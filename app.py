@@ -1072,10 +1072,29 @@ def api_run_case(case_id):
                     else:
                         uat_logger.warning("导航步骤缺少有效的URL")
                 elif action == 'click':
-                    if selector_value:
-                        sync_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                        # 点击后等待页面响应
-                        sync_wait_for_timeout(2000)
+                            if selector_value:
+                                try:
+                                    sync_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                                    # 点击后等待页面响应
+                                    sync_wait_for_timeout(2000)
+                                except Exception as click_error:
+                                    uat_logger.error(f"执行点击操作时出错: {click_error}")
+                                    # 检查是否是页面关闭导致的错误
+                                    if "closed" in str(click_error).lower():
+                                        # 重新启动浏览器并导航到之前的URL
+                                        uat_logger.info("页面已关闭,重新启动浏览器")
+                                        sync_start_browser(headless=False)
+                                        # 如果有目标URL，重新导航到该URL
+                                        if case.get('url'):
+                                            url = case['url']
+                                            if url and url.strip():
+                                                url = url.strip()
+                                                if not url.startswith(('http://', 'https://')):
+                                                    url = 'http://' + url
+                                                sync_navigate_to(url)
+                                    else:
+                                        # 其他错误直接抛出
+                                        raise
                 elif action == 'input':
                     if selector_value and input_value:
                         sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
@@ -1100,11 +1119,30 @@ def api_run_case(case_id):
                     if selector_value:
                         sync_wait_for_selector(selector_value, selector_type=selector_type)
                 elif action == 'scroll':
-                    direction = 'down'
-                    pixels = 500
-                    sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
-                    # 滚动后等待页面响应
-                    sync_wait_for_timeout(1500)
+                            direction = 'down'
+                            pixels = 500
+                            try:
+                                sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
+                                # 滚动后等待页面响应
+                                sync_wait_for_timeout(1500)
+                            except Exception as scroll_error:
+                                uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
+                                # 检查是否是页面关闭导致的错误
+                                if "closed" in str(scroll_error).lower():
+                                    # 重新启动浏览器并导航到之前的URL
+                                    uat_logger.info("页面已关闭,重新启动浏览器")
+                                    sync_start_browser(headless=False)
+                                    # 如果有目标URL，重新导航到该URL
+                                    if case.get('url'):
+                                        url = case['url']
+                                        if url and url.strip():
+                                            url = url.strip()
+                                            if not url.startswith(('http://', 'https://')):
+                                                url = 'http://' + url
+                                            sync_navigate_to(url)
+                                else:
+                                    # 其他错误直接抛出
+                                    raise
                 elif action == 'extract_text' or action == 'text_compare':
                     if selector_value:
                         # 构建完整的选择器
@@ -1569,9 +1607,28 @@ def execute_multiple_cases():
                         elif action == 'scroll':
                             direction = 'down'
                             pixels = 500
-                            sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
-                            # 滚动后等待页面响应
-                            sync_wait_for_timeout(1500)
+                            try:
+                                sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
+                                # 滚动后等待页面响应
+                                sync_wait_for_timeout(1500)
+                            except Exception as scroll_error:
+                                uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
+                                # 检查是否是页面关闭导致的错误
+                                if "closed" in str(scroll_error).lower():
+                                    # 重新启动浏览器并导航到之前的URL
+                                    uat_logger.info("页面已关闭,重新启动浏览器")
+                                    sync_start_browser(headless=False)
+                                    # 如果有目标URL，重新导航到该URL
+                                    if case.get('url'):
+                                        url = case['url']
+                                        if url and url.strip():
+                                            url = url.strip()
+                                            if not url.startswith(('http://', 'https://')):
+                                                url = 'http://' + url
+                                            sync_navigate_to(url)
+                                else:
+                                    # 其他错误直接抛出
+                                    raise
                         elif action == 'extract_text' or action == 'text_compare':
                             if selector_value:
                                 # 构建完整的选择器

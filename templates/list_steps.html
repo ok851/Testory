@@ -362,7 +362,6 @@
                     <option value="navigate">导航</option>
                     <option value="click">点击</option>
                     <option value="input">输入</option>
-                    <option value="fill">填充</option>
                     <option value="hover">悬停</option>
                     <option value="double_click">双击</option>
                     <option value="right_click">右键点击</option>
@@ -383,16 +382,41 @@
             </div>
             <div class="form-group">
                 <label for="stepSelectorValue">选择器值</label>
-                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                    <input type="text" id="stepSelectorValue" placeholder="例如: #username 或 //input[@id='username']" style="flex: 1;">
-                    <button type="button" id="startSelectBtn" class="btn btn-primary" onclick="startVisualSelection()" style="display: none;">
-                        <i class="fa fa-mouse-pointer"></i> 选择元素
-                    </button>
-                </div>
+                <input type="text" id="stepSelectorValue" placeholder="例如: #username 或 //input[@id='username']">
             </div>
             <div class="form-group">
                 <label for="stepInputValue">输入值/预期文本</label>
                 <input type="text" id="stepInputValue" placeholder="输入内容或预期验证的文本">
+            </div>
+            <div class="form-group" id="stepCompareType" style="display: none;">
+                <label for="stepCompareTypeSelect">对比方式</label>
+                <select id="stepCompareTypeSelect">
+                    <option value="equals">等于</option>
+                    <option value="not_equals">不等于</option>
+                    <option value="contains">包含</option>
+                </select>
+            </div>
+            <!-- 滚动操作的上下左右输入框 -->
+            <div class="form-group" id="scrollFields" style="display: none;">
+                <label>滚动距离 (px)</label>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div>
+                        <label for="scrollUp">向上</label>
+                        <input type="number" id="scrollUp" placeholder="0" min="0">
+                    </div>
+                    <div>
+                        <label for="scrollDown">向下</label>
+                        <input type="number" id="scrollDown" placeholder="0" min="0">
+                    </div>
+                    <div>
+                        <label for="scrollLeft">向左</label>
+                        <input type="number" id="scrollLeft" placeholder="0" min="0">
+                    </div>
+                    <div>
+                        <label for="scrollRight">向右</label>
+                        <input type="number" id="scrollRight" placeholder="0" min="0">
+                    </div>
+                </div>
             </div>
             <div class="form-group">
                 <label for="stepDescription">步骤描述</label>
@@ -417,7 +441,6 @@
                     <option value="navigate">导航</option>
                     <option value="click">点击</option>
                     <option value="input">输入</option>
-                    <option value="fill">填充</option>
                     <option value="hover">悬停</option>
                     <option value="double_click">双击</option>
                     <option value="right_click">右键点击</option>
@@ -443,6 +466,36 @@
             <div class="form-group">
                 <label for="editStepInputValue">输入值/预期文本</label>
                 <input type="text" id="editStepInputValue" placeholder="输入内容或预期验证的文本">
+            </div>
+            <div class="form-group" id="editStepCompareType" style="display: none;">
+                <label for="editStepCompareTypeSelect">对比方式</label>
+                <select id="editStepCompareTypeSelect">
+                    <option value="equals">等于</option>
+                    <option value="not_equals">不等于</option>
+                    <option value="contains">包含</option>
+                </select>
+            </div>
+            <!-- 滚动操作的上下左右输入框 -->
+            <div class="form-group" id="editScrollFields" style="display: none;">
+                <label>滚动距离 (px)</label>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <div>
+                        <label for="editScrollUp">向上</label>
+                        <input type="number" id="editScrollUp" placeholder="0" min="0">
+                    </div>
+                    <div>
+                        <label for="editScrollDown">向下</label>
+                        <input type="number" id="editScrollDown" placeholder="0" min="0">
+                    </div>
+                    <div>
+                        <label for="editScrollLeft">向左</label>
+                        <input type="number" id="editScrollLeft" placeholder="0" min="0">
+                    </div>
+                    <div>
+                        <label for="editScrollRight">向右</label>
+                        <input type="number" id="editScrollRight" placeholder="0" min="0">
+                    </div>
+                </div>
             </div>
             <div class="form-group">
                 <label for="editStepDescription">步骤描述</label>
@@ -584,6 +637,13 @@
             document.getElementById('stepSelectorValue').value = '';
             document.getElementById('stepInputValue').value = '';
             document.getElementById('stepDescription').value = '';
+            
+            // 重置滚动操作的四个输入框
+            document.getElementById('scrollUp').value = '';
+            document.getElementById('scrollDown').value = '';
+            document.getElementById('scrollLeft').value = '';
+            document.getElementById('scrollRight').value = '';
+            
             toggleActionFields();
         }
         
@@ -599,6 +659,33 @@
             document.getElementById('editStepSelectorValue').value = step.selector_value || '';
             document.getElementById('editStepInputValue').value = step.input_value || '';
             document.getElementById('editStepDescription').value = step.description || '';
+            
+            // 处理对比方式选择
+            if (step.action === 'extract_text') {
+                document.getElementById('editStepCompareTypeSelect').value = step.compare_type || 'equals';
+            }
+            
+            // 处理滚动操作的四个输入框
+            if (step.action === 'scroll') {
+                // 解析 input_value 中的滚动值
+                const scrollValues = { up: '0', down: '0', left: '0', right: '0' };
+                if (step.input_value) {
+                    const parts = step.input_value.split(',');
+                    parts.forEach(part => {
+                        const [key, value] = part.split(':');
+                        if (scrollValues.hasOwnProperty(key)) {
+                            scrollValues[key] = value;
+                        }
+                    });
+                }
+                
+                // 填充到相应的输入框
+                document.getElementById('editScrollUp').value = scrollValues.up;
+                document.getElementById('editScrollDown').value = scrollValues.down;
+                document.getElementById('editScrollLeft').value = scrollValues.left;
+                document.getElementById('editScrollRight').value = scrollValues.right;
+            }
+            
             toggleEditActionFields();
         }
         
@@ -612,32 +699,62 @@
             const selectorTypeField = document.querySelector('label[for="stepSelectorType"]').parentElement;
             const selectorValueField = document.querySelector('label[for="stepSelectorValue"]').parentElement;
             const inputValueField = document.querySelector('label[for="stepInputValue"]').parentElement;
-            const startSelectBtn = document.getElementById('startSelectBtn');
             
-            if (action === 'navigate' || action === 'scroll') {
+            // 重置所有字段为默认状态
+            selectorTypeField.style.display = 'block';
+            selectorValueField.style.display = 'block';
+            inputValueField.style.display = 'block';
+            
+            const scrollFields = document.getElementById('scrollFields');
+            const compareTypeField = document.getElementById('stepCompareType');
+            // 默认隐藏对比方式选择
+            compareTypeField.style.display = 'none';
+            
+            if (action === 'navigate') {
+                // 导航操作只需要URL输入框
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="stepInputValue"]').textContent = 'URL (导航) / 方向 (滚动)';
-                if (startSelectBtn) startSelectBtn.style.display = 'none';
-            } else if (action === 'input' || action === 'fill') {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
+                document.querySelector('label[for="stepInputValue"]').textContent = 'URL';
+            } else if (action === 'scroll') {
+                // 滚动操作需要上下左右四个输入框
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'block';
+            } else if (action === 'input') {
+                // 输入操作需要选择器和输入值
                 inputValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = '输入值';
-                if (startSelectBtn) startSelectBtn.style.display = 'none';
             } else if (action === 'extract_text') {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
+                // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = '预期文本 (可选)';
-                if (startSelectBtn) startSelectBtn.style.display = 'inline-block';
-            } else {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
+                // 显示对比方式选择
+                const compareTypeField = document.getElementById('stepCompareType');
+                compareTypeField.style.display = 'block';
+            } else if (action === 'wait') {
+                // 等待操作需要选择器和等待时间
                 inputValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
+                document.querySelector('label[for="stepInputValue"]').textContent = '等待时间 (秒)';
+            } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
+                // 点击相关操作只需要选择器，不需要输入值
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'none';
+            } else if (action === 'hover') {
+                // 悬停操作需要选择器和悬停时间
+                inputValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
+                document.querySelector('label[for="stepInputValue"]').textContent = '悬停时间 (秒)';
+            } else {
+                // 其他操作只需要选择器
+                inputValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = '附加信息 (可选)';
-                if (startSelectBtn) startSelectBtn.style.display = 'none';
             }
         }
         
@@ -646,25 +763,52 @@
             const selectorTypeField = document.querySelector('label[for="editStepSelectorType"]').parentElement;
             const selectorValueField = document.querySelector('label[for="editStepSelectorValue"]').parentElement;
             const inputValueField = document.querySelector('label[for="editStepInputValue"]').parentElement;
+            const editScrollFields = document.getElementById('editScrollFields');
+            const editCompareTypeField = document.getElementById('editStepCompareType');
             
-            if (action === 'navigate' || action === 'scroll') {
+            // 重置所有字段为默认状态
+            selectorTypeField.style.display = 'block';
+            selectorValueField.style.display = 'block';
+            inputValueField.style.display = 'block';
+            editScrollFields.style.display = 'none';
+            editCompareTypeField.style.display = 'none';
+            
+            if (action === 'navigate') {
+                // 导航操作只需要URL输入框
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = 'URL (导航) / 方向 (滚动)';
-            } else if (action === 'input' || action === 'fill') {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
+                document.querySelector('label[for="editStepInputValue"]').textContent = 'URL';
+            } else if (action === 'scroll') {
+                // 滚动操作需要上下左右四个输入框
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
+                editScrollFields.style.display = 'block';
+            } else if (action === 'input') {
+                // 输入操作需要选择器和输入值
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = '输入值';
             } else if (action === 'extract_text') {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
+                // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = '预期文本 (可选)';
+                // 显示对比方式选择
+                const editCompareTypeField = document.getElementById('editStepCompareType');
+                editCompareTypeField.style.display = 'block';
+            } else if (action === 'wait') {
+                // 等待操作需要选择器和等待时间
+                inputValueField.style.display = 'block';
+                document.querySelector('label[for="editStepInputValue"]').textContent = '等待时间 (秒)';
+            } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
+                // 点击相关操作只需要选择器，不需要输入值
+                inputValueField.style.display = 'none';
+            } else if (action === 'hover') {
+                // 悬停操作需要选择器和悬停时间
+                inputValueField.style.display = 'block';
+                document.querySelector('label[for="editStepInputValue"]').textContent = '悬停时间 (秒)';
             } else {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
+                // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = '附加信息 (可选)';
             }
@@ -811,12 +955,26 @@
             const action = document.getElementById('stepAction').value;
             const selectorType = document.getElementById('stepSelectorType').value;
             const selectorValue = document.getElementById('stepSelectorValue').value.trim();
-            const inputValue = document.getElementById('stepInputValue').value.trim();
+            let inputValue = document.getElementById('stepInputValue').value.trim();
             const description = document.getElementById('stepDescription').value.trim();
+            // 获取对比方式选择
+            let compareType = '';
+            if (action === 'extract_text') {
+                compareType = document.getElementById('stepCompareTypeSelect').value;
+            }
             
             if (!action) {
                 alert('请选择操作类型');
                 return;
+            }
+            
+            // 处理滚动操作的四个输入框
+            if (action === 'scroll') {
+                const scrollUp = document.getElementById('scrollUp').value || '0';
+                const scrollDown = document.getElementById('scrollDown').value || '0';
+                const scrollLeft = document.getElementById('scrollLeft').value || '0';
+                const scrollRight = document.getElementById('scrollRight').value || '0';
+                inputValue = `up:${scrollUp},down:${scrollDown},left:${scrollLeft},right:${scrollRight}`;
             }
             
             try {
@@ -831,7 +989,8 @@
                         selector_type: selectorType,
                         selector_value: selectorValue,
                         input_value: inputValue,
-                        description: description
+                        description: description,
+                        compare_type: compareType
                     })
                 });
                 
@@ -868,12 +1027,26 @@
             const action = document.getElementById('editStepAction').value;
             const selectorType = document.getElementById('editStepSelectorType').value;
             const selectorValue = document.getElementById('editStepSelectorValue').value.trim();
-            const inputValue = document.getElementById('editStepInputValue').value.trim();
+            let inputValue = document.getElementById('editStepInputValue').value.trim();
             const description = document.getElementById('editStepDescription').value.trim();
+            // 获取对比方式选择
+            let compareType = '';
+            if (action === 'extract_text') {
+                compareType = document.getElementById('editStepCompareTypeSelect').value;
+            }
             
             if (!action) {
                 alert('请选择操作类型');
                 return;
+            }
+            
+            // 处理滚动操作的四个输入框
+            if (action === 'scroll') {
+                const scrollUp = document.getElementById('editScrollUp').value || '0';
+                const scrollDown = document.getElementById('editScrollDown').value || '0';
+                const scrollLeft = document.getElementById('editScrollLeft').value || '0';
+                const scrollRight = document.getElementById('editScrollRight').value || '0';
+                inputValue = `up:${scrollUp},down:${scrollDown},left:${scrollLeft},right:${scrollRight}`;
             }
             
             try {
@@ -887,7 +1060,8 @@
                         selector_type: selectorType,
                         selector_value: selectorValue,
                         input_value: inputValue,
-                        description: description
+                        description: description,
+                        compare_type: compareType
                     })
                 });
                 

@@ -1003,6 +1003,14 @@ class PlaywrightAutomation:
         if self.page is None:
             raise Exception("浏览器未启动")
         
+        # 检查页面是否已经被关闭
+        try:
+            if hasattr(self.page, 'url'):
+                _ = self.page.url  # 尝试访问URL判断页面是否有效
+        except Exception as e:
+            uat_logger.error(f"页面已关闭,无法执行点击操作: {str(e)}")
+            raise Exception("页面已关闭")
+        
         uat_logger.info(f"🔍 [CLICK_DEBUG] 开始点击元素,选择器: {selector}, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
         
         # 构建完整的选择器
@@ -1018,168 +1026,172 @@ class PlaywrightAutomation:
             uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
             target_context = self.page.frame_locator(iframe_selector)
         
-        if target_context is not None:
-            element_clicked = False
+        if target_context is None:
+            uat_logger.error(f"❌ [CLICK_DEBUG] 操作上下文为None,无法执行点击操作")
+            raise Exception(f"操作上下文为None,无法执行点击操作")
+        
+        element_clicked = False
+        
+        # 获取当前页面URL和状态
+        try:
+            current_url = self.page.url
+            uat_logger.info(f"🔍 [CLICK_DEBUG] 当前页面URL: {current_url}")
+        except Exception as e:
+            uat_logger.warning(f"🔍 [CLICK_DEBUG] 获取当前URL失败: {str(e)}")
+            current_url = ""
+        
+        # 尝试多种点击方式,增加成功概率
+        # 方式1: 使用Playwright的click方法,等待元素可点击
+        try:
+            uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式1: Playwright click方法")
+            # 根据上下文类型执行不同的操作
+            if hasattr(target_context, 'wait_for_selector'):
+                # 等待元素可见且可交互
+                await target_context.wait_for_selector(full_selector, state='visible', timeout=5000)
+                # 等待元素可点击
+                await target_context.wait_for_selector(full_selector, state='enabled', timeout=5000)
+                # 使用更健壮的点击方式
+                await target_context.click(full_selector, timeout=5000)
+                uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
+                element_clicked = True
+            else:
+                # 如果是frame_locator对象,需要使用其locator方法
+                element = target_context.locator(full_selector)
+                await element.wait_for(state='visible', timeout=5000)
+                await element.wait_for(state='enabled', timeout=5000)
+                await element.click(timeout=5000)
+                uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
+                element_clicked = True
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式1失败: {str(e)}, 尝试方式2: force click")
             
-            # 获取当前页面URL和状态
+            # 方式2: 使用force参数强制点击
             try:
-                current_url = self.page.url
-                uat_logger.info(f"🔍 [CLICK_DEBUG] 当前页面URL: {current_url}")
-            except Exception as e:
-                uat_logger.warning(f"🔍 [CLICK_DEBUG] 获取当前URL失败: {str(e)}")
-            
-            # 尝试多种点击方式,增加成功概率
-            # 方式1: 使用Playwright的click方法,等待元素可点击
-            try:
-                uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式1: Playwright click方法")
-                # 根据上下文类型执行不同的操作
-                if hasattr(target_context, 'wait_for_selector'):
-                    # 等待元素可见且可交互
-                    await target_context.wait_for_selector(full_selector, state='visible', timeout=5000)
-                    # 等待元素可点击
-                    await target_context.wait_for_selector(full_selector, state='enabled', timeout=5000)
-                    # 使用更健壮的点击方式
-                    await target_context.click(full_selector, timeout=5000)
-                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
+                if hasattr(target_context, 'click'):
+                    await target_context.click(full_selector, force=True, timeout=5000)
+                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
                     element_clicked = True
                 else:
                     # 如果是frame_locator对象,需要使用其locator方法
                     element = target_context.locator(full_selector)
-                    await element.wait_for(state='visible', timeout=5000)
-                    await element.wait_for(state='enabled', timeout=5000)
-                    await element.click(timeout=5000)
-                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
+                    await element.click(timeout=5000, force=True)
+                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
                     element_clicked = True
-            except Exception as e:
-                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式1失败: {str(e)}, 尝试方式2: force click")
+            except Exception as e2:
+                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式2失败: {str(e2)}, 尝试方式3: JavaScript点击")
                 
-                # 方式2: 使用force参数强制点击
+                # 方式3: 尝试使用JavaScript点击
                 try:
-                    if hasattr(target_context, 'click'):
-                        await target_context.click(full_selector, force=True, timeout=5000)
-                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
-                        element_clicked = True
-                    else:
-                        # 如果是frame_locator对象,需要使用其locator方法
-                        element = target_context.locator(full_selector)
-                        await element.click(timeout=5000, force=True)
-                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
-                        element_clicked = True
-                except Exception as e2:
-                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式2失败: {str(e2)}, 尝试方式3: JavaScript点击")
-                    
-                    # 方式3: 尝试使用JavaScript点击
-                    try:
-                        uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式3: JavaScript点击")
-                        # 检查元素是否存在并点击
-                        if selector_type == "css":
-                            if hasattr(target_context, 'evaluate'):
-                                element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
-                                if element_exists:
-                                    # 使用JavaScript点击,正常触发所有事件
-                                    await target_context.evaluate("""(selector) => {
-                                        const element = document.querySelector(selector);
-                                        if (element) {
-                                            // 直接使用click(),触发所有相关事件
-                                            element.click();
-                                        }
-                                    }""", selector)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法使用JavaScript点击: {selector}")
-                            else:
-                                # 如果是frame_locator对象,使用其locator方法
-                                element = target_context.locator(selector)
-                                count = await element.count()
-                                if count > 0:
-                                    await element.click(timeout=5000, force=True)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法点击: {selector}")
-                        else:  # xpath
-                            if hasattr(target_context, 'evaluate'):
-                                element_exists = await target_context.evaluate("""(xpath) => {
-                                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                    return result.singleNodeValue !== null;
+                    uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式3: JavaScript点击")
+                    # 检查元素是否存在并点击
+                    if selector_type == "css":
+                        if hasattr(target_context, 'evaluate'):
+                            element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
+                            if element_exists:
+                                # 使用JavaScript点击,正常触发所有事件
+                                await target_context.evaluate("""(selector) => {
+                                    const element = document.querySelector(selector);
+                                    if (element) {
+                                        // 直接使用click(),触发所有相关事件
+                                        element.click();
+                                    }
                                 }""", selector)
-                                if element_exists:
-                                    # 使用JavaScript点击,正常触发所有事件
-                                    await target_context.evaluate("""(xpath) => {
-                                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                        const element = result.singleNodeValue;
-                                        if (element) {
-                                            // 直接使用click(),触发所有相关事件
-                                            element.click();
-                                        }
-                                    }""", selector)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法使用JavaScript点击: {selector}")
+                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
+                                element_clicked = True
                             else:
-                                # 如果是frame_locator对象,使用其locator方法
-                                element = target_context.locator(f"xpath={selector}")
-                                count = await element.count()
-                                if count > 0:
-                                    await element.click(timeout=5000, force=True)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法点击: {selector}")
-                    except Exception as e3:
-                        uat_logger.error(f"❌ [CLICK_DEBUG] 方式3失败: {str(e3)}")
-                        
-            if not element_clicked:
-                # 如果所有点击方式都失败,抛出异常
-                raise Exception(f"无法点击元素: {selector}, 选择器类型: {selector_type}, 所有点击方式均失败")
+                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法使用JavaScript点击: {selector}")
+                        else:
+                            # 如果是frame_locator对象,使用其locator方法
+                            element = target_context.locator(selector)
+                            count = await element.count()
+                            if count > 0:
+                                await element.click(timeout=5000, force=True)
+                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
+                                element_clicked = True
+                            else:
+                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法点击: {selector}")
+                    else:  # xpath
+                        if hasattr(target_context, 'evaluate'):
+                            element_exists = await target_context.evaluate("""(xpath) => {
+                                const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                return result.singleNodeValue !== null;
+                            }""", selector)
+                            if element_exists:
+                                # 使用JavaScript点击,正常触发所有事件
+                                await target_context.evaluate("""(xpath) => {
+                                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                    const element = result.singleNodeValue;
+                                    if (element) {
+                                        // 直接使用click(),触发所有相关事件
+                                        element.click();
+                                    }
+                                }""", selector)
+                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
+                                element_clicked = True
+                            else:
+                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法使用JavaScript点击: {selector}")
+                        else:
+                            # 如果是frame_locator对象,使用其locator方法
+                            element = target_context.locator(f"xpath={selector}")
+                            count = await element.count()
+                            if count > 0:
+                                await element.click(timeout=5000, force=True)
+                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
+                                element_clicked = True
+                            else:
+                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法点击: {selector}")
+                except Exception as e3:
+                    uat_logger.error(f"❌ [CLICK_DEBUG] 方式3失败: {str(e3)}")
+                    
+        if not element_clicked:
+            # 如果所有点击方式都失败,抛出异常
+            raise Exception(f"无法点击元素: {selector}, 选择器类型: {selector_type}, 所有点击方式均失败")
+        
+        # 检查点击后的页面状态
+        try:
+            new_url = self.page.url
+            uat_logger.info(f"🔍 [CLICK_DEBUG] 点击后页面URL: {new_url}")
+            if new_url != current_url:
+                uat_logger.info(f"🔄 [CLICK_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
+        except Exception as e:
+            uat_logger.warning(f"🔍 [CLICK_DEBUG] 获取点击后URL失败: {str(e)}")
+        
+        # 单选框和复选框点击后状态验证
+        try:
+            # 检查是否是单选框或复选框相关选择器
+            is_radio_selector = False
+            is_checkbox_selector = False
+            selector_lower = selector.lower()
+            if 'radio' in selector_lower or 'type="radio"' in selector_lower:
+                is_radio_selector = True
+            elif 'checkbox' in selector_lower or 'type="checkbox"' in selector_lower:
+                is_checkbox_selector = True
             
-            # 检查点击后的页面状态
-            try:
-                new_url = self.page.url
-                uat_logger.info(f"🔍 [CLICK_DEBUG] 点击后页面URL: {new_url}")
-                if new_url != current_url:
-                    uat_logger.info(f"🔄 [CLICK_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
-            except Exception as e:
-                uat_logger.warning(f"🔍 [CLICK_DEBUG] 获取点击后URL失败: {str(e)}")
-            
-            # 单选框和复选框点击后状态验证
-            try:
-                # 检查是否是单选框或复选框相关选择器
-                is_radio_selector = False
-                is_checkbox_selector = False
-                selector_lower = selector.lower()
-                if 'radio' in selector_lower or 'type="radio"' in selector_lower:
-                    is_radio_selector = True
-                elif 'checkbox' in selector_lower or 'type="checkbox"' in selector_lower:
-                    is_checkbox_selector = True
+            # 如果是单选框或复选框选择器,验证点击后状态
+            if is_radio_selector or is_checkbox_selector:
+                # 等待元素状态更新
+                await self.page.wait_for_timeout(200)
                 
-                # 如果是单选框或复选框选择器,验证点击后状态
-                if is_radio_selector or is_checkbox_selector:
-                    # 等待元素状态更新
-                    await self.page.wait_for_timeout(200)
-                    
-                    # 检查单选框或复选框是否被选中
-                    evaluate_script = f'''() => {{
-                        const element = document.querySelector('{selector}');
-                        if (element && element.tagName === 'INPUT' && (element.type === 'radio' || element.type === 'checkbox')) {{
-                            return element.checked;
-                        }}
-                        // 处理复合组件,找到内部的input元素
-                        const inputElement = element?.querySelector('input[type="radio"], input[type="checkbox"]');
-                        return inputElement ? inputElement.checked : false;
-                    }}'''
-                    is_checked = await self.page.evaluate(evaluate_script)
-                    
-                    if is_checked:
-                        element_type = "单选框" if is_radio_selector else "复选框"
-                        uat_logger.info(f"✅ {element_type}点击验证通过: {selector} 已选中")
-                    else:
-                        element_type = "单选框" if is_radio_selector else "复选框"
-                        uat_logger.warning(f"⚠️ {element_type}点击验证警告: {selector} 未选中")
-            except Exception as e:
-                uat_logger.warning(f"验证单选框/复选框状态时出错: {str(e)}")
+                # 检查单选框或复选框是否被选中
+                evaluate_script = f'''() => {{
+                    const element = document.querySelector('{selector}');
+                    if (element && element.tagName === 'INPUT' && (element.type === 'radio' || element.type === 'checkbox')) {{
+                        return element.checked;
+                    }}
+                    // 处理复合组件,找到内部的input元素
+                    const inputElement = element?.querySelector('input[type="radio"], input[type="checkbox"]');
+                    return inputElement ? inputElement.checked : false;
+                }}'''
+                is_checked = await self.page.evaluate(evaluate_script)
+                
+                if is_checked:
+                    element_type = "单选框" if is_radio_selector else "复选框"
+                    uat_logger.info(f"✅ {element_type}点击验证通过: {selector} 已选中")
+                else:
+                    element_type = "单选框" if is_radio_selector else "复选框"
+                    uat_logger.warning(f"⚠️ {element_type}点击验证警告: {selector} 未选中")
+        except Exception as e:
+            uat_logger.warning(f"验证单选框/复选框状态时出错: {str(e)}")
         
         # 如果正在录制,记录点击步骤
         if self.recording:
@@ -1355,7 +1367,17 @@ class PlaywrightAutomation:
     async def scroll_page(self, direction: str = "down", pixels: int = 500, iframe_selector: str = None, iframe_context=None):
         """滚动页面或iframe"""
         if self.page is None:
+            uat_logger.error("浏览器未启动,无法执行滚动操作")
             raise Exception("浏览器未启动")
+        
+        # 检查页面是否已经被关闭
+        try:
+            # 尝试获取页面URL来检查页面是否仍然有效
+            if hasattr(self.page, 'url'):
+                _ = self.page.url
+        except Exception as e:
+            uat_logger.error(f"页面已关闭,无法执行滚动操作: {str(e)}")
+            raise Exception("页面已关闭")
         
         uat_logger.info(f"🔍 [SCROLL_DEBUG] 开始滚动,方向: {direction}, 像素: {pixels}, iframe选择器: {iframe_selector}")
         
