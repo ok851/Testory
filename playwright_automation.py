@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 from playwright.async_api import async_playwright
 from typing import List, Dict, Any, Optional
 import json
@@ -921,30 +921,32 @@ class PlaywrightAutomation:
                 return 0
         return 0
     
-    async def navigate_to(self, url: str, iframe_selector: str = None):
-        """导航到指定URL,支持iframe导航"""
-        if self.page is None:
+    async def navigate_to(self, url: str, iframe_selector: str = None, page=None):
+        """导航到指定URL,支持iframe导航。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             await self.start_browser()
+            target_page = self.page
         
         # 再次检查确保page对象存在
-        if self.page is not None:
+        if target_page is not None:
             # 导航到URL,对于录制时使用domcontentloaded以提高响应速度
             # 但在回放时,我们需要确保页面完全加载
             if self.recording:
-                await self.page.goto(url, wait_until='domcontentloaded')
+                await target_page.goto(url, wait_until='domcontentloaded')
             else:
                 # 回放时等待更完整的页面加载状态
-                await self.page.goto(url, wait_until='load')
+                await target_page.goto(url, wait_until='load')
                 # 额外等待网络请求完成(对于复杂的单页应用)
                 try:
-                    await self.page.wait_for_load_state('networkidle', timeout=25000)
+                    await target_page.wait_for_load_state('networkidle', timeout=25000)
                 except Exception as e:
                     uat_logger.debug(f"网络idle状态超时(可能是正常的长连接): {str(e)}")
                 # 增加JavaScript渲染等待时间,确保动态内容完全显示
-                await self.page.wait_for_timeout(1000)
+                await target_page.wait_for_timeout(1000)
                 
                 # 等待页面渲染稳定(无更多DOM变化)
-                await self.page.evaluate("""
+                await target_page.evaluate("""
                     () => new Promise(resolve => {
                         let lastScrollHeight = document.body.scrollHeight;
                         let checkCount = 0;
@@ -998,15 +1000,16 @@ class PlaywrightAutomation:
         else:
             uat_logger.info(f"执行导航操作: {url}")
     
-    async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None):
-        """点击元素"""
-        if self.page is None:
+    async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
+        """点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
         # 检查页面是否已经被关闭
         try:
-            if hasattr(self.page, 'url'):
-                _ = self.page.url  # 尝试访问URL判断页面是否有效
+            if hasattr(target_page, 'url'):
+                _ = target_page.url  # 尝试访问URL判断页面是否有效
         except Exception as e:
             uat_logger.error(f"页面已关闭,无法执行点击操作: {str(e)}")
             raise Exception("页面已关闭")
@@ -1019,12 +1022,12 @@ class PlaywrightAutomation:
             full_selector = f"xpath={selector}"
         
         # 确定操作上下文
-        target_context = self.page
+        target_context = target_page
         if iframe_context:
             target_context = iframe_context
         elif iframe_selector:
             uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
-            target_context = self.page.frame_locator(iframe_selector)
+            target_context = target_page.frame_locator(iframe_selector)
         
         if target_context is None:
             uat_logger.error(f"❌ [CLICK_DEBUG] 操作上下文为None,无法执行点击操作")
@@ -1034,7 +1037,7 @@ class PlaywrightAutomation:
         
         # 获取当前页面URL和状态
         try:
-            current_url = self.page.url
+            current_url = target_page.url
             uat_logger.info(f"🔍 [CLICK_DEBUG] 当前页面URL: {current_url}")
         except Exception as e:
             uat_logger.warning(f"🔍 [CLICK_DEBUG] 获取当前URL失败: {str(e)}")
@@ -1149,7 +1152,7 @@ class PlaywrightAutomation:
         
         # 检查点击后的页面状态
         try:
-            new_url = self.page.url
+            new_url = target_page.url
             uat_logger.info(f"🔍 [CLICK_DEBUG] 点击后页面URL: {new_url}")
             if new_url != current_url:
                 uat_logger.info(f"🔄 [CLICK_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
@@ -1170,7 +1173,7 @@ class PlaywrightAutomation:
             # 如果是单选框或复选框选择器,验证点击后状态
             if is_radio_selector or is_checkbox_selector:
                 # 等待元素状态更新
-                await self.page.wait_for_timeout(200)
+                await target_page.wait_for_timeout(200)
                 
                 # 检查单选框或复选框是否被选中
                 evaluate_script = f'''() => {{
@@ -1182,7 +1185,7 @@ class PlaywrightAutomation:
                     const inputElement = element?.querySelector('input[type="radio"], input[type="checkbox"]');
                     return inputElement ? inputElement.checked : false;
                 }}'''
-                is_checked = await self.page.evaluate(evaluate_script)
+                is_checked = await target_page.evaluate(evaluate_script)
                 
                 if is_checked:
                     element_type = "单选框" if is_radio_selector else "复选框"
@@ -1202,9 +1205,10 @@ class PlaywrightAutomation:
             }
             self.recorded_steps.append(step)
     
-    async def fill_input(self, selector: str, text: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None):
-        """填充输入框"""
-        if self.page is None:
+    async def fill_input(self, selector: str, text: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
+        """填充输入框。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
         # 构建完整的选择器
@@ -1213,12 +1217,12 @@ class PlaywrightAutomation:
             full_selector = f"xpath={selector}"
         
         # 确定操作上下文
-        target_context = self.page
+        target_context = target_page
         if iframe_context:
             target_context = iframe_context
         elif iframe_selector:
             uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
-            target_context = self.page.frame_locator(iframe_selector)
+            target_context = target_page.frame_locator(iframe_selector)
         
         # 尝试多种填充方式,增加成功概率
         fill_success = False
@@ -1364,17 +1368,17 @@ class PlaywrightAutomation:
             }
             self.recorded_steps.append(step)
     
-    async def scroll_page(self, direction: str = "down", pixels: int = 500, iframe_selector: str = None, iframe_context=None):
-        """滚动页面或iframe"""
-        if self.page is None:
+    async def scroll_page(self, direction: str = "down", pixels: int = 500, iframe_selector: str = None, iframe_context=None, page=None):
+        """滚动页面或iframe。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             uat_logger.error("浏览器未启动,无法执行滚动操作")
             raise Exception("浏览器未启动")
         
         # 检查页面是否已经被关闭
         try:
-            # 尝试获取页面URL来检查页面是否仍然有效
-            if hasattr(self.page, 'url'):
-                _ = self.page.url
+            if hasattr(target_page, 'url'):
+                _ = target_page.url
         except Exception as e:
             uat_logger.error(f"页面已关闭,无法执行滚动操作: {str(e)}")
             raise Exception("页面已关闭")
@@ -1382,12 +1386,12 @@ class PlaywrightAutomation:
         uat_logger.info(f"🔍 [SCROLL_DEBUG] 开始滚动,方向: {direction}, 像素: {pixels}, iframe选择器: {iframe_selector}")
         
         # 确定操作上下文
-        target_context = self.page
+        target_context = target_page
         if iframe_context:
             target_context = iframe_context
         elif iframe_selector:
             uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
-            target_context = self.page.frame_locator(iframe_selector)
+            target_context = target_page.frame_locator(iframe_selector)
         
         # 执行滚动操作
         if hasattr(target_context, 'evaluate'):
@@ -1430,15 +1434,16 @@ class PlaywrightAutomation:
             }
             self.recorded_steps.append(step)
     
-    async def get_page_text(self) -> str:
-        """获取页面文本内容"""
-        if self.page is None:
+    async def get_page_text(self, page=None) -> str:
+        """获取页面文本内容。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
         # 使用更高效的方法获取页面文本
         try:
             # 首先尝试使用JavaScript直接获取所有文本,这是最快的方法
-            text_content = await self.page.evaluate(
+            text_content = await target_page.evaluate(
                 "() => document.body.innerText || document.body.textContent || document.documentElement.innerText || document.documentElement.textContent || ''"
             )
             
@@ -1446,7 +1451,7 @@ class PlaywrightAutomation:
                 return text_content.strip()
             
             # 如果JavaScript方法失败,使用Playwright的text_content方法
-            body_element = self.page.locator('body')
+            body_element = target_page.locator('body')
             text_content = await body_element.text_content(timeout=5000)
             
             return text_content if text_content else ""
@@ -1454,8 +1459,8 @@ class PlaywrightAutomation:
             print(f"获取页面文本时出错: {e}")
             return ""
     
-    async def extract_element_text(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None) -> str:
-        """提取特定元素的文本，支持多种定位方式
+    async def extract_element_text(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None) -> str:
+        """提取特定元素的文本，支持多种定位方式。page: 可选，指定在哪个标签页执行（多标签并行时使用）
         Parameters:
             selector: Locator string
             selector_type: Locator type, supports:
@@ -1467,7 +1472,8 @@ class PlaywrightAutomation:
             iframe_selector: iframe selector (optional)
             iframe_context: iframe context (optional)
         """
-        if self.page is None:
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("Browser not started")
         
         uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Start extracting text, selector: {selector}, selector_type: {selector_type}")
@@ -1476,9 +1482,9 @@ class PlaywrightAutomation:
             element = None
             
             # Determine target context
-            target_context = self.page
+            target_context = target_page
             if iframe_selector:
-                target_context = self.page.frame_locator(iframe_selector)
+                target_context = target_page.frame_locator(iframe_selector)
             elif iframe_context:
                 target_context = iframe_context
             
@@ -1508,19 +1514,19 @@ class PlaywrightAutomation:
                     # Handle role with parameters, only use role name part
                     role_name = selector.split(",")[0]
                     uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Role selector contains parameters, only use role name: {role_name}")
-                    element = self.page.get_by_role(role_name)
+                    element = target_page.get_by_role(role_name)
                 else:
-                    element = self.page.get_by_role(selector)
+                    element = target_page.get_by_role(selector)
                 element = element.first
             elif selector_type == "testid":
                 # Test ID selector, use Playwright's dedicated testid locator
                 uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Using testid selector: {selector}")
-                element = self.page.get_by_test_id(selector)
+                element = target_page.get_by_test_id(selector)
                 element = element.first
             elif selector.startswith("//") or selector.startswith("/"):
                 # Auto-detect XPath
                 uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Auto-detected as XPath selector: {selector}")
-                element = self.page.locator(f"xpath={selector}")
+                element = target_page.locator(f"xpath={selector}")
                 element = element.first
             else:
                 # Default to CSS selector
@@ -2359,17 +2365,18 @@ class PlaywrightAutomation:
             print(f"分析页面内容时出错: {e}")
             return {'error': str(e)}
     
-    async def wait_for_element_visible(self, selector: str, timeout: int = 30000, selector_type: str = "css"):
-        """等待元素可见"""
-        if self.page is None:
+    async def wait_for_element_visible(self, selector: str, timeout: int = 30000, selector_type: str = "css", page=None):
+        """等待元素可见。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
         try:
             if selector_type == "xpath":
-                element = self.page.locator(f"xpath={selector}")
+                element = target_page.locator(f"xpath={selector}")
                 await element.wait_for(state="visible", timeout=timeout)
             else:
-                await self.page.wait_for_selector(selector, state="visible", timeout=timeout)
+                await target_page.wait_for_selector(selector, state="visible", timeout=timeout)
             return True
         except:
             return False
@@ -2424,9 +2431,10 @@ class PlaywrightAutomation:
             }
             self.recorded_steps.append(step)
     
-    async def double_click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None):
-        """双击元素"""
-        if self.page is None:
+    async def double_click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
+        """双击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
         uat_logger.info(f"🔍 [DOUBLE_CLICK_DEBUG] 开始双击元素,选择器: {selector}, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
@@ -2437,12 +2445,12 @@ class PlaywrightAutomation:
             full_selector = f"xpath={selector}"
         
         # 确定操作上下文
-        target_context = self.page
+        target_context = target_page
         if iframe_context:
             target_context = iframe_context
         elif iframe_selector:
             uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
-            target_context = self.page.frame_locator(iframe_selector)
+            target_context = target_page.frame_locator(iframe_selector)
         
         # 等待元素可见且可交互
         if hasattr(target_context, 'wait_for_selector'):
@@ -2466,9 +2474,10 @@ class PlaywrightAutomation:
             }
             self.recorded_steps.append(step)
     
-    async def right_click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None):
-        """右键点击元素"""
-        if self.page is None:
+    async def right_click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
+        """右键点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
         uat_logger.info(f"🔍 [RIGHT_CLICK_DEBUG] 开始右键点击元素,选择器: {selector}, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
@@ -2479,12 +2488,12 @@ class PlaywrightAutomation:
             full_selector = f"xpath={selector}"
         
         # 确定操作上下文
-        target_context = self.page
+        target_context = target_page
         if iframe_context:
             target_context = iframe_context
         elif iframe_selector:
             uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
-            target_context = self.page.frame_locator(iframe_selector)
+            target_context = target_page.frame_locator(iframe_selector)
         
         # 等待元素可见且可交互
         if hasattr(target_context, 'wait_for_selector'):
@@ -2611,12 +2620,19 @@ class PlaywrightAutomation:
         
         return self.page.url
     
-    async def wait_for_selector(self, selector: str, timeout: int = 30000):
-        """等待元素出现"""
-        if self.page is None:
+    async def wait_for_selector(self, selector: str, timeout: int = 30000, selector_type: str = "css", iframe_selector: str = None, page=None):
+        """等待元素出现。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
-        await self.page.wait_for_selector(selector, timeout=timeout)
+        full_selector = f"xpath={selector}" if (selector_type == "xpath" or (selector and (selector.startswith("//") or selector.startswith("/")))) else selector
+        if iframe_selector:
+            context = target_page.frame_locator(iframe_selector)
+            element = context.locator(full_selector)
+            await element.wait_for(state="attached", timeout=timeout)
+        else:
+            await target_page.wait_for_selector(full_selector, timeout=timeout)
     
     async def get_element_count(self, selector: str) -> int:
         """获取指定选择器的元素数量"""
@@ -2630,33 +2646,32 @@ class PlaywrightAutomation:
         """)
         return count
     
-    async def take_screenshot(self, path: str = None):
-        """截取页面截图"""
-        if self.page is None:
+    async def take_screenshot(self, path: str = None, page=None):
+        """截取页面截图。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             raise Exception("浏览器未启动")
         
         if path is None:
             path = f"screenshot_{int(time.time())}.png"
         
-        await self.page.screenshot(path=path)
+        await target_page.screenshot(path=path)
         return path
     
-    async def execute_script_steps(self, steps: List[Dict[str, Any]]):
-        """执行脚本步骤"""
-        if self.page is None:
+    async def execute_script_steps(self, steps: List[Dict[str, Any]], page=None):
+        """执行脚本步骤。page: 可选，指定在哪个标签页执行（多标签并行时使用，每个用例一个标签页）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
             await self.start_browser(headless=False)
-        else:
-            # 确保窗口最大化 - 使用与start_browser相同的Windows API策略
+            target_page = self.page
+        elif page is None:
+            # 使用主页面时，确保窗口最大化
             try:
-                # 调用Windows API获取真实屏幕尺寸
                 user32 = ctypes.windll.user32
-                avail_width = user32.GetSystemMetrics(78)  # SM_CXAVAILABLE
-                avail_height = user32.GetSystemMetrics(79)  # SM_CYAVAILABLE
-                
+                avail_width = user32.GetSystemMetrics(78)
+                avail_height = user32.GetSystemMetrics(79)
                 uat_logger.info(f"脚本执行时获取的可用工作区尺寸: {avail_width}x{avail_height}")
-                
-                # 获取当前窗口大小信息用于验证
-                viewport_size = await self.page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
+                viewport_size = await target_page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
                 uat_logger.info(f"脚本执行时窗口大小: {viewport_size['width']}x{viewport_size['height']}")
             except Exception as e:
                 uat_logger.warning(f"获取窗口大小信息时出错: {str(e)}")
@@ -2837,7 +2852,7 @@ class PlaywrightAutomation:
             
             # 获取当前页面状态
             try:
-                current_url = self.page.url
+                current_url = target_page.url
                 uat_logger.info(f"🎯 [STEP_DEBUG] 当前页面URL: {current_url}")
             except Exception as e:
                 uat_logger.warning(f"🎯 [STEP_DEBUG] 获取当前URL失败: {str(e)}")
@@ -2864,13 +2879,13 @@ class PlaywrightAutomation:
                 if action == "navigate":
                     url = step.get("url")
                     # 检查当前页面是否已经在目标URL上,避免重复导航
-                    if self.page and self.page.url != url:
-                        await self.navigate_to(url)
+                    if target_page and target_page.url != url:
+                        await self.navigate_to(url, page=target_page)
                         # 确保页面完全加载完成
-                        if self.page:
+                        if target_page:
                             uat_logger.info("导航后等待页面完全加载")
-                            await self.page.wait_for_load_state('domcontentloaded', timeout=30000)
-                            await self.page.wait_for_load_state('load', timeout=30000)
+                            await target_page.wait_for_load_state('domcontentloaded', timeout=30000)
+                            await target_page.wait_for_load_state('load', timeout=30000)
                     else:
                         uat_logger.info(f"页面已在目标URL上,跳过导航: {url}")
                 elif action == "click":
@@ -2881,7 +2896,7 @@ class PlaywrightAutomation:
                     
                     # 首先尝试原始选择器
                     try:
-                        await self.click_element(selector, step.get("selector_type", "css"), step.get("iframe_selector"))
+                        await self.click_element(selector, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
                         click_success = True
                     except Exception as e:
                         uat_logger.warning(f"原始选择器点击失败: {str(e)}")
@@ -2906,8 +2921,8 @@ class PlaywrightAutomation:
                                 uat_logger.info(f"尝试使用更宽松的选择器: {base_selector}")
                                 try:
                                     # 等待基础选择器的元素可见
-                                    await self.page.wait_for_selector(base_selector, state='visible', timeout=5000)
-                                    await self.page.click(base_selector, force=True, timeout=5000)
+                                    await target_page.wait_for_selector(base_selector, state='visible', timeout=5000)
+                                    await target_page.click(base_selector, force=True, timeout=5000)
                                     uat_logger.info(f"使用宽松选择器成功点击元素: {base_selector}")
                                     click_success = True
                                 except Exception as e2:
@@ -2926,8 +2941,8 @@ class PlaywrightAutomation:
                                 if id_match:
                                     basic_selector = f"#{id_match.group(1)}"
                                     uat_logger.info(f"尝试使用ID选择器: {basic_selector}")
-                                    await self.page.wait_for_selector(basic_selector, state='visible', timeout=5000)
-                                    await self.page.click(basic_selector, force=True, timeout=5000)
+                                    await target_page.wait_for_selector(basic_selector, state='visible', timeout=5000)
+                                    await target_page.click(basic_selector, force=True, timeout=5000)
                                     uat_logger.info(f"使用ID选择器成功点击元素: {basic_selector}")
                                     click_success = True
                             except:
@@ -2938,20 +2953,20 @@ class PlaywrightAutomation:
                             raise Exception(f"无法点击元素,所有选择器尝试均失败: {selector}")
                     
                     # 对于点击操作,根据元素类型执行适当的等待策略
-                    if self.page:
+                    if target_page:
                         try:
                             # 根据选择器判断元素类型,执行不同的等待策略
                             if 'input' in selector or 'textarea' in selector or 'select' in selector:
                                 # 对于表单元素,等待一段时间让数据保存,但不等待页面加载
                                 uat_logger.info("表单元素点击,等待数据保存完成")
-                                await self.page.wait_for_timeout(300)
+                                await target_page.wait_for_timeout(300)
                             elif 'button' in selector or 'submit' in selector.lower():
                                 # 对于按钮,先不进行导航检测,因为可能只是UI变化
                                 uat_logger.info("按钮点击,等待UI响应")
-                                await self.page.wait_for_timeout(300)
+                                await target_page.wait_for_timeout(300)
                             else:
                                 # 对于其他元素,使用较短的等待时间
-                                await self.page.wait_for_timeout(200)
+                                await target_page.wait_for_timeout(200)
                         except Exception as e:
                             uat_logger.warning(f"点击后等待时出错: {str(e)}")
                             # 发生错误时也继续执行
@@ -2964,7 +2979,7 @@ class PlaywrightAutomation:
                     
                     # 首先尝试原始选择器
                     try:
-                        await self.fill_input(selector, text, step.get("selector_type", "css"), step.get("iframe_selector"))
+                        await self.fill_input(selector, text, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
                         fill_success = True
                     except Exception as e:
                         uat_logger.warning(f"原始选择器填充失败: {str(e)}")
@@ -2987,7 +3002,7 @@ class PlaywrightAutomation:
                             if base_selector != selector and base_selector.strip():
                                 uat_logger.info(f"尝试使用更宽松的选择器: {base_selector}")
                                 try:
-                                    await self.fill_input(base_selector, text)
+                                    await self.fill_input(base_selector, text, page=target_page)
                                     fill_success = True
                                 except Exception as e2:
                                     uat_logger.warning(f"宽松选择器填充失败: {str(e2)}")
@@ -3005,7 +3020,7 @@ class PlaywrightAutomation:
                                 if id_match:
                                     basic_selector = f"#{id_match.group(1)}"
                                     uat_logger.info(f"尝试使用ID选择器: {basic_selector}")
-                                    await self.fill_input(basic_selector, text)
+                                    await self.fill_input(basic_selector, text, page=target_page)
                                     fill_success = True
                             except:
                                 pass
@@ -3015,8 +3030,8 @@ class PlaywrightAutomation:
                             raise Exception(f"无法填充元素,所有选择器尝试均失败: {selector}")
                     
                     # 填充后等待一小段时间以确保值已设置,但不等待页面加载
-                    if self.page:
-                        await self.page.wait_for_timeout(300)
+                    if target_page:
+                        await target_page.wait_for_timeout(300)
                         uat_logger.info(f"填充操作完成,等待值生效: {selector}")
                 elif action == "scroll":
                     # 处理新的滚动格式
@@ -3024,8 +3039,8 @@ class PlaywrightAutomation:
                         scroll_pos = step.get("scrollPosition", {})
                         # 计算滚动距离和方向
                         current_scroll = {"x": 0, "y": 0}  # 默认值
-                        if self.page is not None:
-                            current_scroll = await self.page.evaluate("""
+                        if target_page is not None:
+                            current_scroll = await target_page.evaluate("""
                                 () => ({
                                     x: window.pageXOffset || document.documentElement.scrollLeft,
                                     y: window.pageYOffset || document.documentElement.scrollTop
@@ -3038,13 +3053,13 @@ class PlaywrightAutomation:
                         delta_y = scroll_pos.get("y", 0) - current_scroll["y"]
                         
                         # 执行滚动
-                        if self.page is not None:
-                            await self.page.evaluate(f"window.scrollBy({delta_x}, {delta_y})")
+                        if target_page is not None:
+                            await target_page.evaluate(f"window.scrollBy({delta_x}, {delta_y})")
                     else:
                         # 处理旧的滚动格式
                         direction = step.get("direction", "down")
                         pixels = step.get("pixels", 500)
-                        await self.scroll_page(direction, pixels)
+                        await self.scroll_page(direction, pixels, page=target_page)
                     
                     # 移除滚动后的固定等待
                 elif action == "hover":
@@ -3055,11 +3070,11 @@ class PlaywrightAutomation:
                     # await asyncio.sleep(0.2)
                 elif action == "double_click":
                     selector = step.get("selector")
-                    await self.double_click_element(selector)
+                    await self.double_click_element(selector, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
                     # 移除双击后的固定等待
                 elif action == "right_click":
                     selector = step.get("selector")
-                    await self.right_click_element(selector)
+                    await self.right_click_element(selector, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
                     # 移除右键点击后的固定等待
                 elif action == "submit":
                     selector = step.get("selector")
@@ -3067,7 +3082,7 @@ class PlaywrightAutomation:
                     
                     # 获取当前页面URL和状态
                     try:
-                        current_url = self.page.url
+                        current_url = target_page.url
                         uat_logger.info(f"🔍 [SUBMIT_DEBUG] 当前页面URL: {current_url}")
                     except Exception as e:
                         uat_logger.warning(f"🔍 [SUBMIT_DEBUG] 获取当前URL失败: {str(e)}")
@@ -3079,11 +3094,11 @@ class PlaywrightAutomation:
                     try:
                         uat_logger.info(f"🔍 [SUBMIT_DEBUG] 尝试方式1: 原始选择器提交")
                         # 检查元素是否存在
-                        element_exists = await self.page.evaluate("(selector) => document.querySelector(selector) !== null", selector)
+                        element_exists = await target_page.evaluate("(selector) => document.querySelector(selector) !== null", selector)
                         if element_exists:
                             uat_logger.info(f"🔍 [SUBMIT_DEBUG] 提交按钮存在,准备点击")
                             # 使用JavaScript点击提交按钮,触发表单提交
-                            await self.page.evaluate("""(selector) => {
+                            await target_page.evaluate("""(selector) => {
                                 const element = document.querySelector(selector);
                                 if (element) {
                                     // 直接点击提交按钮,触发表单提交
@@ -3117,10 +3132,10 @@ class PlaywrightAutomation:
                                 uat_logger.info(f"🔍 [SUBMIT_DEBUG] 尝试使用更宽松的选择器: {base_selector}")
                                 try:
                                     # 使用JavaScript点击提交按钮
-                                    element_exists = await self.page.evaluate("(selector) => document.querySelector(selector) !== null", base_selector)
+                                    element_exists = await target_page.evaluate("(selector) => document.querySelector(selector) !== null", base_selector)
                                     if element_exists:
                                         uat_logger.info(f"🔍 [SUBMIT_DEBUG] 宽松选择器元素存在,准备点击")
-                                        await self.page.evaluate("""(selector) => {
+                                        await target_page.evaluate("""(selector) => {
                                             const element = document.querySelector(selector);
                                             if (element) {
                                                 // 直接点击提交按钮,触发表单提交
@@ -3149,10 +3164,10 @@ class PlaywrightAutomation:
                                     basic_selector = f"#{id_match.group(1)}"
                                     uat_logger.info(f"🔍 [SUBMIT_DEBUG] 尝试使用ID选择器: {basic_selector}")
                                     # 使用JavaScript点击提交按钮
-                                    element_exists = await self.page.evaluate("(selector) => document.querySelector(selector) !== null", basic_selector)
+                                    element_exists = await target_page.evaluate("(selector) => document.querySelector(selector) !== null", basic_selector)
                                     if element_exists:
                                         uat_logger.info(f"🔍 [SUBMIT_DEBUG] ID选择器元素存在,准备点击")
-                                        await self.page.evaluate("""(selector) => {
+                                        await target_page.evaluate("""(selector) => {
                                             const element = document.querySelector(selector);
                                             if (element) {
                                                 // 直接点击提交按钮,触发表单提交
@@ -3174,13 +3189,13 @@ class PlaywrightAutomation:
                         uat_logger.info(f"✅ [SUBMIT_DEBUG] submit操作执行成功: {selector}")
                     
                     # 提交后等待一小段时间,确保表单提交事件被触发
-                    if self.page:
+                    if target_page:
                         uat_logger.info(f"🔍 [SUBMIT_DEBUG] 表单提交,等待一小段时间确保提交事件触发")
-                        await self.page.wait_for_timeout(300)
+                        await target_page.wait_for_timeout(300)
                         
                         # 检查提交后的页面状态
                         try:
-                            new_url = self.page.url
+                            new_url = target_page.url
                             uat_logger.info(f"🔍 [SUBMIT_DEBUG] 提交后页面URL: {new_url}")
                             if new_url != current_url:
                                 uat_logger.info(f"🔄 [SUBMIT_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
@@ -3192,9 +3207,9 @@ class PlaywrightAutomation:
                     selector = step.get("selector")
                     key = step.get("key")
                     if selector:
-                        await self.page.click(selector)  # 先点击确保焦点
+                        await target_page.click(selector)  # 先点击确保焦点
                     # 如果没有selector,直接发送按键
-                    await self.page.keyboard.press(key)
+                    await target_page.keyboard.press(key)
                     # 移除按键后的固定等待
                 elif action == "wait":
                     wait_time = step.get("time", 1000)
@@ -3203,15 +3218,15 @@ class PlaywrightAutomation:
                     selector = step.get("selector")
                     timeout = step.get("timeout", 30000)
                     if selector:
-                        await self.wait_for_selector(selector, timeout, step.get("selector_type", "css"), step.get("iframe_selector"))
+                        await self.wait_for_selector(selector, timeout, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
                 elif action == "wait_for_element_visible":
                     selector = step.get("selector")
                     timeout = step.get("timeout", 30000)
                     if selector:
-                        await self.wait_for_element_visible(selector, timeout, step.get("selector_type", "css"), step.get("iframe_selector"))
+                        await self.wait_for_element_visible(selector, timeout, step.get("selector_type", "css"), page=target_page)
                 elif action == "screenshot":
                     # 截取页面截图
-                    await self.take_screenshot()
+                    await self.take_screenshot(page=target_page)
                 elif action == "extract_text":
                     selector = step.get("selector")
                     uat_logger.info(f"🔍 [EXTRACT_TEXT_DEBUG] 开始执行提取文本操作,选择器: {selector}")
@@ -3219,14 +3234,14 @@ class PlaywrightAutomation:
                     try:
                         if selector:
                             # 提取元素文本
-                            extracted_text = await self.extract_element_text(selector, step.get("selector_type", "css"), step.get("iframe_selector"))
+                            extracted_text = await self.extract_element_text(selector, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
                             uat_logger.info(f"✅ [EXTRACT_TEXT_DEBUG] 提取到文本: {extracted_text[:100]}...")
                             # 标记为成功
                             step_status = "success"
                             step_extracted_text = extracted_text
                         else:
                             # 提取整个页面文本
-                            extracted_text = await self.get_page_text()
+                            extracted_text = await self.get_page_text(page=target_page)
                             uat_logger.info(f"✅ [EXTRACT_TEXT_DEBUG] 提取到页面文本: {extracted_text[:100]}...")
                             # 标记为成功
                             step_status = "success"
@@ -3238,7 +3253,7 @@ class PlaywrightAutomation:
                         step_extracted_text = ""
                     
                     # 等待页面状态稳定
-                    if self.page:
+                    if target_page:
                         try:
                             # 等待页面稳定,确保上一步操作完成
                             uat_logger.info(f"等待步骤完成: {action}")
@@ -3246,17 +3261,17 @@ class PlaywrightAutomation:
                             # 检查页面是否正在加载
                             try:
                                 # 等待页面加载状态稳定(最多等待2秒)
-                                await self.page.wait_for_load_state('domcontentloaded', timeout=2000)
+                                await target_page.wait_for_load_state('domcontentloaded', timeout=2000)
                             except:
                                 pass  # 页面可能已经加载完成
                             
                             # 等待一小段时间,让页面状态稳定
-                            await self.page.wait_for_timeout(500)
+                            await target_page.wait_for_timeout(500)
                             
                             # 检查是否有正在进行的网络请求
                             try:
                                 # 等待网络空闲(最多等待3秒)
-                                await self.page.wait_for_load_state('networkidle', timeout=3000)
+                                await target_page.wait_for_load_state('networkidle', timeout=3000)
                             except:
                                 pass  # 网络可能一直有活动
                             
@@ -3267,7 +3282,7 @@ class PlaywrightAutomation:
                     
                     # 检查步骤执行后的页面状态
                     try:
-                        new_url = self.page.url
+                        new_url = target_page.url
                         uat_logger.info(f"🎯 [STEP_DEBUG] 步骤执行后页面URL: {new_url}")
                         if new_url != current_url:
                             uat_logger.info(f"🔄 [STEP_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
@@ -3287,7 +3302,7 @@ class PlaywrightAutomation:
                     
                     # 跳过后续的通用处理
                     continue
-                if self.page:
+                if target_page:
                     try:
                         # 等待页面稳定,确保上一步操作完成
                         uat_logger.info(f"等待步骤完成: {action}")
@@ -3295,17 +3310,17 @@ class PlaywrightAutomation:
                         # 检查页面是否正在加载
                         try:
                             # 等待页面加载状态稳定(最多等待2秒)
-                            await self.page.wait_for_load_state('domcontentloaded', timeout=2000)
+                            await target_page.wait_for_load_state('domcontentloaded', timeout=2000)
                         except:
                             pass  # 页面可能已经加载完成
                         
                         # 等待一小段时间,让页面状态稳定
-                        await self.page.wait_for_timeout(500)
+                        await target_page.wait_for_timeout(500)
                         
                         # 检查是否有正在进行的网络请求
                         try:
                             # 等待网络空闲(最多等待3秒)
-                            await self.page.wait_for_load_state('networkidle', timeout=3000)
+                            await target_page.wait_for_load_state('networkidle', timeout=3000)
                         except:
                             pass  # 网络可能一直有活动
                         
@@ -3316,7 +3331,7 @@ class PlaywrightAutomation:
                 
                 # 检查步骤执行后的页面状态
                 try:
-                    new_url = self.page.url
+                    new_url = target_page.url
                     uat_logger.info(f"🎯 [STEP_DEBUG] 步骤执行后页面URL: {new_url}")
                     if new_url != current_url:
                         uat_logger.info(f"🔄 [STEP_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
@@ -3342,16 +3357,16 @@ class PlaywrightAutomation:
         return results
     
     async def execute_multiple_test_cases(self, case_ids: List[int], db) -> Dict[str, Any]:
-        """执行多个测试用例
+        """执行多个测试用例（按列表顺序从上到下执行；每用例一标签页，首个用例用主标签页避免 about:blank）
         
         Args:
-            case_ids: 测试用例ID列表
+            case_ids: 测试用例ID列表（顺序即执行顺序）
             db: 数据库实例,用于获取测试用例步骤
             
         Returns:
             包含所有测试用例执行结果的字典
         """
-        uat_logger.info(f"🚀 [MULTI_CASE] ========== 开始执行多个测试用例,共 {len(case_ids)} 个用例 ==========")
+        uat_logger.info(f"🚀 [MULTI_CASE] ========== 开始按顺序执行多个测试用例,共 {len(case_ids)} 个用例（每用例一标签页） ==========")
         
         all_results = {
             "total_cases": len(case_ids),
@@ -3360,132 +3375,124 @@ class PlaywrightAutomation:
             "case_results": []
         }
         
-        # 确保浏览器已启动
-        if self.page is None:
+        # 确保浏览器已启动（需要 context 以创建新标签页）
+        if self.browser is None or self.context is None:
             await self.start_browser(headless=False)
         
-        for case_index, case_id in enumerate(case_ids):
-            case_number = case_index + 1
-            uat_logger.info(f"🎯 [MULTI_CASE] ========== 开始执行第 {case_number}/{len(case_ids)} 个测试用例,ID: {case_id} ==========")
-            
+        def build_execution_steps(steps):
+            """将数据库步骤格式转换为执行脚本所需的格式"""
+            execution_steps = []
+            for step in steps:
+                exec_step = {"action": step["action"]}
+                if step["action"] == "click":
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                elif step["action"] in ["fill", "input"]:
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["text"] = step["input_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                elif step["action"] == "submit":
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                elif step["action"] == "navigate":
+                    exec_step["url"] = step["url"] or step["input_value"]
+                elif step["action"] == "keypress":
+                    exec_step["key"] = step["input_value"]
+                elif step["action"] == "wait":
+                    try:
+                        exec_step["time"] = int(step["input_value"])
+                    except Exception:
+                        exec_step["time"] = 1000
+                elif step["action"] in ["wait_for_selector", "wait_for_element_visible"]:
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                    try:
+                        exec_step["timeout"] = int(step["input_value"])
+                    except Exception:
+                        exec_step["timeout"] = 30000
+                elif step["action"] == "extract_text":
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                if step.get("description"):
+                    exec_step["description"] = step["description"]
+                execution_steps.append(exec_step)
+            return execution_steps
+        
+        def process_case_result(result, case_id):
+            """统一处理单个用例结果并写入 all_results"""
+            if isinstance(result, Exception):
+                all_results["case_results"].append({
+                    "case_id": case_id,
+                    "case_name": "未知",
+                    "status": "error",
+                    "error": str(result)
+                })
+                all_results["failed_cases"] += 1
+            elif result.get("status") == "success":
+                all_results["case_results"].append(result)
+                all_results["successful_cases"] += 1
+            elif result.get("status") == "warning":
+                all_results["case_results"].append(result)
+            else:
+                all_results["case_results"].append(result)
+                all_results["failed_cases"] += 1
+        
+        # 按 case_ids 顺序依次执行（第一个用例用主标签页 self.page，避免 about:blank；后续用例新建标签页）
+        for index, case_id in enumerate(case_ids):
+            case_number = index + 1
+            uat_logger.info(f"🎯 [MULTI_CASE] ========== 执行第 {case_number}/{len(case_ids)} 个用例,ID: {case_id} ==========")
+            tab_page = None
             try:
-                # 从数据库获取测试用例信息
                 case_info = db.get_test_case_v2(case_id)
                 if not case_info:
-                    uat_logger.error(f"❌ [MULTI_CASE] 测试用例不存在,ID: {case_id}")
-                    all_results["case_results"].append({
+                    process_case_result({
                         "case_id": case_id,
                         "case_name": "未知",
                         "status": "error",
                         "error": f"测试用例不存在,ID: {case_id}"
-                    })
-                    all_results["failed_cases"] += 1
+                    }, case_id)
                     continue
-                
                 case_name = case_info.get("name", "未命名用例")
-                uat_logger.info(f"📋 [MULTI_CASE] 测试用例名称: {case_name}")
-                
-                # 从数据库获取测试用例的所有步骤
                 steps = db.get_case_steps(case_id)
-                uat_logger.info(f"📋 [MULTI_CASE] 获取到 {len(steps)} 个测试步骤")
-                
                 if not steps:
-                    uat_logger.warning(f"⚠️ [MULTI_CASE] 测试用例没有步骤,ID: {case_id}")
-                    all_results["case_results"].append({
+                    process_case_result({
                         "case_id": case_id,
                         "case_name": case_name,
                         "status": "warning",
                         "warning": "测试用例没有步骤"
-                    })
+                    }, case_id)
                     continue
-                
-                # 将数据库步骤格式转换为执行脚本所需的格式
-                execution_steps = []
-                for step in steps:
-                    exec_step = {
-                        "action": step["action"]
-                    }
-                    
-                    # 根据不同的操作类型添加相应的参数
-                    if step["action"] == "click":
-                        exec_step["selector"] = step["selector_value"]
-                        exec_step["selector_type"] = step.get("selector_type", "css")
-                        exec_step["iframe_selector"] = step.get("iframe_selector")
-                    elif step["action"] in ["fill", "input"]:
-                        exec_step["selector"] = step["selector_value"]
-                        exec_step["text"] = step["input_value"]
-                        exec_step["selector_type"] = step.get("selector_type", "css")
-                        exec_step["iframe_selector"] = step.get("iframe_selector")
-                    elif step["action"] == "submit":
-                        exec_step["selector"] = step["selector_value"]
-                        exec_step["selector_type"] = step.get("selector_type", "css")
-                        exec_step["iframe_selector"] = step.get("iframe_selector")
-                    elif step["action"] == "navigate":
-                        exec_step["url"] = step["url"] or step["input_value"]
-                    elif step["action"] == "keypress":
-                        exec_step["key"] = step["input_value"]
-                    elif step["action"] == "wait":
-                        try:
-                            exec_step["time"] = int(step["input_value"])
-                        except:
-                            exec_step["time"] = 1000
-                    elif step["action"] in ["wait_for_selector", "wait_for_element_visible"]:
-                        exec_step["selector"] = step["selector_value"]
-                        exec_step["selector_type"] = step.get("selector_type", "css")
-                        exec_step["iframe_selector"] = step.get("iframe_selector")
-                        try:
-                            exec_step["timeout"] = int(step["input_value"])
-                        except:
-                            exec_step["timeout"] = 30000
-                    elif step["action"] == "extract_text":
-                        exec_step["selector"] = step["selector_value"]
-                        exec_step["selector_type"] = step.get("selector_type", "css")
-                        exec_step["iframe_selector"] = step.get("iframe_selector")
-                    
-                    # 添加描述信息
-                    if step["description"]:
-                        exec_step["description"] = step["description"]
-                    
-                    execution_steps.append(exec_step)
-                
-                uat_logger.info(f"🔄 [MULTI_CASE] 转换后的执行步骤数: {len(execution_steps)}")
-                
-                # 执行测试用例的步骤
-                case_results = await self.execute_script_steps(execution_steps)
-                
-                # 统计执行结果
+                execution_steps = build_execution_steps(steps)
+                # 第一个用例使用主标签页 self.page（会执行 navigate，不会停留 about:blank）；其余用例新建标签页
+                if index == 0:
+                    case_results = await self.execute_script_steps(execution_steps, page=self.page)
+                else:
+                    tab_page = await self.context.new_page()
+                    uat_logger.info(f"🔄 [MULTI_CASE] 用例 ID:{case_id} 在新标签页中执行: {case_name}")
+                    case_results = await self.execute_script_steps(execution_steps, page=tab_page)
                 success_count = sum(1 for r in case_results if r.get("status") == "success")
                 error_count = sum(1 for r in case_results if r.get("status") == "error")
-                
-                # 提取文本(从所有步骤中收集,使用最后一个提取的文本)
                 extracted_text = ""
                 for r in case_results:
                     if r.get("extracted_text"):
                         extracted_text = r.get("extracted_text")
-                # 移除了 break,现在会使用最后一个提取的文本
-                
                 case_status = "success" if error_count == 0 else "error"
-                
-                uat_logger.info(f"✅ [MULTI_CASE] 测试用例执行完成: {case_name}")
-                uat_logger.info(f"📊 [MULTI_CASE] 成功步骤: {success_count}, 失败步骤: {error_count}")
-                if extracted_text:
-                    uat_logger.info(f"📝 [MULTI_CASE] 提取的文本: {extracted_text[:100]}...")
-                
-                # 记录测试用例执行结果到数据库
                 try:
                     db.create_run_history(
                         case_id,
                         case_status,
-                        0,  # 暂时设置为0,后续可以计算实际执行时间
+                        0,
                         "" if case_status == "success" else str(case_results),
                         extracted_text
                     )
-                    uat_logger.info(f"📋 [MULTI_CASE] 测试结果已保存到数据库")
                 except Exception as db_error:
                     uat_logger.error(f"❌ [MULTI_CASE] 保存测试结果到数据库失败: {db_error}")
-                
-                # 记录测试用例执行结果
-                all_results["case_results"].append({
+                result = {
                     "case_id": case_id,
                     "case_name": case_name,
                     "status": case_status,
@@ -3494,29 +3501,24 @@ class PlaywrightAutomation:
                     "failed_steps": error_count,
                     "extracted_text": extracted_text,
                     "step_results": case_results
-                })
-                
-                if case_status == "success":
-                    all_results["successful_cases"] += 1
-                else:
-                    all_results["failed_cases"] += 1
-                
-                # 在测试用例之间添加短暂的等待,确保页面状态稳定
-                if case_index < len(case_ids) - 1:
-                    uat_logger.info(f"⏳ [MULTI_CASE] 等待 2 秒后执行下一个测试用例")
-                    await asyncio.sleep(2)
-                
+                }
+                process_case_result(result, case_id)
             except Exception as e:
                 uat_logger.error(f"❌ [MULTI_CASE] 测试用例执行异常,ID: {case_id}, 错误: {str(e)}")
-                all_results["case_results"].append({
+                process_case_result({
                     "case_id": case_id,
                     "case_name": case_info.get("name", "未命名用例") if 'case_info' in locals() else "未知",
                     "status": "error",
                     "error": str(e)
-                })
-                all_results["failed_cases"] += 1
+                }, case_id)
+            finally:
+                if tab_page and not (hasattr(tab_page, 'is_closed') and tab_page.is_closed()):
+                    try:
+                        await tab_page.close()
+                    except Exception as close_err:
+                        uat_logger.warning(f"关闭标签页时出错: {close_err}")
         
-        uat_logger.info(f"🎉 [MULTI_CASE] ========== 所有测试用例执行完成 ==========")
+        uat_logger.info(f"🎉 [MULTI_CASE] ========== 所有测试用例执行完成（按顺序） ==========")
         uat_logger.info(f"📊 [MULTI_CASE] 总用例数: {all_results['total_cases']}, 成功: {all_results['successful_cases']}, 失败: {all_results['failed_cases']}")
         
         return all_results

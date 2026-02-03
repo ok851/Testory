@@ -315,6 +315,89 @@
             font-weight: normal;
             cursor: pointer;
         }
+        .selected-order-panel {
+            padding: 12px 30px;
+            background: #e8ecff;
+            border-bottom: 1px solid #d0d7f0;
+            display: none;
+        }
+        .selected-order-panel.visible {
+            display: block;
+        }
+        .selected-order-panel h4 {
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 8px;
+        }
+        .selected-order-list {
+            margin-top: 20px;
+            min-height: 200px;
+        }
+        .selected-order-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 15px 20px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            background: white;
+            transition: all 0.3s ease;
+            user-select: none;
+            cursor: grab;
+        }
+        
+        .selected-order-item:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-color: #667eea;
+        }
+        
+        .selected-order-item:active {
+            cursor: grabbing;
+        }
+        
+        .selected-order-item .step-number {
+            background: #667eea;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        
+        .selected-order-item .step-content {
+            flex: 1;
+            padding: 0 15px;
+        }
+        
+        .selected-order-item .step-content h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        /* 拖动相关样式 */
+        .selected-order-item.dragging {
+            opacity: 0.5;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            cursor: grabbing;
+        }
+        
+        .selected-order-item.drag-before {
+            border-top: 3px solid #667eea;
+            margin-top: 10px;
+        }
+        
+        .selected-order-item.drag-after {
+            border-bottom: 3px solid #667eea;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -334,6 +417,10 @@
                 <button onclick="deselectAllCases()" class="btn btn-secondary btn-sm">取消全选</button>
                 <button onclick="backToProjects()" class="btn btn-secondary">← 返回项目列表</button>
             </div>
+        </div>
+        <div id="selectedOrderPanel" class="selected-order-panel">
+            <h4>执行顺序（拖拽可调整，从上到下依次执行）</h4>
+            <div id="selectedOrderList" class="selected-order-list"></div>
         </div>
         
         <div class="content">
@@ -407,7 +494,10 @@
         let currentProjectId = null;
         let currentProjectName = '';
         let currentEditingCaseId = null;
-        let selectedCaseIds = new Set();
+        let selectedCaseIdsOrdered = [];
+        let caseNamesById = {};
+        let allCasesList = [];
+        let draggedOrderIndex = null;
         
         function escapeHtml(text) {
             if (!text) return '';
@@ -481,6 +571,9 @@
                 const data = await response.json();
                 
                 const casesList = document.getElementById('casesList');
+                allCasesList = data.cases || [];
+                caseNamesById = {};
+                allCasesList.forEach(c => { caseNamesById[c.id] = c.name; });
                 
                 if (data.cases && data.cases.length > 0) {
                     casesList.innerHTML = '<div class="case-list" id="caseListContainer"></div>';
@@ -490,10 +583,10 @@
                         const caseItem = document.createElement('div');
                         caseItem.className = 'case-item';
                         caseItem.id = `case-${testCase.id}`;
-                        
+                        const isSelected = selectedCaseIdsOrdered.includes(testCase.id);
                         caseItem.innerHTML = `
                             <div class="case-checkbox">
-                                <input type="checkbox" id="select-${testCase.id}" onchange="toggleCaseSelection(${testCase.id})">
+                                <input type="checkbox" id="select-${testCase.id}" onchange="toggleCaseSelection(${testCase.id})" ${isSelected ? 'checked' : ''}>
                             </div>
                             <div class="case-content">
                                 <h3>${escapeHtml(testCase.name)}</h3>
@@ -509,6 +602,7 @@
                         
                         caseListContainer.appendChild(caseItem);
                     });
+                    updateSelectedOrderList();
                 } else {
                     casesList.innerHTML = `
                         <div class="empty-state">
@@ -657,7 +751,7 @@
                     
                     if (data.success) {
                         alert('测试用例删除成功！');
-                        selectedCaseIds.delete(caseId);
+                        selectedCaseIdsOrdered = selectedCaseIdsOrdered.filter(id => id !== caseId);
                         loadTestCases();
                     } else {
                         alert('删除失败: ' + (data.error || '未知错误'));
@@ -681,31 +775,191 @@
         function toggleCaseSelection(caseId) {
             const checkbox = document.getElementById(`select-${caseId}`);
             if (checkbox.checked) {
-                selectedCaseIds.add(caseId);
+                if (!selectedCaseIdsOrdered.includes(caseId)) {
+                    selectedCaseIdsOrdered.push(caseId);
+                }
             } else {
-                selectedCaseIds.delete(caseId);
+                selectedCaseIdsOrdered = selectedCaseIdsOrdered.filter(id => id !== caseId);
             }
+            updateSelectedOrderList();
         }
         
         function selectAllCases() {
+            selectedCaseIdsOrdered = allCasesList.map(c => c.id);
             const checkboxes = document.querySelectorAll('input[type="checkbox"][id^="select-"]');
             checkboxes.forEach(checkbox => {
                 checkbox.checked = true;
-                const caseId = parseInt(checkbox.id.replace('select-', ''));
-                selectedCaseIds.add(caseId);
             });
+            updateSelectedOrderList();
         }
         
         function deselectAllCases() {
+            selectedCaseIdsOrdered = [];
             const checkboxes = document.querySelectorAll('input[type="checkbox"][id^="select-"]');
             checkboxes.forEach(checkbox => {
                 checkbox.checked = false;
             });
-            selectedCaseIds.clear();
+            updateSelectedOrderList();
+        }
+        
+        function updateSelectedOrderList() {
+            const panel = document.getElementById('selectedOrderPanel');
+            const listEl = document.getElementById('selectedOrderList');
+            if (selectedCaseIdsOrdered.length === 0) {
+                panel.classList.remove('visible');
+                listEl.innerHTML = '';
+                return;
+            }
+            panel.classList.add('visible');
+            listEl.innerHTML = selectedCaseIdsOrdered.map((caseId, index) => {
+                const name = caseNamesById[caseId] || ('用例 ' + caseId);
+                return `<div class="selected-order-item" draggable="true" data-case-id="${caseId}" data-order-index="${index}"
+                    ondragstart="handleOrderDragStart(event)" ondragover="handleOrderDragOver(event)" ondrop="handleOrderDrop(event)" ondragend="handleOrderDragEnd(event)">
+                    <div class="step-number">${index + 1}</div>
+                    <div class="step-content">
+                        <h4>${escapeHtml(name)}</h4>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        
+        // 拖动相关变量
+        let draggedElement = null;
+        
+        // 处理拖动开始
+        function handleOrderDragStart(e) {
+            draggedElement = e.target;
+            draggedOrderIndex = parseInt(e.target.dataset.orderIndex);
+            e.target.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/html', e.target.innerHTML);
+        }
+        
+        // 处理拖动过程中鼠标悬停
+        function handleOrderDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            
+            const container = document.getElementById('selectedOrderList');
+            const items = container.querySelectorAll('.selected-order-item');
+            const draggedItem = document.querySelector('.selected-order-item.dragging');
+            
+            if (!draggedItem) return;
+            
+            // 计算鼠标位置
+            const rect = container.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            
+            // 找到当前鼠标位置对应的步骤
+            let targetItem = null;
+            for (let item of items) {
+                if (item === draggedItem) continue;
+                const itemRect = item.getBoundingClientRect();
+                const itemTop = itemRect.top - rect.top;
+                const itemBottom = itemTop + itemRect.height;
+                
+                if (y >= itemTop && y <= itemBottom) {
+                    targetItem = item;
+                    break;
+                }
+            }
+            
+            // 移除所有放置指示器
+            items.forEach(item => {
+                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+            });
+            
+            // 添加放置指示器
+            if (targetItem) {
+                const targetRect = targetItem.getBoundingClientRect();
+                const targetTop = targetRect.top - rect.top;
+                const targetMiddle = targetTop + targetRect.height / 2;
+                
+                if (y < targetMiddle) {
+                    targetItem.classList.add('drag-before');
+                } else {
+                    targetItem.classList.add('drag-after');
+                }
+            }
+        }
+        
+        // 处理拖放
+        function handleOrderDrop(e) {
+            e.preventDefault();
+            
+            const container = document.getElementById('selectedOrderList');
+            const draggedItem = document.querySelector('.selected-order-item.dragging');
+            
+            if (!draggedItem) return;
+            
+            // 计算放置位置
+            const rect = container.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            
+            // 找到放置目标
+            let targetItem = null;
+            let insertBefore = false;
+            
+            const items = container.querySelectorAll('.selected-order-item');
+            for (let item of items) {
+                if (item === draggedItem) continue;
+                const itemRect = item.getBoundingClientRect();
+                const itemTop = itemRect.top - rect.top;
+                const itemBottom = itemTop + itemRect.height;
+                
+                if (y >= itemTop && y <= itemBottom) {
+                    targetItem = item;
+                    const targetMiddle = itemTop + itemRect.height / 2;
+                    insertBefore = y < targetMiddle;
+                    break;
+                }
+            }
+            
+            // 执行放置操作
+            if (targetItem) {
+                // 计算新的顺序
+                const targetIndex = parseInt(targetItem.dataset.orderIndex);
+                if (draggedOrderIndex === null || draggedOrderIndex === targetIndex) return;
+                
+                const id = selectedCaseIdsOrdered[draggedOrderIndex];
+                selectedCaseIdsOrdered.splice(draggedOrderIndex, 1);
+                
+                // 根据放置位置计算新的索引
+                let newIndex;
+                if (insertBefore) {
+                    newIndex = targetIndex > draggedOrderIndex ? targetIndex - 1 : targetIndex;
+                } else {
+                    newIndex = targetIndex > draggedOrderIndex ? targetIndex : targetIndex + 1;
+                }
+                
+                // 确保索引在有效范围内
+                newIndex = Math.max(0, Math.min(newIndex, selectedCaseIdsOrdered.length));
+                
+                selectedCaseIdsOrdered.splice(newIndex, 0, id);
+                updateSelectedOrderList();
+            }
+            
+            // 移除拖动状态
+            draggedItem.classList.remove('dragging');
+            items.forEach(item => {
+                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+            });
+            
+            draggedOrderIndex = null;
+        }
+        
+        // 处理拖动结束
+        function handleOrderDragEnd(e) {
+            e.target.classList.remove('dragging');
+            // 移除所有放置指示器
+            document.querySelectorAll('.selected-order-item').forEach(item => {
+                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+            });
+            draggedOrderIndex = null;
         }
         
         async function executeSelectedCases() {
-            if (selectedCaseIds.size === 0) {
+            if (selectedCaseIdsOrdered.length === 0) {
                 alert('请先选择要执行的测试用例');
                 return;
             }
@@ -719,9 +973,8 @@
             
             try {
                 // 如果只选择了一个测试用例，使用单个测试用例的API端点
-                if (selectedCaseIds.size === 1) {
-                    const caseId = Array.from(selectedCaseIds)[0];
-                    await runTestCase(caseId);
+                if (selectedCaseIdsOrdered.length === 1) {
+                    await runTestCase(selectedCaseIdsOrdered[0]);
                     return;
                 }
                 
@@ -731,7 +984,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        case_ids: Array.from(selectedCaseIds)
+                        case_ids: selectedCaseIdsOrdered
                     })
                 });
                 

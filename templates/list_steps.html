@@ -189,6 +189,38 @@
             flex-shrink: 0;
         }
         
+        /* 拖动相关样式 */
+        .step-item.dragging {
+            opacity: 0.5;
+            transform: rotate(2deg);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            cursor: grabbing;
+        }
+        
+        .step-item.drag-before {
+            border-top: 3px solid #667eea;
+            margin-top: 10px;
+        }
+        
+        .step-item.drag-after {
+            border-bottom: 3px solid #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .steps-list {
+            min-height: 200px;
+        }
+        
+        /* 禁用选择文本，提高拖动体验 */
+        .step-item {
+            user-select: none;
+            cursor: grab;
+        }
+        
+        .step-item:active {
+            cursor: grabbing;
+        }
+        
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -570,6 +602,10 @@
                     stepsList.innerHTML = '<div class="steps-list" id="stepsListContainer"></div>';
                     const stepsListContainer = document.getElementById('stepsListContainer');
                     
+                    // 添加拖放事件监听器到容器
+                    stepsListContainer.addEventListener('dragover', handleDragOver);
+                    stepsListContainer.addEventListener('drop', handleDrop);
+                    
                     data.steps.forEach((step, index) => {
                         const stepItem = document.createElement('div');
                         stepItem.className = 'step-item';
@@ -606,6 +642,12 @@
                                 <button onclick="deleteStep(${step.id})" class="btn btn-sm btn-danger">删除</button>
                             </div>
                         `;
+                        
+                        // 添加拖动功能
+                        stepItem.draggable = true;
+                        stepItem.setAttribute('data-step-id', step.id);
+                        stepItem.addEventListener('dragstart', handleDragStart);
+                        stepItem.addEventListener('dragend', handleDragEnd);
                         
                         stepsListContainer.appendChild(stepItem);
                     });
@@ -1123,6 +1165,175 @@
                 window.location.href = `/list_cases_v2/${currentProjectId}`;
             } else {
                 window.location.href = '/list_projects';
+            }
+        }
+        
+        // 拖动相关变量
+        let draggedElement = null;
+        
+        // 处理拖动开始
+        function handleDragStart(e) {
+            draggedElement = this;
+            this.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/html', this.innerHTML);
+        }
+        
+        // 处理拖动结束
+        function handleDragEnd(e) {
+            this.classList.remove('dragging');
+            // 移除所有放置指示器
+            document.querySelectorAll('.step-item').forEach(item => {
+                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+            });
+        }
+        
+        // 处理拖动过程中鼠标悬停
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            
+            const container = document.getElementById('stepsListContainer');
+            const items = container.querySelectorAll('.step-item');
+            const draggedItem = document.querySelector('.dragging');
+            
+            if (!draggedItem) return;
+            
+            // 计算鼠标位置
+            const rect = container.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            
+            // 找到当前鼠标位置对应的步骤
+            let targetItem = null;
+            for (let item of items) {
+                if (item === draggedItem) continue;
+                const itemRect = item.getBoundingClientRect();
+                const itemTop = itemRect.top - rect.top;
+                const itemBottom = itemTop + itemRect.height;
+                
+                if (y >= itemTop && y <= itemBottom) {
+                    targetItem = item;
+                    break;
+                }
+            }
+            
+            // 移除所有放置指示器
+            items.forEach(item => {
+                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+            });
+            
+            // 添加放置指示器
+            if (targetItem) {
+                const targetRect = targetItem.getBoundingClientRect();
+                const targetTop = targetRect.top - rect.top;
+                const targetMiddle = targetTop + targetRect.height / 2;
+                
+                if (y < targetMiddle) {
+                    targetItem.classList.add('drag-before');
+                } else {
+                    targetItem.classList.add('drag-after');
+                }
+            }
+        }
+        
+        // 处理拖放
+        async function handleDrop(e) {
+            e.preventDefault();
+            
+            const container = document.getElementById('stepsListContainer');
+            const draggedItem = document.querySelector('.dragging');
+            
+            if (!draggedItem) return;
+            
+            // 计算放置位置
+            const rect = container.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            
+            // 找到放置目标
+            let targetItem = null;
+            let insertBefore = false;
+            
+            const items = container.querySelectorAll('.step-item');
+            for (let item of items) {
+                if (item === draggedItem) continue;
+                const itemRect = item.getBoundingClientRect();
+                const itemTop = itemRect.top - rect.top;
+                const itemBottom = itemTop + itemRect.height;
+                
+                if (y >= itemTop && y <= itemBottom) {
+                    targetItem = item;
+                    const targetMiddle = itemTop + itemRect.height / 2;
+                    insertBefore = y < targetMiddle;
+                    break;
+                }
+            }
+            
+            // 执行放置操作
+            if (targetItem) {
+                if (insertBefore) {
+                    container.insertBefore(draggedItem, targetItem);
+                } else {
+                    container.insertBefore(draggedItem, targetItem.nextSibling);
+                }
+            }
+            
+            // 更新步骤编号
+            updateStepNumbers();
+            
+            // 保存步骤顺序
+            await saveStepOrder();
+            
+            // 移除拖动状态
+            draggedItem.classList.remove('dragging');
+            items.forEach(item => {
+                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+            });
+        }
+        
+        // 更新步骤编号
+        function updateStepNumbers() {
+            const items = document.querySelectorAll('.step-item');
+            items.forEach((item, index) => {
+                const numberElement = item.querySelector('.step-number');
+                if (numberElement) {
+                    numberElement.textContent = index + 1;
+                }
+            });
+        }
+        
+        // 保存步骤顺序
+        async function saveStepOrder() {
+            const container = document.getElementById('stepsListContainer');
+            const items = container.querySelectorAll('.step-item');
+            
+            // 构建步骤顺序数组
+            const stepOrder = Array.from(items).map(item => {
+                return {
+                    id: parseInt(item.getAttribute('data-step-id')),
+                    order: Array.from(items).indexOf(item) + 1
+                };
+            });
+            
+            try {
+                const response = await fetch(`/api/cases/${currentCaseId}/steps/order`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ steps: stepOrder })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    console.error('保存步骤顺序失败:', data.error);
+                    // 重新加载步骤以恢复原始顺序
+                    loadSteps();
+                }
+            } catch (error) {
+                console.error('保存步骤顺序时发生错误:', error);
+                // 重新加载步骤以恢复原始顺序
+                loadSteps();
             }
         }
         

@@ -4,32 +4,9 @@ import os
 import time
 from database import Database
 from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_execute_script_steps, sync_start_recording, sync_stop_recording, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, sync_execute_multiple_test_cases, worker, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_wait_for_timeout  # 使用全局实例和同步包装器
-import asyncio
 import json
 import functools
 from logger import uat_logger
-
-def generate_selector_by_method(method, value):
-    """根据定位方法生成对应的选择器"""
-    if not value:
-        return ""
-    
-    method = method.lower()
-    
-    if method == 'xpath':
-        return value
-    elif method == 'id':
-        return f'#{value}'
-    elif method == 'name':
-        return f'[name="{value}"]'
-    elif method == 'class':
-        return f'.{value}'
-    elif method == 'text':
-        return f':has-text("{value}")'
-    elif method == 'css':
-        return value
-    else:
-        return value
 
 # 统一的API错误处理装饰器
 def api_error_handler(func):
@@ -92,13 +69,6 @@ def create_case_v2():
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
-    response.headers['Content-Type'] = 'text/html; charset=utf-8'
-    return response
-
-# CDN测试页面
-@app.route('/cdn_test')
-def cdn_test():
-    response = make_response(render_template('cdn_test.html'))
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     return response
 
@@ -264,8 +234,7 @@ def api_execute_multiple_cases():
         # 执行多个测试用例，添加超时处理
         import threading
         import queue
-        import time
-        
+
         # 创建队列用于返回结果
         result_queue = queue.Queue(maxsize=1)  # 设置队列大小，防止阻塞
         
@@ -660,10 +629,8 @@ def api_has_test_cases():
 @log_api_request
 def api_screenshot():
     try:
-        import os
-        import time
         from flask import send_file
-        
+
         # 生成截图文件名
         timestamp = int(time.time())
         filename = f"screenshot_{timestamp}.png"
@@ -959,7 +926,7 @@ def api_delete_case_steps(case_id):
 @api_error_handler
 @log_api_request
 def api_update_step_order(case_id):
-    data = request.json
+    data = request.get_json(silent=True) or {}
     steps = data.get('steps', [])
     
     success = db.update_step_order(case_id, steps)
@@ -1290,7 +1257,7 @@ def api_run_case(case_id):
             })
             
         except Exception as e:
-            # 执行失败时的处理
+            # 执行失败时的处理（不关闭浏览器，便于用户查看页面状态排查问题）
             duration = round(time.time() - start_time, 2)
             uat_logger.error(f"测试用例 #{case_id} 运行失败: {str(e)}")
             
@@ -1441,386 +1408,6 @@ def get_case_run_history(case_id):
             'error': str(e)
         }), 500
 
-@app.route('/api/execute_multiple_cases', methods=['POST'])
-@api_error_handler
-@log_api_request
-def execute_multiple_cases():
-    """执行多个测试用例"""
-    try:
-        data = request.get_json(silent=True) or {}
-        case_ids = data.get('case_ids', [])
-        
-        if not case_ids or not isinstance(case_ids, list):
-            return jsonify({
-                'success': False,
-                'error': '请提供有效的测试用例ID列表'
-            }), 400
-        
-        # 初始化数据库连接
-        db = Database()
-        
-        # 执行结果
-        case_results = []
-        total_cases = len(case_ids)
-        successful_cases = 0
-        failed_cases = 0
-        
-        # 逐个执行测试用例
-        for case_id in case_ids:
-            try:
-                # 获取测试用例信息
-                case = db.get_test_case_v2(case_id)
-                if not case:
-                    case_results.append({
-                        'case_id': case_id,
-                        'case_name': f'用例 {case_id}',
-                        'status': 'error',
-                        'error': '测试用例不存在'
-                    })
-                    failed_cases += 1
-                    continue
-                
-                # 获取测试步骤
-                steps = db.get_case_steps(case_id)
-                if not steps:
-                    case_results.append({
-                        'case_id': case_id,
-                        'case_name': case['name'],
-                        'status': 'error',
-                        'error': '测试用例没有步骤'
-                    })
-                    failed_cases += 1
-                    continue
-                
-                # 记录开始时间
-                start_time = time.time()
-                
-                uat_logger.info(f"开始运行测试用例 #{case_id}: {case['name']}")
-                uat_logger.info(f"测试用例共有 {len(steps)} 个步骤")
-                
-                # 提取的文本
-                extracted_text = ""
-                # 预期结果
-                expected_text = ""
-                
-                # 启动浏览器
-                sync_start_browser(headless=False)
-                
-                # 执行测试步骤
-                try:
-                    # 如果有目标URL，先导航到该URL
-                    if case.get('url'):
-                        url = case['url']
-                        # 验证URL有效性
-                        if url and url.strip():
-                            # 清理URL
-                            url = url.strip()
-                            # 自动添加协议前缀
-                            if not url.startswith(('http://', 'https://')):
-                                url = 'http://' + url
-                            uat_logger.log_automation_step("navigate", url, "测试开始时导航")
-                            sync_navigate_to(url)
-                        else:
-                            uat_logger.warning("测试用例URL为空或无效，跳过初始导航")
-                    
-                    # 执行所有步骤
-                    for step in steps:
-                        action = step.get('action', '')
-                        selector_type = step.get('selector_type', 'css')
-                        selector_value = step.get('selector_value', '')
-                        input_value = step.get('input_value', '')
-                        description = step.get('description', '')
-                        # 添加iframe相关字段
-                        enter_iframe = step.get('enter_iframe', False)
-                        iframe_selector = step.get('iframe_selector', '')
-                                                
-                        uat_logger.log_automation_step(action, selector_value or input_value, description)
-                                                
-                        # 详细的调试日志，跟踪 action 值和执行的方法
-                        uat_logger.debug(f"执行步骤: ID={step.get('id')}, Action={action}, SelectorType={selector_type}, SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, IframeSelector={iframe_selector}")
-                        
-                        if action == 'navigate':
-                            # 获取URL并进行有效性检查
-                            url = None
-                            if step.get('url'):
-                                url = step['url']
-                            elif step.get('input_value'):
-                                url = step['input_value']
-                            
-                            # URL有效性检查和修复
-                            if url:
-                                # 清理URL
-                                url = url.strip()
-                                # 自动添加协议前缀
-                                if not url.startswith(('http://', 'https://')):
-                                    url = 'http://' + url
-                                
-                                # 验证URL是否为有效地址（避免0.0.0.1等无效地址）
-                                import re
-                                # 改进的URL格式验证，包含IP地址范围验证
-                                url_pattern = re.compile(
-                                    r'^(https?://)?'  # 协议前缀
-                                    r'(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|'  # 域名
-                                    r'localhost|'  # localhost
-                                    r'((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))'  # 有效的IP地址
-                                    r'(:\d+)?'  # 端口
-                                    r'(/.*)?$'  # 路径
-                                )
-                                
-                                if url_pattern.match(url):
-                                    uat_logger.log_automation_step("navigate", url, "导航到URL")
-                                    sync_navigate_to(url)
-                                else:
-                                    error_msg = f"无效的URL地址: {url}"
-                                    uat_logger.error(error_msg)
-                                    raise Exception(error_msg)
-                            else:
-                                uat_logger.warning("导航步骤缺少有效的URL")
-                        elif action == 'click':
-                            if selector_value:
-                                sync_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                                # 点击后等待页面响应
-                                sync_wait_for_timeout(2000)
-                        elif action == 'input':
-                            if selector_value and input_value:
-                                sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                                # 输入后等待页面响应
-                                sync_wait_for_timeout(1000)
-                        elif action == 'hover':
-                            if selector_value:
-                                sync_hover_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                                # 悬停后等待页面响应
-                                sync_wait_for_timeout(1000)
-                        elif action == 'double_click':
-                            if selector_value:
-                                sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                                # 双击后等待页面响应
-                                sync_wait_for_timeout(2000)
-                        elif action == 'right_click':
-                            if selector_value:
-                                sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                                # 右键点击后等待页面响应
-                                sync_wait_for_timeout(1000)
-                        elif action == 'wait':
-                            if selector_value:
-                                sync_wait_for_selector(selector_value, selector_type=selector_type)
-                        elif action == 'scroll':
-                            direction = 'down'
-                            pixels = 500
-                            try:
-                                sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
-                                # 滚动后等待页面响应
-                                sync_wait_for_timeout(1500)
-                            except Exception as scroll_error:
-                                uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
-                                # 检查是否是页面关闭导致的错误
-                                if "closed" in str(scroll_error).lower():
-                                    # 重新启动浏览器并导航到之前的URL
-                                    uat_logger.info("页面已关闭,重新启动浏览器")
-                                    sync_start_browser(headless=False)
-                                    # 如果有目标URL，重新导航到该URL
-                                    if case.get('url'):
-                                        url = case['url']
-                                        if url and url.strip():
-                                            url = url.strip()
-                                            if not url.startswith(('http://', 'https://')):
-                                                url = 'http://' + url
-                                            sync_navigate_to(url)
-                                else:
-                                    # 其他错误直接抛出
-                                    raise
-                        elif action == 'extract_text' or action == 'text_compare':
-                            if selector_value:
-                                # 构建完整的选择器
-                                full_selector = selector_value
-                                if selector_type == 'xpath' and not full_selector.startswith('xpath='):
-                                    full_selector = f'xpath={full_selector}'
-                                # 提取元素文本（添加异常处理）
-                                try:
-                                    current_extracted = sync_extract_element_text(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                                    uat_logger.info(f"提取到文本: {current_extracted[:100]}...")
-                                    # 保存到extracted_text变量，而不是覆盖
-                                    extracted_text = current_extracted
-                                except Exception as extract_error:
-                                    uat_logger.warning(f"提取文本失败: {extract_error}")
-                                    # 仅在提取失败时才将当前提取结果设为空，不影响之前的提取结果
-                                    current_extracted = ""
-                                
-                                # 检查是否需要验证文本
-                                current_expected = input_value or description
-                                verify_type = step.get('compare_type', step.get('verify_type', 'equals'))
-                                # 保存预期结果
-                                expected_text = current_expected
-                                
-                                if expected_text:
-                                    # 只有当提取到文本时才进行验证
-                                    if extracted_text:
-                                        uat_logger.info(f"验证文本 - 提取: {extracted_text[:100]}..., 预期: {expected_text[:100]}..., 验证方式: {verify_type}")
-                                        
-                                        # 根据验证方式执行不同的验证逻辑
-                                        if verify_type == 'equals':
-                                            if extracted_text != expected_text:
-                                                uat_logger.error("文本验证失败: 提取的文本与预期结果不相等")
-                                                raise Exception(f"文本验证失败: 提取的文本与预期结果不相等")
-                                        elif verify_type == 'not_equals':
-                                            if extracted_text == expected_text:
-                                                uat_logger.error("文本验证失败: 提取的文本与预期结果相等")
-                                                raise Exception(f"文本验证失败: 提取的文本与预期结果相等")
-                                        elif verify_type == 'contains':
-                                            if expected_text not in extracted_text:
-                                                uat_logger.error("文本验证失败: 提取的文本不包含预期内容")
-                                                raise Exception(f"文本验证失败: 提取的文本不包含预期内容")
-                                        elif verify_type == 'partial':
-                                            if expected_text not in extracted_text:
-                                                uat_logger.error("文本验证失败: 提取的文本不包含预期的部分内容")
-                                                raise Exception(f"文本验证失败: 提取的文本不包含预期的部分内容")
-                                        
-                                        uat_logger.info("文本验证成功")
-                                    else:
-                                        # 如果没有提取到文本，且是text_compare操作，则跳过验证
-                                        if action == 'text_compare':
-                                            uat_logger.warning("未提取到文本，跳过文本验证")
-                                        else:
-                                            uat_logger.info("提取文本操作完成（未提取到文本）")
-                                
-                                # 提取后等待页面响应
-                                sync_wait_for_timeout(1000)
-                            else:
-                                # 提取整个页面文本
-                                try:
-                                    current_extracted = sync_get_page_text()
-                                    uat_logger.info(f"提取到页面文本: {current_extracted[:100]}...")
-                                    # 保存到extracted_text变量
-                                    extracted_text = current_extracted
-                                except Exception as extract_error:
-                                    uat_logger.warning(f"提取页面文本失败: {extract_error}")
-                                    current_extracted = ""
-                                
-                                # 检查是否需要验证文本
-                                current_expected = input_value or description
-                                verify_type = step.get('compare_type', step.get('verify_type', 'equals'))
-                                # 保存预期结果
-                                expected_text = current_expected
-                                
-                                if expected_text:
-                                    # 只有当提取到文本时才进行验证
-                                    if extracted_text:
-                                        uat_logger.info(f"验证页面文本 - 提取: {extracted_text[:100]}..., 预期: {expected_text[:100]}..., 验证方式: {verify_type}")
-                                        
-                                        # 根据验证方式执行不同的验证逻辑
-                                        if verify_type == 'equals':
-                                            if extracted_text != expected_text:
-                                                uat_logger.error("页面文本验证失败: 提取的文本与预期结果不相等")
-                                                raise Exception(f"页面文本验证失败: 提取的文本与预期结果不相等")
-                                        elif verify_type == 'not_equals':
-                                            if extracted_text == expected_text:
-                                                uat_logger.error("页面文本验证失败: 提取的文本与预期结果相等")
-                                                raise Exception(f"页面文本验证失败: 提取的文本与预期结果相等")
-                                        elif verify_type == 'contains':
-                                            if expected_text not in extracted_text:
-                                                uat_logger.error("页面文本验证失败: 提取的文本不包含预期内容")
-                                                raise Exception(f"页面文本验证失败: 提取的文本不包含预期内容")
-                                        elif verify_type == 'partial':
-                                            if expected_text not in extracted_text:
-                                                uat_logger.error("页面文本验证失败: 提取的文本不包含预期的部分内容")
-                                                raise Exception(f"页面文本验证失败: 提取的文本不包含预期的部分内容")
-                                        
-                                        uat_logger.info("页面文本验证成功")
-                                    else:
-                                        # 如果没有提取到文本，且是text_compare操作，则跳过验证
-                                        if action == 'text_compare':
-                                            uat_logger.warning("未提取到页面文本，跳过文本验证")
-                        else:
-                            uat_logger.warning(f"未知操作类型: {action}")
-                    
-                    # 记录结束时间
-                    end_time = time.time()
-                    duration = round(end_time - start_time, 2)
-                    
-                    uat_logger.info(f"测试用例 #{case_id} 运行成功，耗时: {duration}秒")
-                    
-                    # 保存运行结果到数据库
-                    db = Database()
-                    db.add_run_history(
-                        case_id=case_id,
-                        status='passed',
-                        duration=duration,
-                        extracted_text=extracted_text,
-                        expected_text=expected_text
-                    )
-                    
-                    # 添加到结果列表
-                    case_results.append({
-                        'case_id': case_id,
-                        'case_name': case['name'],
-                        'status': 'success',
-                        'duration': duration
-                    })
-                    successful_cases += 1
-                    
-                except Exception as e:
-                    # 记录结束时间
-                    end_time = time.time()
-                    duration = round(end_time - start_time, 2)
-                    
-                    uat_logger.error(f"运行测试用例 #{case_id} 时发生错误: {str(e)}")
-                    
-                    # 保存失败结果到数据库
-                    db = Database()
-                    db.add_run_history(
-                        case_id=case_id,
-                        status='failed',
-                        duration=duration,
-                        extracted_text=extracted_text,
-                        expected_text=expected_text,
-                        error=str(e)
-                    )
-                    
-                    # 添加到结果列表
-                    case_results.append({
-                        'case_id': case_id,
-                        'case_name': case['name'],
-                        'status': 'error',
-                        'error': str(e),
-                        'duration': duration
-                    })
-                    failed_cases += 1
-                    
-                finally:
-                    # 关闭浏览器
-                    try:
-                        sync_close_browser()
-                    except:
-                        pass
-            except Exception as e:
-                uat_logger.error(f"执行测试用例 #{case_id} 时发生错误: {str(e)}")
-                case_results.append({
-                    'case_id': case_id,
-                    'case_name': f'用例 {case_id}',
-                    'status': 'error',
-                    'error': str(e)
-                })
-                failed_cases += 1
-                
-        # 构建响应结果
-        results = {
-            'total_cases': total_cases,
-            'successful_cases': successful_cases,
-            'failed_cases': failed_cases,
-            'case_results': case_results
-        }
-        
-        return jsonify({
-            'success': True,
-            'results': results
-        })
-        
-    except Exception as e:
-        uat_logger.error(f"执行多个测试用例时发生错误: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

@@ -121,6 +121,12 @@ class Database:
             )
         ''')
         
+        # 添加 expected_text 列（若表已存在可能无此列）
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN expected_text TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
         conn.commit()
         conn.close()
     
@@ -483,9 +489,6 @@ class Database:
             
             # 删除测试用例
             cursor.execute("DELETE FROM test_cases WHERE id = ?", (case_id,))
-            
-            # 检查是否有行被删除
-            steps_deleted = cursor.rowcount > 0
             
             # 提交事务
             conn.commit()
