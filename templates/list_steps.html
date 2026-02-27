@@ -400,6 +400,10 @@
                     <option value="wait">等待</option>
                     <option value="scroll">滚动</option>
                     <option value="extract_text">提取文本</option>
+                    <option value="swipe">滑动</option>
+                    <option value="verify">验证操作</option>
+                    <option value="enter_iframe">进入iframe</option>
+                    <option value="exit_iframe">跳出iframe</option>
                 </select>
             </div>
             <div class="form-group">
@@ -428,6 +432,14 @@
                     <option value="contains">包含</option>
                 </select>
             </div>
+            <div class="form-group" id="stepVerifyType" style="display: none;">
+                <label for="stepVerifyTypeSelect">验证类型</label>
+                <select id="stepVerifyTypeSelect">
+                    <option value="auto">自动识别</option>
+                    <option value="slider">滑动方块</option>
+                    <option value="image">点击图片文字</option>
+                </select>
+            </div>
             <!-- 滚动操作的上下左右输入框 -->
             <div class="form-group" id="scrollFields" style="display: none;">
                 <label>滚动距离 (px)</label>
@@ -449,6 +461,21 @@
                         <input type="number" id="scrollRight" placeholder="0" min="0">
                     </div>
                 </div>
+            </div>
+            <!-- 滑动操作的方向选择 -->
+            <div class="form-group" id="swipeDirection" style="display: none;">
+                <label for="stepSwipeDirection">滑动方向</label>
+                <select id="stepSwipeDirection">
+                    <option value="up">向上</option>
+                    <option value="down">向下</option>
+                    <option value="left">向左</option>
+                    <option value="right">向右</option>
+                </select>
+            </div>
+            <!-- 滑动操作的距离输入 -->
+            <div class="form-group" id="swipeDistance" style="display: none;">
+                <label for="stepSwipeDistance">滑动距离 (px)</label>
+                <input type="number" id="stepSwipeDistance" placeholder="100" min="1" value="100">
             </div>
             <div class="form-group">
                 <label for="stepDescription">步骤描述</label>
@@ -479,6 +506,10 @@
                     <option value="wait">等待</option>
                     <option value="scroll">滚动</option>
                     <option value="extract_text">提取文本</option>
+                    <option value="swipe">滑动</option>
+                    <option value="verify">验证操作</option>
+                    <option value="enter_iframe">进入iframe</option>
+                    <option value="exit_iframe">跳出iframe</option>
                 </select>
             </div>
             <div class="form-group">
@@ -507,6 +538,14 @@
                     <option value="contains">包含</option>
                 </select>
             </div>
+            <div class="form-group" id="editStepVerifyType" style="display: none;">
+                <label for="editStepVerifyTypeSelect">验证类型</label>
+                <select id="editStepVerifyTypeSelect">
+                    <option value="auto">自动识别</option>
+                    <option value="slider">滑动方块</option>
+                    <option value="image">点击图片文字</option>
+                </select>
+            </div>
             <!-- 滚动操作的上下左右输入框 -->
             <div class="form-group" id="editScrollFields" style="display: none;">
                 <label>滚动距离 (px)</label>
@@ -528,6 +567,21 @@
                         <input type="number" id="editScrollRight" placeholder="0" min="0">
                     </div>
                 </div>
+            </div>
+            <!-- 滑动操作的方向选择 -->
+            <div class="form-group" id="editSwipeDirection" style="display: none;">
+                <label for="editStepSwipeDirection">滑动方向</label>
+                <select id="editStepSwipeDirection">
+                    <option value="up">向上</option>
+                    <option value="down">向下</option>
+                    <option value="left">向左</option>
+                    <option value="right">向右</option>
+                </select>
+            </div>
+            <!-- 滑动操作的距离输入 -->
+            <div class="form-group" id="editSwipeDistance" style="display: none;">
+                <label for="editStepSwipeDistance">滑动距离 (px)</label>
+                <input type="number" id="editStepSwipeDistance" placeholder="100" min="1" value="100">
             </div>
             <div class="form-group">
                 <label for="editStepDescription">步骤描述</label>
@@ -623,6 +677,10 @@
                             case 'wait': actionText = '等待'; break;
                             case 'scroll': actionText = '滚动'; break;
                             case 'extract_text': actionText = '提取文本'; break;
+                            case 'verify': actionText = '验证操作'; break;
+                            case 'swipe': actionText = '滑动'; break;
+                            case 'enter_iframe': actionText = '进入iframe'; break;
+                            case 'exit_iframe': actionText = '跳出iframe'; break;
                             default: actionText = step.action;
                         }
                         
@@ -726,6 +784,27 @@
                 document.getElementById('editScrollDown').value = scrollValues.down;
                 document.getElementById('editScrollLeft').value = scrollValues.left;
                 document.getElementById('editScrollRight').value = scrollValues.right;
+            } else if (step.action === 'swipe') {
+                // 处理滑动操作的方向选择和距离输入
+                let direction = 'up';
+                let distance = '100';
+                if (step.input_value) {
+                    // 解析 input_value 中的方向和距离 (格式: direction:distance)
+                    const parts = step.input_value.split(':');
+                    if (parts.length === 2) {
+                        direction = parts[0];
+                        distance = parts[1];
+                    } else {
+                        // 兼容旧格式 (只有方向)
+                        direction = step.input_value;
+                    }
+                }
+                document.getElementById('editStepSwipeDirection').value = direction;
+                document.getElementById('editStepSwipeDistance').value = distance;
+            } else if (step.action === 'verify') {
+                // 处理验证操作的验证类型选择
+                const verifyType = step.input_value || 'auto';
+                document.getElementById('editStepVerifyTypeSelect').value = verifyType;
             }
             
             toggleEditActionFields();
@@ -749,8 +828,12 @@
             
             const scrollFields = document.getElementById('scrollFields');
             const compareTypeField = document.getElementById('stepCompareType');
-            // 默认隐藏对比方式选择
+            const swipeDirectionField = document.getElementById('swipeDirection');
+            const swipeDistanceField = document.getElementById('swipeDistance');
+            // 默认隐藏对比方式选择、滑动方向选择和滑动距离输入
             compareTypeField.style.display = 'none';
+            swipeDirectionField.style.display = 'none';
+            swipeDistanceField.style.display = 'none';
             
             if (action === 'navigate') {
                 // 导航操作只需要URL输入框
@@ -765,6 +848,12 @@
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'none';
                 scrollFields.style.display = 'block';
+            } else if (action === 'swipe') {
+                // 滑动操作需要选择器、方向和距离
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'none';
+                swipeDirectionField.style.display = 'block';
+                swipeDistanceField.style.display = 'block';
             } else if (action === 'input') {
                 // 输入操作需要选择器和输入值
                 inputValueField.style.display = 'block';
@@ -792,6 +881,28 @@
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = '悬停时间 (秒)';
+            } else if (action === 'verify') {
+                // 验证操作需要选择器和验证类型
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'none';
+                swipeDirectionField.style.display = 'none';
+                swipeDistanceField.style.display = 'none';
+                // 显示验证类型选择
+                const verifyTypeField = document.getElementById('stepVerifyType');
+                verifyTypeField.style.display = 'block';
+            } else if (action === 'enter_iframe') {
+                // 进入iframe操作需要选择器类型和选择器值
+                selectorTypeField.style.display = 'block';
+                selectorValueField.style.display = 'block';
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'none';
+                document.querySelector('label[for="stepSelectorValue"]').textContent = 'iframe选择器值';
+            } else if (action === 'exit_iframe') {
+                // 跳出iframe操作不需要任何字段
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'none';
             } else {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
@@ -807,6 +918,8 @@
             const inputValueField = document.querySelector('label[for="editStepInputValue"]').parentElement;
             const editScrollFields = document.getElementById('editScrollFields');
             const editCompareTypeField = document.getElementById('editStepCompareType');
+            const editSwipeDirectionField = document.getElementById('editSwipeDirection');
+            const editSwipeDistanceField = document.getElementById('editSwipeDistance');
             
             // 重置所有字段为默认状态
             selectorTypeField.style.display = 'block';
@@ -814,6 +927,8 @@
             inputValueField.style.display = 'block';
             editScrollFields.style.display = 'none';
             editCompareTypeField.style.display = 'none';
+            editSwipeDirectionField.style.display = 'none';
+            editSwipeDistanceField.style.display = 'none';
             
             if (action === 'navigate') {
                 // 导航操作只需要URL输入框
@@ -827,6 +942,11 @@
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'none';
                 editScrollFields.style.display = 'block';
+            } else if (action === 'swipe') {
+                // 滑动操作需要选择器、方向和距离
+                inputValueField.style.display = 'none';
+                editSwipeDirectionField.style.display = 'block';
+                editSwipeDistanceField.style.display = 'block';
             } else if (action === 'input') {
                 // 输入操作需要选择器和输入值
                 inputValueField.style.display = 'block';
@@ -849,6 +969,25 @@
                 // 悬停操作需要选择器和悬停时间
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = '悬停时间 (秒)';
+            } else if (action === 'verify') {
+                // 验证操作需要选择器和验证类型
+                inputValueField.style.display = 'none';
+                editSwipeDirectionField.style.display = 'none';
+                editSwipeDistanceField.style.display = 'none';
+                // 显示验证类型选择
+                const editVerifyTypeField = document.getElementById('editStepVerifyType');
+                editVerifyTypeField.style.display = 'block';
+            } else if (action === 'enter_iframe') {
+                // 进入iframe操作需要选择器类型和选择器值
+                selectorTypeField.style.display = 'block';
+                selectorValueField.style.display = 'block';
+                inputValueField.style.display = 'none';
+                document.querySelector('label[for="editStepSelectorValue"]').textContent = 'iframe选择器值';
+            } else if (action === 'exit_iframe') {
+                // 跳出iframe操作不需要任何字段
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
             } else {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
@@ -1017,6 +1156,15 @@
                 const scrollLeft = document.getElementById('scrollLeft').value || '0';
                 const scrollRight = document.getElementById('scrollRight').value || '0';
                 inputValue = `up:${scrollUp},down:${scrollDown},left:${scrollLeft},right:${scrollRight}`;
+            } else if (action === 'swipe') {
+                // 处理滑动操作的方向选择和距离输入
+                const swipeDirection = document.getElementById('stepSwipeDirection').value;
+                const swipeDistance = document.getElementById('stepSwipeDistance').value || '100';
+                inputValue = `${swipeDirection}:${swipeDistance}`;
+            } else if (action === 'verify') {
+                // 验证操作需要验证类型
+                const verifyType = document.getElementById('stepVerifyTypeSelect').value;
+                inputValue = verifyType;
             }
             
             try {
@@ -1089,6 +1237,15 @@
                 const scrollLeft = document.getElementById('editScrollLeft').value || '0';
                 const scrollRight = document.getElementById('editScrollRight').value || '0';
                 inputValue = `up:${scrollUp},down:${scrollDown},left:${scrollLeft},right:${scrollRight}`;
+            } else if (action === 'swipe') {
+                // 处理滑动操作的方向选择和距离输入
+                const swipeDirection = document.getElementById('editStepSwipeDirection').value;
+                const swipeDistance = document.getElementById('editStepSwipeDistance').value || '100';
+                inputValue = `${swipeDirection}:${swipeDistance}`;
+            } else if (action === 'verify') {
+                // 验证操作需要验证类型
+                const verifyType = document.getElementById('editStepVerifyTypeSelect').value;
+                inputValue = verifyType;
             }
             
             try {
@@ -1143,10 +1300,32 @@
         }
         
         async function runTestCase() {
+            // 显示加载状态，防止重复点击
+            const runButton = document.querySelector('button.btn-success');
+            if (runButton) {
+                runButton.disabled = true;
+                runButton.textContent = '执行中...';
+            }
+            
             try {
+                if (!currentCaseId) {
+                    throw new Error('未找到用例信息');
+                }
+                
+                // 设置请求超时时间为10分钟
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 600000); // 10分钟超时
+                
                 const response = await fetch(`/api/cases/${currentCaseId}/run`, {
-                    method: 'POST'
+                    method: 'POST',
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
+                }
                 
                 const data = await response.json();
                 
@@ -1156,7 +1335,17 @@
                     alert('运行失败: ' + (data.error || '未知错误'));
                 }
             } catch (error) {
-                alert('运行测试用例时发生错误: ' + error.message);
+                if (error.name === 'AbortError') {
+                    alert('运行测试用例时发生错误: 请求超时，可能是页面无响应');
+                } else {
+                    alert('运行测试用例时发生错误: ' + error.message);
+                }
+            } finally {
+                // 恢复按钮状态
+                if (runButton) {
+                    runButton.disabled = false;
+                    runButton.textContent = '▶ 运行用例';
+                }
             }
         }
         

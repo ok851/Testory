@@ -3,7 +3,9 @@ from flask_cors import CORS
 import os
 import time
 from database import Database
-from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_execute_script_steps, sync_start_recording, sync_stop_recording, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, sync_execute_multiple_test_cases, worker, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_wait_for_timeout  # 使用全局实例和同步包装器
+from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_execute_script_steps, sync_start_recording, sync_stop_recording, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, sync_execute_multiple_test_cases, worker, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_enter_iframe, sync_exit_iframe  # 使用全局实例和同步包装器
+from test_report import TestReportGenerator
+from report_exporter import ReportExporter
 import json
 import functools
 from logger import uat_logger
@@ -1046,22 +1048,8 @@ def api_run_case(case_id):
                                     sync_wait_for_timeout(2000)
                                 except Exception as click_error:
                                     uat_logger.error(f"执行点击操作时出错: {click_error}")
-                                    # 检查是否是页面关闭导致的错误
-                                    if "closed" in str(click_error).lower():
-                                        # 重新启动浏览器并导航到之前的URL
-                                        uat_logger.info("页面已关闭,重新启动浏览器")
-                                        sync_start_browser(headless=False)
-                                        # 如果有目标URL，重新导航到该URL
-                                        if case.get('url'):
-                                            url = case['url']
-                                            if url and url.strip():
-                                                url = url.strip()
-                                                if not url.startswith(('http://', 'https://')):
-                                                    url = 'http://' + url
-                                                sync_navigate_to(url)
-                                    else:
-                                        # 其他错误直接抛出
-                                        raise
+                                    # 直接抛出错误，视为测试用例执行失败
+                                    raise
                 elif action == 'input':
                     if selector_value and input_value:
                         sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
@@ -1094,22 +1082,43 @@ def api_run_case(case_id):
                                 sync_wait_for_timeout(1500)
                             except Exception as scroll_error:
                                 uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
-                                # 检查是否是页面关闭导致的错误
-                                if "closed" in str(scroll_error).lower():
-                                    # 重新启动浏览器并导航到之前的URL
-                                    uat_logger.info("页面已关闭,重新启动浏览器")
-                                    sync_start_browser(headless=False)
-                                    # 如果有目标URL，重新导航到该URL
-                                    if case.get('url'):
-                                        url = case['url']
-                                        if url and url.strip():
-                                            url = url.strip()
-                                            if not url.startswith(('http://', 'https://')):
-                                                url = 'http://' + url
-                                            sync_navigate_to(url)
-                                else:
-                                    # 其他错误直接抛出
-                                    raise
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                elif action == 'swipe':
+                    if selector_value:
+                        direction = 'up'
+                        distance = 100
+                        if input_value:
+                            # 解析 input_value 中的方向和距离 (格式: direction:distance)
+                            parts = input_value.split(':')
+                            if len(parts) == 2:
+                                direction = parts[0]
+                                try:
+                                    distance = int(parts[1])
+                                except ValueError:
+                                    uat_logger.warning(f"无效的滑动距离值: {parts[1]}，使用默认值 100")
+                            else:
+                                # 兼容旧格式 (只有方向)
+                                direction = input_value
+                        try:
+                            sync_swipe_element(selector_value, direction, distance, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            # 滑动后等待页面响应
+                            sync_wait_for_timeout(1500)
+                        except Exception as swipe_error:
+                            uat_logger.error(f"执行滑动操作时出错: {swipe_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
+                elif action == 'verify':
+                    # 验证操作处理
+                    verify_type = input_value if input_value else 'auto'
+                    try:
+                        sync_verify_element(selector=selector_value, verify_type=verify_type, selector_type=selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                        # 验证后等待页面响应
+                        sync_wait_for_timeout(1500)
+                    except Exception as verify_error:
+                        uat_logger.error(f"执行验证操作时出错: {verify_error}")
+                        # 直接抛出错误，视为测试用例执行失败
+                        raise
                 elif action == 'extract_text' or action == 'text_compare':
                     if selector_value:
                         # 构建完整的选择器
@@ -1231,6 +1240,33 @@ def api_run_case(case_id):
                     
                     # 提取后等待页面响应
                     sync_wait_for_timeout(1000)
+                elif action == 'enter_iframe':
+                    if selector_value:
+                        # 进入iframe
+                        try:
+                            sync_enter_iframe(selector_value, selector_type)
+                            # 更新iframe状态
+                            enter_iframe = True
+                            iframe_selector = selector_value
+                            uat_logger.info(f"✅ 成功进入iframe: {selector_value}")
+                        except Exception as enter_error:
+                            uat_logger.error(f"执行进入iframe操作时出错: {enter_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
+                    else:
+                        uat_logger.warning("进入iframe操作缺少选择器")
+                elif action == 'exit_iframe':
+                    # 跳出iframe
+                    try:
+                        sync_exit_iframe()
+                        # 更新iframe状态
+                        enter_iframe = False
+                        iframe_selector = None
+                        uat_logger.info("✅ 成功跳出iframe，返回主文档")
+                    except Exception as exit_error:
+                        uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
+                        # 直接抛出错误，视为测试用例执行失败
+                        raise
             
             # 计算执行时间
             duration = round(time.time() - start_time, 2)
@@ -1403,6 +1439,229 @@ def get_case_run_history(case_id):
         })
     except Exception as e:
         uat_logger.error(f"获取测试用例运行历史记录失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# ==================== 测试报告API ====================
+
+# 测试报告页面
+@app.route('/test_report')
+def test_report():
+    return render_template('test_report.html')
+
+# API: 获取测试统计概览
+@app.route('/api/report/overview', methods=['GET'])
+@api_error_handler
+@log_api_request
+def api_get_report_overview():
+    """获取测试统计概览"""
+    try:
+        project_id = request.args.get('project_id')
+        if project_id is not None:
+            project_id = int(project_id)
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        report_generator = TestReportGenerator()
+        overview = report_generator.get_statistics_overview(project_id, start_date, end_date)
+        
+        return jsonify({
+            'success': True,
+            'data': overview
+        })
+    except Exception as e:
+        uat_logger.error(f"获取测试统计概览失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# API: 获取状态分布
+@app.route('/api/report/status-distribution', methods=['GET'])
+@api_error_handler
+@log_api_request
+def api_get_status_distribution():
+    """获取状态分布"""
+    try:
+        project_id = request.args.get('project_id')
+        if project_id is not None:
+            project_id = int(project_id)
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        report_generator = TestReportGenerator()
+        status_dist = report_generator.get_status_distribution(project_id, start_date, end_date)
+        
+        return jsonify({
+            'success': True,
+            'data': status_dist
+        })
+    except Exception as e:
+        uat_logger.error(f"获取状态分布失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# API: 获取耗时分布
+@app.route('/api/report/duration-distribution', methods=['GET'])
+@api_error_handler
+@log_api_request
+def api_get_duration_distribution():
+    """获取耗时分布"""
+    try:
+        project_id = request.args.get('project_id')
+        if project_id is not None:
+            project_id = int(project_id)
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        report_generator = TestReportGenerator()
+        duration_dist = report_generator.get_duration_distribution(project_id, start_date, end_date)
+        
+        return jsonify({
+            'success': True,
+            'data': duration_dist
+        })
+    except Exception as e:
+        uat_logger.error(f"获取耗时分布失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# API: 获取趋势数据
+@app.route('/api/report/trend', methods=['GET'])
+@api_error_handler
+@log_api_request
+def api_get_trend_data():
+    """获取趋势数据"""
+    try:
+        project_id = request.args.get('project_id')
+        if project_id is not None:
+            project_id = int(project_id)
+        days = request.args.get('days', 30)
+        if days is not None:
+            days = int(days)
+        
+        report_generator = TestReportGenerator()
+        trend_data = report_generator.get_trend_data(project_id, days)
+        
+        return jsonify({
+            'success': True,
+            'data': trend_data
+        })
+    except Exception as e:
+        uat_logger.error(f"获取趋势数据失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# API: 获取用例统计
+@app.route('/api/report/case-statistics', methods=['GET'])
+@api_error_handler
+@log_api_request
+def api_get_case_statistics():
+    """获取用例统计"""
+    try:
+        project_id = request.args.get('project_id')
+        if project_id is not None:
+            project_id = int(project_id)
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        report_generator = TestReportGenerator()
+        case_stats = report_generator.get_case_statistics(project_id, start_date, end_date)
+        
+        return jsonify({
+            'success': True,
+            'data': case_stats
+        })
+    except Exception as e:
+        uat_logger.error(f"获取用例统计失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# API: 获取项目统计
+@app.route('/api/report/project-statistics', methods=['GET'])
+@api_error_handler
+@log_api_request
+def api_get_project_statistics():
+    """获取项目统计"""
+    try:
+        project_id = request.args.get('project_id')
+        if project_id is not None:
+            project_id = int(project_id)
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        report_generator = TestReportGenerator()
+        project_stats = report_generator.get_project_statistics(project_id, start_date, end_date)
+        
+        return jsonify({
+            'success': True,
+            'data': project_stats
+        })
+    except Exception as e:
+        uat_logger.error(f"获取项目统计失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# API: 导出报告
+@app.route('/api/report/export', methods=['POST'])
+@api_error_handler
+@log_api_request
+def api_export_report():
+    """导出测试报告"""
+    try:
+        data = request.get_json(silent=True) or {}
+        format_type = data.get('format', 'html')
+        project_id = data.get('project_id')
+        if project_id is not None:
+            project_id = int(project_id)
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        filename = data.get('filename')
+        
+        # 收集报告数据
+        report_generator = TestReportGenerator()
+        report_data = {
+            'overview': report_generator.get_statistics_overview(project_id, start_date, end_date),
+            'status_distribution': report_generator.get_status_distribution(project_id, start_date, end_date),
+            'duration_distribution': report_generator.get_duration_distribution(project_id, start_date, end_date),
+            'case_statistics': report_generator.get_case_statistics(project_id, start_date, end_date),
+            'project_statistics': report_generator.get_project_statistics(project_id, start_date, end_date)
+        }
+        
+        # 导出报告
+        exporter = ReportExporter()
+        
+        if format_type == 'html':
+            filepath = exporter.export_to_html(report_data, filename)
+        elif format_type == 'excel':
+            filepath = exporter.export_to_excel(report_data, filename)
+        elif format_type == 'pdf':
+            filepath = exporter.export_to_pdf(report_data, filename)
+        else:
+            return jsonify({
+                'success': False,
+                'error': f'不支持的导出格式: {format_type}'
+            }), 400
+        
+        return jsonify({
+            'success': True,
+            'filepath': filepath
+        })
+    except Exception as e:
+        uat_logger.error(f"导出报告失败: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)

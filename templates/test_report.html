@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试报告 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        secondary: '#10b981',
+                        accent: '#8b5cf6',
+                        danger: '#ef4444',
+                        warning: '#f59e0b',
+                        info: '#3b82f6',
+                        light: '#f3f4f6',
+                        dark: '#1f2937',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .btn {
+                @apply px-4 py-2 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+            }
+            .btn-primary {
+                @apply bg-primary text-white hover:bg-blue-600 focus:ring-blue-500;
+            }
+            .btn-secondary {
+                @apply bg-secondary text-white hover:bg-green-600 focus:ring-green-500;
+            }
+            .btn-accent {
+                @apply bg-accent text-white hover:bg-purple-600 focus:ring-purple-500;
+            }
+            .card {
+                @apply bg-white rounded-lg shadow-md p-6;
+            }
+            .stat-card {
+                @apply bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg shadow-md p-6 border-l-4 border-primary;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans">
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-robot text-primary text-2xl"></i>
+                <h1 class="text-xl font-bold text-gray-800">UI自动化测试平台</h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="/" class="btn btn-primary">
+                    <i class="fas fa-home"></i>
+                    首页
+                </a>
+                <a href="/list_projects" class="btn btn-secondary">
+                    <i class="fas fa-folder"></i>
+                    项目管理
+                </a>
+                <a href="/run-history" class="btn btn-accent">
+                    <i class="fas fa-history"></i>
+                    运行历史记录
+                </a>
+                <a href="/test_report" class="btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500">
+                    <i class="fas fa-chart-bar"></i>
+                    测试报告
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mx-auto px-4 py-8">
+        <div class="mb-8">
+            <h2 class="text-3xl font-bold text-gray-800 mb-2">
+                <i class="fas fa-chart-bar text-primary mr-2"></i>
+                测试报告
+            </h2>
+            <p class="text-gray-600">查看测试执行统计、趋势分析和详细报告</p>
+        </div>
+
+        <div class="card mb-6">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">
+                <i class="fas fa-filter text-primary mr-2"></i>
+                筛选条件
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">项目</label>
+                    <select id="projectFilter" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary">
+                        <option value="">全部项目</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">开始日期</label>
+                    <input type="date" id="startDate" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">结束日期</label>
+                    <input type="date" id="endDate" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary">
+                </div>
+                <div class="flex items-end">
+                    <button onclick="loadReportData()" class="btn btn-primary w-full">
+                        <i class="fas fa-search mr-2"></i>
+                        查询
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="stat-card">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600 mb-1">总执行次数</p>
+                        <p class="text-3xl font-bold text-primary" id="totalRuns">0</p>
+                    </div>
+                    <div class="w-12 h-12 bg-primary bg-opacity-20 rounded-full flex items-center justify-center">
+                        <i class="fas fa-play-circle text-primary text-2xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600 mb-1">通过次数</p>
+                        <p class="text-3xl font-bold text-secondary" id="passedRuns">0</p>
+                    </div>
+                    <div class="w-12 h-12 bg-secondary bg-opacity-20 rounded-full flex items-center justify-center">
+                        <i class="fas fa-check-circle text-secondary text-2xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600 mb-1">失败次数</p>
+                        <p class="text-3xl font-bold text-danger" id="failedRuns">0</p>
+                    </div>
+                    <div class="w-12 h-12 bg-danger bg-opacity-20 rounded-full flex items-center justify-center">
+                        <i class="fas fa-times-circle text-danger text-2xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-600 mb-1">通过率</p>
+                        <p class="text-3xl font-bold text-accent" id="passRate">0%</p>
+                    </div>
+                    <div class="w-12 h-12 bg-accent bg-opacity-20 rounded-full flex items-center justify-center">
+                        <i class="fas fa-percentage text-accent text-2xl"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="card">
+                <h3 class="text-lg font-semibold text-gray-700 mb-4">
+                    <i class="fas fa-chart-pie text-primary mr-2"></i>
+                    状态分布
+                </h3>
+                <div class="relative h-80">
+                    <canvas id="statusChart"></canvas>
+                </div>
+            </div>
+            <div class="card">
+                <h3 class="text-lg font-semibold text-gray-700 mb-4">
+                    <i class="fas fa-clock text-primary mr-2"></i>
+                    耗时分布
+                </h3>
+                <div class="relative h-80">
+                    <canvas id="durationChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-8">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">
+                <i class="fas fa-chart-line text-primary mr-2"></i>
+                执行趋势
+            </h3>
+            <div class="relative h-80">
+                <canvas id="trendChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card mb-8">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">
+                <i class="fas fa-list text-primary mr-2"></i>
+                用例统计
+            </h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用例名称</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">总执行次数</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">通过次数</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">失败次数</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">通过率</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均耗时</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">最后执行时间</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="caseStatsTable">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card mb-8">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">
+                <i class="fas fa-folder text-primary mr-2"></i>
+                项目统计
+            </h3>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">项目名称</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用例数量</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">总执行次数</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">通过次数</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">失败次数</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">通过率</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均耗时</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="projectStatsTable">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 class="text-lg font-semibold text-gray-700 mb-4">
+                <i class="fas fa-download text-primary mr-2"></i>
+                导出报告
+            </h3>
+            <div class="flex flex-wrap gap-4">
+                <button onclick="exportReport('html')" class="btn btn-primary">
+                    <i class="fas fa-file-code mr-2"></i>
+                    导出HTML
+                </button>
+                <button onclick="exportReport('excel')" class="btn btn-secondary">
+                    <i class="fas fa-file-excel mr-2"></i>
+                    导出Excel
+                </button>
+                <button onclick="exportReport('pdf')" class="btn btn-accent">
+                    <i class="fas fa-file-pdf mr-2"></i>
+                    导出PDF
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let statusChart = null;
+        let durationChart = null;
+        let trendChart = null;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadProjects();
+            loadReportData();
+        });
+
+        function loadProjects() {
+            fetch('/api/projects')
+                .then(response => response.json())
+                .then(data => {
+                    const select = document.getElementById('projectFilter');
+                    data.projects.forEach(project => {
+                        const option = document.createElement('option');
+                        option.value = project.id;
+                        option.textContent = project.name;
+                        select.appendChild(option);
+                    });
+                })
+                .catch(error => console.error('加载项目失败:', error));
+        }
+
+        function loadReportData() {
+            const projectId = document.getElementById('projectFilter').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            const params = new URLSearchParams();
+            if (projectId) params.append('project_id', projectId);
+            if (startDate) params.append('start_date', startDate);
+            if (endDate) params.append('end_date', endDate);
+
+            Promise.all([
+                fetch(`/api/report/overview?${params}`).then(r => r.json()),
+                fetch(`/api/report/status-distribution?${params}`).then(r => r.json()),
+                fetch(`/api/report/duration-distribution?${params}`).then(r => r.json()),
+                fetch(`/api/report/trend?${params}`).then(r => r.json()),
+                fetch(`/api/report/case-statistics?${params}`).then(r => r.json()),
+                fetch(`/api/report/project-statistics?${params}`).then(r => r.json())
+            ]).then(([overview, statusDist, durationDist, trend, caseStats, projectStats]) => {
+                updateOverview(overview.data);
+                updateStatusChart(statusDist.data);
+                updateDurationChart(durationDist.data);
+                updateTrendChart(trend.data);
+                updateCaseStatsTable(caseStats.data);
+                updateProjectStatsTable(projectStats.data);
+            }).catch(error => {
+                console.error('加载报告数据失败:', error);
+                alert('加载报告数据失败，请重试');
+            });
+        }
+
+        function updateOverview(data) {
+            document.getElementById('totalRuns').textContent = data.total_runs || 0;
+            document.getElementById('passedRuns').textContent = data.passed_runs || 0;
+            document.getElementById('failedRuns').textContent = data.failed_runs || 0;
+            document.getElementById('passRate').textContent = (data.pass_rate || 0) + '%';
+        }
+
+        function updateStatusChart(data) {
+            const ctx = document.getElementById('statusChart').getContext('2d');
+            
+            if (statusChart) {
+                statusChart.destroy();
+            }
+
+            const labels = data.map(item => item.status);
+            const counts = data.map(item => item.count);
+            const colors = {
+                'passed': '#10b981',
+                'failed': '#ef4444',
+                'success': '#10b981',
+                'error': '#ef4444',
+                'skipped': '#f59e0b',
+                'unknown': '#6b7280'
+            };
+
+            statusChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: counts,
+                        backgroundColor: labels.map(label => colors[label] || colors['unknown']),
+                        borderWidth: 2,
+                        borderColor: '#ffffff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateDurationChart(data) {
+            const ctx = document.getElementById('durationChart').getContext('2d');
+            
+            if (durationChart) {
+                durationChart.destroy();
+            }
+
+            durationChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: '执行次数',
+                        data: data.data,
+                        backgroundColor: 'rgba(59, 130, 246, 0.8)',
+                        borderColor: 'rgba(59, 130, 246, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateTrendChart(data) {
+            const ctx = document.getElementById('trendChart').getContext('2d');
+            
+            if (trendChart) {
+                trendChart.destroy();
+            }
+
+            trendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.dates,
+                    datasets: [
+                        {
+                            label: '总执行次数',
+                            data: data.total,
+                            borderColor: 'rgba(59, 130, 246, 1)',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: '通过次数',
+                            data: data.passed,
+                            borderColor: 'rgba(16, 185, 129, 1)',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: '失败次数',
+                            data: data.failed,
+                            borderColor: 'rgba(239, 68, 68, 1)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateCaseStatsTable(data) {
+            const tbody = document.getElementById('caseStatsTable');
+            tbody.innerHTML = '';
+
+            data.forEach(item => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.case_name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.total_runs}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.passed_runs}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.failed_runs}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.pass_rate}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.avg_duration}秒</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.last_run_time || '-'}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function updateProjectStatsTable(data) {
+            const tbody = document.getElementById('projectStatsTable');
+            tbody.innerHTML = '';
+
+            data.forEach(item => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.project_name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.total_cases}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.total_runs}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.passed_runs}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.failed_runs}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.pass_rate}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.avg_duration}秒</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function exportReport(format) {
+            const projectId = document.getElementById('projectFilter').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+
+            const data = {
+                format: format,
+                project_id: projectId ? parseInt(projectId) : null,
+                start_date: startDate,
+                end_date: endDate
+            };
+
+            fetch('/api/report/export', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success) {
+                    alert(`报告已成功导出到: ${result.filepath}`);
+                } else {
+                    alert(`导出失败: ${result.error}`);
+                }
+            })
+            .catch(error => {
+                console.error('导出报告失败:', error);
+                alert('导出报告失败，请重试');
+            });
+        }
+    </script>
+</body>
+</html>

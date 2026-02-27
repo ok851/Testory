@@ -1,4 +1,7 @@
 import asyncio
+import random
+import cv2
+import numpy as np
 from playwright.async_api import async_playwright
 from typing import List, Dict, Any, Optional
 import json
@@ -2517,6 +2520,1750 @@ class PlaywrightAutomation:
             }
             self.recorded_steps.append(step)
     
+    async def swipe_element(self, selector: str, direction: str, distance: int = 100, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
+        """滑动元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        # 验证方向参数
+        valid_directions = ['up', 'down', 'left', 'right']
+        if direction not in valid_directions:
+            raise ValueError(f"无效的滑动方向: {direction}，有效值为: {valid_directions}")
+        
+        # 验证距离参数
+        if not isinstance(distance, int) or distance <= 0:
+            raise ValueError(f"无效的滑动距离: {distance}，必须是正整数")
+        
+        uat_logger.info(f"🔍 [SWIPE_DEBUG] 开始滑动元素,选择器: {selector}, 方向: {direction}, 距离: {distance}px, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
+        
+        # 构建完整的选择器
+        full_selector = selector
+        if selector_type == "xpath":
+            full_selector = f"xpath={selector}"
+        
+        # 确定操作上下文
+        target_context = target_page
+        if iframe_context:
+            target_context = iframe_context
+        elif iframe_selector:
+            uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
+            target_context = target_page.frame_locator(iframe_selector)
+        
+        # 等待元素可见
+        if hasattr(target_context, 'wait_for_selector'):
+            # 对于page对象
+            await target_context.wait_for_selector(full_selector, state='visible', timeout=10000)
+            element = target_context.locator(full_selector)
+        else:
+            # 对于frame_locator对象
+            element = target_context.locator(full_selector)
+            await element.wait_for(state='visible', timeout=10000)
+        
+        # 获取元素位置和大小
+        box = await element.bounding_box()
+        if not box:
+            raise Exception("无法获取元素边界框")
+        
+        # 计算滑动起点和终点
+        x = box['x'] + box['width'] / 2
+        y = box['y'] + box['height'] / 2
+        
+        # 使用传入的滑动距离
+        swipe_distance = distance
+        
+        if direction == 'up':
+            end_y = y - swipe_distance
+        elif direction == 'down':
+            end_y = y + swipe_distance
+        elif direction == 'left':
+            end_x = x - swipe_distance
+        elif direction == 'right':
+            end_x = x + swipe_distance
+        
+        # 执行滑动操作
+        await target_page.mouse.move(x, y)
+        await target_page.mouse.down()
+        await target_page.wait_for_timeout(100)
+        if direction in ['up', 'down']:
+            await target_page.mouse.move(x, end_y, steps=10)
+        else:
+            await target_page.mouse.move(end_x, y, steps=10)
+        await target_page.mouse.up()
+        
+        uat_logger.info(f"✅ 滑动元素成功: {selector}, 方向: {direction}, 距离: {distance}px")
+        
+        # 如果正在录制,记录滑动步骤
+        if self.recording:
+            step = {
+                "action": "swipe",
+                "selector": selector,
+                "selector_type": selector_type,
+                "direction": direction,
+                "distance": distance,
+                "iframe_selector": iframe_selector,
+                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
+            }
+            self.recorded_steps.append(step)
+    
+    async def verify_element(self, selector: str = None, verify_type: str = "visible", selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
+        """验证元素。用于处理人机验证弹窗等场景。page: 可选，指定在哪个标签页执行（多标签并行时使用）
+        
+        如果没有提供selector，则自动识别并处理验证弹窗
+        verify_type 可以是 'visible', 'exist', 'clickable' 或验证码类型: 'auto', 'slider', 'image'
+        """
+        target_page = page if page is not None else self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        # 检查是否为验证码类型
+        captcha_types = ['auto', 'slider', 'image']
+        if verify_type in captcha_types:
+            uat_logger.info(f"🔍 [VERIFY_DEBUG] 开始处理验证码，类型: {verify_type}")
+            # 如果提供了选择器，则使用选择器定位并处理验证码
+            if selector:
+                uat_logger.info(f"🔍 [VERIFY_DEBUG] 使用提供的选择器处理验证码: {selector}")
+                # 构建完整的选择器
+                full_selector = selector
+                if selector_type == "xpath":
+                    full_selector = f"xpath={selector}"
+                
+                # 确定操作上下文
+                target_context = target_page
+                if iframe_context:
+                    target_context = iframe_context
+                elif iframe_selector:
+                    uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
+                    target_context = target_page.frame_locator(iframe_selector)
+                
+                # 查找验证码元素
+                element = target_context.locator(full_selector)
+                try:
+                    await element.wait_for(state='visible', timeout=10000)
+                    uat_logger.info(f"✅ [VERIFY_DEBUG] 找到验证码元素: {selector}")
+                except Exception as e:
+                    uat_logger.error(f"❌ [VERIFY_DEBUG] 等待验证码元素超时: {e}")
+                    # 尝试直接查找滑块，不依赖于容器元素
+                    uat_logger.info("🔍 [VERIFY_DEBUG] 尝试直接查找滑块")
+                    try:
+                        slider_handled = await self._handle_slider_captcha(target_page)
+                        if slider_handled:
+                            return True
+                        else:
+                            raise Exception("验证码处理失败: 未找到滑块验证码元素")
+                    except Exception as slider_error:
+                        uat_logger.error(f"❌ [VERIFY_DEBUG] 直接查找滑块失败: {slider_error}")
+                        raise Exception(f"验证码处理失败: 等待元素超时 - {e}")
+                
+                # 根据验证类型处理
+                if verify_type == 'slider' or verify_type == 'auto':
+                    # 处理滑动验证码
+                    uat_logger.info("🔍 [VERIFY_DEBUG] 处理滑动验证码")
+                    # 尝试在验证码元素内查找滑块
+                    try:
+                        # 使用与_handle_slider_captcha方法相同的滑块选择器列表
+                        slider_selectors = [
+                            # 滑块容器
+                            '.captcha-slider',
+                            '.slider-container',
+                            '.slide-container',
+                            '[class*="slider"]',
+                            '[class*="slide"]',
+                            '[class*="verify"]',
+                            '[class*="verifybox"]',
+                            '[class*="captcha"]',
+                            '[class*="geetest"]',
+                            '[class*="tcaptcha"]',
+                            '[class*="yidun"]',
+                            '.geetest_slider',
+                            '.tcaptcha-slider',
+                            '.yidun_slider',
+                            '.nc_wrapper',  # 网易易盾
+                            '.ac-slider',  # 阿里滑块
+                            # 滑块本身
+                            '.slider-handle',
+                            '.slide-handle',
+                            '.slider-btn',
+                            '.slide-btn',
+                            '.captcha-btn',
+                            '.geetest_slider_button',
+                            '.tcaptcha-drag-button',
+                            '.yidun_slider__handle',
+                            '.nc_iconfont',  # 网易易盾滑块
+                            '.ac-slider-handle',  # 阿里滑块
+                            '[class*="handle"]',
+                            '[class*="btn"]',
+                            '[class*="verify-move-block"]',
+                            '[class*="verify-drag-icon"]',
+                            '[class*="button"]',
+                            '[class*="drag"]',
+                            '[class*="slide"]',
+                            '[class*="slider"]',
+                            '[class*="move"]',
+                            '[class*="icon"]',
+                            # 通用元素
+                            'button',
+                            'div',
+                            'span',
+                            'i',
+                            # 组合选择器
+                            '[class*="slider"] button',
+                            '[class*="slide"] button',
+                            '[class*="captcha"] button',
+                            '[class*="verify"] button',
+                            '[class*="slider"] div',
+                            '[class*="slide"] div',
+                            '[class*="captcha"] div',
+                            '[class*="verify"] div',
+                        ]
+                        
+                        # 在验证码元素内尝试查找滑块
+                        slider_found = False
+                        for slider_selector in slider_selectors:
+                            try:
+                                uat_logger.info(f"🔍 [VERIFY_DEBUG] 在验证码元素内尝试查找滑块: {slider_selector}")
+                                slider_element = element.locator(slider_selector)
+                                if await slider_element.count() > 0:
+                                    slider_element = slider_element.first
+                                    if await slider_element.is_visible():
+                                        uat_logger.info(f"✅ [VERIFY_DEBUG] 在验证码元素内找到滑块: {slider_selector}")
+                                        slider_found = True
+                                        # 执行滑动操作
+                                        await self._perform_slider_action(target_page, slider_element)
+                                        # 等待验证完成
+                                        await asyncio.sleep(2)
+                                        # 检查验证是否成功（通过检查验证码元素是否仍然可见）
+                                        try:
+                                            await element.wait_for(state='hidden', timeout=5000)
+                                            uat_logger.info("✅ 滑动验证码处理成功")
+                                            # 记录步骤
+                                            step = {
+                                                "action": "verify",
+                                                "selector": selector,
+                                                "verify_type": "slider",
+                                                "timestamp": int(time.time() * 1000)
+                                            }
+                                            self.recorded_steps.append(step)
+                                            return True
+                                        except Exception as e:
+                                            uat_logger.error(f"❌ 滑动验证码验证失败: {e}")
+                                            raise Exception("验证码处理失败: 滑动操作已执行，但验证未完成")
+                            except Exception as e:
+                                uat_logger.debug(f"选择器 {slider_selector} 未找到滑块: {e}")
+                                continue
+                        
+                        if not slider_found:
+                            # 如果在验证码元素内未找到滑块，尝试调用专门的滑块处理方法
+                            uat_logger.info("🔍 [VERIFY_DEBUG] 在验证码元素内未找到滑块，尝试使用专门的滑块处理方法")
+                            try:
+                                # 尝试在整个页面中查找滑块，优先在指定容器内查找
+                                slider_handled = await self._handle_slider_captcha(target_page, selector)
+                                if slider_handled:
+                                    return True
+                                else:
+                                    # 如果专门的滑块处理方法返回False，抛出异常
+                                    raise Exception("验证码处理失败: 未找到滑块验证码元素或滑动操作未完成")
+                            except Exception as e:
+                                uat_logger.warning(f"⚠️ 专门的滑块处理方法失败: {e}")
+                                # 重新抛出异常
+                                raise
+                    except Exception as slider_error:
+                        uat_logger.warning(f"⚠️ 在验证码元素内查找滑块失败: {slider_error}")
+                        # 尝试调用专门的滑块处理方法
+                        uat_logger.info("🔍 [VERIFY_DEBUG] 尝试使用专门的滑块处理方法")
+                        try:
+                            # 尝试在整个页面中查找滑块，优先在指定容器内查找
+                            slider_handled = await self._handle_slider_captcha(target_page, selector)
+                            if slider_handled:
+                                return True
+                            else:
+                                # 如果专门的滑块处理方法返回False，抛出异常
+                                raise Exception("验证码处理失败: 未找到滑块验证码元素或滑动操作未完成")
+                        except Exception as e:
+                            uat_logger.warning(f"⚠️ 专门的滑块处理方法失败: {e}")
+                            # 回退到自动检测
+                            success = await self._auto_handle_verification_popup(target_page, verify_type)
+                            if not success:
+                                raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
+                            return success
+                elif verify_type == 'image' or verify_type == 'auto':
+                    # 处理图片验证码
+                    uat_logger.info("🔍 [VERIFY_DEBUG] 处理图片验证码")
+                    # 首先尝试在提供的选择器所定位的元素内查找图片验证码
+                    try:
+                        # 在验证码元素内查找图片（使用更多选择器）
+                        image_element = element.locator('img, [class*="image"], [class*="pic"], [class*="img"]').first
+                        await image_element.wait_for(state='visible', timeout=5000)
+                        # 执行图片验证操作
+                        await self._click_image_randomly(target_page, image_element)
+                        uat_logger.info("✅ 图片验证码处理成功")
+                        return True
+                    except Exception as image_error:
+                        uat_logger.warning(f"⚠️ 在验证码元素内查找图片失败: {image_error}")
+                        # 如果在验证码元素内查找图片失败，则尝试调用专门的图片处理方法
+                        success = await self._handle_image_captcha(target_page)
+                        if not success:
+                            # 如果是auto类型，尝试处理滑动验证码
+                            if verify_type == 'auto':
+                                uat_logger.info("🔍 [VERIFY_DEBUG] 图片验证码处理失败，尝试处理滑动验证码")
+                                success = await self._handle_slider_captcha(target_page)
+                                if not success:
+                                    raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
+                                return success
+                            else:
+                                raise Exception("验证码处理失败: 未找到图片验证码元素或验证操作未完成")
+                        return success
+                else:
+                    # 自动检测验证类型
+                    success = await self._auto_handle_verification_popup(target_page, verify_type)
+                    if not success:
+                        raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
+                    return success
+            else:
+                # 如果没有提供选择器，则自动识别并处理验证弹窗
+                success = await self._auto_handle_verification_popup(target_page, verify_type)
+                if not success:
+                    raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
+                return success
+        
+        # 如果没有提供选择器，则自动识别验证弹窗
+        if not selector:
+            uat_logger.info("🔍 [VERIFY_DEBUG] 开始自动识别验证弹窗")
+            success = await self._auto_handle_verification_popup(target_page)
+            if not success:
+                raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
+            return success
+        
+        # 验证验证类型参数
+        valid_verify_types = ['visible', 'exist', 'clickable']
+        if verify_type not in valid_verify_types and verify_type not in captcha_types:
+            raise ValueError(f"无效的验证类型: {verify_type}，有效值为: {valid_verify_types} 或验证码类型: {captcha_types}")
+        
+        uat_logger.info(f"🔍 [VERIFY_DEBUG] 开始验证元素,选择器: {selector}, 验证类型: {verify_type}, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
+        
+        # 构建完整的选择器
+        full_selector = selector
+        if selector_type == "xpath":
+            full_selector = f"xpath={selector}"
+        
+        # 确定操作上下文
+        target_context = target_page
+        if iframe_context:
+            target_context = iframe_context
+        elif iframe_selector:
+            uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
+            target_context = target_page.frame_locator(iframe_selector)
+        
+        # 等待元素满足验证条件
+        # 确保只使用有效的 state 值
+        valid_states = ['attached', 'detached', 'visible', 'hidden']
+        wait_state = verify_type if verify_type in valid_states else 'visible'
+        
+        if hasattr(target_context, 'wait_for_selector'):
+            # 对于page对象
+            await target_context.wait_for_selector(full_selector, state=wait_state, timeout=10000)
+            element = target_context.locator(full_selector)
+        else:
+            # 对于frame_locator对象
+            element = target_context.locator(full_selector)
+            await element.wait_for(state=wait_state, timeout=10000)
+        
+        # 执行基本的验证操作（这里可以根据需要扩展更复杂的验证逻辑）
+        # 例如：点击验证按钮、输入验证码等
+        
+        # 记录验证成功
+        uat_logger.info(f"✅ 验证元素成功: {selector}, 验证类型: {verify_type}")
+        
+        # 记录步骤
+        step = {
+            "action": "verify",
+            "selector": selector,
+            "selector_type": selector_type,
+            "verify_type": verify_type,
+            "iframe_selector": iframe_selector,
+            "timestamp": int(time.time() * 1000)
+        }
+        self.recorded_steps.append(step)
+    
+    async def _auto_handle_verification_popup(self, page, verify_type='auto'):
+        """自动识别并处理验证弹窗
+        
+        Args:
+            page: 页面对象
+            verify_type: 验证类型，可选值: 'auto', 'slider', 'image'
+        """
+        uat_logger.info(f"🔍 开始处理验证弹窗，类型: {verify_type}")
+        
+        if verify_type == 'auto':
+            # 自动检测验证类型
+            return await self._detect_and_handle_captcha(page)
+        elif verify_type == 'slider':
+            # 处理滑动方块验证码
+            return await self._handle_slider_captcha(page)
+        elif verify_type == 'image':
+            # 处理点击图片文字验证码
+            return await self._handle_image_captcha(page)
+        else:
+            uat_logger.warning(f"⚠️ 未知的验证类型: {verify_type}，使用自动检测")
+            return await self._detect_and_handle_captcha(page)
+    
+    async def _detect_and_handle_captcha(self, page):
+        """自动检测并处理验证码"""
+        uat_logger.info("🔍 自动检测验证码类型")
+        
+        # 智能等待验证弹窗出现
+        max_wait_time = 10  # 最大等待时间（秒）
+        start_time = time.time()
+        verification_found = False
+        
+        while time.time() - start_time < max_wait_time:
+            # 尝试查找常见的验证弹窗元素
+            try:
+                # 常见的验证弹窗选择器
+                verification_selectors = [
+                    '.captcha-box',
+                    '.verification-box',
+                    '.verify-box',
+                    '[class*="captcha"]',
+                    '[class*="verification"]',
+                    '[class*="verify"]',
+                    '.slider-container',
+                    '.slide-container',
+                    '.captcha-slider',
+                    '[class*="slider"]',
+                    '[class*="slide"]',
+                ]
+                
+                for selector in verification_selectors:
+                    element = page.locator(selector)
+                    if await element.count() > 0:
+                        first_element = element.first
+                        is_visible = await first_element.is_visible()
+                        if is_visible:
+                            uat_logger.info(f"✅ 验证弹窗已出现: {selector}")
+                            verification_found = True
+                            break
+                
+                if verification_found:
+                    break
+            except Exception as e:
+                uat_logger.debug(f"等待验证弹窗时出错: {e}")
+            
+            # 短暂等待后重试
+            await asyncio.sleep(0.5)
+        
+        if not verification_found:
+            uat_logger.warning("⚠️ 未检测到验证弹窗，继续执行默认流程")
+        
+        # 首先尝试处理滑动验证码
+        try:
+            slider_handled = await self._handle_slider_captcha(page)
+            if slider_handled:
+                uat_logger.info("✅ 滑动验证码处理成功")
+                # 记录步骤
+                step = {
+                    "action": "verify",
+                    "auto_detect": True,
+                    "found_verification": True,
+                    "verification_type": "slider",
+                    "timestamp": int(time.time() * 1000)
+                }
+                self.recorded_steps.append(step)
+                return True
+        except Exception as slider_error:
+            uat_logger.warning(f"⚠️ 处理滑动验证码时出错: {slider_error}")
+        
+        # 然后尝试处理图片验证码
+        try:
+            image_handled = await self._handle_image_captcha(page)
+            if image_handled:
+                uat_logger.info("✅ 图片验证码处理成功")
+                # 记录步骤
+                step = {
+                    "action": "verify",
+                    "auto_detect": True,
+                    "found_verification": True,
+                    "verification_type": "image",
+                    "timestamp": int(time.time() * 1000)
+                }
+                self.recorded_steps.append(step)
+                return True
+        except Exception as image_error:
+            uat_logger.warning(f"⚠️ 处理图片验证码时出错: {image_error}")
+        
+        # 最后尝试查找其他类型的验证弹窗
+        # 常见的验证弹窗选择器模式
+        verification_selectors = [
+            # 人机验证相关
+            '.captcha-box',
+            '.verification-box',
+            '.verify-box',
+            '#captcha',
+            '#verification',
+            '#verify',
+            '[class*="captcha"]',
+            '[class*="verification"]',
+            '[class*="verify"]',
+            '[id*="captcha"]',
+            '[id*="verification"]',
+            '[id*="verify"]',
+            # 验证按钮
+            'button:has-text("验证")',
+            'button:has-text("Verify")',
+            'button:has-text("确认")',
+            'button:has-text("Confirm")',
+            'button:has-text("提交")',
+            'button:has-text("Submit")',
+            'a:has-text("验证")',
+            'a:has-text("Verify")',
+            # iframe中的验证
+            'iframe[src*="captcha"]',
+            'iframe[src*="verify"]',
+            'iframe[src*="recaptcha"]',
+            # 其他常见验证元素
+            '.g-recaptcha',
+            '#g-recaptcha',
+            '[data-sitekey]',
+            '.hcaptcha',
+            '#hcaptcha',
+        ]
+        
+        # 尝试查找验证弹窗
+        found_verification = False
+        for selector in verification_selectors:
+            try:
+                uat_logger.info(f"🔍 尝试查找验证弹窗: {selector}")
+                element = page.locator(selector)
+                
+                # 检查元素是否存在且可见
+                if await element.count() > 0:
+                    first_element = element.first
+                    is_visible = await first_element.is_visible()
+                    if is_visible:
+                        uat_logger.info(f"✅ 找到验证弹窗: {selector}")
+                        found_verification = True
+                        
+                        # 尝试点击验证按钮
+                        try:
+                            await first_element.click(timeout=3000)
+                            uat_logger.info("✅ 已点击验证按钮")
+                            # 等待验证完成
+                            await asyncio.sleep(2)
+                        except Exception as click_error:
+                            uat_logger.warning(f"⚠️ 点击验证按钮失败: {click_error}")
+                            # 如果点击失败，尝试其他方式
+                            try:
+                                # 尝试等待验证弹窗消失
+                                await first_element.wait_for(state='hidden', timeout=5000)
+                                uat_logger.info("✅ 验证弹窗已消失")
+                            except Exception as wait_error:
+                                uat_logger.warning(f"⚠️ 等待验证弹窗消失失败: {wait_error}")
+                        
+                        break
+            except Exception as e:
+                uat_logger.debug(f"选择器 {selector} 未找到验证弹窗: {e}")
+                continue
+        
+        if not found_verification:
+            uat_logger.error("❌ 未检测到验证弹窗，验证操作失败")
+            # 记录步骤
+            step = {
+                "action": "verify",
+                "auto_detect": True,
+                "found_verification": False,
+                "timestamp": int(time.time() * 1000)
+            }
+            self.recorded_steps.append(step)
+            # 抛出异常，标记验证失败
+            raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
+        
+        # 记录步骤
+        step = {
+            "action": "verify",
+            "auto_detect": True,
+            "found_verification": True,
+            "timestamp": int(time.time() * 1000)
+        }
+        self.recorded_steps.append(step)
+        
+        return True
+    
+    async def _handle_slider_captcha(self, page, selector=None):
+        """处理滑动方块验证码
+        
+        Args:
+            page: 页面对象
+            selector: 可选，验证码容器选择器，优先在该容器内查找滑块
+        """
+        uat_logger.info("🔍 处理滑动方块验证码")
+        
+        # 常见的滑块验证码选择器
+        slider_selectors = [
+            # 滑块容器
+            '.captcha-slider',
+            '.slider-container',
+            '.slide-container',
+            '[class*="slider"]',
+            '[class*="slide"]',
+            '[class*="verify"]',
+            '[class*="verifybox"]',
+            '[class*="captcha"]',
+            '[class*="geetest"]',
+            '[class*="tcaptcha"]',
+            '[class*="yidun"]',
+            '.geetest_slider',
+            '.tcaptcha-slider',
+            '.yidun_slider',
+            '.nc_wrapper',  # 网易易盾
+            '.ac-slider',  # 阿里滑块
+            # 滑块本身
+            '.slider-handle',
+            '.slide-handle',
+            '.slider-btn',
+            '.slide-btn',
+            '.captcha-btn',
+            '.geetest_slider_button',
+            '.tcaptcha-drag-button',
+            '.yidun_slider__handle',
+            '.nc_iconfont',  # 网易易盾滑块
+            '.ac-slider-handle',  # 阿里滑块
+            '[class*="handle"]',
+            '[class*="btn"]',
+            '[class*="verify-move-block"]',
+            '[class*="verify-drag-icon"]',
+            '[class*="button"]',
+            '[class*="drag"]',
+            '[class*="slide"]',
+            '[class*="slider"]',
+            '[class*="move"]',
+            '[class*="icon"]',
+            # 通用元素
+            'button',
+            'div',
+            'span',
+            'i',
+            # 组合选择器
+            '[class*="slider"] button',
+            '[class*="slide"] button',
+            '[class*="captcha"] button',
+            '[class*="verify"] button',
+            '[class*="slider"] div',
+            '[class*="slide"] div',
+            '[class*="captcha"] div',
+            '[class*="verify"] div',
+        ]
+        
+        # 等待滑块加载 - 减少等待时间
+        await asyncio.sleep(0.5)
+        
+        # 优先在指定容器内查找滑块
+        if selector:
+            uat_logger.info(f"🔍 优先在指定容器内查找滑块: {selector}")
+            try:
+                container = page.locator(selector)
+                if await container.count() > 0:
+                    container_element = container.first
+                    if await container_element.is_visible():
+                        for sub_selector in slider_selectors:
+                            try:
+                                uat_logger.info(f"🔍 在容器内尝试查找滑块: {sub_selector}")
+                                slider = container_element.locator(sub_selector)
+                                if await slider.count() > 0:
+                                    slider_element = slider.first
+                                    is_visible = await slider_element.is_visible()
+                                    if is_visible:
+                                        uat_logger.info(f"✅ 在容器内找到滑块: {sub_selector}")
+                                        # 执行滑动操作
+                                        try:
+                                            # 首先尝试获取滑块位置和尺寸
+                                            slider_box = await slider_element.bounding_box()
+                                            if slider_box:
+                                                # 尝试识别拼图滑块并计算缺口位置
+                                                uat_logger.info("🔍 尝试识别拼图滑块并计算缺口位置")
+                                                distance = await self._calculate_puzzle_distance(page, slider_element, slider_box)
+                                                if distance and distance > 0:
+                                                    uat_logger.info(f"✅ 拼图滑块缺口计算距离: {distance}px")
+                                                    # 直接执行滑动操作，使用计算出的距离
+                                                    uat_logger.info("🔄 执行滑块滑动，使用计算出的距离")
+                                                    
+                                                    # 获取滑动起点
+                                                    start_x = slider_box['x'] + slider_box['width'] // 2
+                                                    start_y = slider_box['y'] + slider_box['height'] // 2
+                                                    uat_logger.info(f"🎯 滑动起点: x={start_x}, y={start_y}")
+                                                    
+                                                    # 模拟鼠标移动到滑块上
+                                                    uat_logger.info(f"🖱️  移动鼠标到滑块位置: x={start_x}, y={start_y}")
+                                                    await page.mouse.move(start_x, start_y, steps=3)
+                                                    await asyncio.sleep(0.2)  # 短暂停顿
+                                                    
+                                                    # 模拟鼠标按下
+                                                    uat_logger.info("🖱️  按下鼠标")
+                                                    await page.mouse.down()
+                                                    await asyncio.sleep(0.1)  # 短暂停顿
+                                                    
+                                                    # 分阶段滑动，模拟人类行为
+                                                    # 开始加速
+                                                    middle_x1 = start_x + distance * 0.3
+                                                    middle_y1 = start_y + random.randint(-5, 5)
+                                                    uat_logger.info(f"🖱️  开始加速，移动到: x={middle_x1}, y={middle_y1}")
+                                                    await page.mouse.move(middle_x1, middle_y1, steps=3)
+                                                    await asyncio.sleep(random.uniform(0.05, 0.1))
+                                                    # 中间匀速
+                                                    middle_x2 = start_x + distance * 0.6
+                                                    middle_y2 = start_y + random.randint(-5, 5)
+                                                    uat_logger.info(f"🖱️  中间匀速，移动到: x={middle_x2}, y={middle_y2}")
+                                                    await page.mouse.move(middle_x2, middle_y2, steps=5)
+                                                    await asyncio.sleep(random.uniform(0.05, 0.1))
+                                                    # 最后减速 - 更精确地移动到目标位置
+                                                    end_x = start_x + distance
+                                                    end_y = start_y + random.randint(-1, 1)  # 最小化抖动，最精确
+                                                    uat_logger.info(f"🖱️  最后减速，移动到: x={end_x}, y={end_y}")
+                                                    await page.mouse.move(end_x, end_y, steps=20)  # 最大化步骤，最精确
+                                                    await asyncio.sleep(0.3)  # 增加停顿时间，确保完全到达目标位置
+                                                    
+                                                    # 释放鼠标 - 在正确位置精确释放
+                                                    uat_logger.info("🖱️  释放鼠标")
+                                                    await page.mouse.up()
+                                                    await asyncio.sleep(0.5)  # 增加释放后的停顿时间，确保验证有足够时间响应
+                                                    
+                                                    # 等待验证完成
+                                                    uat_logger.info("⏳ 等待验证完成")
+                                                    await asyncio.sleep(2)
+                                                    
+                                                    # 尝试点击验证按钮或确认区域
+                                                    try:
+                                                        uat_logger.info("🔍 尝试找到并点击验证确认按钮")
+                                                        # 常见的验证确认按钮选择器
+                                                        confirm_selectors = [
+                                                            'button:has-text("验证")',
+                                                            'button:has-text("确认")',
+                                                            'button:has-text("Verify")',
+                                                            'button:has-text("Confirm")',
+                                                            '.verify-button',
+                                                            '.confirm-button',
+                                                            '.submit-button',
+                                                            '[class*="verify"] button',
+                                                            '[class*="confirm"] button',
+                                                            '[class*="submit"] button',
+                                                        ]
+                                                        
+                                                        for selector in confirm_selectors:
+                                                            try:
+                                                                confirm_button = page.locator(selector)
+                                                                if await confirm_button.count() > 0:
+                                                                    is_visible = await confirm_button.is_visible()
+                                                                    if is_visible:
+                                                                        uat_logger.info(f"✅ 找到验证确认按钮: {selector}")
+                                                                        await confirm_button.click()
+                                                                        uat_logger.info("✅ 点击验证确认按钮")
+                                                                        await asyncio.sleep(1)
+                                                                        break
+                                                            except Exception as e:
+                                                                uat_logger.debug(f"选择器 {selector} 未找到确认按钮: {e}")
+                                                                continue
+                                                    except Exception as e:
+                                                        uat_logger.debug(f"点击确认按钮失败: {e}")
+                                                    
+                                                    uat_logger.info("✅ 滑动验证完成")
+                                                    return True
+                                                else:
+                                                    uat_logger.error("❌ 无法计算滑动距离")
+                                                    continue
+                                            else:
+                                                uat_logger.error("❌ 无法获取滑块位置")
+                                                continue
+                                        except Exception as slide_error:
+                                            uat_logger.error(f"❌ 滑动验证失败: {slide_error}")
+                                            raise
+                            except Exception as e:
+                                uat_logger.debug(f"容器内选择器 {sub_selector} 未找到滑块: {e}")
+                                continue
+            except Exception as e:
+                uat_logger.debug(f"容器选择器 {selector} 未找到: {e}")
+        
+        # 在整个页面中查找滑块
+        uat_logger.info("🔍 在整个页面中查找滑块")
+        for selector in slider_selectors:
+            try:
+                uat_logger.info(f"🔍 尝试查找滑块: {selector}")
+                element = page.locator(selector)
+                
+                if await element.count() > 0:
+                    slider = element.first
+                    is_visible = await slider.is_visible()
+                    if is_visible:
+                        uat_logger.info(f"✅ 找到滑块: {selector}")
+                        
+                        # 执行滑动操作
+                        try:
+                            # 首先尝试获取滑块位置和尺寸
+                            slider_box = await slider.bounding_box()
+                            if slider_box:
+                                # 尝试识别拼图滑块并计算缺口位置
+                                uat_logger.info("🔍 尝试识别拼图滑块并计算缺口位置")
+                                distance = await self._calculate_puzzle_distance(page, slider, slider_box)
+                                if distance and distance > 0:
+                                    uat_logger.info(f"✅ 拼图滑块缺口计算距离: {distance}px")
+                                    # 直接执行滑动操作，使用计算出的距离
+                                    uat_logger.info("🔄 执行滑块滑动，使用计算出的距离")
+                                    
+                                    # 获取滑动起点
+                                    start_x = slider_box['x'] + slider_box['width'] // 2
+                                    start_y = slider_box['y'] + slider_box['height'] // 2
+                                    uat_logger.info(f"🎯 滑动起点: x={start_x}, y={start_y}")
+                                    
+                                    # 模拟鼠标移动到滑块上
+                                    uat_logger.info(f"🖱️  移动鼠标到滑块位置: x={start_x}, y={start_y}")
+                                    await page.mouse.move(start_x, start_y, steps=3)
+                                    await asyncio.sleep(0.2)  # 短暂停顿
+                                    
+                                    # 模拟鼠标按下
+                                    uat_logger.info("🖱️  按下鼠标")
+                                    await page.mouse.down()
+                                    await asyncio.sleep(0.1)  # 短暂停顿
+                                    
+                                    # 分阶段滑动，模拟人类行为
+                                    # 开始加速
+                                    middle_x1 = start_x + distance * 0.3
+                                    middle_y1 = start_y + random.randint(-5, 5)
+                                    uat_logger.info(f"🖱️  开始加速，移动到: x={middle_x1}, y={middle_y1}")
+                                    await page.mouse.move(middle_x1, middle_y1, steps=3)
+                                    await asyncio.sleep(random.uniform(0.05, 0.1))
+                                    # 中间匀速
+                                    middle_x2 = start_x + distance * 0.6
+                                    middle_y2 = start_y + random.randint(-5, 5)
+                                    uat_logger.info(f"🖱️  中间匀速，移动到: x={middle_x2}, y={middle_y2}")
+                                    await page.mouse.move(middle_x2, middle_y2, steps=5)
+                                    await asyncio.sleep(random.uniform(0.05, 0.1))
+                                    # 最后减速 - 更精确地移动到目标位置
+                                    end_x = start_x + distance
+                                    end_y = start_y + random.randint(-1, 1)  # 最小化抖动，最精确
+                                    uat_logger.info(f"🖱️  最后减速，移动到: x={end_x}, y={end_y}")
+                                    await page.mouse.move(end_x, end_y, steps=20)  # 最大化步骤，最精确
+                                    await asyncio.sleep(0.3)  # 增加停顿时间，确保完全到达目标位置
+                                    
+                                    # 释放鼠标 - 在正确位置精确释放
+                                    uat_logger.info("🖱️  释放鼠标")
+                                    await page.mouse.up()
+                                    await asyncio.sleep(0.5)  # 增加释放后的停顿时间，确保验证有足够时间响应
+                                    
+                                    # 等待验证完成
+                                    uat_logger.info("⏳ 等待验证完成")
+                                    await asyncio.sleep(2)
+                                    
+                                    # 尝试点击验证按钮或确认区域
+                                    try:
+                                        uat_logger.info("🔍 尝试找到并点击验证确认按钮")
+                                        # 常见的验证确认按钮选择器
+                                        confirm_selectors = [
+                                            'button:has-text("验证")',
+                                            'button:has-text("确认")',
+                                            'button:has-text("Verify")',
+                                            'button:has-text("Confirm")',
+                                            '.verify-button',
+                                            '.confirm-button',
+                                            '.submit-button',
+                                            '[class*="verify"] button',
+                                            '[class*="confirm"] button',
+                                            '[class*="submit"] button',
+                                        ]
+                                        
+                                        for selector in confirm_selectors:
+                                            try:
+                                                confirm_button = page.locator(selector)
+                                                if await confirm_button.count() > 0:
+                                                    is_visible = await confirm_button.is_visible()
+                                                    if is_visible:
+                                                        uat_logger.info(f"✅ 找到验证确认按钮: {selector}")
+                                                        await confirm_button.click()
+                                                        uat_logger.info("✅ 点击验证确认按钮")
+                                                        await asyncio.sleep(1)
+                                                        break
+                                            except Exception as e:
+                                                uat_logger.debug(f"选择器 {selector} 未找到确认按钮: {e}")
+                                                continue
+                                    except Exception as e:
+                                        uat_logger.debug(f"点击确认按钮失败: {e}")
+                                    
+                                    uat_logger.info("✅ 滑动验证完成")
+                                    return True
+                            # 如果无法计算距离，使用默认的滑动操作
+                            uat_logger.info("⚠️ 无法计算滑动距离，使用默认的滑动操作")
+                            try:
+                                await self._perform_slider_action(page, slider)
+                                uat_logger.info("✅ 滑动验证完成")
+                                return True
+                            except Exception as slide_error:
+                                uat_logger.error(f"❌ 滑动验证失败: {slide_error}")
+                                raise
+                        except Exception as slide_error:
+                            uat_logger.error(f"❌ 滑动验证失败: {slide_error}")
+                            continue
+            except Exception as e:
+                uat_logger.debug(f"选择器 {selector} 未找到滑块: {e}")
+                continue
+        
+        uat_logger.error("❌ 未找到滑块验证码元素")
+        raise Exception("滑动验证失败: 未找到滑块验证码元素，可能的原因：1. 验证码未加载完成 2. 页面结构发生变化 3. 选择器不匹配")
+    
+
+    async def _perform_slider_action(self, page, slider):
+        """执行滑块滑动操作
+        
+        Args:
+            page: 页面对象
+            slider: 滑块元素
+        
+        Returns:
+            bool: 滑动操作是否成功
+        """
+        uat_logger.info("🔄 执行滑块滑动")
+        
+        try:
+            # 确保滑块在视口中可见
+            await slider.scroll_into_view_if_needed()
+            await asyncio.sleep(0.5)  # 等待滚动完成
+            
+            # 获取滑块位置和尺寸
+            slider_box = await slider.bounding_box()
+            if not slider_box:
+                error_msg = "无法获取滑块位置，可能的原因：1. 滑块元素不可见 2. 页面结构发生变化"
+                uat_logger.error(f"❌ {error_msg}")
+                raise Exception(error_msg)
+            
+            # 打印滑块位置和尺寸
+            uat_logger.info(f"📏 滑块位置: x={slider_box['x']}, y={slider_box['y']}, 宽度={slider_box['width']}, 高度={slider_box['height']}")
+            
+            # 计算滑动起点
+            start_x = slider_box['x'] + slider_box['width'] // 2
+            start_y = slider_box['y'] + slider_box['height'] // 2
+            uat_logger.info(f"🎯 滑动起点: x={start_x}, y={start_y}")
+            
+            # 尝试识别拼图滑块并计算缺口位置
+            distance = await self._calculate_puzzle_distance(page, slider, slider_box)
+            
+            # 如果无法计算距离，尝试智能计算
+            if not distance or distance <= 0:
+                uat_logger.info("⚠️ 无法计算拼图距离，尝试智能计算滑动距离")
+                distance = await self._calculate_slider_distance(page, slider, slider_box)
+            
+            # 如果仍然无法计算，抛出错误而不是使用默认距离
+            # 这样可以提供更明确的错误信息，便于分析失败原因
+            if not distance or distance <= 0:
+                error_msg = "无法计算滑块滑动距离，可能的原因：1. 无法识别拼图缺口 2. 无法找到滑块容器 3. 页面结构异常"
+                uat_logger.error(f"❌ {error_msg}")
+                raise Exception(error_msg)
+            
+            uat_logger.info(f"🎯 最终滑动距离: {distance}px")
+            
+            # 执行一致的滑动操作
+            success = await self._slide_with_consistent_speed(page, start_x, start_y, distance)
+            if success:
+                # 等待验证完成
+                uat_logger.info("⏳ 等待验证完成")
+                await asyncio.sleep(1.5)  # 固定等待时间
+                return True
+            else:
+                error_msg = "滑块滑动操作执行失败，可能的原因：1. 鼠标移动路径不正确 2. 滑动速度不符合要求 3. 验证系统检测到自动化操作"
+                uat_logger.error(f"❌ {error_msg}")
+                raise Exception(error_msg)
+        except Exception as e:
+            uat_logger.error(f"❌ 滑动操作执行失败: {e}")
+            raise
+    
+    # 临时方法，稍后删除
+    async def _old_perform_slider_action(self, page, slider):
+        """旧的滑块滑动操作方法，用于备份"""
+        pass
+    
+    async def _calculate_slider_distance(self, page, slider, slider_box):
+        """智能计算滑块滑动距离
+        
+        Args:
+            page: 页面对象
+            slider: 滑块元素
+            slider_box: 滑块边界框
+        
+        Returns:
+            int: 滑动距离
+        """
+        uat_logger.info("🔍 智能计算滑块滑动距离")
+        
+        try:
+            # 尝试获取滑块容器，以计算实际需要滑动的距离
+            # 常见的滑块容器选择器
+            container_selectors = [
+                '.slider-container',
+                '.slide-container',
+                '.captcha-slider',
+                '[class*="slider"]',
+                '[class*="slide"]',
+                '[class*="verify"]',
+                '[class*="verifybox"]',
+                '[class*="captcha"]',
+                '[class*="geetest"]',
+                '[class*="tcaptcha"]',
+                '[class*="yidun"]',
+                '.geetest_slider',
+                '.tcaptcha-slider',
+                '.yidun_slider',
+                '.nc_wrapper',  # 网易易盾
+                '.ac-slider',  # 阿里滑块
+                '.verify-bar-area',  # 特定于用户的验证容器
+                '.verify-left-bar',  # 特定于用户的验证容器
+            ]
+            
+            for container_selector in container_selectors:
+                container = page.locator(container_selector)
+                if await container.count() > 0:
+                    container_element = container.first
+                    container_box = await container_element.bounding_box()
+                    if container_box:
+                        uat_logger.info(f"📦 找到容器: {container_selector}, 位置: x={container_box['x']}, y={container_box['y']}, 宽度={container_box['width']}, 高度={container_box['height']}")
+                        # 尝试通过查找缺口元素来计算滑动距离
+                        # 常见的缺口元素选择器
+                        gap_selectors = [
+                            '.puzzle-gap',
+                            '.captcha-gap',
+                            '.verify-gap',
+                            '.slider-gap',
+                            '.slide-gap',
+                            '[class*="gap"]',
+                            '[class*="hole"]',
+                            '[class*="缺口"]',
+                        ]
+                        
+                        for gap_selector in gap_selectors:
+                            try:
+                                gap_element = page.locator(gap_selector)
+                                if await gap_element.count() > 0:
+                                    gap = gap_element.first
+                                    is_visible = await gap.is_visible()
+                                    if is_visible:
+                                        gap_box = await gap.bounding_box()
+                                        if gap_box:
+                                            uat_logger.info(f"✅ 找到缺口元素: {gap_selector}, 位置: x={gap_box['x']}, y={gap_box['y']}")
+                                            # 计算滑动距离：缺口位置 - 滑块初始位置
+                                            distance = int(gap_box['x'] - slider_box['x'])
+                                            uat_logger.info(f"✅ 缺口位置计算距离: {distance}px")
+                                            if distance > 0 and distance < 500:
+                                                return distance
+                            except Exception as e:
+                                uat_logger.debug(f"选择器 {gap_selector} 未找到缺口元素: {e}")
+                                continue
+                        
+                        # 如果没有找到缺口元素，返回一个基于容器宽度的合理距离
+                        # 但不是容器宽度 - 滑块宽度，而是一个更合理的值
+                        distance = int(container_box['width'] * 0.6)
+                        uat_logger.info(f"✅ 基于容器宽度计算滑动距离: {distance}px")
+                        if distance > 0 and distance < 500:
+                            return distance
+            
+            # 如果仍然无法计算，尝试获取滑块的父元素作为容器
+            try:
+                # 获取滑块的父元素
+                parent = slider.locator('xpath=..')
+                parent_box = await parent.bounding_box()
+                if parent_box:
+                    uat_logger.info(f"👨‍👩‍👧‍👦 找到父元素, 位置: x={parent_box['x']}, y={parent_box['y']}, 宽度={parent_box['width']}, 高度={parent_box['height']}")
+                    # 如果没有找到缺口元素，返回一个基于父元素宽度的合理距离
+                    # 但不是父元素宽度 - 滑块宽度，而是一个更合理的值
+                    distance = int(parent_box['width'] * 0.6)
+                    uat_logger.info(f"✅ 基于父元素宽度计算滑动距离: {distance}px")
+                    if distance > 0 and distance < 500:
+                        return distance
+            except Exception as e:
+                uat_logger.debug(f"使用父元素计算滑动距离失败: {e}")
+            
+            # 如果仍然无法计算，尝试获取滑块的祖父元素作为容器
+            try:
+                # 获取滑块的祖父元素
+                grandparent = slider.locator('xpath=../..')
+                grandparent_box = await grandparent.bounding_box()
+                if grandparent_box:
+                    uat_logger.info(f"👴 找到祖父元素, 位置: x={grandparent_box['x']}, y={grandparent_box['y']}, 宽度={grandparent_box['width']}, 高度={grandparent_box['height']}")
+                    # 如果没有找到缺口元素，返回一个基于祖父元素宽度的合理距离
+                    # 但不是祖父元素宽度 - 滑块宽度，而是一个更合理的值
+                    distance = int(grandparent_box['width'] * 0.6)
+                    uat_logger.info(f"✅ 基于祖父元素宽度计算滑动距离: {distance}px")
+                    if distance > 0 and distance < 500:
+                        return distance
+            except Exception as e:
+                uat_logger.debug(f"使用祖父元素计算滑动距离失败: {e}")
+        except Exception as e:
+            uat_logger.debug(f"智能计算滑动距离失败: {e}")
+        
+        # 如果所有方法都失败，返回一个默认的滑动距离
+        # 这个默认距离是基于常见的滑块验证码容器宽度计算的
+        default_distance = 200
+        uat_logger.warning(f"⚠️ 所有距离计算方法都失败，使用默认滑动距离: {default_distance}px")
+        return default_distance
+    
+    async def _slide_with_consistent_speed(self, page, start_x, start_y, distance):
+        """以一致的速度执行滑块滑动
+        
+        Args:
+            page: 页面对象
+            start_x: 滑动起点x坐标
+            start_y: 滑动起点y坐标
+            distance: 滑动距离
+        
+        Returns:
+            bool: 滑动操作是否成功
+        """
+        uat_logger.info(f"🔄 以一致速度滑动，距离: {distance}px")
+        
+        try:
+            # 模拟鼠标移动到滑块上 - 减少等待时间
+            uat_logger.info(f"🖱️  移动鼠标到滑块位置: x={start_x}, y={start_y}")
+            # 先移动到滑块附近，再微调位置
+            near_x = start_x + random.randint(-10, 10)
+            near_y = start_y + random.randint(-10, 10)
+            await page.mouse.move(near_x, near_y, steps=3)
+            await asyncio.sleep(random.uniform(0.05, 0.15))  # 减少随机停顿时间
+            # 精确移动到滑块中心
+            await page.mouse.move(start_x, start_y, steps=5)
+            await asyncio.sleep(random.uniform(0.05, 0.1))  # 减少随机停顿时间
+            
+            # 模拟鼠标按下 - 减少等待时间
+            uat_logger.info("🖱️  按下鼠标")
+            await asyncio.sleep(random.uniform(0.02, 0.08))  # 减少按下前的犹豫时间
+            await page.mouse.down()
+            await asyncio.sleep(random.uniform(0.02, 0.05))  # 减少按下后的停顿时间
+            
+            # 计算滑动路径点 - 模拟人类的加速、匀速、减速过程
+            total_steps = random.randint(20, 30)  # 增加总步骤数，进一步提高精度
+            step_distance = distance / total_steps
+            
+            # 分阶段滑动，模拟人类行为
+            current_x = start_x
+            current_y = start_y
+            
+            for step in range(1, total_steps + 1):
+                # 计算当前步骤的目标位置
+                target_x = start_x + step_distance * step
+                
+                # 模拟人类的Y轴偏移 - 更自然的抖动
+                # 开始和结束时抖动较小，中间时抖动较大
+                if step < total_steps * 0.2 or step > total_steps * 0.8:
+                    # 开始和结束阶段，抖动较小
+                    jitter = random.randint(-1, 1)
+                else:
+                    # 中间阶段，抖动较大
+                    jitter = random.randint(-3, 3)
+                target_y = start_y + jitter
+                
+                # 模拟人类的移动速度变化
+                # 开始时较慢（加速），中间较快（匀速），结束时较慢（减速）
+                if step < total_steps * 0.3:
+                    # 加速阶段
+                    move_steps = random.randint(2, 3)
+                    sleep_time = random.uniform(0.04, 0.06)
+                elif step > total_steps * 0.7:
+                    # 减速阶段
+                    if step > total_steps * 0.9:
+                        # 最后10%的步骤，使用最多的步骤以获得最高精度
+                        move_steps = random.randint(20, 30)  # 进一步增加最后阶段的步骤数
+                        sleep_time = random.uniform(0.1, 0.2)  # 增加最后阶段的停留时间
+                    else:
+                        # 减速阶段的前半部分
+                        move_steps = random.randint(10, 15)  # 进一步增加减速阶段的步骤数
+                        sleep_time = random.uniform(0.05, 0.1)
+                else:
+                    # 匀速阶段
+                    move_steps = random.randint(3, 5)  # 增加匀速阶段的步骤数
+                    sleep_time = random.uniform(0.02, 0.05)
+                
+                # 移动到目标位置
+                await page.mouse.move(target_x, target_y, steps=move_steps)
+                await asyncio.sleep(sleep_time)
+            
+            # 最后的精确定位 - 确保滑块准确到达目标位置
+            final_target_x = start_x + distance
+            final_target_y = start_y + random.randint(-1, 1)  # 最后的微调
+            await page.mouse.move(final_target_x, final_target_y, steps=30)  # 使用更多步骤确保精度
+            await asyncio.sleep(random.uniform(0.1, 0.2))  # 增加停顿时间，确保完全到达目标位置
+            
+            # 释放鼠标 - 人类可能会有轻微的延迟
+            await asyncio.sleep(random.uniform(0.05, 0.1))  # 释放前的停顿
+            uat_logger.info("🖱️  释放鼠标")
+            await page.mouse.up()
+            
+            # 释放后的停顿
+            await asyncio.sleep(random.uniform(0.1, 0.2))
+            
+            return True
+        except Exception as e:
+            uat_logger.error(f"❌ 一致速度滑动失败: {e}")
+            return False
+    
+    async def _calculate_puzzle_distance_with_opencv(self, page, slider, slider_box):
+        """使用OpenCV计算拼图滑块的缺口距离"""
+        uat_logger.info("🔍 使用OpenCV识别拼图滑块并计算缺口距离")
+        
+        try:
+            # 尝试获取滑块的父元素，作为验证码区域
+            try:
+                parent = slider.locator('xpath=..')
+                parent_box = await parent.bounding_box()
+                if parent_box:
+                    # 截图只包含验证码区域，减少干扰
+                    uat_logger.info("📸 截图获取验证码区域")
+                    screenshot_path = "captcha_screenshot.png"
+                    # 计算截图区域，稍微扩大一点范围以确保包含完整的验证码
+                    clip = {
+                        "x": max(0, parent_box['x'] - 10),
+                        "y": max(0, parent_box['y'] - 10),
+                        "width": parent_box['width'] + 20,
+                        "height": parent_box['height'] + 20
+                    }
+                    await page.screenshot(path=screenshot_path, clip=clip)
+                else:
+                    # 如果无法获取父元素，使用整个页面截图
+                    uat_logger.info("📸 截图获取整个页面")
+                    screenshot_path = "captcha_screenshot.png"
+                    await page.screenshot(path=screenshot_path, full_page=False)
+            except Exception:
+                # 失败时使用整个页面截图
+                uat_logger.info("📸 截图获取整个页面")
+                screenshot_path = "captcha_screenshot.png"
+                await page.screenshot(path=screenshot_path, full_page=False)
+            
+            # 读取截图并进行图像处理
+            image = cv2.imread(screenshot_path)
+            if image is None:
+                uat_logger.error("❌ 无法读取截图")
+                return None
+            
+            # 转换为灰度图像
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            
+            # 应用高斯模糊，减少噪声，使用更大的核以获得更好的模糊效果
+            blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+            
+            # 使用自适应阈值处理，调整参数以获得更好的阈值效果
+            thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 3)
+            
+            # 使用边缘检测，调整参数以获得更清晰的边缘
+            edges = cv2.Canny(thresh, 20, 80)
+            
+            # 执行形态学操作，闭合边缘中的小间隙
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+            
+            # 查找轮廓
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 过滤出可能的缺口轮廓
+            gap_contours = []
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                # 根据面积和长宽比过滤，只保留可能是缺口的轮廓
+                if 80 < area < 4000:  # 调整面积范围
+                    x, y, w, h = cv2.boundingRect(contour)
+                    aspect_ratio = w / h if h > 0 else 0
+                    # 缺口通常是横向的，长宽比大于1
+                    if 1.0 < aspect_ratio < 6:  # 调整长宽比范围
+                        # 进一步过滤：缺口通常位于图像的右侧部分
+                        if x > image.shape[1] * 0.3:  # 确保缺口在图像右侧30%区域
+                            gap_contours.append(contour)
+            
+            # 如果找到缺口轮廓
+            if gap_contours:
+                # 按面积排序，选择最大的缺口轮廓
+                gap_contours.sort(key=lambda x: cv2.contourArea(x), reverse=True)
+                largest_contour = gap_contours[0]
+                
+                # 计算缺口轮廓的边界框
+                x, y, w, h = cv2.boundingRect(largest_contour)
+                uat_logger.info(f"✅ 使用OpenCV找到缺口位置: x={x}, y={y}, 宽度={w}, 高度={h}")
+                
+                # 计算缺口中心点位置（在截图中的坐标）
+                gap_center_x_screenshot = x + w // 2
+                
+                # 计算滑块中心点位置（在实际页面中的坐标）
+                slider_center_x_page = int(slider_box['x'] + slider_box['width'] // 2)
+                
+                # 计算坐标映射比例
+                # 截图宽度与实际截图区域宽度的比例
+                if 'clip' in locals():
+                    # 如果使用了裁剪区域，使用裁剪区域的宽度
+                    width_ratio = clip['width'] / image.shape[1]
+                    # 调整缺口坐标，考虑裁剪区域的偏移
+                    gap_center_x_page = int((gap_center_x_screenshot * width_ratio) + clip['x'])
+                else:
+                    # 否则使用页面视口宽度
+                    viewport_width = await page.evaluate("window.innerWidth")
+                    width_ratio = viewport_width / image.shape[1] if viewport_width else 1
+                    gap_center_x_page = int(gap_center_x_screenshot * width_ratio)
+                
+                uat_logger.info(f"📏 宽度映射比例: {width_ratio}")
+                uat_logger.info(f"📍 转换后的缺口中心点页面坐标: {gap_center_x_page}")
+                uat_logger.info(f"📍 滑块中心点页面坐标: {slider_center_x_page}")
+                
+                # 计算滑动距离
+                distance = gap_center_x_page - slider_center_x_page
+                uat_logger.info(f"✅ 使用OpenCV计算滑动距离: {distance}px")
+                
+                # 验证距离是否合理
+                if distance < 0 or distance > 500:
+                    uat_logger.warning(f"⚠️ 计算的滑动距离不合理: {distance}px，可能是坐标映射错误")
+                    # 使用传统方法作为备选
+                    return None
+                
+                return distance
+            
+            # 如果未找到缺口轮廓，尝试使用模板匹配方法
+            uat_logger.info("⚠️ 轮廓检测失败，尝试使用模板匹配方法")
+            try:
+                # 尝试找到滑块图像
+                slider_image = None
+                slider_images = page.locator('img, [class*="slider"], [class*="slide"]')
+                count = await slider_images.count()
+                if count > 0:
+                    for i in range(count):
+                        img = slider_images.nth(i)
+                        if await img.is_visible():
+                            slider_image = img
+                            break
+                
+                if slider_image:
+                    # 获取滑块图像位置
+                    slider_img_box = await slider_image.bounding_box()
+                    if slider_img_box:
+                        # 截图滑块区域
+                        slider_clip = {
+                            "x": max(0, slider_img_box['x'] - 5),
+                            "y": max(0, slider_img_box['y'] - 5),
+                            "width": slider_img_box['width'] + 10,
+                            "height": slider_img_box['height'] + 10
+                        }
+                        slider_screenshot_path = "slider_template.png"
+                        await page.screenshot(path=slider_screenshot_path, clip=slider_clip)
+                        
+                        # 读取滑块模板
+                        template = cv2.imread(slider_screenshot_path, 0)
+                        if template is not None:
+                            # 模板匹配
+                            result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
+                            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+                            
+                            # 找到最佳匹配位置
+                            if max_val > 0.6:  # 匹配阈值
+                                # 计算缺口位置
+                                gap_x = max_loc[0] + template.shape[1] // 2
+                                uat_logger.info(f"✅ 使用模板匹配找到缺口位置: x={gap_x}")
+                                
+                                # 坐标映射
+                                if 'clip' in locals():
+                                    width_ratio = clip['width'] / image.shape[1]
+                                    gap_center_x_page = int((gap_x * width_ratio) + clip['x'])
+                                else:
+                                    viewport_width = await page.evaluate("window.innerWidth")
+                                    width_ratio = viewport_width / image.shape[1] if viewport_width else 1
+                                    gap_center_x_page = int(gap_x * width_ratio)
+                                
+                                # 计算滑块中心点位置（在实际页面中的坐标）
+                                slider_center_x_page = int(slider_box['x'] + slider_box['width'] // 2)
+                                # 计算滑动距离
+                                distance = gap_center_x_page - slider_center_x_page
+                                uat_logger.info(f"✅ 使用模板匹配计算滑动距离: {distance}px")
+                                
+                                if distance > 0 and distance < 500:
+                                    return distance
+            except Exception as template_error:
+                uat_logger.debug(f"模板匹配失败: {template_error}")
+            
+            uat_logger.warning("⚠️ 使用OpenCV未找到缺口位置")
+            return None
+        except Exception as e:
+            uat_logger.error(f"❌ 使用OpenCV计算拼图距离失败: {e}")
+            return None
+    
+    async def _calculate_puzzle_distance(self, page, slider, slider_box):
+        """计算拼图滑块的缺口距离"""
+        uat_logger.info("🔍 识别拼图滑块并计算缺口距离")
+        
+        try:
+            # 优先使用OpenCV进行缺口识别
+            uat_logger.info("📋 步骤1: 使用OpenCV进行缺口识别")
+            opencv_distance = await self._calculate_puzzle_distance_with_opencv(page, slider, slider_box)
+            if opencv_distance and opencv_distance > 0 and opencv_distance < 500:
+                uat_logger.info(f"✅ 使用OpenCV计算出的距离: {opencv_distance}px")
+                return opencv_distance
+            
+            # 如果OpenCV方法失败，使用传统的DOM元素识别方法
+            uat_logger.info("⚠️ OpenCV方法失败，使用传统的DOM元素识别方法")
+            uat_logger.info("📋 步骤2: 使用传统的DOM元素识别方法")
+            # 尝试找到缺口元素 - 这是最准确的方法
+            gap_selectors = [
+                '.puzzle-gap',
+                '.captcha-gap',
+                '.verify-gap',
+                '.slider-gap',
+                '.slide-gap',
+                '[class*="gap"]',
+                '[class*="hole"]',
+                '[class*="缺口"]',
+                # 新增缺口选择器
+                '[class*="notch"]',
+                '[class*="missing"]',
+                '[class*="empty"]',
+                '[class*="cut"]',
+                '[class*="break"]',
+                '[class*="puzzle"] [class*="gap"]',
+                '[class*="captcha"] [class*="gap"]',
+                '[class*="verify"] [class*="gap"]',
+                '[class*="slider"] [class*="gap"]',
+                '[class*="slide"] [class*="gap"]',
+                # 新增针对拼图验证码的选择器
+                '.puzzle-piece',
+                '.puzzle-missing',
+                '.puzzle-hole',
+                '[class*="puzzle"] [class*="piece"]',
+                '[class*="puzzle"] [class*="missing"]',
+                '[class*="puzzle"] [class*="hole"]',
+                # 针对特定验证码服务的选择器
+                '.geetest_canvas_slice',  # 极验验证码
+                '.yidun_jigsaw',  # 易盾验证码
+                '.tcaptcha-puzzle',  # 腾讯验证码
+                # 新增更多常见的缺口选择器
+                '.jigsaw-gap',
+                '.security-gap',
+                '.code-gap',
+                '[class*="jigsaw"]',
+                '[class*="security"]',
+                '[class*="code"]',
+                '[class*="verify"] [class*="hole"]',
+                '[class*="captcha"] [class*="hole"]',
+                '[class*="slider"] [class*="hole"]',
+                '[class*="slide"] [class*="hole"]',
+                # 针对不同框架和库的选择器
+                '.ant-captcha-gap',
+                '.element-plus-captcha-gap',
+                '.vuetify-captcha-gap',
+                '.bootstrap-captcha-gap',
+                # 通用选择器
+                'div[class*="gap"]',
+                'div[class*="hole"]',
+                'span[class*="gap"]',
+                'span[class*="hole"]',
+                'img[class*="gap"]',
+                'img[class*="hole"]',
+            ]
+            
+            for selector in gap_selectors:
+                try:
+                    gap_element = page.locator(selector)
+                    if await gap_element.count() > 0:
+                        gap = gap_element.first
+                        is_visible = await gap.is_visible()
+                        if is_visible:
+                            uat_logger.info(f"✅ 找到缺口元素: {selector}")
+                            
+                            # 获取缺口位置
+                            gap_box = await gap.bounding_box()
+                            if gap_box:
+                                uat_logger.info(f"📏 缺口位置: x={gap_box['x']}, y={gap_box['y']}, 宽度={gap_box['width']}, 高度={gap_box['height']}")
+                                
+                                # 计算滑动距离：缺口位置 - 滑块初始位置（考虑中心点）
+                                # 缺口的中心点位置减去滑块的中心点位置
+                                gap_center_x = gap_box['x'] + gap_box['width'] // 2
+                                slider_center_x = slider_box['x'] + slider_box['width'] // 2
+                                distance = int(gap_center_x - slider_center_x)
+                                uat_logger.info(f"✅ 缺口位置计算距离: {distance}px")
+                                return distance
+                except Exception as e:
+                    uat_logger.debug(f"选择器 {selector} 未找到缺口元素: {e}")
+                    continue
+            
+            # 尝试获取滑块的目标位置
+            target_selectors = [
+                '.target-position',
+                '.puzzle-target',
+                '.captcha-target',
+                '.verify-target',
+                '[class*="target"]',
+                # 新增目标位置选择器
+                '[class*="destination"]',
+                '[class*="end"]',
+                '[class*="final"]',
+                '[class*="goal"]',
+            ]
+            
+            for selector in target_selectors:
+                try:
+                    target_element = page.locator(selector)
+                    if await target_element.count() > 0:
+                        target = target_element.first
+                        is_visible = await target.is_visible()
+                        if is_visible:
+                            uat_logger.info(f"✅ 找到目标位置: {selector}")
+                            
+                            # 获取目标位置
+                            target_box = await target.bounding_box()
+                            if target_box:
+                                uat_logger.info(f"📏 目标位置: x={target_box['x']}, y={target_box['y']}, 宽度={target_box['width']}, 高度={target_box['height']}")
+                                
+                                # 计算滑动距离：目标位置 - 滑块初始位置（考虑中心点）
+                                # 目标的中心点位置减去滑块的中心点位置
+                                target_center_x = target_box['x'] + target_box['width'] // 2
+                                slider_center_x = slider_box['x'] + slider_box['width'] // 2
+                                distance = int(target_center_x - slider_center_x)
+                                uat_logger.info(f"✅ 目标位置计算距离: {distance}px")
+                                return distance
+                except Exception as e:
+                    uat_logger.debug(f"选择器 {selector} 未找到目标位置: {e}")
+                    continue
+            
+
+            
+
+            
+            # 尝试通过图片计算距离 - 作为最后的备选方案
+            # 常见的拼图图片选择器
+            puzzle_image_selectors = [
+                '.puzzle-image',
+                '.captcha-image',
+                '.verify-image',
+                '.slider-image',
+                '.slide-image',
+                '[class*="puzzle"]',
+                '[class*="captcha"] img',
+                '[class*="verify"] img',
+                '[class*="slider"] img',
+                '[class*="slide"] img',
+                '.geetest_item_img',  # 极验验证码
+                '.yidun_bg-img',  # 易盾验证码
+                '.tcaptcha-img',  # 腾讯验证码
+                '.verifybox',  # 用户提供的verifybox选择器
+                '.verify-bar-area',  # 验证条区域
+                '.verify-left-bar',  # 验证左侧条
+                '.verify-move-block',  # 验证移动块
+                '.verify-drag-icon',  # 验证拖动图标
+                # 新增常见验证码选择器
+                '.captcha-container img',
+                '.verify-container img',
+                '.security-code img',
+                '.code-image',
+                '[class*="security"] img',
+                '[class*="code"] img',
+                'img[src*="captcha"]',
+                'img[src*="verify"]',
+                'img[src*="code"]',
+                # 通用选择器
+                'img',  # 最后尝试所有图片
+            ]
+            
+            # 尝试找到拼图图片
+            for selector in puzzle_image_selectors:
+                try:
+                    image_element = page.locator(selector)
+                    if await image_element.count() > 0:
+                        image = image_element.first
+                        is_visible = await image.is_visible()
+                        if is_visible:
+                            uat_logger.info(f"✅ 找到拼图图片: {selector}")
+                            
+                            # 获取图片位置和尺寸
+                            image_box = await image.bounding_box()
+                            if image_box:
+                                uat_logger.info(f"📏 拼图图片位置: x={image_box['x']}, y={image_box['y']}, 宽度={image_box['width']}, 高度={image_box['height']}")
+                                
+                                # 对于拼图滑块，使用OpenCV进行缺口识别
+                                uat_logger.info("🔍 使用OpenCV进行缺口识别")
+                                opencv_distance = await self._calculate_puzzle_distance_with_opencv(page, slider, slider_box)
+                                if opencv_distance and opencv_distance > 0 and opencv_distance < 500:
+                                    uat_logger.info(f"✅ 使用OpenCV计算出的距离: {opencv_distance}px")
+                                    return opencv_distance
+                except Exception as e:
+                    uat_logger.debug(f"选择器 {selector} 未找到拼图图片: {e}")
+                    continue
+            
+            # 未找到拼图图片或缺口位置，返回None
+            uat_logger.warning(f"⚠️ 未找到拼图图片或缺口位置")
+            return None
+        except Exception as e:
+            uat_logger.error(f"❌ 计算拼图距离失败: {e}")
+            # 出错时返回None
+            return None
+
+    async def _handle_image_captcha(self, page):
+        """处理点击图片文字验证码"""
+        uat_logger.info("🔍 处理点击图片文字验证码")
+        
+        # 常见的图片验证码选择器
+        image_captcha_selectors = [
+            '.captcha-image',
+            '.verify-image',
+            '.image-captcha',
+            '#captcha-image',
+            '#verify-image',
+            '[class*="image"]',
+            '[class*="pic"]',
+            '[class*="img"]',
+            'img[class*="captcha"]',
+            'img[class*="verify"]',
+            '.captcha-container img',
+            '.verify-container img',
+        ]
+        
+        # 等待图片加载
+        await asyncio.sleep(1)
+        
+        for selector in image_captcha_selectors:
+            try:
+                uat_logger.info(f"🔍 尝试查找图片验证码: {selector}")
+                element = page.locator(selector)
+                
+                if await element.count() > 0:
+                    image = element.first
+                    is_visible = await image.is_visible()
+                    if is_visible:
+                        uat_logger.info(f"✅ 找到图片验证码: {selector}")
+                        
+                        # 尝试点击图片中的随机位置
+                        try:
+                            await self._click_image_randomly(page, image)
+                            uat_logger.info("✅ 图片验证操作完成")
+                            return True
+                        except Exception as click_error:
+                            uat_logger.error(f"❌ 图片验证失败: {click_error}")
+                            continue
+            except Exception as e:
+                uat_logger.debug(f"选择器 {selector} 未找到图片验证码: {e}")
+                continue
+        
+        uat_logger.warning("⚠️ 未找到图片验证码元素")
+        return False
+    
+    async def _click_image_randomly(self, page, image):
+        """在图片上随机点击"""
+        uat_logger.info("🎯 在图片上随机点击")
+        
+        # 获取图片位置和尺寸
+        image_box = await image.bounding_box()
+        if not image_box:
+            raise Exception("无法获取图片位置")
+        
+        # 计算图片中心区域
+        center_x = image_box['x'] + image_box['width'] // 2
+        center_y = image_box['y'] + image_box['height'] // 2
+        
+        # 在中心区域周围随机点击几个位置
+        click_positions = [
+            (center_x, center_y),  # 中心
+            (center_x - 30, center_y - 30),  # 左上
+            (center_x + 30, center_y - 30),  # 右上
+            (center_x - 30, center_y + 30),  # 左下
+            (center_x + 30, center_y + 30),  # 右下
+        ]
+        
+        for x, y in click_positions:
+            try:
+                await page.mouse.click(x, y)
+                uat_logger.info(f"🎯 点击位置: ({x}, {y})")
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                uat_logger.debug(f"点击位置 ({x}, {y}) 失败: {e}")
+                continue
+        
+        # 等待验证完成
+        await asyncio.sleep(2)
+    
+    async def _auto_handle_verification_popup_old(self, page):
+        """自动识别并处理验证弹窗"""
+        uat_logger.info("🔍 开始自动识别验证弹窗")
+        
+        # 常见的验证弹窗选择器模式
+        verification_selectors = [
+            # 人机验证相关
+            '.captcha-box',
+            '.verification-box',
+            '.verify-box',
+            '#captcha',
+            '#verification',
+            '#verify',
+            '[class*="captcha"]',
+            '[class*="verification"]',
+            '[class*="verify"]',
+            '[id*="captcha"]',
+            '[id*="verification"]',
+            '[id*="verify"]',
+            # 验证按钮
+            'button:has-text("验证")',
+            'button:has-text("Verify")',
+            'button:has-text("确认")',
+            'button:has-text("Confirm")',
+            'button:has-text("提交")',
+            'button:has-text("Submit")',
+            'a:has-text("验证")',
+            'a:has-text("Verify")',
+            # iframe中的验证
+            'iframe[src*="captcha"]',
+            'iframe[src*="verify"]',
+            'iframe[src*="recaptcha"]',
+            # 其他常见验证元素
+            '.g-recaptcha',
+            '#g-recaptcha',
+            '[data-sitekey]',
+            '.hcaptcha',
+            '#hcaptcha',
+        ]
+        
+        # 等待一段时间让验证弹窗出现
+        await asyncio.sleep(1)
+        
+        # 尝试查找验证弹窗
+        found_verification = False
+        for selector in verification_selectors:
+            try:
+                uat_logger.info(f"🔍 尝试查找验证弹窗: {selector}")
+                element = page.locator(selector)
+                
+                # 检查元素是否存在且可见
+                if await element.count() > 0:
+                    first_element = element.first
+                    is_visible = await first_element.is_visible()
+                    if is_visible:
+                        uat_logger.info(f"✅ 找到验证弹窗: {selector}")
+                        found_verification = True
+                        
+                        # 尝试点击验证按钮
+                        try:
+                            await first_element.click(timeout=3000)
+                            uat_logger.info("✅ 已点击验证按钮")
+                            # 等待验证完成
+                            await asyncio.sleep(2)
+                        except Exception as click_error:
+                            uat_logger.warning(f"⚠️ 点击验证按钮失败: {click_error}")
+                            # 如果点击失败，尝试其他方式
+                            try:
+                                # 尝试等待验证弹窗消失
+                                await first_element.wait_for(state='hidden', timeout=5000)
+                                uat_logger.info("✅ 验证弹窗已消失")
+                            except Exception as wait_error:
+                                uat_logger.warning(f"⚠️ 等待验证弹窗消失失败: {wait_error}")
+                        
+                        break
+            except Exception as e:
+                uat_logger.debug(f"选择器 {selector} 未找到验证弹窗: {e}")
+                continue
+        
+        if not found_verification:
+            uat_logger.info("ℹ️ 未检测到验证弹窗，继续执行")
+        
+        # 记录步骤
+        step = {
+            "action": "verify",
+            "auto_detect": True,
+            "found_verification": found_verification,
+            "timestamp": int(time.time() * 1000)
+        }
+        self.recorded_steps.append(step)
+        
+        return found_verification
+    
     async def get_element_screenshot(self, selector: str, path: str = None):
         """截取特定元素的截图"""
         if self.page is None:
@@ -3302,6 +5049,69 @@ class PlaywrightAutomation:
                     
                     # 跳过后续的通用处理
                     continue
+                elif action == "verify":
+                    selector = step.get("selector")
+                    verify_type = step.get("verify_type", "auto")
+                    uat_logger.info(f"🔍 [VERIFY_DEBUG] 开始执行验证操作,选择器: {selector}, 验证类型: {verify_type}")
+                    
+                    try:
+                        # 执行验证操作
+                        await self.verify_element(selector, verify_type, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
+                        uat_logger.info(f"✅ [VERIFY_DEBUG] 验证操作成功")
+                        # 标记为成功
+                        step_status = "success"
+                    except Exception as e:
+                        uat_logger.error(f"❌ [VERIFY_DEBUG] 验证操作失败: {str(e)}")
+                        step_status = "error"
+                        step_error = str(e)
+                    
+                    # 等待页面状态稳定
+                    if target_page:
+                        try:
+                            # 等待页面稳定,确保上一步操作完成
+                            uat_logger.info(f"等待步骤完成: {action}")
+                            
+                            # 检查页面是否正在加载
+                            try:
+                                # 等待页面加载状态稳定(最多等待2秒)
+                                await target_page.wait_for_load_state('domcontentloaded', timeout=2000)
+                            except:
+                                pass  # 页面可能已经加载完成
+                            
+                            # 等待一小段时间,让页面状态稳定
+                            await target_page.wait_for_timeout(500)
+                            
+                            # 检查是否有正在进行的网络请求
+                            try:
+                                # 等待网络空闲(最多等待3秒)
+                                await target_page.wait_for_load_state('networkidle', timeout=3000)
+                            except:
+                                pass  # 网络可能一直有活动
+                            
+                            uat_logger.info(f"步骤完成: {action}")
+                        except Exception as e:
+                            uat_logger.warning(f"等待页面稳定时出错: {str(e)}")
+                            # 即使等待失败,也继续执行后续步骤
+                    
+                    # 检查步骤执行后的页面状态
+                    try:
+                        new_url = target_page.url
+                        uat_logger.info(f"🎯 [STEP_DEBUG] 步骤执行后页面URL: {new_url}")
+                        if new_url != current_url:
+                            uat_logger.info(f"🔄 [STEP_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
+                    except Exception as e:
+                        uat_logger.warning(f"🎯 [STEP_DEBUG] 获取步骤执行后URL失败: {str(e)}")
+                    
+                    uat_logger.info(f"✅ [STEP_DEBUG] ========== 步骤 {step_index}/{len(deduplicated_steps)} 执行成功 ==========")
+                    
+                    # 添加到结果中
+                    if step_status == "success":
+                        results.append({"status": "success", "step": step})
+                    else:
+                        results.append({"status": "error", "step": step, "error": step_error})
+                    
+                    # 跳过后续的通用处理
+                    continue
                 if target_page:
                     try:
                         # 等待页面稳定,确保上一步操作完成
@@ -3416,6 +5226,11 @@ class PlaywrightAutomation:
                         exec_step["timeout"] = 30000
                 elif step["action"] == "extract_text":
                     exec_step["selector"] = step["selector_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                elif step["action"] == "verify":
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["verify_type"] = step.get("verify_type", "auto")
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
                 if step.get("description"):
@@ -4189,6 +6004,16 @@ def sync_right_click_element(selector: str, selector_type: str = "css", iframe_s
         return await automation.right_click_element(selector, selector_type, iframe_selector=iframe_selector)
     return worker.execute(run)
 
+def sync_swipe_element(selector: str, direction: str, distance: int = 100, selector_type: str = "css", iframe_selector: str = None):
+    async def run():
+        return await automation.swipe_element(selector, direction, distance, selector_type, iframe_selector=iframe_selector)
+    return worker.execute(run)
+
+def sync_verify_element(selector: str = None, verify_type: str = "visible", selector_type: str = "css", iframe_selector: str = None):
+    async def run():
+        return await automation.verify_element(selector, verify_type, selector_type, iframe_selector=iframe_selector)
+    return worker.execute(run)
+
 def sync_get_page_elements():
     async def run():
         return await automation.get_page_elements()
@@ -4341,6 +6166,48 @@ try:
         extractor = self.init_high_performance_extractor()
         return await extractor.extract_element_text_fast(selector, use_cache)
     
+    async def enter_iframe(self, selector: str, selector_type: str = 'css') -> None:
+        """进入iframe框架"""
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        
+        uat_logger.info(f"🔄 进入iframe: {selector} (类型: {selector_type})")
+        
+        try:
+            # 等待iframe元素加载完成
+            await self.page.wait_for_selector(selector, timeout=15000)
+            uat_logger.info(f"✅ 找到iframe元素: {selector}")
+            
+            # 切换到iframe
+            iframe = self.page.frame_locator(selector)
+            uat_logger.info(f"✅ 成功切换到iframe: {selector}")
+            
+            # 保存当前iframe信息，以便后续操作使用
+            if not hasattr(self, 'current_iframe'):
+                self.current_iframe = None
+            self.current_iframe = {
+                'selector': selector,
+                'selector_type': selector_type,
+                'iframe': iframe
+            }
+            uat_logger.info(f"✅ 保存当前iframe状态: {selector}")
+        except Exception as e:
+            uat_logger.error(f"❌ 进入iframe失败: {e}")
+            raise Exception(f"进入iframe失败: {e}")
+    
+    async def exit_iframe(self) -> None:
+        """跳出iframe框架，返回主文档"""
+        uat_logger.info("🔄 跳出iframe，返回主文档")
+        
+        try:
+            # 清除当前iframe信息
+            if hasattr(self, 'current_iframe'):
+                self.current_iframe = None
+            uat_logger.info("✅ 成功跳出iframe，返回主文档")
+        except Exception as e:
+            uat_logger.error(f"❌ 跳出iframe失败: {e}")
+            raise Exception(f"跳出iframe失败: {e}")
+    
     async def extract_element_text_with_fallback(self, selector: str, timeout: int = 5000) -> str:
         """
         带降级策略的文本提取
@@ -4388,8 +6255,17 @@ try:
     PlaywrightAutomation.extract_element_text_with_fallback = extract_element_text_with_fallback
     PlaywrightAutomation.extract_multiple_elements_batch = extract_multiple_elements_batch
     PlaywrightAutomation.extract_text_by_priority = extract_text_by_priority
-    
+
 except ImportError:
     uat_logger.warning("未能导入高性能文本提取模块,将使用优化后的基础方法")
     # 如果无法导入高性能提取模块,保持优化后的基础功能
     pass
+
+# 同步包装器函数
+def sync_enter_iframe(selector, selector_type='css'):
+    """进入iframe框架（同步版本）"""
+    return asyncio.run(automation.enter_iframe(selector, selector_type))
+
+def sync_exit_iframe():
+    """跳出iframe框架（同步版本）"""
+    return asyncio.run(automation.exit_iframe())

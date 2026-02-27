@@ -507,14 +507,17 @@
         }
 
         // 显示运行结果模态框
-        function showRunResultModal(content) {
+        function showRunResultModal(content, isError = false) {
             document.getElementById('runResultContent').innerHTML = content;
             document.getElementById('runResultModal').classList.add('active');
             
-            // 3秒后自动关闭模态框
-            setTimeout(() => {
-                closeRunResultModal();
-            }, 3000);
+            // 只有在成功时才自动关闭模态框，失败时保持打开状态
+            if (!isError) {
+                // 3秒后自动关闭模态框
+                setTimeout(() => {
+                    closeRunResultModal();
+                }, 3000);
+            }
         }
 
         // 关闭运行结果模态框
@@ -1040,7 +1043,7 @@
                         <h4>执行失败</h4>
                         <p>发生错误: ${error.message}</p>
                     </div>
-                `);
+                `, true);
             } finally {
                 // 恢复按钮状态
                 if (runButton) {
@@ -1062,9 +1065,16 @@
             });
             
             try {
+                // 设置请求超时时间为10分钟
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 600000); // 10分钟超时
+                
                 const response = await fetch(`/api/cases/${caseId}/run`, {
-                    method: 'POST'
+                    method: 'POST',
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
                 
                 if (!response.ok) {
                     throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
@@ -1080,23 +1090,32 @@
                             ${data.extracted_text ? `<p><strong>提取的文本:</strong> ${escapeHtml(data.extracted_text)}</p>` : ''}
                             <p><strong>执行时间:</strong> ${data.duration || '未知'}秒</p>
                         </div>
-                    `);
+                    `, false);
                 } else {
                     showRunResultModal(`
                         <div style="padding: 20px; color: red;">
                             <h4>执行失败</h4>
                             <p>${escapeHtml(data.error || '未知错误')}</p>
                         </div>
-                    `);
+                    `, true);
                 }
             } catch (error) {
                 console.error('执行测试用例时发生错误:', error);
-                showRunResultModal(`
-                    <div style="padding: 20px; color: red;">
-                        <h4>执行失败</h4>
-                        <p>发生错误: ${error.message}</p>
-                    </div>
-                `);
+                if (error.name === 'AbortError') {
+                    showRunResultModal(`
+                        <div style="padding: 20px; color: red;">
+                            <h4>执行失败</h4>
+                            <p>发生错误: 请求超时，可能是页面无响应</p>
+                        </div>
+                    `, true);
+                } else {
+                    showRunResultModal(`
+                        <div style="padding: 20px; color: red;">
+                            <h4>执行失败</h4>
+                            <p>发生错误: ${error.message}</p>
+                        </div>
+                    `, true);
+                }
             } finally {
                 // 恢复按钮状态
                 runButtons.forEach(btn => {
