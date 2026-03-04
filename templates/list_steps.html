@@ -599,6 +599,9 @@
         let currentCaseName = '';
         let currentEditingStepId = null;
         let currentProjectId = null;
+        let currentPage = 1;
+        let totalPages = 1;
+        const pageSize = 10;
         
         function escapeHtml(text) {
             if (!text) return '';
@@ -647,12 +650,15 @@
             if (!currentCaseId) return;
             
             try {
-                const response = await fetch(`/api/cases/${currentCaseId}/steps`);
+                const response = await fetch(`/api/cases/${currentCaseId}/steps?page=${currentPage}&page_size=${pageSize}`);
                 const data = await response.json();
                 
                 const stepsList = document.getElementById('stepsList');
                 
                 if (data.steps && data.steps.length > 0) {
+                    // 计算总页数
+                    totalPages = Math.ceil(data.total / pageSize);
+                    
                     stepsList.innerHTML = '<div class="steps-list" id="stepsListContainer"></div>';
                     const stepsListContainer = document.getElementById('stepsListContainer');
                     
@@ -661,6 +667,9 @@
                     stepsListContainer.addEventListener('drop', handleDrop);
                     
                     data.steps.forEach((step, index) => {
+                        // 计算实际步骤编号（考虑分页）
+                        const actualStepNumber = (currentPage - 1) * pageSize + index + 1;
+                        
                         const stepItem = document.createElement('div');
                         stepItem.className = 'step-item';
                         stepItem.id = `step-${step.id}`;
@@ -685,7 +694,7 @@
                         }
                         
                         stepItem.innerHTML = `
-                            <div class="step-number">${index + 1}</div>
+                            <div class="step-number">${actualStepNumber}</div>
                             <div class="step-content">
                                 <h4>${step.description || actionText}</h4>
                                 <div class="step-details">
@@ -709,6 +718,9 @@
                         
                         stepsListContainer.appendChild(stepItem);
                     });
+                    
+                    // 添加分页控件
+                    addPaginationControls();
                 } else {
                     stepsList.innerHTML = `
                         <div class="empty-state">
@@ -728,6 +740,31 @@
                     </div>
                 `;
             }
+        }
+        
+        // 添加分页控件
+        function addPaginationControls() {
+            if (totalPages <= 1) return;
+            
+            const stepsList = document.getElementById('stepsList');
+            const paginationHtml = `
+                <div style="margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 8px;">
+                    <button onclick="changePage(1)" ${currentPage === 1 ? 'disabled' : ''} class="btn btn-sm btn-secondary">首页</button>
+                    <button onclick="changePage(currentPage - 1)" ${currentPage === 1 ? 'disabled' : ''} class="btn btn-sm btn-secondary">上一页</button>
+                    <span style="font-size: 14px; color: #666;">第 ${currentPage} / ${totalPages} 页</span>
+                    <button onclick="changePage(currentPage + 1)" ${currentPage === totalPages ? 'disabled' : ''} class="btn btn-sm btn-secondary">下一页</button>
+                    <button onclick="changePage(totalPages)" ${currentPage === totalPages ? 'disabled' : ''} class="btn btn-sm btn-secondary">末页</button>
+                </div>
+            `;
+            
+            stepsList.insertAdjacentHTML('beforeend', paginationHtml);
+        }
+        
+        // 切换分页
+        function changePage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            loadSteps();
         }
         
         function showCreateStepModal() {

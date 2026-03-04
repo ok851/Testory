@@ -566,12 +566,13 @@ class Database:
         conn.close()
         return None
     
-    def get_case_steps(self, case_id: int) -> List[Dict[str, Any]]:
-        """获取测试用例的所有步骤"""
+    def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 10) -> List[Dict[str, Any]]:
+        """获取测试用例的步骤（支持分页）"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM test_steps WHERE case_id = ? ORDER BY step_order ASC", (case_id,))
+        offset = (page - 1) * page_size
+        cursor.execute("SELECT * FROM test_steps WHERE case_id = ? ORDER BY step_order ASC LIMIT ? OFFSET ?", (case_id, page_size, offset))
         rows = cursor.fetchall()
         
         steps = []
@@ -597,6 +598,17 @@ class Database:
         
         conn.close()
         return steps
+    
+    def get_case_steps_count(self, case_id: int) -> int:
+        """获取测试用例步骤的总数"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM test_steps WHERE case_id = ?", (case_id,))
+        count = cursor.fetchone()[0]
+        
+        conn.close()
+        return count
     
     def update_test_step(self, step_id: int, action: str = None, selector_type: str = None,
                         selector_value: str = None, input_value: str = None,

@@ -777,8 +777,23 @@ def api_delete_case_v2(case_id):
 @api_error_handler
 @log_api_request
 def api_get_case_steps(case_id):
-    steps = db.get_case_steps(case_id)
-    return jsonify({'steps': steps})
+    # 获取分页参数
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('page_size', 10, type=int)
+    
+    # 确保参数有效
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))  # 限制最大页面大小为100
+    
+    steps = db.get_case_steps(case_id, page, page_size)
+    total = db.get_case_steps_count(case_id)
+    
+    return jsonify({
+        'steps': steps,
+        'total': total,
+        'page': page,
+        'page_size': page_size
+    })
 
 # API: 获取单个测试步骤详情
 @app.route('/api/steps/<int:step_id>', methods=['GET'])

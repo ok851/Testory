@@ -563,10 +563,12 @@
                             } else {
                                 history = history.filter(item => item.status === statusFilter);
                             }
+                            // 状态过滤后重新计算总页数
+                            totalPages = Math.ceil(history.length / pageSize);
+                        } else {
+                            // 计算总页数（基于后端返回的总数）
+                            totalPages = Math.ceil(data.total / pageSize);
                         }
-                        
-                        // 计算总页数（基于后端返回的总数）
-                        totalPages = Math.ceil(data.total / pageSize);
                         
                         renderHistoryTable(history, totalPages);
                     } else {

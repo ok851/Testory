@@ -5275,12 +5275,43 @@ class PlaywrightAutomation:
             case_number = index + 1
             actual_execution_order.append(case_id)
             
+            # 🔥 添加用例级计时开始
+            case_start_time = time.time()
+            
             uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] ========== 强制严格串行执行第 {case_number}/{len(execution_order)} 个用例 ==========")
             uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 当前执行位置: {index + 1}/{len(execution_order)}, 用例ID: {case_id}")
             uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 顺序验证 - 这是第 {index + 1} 个应该执行的用例")
             uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 期望顺序对比: {case_ids[index]} vs 实际执行: {case_id}")
-            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 在主页面 {self.page} 中执行用例 {case_id}")
+            
+            # 🔥 修复：为每个用例创建独立的浏览器上下文，确保用例隔离
+            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 为用例 {case_id} 创建独立的浏览器上下文")
             try:
+                # 清理之前的上下文
+                if self.context:
+                    await self.context.close()
+                
+                # 创建新的上下文
+                self.context = await self.browser.new_context(ignore_https_errors=True, no_viewport=True)
+                self.page = await self.context.new_page()
+                
+                # 重新设置事件监听器
+                await self._setup_event_listeners()
+                
+                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建独立上下文成功")
+            except Exception as e:
+                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建上下文失败: {str(e)}")
+                process_case_result({
+                    "case_id": case_id,
+                    "case_name": "未知",
+                    "status": "error",
+                    "error": f"创建浏览器上下文失败: {str(e)}"
+                }, case_id)
+                continue
+            
+            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 在独立页面中执行用例 {case_id}")
+            try:
+                # 🔥 修复：用例级计时开始，确保每个用例的计时都是独立的
+                case_start_time = time.time()
                 case_info = db.get_test_case_v2(case_id)
                 if not case_info:
                     process_case_result({
@@ -5301,9 +5332,8 @@ class PlaywrightAutomation:
                     }, case_id)
                     continue
                 execution_steps = build_execution_steps(steps)
-                # 所有用例都在同一个页面 self.page 中串行执行
-                # 🔥 完全移除页面重置逻辑，保持当前页面状态继续执行
-                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 继续在当前页面执行，不进行页面重置")
+                # 🔥 修复：每个用例在独立页面中执行，不需要保持当前页面状态
+                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 在独立页面中执行")
                 
                 # 🔥 修复：移除全局用例超时限制，让每个步骤自己控制超时
                 uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 直接执行，不设置全局超时限制")
@@ -5313,9 +5343,15 @@ class PlaywrightAutomation:
                 try:
                     case_results = await self._execute_case_steps(execution_steps)
                     uat_logger.info(f"✅ [MULTI_CASE] 用例 {case_id} 执行完成")
+                    # 🔥 修复：用例级计时结束，确保计时时间准确
+                    case_end_time = time.time()
+                    case_duration = case_end_time - case_start_time
                 except Exception as e:
                     uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 执行异常: {str(e)}")
                     case_results = [{"status": "error", "step": None, "error": str(e)}]
+                    # 🔥 修复：在异常情况下也计算时间
+                    case_end_time = time.time()
+                    case_duration = case_end_time - case_start_time
                 # 🔥 修复：添加详细的日志来追踪用例状态判断
                 uat_logger.info(f"📊 [CASE_STATUS] 开始判断用例 {case_id} 的执行状态")
                 uat_logger.info(f"📊 [CASE_STATUS] case_results 长度: {len(case_results)}")
@@ -5344,11 +5380,12 @@ class PlaywrightAutomation:
                     case_status = "success" if error_count == 0 else "error"
                 try:
                     db.create_run_history(
-                        case_id,
-                        case_status,
-                        0,
-                        "" if case_status == "success" else str(case_results),
-                        extracted_text
+                       case_id,
+                       case_status,
+                       round(case_duration, 2),  # 使用实际计算的执行时间
+                       "" if case_status == "success" else 
+                    str(case_results),
+                       extracted_text
                     )
                 except Exception as db_error:
                     uat_logger.error(f"❌ [MULTI_CASE] 保存测试结果到数据库失败: {db_error}")
@@ -5360,47 +5397,13 @@ class PlaywrightAutomation:
                     "successful_steps": success_count,
                     "failed_steps": error_count,
                     "extracted_text": extracted_text,
-                    "step_results": case_results
+                    "step_results": case_results,
+                    # 🔥 添加用例耗时计算
+                    "execution_time": round(case_duration, 2)
                 }
                 process_case_result(result, case_id)
                 uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_number}/{len(case_ids)} 串行执行完成，状态: {case_status}，继续执行下一个用例")
-                
-                # 🔥 修复：添加用例间的环境清理和页面状态重置
-                # 在每个用例执行完成后，清理环境并重置页面状态
-                try:
-                    uat_logger.info(f"🧹 [CASE_CLEANUP] 开始清理用例 {case_id} 的环境...")
-                    
-                    # 关闭可能存在的额外页面（只保留主页）
-                    if self.context:
-                        try:
-                            pages = self.context.pages
-                            if len(pages) > 1:
-                                # 关闭除主页外的所有页面
-                                for page in pages[1:]:
-                                    try:
-                                        await page.close()
-                                        uat_logger.info(f"🧹 [CASE_CLEANUP] 关闭额外页面: {page.url}")
-                                    except Exception as e:
-                                        uat_logger.warning(f"🧹 [CASE_CLEANUP] 关闭页面时出错: {str(e)}")
-                        except Exception as e:
-                            uat_logger.warning(f"🧹 [CASE_CLEANUP] 获取页面列表时出错: {str(e)}")
-                    
-                    # 清除页面缓存和存储
-                    if self.page:
-                        try:
-                            # 清除页面缓存
-                            await self.page.evaluate("() => { window.performance.clearResourceTimings(); }")
-                            # 清除会话存储
-                            await self.page.evaluate("() => { sessionStorage.clear(); }")
-                            # 清除本地存储
-                            await self.page.evaluate("() => { localStorage.clear(); }")
-                            uat_logger.info(f"🧹 [CASE_CLEANUP] 已清除页面缓存和存储")
-                        except Exception as e:
-                            uat_logger.warning(f"🧹 [CASE_CLEANUP] 清除页面缓存时出错: {str(e)}")
-                    
-                    uat_logger.info(f"🧹 [CASE_CLEANUP] 用例 {case_id} 环境清理完成")
-                except Exception as e:
-                    uat_logger.warning(f"🧹 [CASE_CLEANUP] 用例 {case_id} 环境清理时出错: {str(e)}")
+                uat_logger.info(f"⏱️ [SERIAL_MULTI_CASE] 用例 {case_id} 执行耗时: {result['execution_time']:.2f} 秒")
             except Exception as e:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 测试用例执行异常,ID: {case_id}, 错误: {str(e)}")
                 process_case_result({
@@ -5410,6 +5413,18 @@ class PlaywrightAutomation:
                     "error": str(e)
                 }, case_id)
                 uat_logger.info(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_number}/{len(case_ids)} 执行失败，继续执行下一个用例")
+            finally:
+                # 🔥 修复：在每个用例执行完成后清理浏览器上下文
+                try:
+                    if self.context:
+                        await self.context.close()
+                        self.context = None
+                        self.page = None
+                    uat_logger.info(f"🧹 [CASE_CLEANUP] 用例 {case_id} 浏览器上下文已清理")
+                except Exception as e:
+                    uat_logger.warning(f"🧹 [CASE_CLEANUP] 清理用例 {case_id} 浏览器上下文时出错: {str(e)}")
+                # 🔥 修复：添加用例间的等待时间，确保前一个用例的步骤已经完全执行完成
+                await asyncio.sleep(1)  # 等待1秒
         
         uat_logger.info(f"🎉 [SERIAL_MULTI_CASE] ========== 所有测试用例串行执行完成（严格按顺序） ==========")
         uat_logger.info(f"📊 [SERIAL_MULTI_CASE] 总用例数: {all_results['total_cases']}, 成功: {all_results['successful_cases']}, 失败: {all_results['failed_cases']}")
