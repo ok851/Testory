@@ -8,6 +8,21 @@ import json
 import time
 from logger import uat_logger
 import ctypes  # 用于调用Windows API获取真实屏幕尺寸
+import threading
+
+# 🔥 添加全局执行锁，防止并发执行多个测试用例集
+_execution_lock = threading.Lock()
+_currently_executing = False
+
+def is_execution_in_progress():
+    """检查是否有测试用例正在执行"""
+    global _currently_executing
+    return _currently_executing
+
+def set_execution_in_progress(status):
+    """设置执行状态"""
+    global _currently_executing
+    _currently_executing = status
 
 class PlaywrightAutomation:
     def __init__(self):
@@ -21,9 +36,85 @@ class PlaywrightAutomation:
         self.sync_task = None  # 用于同步录制事件的后台任务
         self.playwright = None  # 初始化playwright实例变量
     
+    async def _cleanup_browser_resources(self):
+        """清理浏览器相关资源"""
+        uat_logger.info("🧹 [CLEANUP] 开始清理浏览器资源...")
+        try:
+            # 关闭页面
+            if self.page:
+                try:
+                    await self.page.close()
+                    uat_logger.info("✅ [CLEANUP] 页面已关闭")
+                except Exception as e:
+                    uat_logger.warning(f"⚠️ [CLEANUP] 关闭页面时出现警告: {str(e)}")
+                self.page = None
+            
+            # 关闭上下文
+            if self.context:
+                try:
+                    await self.context.close()
+                    uat_logger.info("✅ [CLEANUP] 浏览器上下文已关闭")
+                except Exception as e:
+                    uat_logger.warning(f"⚠️ [CLEANUP] 关闭上下文时出现警告: {str(e)}")
+                self.context = None
+            
+            # 关闭浏览器
+            if self.browser:
+                try:
+                    await self.browser.close()
+                    uat_logger.info("✅ [CLEANUP] 浏览器已关闭")
+                except Exception as e:
+                    uat_logger.warning(f"⚠️ [CLEANUP] 关闭浏览器时出现警告: {str(e)}")
+                self.browser = None
+            
+            # 停止playwright
+            if self.playwright:
+                try:
+                    await self.playwright.stop()
+                    uat_logger.info("✅ [CLEANUP] Playwright已停止")
+                except Exception as e:
+                    uat_logger.warning(f"⚠️ [CLEANUP] 停止Playwright时出现警告: {str(e)}")
+                self.playwright = None
+                
+            uat_logger.info("✅ [CLEANUP] 浏览器资源清理完成")
+        except Exception as e:
+            uat_logger.error(f"❌ [CLEANUP] 清理浏览器资源时发生错误: {str(e)}")
+    
     async def start_browser(self, headless=False):
         """启动浏览器"""
         try:
+            # 检查现有浏览器状态
+            browser_valid = self.browser is not None and self.browser.is_connected() if self.browser else False
+            context_valid = self.context is not None
+            page_valid = self.page is not None
+            
+            uat_logger.info(f"🔍 [BROWSER_START] 浏览器状态检查 - Browser: {browser_valid}, Context: {context_valid}, Page: {page_valid}")
+            
+            # 🔥 修复：只在明确需要时才清理浏览器资源，避免在执行过程中误触发
+            # 只有当所有组件都不存在或严重损坏时才清理
+            if not browser_valid and not context_valid and not page_valid:
+                uat_logger.info("🔧 [BROWSER_START] 检测到浏览器完全未初始化，进行初始化...")
+                await self._cleanup_browser_resources()
+            elif browser_valid and (not context_valid or not page_valid):
+                # 如果浏览器还活着但context或page失效，只清理context和page，不清理browser
+                uat_logger.info("🔧 [BROWSER_START] 检测到context或page失效，只清理失效组件...")
+                if self.context:
+                    try:
+                        await self.context.close()
+                        uat_logger.info("✅ [CLEANUP] Context已关闭")
+                    except Exception as e:
+                        uat_logger.warning(f"⚠️ [CLEANUP] 关闭context时出现警告: {str(e)}")
+                    self.context = None
+                if self.page:
+                    try:
+                        await self.page.close()
+                        uat_logger.info("✅ [CLEANUP] Page已关闭")
+                    except Exception as e:
+                        uat_logger.warning(f"⚠️ [CLEANUP] 关闭page时出现警告: {str(e)}")
+                    self.page = None
+            else:
+                uat_logger.info("✅ [BROWSER_START] 浏览器状态正常，无需清理")
+            
             # 确保浏览器相关对象都已正确重置
             if self.browser is None or not self.browser.is_connected():
                 uat_logger.info(f"启动浏览器,headless={headless}")
@@ -107,6 +198,8 @@ class PlaywrightAutomation:
                 
                 # 监听页面跳转事件,确保在新页面上也设置事件监听器
                 self.page.on('framenavigated', self._on_page_navigated)
+                
+                uat_logger.info("浏览器启动完成，已准备就绪")
             
             return self.page
         except Exception as e:
@@ -926,6 +1019,19 @@ class PlaywrightAutomation:
     
     async def navigate_to(self, url: str, iframe_selector: str = None, page=None):
         """导航到指定URL,支持iframe导航。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+        # 验证URL是否有效
+        if not url or not url.strip():
+            raise Exception("导航步骤的URL不能为空")
+
+        # 防止导航到 about:blank
+        if url.strip().lower() == "about:blank":
+            raise Exception("不允许导航到 about:blank 页面")
+
+        # 确保URL以协议开头（http:// 或 https://）
+        if not url.startswith(("http://", "https://")):
+            uat_logger.warning(f"URL可能缺少协议: {url}，尝试添加https://")
+            url = f"https://{url}"
+        
         target_page = page if page is not None else self.page
         if target_page is None:
             await self.start_browser()
@@ -1053,19 +1159,19 @@ class PlaywrightAutomation:
             # 根据上下文类型执行不同的操作
             if hasattr(target_context, 'wait_for_selector'):
                 # 等待元素可见且可交互
-                await target_context.wait_for_selector(full_selector, state='visible', timeout=5000)
+                await target_context.wait_for_selector(full_selector, state='visible', timeout=10000)
                 # 等待元素可点击
-                await target_context.wait_for_selector(full_selector, state='enabled', timeout=5000)
+                await target_context.wait_for_selector(full_selector, state='enabled', timeout=10000)
                 # 使用更健壮的点击方式
-                await target_context.click(full_selector, timeout=5000)
+                await target_context.click(full_selector, timeout=10000)
                 uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
                 element_clicked = True
             else:
                 # 如果是frame_locator对象,需要使用其locator方法
                 element = target_context.locator(full_selector)
-                await element.wait_for(state='visible', timeout=5000)
-                await element.wait_for(state='enabled', timeout=5000)
-                await element.click(timeout=5000)
+                await element.wait_for(state='visible', timeout=10000)
+                await element.wait_for(state='enabled', timeout=10000)
+                await element.click(timeout=10000)
                 uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
                 element_clicked = True
         except Exception as e:
@@ -1074,13 +1180,13 @@ class PlaywrightAutomation:
             # 方式2: 使用force参数强制点击
             try:
                 if hasattr(target_context, 'click'):
-                    await target_context.click(full_selector, force=True, timeout=5000)
+                    await target_context.click(full_selector, force=True, timeout=10000)
                     uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
                     element_clicked = True
                 else:
                     # 如果是frame_locator对象,需要使用其locator方法
                     element = target_context.locator(full_selector)
-                    await element.click(timeout=5000, force=True)
+                    await element.click(timeout=10000, force=True)
                     uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
                     element_clicked = True
             except Exception as e2:
@@ -1111,7 +1217,7 @@ class PlaywrightAutomation:
                             element = target_context.locator(selector)
                             count = await element.count()
                             if count > 0:
-                                await element.click(timeout=5000, force=True)
+                                await element.click(timeout=10000, force=True)
                                 uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
                                 element_clicked = True
                             else:
@@ -1123,7 +1229,7 @@ class PlaywrightAutomation:
                                 return result.singleNodeValue !== null;
                             }""", selector)
                             if element_exists:
-                                # 使用JavaScript点击,正常触发所有事件
+                                # 使用JavaScript点击,正常触发所有相关事件
                                 await target_context.evaluate("""(xpath) => {
                                     const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
                                     const element = result.singleNodeValue;
@@ -1198,6 +1304,34 @@ class PlaywrightAutomation:
                     uat_logger.warning(f"⚠️ {element_type}点击验证警告: {selector} 未选中")
         except Exception as e:
             uat_logger.warning(f"验证单选框/复选框状态时出错: {str(e)}")
+        
+        # 🔥 修复：添加点击后的页面响应等待机制
+        # 等待页面加载状态变化
+        try:
+            uat_logger.info(f"⏳ [CLICK_DEBUG] 等待页面加载状态变化...")
+            # 等待页面DOM内容加载完成
+            await target_page.wait_for_load_state('domcontentloaded', timeout=5000)
+            uat_logger.info(f"✅ [CLICK_DEBUG] 页面DOM内容加载完成")
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [CLICK_DEBUG] 等待DOM内容加载超时: {str(e)}")
+        
+        # 等待网络空闲状态
+        try:
+            uat_logger.info(f"⏳ [CLICK_DEBUG] 等待网络空闲状态...")
+            # 等待网络空闲（最多等待5秒）
+            await target_page.wait_for_load_state('networkidle', timeout=5000)
+            uat_logger.info(f"✅ [CLICK_DEBUG] 网络空闲状态达成")
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [CLICK_DEBUG] 等待网络空闲超时: {str(e)}")
+        
+        # 等待页面稳定
+        try:
+            uat_logger.info(f"⏳ [CLICK_DEBUG] 等待页面稳定...")
+            # 等待一小段时间，让页面状态稳定
+            await target_page.wait_for_timeout(1000)
+            uat_logger.info(f"✅ [CLICK_DEBUG] 页面状态稳定")
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [CLICK_DEBUG] 等待页面稳定时出错: {str(e)}")
         
         # 如果正在录制,记录点击步骤
         if self.recording:
@@ -1539,26 +1673,27 @@ class PlaywrightAutomation:
             
             # Ensure element is correctly obtained
             if element is None:
-                uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] Element not successfully obtained")
-                return ""
+                uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Element not successfully obtained")
+                raise Exception(f"元素获取失败: {selector}")
             
-            # Add relaxed waiting mechanism
+            # Add strict waiting mechanism
             try:
                 # Try to wait for element to exist (not required to be visible)
                 await element.wait_for(state="attached", timeout=5000)
-            except Exception:
-                uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] Waiting for element existence timed out, trying to continue extraction")
+            except Exception as e:
+                uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Waiting for element existence timed out: {e}")
+                raise Exception(f"等待元素超时: {selector}")
             
             # Check if element exists
             try:
                 count = await element.count()
                 uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Found {count} elements")
                 if count == 0:
-                    uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] Element not found")
-                    return ""
+                    uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Element not found")
+                    raise Exception(f"元素未找到: {selector}")
             except Exception as e:
-                uat_logger.warning(f"📝 [TEXT_EXTRACT_DEBUG] Failed to check element count: {e}")
-                # Continue trying to extract, not forcing element existence
+                uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Failed to check element count: {e}")
+                raise Exception(f"检查元素数量失败: {selector}")
             
             # Use appropriate extraction method based on element type
             extracted_text = ""
@@ -1617,13 +1752,16 @@ class PlaywrightAutomation:
             
             # Ensure returned text is not None
             result = extracted_text if extracted_text is not None else ""
+            if not result:
+                uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Extracted text is empty")
+                raise Exception(f"元素文本提取失败: {selector}")
             uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Final extraction result: '{result}'")
             return result
         except Exception as e:
             # Record detailed exception information
             uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Error extracting text: {str(e)}")
             print(f"Error extracting element text: {str(e)}")
-            return ""
+            raise Exception(f"文本提取异常: {str(e)}")
     async def extract_element_json(self, selector: str, selector_type: str = "css") -> dict:
         """从特定元素中提取JSON数据,支持多种定位方式
         参数:
@@ -4367,6 +4505,8 @@ class PlaywrightAutomation:
         
         return self.page.url
     
+    # 🔥 已移除 reset_page_to_clean_state 方法，不再需要页面重置逻辑
+    
     async def wait_for_selector(self, selector: str, timeout: int = 30000, selector_type: str = "css", iframe_selector: str = None, page=None):
         """等待元素出现。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
         target_page = page if page is not None else self.page
@@ -4405,184 +4545,25 @@ class PlaywrightAutomation:
         await target_page.screenshot(path=path)
         return path
     
-    async def execute_script_steps(self, steps: List[Dict[str, Any]], page=None):
-        """执行脚本步骤。page: 可选，指定在哪个标签页执行（多标签并行时使用，每个用例一个标签页）"""
-        target_page = page if page is not None else self.page
+    async def execute_script_steps(self, steps: List[Dict[str, Any]]):
+        """执行脚本步骤（严格按顺序串行执行，禁用所有并行逻辑）"""
+        # 强制使用主页面，禁用所有多标签页和并行执行逻辑
+        target_page = self.page
         if target_page is None:
             await self.start_browser(headless=False)
             target_page = self.page
-        elif page is None:
-            # 使用主页面时，确保窗口最大化
-            try:
-                user32 = ctypes.windll.user32
-                avail_width = user32.GetSystemMetrics(78)
-                avail_height = user32.GetSystemMetrics(79)
-                uat_logger.info(f"脚本执行时获取的可用工作区尺寸: {avail_width}x{avail_height}")
-                viewport_size = await target_page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
-                uat_logger.info(f"脚本执行时窗口大小: {viewport_size['width']}x{viewport_size['height']}")
-            except Exception as e:
-                uat_logger.warning(f"获取窗口大小信息时出错: {str(e)}")
         
-        # 步骤去重逻辑
+        # 确保使用主页面，禁用所有并行执行选项
+        uat_logger.info("🔧 [SERIAL_EXECUTION] 启用严格的串行执行模式，禁用所有并行逻辑")
+        
+        # 🔥 修复：禁用所有步骤去重逻辑，直接执行所有步骤
+        # 原因：去重逻辑过于激进，会跳过应该执行的步骤
         if not steps:
             return []
-            
-        # 第一阶段:合并所有相同选择器的填充步骤(无论是否连续)
-        # 创建一个字典存储每个选择器的最新填充值
-        fill_values = {}
-        all_steps = []
-        
-        # 遍历所有步骤,收集填充值和非填充步骤
-        for step in steps:
-            if step['action'] in ['fill', 'input']:
-                selector = step.get('selector')
-                if selector:
-                    # 更新该选择器的最新填充值
-                    fill_values[selector] = step
-                    all_steps.append(step)  # 保留原始填充步骤用于执行顺序
-            else:
-                all_steps.append(step)
-        
-        # 第二阶段:合并连续的重复步骤和处理填充步骤
-        deduplicated_steps = []
-        last_step = None
-        
-        # 跟踪已处理的填充选择器
-        processed_fills = set()
-        
-        # 跟踪所有已处理的点击步骤(用于处理非连续的重复点击)
-        processed_clicks = {}
-        
-        uat_logger.info(f"开始步骤去重,原始步骤数: {len(all_steps)}")
-        
-        for step in all_steps:
-            action = step.get('action')
-            uat_logger.info(f"处理步骤: {action}, 详情: {step}")
-            
-            # 过滤悬停动作,不记录和执行
-            if step['action'] == 'hover':
-                uat_logger.info(f"跳过悬停步骤: {step.get('selector')}")
-                continue
-            
-            if step['action'] in ['fill', 'input']:
-                selector = step.get('selector')
-                if selector:
-                    # 如果该选择器已经处理过,跳过
-                    if selector in processed_fills:
-                        continue
-                    
-                    # 获取最新的填充值
-                    if selector in fill_values:
-                        latest_fill = fill_values[selector]
-                        uat_logger.info(f"使用最新填充值: {selector} -> {latest_fill.get('text')}")
-                        deduplicated_steps.append(latest_fill)
-                        processed_fills.add(selector)
-                    continue
-            
-            # 处理点击步骤 - 特殊处理单选框/复选框的重复点击
-            if step['action'] == 'click':
-                selector = step.get('selector')
-                if selector:
-                    # 检测是否为单选框或复选框相关选择器
-                    # 更准确的检测方式:基于选择器和元素信息
-                    is_radio = False
-                    is_checkbox = False
-                    
-                    # 首先检查选择器中是否包含明确的单选框/复选框标识
-                    selector_lower = selector.lower()
-                    if 'radio' in selector_lower:
-                        is_radio = True
-                    elif 'checkbox' in selector_lower:
-                        # 注意:有些单选框可能使用checkbox的样式或类名
-                        # 对于这种情况,我们也将其视为单选框处理
-                        # 因为用户通常不希望单选框被取消选择
-                        is_radio = True
-                        # is_checkbox = True
-                    
-                    # 移除动态类名,生成稳定的选择器用于比较
-                    import re
-                    stable_selector = selector
-                    # 移除所有以is-开头的动态类(如is-loading、is-focus、is-active等)
-                    stable_selector = re.sub(r'\.(is-\w+)', '', stable_selector)
-                    # 移除所有以el-开头的动态类(Element UI临时类名)
-                    stable_selector = re.sub(r'\.(el-\w+-\w+)', '', stable_selector)
-                    # 移除所有以has-开头的动态类
-                    stable_selector = re.sub(r'\.(has-\w+)', '', stable_selector)
-                    # 移除连续的空格和重复的>符号
-                    stable_selector = re.sub(r'\s+', ' ', stable_selector)
-                    stable_selector = re.sub(r'\s*>\s*', ' > ', stable_selector)
-                    stable_selector = stable_selector.strip()
-                    
-                    # 特殊处理:如果选择器只剩下基础元素类型(如span、div),则保留原始选择器的前两个类名
-                    if '.' not in stable_selector and selector.count('.') >= 2:
-                        # 保留原始选择器的基础元素和前两个类名
-                        parts = selector.split(' ')
-                        new_parts = []
-                        for part in parts:
-                            if '.' in part:
-                                # 提取元素类型和前两个类名
-                                element_class_parts = part.split('.')
-                                if len(element_class_parts) > 2:
-                                    new_parts.append('.'.join(element_class_parts[:3]))
-                                else:
-                                    new_parts.append(part)
-                            else:
-                                new_parts.append(part)
-                        stable_selector = ' '.join(new_parts)
-                    
-                    # 对于单选框:同一选择器的非连续重复点击应该被过滤
-                    # 因为单选框点击一次就足够,重复点击会导致状态切换
-                    if is_radio:
-                        if stable_selector in processed_clicks:
-                            uat_logger.info(f"跳过非连续的重复点击步骤(单选框): {selector}")
-                            continue
-                        # 记录已处理的单选框点击
-                        processed_clicks[stable_selector] = True
-                    
-                    # 对于复选框:可以多次点击切换状态,所以不应该过滤重复点击
-                    # 对于普通元素:也不应该过滤重复点击,因为用户可能需要多次点击
-                    elif not is_checkbox:
-                        # 记录已处理的点击,但不用于过滤,仅作参考
-                        processed_clicks[stable_selector] = True
-            
-            # 处理其他类型的步骤
-            if not last_step:
-                deduplicated_steps.append(step)
-                last_step = step
-                uat_logger.info(f"添加第一个步骤: {action}")
-                continue
-            
-            # 移除跳过submit后navigate事件的逻辑,确保所有步骤都按顺序执行
-            
-            uat_logger.info(f"上一步骤: {last_step['action']}, 当前步骤: {action}")
-            
-            # 跳过连续的重复步骤
-            if last_step['action'] == step['action']:
-                if step['action'] == 'navigate':
-                    if last_step.get('url') == step.get('url'):
-                        uat_logger.info(f"跳过重复导航步骤: {step.get('url')}")
-                        continue
-                elif step['action'] == 'click' or step['action'] == 'hover':
-                    # 特殊处理:如果当前步骤是click,且下一个步骤是submit,则不跳过这个click
-                    # 因为这个click可能是提交按钮的点击,需要保留
-                    next_step_index = all_steps.index(step) + 1
-                    next_step = all_steps[next_step_index] if next_step_index < len(all_steps) else None
-                    if next_step and next_step['action'] == 'submit':
-                        uat_logger.info(f"保留submit前的click操作: {step.get('selector')}")
-                    elif last_step.get('selector') == step.get('selector'):
-                        uat_logger.info(f"跳过重复{step['action']}步骤: {step.get('selector')}")
-                        continue
-                elif step['action'] == 'scroll':
-                    if last_step.get('scrollPosition') == step.get('scrollPosition'):
-                        uat_logger.info(f"跳过重复滚动步骤")
-                        continue
-            
-            deduplicated_steps.append(step)
-            last_step = step
-            uat_logger.info(f"添加步骤到去重列表: {action}, 当前去重列表长度: {len(deduplicated_steps)}")
-        
-        uat_logger.info(f"步骤去重完成,去重后步骤数: {len(deduplicated_steps)}")
-        
+
+        uat_logger.info(f"开始执行步骤，原始步骤数: {len(steps)}")
+
+        # 直接执行所有步骤，不进行任何去重
         results = []
         step_index = 0
         
@@ -4590,10 +4571,10 @@ class PlaywrightAutomation:
         has_clicked = False
         has_submitted = False
         
-        for step in deduplicated_steps:
+        for step in steps:
             step_index += 1
             action = step.get("action")
-            uat_logger.info(f"🎯 [STEP_DEBUG] ========== 开始执行步骤 {step_index}/{len(deduplicated_steps)} ==========")
+            uat_logger.info(f"🎯 [STEP_DEBUG] ========== 开始执行步骤 {step_index}/{len(steps)} ==========")
             uat_logger.info(f"🎯 [STEP_DEBUG] 步骤类型: {action}, 详情: {step}")
             uat_logger.info(f"🎯 [STEP_DEBUG] 当前操作状态: has_clicked={has_clicked}, has_submitted={has_submitted}")
             
@@ -5159,15 +5140,18 @@ class PlaywrightAutomation:
                     has_submitted = True
                     uat_logger.info(f"🔄 [STATE_UPDATE] 已执行submit操作,更新状态: has_submitted=True")
             except Exception as e:
-                uat_logger.error(f"❌ [STEP_DEBUG] ========== 步骤 {step_index}/{len(deduplicated_steps)} 执行失败 ==========")
+                uat_logger.error(f"❌ [STEP_DEBUG] ========== 步骤 {step_index}/{len(steps)} 执行失败 ==========")
                 uat_logger.error(f"❌ [STEP_DEBUG] 错误详情: {str(e)}")
                 results.append({"status": "error", "step": step, "error": str(e)})
+                # 🔥 修复：异常捕获后添加 break 语句，终止当前用例的步骤循环
+                uat_logger.error(f"❌ [STEP_DEBUG] 步骤执行失败，终止用例执行: {e}")
+                break
         
         uat_logger.info(f"🎯 [STEP_DEBUG] ========== 所有步骤执行完成,共 {len(results)} 个步骤 ==========")
         return results
     
     async def execute_multiple_test_cases(self, case_ids: List[int], db) -> Dict[str, Any]:
-        """执行多个测试用例（按列表顺序从上到下执行；每用例一标签页，首个用例用主标签页避免 about:blank）
+        """执行多个测试用例（严格按列表顺序串行执行；禁用所有并行逻辑）
         
         Args:
             case_ids: 测试用例ID列表（顺序即执行顺序）
@@ -5176,7 +5160,9 @@ class PlaywrightAutomation:
         Returns:
             包含所有测试用例执行结果的字典
         """
-        uat_logger.info(f"🚀 [MULTI_CASE] ========== 开始按顺序执行多个测试用例,共 {len(case_ids)} 个用例（每用例一标签页） ==========")
+        uat_logger.info(f"🚀 [SERIAL_MULTI_CASE] ========== 开始严格串行执行多个测试用例,共 {len(case_ids)} 个用例 ==========")
+        uat_logger.info(f"📋 [SERIAL_MULTI_CASE] 接收的执行顺序: {case_ids}")
+        uat_logger.info("🔧 [SERIAL_MULTI_CASE] 已禁用所有并行执行和多标签页逻辑")
         
         all_results = {
             "total_cases": len(case_ids),
@@ -5185,9 +5171,13 @@ class PlaywrightAutomation:
             "case_results": []
         }
         
-        # 确保浏览器已启动（需要 context 以创建新标签页）
+        # 确保浏览器已启动
         if self.browser is None or self.context is None:
+            uat_logger.info("🔧 [SERIAL_MULTI_CASE] 浏览器未启动，正在启动浏览器...")
             await self.start_browser(headless=False)
+            uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器启动成功")
+        else:
+            uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器已处于运行状态")
         
         def build_execution_steps(steps):
             """将数据库步骤格式转换为执行脚本所需的格式"""
@@ -5208,7 +5198,19 @@ class PlaywrightAutomation:
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
                 elif step["action"] == "navigate":
-                    exec_step["url"] = step["url"] or step["input_value"]
+                    # 🔥 修复：确保导航步骤的URL不为空
+                    url = step.get("url") or step.get("input_value", "")
+                    if not url or not url.strip():
+                        uat_logger.error(f"❌ 导航步骤缺少有效URL: {step}")
+                        exec_step["url"] = "__INVALID_URL_MISSING__"
+                    elif url.strip().lower() == "about:blank":
+                        uat_logger.error(f"❌ 不允许导航到 about:blank: {step}")
+                        exec_step["url"] = "__INVALID_URL_BLANK__"
+                    else:
+                        exec_step["url"] = url.strip()
+                        # 如果URL没有协议，添加https://
+                        if not exec_step["url"].startswith(("http://", "https://")):
+                            exec_step["url"] = f"https://{exec_step['url']}"
                 elif step["action"] == "keypress":
                     exec_step["key"] = step["input_value"]
                 elif step["action"] == "wait":
@@ -5257,11 +5259,27 @@ class PlaywrightAutomation:
                 all_results["case_results"].append(result)
                 all_results["failed_cases"] += 1
         
-        # 按 case_ids 顺序依次执行（第一个用例用主标签页 self.page，避免 about:blank；后续用例新建标签页）
-        for index, case_id in enumerate(case_ids):
+        # 🔥 严格验证执行顺序，禁用任何并行执行
+        uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 开始强制严格串行执行用例列表")
+        uat_logger.info(f"📋 [SERIAL_MULTI_CASE] 原始执行顺序: {case_ids}")
+        
+        # 🔥 修复: 定义 execution_order 变量
+        execution_order = case_ids
+        uat_logger.info(f"📋 [SERIAL_MULTI_CASE] 验证执行顺序: {execution_order}")
+        uat_logger.info("🚫 [SERIAL_MULTI_CASE] 已禁用所有并行执行、多标签页和异步执行逻辑")
+        
+        # 🔥 添加执行顺序追踪
+        actual_execution_order = []
+        
+        for index, case_id in enumerate(execution_order):
             case_number = index + 1
-            uat_logger.info(f"🎯 [MULTI_CASE] ========== 执行第 {case_number}/{len(case_ids)} 个用例,ID: {case_id} ==========")
-            tab_page = None
+            actual_execution_order.append(case_id)
+            
+            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] ========== 强制严格串行执行第 {case_number}/{len(execution_order)} 个用例 ==========")
+            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 当前执行位置: {index + 1}/{len(execution_order)}, 用例ID: {case_id}")
+            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 顺序验证 - 这是第 {index + 1} 个应该执行的用例")
+            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 期望顺序对比: {case_ids[index]} vs 实际执行: {case_id}")
+            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 在主页面 {self.page} 中执行用例 {case_id}")
             try:
                 case_info = db.get_test_case_v2(case_id)
                 if not case_info:
@@ -5283,20 +5301,47 @@ class PlaywrightAutomation:
                     }, case_id)
                     continue
                 execution_steps = build_execution_steps(steps)
-                # 第一个用例使用主标签页 self.page（会执行 navigate，不会停留 about:blank）；其余用例新建标签页
-                if index == 0:
-                    case_results = await self.execute_script_steps(execution_steps, page=self.page)
+                # 所有用例都在同一个页面 self.page 中串行执行
+                # 🔥 完全移除页面重置逻辑，保持当前页面状态继续执行
+                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 继续在当前页面执行，不进行页面重置")
+                
+                # 🔥 修复：移除全局用例超时限制，让每个步骤自己控制超时
+                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 直接执行，不设置全局超时限制")
+                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 各步骤将使用各自独立的超时控制")
+
+                # 直接执行用例步骤，不使用全局超时
+                try:
+                    case_results = await self._execute_case_steps(execution_steps)
+                    uat_logger.info(f"✅ [MULTI_CASE] 用例 {case_id} 执行完成")
+                except Exception as e:
+                    uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 执行异常: {str(e)}")
+                    case_results = [{"status": "error", "step": None, "error": str(e)}]
+                # 🔥 修复：添加详细的日志来追踪用例状态判断
+                uat_logger.info(f"📊 [CASE_STATUS] 开始判断用例 {case_id} 的执行状态")
+                uat_logger.info(f"📊 [CASE_STATUS] case_results 长度: {len(case_results)}")
+                uat_logger.info(f"📊 [CASE_STATUS] case_results 详细内容: {case_results}")
+                
+                # 🔥 修复：检查步骤执行完整性
+                if len(case_results) < len(execution_steps):
+                    uat_logger.error(f"❌ [CASE_INTEGRITY] 用例 {case_id} 步骤未全部执行！")
+                    uat_logger.error(f"❌ [CASE_INTEGRITY] 期望步骤数: {len(execution_steps)}, 实际执行数: {len(case_results)}")
+                    case_status = "error"
+                    extracted_text = ""
+                    # 🔥 修复：在完整性检查分支中也设置 success_count 和 error_count
+                    success_count = sum(1 for r in case_results if r.get("status") == "success")
+                    error_count = sum(1 for r in case_results if r.get("status") == "error")
                 else:
-                    tab_page = await self.context.new_page()
-                    uat_logger.info(f"🔄 [MULTI_CASE] 用例 ID:{case_id} 在新标签页中执行: {case_name}")
-                    case_results = await self.execute_script_steps(execution_steps, page=tab_page)
-                success_count = sum(1 for r in case_results if r.get("status") == "success")
-                error_count = sum(1 for r in case_results if r.get("status") == "error")
-                extracted_text = ""
-                for r in case_results:
-                    if r.get("extracted_text"):
-                        extracted_text = r.get("extracted_text")
-                case_status = "success" if error_count == 0 else "error"
+                    # 原有的状态判断逻辑
+                    success_count = sum(1 for r in case_results if r.get("status") == "success")
+                    error_count = sum(1 for r in case_results if r.get("status") == "error")
+                    
+                    # 🔥 关键修复：在 else 分支中也定义 extracted_text
+                    extracted_text = ""
+                    for r in case_results:
+                        if r.get("extracted_text"):
+                            extracted_text = r.get("extracted_text")
+                    
+                    case_status = "success" if error_count == 0 else "error"
                 try:
                     db.create_run_history(
                         case_id,
@@ -5318,25 +5363,310 @@ class PlaywrightAutomation:
                     "step_results": case_results
                 }
                 process_case_result(result, case_id)
+                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_number}/{len(case_ids)} 串行执行完成，状态: {case_status}，继续执行下一个用例")
+                
+                # 🔥 修复：添加用例间的环境清理和页面状态重置
+                # 在每个用例执行完成后，清理环境并重置页面状态
+                try:
+                    uat_logger.info(f"🧹 [CASE_CLEANUP] 开始清理用例 {case_id} 的环境...")
+                    
+                    # 关闭可能存在的额外页面（只保留主页）
+                    if self.context:
+                        try:
+                            pages = self.context.pages
+                            if len(pages) > 1:
+                                # 关闭除主页外的所有页面
+                                for page in pages[1:]:
+                                    try:
+                                        await page.close()
+                                        uat_logger.info(f"🧹 [CASE_CLEANUP] 关闭额外页面: {page.url}")
+                                    except Exception as e:
+                                        uat_logger.warning(f"🧹 [CASE_CLEANUP] 关闭页面时出错: {str(e)}")
+                        except Exception as e:
+                            uat_logger.warning(f"🧹 [CASE_CLEANUP] 获取页面列表时出错: {str(e)}")
+                    
+                    # 清除页面缓存和存储
+                    if self.page:
+                        try:
+                            # 清除页面缓存
+                            await self.page.evaluate("() => { window.performance.clearResourceTimings(); }")
+                            # 清除会话存储
+                            await self.page.evaluate("() => { sessionStorage.clear(); }")
+                            # 清除本地存储
+                            await self.page.evaluate("() => { localStorage.clear(); }")
+                            uat_logger.info(f"🧹 [CASE_CLEANUP] 已清除页面缓存和存储")
+                        except Exception as e:
+                            uat_logger.warning(f"🧹 [CASE_CLEANUP] 清除页面缓存时出错: {str(e)}")
+                    
+                    uat_logger.info(f"🧹 [CASE_CLEANUP] 用例 {case_id} 环境清理完成")
+                except Exception as e:
+                    uat_logger.warning(f"🧹 [CASE_CLEANUP] 用例 {case_id} 环境清理时出错: {str(e)}")
             except Exception as e:
-                uat_logger.error(f"❌ [MULTI_CASE] 测试用例执行异常,ID: {case_id}, 错误: {str(e)}")
+                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 测试用例执行异常,ID: {case_id}, 错误: {str(e)}")
                 process_case_result({
                     "case_id": case_id,
                     "case_name": case_info.get("name", "未命名用例") if 'case_info' in locals() else "未知",
                     "status": "error",
                     "error": str(e)
                 }, case_id)
-            finally:
-                if tab_page and not (hasattr(tab_page, 'is_closed') and tab_page.is_closed()):
-                    try:
-                        await tab_page.close()
-                    except Exception as close_err:
-                        uat_logger.warning(f"关闭标签页时出错: {close_err}")
+                uat_logger.info(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_number}/{len(case_ids)} 执行失败，继续执行下一个用例")
         
-        uat_logger.info(f"🎉 [MULTI_CASE] ========== 所有测试用例执行完成（按顺序） ==========")
-        uat_logger.info(f"📊 [MULTI_CASE] 总用例数: {all_results['total_cases']}, 成功: {all_results['successful_cases']}, 失败: {all_results['failed_cases']}")
+        uat_logger.info(f"🎉 [SERIAL_MULTI_CASE] ========== 所有测试用例串行执行完成（严格按顺序） ==========")
+        uat_logger.info(f"📊 [SERIAL_MULTI_CASE] 总用例数: {all_results['total_cases']}, 成功: {all_results['successful_cases']}, 失败: {all_results['failed_cases']}")
+        
+        # 🔥 验证执行顺序是否正确
+        if actual_execution_order == case_ids:
+            uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 执行顺序验证通过: {actual_execution_order}")
+        else:
+            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 执行顺序验证失败!")
+            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 期望顺序: {case_ids}")
+            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 实际顺序: {actual_execution_order}")
+        
+        uat_logger.info("✅ [SERIAL_MULTI_CASE] 串行执行模式已完成，所有并行逻辑已禁用，页面重置已移除")
         
         return all_results
+    
+    async def _execute_case_steps(self, execution_steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """执行单个测试用例的所有步骤（严格在当前页面执行，禁止多标签页并行）
+        
+        Args:
+            execution_steps: 要执行的步骤列表
+            
+        Returns:
+            步骤执行结果列表
+        """
+        case_results = []
+        
+        # 逐个执行步骤
+        for i, step in enumerate(execution_steps):
+            uat_logger.info(f"🎯 [CASE_STEP] 执行步骤 {i+1}/{len(execution_steps)}: {step.get('action', 'unknown')}")
+            try:
+                # 强制使用主页面，禁止多标签页并行执行
+                step_result = await self.execute_single_step(step)
+                case_results.extend(step_result if isinstance(step_result, list) else [step_result])
+                uat_logger.info(f"✅ [CASE_STEP] 步骤 {i+1} 执行成功")
+            except Exception as step_error:
+                # 🔥 修复：添加详细的日志来追踪步骤异常处理
+                import traceback
+                uat_logger.error(f"❌ [CASE_STEP] 步骤 {i+1} 执行异常: {str(step_error)}")
+                uat_logger.error(f"❌ [CASE_STEP] 异常类型: {type(step_error).__name__}")
+                uat_logger.error(f"❌ [CASE_STEP] 异常堆栈: {traceback.format_exc()}")
+                
+                # 添加错误结果到 case_results
+                error_result = { 
+                    "status": "error", 
+                    "step": step.get('action', 'unknown'), 
+                    "error": str(step_error)
+                }
+                case_results.append(error_result)
+                
+                # 检查错误结果是否正确添加
+                uat_logger.info(f"📊 [CASE_STEP] 错误结果已添加到 case_results: {error_result}")
+                uat_logger.info(f"📊 [CASE_STEP] case_results 最新长度: {len(case_results)}")
+                uat_logger.info(f"📊 [CASE_STEP] case_results 最新内容: {case_results}")
+                
+                # 🔥 修复：任何步骤失败都终止当前用例执行
+                uat_logger.error(f"🛑 [CASE_STEP] 步骤 {i+1} 失败，终止用例 {len(execution_steps)} 中剩余的 {len(execution_steps) - i - 1} 个步骤")
+                break
+        
+        return case_results
+    
+    async def execute_single_step(self, step: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """执行单个测试步骤（强制在主页面执行，禁用多标签页）
+        
+        Args:
+            step: 要执行的步骤字典
+            
+        Returns:
+            步骤执行结果列表
+        """
+        target_page = self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        action = step.get("action", "")
+        uat_logger.info(f"🎯 [SINGLE_STEP] 开始执行单步操作: {action}")
+        
+        results = []
+        
+        try:
+            if action == "navigate":
+                url = step.get("url", "")
+                # 🔥 修复：检查URL是否有效
+                if not url:
+                    raise Exception("导航步骤缺少URL参数")
+                elif url == "__INVALID_URL_MISSING__":
+                    raise Exception("导航步骤的URL为空，请检查测试用例步骤配置")
+                elif url == "__INVALID_URL_BLANK__":
+                    raise Exception("不允许导航到 about:blank 页面，请检查测试用例步骤配置")
+                elif url.strip().lower() == "about:blank":
+                    raise Exception("不允许导航到 about:blank 页面")
+                
+                # 验证URL格式
+                if not url.startswith(("http://", "https://")):
+                    raise Exception(f"导航URL格式无效，必须以 http://或https://开头: {url}")
+                
+                await self.navigate_to(url, page=target_page)
+                results.append({"status": "success", "step": step})
+                    
+            elif action == "click":
+                selector = step.get("selector", "")
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    await self.click_element(selector, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("点击步骤缺少选择器参数")
+                    
+            elif action in ["fill", "input"]:
+                selector = step.get("selector", "")
+                text = step.get("text", step.get("input_value", ""))
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector and text:
+                    await self.fill_input(selector, text, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("填充步骤缺少选择器或文本参数")
+                    
+            elif action == "scroll":
+                direction = step.get("direction", "down")
+                pixels = step.get("pixels", 500)
+                await self.scroll_page(direction, pixels, page=target_page)
+                results.append({"status": "success", "step": step})
+                
+            elif action == "wait":
+                wait_time = step.get("time", 1000)
+                await target_page.wait_for_timeout(wait_time)
+                results.append({"status": "success", "step": step})
+                
+            elif action == "submit":
+                selector = step.get("selector", "")
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    # 提交操作通常需要先点击提交按钮
+                    await self.click_element(selector, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("提交步骤缺少选择器参数")
+                    
+            elif action == "extract_text":
+                selector = step.get("selector", "")
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    extracted_text = await self.extract_element_text(selector, selector_type, iframe_selector, page=target_page)
+                    results.append({
+                        "status": "success", 
+                        "step": step,
+                        "extracted_text": extracted_text
+                    })
+                else:
+                    # 提取整个页面文本
+                    page_text = await self.get_page_text(page=target_page)
+                    results.append({
+                        "status": "success", 
+                        "step": step,
+                        "extracted_text": page_text
+                    })
+                    
+            elif action == "verify":
+                selector = step.get("selector", "")
+                verify_type = step.get("verify_type", "visible")
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                await self.verify_element(selector, verify_type, selector_type, iframe_selector, page=target_page)
+                results.append({"status": "success", "step": step})
+                
+            elif action == "hover":
+                selector = step.get("selector", "")
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    await self.hover_element(selector, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("悬停步骤缺少选择器参数")
+                    
+            elif action == "double_click":
+                selector = step.get("selector", "")
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    await self.double_click_element(selector, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("双击步骤缺少选择器参数")
+                    
+            elif action == "right_click":
+                selector = step.get("selector", "")
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    await self.right_click_element(selector, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("右键点击步骤缺少选择器参数")
+                    
+            elif action == "swipe":
+                selector = step.get("selector", "")
+                direction = step.get("direction", "right")
+                distance = step.get("distance", 100)
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    await self.swipe_element(selector, direction, distance, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("滑动步骤缺少选择器参数")
+                    
+            elif action == "wait_for_selector":
+                selector = step.get("selector", "")
+                timeout = step.get("timeout", 30000)
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector:
+                    await self.wait_for_selector(selector, timeout, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("等待选择器步骤缺少选择器参数")
+                    
+            elif action == "wait_for_element_visible":
+                selector = step.get("selector", "")
+                timeout = step.get("timeout", 30000)
+                selector_type = step.get("selector_type", "css")
+                if selector:
+                    await self.wait_for_element_visible(selector, timeout, selector_type, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("等待元素可见步骤缺少选择器参数")
+                    
+            elif action == "screenshot":
+                screenshot_path = await self.take_screenshot(page=target_page)
+                results.append({
+                    "status": "success", 
+                    "step": step,
+                    "screenshot_path": screenshot_path
+                })
+                
+            else:
+                raise Exception(f"不支持的操作类型: {action}")
+                
+            uat_logger.info(f"✅ [SINGLE_STEP] 单步操作执行成功: {action}")
+            
+        except Exception as e:
+            uat_logger.error(f"❌ [SINGLE_STEP] 单步操作执行失败: {action}, 错误: {str(e)}")
+            results.append({
+                "status": "error", 
+                "step": step, 
+                "error": str(e)
+            })
+            # 🔥 修复：重新抛出异常，让上层调用者知道步骤执行失败
+            raise
+            
+        return results
     
     async def start_recording(self):
         """开始录制"""
@@ -6082,9 +6412,42 @@ def sync_extract_json_from_selected_element():
     return worker.execute(run)
 
 def sync_execute_multiple_test_cases(case_ids: List[int], db):
-    async def run():
-        return await automation.execute_multiple_test_cases(case_ids, db)
-    return worker.execute(run)
+    """同步执行多个测试用例（带执行锁，防止并发执行）"""
+    # 🔥 检查是否有其他测试用例正在执行
+    if is_execution_in_progress():
+        uat_logger.error(f"❌ [EXECUTION_LOCK] 检测到有测试用例正在执行，拒绝并发执行")
+        return {
+            "total_cases": len(case_ids),
+            "successful_cases": 0,
+            "failed_cases": len(case_ids),
+            "case_results": [],
+            "error": "有其他测试用例正在执行，请等待当前执行完成"
+        }
+    
+    # 🔥 获取执行锁
+    if not _execution_lock.acquire(blocking=True, timeout=60):
+        uat_logger.error(f"❌ [EXECUTION_LOCK] 获取执行锁超时")
+        return {
+            "total_cases": len(case_ids),
+            "successful_cases": 0,
+            "failed_cases": len(case_ids),
+            "case_results": [],
+            "error": "获取执行锁超时，请稍后重试"
+        }
+    
+    # 🔥 设置执行状态
+    set_execution_in_progress(True)
+    uat_logger.info(f"🔒 [EXECUTION_LOCK] 成功获取执行锁，开始执行测试用例")
+    
+    try:
+        async def run():
+            return await automation.execute_multiple_test_cases(case_ids, db)
+        return worker.execute(run)
+    finally:
+        # 🔥 释放执行锁
+        set_execution_in_progress(False)
+        _execution_lock.release()
+        uat_logger.info(f"🔓 [EXECUTION_LOCK] 释放执行锁")
 
 
 # 网络爬虫文本提取功能

@@ -967,6 +967,10 @@
                 return;
             }
             
+            // 调试信息：打印执行顺序
+            console.log('📋 [FRONTEND] 当前选择的用例执行顺序:', selectedCaseIdsOrdered);
+            console.log('📋 [FRONTEND] 用例名称映射:', selectedCaseIdsOrdered.map(id => ({id: id, name: caseNamesById[id] || '未知'})));
+            
             // 显示加载状态，防止重复点击
             const runButton = document.querySelector('button.btn-success[onclick="executeSelectedCases()"]');
             if (runButton) {

@@ -868,7 +868,9 @@
                 const compareTypeField = document.getElementById('stepCompareType');
                 compareTypeField.style.display = 'block';
             } else if (action === 'wait') {
-                // 等待操作需要选择器和等待时间
+                // 等待操作只需要等待时间，不需要定位方式和选择器
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = '等待时间 (秒)';
@@ -959,7 +961,9 @@
                 const editCompareTypeField = document.getElementById('editStepCompareType');
                 editCompareTypeField.style.display = 'block';
             } else if (action === 'wait') {
-                // 等待操作需要选择器和等待时间
+                // 等待操作只需要等待时间，不需要定位方式和选择器
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = '等待时间 (秒)';
             } else if (action === 'click' || action === 'double_click' || action === 'right_click') {

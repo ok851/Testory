@@ -228,51 +228,29 @@ def api_execute_multiple_cases():
     if not isinstance(case_ids, list):
         return jsonify({'success': False, 'error': 'case_ids参数必须是数组'}), 400
     
+    # 添加调试信息
+    uat_logger.info(f"📥 [API_ENTRY] 接收到的执行顺序: {case_ids}")
+    uat_logger.info(f"📥 [API_ENTRY] 用例数量: {len(case_ids)}")
+    
     uat_logger.info(f"开始执行多个测试用例，共 {len(case_ids)} 个用例")
     
     results = None
     
     try:
-        # 执行多个测试用例，添加超时处理
-        import threading
-        import queue
-
-        # 创建队列用于返回结果
-        result_queue = queue.Queue(maxsize=1)  # 设置队列大小，防止阻塞
+        # 严格同步执行多个测试用例，确保执行顺序
+        uat_logger.info(f"🔧 [API] 开始严格同步执行多个测试用例")
         
-        def execute_test_cases():
-            """在子线程中执行测试用例"""
-            try:
-                # 创建独立的数据库连接实例，确保线程安全
-                from database import Database
-                thread_db = Database()
-                
-                # 执行测试用例
-                result = sync_execute_multiple_test_cases(case_ids, thread_db)
-                
-                # 尝试将结果放入队列，设置超时
-                try:
-                    result_queue.put((True, result), timeout=10)
-                except queue.Full:
-                    uat_logger.error("结果队列已满，无法放入执行结果")
-            except Exception as e:
-                uat_logger.error(f"执行测试用例时发生异常: {str(e)}")
-                try:
-                    result_queue.put((False, str(e)), timeout=10)
-                except queue.Full:
-                    uat_logger.error("结果队列已满，无法放入错误信息")
-        
-        # 启动子线程执行测试用例
-        thread = threading.Thread(target=execute_test_cases)
-        thread.daemon = True
-        thread.start()
-        
-        # 等待测试用例执行完成，设置超时时间为300秒（5分钟）
-        thread.join(300)  # 300秒超时
-        
-        if thread.is_alive():
-            # 测试用例执行超时
-            uat_logger.error("测试用例执行超时，已超过300秒")
+        try:
+            # 创建独立的数据库连接实例，确保线程安全
+            from database import Database
+            thread_db = Database()
+            
+            # 直接在主线程中同步执行测试用例，确保严格的执行顺序
+            uat_logger.info(f"🚀 [API] 在主线程中同步执行测试用例序列: {case_ids}")
+            results = sync_execute_multiple_test_cases(case_ids, thread_db)
+            uat_logger.info(f"✅ [API] 多个测试用例同步执行完成")
+        except Exception as e:
+            uat_logger.error(f"❌ [API] 执行测试用例时发生异常: {str(e)}")
             results = {
                 "total_cases": len(case_ids),
                 "successful_cases": 0,
@@ -282,46 +260,12 @@ def api_execute_multiple_cases():
                         "case_id": case_id,
                         "case_name": "未知",
                         "status": "error",
-                        "error": "测试用例执行超时"
+                        "error": f"执行出错: {str(e)}"
                     } for case_id in case_ids
                 ]
             }
-        else:
-            # 获取测试用例执行结果，设置超时
-            try:
-                success, result = result_queue.get(timeout=10)  # 10秒超时
-                if success:
-                    results = result
-                else:
-                    uat_logger.error(f"测试用例执行出错: {result}")
-                    results = {
-                        "total_cases": len(case_ids),
-                        "successful_cases": 0,
-                        "failed_cases": len(case_ids),
-                        "case_results": [
-                            {
-                                "case_id": case_id,
-                                "case_name": "未知",
-                                "status": "error",
-                                "error": f"执行出错: {result}"
-                            } for case_id in case_ids
-                        ]
-                    }
-            except queue.Empty:
-                uat_logger.error("结果队列为空，无法获取执行结果")
-                results = {
-                    "total_cases": len(case_ids),
-                    "successful_cases": 0,
-                    "failed_cases": len(case_ids),
-                    "case_results": [
-                        {
-                            "case_id": case_id,
-                            "case_name": "未知",
-                            "status": "error",
-                            "error": "无法获取执行结果，可能是执行过程中发生异常"
-                        } for case_id in case_ids
-                    ]
-                }
+        
+        # 执行结果已在上面获取
         
         # 记录执行结果
         uat_logger.info(f"多个测试用例执行完成，成功: {results['successful_cases']}, 失败: {results['failed_cases']}")
@@ -342,13 +286,14 @@ def api_execute_multiple_cases():
             ]
         }
     finally:
-        # 确保浏览器关闭，无论测试用例执行结果如何
+        # 确保浏览器资源清理，无论测试用例执行结果如何
         try:
-            # 注意：不要在这里调用 sync_close_browser，因为每个测试用例已经在自己的线程中关闭了浏览器
-            # 这里主要是清理可能的全局实例
-            uat_logger.info("多个测试用例执行完成，浏览器清理完成")
+            uat_logger.info("🔧 [API_CLEANUP] 开始清理浏览器资源...")
+            # 调用同步关闭浏览器函数确保资源释放
+            sync_close_browser()
+            uat_logger.info("✅ [API_CLEANUP] 浏览器资源清理完成")
         except Exception as close_error:
-            uat_logger.warning(f"清理浏览器时出错: {close_error}")
+            uat_logger.warning(f"⚠️ [API_CLEANUP] 清理浏览器时出现警告: {close_error}")
     
     response_data = {'success': True, 'results': results}
     return jsonify(response_data)

@@ -51,7 +51,7 @@
         }
         
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 32px auto;
             padding: 0 16px;
         }
@@ -112,6 +112,47 @@
         .history-table {
             width: 100%;
             border-collapse: collapse;
+            table-layout: fixed;
+        }
+        
+        .history-table th:nth-child(1),
+        .history-table td:nth-child(1) {
+            width: 60px;
+        }
+        
+        .history-table th:nth-child(2),
+        .history-table td:nth-child(2) {
+            width: 150px;
+        }
+        
+        .history-table th:nth-child(3),
+        .history-table td:nth-child(3) {
+            width: 80px;
+        }
+        
+        .history-table th:nth-child(4),
+        .history-table td:nth-child(4) {
+            width: 80px;
+        }
+        
+        .history-table th:nth-child(5),
+        .history-table td:nth-child(5) {
+            width: 250px;
+        }
+        
+        .history-table th:nth-child(6),
+        .history-table td:nth-child(6) {
+            width: 400px;
+        }
+        
+        .history-table th:nth-child(7),
+        .history-table td:nth-child(7) {
+            width: 150px;
+        }
+        
+        .history-table th:nth-child(8),
+        .history-table td:nth-child(8) {
+            width: 140px;
         }
         
         .history-table th,
@@ -119,6 +160,8 @@
             padding: 12px;
             text-align: left;
             border-bottom: 1px solid #f0f0f0;
+            writing-mode: horizontal-tb;
+            vertical-align: middle;
         }
         
         .history-table th {
@@ -174,6 +217,21 @@
         .error-message {
             color: #ff4d4f;
             font-size: 12px;
+            max-width: 100%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: pointer;
+        }
+        
+        .error-message:hover {
+            overflow: visible;
+            white-space: normal;
+            background-color: #f9f9f9;
+            padding: 4px;
+            border-radius: 4px;
+            position: relative;
+            z-index: 10;
         }
         
         .action-buttons {
@@ -188,6 +246,9 @@
             background-color: #f0f0f0;
             cursor: pointer;
             font-size: 12px;
+            white-space: nowrap;
+            writing-mode: horizontal-tb;
+            width: 50px;
         }
         
         .action-buttons button:hover {
