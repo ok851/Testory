@@ -181,6 +181,8 @@
             font-size: 13px;
             color: #666;
             line-height: 1.4;
+            word-break: break-all;
+            overflow-wrap: break-word;
         }
         
         .step-actions {
@@ -404,6 +406,7 @@
                     <option value="verify">验证操作</option>
                     <option value="enter_iframe">进入iframe</option>
                     <option value="exit_iframe">跳出iframe</option>
+                    <option value="select">下拉框选择</option>
                 </select>
             </div>
             <div class="form-group">
@@ -510,6 +513,7 @@
                     <option value="verify">验证操作</option>
                     <option value="enter_iframe">进入iframe</option>
                     <option value="exit_iframe">跳出iframe</option>
+                    <option value="select">下拉框选择</option>
                 </select>
             </div>
             <div class="form-group">
@@ -602,6 +606,10 @@
         let currentPage = 1;
         let totalPages = 1;
         const pageSize = 10;
+        let draggedElement = null;
+        let draggedStepId = null;
+        let isDragging = false;
+        let pageSwitchTimer = null;
         
         function escapeHtml(text) {
             if (!text) return '';
@@ -690,6 +698,7 @@
                             case 'swipe': actionText = '滑动'; break;
                             case 'enter_iframe': actionText = '进入iframe'; break;
                             case 'exit_iframe': actionText = '跳出iframe'; break;
+                            case 'select': actionText = '下拉框选择'; break;
                             default: actionText = step.action;
                         }
                         
@@ -700,7 +709,7 @@
                                 <div class="step-details">
                                     ${step.selector_type ? `<div><strong>定位方式:</strong> ${escapeHtml(step.selector_type)}</div>` : ''}
                                     ${step.selector_value ? `<div><strong>选择器:</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
-                                    ${step.input_value ? `<div><strong>输入值:</strong> ${escapeHtml(step.input_value)}</div>` : ''}
+                                    ${(step.action === 'input' || step.action === 'fill' || step.action === 'navigate' || step.action === 'wait' || step.action === 'scroll' || step.action === 'swipe' || step.action === 'extract_text' || step.action === 'verify' || step.action === 'text_compare' || step.action === 'select') && step.input_value && step.input_value.trim() ? `<div><strong>输入值:</strong> ${escapeHtml(step.input_value)}</div>` : ''}
                                     ${step.description ? `<div><strong>描述:</strong> ${escapeHtml(step.description)}</div>` : ''}
                                 </div>
                             </div>
@@ -765,6 +774,152 @@
             if (page < 1 || page > totalPages) return;
             currentPage = page;
             loadSteps();
+        }
+        
+        // 在拖动过程中切换页面
+        async function changePageWithDrag(page) {
+            if (page < 1 || page > totalPages) return;
+            
+            // 保存当前拖动的步骤信息
+            const stepId = draggedStepId;
+            const isBottom = page > currentPage; // 判断是向下还是向上拖动
+            
+            console.log(`开始切换页面: 从 ${currentPage} 到 ${page}, 拖动的步骤ID: ${stepId}, 方向: ${isBottom ? '向下' : '向上'}`);
+            
+            // 清除计时器
+            if (pageSwitchTimer) {
+                clearTimeout(pageSwitchTimer);
+                pageSwitchTimer = null;
+            }
+            if (pageSwitchDebounceTimer) {
+                clearTimeout(pageSwitchDebounceTimer);
+                pageSwitchDebounceTimer = null;
+            }
+            
+            // 切换页面
+            currentPage = page;
+            await loadSteps();
+            
+            // 向下翻页 → 将步骤移动到新页面的第一个位置
+            // 向上翻页 → 将步骤移动到新页面的最后一个位置
+            if (isBottom) {
+                console.log('向下翻页，将步骤移动到新页面的第一个位置');
+                await moveStepToStartOfPage(stepId);  // 改为放到顶部
+            } else {
+                console.log('向上翻页，将步骤移动到新页面的最后一个位置');
+                await moveStepToEndOfPage(stepId);    // 改为放到底部
+            }
+            
+            // 重新设置拖动状态
+            setTimeout(() => {
+                const movedStep = document.querySelector(`.step-item[data-step-id="${stepId}"]`);
+                if (movedStep) {
+                    console.log(`重新设置步骤 ${stepId} 的拖动状态`);
+                    
+                    // 重新设置拖动相关变量
+                    draggedElement = movedStep;
+                    draggedStepId = stepId;
+                    isDragging = true;
+                    
+                    // 重新添加拖动类
+                    movedStep.classList.add('dragging');
+                    
+                    // 重新添加拖动事件监听器
+                    document.addEventListener('drag', handleDrag);
+                    
+                    // 重新添加拖放事件监听器到新页面的步骤
+                    document.querySelectorAll('.step-item').forEach(item => {
+                        if (item !== movedStep) {
+                            item.addEventListener('dragover', handleDragOver);
+                            item.addEventListener('drop', handleDrop);
+                        }
+                    });
+                }
+            }, 100);
+        }
+        
+        // 将步骤移动到当前页面的第一个位置之前
+        async function moveStepToStartOfPage(stepId) {
+            const container = document.getElementById('stepsListContainer');
+            const items = container.querySelectorAll('.step-item');
+            let newOrder = 1;
+
+            if (items.length > 0) {
+                const firstItem = items[0];
+                const firstStepId = parseInt(firstItem.getAttribute('data-step-id'));
+                const firstStepOrder = await getStepOrder(firstStepId);
+
+                // 新顺序设为第一个步骤顺序减1（若为0则改为1，并调整原第一个步骤）
+                newOrder = firstStepOrder - 1;
+                if (newOrder < 1) {
+                    // 如果减到0，则交换顺序：将原第一个步骤后移一位，新步骤设为1
+                    await updateStepOrder(firstStepId, firstStepOrder + 1);
+                    newOrder = 1;
+                }
+            }
+            
+            console.log(`将步骤 ${stepId} 移动到新页面的第一个位置，新顺序: ${newOrder}`);
+            await updateStepOrder(stepId, newOrder);
+            await loadSteps();
+        }
+
+        // 将步骤移动到当前页面的最后一个位置之后
+        async function moveStepToEndOfPage(stepId) {
+            const container = document.getElementById('stepsListContainer');
+            const items = container.querySelectorAll('.step-item');
+            let newOrder = 1;
+
+            if (items.length > 0) {
+                const lastItem = items[items.length - 1];
+                const lastStepId = parseInt(lastItem.getAttribute('data-step-id'));
+                const lastStepOrder = await getStepOrder(lastStepId);
+
+                newOrder = lastStepOrder + 1;
+            }
+            
+            console.log(`将步骤 ${stepId} 移动到新页面的最后一个位置，新顺序: ${newOrder}`);
+            await updateStepOrder(stepId, newOrder);
+            await loadSteps();
+        }
+        
+        // 获取步骤的当前顺序
+        async function getStepOrder(stepId) {
+            try {
+                const response = await fetch(`/api/steps/${stepId}`);
+                const data = await response.json();
+                return data.step ? data.step.step_order : 0;
+            } catch (error) {
+                console.error('获取步骤顺序失败:', error);
+                return 0;
+            }
+        }
+        
+        // 更新步骤的顺序
+        async function updateStepOrder(stepId, newOrder) {
+            try {
+                const response = await fetch(`/api/steps/${stepId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ step_order: newOrder })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                if (!data.success) {
+                    console.error('更新步骤顺序失败:', data.error);
+                    return false;
+                }
+                console.log(`成功更新步骤 ${stepId} 的顺序为: ${newOrder}`);
+                return true;
+            } catch (error) {
+                console.error('更新步骤顺序时发生错误:', error);
+                return false;
+            }
         }
         
         function showCreateStepModal() {
@@ -942,6 +1097,11 @@
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'none';
                 scrollFields.style.display = 'none';
+            } else if (action === 'select') {
+                // 下拉框选择操作需要选择器和选择值
+                inputValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
+                document.querySelector('label[for="stepInputValue"]').textContent = '选择值';
             } else {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
@@ -1029,6 +1189,10 @@
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'none';
+            } else if (action === 'select') {
+                // 下拉框选择操作需要选择器和选择值
+                inputValueField.style.display = 'block';
+                document.querySelector('label[for="editStepInputValue"]').textContent = '选择值';
             } else {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
@@ -1398,24 +1562,110 @@
             }
         }
         
-        // 拖动相关变量
-        let draggedElement = null;
-        
         // 处理拖动开始
         function handleDragStart(e) {
             draggedElement = this;
+            draggedStepId = parseInt(this.getAttribute('data-step-id'));
+            isDragging = true;
             this.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/html', this.innerHTML);
+            
+            // 添加拖动事件监听器，用于处理跨页拖动
+            document.addEventListener('drag', handleDrag);
+            console.log('添加了拖动事件监听器');
         }
         
         // 处理拖动结束
         function handleDragEnd(e) {
-            this.classList.remove('dragging');
-            // 移除所有放置指示器
+            // 移除所有拖动状态
             document.querySelectorAll('.step-item').forEach(item => {
-                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+                item.classList.remove('dragging', 'drag-over', 'drag-before', 'drag-after');
             });
+            
+            isDragging = false;
+            draggedElement = null;
+            draggedStepId = null;
+            
+            // 清除计时器
+            if (pageSwitchTimer) {
+                clearTimeout(pageSwitchTimer);
+                pageSwitchTimer = null;
+            }
+            if (pageSwitchDebounceTimer) {
+                clearTimeout(pageSwitchDebounceTimer);
+                pageSwitchDebounceTimer = null;
+            }
+            lastPageSwitchDirection = null;
+            
+            // 移除拖动事件监听器
+            document.removeEventListener('drag', handleDrag);
+            console.log('移除了拖动事件监听器');
+        }
+        
+        // 页面切换防抖计时器
+        let pageSwitchDebounceTimer = null;
+        let lastPageSwitchDirection = null; // 记录上一次页面切换的方向
+        
+        // 处理拖动过程，用于跨页拖动
+        function handleDrag(e) {
+            console.log('handleDrag被调用');
+            if (!isDragging) {
+                console.log('isDragging为false，退出');
+                return;
+            }
+            
+            const container = document.getElementById('stepsListContainer');
+            if (!container) {
+                console.log('容器不存在，退出');
+                return;
+            }
+            
+            // 获取步骤列表容器的位置和大小
+            const containerRect = container.getBoundingClientRect();
+            const containerTop = containerRect.top;
+            const containerBottom = containerRect.bottom;
+            const mouseY = e.clientY;
+            
+            // 调试信息
+            console.log(`鼠标位置: ${mouseY}, 容器顶部: ${containerTop}, 容器底部: ${containerBottom}, 当前页: ${currentPage}, 总页数: ${totalPages}`);
+            
+            // 确定当前鼠标所在的区域
+            let currentDirection = null;
+            if (mouseY < containerTop + 50 && currentPage > 1) {
+                currentDirection = 'up';
+                console.log('鼠标在容器顶部区域，准备切换到上一页');
+            } else if (mouseY > containerBottom - 50 && currentPage < totalPages) {
+                currentDirection = 'down';
+                console.log('鼠标在容器底部区域，准备切换到下一页');
+            }
+            
+            // 只有当方向改变或者没有设置计时器时，才清除并重新设置计时器
+            if (currentDirection !== lastPageSwitchDirection || !pageSwitchDebounceTimer) {
+                // 清除之前的防抖计时器
+                if (pageSwitchDebounceTimer) {
+                    clearTimeout(pageSwitchDebounceTimer);
+                    pageSwitchDebounceTimer = null;
+                }
+                
+                // 设置新的防抖计时器
+                if (currentDirection === 'up') {
+                    pageSwitchDebounceTimer = setTimeout(() => {
+                        const newPage = currentPage - 1;
+                        console.log(`切换到上一页: ${newPage}`);
+                        changePageWithDrag(newPage);
+                    }, 500); // 500毫秒防抖
+                } else if (currentDirection === 'down') {
+                    pageSwitchDebounceTimer = setTimeout(() => {
+                        const newPage = currentPage + 1;
+                        console.log(`切换到下一页: ${newPage}`);
+                        changePageWithDrag(newPage);
+                    }, 500); // 500毫秒防抖
+                }
+                
+                // 更新上一次页面切换的方向
+                lastPageSwitchDirection = currentDirection;
+            }
         }
         
         // 处理拖动过程中鼠标悬停
@@ -1526,7 +1776,9 @@
             items.forEach((item, index) => {
                 const numberElement = item.querySelector('.step-number');
                 if (numberElement) {
-                    numberElement.textContent = index + 1;
+                    // 考虑分页因素计算实际步骤编号
+                    const actualStepNumber = (currentPage - 1) * pageSize + index + 1;
+                    numberElement.textContent = actualStepNumber;
                 }
             });
         }
@@ -1537,10 +1789,10 @@
             const items = container.querySelectorAll('.step-item');
             
             // 构建步骤顺序数组
-            const stepOrder = Array.from(items).map(item => {
+            const stepOrder = Array.from(items).map((item, index) => {
                 return {
                     id: parseInt(item.getAttribute('data-step-id')),
-                    order: Array.from(items).indexOf(item) + 1
+                    order: (currentPage - 1) * pageSize + index + 1
                 };
             });
             

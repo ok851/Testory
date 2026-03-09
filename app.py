@@ -3,7 +3,7 @@ from flask_cors import CORS
 import os
 import time
 from database import Database
-from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_execute_script_steps, sync_start_recording, sync_stop_recording, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, sync_execute_multiple_test_cases, worker, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_enter_iframe, sync_exit_iframe  # 使用全局实例和同步包装器
+from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count  # 使用全局实例和同步包装器
 from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 import json
@@ -1031,19 +1031,40 @@ def api_run_case(case_id):
                         # 右键点击后等待页面响应
                         sync_wait_for_timeout(1000)
                 elif action == 'wait':
-                    if selector_value:
-                        sync_wait_for_selector(selector_value, selector_type=selector_type)
+                    # 修复：wait操作应该等待时间，而不是等待选择器
+                    if input_value:
+                        try:
+                            # 将输入值转换为毫秒（支持秒为单位）
+                            wait_time = int(input_value) * 1000 if int(input_value) < 1000 else int(input_value)
+                            sync_wait_for_timeout(wait_time)
+                        except ValueError:
+                            uat_logger.warning(f"无效的等待时间值: {input_value}，使用默认值1000毫秒")
+                            sync_wait_for_timeout(1000)
+                    else:
+                        # 如果没有输入值，默认等待1秒
+                        sync_wait_for_timeout(1000)
+                elif action == 'select':
+                    # 修复：添加下拉框选择操作
+                    if selector_value and input_value:
+                        try:
+                            sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            # 选择后等待页面响应
+                            sync_wait_for_timeout(1000)
+                        except Exception as select_error:
+                            uat_logger.error(f"执行下拉框选择操作时出错: {select_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
                 elif action == 'scroll':
-                            direction = 'down'
-                            pixels = 500
-                            try:
-                                sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
-                                # 滚动后等待页面响应
-                                sync_wait_for_timeout(1500)
-                            except Exception as scroll_error:
-                                uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
-                                # 直接抛出错误，视为测试用例执行失败
-                                raise
+                    direction = 'down'
+                    pixels = 500
+                    try:
+                        sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
+                        # 滚动后等待页面响应
+                        sync_wait_for_timeout(1500)
+                    except Exception as scroll_error:
+                        uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
+                        # 直接抛出错误，视为测试用例执行失败
+                        raise
                 elif action == 'swipe':
                     if selector_value:
                         direction = 'up'

@@ -1109,6 +1109,177 @@ class PlaywrightAutomation:
         else:
             uat_logger.info(f"执行导航操作: {url}")
     
+    async def select_option(self, selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None, page=None):
+        """选择下拉框选项。支持原生select和自定义下拉框（如Element Plus）。page: 可选，指定在哪个标签页执行"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        uat_logger.info(f"🔍 [SELECT_DEBUG] 开始选择下拉框选项,选择器: {selector}, 选择值: {select_value}, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
+        
+        # 构建完整的选择器
+        full_selector = selector
+        if selector_type == "xpath":
+            full_selector = f"xpath={selector}"
+        
+        # 确定操作上下文
+        target_context = target_page
+        if iframe_selector:
+            uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
+            target_context = target_page.frame_locator(iframe_selector)
+        
+        if target_context is None:
+            uat_logger.error(f"❌ [SELECT_DEBUG] 操作上下文为None,无法执行选择操作")
+            raise Exception(f"操作上下文为None,无法执行选择操作")
+        
+        # 策略优化: 先等待元素存在于DOM，不要求可见性
+        uat_logger.info(f"🔍 [SELECT_DEBUG] 等待元素存在于DOM...")
+        try:
+            await target_context.wait_for_selector(full_selector, state='attached', timeout=5000)
+            uat_logger.info(f"✅ [SELECT_DEBUG] 元素已存在于DOM")
+        except Exception as e:
+            uat_logger.error(f"❌ [SELECT_DEBUG] 等待元素存在于DOM失败: {str(e)}")
+            raise Exception(f"无法找到下拉框元素: {selector}")
+        
+        # 获取元素引用
+        element = target_context.locator(full_selector)
+        
+        # 滚动到视图，确保元素可见
+        uat_logger.info(f"🔍 [SELECT_DEBUG] 滚动元素到视图...")
+        try:
+            await element.scroll_into_view_if_needed(timeout=3000)
+            uat_logger.info(f"✅ [SELECT_DEBUG] 滚动完成")
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [SELECT_DEBUG] 滚动失败: {str(e)}, 继续尝试")
+        
+        # 再次等待元素可见
+        uat_logger.info(f"🔍 [SELECT_DEBUG] 等待元素可见...")
+        try:
+            await target_context.wait_for_selector(full_selector, state='visible', timeout=5000)
+            uat_logger.info(f"✅ [SELECT_DEBUG] 元素可见")
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [SELECT_DEBUG] 元素可能不可见: {str(e)}, 继续尝试操作")
+        
+        uat_logger.info(f"🔍 [SELECT_DEBUG] 检测下拉框类型")
+        
+        # 检查是否是原生select元素
+        try:
+            tag_name = await element.evaluate("el => el.tagName.toLowerCase()")
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 元素标签名: {tag_name}")
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [SELECT_DEBUG] 获取标签名失败: {str(e)}, 按自定义下拉框处理")
+            tag_name = "div"
+        
+        if tag_name == "select":
+            # 处理原生select元素
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 检测到原生select元素，使用原生方法")
+            
+            # 获取所有选项文本
+            options = await target_context.locator(f"{full_selector} option").all()
+            option_texts = []
+            for option in options:
+                text = await option.text_content()
+                if text:
+                    option_texts.append(text.strip())
+            
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 下拉框中的选项: {option_texts}")
+            
+            # 验证选择值是否存在于下拉框中
+            if select_value not in option_texts:
+                uat_logger.error(f"❌ [SELECT_DEBUG] 选择值 '{select_value}' 不存在于下拉框中")
+                raise Exception(f"选择值 '{select_value}' 不存在于下拉框中")
+            
+            # 选择选项
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 自动选择用户输入值: {select_value}")
+            await target_context.locator(full_selector).select_option(select_value)
+            uat_logger.info(f"✅ [SELECT_DEBUG] 原生下拉框选择成功: {select_value}")
+        else:
+            # 处理自定义下拉框（Element Plus、Ant Design等）
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 检测到自定义下拉框，使用点击方式")
+            
+            # 尝试点击下拉框展开选项
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试点击下拉框展开选项")
+            clicked = False
+            for attempt in range(3):  # 最多尝试3次
+                try:
+                    uat_logger.info(f"🔍 [SELECT_DEBUG] 第{attempt+1}次尝试点击下拉框")
+                    await element.click(timeout=3000)
+                    uat_logger.info(f"✅ [SELECT_DEBUG] 下拉框点击成功")
+                    clicked = True
+                    break
+                except Exception as e:
+                    uat_logger.warning(f"⚠️ [SELECT_DEBUG] 第{attempt+1}次点击失败: {str(e)}")
+                    # 尝试使用force点击
+                    try:
+                        await element.click(force=True, timeout=2000)
+                        uat_logger.info(f"✅ [SELECT_DEBUG] force点击成功")
+                        clicked = True
+                        break
+                    except Exception as e2:
+                        uat_logger.warning(f"⚠️ [SELECT_DEBUG] force点击也失败: {str(e2)}")
+                        await target_page.wait_for_timeout(500)
+            
+            if not clicked:
+                uat_logger.error(f"❌ [SELECT_DEBUG] 所有点击尝试都失败")
+                raise Exception(f"无法点击下拉框: {selector}")
+            
+            # 等待下拉选项展开 - Element Plus需要等待下拉面板出现
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 等待下拉面板出现...")
+            await target_page.wait_for_timeout(800)
+            
+            # 查找并点击选项 - 尝试多种选择器策略
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 查找选项: {select_value}")
+            
+            # 策略1: 查找包含文本的选项（在dropdown中）
+            option_selectors = [
+                f"xpath=//*[contains(@class, 'dropdown')]//div[text()='{select_value}']",
+                f"xpath=//*[contains(@class, 'select-dropdown')]//div[text()='{select_value}']",
+                f"xpath=//*[contains(@class, 'el-select-dropdown')]//div[text()='{select_value}']",
+                f"xpath=//*[contains(@class, 'el-select-dropdown')]//li[text()='{select_value}']",
+                f"xpath=//*[contains(@class, 'option')]//span[text()='{select_value}']",
+                f"xpath=//*[contains(@class, 'menu')]//li[text()='{select_value}']",
+                f"xpath=//*[contains(@class, 'list')]//div[text()='{select_value}']",
+                f"xpath=//div[@role='option']//span[text()='{select_value}']",
+                f"xpath=//li[@role='option'][text()='{select_value}']",
+                f"xpath=//div[@role='listbox']//div[text()='{select_value}']",
+            ]
+            
+            option_clicked = False
+            for idx, opt_selector in enumerate(option_selectors, 1):
+                try:
+                    uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试策略{idx}: {opt_selector}")
+                    # 在整个页面中查找（因为下拉面板可能挂载到body）
+                    await target_page.locator(opt_selector).first.click(timeout=2000)
+                    uat_logger.info(f"✅ [SELECT_DEBUG] 策略{idx}成功，选项点击成功")
+                    option_clicked = True
+                    break
+                except Exception as e:
+                    uat_logger.debug(f"🔍 [SELECT_DEBUG] 策略{idx}未找到选项: {str(e)}")
+            
+            if not option_clicked:
+                # 策略2: 在页面中查找所有可见的文本元素
+                uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试在页面中通过文本查找选项")
+                try:
+                    # 使用更宽松的文本匹配
+                    await target_page.get_by_text(select_value, exact=True).first.click(timeout=3000)
+                    uat_logger.info(f"✅ [SELECT_DEBUG] 通过精确文本点击成功")
+                    option_clicked = True
+                except Exception:
+                    try:
+                        # 尝试模糊匹配
+                        await target_page.get_by_text(select_value).first.click(timeout=3000)
+                        uat_logger.info(f"✅ [SELECT_DEBUG] 通过模糊文本点击成功")
+                        option_clicked = True
+                    except Exception as e:
+                        uat_logger.warning(f"⚠️ [SELECT_DEBUG] 通过文本点击失败: {str(e)}")
+            
+            if not option_clicked:
+                uat_logger.error(f"❌ [SELECT_DEBUG] 无法找到并点击选项: {select_value}")
+                uat_logger.info(f"🔍 [SELECT_DEBUG] 提示: 可能需要调整选择值或检查下拉框结构")
+                raise Exception(f"无法找到并点击选项: {select_value}")
+            
+            uat_logger.info(f"✅ [SELECT_DEBUG] 自定义下拉框选择成功: {select_value}")
+
     async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
         """点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
         target_page = page if page is not None else self.page
@@ -5215,9 +5386,15 @@ class PlaywrightAutomation:
                     exec_step["key"] = step["input_value"]
                 elif step["action"] == "wait":
                     try:
-                        exec_step["time"] = int(step["input_value"])
+                        # 修复：将秒转换为毫秒，确保等待时间正确
+                        exec_step["time"] = int(step["input_value"]) * 1000
                     except Exception:
-                        exec_step["time"] = 1000
+                        exec_step["time"] = 1000  # 默认1秒
+                elif step["action"] == "select":
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["text"] = step.get("input_value", "")
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
                 elif step["action"] in ["wait_for_selector", "wait_for_element_visible"]:
                     exec_step["selector"] = step["selector_value"]
                     exec_step["selector_type"] = step.get("selector_type", "css")
@@ -5665,7 +5842,16 @@ class PlaywrightAutomation:
                     "step": step,
                     "screenshot_path": screenshot_path
                 })
-                
+            elif action == "select":
+                selector = step.get("selector", "")
+                select_value = step.get("text", step.get("input_value", ""))
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if selector and select_value:
+                    await self.select_option(selector, select_value, selector_type, iframe_selector, page=target_page)
+                    results.append({"status": "success", "step": step})
+                else:
+                    raise Exception("下拉框选择步骤缺少选择器或选择值参数")
             else:
                 raise Exception(f"不支持的操作类型: {action}")
                 
@@ -6267,6 +6453,16 @@ def sync_fill_input(selector: str, text: str, selector_type: str = "css", iframe
         return await automation.fill_input(selector, text, selector_type, iframe_selector=iframe_selector)
     return worker.execute(run)
 
+def sync_select_option(selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None):
+    async def run():
+        return await automation.select_option(selector, select_value, selector_type, iframe_selector=iframe_selector)
+    return worker.execute(run)
+
+def sync_wait_for_timeout(milliseconds: int):
+    async def run():
+        return await automation.wait_for_timeout(milliseconds)
+    return worker.execute(run)
+
 def sync_scroll_page(direction: str = "down", pixels: int = 500, iframe_selector: str = None):
     async def run():
         return await automation.scroll_page(direction, pixels, iframe_selector=iframe_selector)
@@ -6295,11 +6491,6 @@ def sync_execute_script_steps(steps: List[Dict[str, Any]]):
 def sync_close_browser():
     async def run():
         return await automation.close_browser()
-    return worker.execute(run)
-
-def sync_wait_for_timeout(milliseconds: int):
-    async def run():
-        return await automation.wait_for_timeout(milliseconds)
     return worker.execute(run)
 
 def sync_get_all_links():
