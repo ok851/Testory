@@ -566,8 +566,8 @@ class Database:
         conn.close()
         return None
     
-    def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 10) -> List[Dict[str, Any]]:
-        """获取测试用例的步骤（支持分页）"""
+    def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:
+        """获取测试用例的步骤（支持分页）- 修改默认page_size为9999以获取所有步骤"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         

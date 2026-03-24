@@ -3,7 +3,7 @@ from flask_cors import CORS
 import os
 import time
 from database import Database
-from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count  # 使用全局实例和同步包装器
+from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_start_recording, sync_stop_recording, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe  # 使用全局实例和同步包装器
 from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 import json
@@ -1052,6 +1052,17 @@ def api_run_case(case_id):
                             sync_wait_for_timeout(1000)
                         except Exception as select_error:
                             uat_logger.error(f"执行下拉框选择操作时出错: {select_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
+                elif action == 'date':
+                    # 新增：日期选择器操作
+                    if selector_value and input_value:
+                        try:
+                            sync_select_date(selector_value, input_value)
+                            # 选择日期后等待页面响应
+                            sync_wait_for_timeout(1000)
+                        except Exception as date_error:
+                            uat_logger.error(f"执行日期选择操作时出错: {date_error}")
                             # 直接抛出错误，视为测试用例执行失败
                             raise
                 elif action == 'scroll':

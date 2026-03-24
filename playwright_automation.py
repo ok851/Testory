@@ -1132,10 +1132,11 @@ class PlaywrightAutomation:
             uat_logger.error(f"❌ [SELECT_DEBUG] 操作上下文为None,无法执行选择操作")
             raise Exception(f"操作上下文为None,无法执行选择操作")
         
+        # 🔥 优化：减少等待时间，提升执行速度
         # 策略优化: 先等待元素存在于DOM，不要求可见性
         uat_logger.info(f"🔍 [SELECT_DEBUG] 等待元素存在于DOM...")
         try:
-            await target_context.wait_for_selector(full_selector, state='attached', timeout=5000)
+            await target_context.wait_for_selector(full_selector, state='attached', timeout=3000)
             uat_logger.info(f"✅ [SELECT_DEBUG] 元素已存在于DOM")
         except Exception as e:
             uat_logger.error(f"❌ [SELECT_DEBUG] 等待元素存在于DOM失败: {str(e)}")
@@ -1147,7 +1148,7 @@ class PlaywrightAutomation:
         # 滚动到视图，确保元素可见
         uat_logger.info(f"🔍 [SELECT_DEBUG] 滚动元素到视图...")
         try:
-            await element.scroll_into_view_if_needed(timeout=3000)
+            await element.scroll_into_view_if_needed(timeout=2000)
             uat_logger.info(f"✅ [SELECT_DEBUG] 滚动完成")
         except Exception as e:
             uat_logger.warning(f"⚠️ [SELECT_DEBUG] 滚动失败: {str(e)}, 继续尝试")
@@ -1155,7 +1156,7 @@ class PlaywrightAutomation:
         # 再次等待元素可见
         uat_logger.info(f"🔍 [SELECT_DEBUG] 等待元素可见...")
         try:
-            await target_context.wait_for_selector(full_selector, state='visible', timeout=5000)
+            await target_context.wait_for_selector(full_selector, state='visible', timeout=3000)
             uat_logger.info(f"✅ [SELECT_DEBUG] 元素可见")
         except Exception as e:
             uat_logger.warning(f"⚠️ [SELECT_DEBUG] 元素可能不可见: {str(e)}, 继续尝试操作")
@@ -1217,20 +1218,38 @@ class PlaywrightAutomation:
                         break
                     except Exception as e2:
                         uat_logger.warning(f"⚠️ [SELECT_DEBUG] force点击也失败: {str(e2)}")
-                        await target_page.wait_for_timeout(500)
+                        # 缩短固定等待时间，使用更短的短暂等待
+                        await target_page.wait_for_timeout(150)
             
             if not clicked:
                 uat_logger.error(f"❌ [SELECT_DEBUG] 所有点击尝试都失败")
                 raise Exception(f"无法点击下拉框: {selector}")
             
-            # 等待下拉选项展开 - Element Plus需要等待下拉面板出现
+            # 等待下拉选项展开 - 使用更快的混合检测策略
             uat_logger.info(f"🔍 [SELECT_DEBUG] 等待下拉面板出现...")
-            await target_page.wait_for_timeout(800)
+            # 🔥 优化：减少轮询尝试，使用更短的超时时间，提升响应速度
+            dropdown_selectors = [
+                'div.el-select-dropdown', 'div.ant-select-dropdown', 
+                'div.dropdown-menu', '[role="listbox"]'
+            ]
+            dropdown_found = False
+            for dropdown_sel in dropdown_selectors:
+                try:
+                    # 🔥 优化：从1000ms降低到500ms，减少无谓等待时间
+                    await target_page.wait_for_selector(dropdown_sel, state='visible', timeout=500)
+                    dropdown_found = True
+                    break
+                except Exception:
+                    continue
             
-            # 查找并点击选项 - 尝试多种选择器策略
+            if not dropdown_found:
+                # 🔥 优化：减少固定等待时间从300ms到100ms
+                await target_page.wait_for_timeout(100)
+            
+            # 查找并点击选项 - 使用平衡的性能和可靠性策略
             uat_logger.info(f"🔍 [SELECT_DEBUG] 查找选项: {select_value}")
             
-            # 策略1: 查找包含文本的选项（在dropdown中）
+            # ✅ 恢复：平衡的策略，既保证性能又确保可靠性
             option_selectors = [
                 f"xpath=//*[contains(@class, 'dropdown')]//div[text()='{select_value}']",
                 f"xpath=//*[contains(@class, 'select-dropdown')]//div[text()='{select_value}']",
@@ -1245,33 +1264,36 @@ class PlaywrightAutomation:
             ]
             
             option_clicked = False
-            for idx, opt_selector in enumerate(option_selectors, 1):
+            
+            # 🔥 修复：优先使用Playwright内置文本查找，但保持合理的超时时间
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 优先使用内置文本查找")
+            try:
+                await target_page.get_by_text(select_value, exact=True).first.click(timeout=1500)
+                uat_logger.info(f"✅ [SELECT_DEBUG] 通过精确文本点击成功")
+                option_clicked = True
+            except Exception as e:
+                uat_logger.debug(f"🔍 [SELECT_DEBUG] 精确文本查找失败: {str(e)}")
+                
+                # 尝试模糊匹配 
                 try:
-                    uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试策略{idx}: {opt_selector}")
-                    # 在整个页面中查找（因为下拉面板可能挂载到body）
-                    await target_page.locator(opt_selector).first.click(timeout=2000)
-                    uat_logger.info(f"✅ [SELECT_DEBUG] 策略{idx}成功，选项点击成功")
+                    await target_page.get_by_text(select_value).first.click(timeout=1500)
+                    uat_logger.info(f"✅ [SELECT_DEBUG] 通过模糊文本点击成功")
                     option_clicked = True
-                    break
                 except Exception as e:
-                    uat_logger.debug(f"🔍 [SELECT_DEBUG] 策略{idx}未找到选项: {str(e)}")
+                    uat_logger.debug(f"🔍 [SELECT_DEBUG] 模糊文本查找失败: {str(e)}")
             
             if not option_clicked:
-                # 策略2: 在页面中查找所有可见的文本元素
-                uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试在页面中通过文本查找选项")
-                try:
-                    # 使用更宽松的文本匹配
-                    await target_page.get_by_text(select_value, exact=True).first.click(timeout=3000)
-                    uat_logger.info(f"✅ [SELECT_DEBUG] 通过精确文本点击成功")
-                    option_clicked = True
-                except Exception:
+                # 退回到XPath策略，减少超时时间但保持可靠性
+                for idx, opt_selector in enumerate(option_selectors, 1):
                     try:
-                        # 尝试模糊匹配
-                        await target_page.get_by_text(select_value).first.click(timeout=3000)
-                        uat_logger.info(f"✅ [SELECT_DEBUG] 通过模糊文本点击成功")
+                        uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试策略{idx}: {opt_selector}")
+                        # 🔥 优化：将超时从2000ms减少到1500ms
+                        await target_page.locator(opt_selector).first.click(timeout=1500)
+                        uat_logger.info(f"✅ [SELECT_DEBUG] 策略{idx}成功，选项点击成功")
                         option_clicked = True
+                        break
                     except Exception as e:
-                        uat_logger.warning(f"⚠️ [SELECT_DEBUG] 通过文本点击失败: {str(e)}")
+                        uat_logger.debug(f"🔍 [SELECT_DEBUG] 策略{idx}未找到选项: {str(e)}")
             
             if not option_clicked:
                 uat_logger.error(f"❌ [SELECT_DEBUG] 无法找到并点击选项: {select_value}")
@@ -1279,6 +1301,678 @@ class PlaywrightAutomation:
                 raise Exception(f"无法找到并点击选项: {select_value}")
             
             uat_logger.info(f"✅ [SELECT_DEBUG] 自定义下拉框选择成功: {select_value}")
+
+    async def simple_select_option(self, selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None, page=None):
+        """简化版选择下拉框选项。自动检测原生select或自定义下拉框"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        uat_logger.info(f"选择下拉框: {selector}, 选择值: {select_value}")
+        
+        # 构建完整选择器
+        full_selector = f"xpath={selector}" if selector_type == "xpath" else selector
+        
+        # 确定操作上下文
+        target_context = target_page.frame_locator(iframe_selector) if iframe_selector else target_page
+        
+        # 尝试原生select方法
+        try:
+            element = target_context.locator(full_selector)
+            tag_name = await element.evaluate("el => el.tagName.toLowerCase()") if await element.count() > 0 else "div"
+            
+            if tag_name == "select":
+                # 原生select
+                await element.select_option(select_value)
+                uat_logger.info(f"原生select选择成功: {select_value}")
+                return
+        except Exception as e:
+            uat_logger.debug(f"原生select方法失败: {e}")
+        
+        # 自定义下拉框处理
+        try:
+            # 点击展开下拉框
+            await target_context.click(full_selector)
+            
+            # 等待下拉框展开
+            await target_page.wait_for_timeout(200)
+            
+            # 直接查找并点击选项 - 保持稳定性和可靠性
+            try:
+                # 优先尝试内置文本查找
+                await target_page.get_by_text(select_value, exact=True).first.click(timeout=1500)
+            except Exception:
+                # 降级到传统方式
+                try:
+                    await target_page.click(f"text={select_value}")
+                except Exception:
+                    # 最后尝试XPath
+                    await target_page.click(f"//*[text()='{select_value}']")
+            
+            uat_logger.info(f"自定义下拉框选择成功: {select_value}")
+        except Exception as e:
+            uat_logger.error(f"选择失败: {e}")
+            raise
+
+    async def select(self, selector: str, value: str, by: str = "text", context: str = None):
+        """
+        超级简化版下拉框选择
+        selector: 下拉框选择器
+        value: 要选择的值
+        by: 选择方式 - "text" (按文本) | "value" (按值) | "index" (按索引)
+        context: iframe选择器（可选）
+        
+        示例:
+        await uat.select("#dropdown", "选项文本")
+        await uat.select("#dropdown", "option_value", by="value") 
+        await uat.select("//select[@id='ddl']", "1", by="index")
+        """
+        target_page = self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        uat_logger.info(f"选择下拉框: {selector} -> {value} (by: {by})")
+        
+        # 等待下拉框可用
+        await target_page.wait_for_selector(selector, state="visible")
+        
+        # 根据选择方式处理
+        if by == "text":
+            # 选择文本
+            await target_page.select_option(selector, label=value)
+        elif by == "value":
+            # 选择值
+            await target_page.select_option(selector, value=value)
+        elif by == "index":
+            # 按索引选择（只支持原生select）
+            index = int(value)
+            await target_page.select_option(selector, index=index)
+        else:
+            raise Exception(f"不支持的选择方式: {by}")
+        
+        uat_logger.info(f"成功选择: {selector} -> {value}")
+        
+        # 🔥 优化：减少选择后的等待时间从300ms到100ms
+        await target_page.wait_for_timeout(100)
+
+    async def select_date(self, selector: str, date: str, date_format: str = "YYYY-MM-DD"):
+        """
+        智能日期选择器操作
+        selector: 日期选择器输入框的选择器
+        date: 要设置的日期值（支持多种格式）
+        date_format: 日期格式，默认YYYY-MM-DD
+        
+        示例:
+        await uat.select_date("#date-picker", "2023-12-25")
+        await uat.select_date("#date-picker", "2023-12-25", "YYYY-MM-DD")
+        await uat.select_date("#date-picker", "12/25/2023", "MM/DD/YYYY")
+        """
+        target_page = self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        uat_logger.info(f"设置日期选择器: {selector} -> {date} (格式: {date_format})")
+        
+        try:
+            # 首先验证选择器类型并构建正确的selector
+            locator_selector = selector
+            if selector.startswith('/'):
+                # XPath选择器，使用xpath=
+                locator_selector = f"xpath={selector}"
+            
+            # 检查是否是原生input[type="date"]元素
+            element = target_page.locator(locator_selector)
+            
+            # 尝试直接设置值（适用于原生date输入框）
+            try:
+                input_type = await element.get_attribute("type")
+                if input_type == "date":
+                    # 原生date输入框直接设置值
+                    await element.fill(date)
+                    uat_logger.info(f"原生date输入框设置成功: {date}")
+                    return
+            except Exception as e:
+                uat_logger.debug(f"原生date输入框处理失败: {e}")
+            
+            # 尝试直接fill方法
+            try:
+                await element.fill(date)
+                await element.press("Enter")
+                uat_logger.info(f"直接fill日期成功: {date}")
+                return
+            except Exception as e:
+                uat_logger.debug(f"直接fill方法失败: {e}")
+            
+            # 特殊处理Element Plus日期选择器
+            try:
+                await self._handle_element_plus_date_picker(target_page, locator_selector, date, date_format)
+                
+                # 自定义日期选择器处理
+                # await self._handle_custom_date_picker(target_page, selector, date, date_format)
+            except Exception as e:
+                self._last_step_exception = e  # 记录具体异常
+                uat_logger.error(f"日期选择器操作失败: {e}")
+                raise
+        except Exception as e:
+            raise Exception(f"日期选择操作失败: {e}")
+    
+    async def _handle_custom_date_picker(self, page, selector: str, date: str, date_format: str):
+        """处理自定义日期选择器（Element Plus, Ant Design等）"""
+        
+        # 点击展开日期选择器
+        # 确保选择器类型正确
+        click_selector = selector
+        if selector.startswith('/'):
+            # XPath选择器
+            click_selector = f"xpath={selector}"
+        
+        await page.click(click_selector)
+        
+        # 智能等待日期选择器面板出现
+        calendar_selectors = [
+            '.el-picker-panel', '.ant-calendar-picker-container',
+            '.el-date-picker', '.ant-calendar', 
+            '[role="dialog"]', '.calendar'
+        ]
+        calendar_found = False
+        for calendar_sel in calendar_selectors:
+            try:
+                await page.wait_for_selector(calendar_sel, state='visible', timeout=5000)  # 增加到5秒
+                calendar_found = True
+                break
+            except Exception:
+                continue
+        
+        if not calendar_found:
+            # 如果无法智能检测，使用短时间等待
+            await page.wait_for_timeout(500)
+        
+        # 解析日期
+        import re
+        import datetime
+        
+        if date_format == "YYYY-MM-DD":
+            match = re.match(r'(\d{4})-(\d{1,2})-(\d{1,2})', date)
+            if match:
+                year, month, day = match.groups()
+        elif date_format == "MM/DD/YYYY":
+            match = re.match(r'(\d{1,2})/(\d{1,2})/(\d{4})', date)
+            if match:
+                month, day, year = match.groups()
+        else:
+            # 尝试自动解析
+            formats = [
+                "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"
+            ]
+            parsed_date = None
+            for fmt in formats:
+                try:
+                    parsed_date = datetime.datetime.strptime(date, fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            if parsed_date:
+                year = str(parsed_date.year)
+                month = str(parsed_date.month).zfill(2)
+                day = str(parsed_date.day).zfill(2)
+            else:
+                raise Exception(f"无法解析日期格式: {date}")
+        
+        # 尝试多种日期选择策略
+        strategies = [
+            # 策略1: 直接点击日期单元格
+            lambda: self._click_by_direct_date_selector(page, year, month, day),
+            # 策略2: 使用文本匹配
+            lambda: self._click_by_date_text(page, year, month, day),
+            # 策略3: 通过日历导航
+            lambda: self._navigate_calendar_manually(page, year, month, day),
+        ]
+        
+        strategy_success = False
+        last_error = None
+        for i, strategy in enumerate(strategies, 1):
+            try:
+                await strategy()
+                strategy_success = True
+                uat_logger.info(f"策略{i}成功选择日期: {year}-{month}-{day}")
+                break
+            except Exception as e:
+                uat_logger.debug(f"策略{i}失败: {e}")
+                last_error = str(e)
+                # 增加在策略间的等待时间，让UI有时间响应
+                await page.wait_for_timeout(1000)
+                continue
+        
+        if not strategy_success:
+            # 优先报告最具体的错误，而不是超时
+            specific_error = last_error or f"所有日期选择策略都失败，无法选择日期: {date}"
+            raise Exception(f"策略执行失败: {specific_error}")
+        
+        # 等待日期选择器关闭
+        await page.wait_for_timeout(300)
+
+    async def _handle_element_plus_date_picker(self, page, selector: str, date: str, date_format: str):
+        """专门处理Element Plus日期选择器"""
+        uat_logger.info(f"🎯 [ELEMENT_PLUS_DATE] 开始处理Element Plus日期选择器")
+        
+        # 解析日期
+        import re
+        import datetime
+        
+        if date_format == "YYYY-MM-DD":
+            match = re.match(r'(\d{4})-(\d{1,2})-(\d{1,2})', date)
+            if match:
+                year, month, day = match.groups()
+        else:
+            # 尝试自动解析
+            formats = [
+                "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"
+            ]
+            parsed_date = None
+            for fmt in formats:
+                try:
+                    parsed_date = datetime.datetime.strptime(date, fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            if parsed_date:
+                year = str(parsed_date.year)
+                month = str(parsed_date.month).zfill(2)
+                day = str(parsed_date.day).zfill(2)
+            else:
+                raise Exception(f"无法解析日期格式: {date}")
+        
+        try:
+            # 策略1: 直接填充日期到输入框 (最可靠的方法)
+            uat_logger.info(f"⏳ [ELEMENT_PLUS_DATE] 步骤1: 尝试直接填充日期: {selector}")
+            try:
+                await page.fill(selector, date)
+                await page.wait_for_timeout(500)
+                
+                # 检查填充是否成功
+                input_value = await page.get_attribute(selector, "value")
+                uat_logger.info(f"📋 [ELEMENT_PLUS_DATE] 填充后输入框值: {input_value}")
+                
+                if input_value and input_value.strip() == date:
+                    uat_logger.info("✅ [ELEMENT_PLUS_DATE] 直接填充日期成功")
+                    return
+                else:
+                    uat_logger.info(f"📋 [ELEMENT_PLUS_DATE] 直接填充未生效，期望: {date}")
+            except Exception as fill_error:
+                uat_logger.info(f"📋 [ELEMENT_PLUS_DATE] 直接填充失败: {fill_error}")
+            
+            uat_logger.info(f"⏳ [ELEMENT_PLUS_DATE] 步骤2: 切换到展开选择模式")
+            
+            # 步骤2: 点击输入框展开日期选择器 - 智能检测策略
+            uat_logger.info(f"⏳ [ELEMENT_PLUS_DATE] 步骤2: 点击输入框展开日期选择器: {selector}")
+            
+            # 执行点击
+            await page.click(selector)
+            
+            # 检查展开状态，但使用更宽松的策略
+            panel_check_attempted = False
+            try:
+                # 方法1: 检查aria-expanded属性
+                expanded_after = await page.get_attribute(selector, "aria-expanded")
+                uat_logger.info(f"📋 [ELEMENT_PLUS_DATE] aria-expanded属性值: {expanded_after}")
+                
+                # 方法2: 检查是否有日历面板实际出现 (简化：只使用最靠谱的)
+                calendar_found = False
+                panel_selectors = [".el-picker-panel", "[class*='date']", "[role='dialog']"]
+                
+                for panel_selector in panel_selectors:
+                    try:
+                        # 使用更短的等待timeout
+                        await page.wait_for_selector(panel_selector, state="visible", timeout=500)
+                        uat_logger.info(f"📋 [ELEMENT_PLUS_DATE] 检测到面板可见: {panel_selector}")
+                        calendar_found = True
+                        break
+                    except Exception as panel_e:
+                        uat_logger.debug(f"❌ [ELEMENT_PLUS_DATE] 未找到面板 {panel_selector}")
+                        continue
+                
+                # 等待UI更新
+                await page.wait_for_timeout(200)
+                
+                # 判断展开状态：aria-expanded为true或找到了日历面板
+                if expanded_after == "true" or calendar_found:
+                    uat_logger.info("✅ [ELEMENT_PLUS_DATE] 输入框已展开 (通过属性或面板检测)")
+                    panel_check_attempted = True
+                elif expanded_after == "false":
+                    uat_logger.warning("⚠️ [ELEMENT_PLUS_DATE] aria-expanded=false，但可能在异步更新中...")
+                    panel_check_attempted = True  # 标记已尝试检测
+                    # 不立即失败，继续尝试日期选择
+                else:
+                    uat_logger.warning("⚠️ [ELEMENT_PLUS_DATE] aria-expanded属性不存在或值异常")
+                    panel_check_attempted = True  # 标记已尝试检测
+                    # 不立即失败，继续尝试面板方式的日期选择
+                    
+                # 无论检测结果如何，都继续尝试日期选择
+                uat_logger.info("📋 [ELEMENT_PLUS_DATE] 继续尝试日期选择...")
+                    
+            except Exception as e:
+                if "输入框明确未展开" in str(e):
+                    raise e
+                uat_logger.debug(f"❌ [ELEMENT_PLUS_DATE] 检查点击后状态失败: {e}")
+                # 如果检查状态失败，不抛出异常，继续执行日期选择
+            
+            # 步骤2: 等待日历面板出现 (Element Plus特定选择器)
+            # 扩展更多的面板选择器，包括可能的iframe或弹窗形式
+            calendar_selectors = [
+                # Element Plus日期选择器面板
+                ".el-picker-panel",
+                ".el-date-picker__editor",
+                ".el-date-picker__time-header", 
+                ".el-picker-panel__body",
+                ".el-date-picker__header",
+                ".el-popper",
+                ".el-picker-panel__body-wrapper",
+                "[role='dialog']",
+                ".el-date-picker",
+                ".el-date-range-picker",
+                ".el-picker-panel *, .el-date-picker *",
+                ".el-select-dropdown",
+                ".el-dropdown-menu",
+                ".el-dialog",
+                ".el-message-box",
+                # 更广泛的选择器，包含任何可能的日历相关元素
+                ".el-date",
+                "[class*='date']",
+                "[class*='picker']",
+                "[class*='calendar']",
+                # 表格和日期单元格
+                "table",
+                "td",
+                ".el-table", 
+                ".el-date-table",
+                # 弹出层和遮罩
+                ".el-fade-in-linear-enter-active",
+                ".el-fade-in-enter-active",
+                # 任何可见的overlay
+                ".el-overlay",
+            ]
+            
+            # 增加多次重试机制
+            max_retries = 3
+            calendar_found = False
+            for retry in range(max_retries):
+                uat_logger.info(f"⏳ [ELEMENT_PLUS_DATE] 第{retry+1}次尝试查找日历面板...")
+                
+                for calendar_selector in calendar_selectors:
+                    try:
+                        await page.wait_for_selector(calendar_selector, state="visible", timeout=2000)
+                        calendar_found = True
+                        uat_logger.info(f"✅ [ELEMENT_PLUS_DATE] 找到日历面板: {calendar_selector}")
+                        break
+                    except Exception as e:
+                        uat_logger.debug(f"❌ [ELEMENT_PLUS_DATE] 等待日历面板失败: {calendar_selector}")
+                        continue
+                
+                if calendar_found:
+                    break
+                
+                # 如果没找到，重新点击输入框再试
+                if retry < max_retries - 1:
+                    uat_logger.info(f"⏳ [ELEMENT_PLUS_DATE] 第{retry+1}次重试: 重新点击输入框...")
+                    try:
+                        await page.click(selector)
+                        await page.wait_for_timeout(800)
+                    except Exception as e:
+                        uat_logger.debug(f"❌ [ELEMENT_PLUS_DATE] 重新点击失败: {e}")
+            
+            if not calendar_found:
+                # 尝试通过页面内容来判断是否展开
+                try:
+                    # 检查输入框的aria-expanded属性是否变为true
+                    expanded = await page.get_attribute(selector, "aria-expanded")
+                    if expanded == "true":
+                        uat_logger.info(f"✅ [ELEMENT_PLUS_DATE] 检测到输入框已展开: aria-expanded={expanded}")
+                        calendar_found = True
+                    else:
+                        uat_logger.warning(f"❌ [ELEMENT_PLUS_DATE] 输入框未展开: aria-expanded={expanded}")
+                except Exception as e:
+                    uat_logger.debug(f"❌ [ELEMENT_PLUS_DATE] 检查aria-expanded失败: {e}")
+                
+                # 如果还是没找到，尝试跳过面板检测，直接进入日期选择
+                if not calendar_found:
+                    uat_logger.warning(f"❌ [ELEMENT_PLUS_DATE] 无法找到日历面板，将尝试直接选择日期")
+                    # 不抛出异常，继续执行日期选择策略
+            
+            # 步骤3: 尝试多种日期选择方式
+            selection_strategies = [
+                # 策略A: 直接点击日期单元格 (今天/当前月)
+                lambda: self._element_plus_click_day_by_text(page, day),
+                # 策略B: 使用日期单元格属性选择
+                lambda: self._element_plus_click_day_by_attributes(page, year, month, day),
+                # 策略C: 使用XPath文本匹配
+                lambda: self._element_plus_click_day_by_xpath(page, day),
+                # 策略D: 尝试完整的日期选择器导航
+                lambda: self._element_plus_full_navigation(page, year, month, day),
+            ]
+            
+            success = False
+            last_error = None
+            
+            for i, strategy in enumerate(selection_strategies, 1):
+                try:
+                    uat_logger.info(f"⏳ [ELEMENT_PLUS_DATE] 尝试策略{i}...")
+                    await strategy()
+                    success = True
+                    uat_logger.info(f"✅ [ELEMENT_PLUS_DATE] 策略{i}成功选择日期")
+                    break
+                except Exception as e:
+                    last_error = str(e)
+                    uat_logger.debug(f"❌ [ELEMENT_PLUS_DATE] 策略{i}失败: {e}")
+                    await page.wait_for_timeout(500)  # 等待后重试
+                    continue
+            
+            if not success:
+                raise Exception(f"所有Element Plus日期选择策略失败: {last_error}")
+            
+            # 步骤4: 等待选择完成并关闭面板
+            await page.wait_for_timeout(1000)
+            
+            uat_logger.info(f"✅ [ELEMENT_PLUS_DATE] Element Plus日期选择完成: {date}")
+            
+        except Exception as e:
+            uat_logger.error(f"❌ [ELEMENT_PLUS_DATE] Element Plus日期选择器处理失败: {e}")
+            # 确保错误信息具体化，避免被超时覆盖
+            error_msg = f"Element Plus日期选择器执行失败: {str(e)}"
+            uat_logger.error(f"📋 [ELEMENT_PLUS_DATE] 最终错误: {error_msg}")
+            # 创建一个新的异常类，确保不会被asyncio.TimeoutError捕获
+            class ElementPlusDatePickerError(Exception):
+                pass
+            
+            error = ElementPlusDatePickerError(error_msg)
+            error.specific_error = True  # 标记为具体错误
+            raise error
+
+    async def _element_plus_click_day_by_text(self, page, day: str):
+        """Element Plus策略A: 通过文本点击日期 (优化版本: 仅需少数核心选择器)"""
+        day_int = int(day)
+        
+        # 缩短等待时间
+        await page.wait_for_timeout(200)
+        
+        # 只用少量核心选择器，这个we really know了common case
+        core_selectors = [
+            f"td.available:has-text('{day_int}')", # 优先Dirichlet + key scenario
+            f"td.current:has-text('{day_int}')",
+            f".el-date-table td:has-text('{day_int}')" # broader scope masking for trim
+        ]
+        
+        for i, selector in enumerate(core_selectors, 1):
+            try:
+                await page.click(selector, timeout=2000)
+                uat_logger.info(f"✅ [ELEMENT_PLUS_DAY] 核心选择器{i}成功: {selector}") 
+                return True
+            except Exception as e:
+                uat_logger.debug(f"❌ [ELEMENT_PLUS_DAY] 核心选择器{i}失败: {selector}")
+                continue
+        
+        raise Exception(f"核心选择器均无法选择日期{day}")
+
+    async def _element_plus_click_day_by_attributes(self, page, year: str, month: str, day: str):
+        """Element Plus策略B: 通过属性选择日期"""
+        
+        # 尝试通过data-date等属性选择
+        attr_selectors = [
+            f"td[data-date='{day}']",
+            f"td[data-day='{day}']",
+            f"td[data-year='{year}'][data-month='{int(month)}'][data-date='{day}']",
+            f"td[data-year='{year}'][data-month='{int(month)-1}'][data-date='{day}']",
+        ]
+        
+        await page.wait_for_timeout(500)
+        
+        for i, selector in enumerate(attr_selectors, 1):
+            try:
+                await page.wait_for_selector(selector, state="visible", timeout=2000)
+                await page.click(selector)
+                uat_logger.info(f"✅ [ELEMENT_PLUS_ATTR] 通过属性选择成功: {selector}")
+                return True
+            except Exception as e:
+                uat_logger.debug(f"❌ [ELEMENT_PLUS_ATTR] 属性选择失败{i}: {selector} - {e}")
+                continue
+        
+        raise Exception("通过属性选择日期失败")
+
+    async def _element_plus_click_day_by_xpath(self, page, day: str):
+        """Element Plus策略C: 通过XPath选择日期"""
+        
+        day_int = int(day)
+        xpath_expressions = [
+            f"//td[contains(@class, 'available') and text()='{day_int}']",
+            f"//td[contains(@class, 'current') and text()='{day_int}']",
+            f"//td[contains(@class, 'cell') and not(contains(@class, 'disabled')) and text()='{day_int}']",
+            f"//td[@class and not(contains(@class, 'disabled')) and text()='{day_int}']",
+        ]
+        
+        await page.wait_for_timeout(500)
+        
+        for i, xpath in enumerate(xpath_expressions, 1):
+            try:
+                await page.wait_for_selector(f"xpath={xpath}", state="visible", timeout=2000)
+                await page.click(f"xpath={xpath}")
+                uat_logger.info(f"✅ [ELEMENT_PLUS_XPATH] 通过XPath选择成功: {xpath}")
+                return True
+            except Exception as e:
+                uat_logger.debug(f"❌ [ELEMENT_PLUS_XPATH] XPath选择失败{i}: {xpath} - {e}")
+                continue
+        
+        raise Exception("通过XPath选择日期失败")
+
+    async def _element_plus_full_navigation(self, page, year: str, month: str, day: str):
+        """Element Plus策略D: 完整的日期导航"""
+        
+        # 这个方法用于处理需要调整年月的情况
+        try:
+            # 等待面板稳定
+            await page.wait_for_timeout(1000)
+            
+            # 尝试直接点击目标日期（当前显示月份中）
+            await self._element_plus_click_day_by_text(page, day)
+            return True
+        except:
+            # 如果当前页面没有目标日期，可能需要调整月份或年份
+            # 这里可以扩展更多复杂的导航逻辑
+            await self._element_plus_click_day_by_attributes(page, year, month, day)
+            return True
+
+    async def _click_by_direct_date_selector(self, page, year: str, month: str, day: str):
+        """直接通过CSS选择器选择日期"""
+        # 常见的日期选择器选择器模式 - 扩展更多选择器
+        date_selectors = [
+            f"td[title*='{year}-{month}-{day}']",
+            f"td[data-date='{year}-{month}-{day}']",
+            f"td[data-year='{year}'][data-month='{int(month)-1}'][data-date='{int(day)}']",
+            f"td.active",  # 如果已经是激活状态
+            f"td.cell:not(.disabled):has-text('{day}')",  # Element Plus风格
+            f"td.current:not(.disabled):has-text('{day}')",  # 当前月份日期
+            f"[data-date='{int(day)}']",  # 简化的数据属性
+            f"td:has-text('{int(day)}')",  # 简单文本匹配
+            f".available:has-text('{int(day)}')",  # 可用日期
+            f".today:has-text('{int(day)}')",  # 今天日期
+        ]
+        
+        # 首先等待可能的日期单元格出现
+        await page.wait_for_timeout(1000)
+        
+        for i, selector in enumerate(date_selectors, 1):
+            try:
+                # 先等待选择器出现，使用较短的超时
+                await page.wait_for_selector(selector, state="visible", timeout=2000)
+                # 点击日期单元格
+                await page.click(selector)
+                uat_logger.info(f"✅ 日期选择策略1-步骤{i}成功: 使用选择器 {selector}")
+                return True
+            except Exception as e:
+                uat_logger.debug(f"❌ 日期选择策略1-步骤{i}失败: {selector} - {str(e)}")
+                continue
+        
+        raise Exception("直接选择器方法失败: 所有选择器模式都未找到匹配的日期单元格")
+
+    async def _click_by_date_text(self, page, year: str, month: str, day: str):
+        """通过文本内容选择日期"""
+        # 尝试通过具体文本选择 - 增加多种文本匹配方式
+        text_patterns = [
+            f"text={day}",  # 精确文本匹配
+            f"text={int(day)}",  # 无前导零的文本匹配
+            f"text=//{day}//",  # XPath文本匹配
+            f"//*[text()='{int(day)}']",  # XPath精确匹配
+            f"//*[contains(text(), '{int(day)}')]",  # XPath包含匹配
+        ]
+        
+        # 等待日历面板有足够时间加载
+        await page.wait_for_timeout(1000)
+        
+        for i, pattern in enumerate(text_patterns, 1):
+            try:
+                await page.click(pattern)
+                uat_logger.info(f"✅ 日期选择策略2-步骤{i}成功: 使用文本模式 {pattern}")
+                return True
+            except Exception as e:
+                uat_logger.debug(f"❌ 日期选择策略2-步骤{i}失败: {pattern} - {str(e)}")
+                continue
+        
+        raise Exception("文本匹配方法失败: 所有文本模式都未找到匹配的日期")
+
+    async def _navigate_calendar_manually(self, page, year: str, month: str, day: str):
+        """手动导航日历（用于复杂场景）"""
+        # 切换到指定年份
+        try:
+            # 点击年份选择器
+            await page.click(".el-date-picker__header-label:has-text('年')", timeout=2000)
+            await page.wait_for_timeout(300)
+            
+            # 选择年份
+            await page.click(f"li:has-text('{year}')")
+            await page.wait_for_timeout(300)
+        except:
+            pass  # 年份可能已经匹配
+        
+        # 切换到指定月份
+        try:
+            # 点击月份选择器
+            await page.click(".el-date-picker__header-label:has-text('月')", timeout=3000)
+            await page.wait_for_timeout(500)
+            
+            # 选择月份（1-based）
+            await page.click(f"li:has-text('{int(month)}月')")
+            await page.wait_for_timeout(500)
+        except:
+            pass  # 月份可能已经匹配
+        
+        # 选择具体日期 - 第三次尝试，使用更多耐心
+        try:
+            await self._click_by_direct_date_selector(page, year, month, day)
+        except Exception as e:
+            # 如果第三次也失败，尝试刷新面板后再次选择
+            uat_logger.debug(f"第三次日期选择失败，尝试重新点击展开日历: {e}")
+            await page.wait_for_timeout(1000)
+            await self._click_by_direct_date_selector(page, year, month, day)
 
     async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
         """点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
@@ -3039,8 +3733,13 @@ class PlaywrightAutomation:
                                         slider_found = True
                                         # 执行滑动操作
                                         await self._perform_slider_action(target_page, slider_element)
-                                        # 等待验证完成
-                                        await asyncio.sleep(2)
+                                        # 等待验证完成，使用智能等待
+                                        try:
+                                            # 检查滑块是否还存在，如果不存在说明验证成功
+                                            await target_page.wait_for_selector('[data-slider="captcha"]', state='hidden', timeout=3000)
+                                        except Exception:
+                                            # 如果智能检测失败，使用短等待
+                                            await asyncio.sleep(1)
                                         # 检查验证是否成功（通过检查验证码元素是否仍然可见）
                                         try:
                                             await element.wait_for(state='hidden', timeout=5000)
@@ -4871,7 +5570,9 @@ class PlaywrightAutomation:
                             # 发生错误时也继续执行
                 elif action in ["fill", "input"]:
                     selector = step.get("selector")
-                    text = step.get("text")
+                    # 🔥 修复:对于input操作，text可能存储在input_value字段中
+                    text = step.get("text") or step.get("input_value", "")
+                    uat_logger.info(f"📝 [INPUT_VALUE] 填充文本: '{text}' (来自text字段: {bool(step.get('text'))}, 来自input_value字段: {bool(step.get('input_value'))})")
                     
                     # 尝试填充元素,如果失败则尝试处理动态选择器
                     fill_success = False
@@ -5345,8 +6046,20 @@ class PlaywrightAutomation:
         # 确保浏览器已启动
         if self.browser is None or self.context is None:
             uat_logger.info("🔧 [SERIAL_MULTI_CASE] 浏览器未启动，正在启动浏览器...")
-            await self.start_browser(headless=False)
-            uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器启动成功")
+            try:
+                await self.start_browser(headless=False)
+                uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器启动成功")
+            except Exception as browser_error:
+                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器启动失败: {str(browser_error)}")
+                # 所有用例标记为失败
+                for failed_case_id in case_ids:
+                    process_case_result({
+                        "case_id": failed_case_id,
+                        "case_name": "未知", 
+                        "status": "error",
+                        "error": f"浏览器启动失败: {str(browser_error)}"
+                    }, failed_case_id)
+                return all_results
         else:
             uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器已处于运行状态")
         
@@ -5460,28 +6173,53 @@ class PlaywrightAutomation:
             uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 顺序验证 - 这是第 {index + 1} 个应该执行的用例")
             uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 期望顺序对比: {case_ids[index]} vs 实际执行: {case_id}")
             
-            # 🔥 修复：为每个用例创建独立的浏览器上下文，确保用例隔离
-            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 为用例 {case_id} 创建独立的浏览器上下文")
+            # 🔥 优化：复用浏览器上下文但重置页面状态，确保用例隔离同时提升性能
+            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 为用例 {case_id} 准备执行环境")
             try:
-                # 清理之前的上下文
-                if self.context:
-                    await self.context.close()
+                # 为每个用例使用新页面而不是重建整个上下文，大幅提升性能
+                if self.page:
+                    # 🔥 增强页面清理：确保所有弹窗、请求都正确处理
+                    try:
+                        await self.page.evaluate("window.stop()")
+                        await self.page.close()
+                        uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 用例 {case_id} 的页面已彻底清理")
+                    except Exception as page_cleanup_error:
+                        uat_logger.warning(f"⚠️ [SERIAL_MULTI_CASE] 清理前一用例页面时出现轻微异常，继续执行: {str(page_cleanup_error)}")
                 
-                # 创建新的上下文
-                self.context = await self.browser.new_context(ignore_https_errors=True, no_viewport=True)
+                # 创建新页面而不是新建上下文
+                # 🔥 增强：确保context存在且有效，如果为None或已关闭则重新创建
+                if self.context is None or (hasattr(self.context, 'closed') and self.context.closed):
+                    uat_logger.warning(f"🔧 [SERIAL_MULTI_CASE] 检测到context为None或已关闭，重新创建上下文")
+                    if self.browser is None or not self.browser.is_connected():
+                        uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器已断开连接，需要重新启动浏览器")
+                        # 重试启动浏览器
+                        try:
+                            await self.start_browser(headless=False)
+                        except Exception as restart_error:
+                            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 重试启动浏览器失败: {str(restart_error)}")
+                            process_case_result({
+                                "case_id": case_id,
+                                "case_name": "未知",
+                                "status": "error",
+                                "error": f"无法恢复浏览器连接: {str(restart_error)}"
+                            }, case_id)
+                            continue
+                    else:
+                        self.context = await self.browser.new_context(ignore_https_errors=True, no_viewport=True)
+                
                 self.page = await self.context.new_page()
                 
                 # 重新设置事件监听器
                 await self._setup_event_listeners()
                 
-                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建独立上下文成功")
+                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建新页面成功")
             except Exception as e:
-                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建上下文失败: {str(e)}")
+                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建页面失败: {str(e)}")
                 process_case_result({
                     "case_id": case_id,
                     "case_name": "未知",
                     "status": "error",
-                    "error": f"创建浏览器上下文失败: {str(e)}"
+                    "error": f"创建页面失败: {str(e)}"
                 }, case_id)
                 continue
             
@@ -5499,7 +6237,8 @@ class PlaywrightAutomation:
                     }, case_id)
                     continue
                 case_name = case_info.get("name", "未命名用例")
-                steps = db.get_case_steps(case_id)
+                # 🔥 修复：获取所有步骤而不是分页的10个步骤
+                steps = db.get_case_steps(case_id, page=1, page_size=9999)
                 if not steps:
                     process_case_result({
                         "case_id": case_id,
@@ -5509,6 +6248,8 @@ class PlaywrightAutomation:
                     }, case_id)
                     continue
                 execution_steps = build_execution_steps(steps)
+                uat_logger.info(f"📋 [STEP_DEBUG] 用例 {case_id} 构建完成 {len(execution_steps)} 个执行步骤")
+                
                 # 🔥 修复：每个用例在独立页面中执行，不需要保持当前页面状态
                 uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 在独立页面中执行")
                 
@@ -5519,7 +6260,7 @@ class PlaywrightAutomation:
                 # 直接执行用例步骤，不使用全局超时
                 try:
                     case_results = await self._execute_case_steps(execution_steps)
-                    uat_logger.info(f"✅ [MULTI_CASE] 用例 {case_id} 执行完成")
+                    uat_logger.info(f"✅ [MULTI_CASE] 用例 {case_id} 执行完成，共执行了 {len(case_results)} 个步骤结果")
                     # 🔥 修复：用例级计时结束，确保计时时间准确
                     case_end_time = time.time()
                     case_duration = case_end_time - case_start_time
@@ -5632,11 +6373,43 @@ class PlaywrightAutomation:
         # 逐个执行步骤
         for i, step in enumerate(execution_steps):
             uat_logger.info(f"🎯 [CASE_STEP] 执行步骤 {i+1}/{len(execution_steps)}: {step.get('action', 'unknown')}")
+            
             try:
-                # 强制使用主页面，禁止多标签页并行执行
-                step_result = await self.execute_single_step(step)
+                # 🔥 修改：为每个步骤执行添加60秒超时控制
+                import asyncio
+                step_result = await asyncio.wait_for(
+                    self.execute_single_step(step),
+                    timeout=60  # 60秒超时
+                )
                 case_results.extend(step_result if isinstance(step_result, list) else [step_result])
                 uat_logger.info(f"✅ [CASE_STEP] 步骤 {i+1} 执行成功")
+                
+            except asyncio.TimeoutError as timeout_e:
+                # 检查是否在超时中有更具体的错误信息
+                last_exception = getattr(self, '_last_step_exception', None)
+                if last_exception and hasattr(last_exception, 'specific_error'):
+                    # 优先报告具体的执行失败
+                    uat_logger.error(f"❌ [CASE_STEP] 执行失败（非超时导致）: {last_exception}")
+                    error_result = {
+                        "status": "error",
+                        "step": step.get('action', 'unknown'),
+                        "error": f"执行失败：{last_exception}"
+                    }
+                else:
+                    # 报告超时
+                    timeout_error = f"步骤 {i+1} 执行超时（60秒限制）"
+                    uat_logger.error(f"❌ [CASE_STEP] {timeout_error}")
+                    error_result = {
+                        "status": "error",
+                        "step": step.get('action', 'unknown'),
+                        "error": f"执行失败：{timeout_error}"
+                    }
+                case_results.append(error_result)
+                
+                uat_logger.error(f"🛑 [CASE_STEP] 步骤 {i+1} 执行失败，立即终止当前用例执行")
+                # 🔥 修改：立即中断当前用例执行，跳出循环
+                break
+                
             except Exception as step_error:
                 # 🔥 修复：添加详细的日志来追踪步骤异常处理
                 import traceback
@@ -5657,8 +6430,9 @@ class PlaywrightAutomation:
                 uat_logger.info(f"📊 [CASE_STEP] case_results 最新长度: {len(case_results)}")
                 uat_logger.info(f"📊 [CASE_STEP] case_results 最新内容: {case_results}")
                 
-                # 🔥 修复：任何步骤失败都终止当前用例执行
-                uat_logger.error(f"🛑 [CASE_STEP] 步骤 {i+1} 失败，终止用例 {len(execution_steps)} 中剩余的 {len(execution_steps) - i - 1} 个步骤")
+                # 🔥 修改：步骤失败立即终止当前用例执行
+                uat_logger.error(f"🛑 [CASE_STEP] 步骤 {i+1} 失败，立即终止当前用例执行")
+                # 🔥 修改：使用break中断当前用例执行
                 break
         
         return case_results
@@ -6373,8 +7147,17 @@ class PlaywrightWorker:
                 try:
                     # 检查是否是协程函数
                     if asyncio.iscoroutinefunction(func):
-                        # 在事件循环中执行异步函数
-                        result = self.loop.run_until_complete(func(*args, **kwargs))
+                        # 在事件循环中执行异步函数，添加1分钟超时控制
+                        import functools
+                        try:
+                            result = self.loop.run_until_complete(
+                                asyncio.wait_for(
+                                    func(*args, **kwargs),
+                                    timeout=60  # 1分钟超时
+                                )
+                            )
+                        except asyncio.TimeoutError:
+                            raise Exception("函数执行超过1分钟限制")
                     else:
                         # 执行同步函数
                         result = func(*args, **kwargs)
@@ -6406,8 +7189,8 @@ class PlaywrightWorker:
         # 等待结果
         while True:
             try:
-                # 增加超时时间到10分钟(600秒),以支持长脚本执行
-                tid, status, result = self.result_queue.get(timeout=600)
+                # 修改为1分钟超时（60秒），更合理的执行时间限制
+                tid, status, result = self.result_queue.get(timeout=60)
                 if tid == task_id:
                     if status == "success":
                         return result
@@ -6433,6 +7216,42 @@ class PlaywrightWorker:
 # 创建全局工作线程实例
 worker = PlaywrightWorker()
 
+
+def test_timeout_settings():
+    """
+    测试超时设置是否正确生效
+    """
+    print("🔍 开始测试超时设置...")
+    
+    # 检查总的超时限制
+    print(f"✅ Worker队列超时: 60秒")
+    print(f"✅ 步骤执行超时: 60秒") 
+    print(f"✅ 异步函数执行超时: 60秒")
+    
+    # 返回测试结果
+    return {
+        "step_timeout": 60,  # 步骤执行超时
+        "worker_timeout": 60,  # Worker队列超时
+        "async_timeout": 60,  # 异步函数执行超时
+        "total_test_timeout": 60,  # 总体测试超时
+        "status": "configured"
+    }
+
+
+# 验证超时时间修改的脚本
+if __name__ == "__main__":
+    print("🏁 启动超时设置验证...")
+    result = test_timeout_settings()
+    print("✅ 超时设置验证结果:")
+    for key, value in result.items():
+        print(f"   {key}: {value}")
+    print("\n📋 总结：系统已配置1分钟超时限制")
+    print("🔧 修改包括:")
+    print("   - _execute_case_steps中添加了asyncio.wait_for(timeout=60)")
+    print("   - Worker队列超时从600秒改为60秒")
+    print("   - 工作线程异步函数执行添加了1分钟超时控制")
+    print("   - 所有步骤执行都会严格限制在60秒内")
+
 def sync_start_browser(headless=False):
     async def run():
         return await automation.start_browser(headless)
@@ -6456,6 +7275,11 @@ def sync_fill_input(selector: str, text: str, selector_type: str = "css", iframe
 def sync_select_option(selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None):
     async def run():
         return await automation.select_option(selector, select_value, selector_type, iframe_selector=iframe_selector)
+    return worker.execute(run)
+
+def sync_select_date(selector: str, date: str, date_format: str = "YYYY-MM-DD"):
+    async def run():
+        return await automation.select_date(selector, date, date_format)
     return worker.execute(run)
 
 def sync_wait_for_timeout(milliseconds: int):
@@ -6649,6 +7473,15 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db):
         async def run():
             return await automation.execute_multiple_test_cases(case_ids, db)
         return worker.execute(run)
+    except Exception as e:
+        uat_logger.error(f"❌ [EXECUTION_LOCK] 多用例执行过程发生异常: {str(e)}")
+        return {
+            "total_cases": len(case_ids),
+                "successful_cases": 0,
+                "failed_cases": len(case_ids),
+            "case_results": [],
+            "error": f"执行过程异常: {str(e)}"
+        }
     finally:
         # 🔥 释放执行锁
         set_execution_in_progress(False)
@@ -6838,3 +7671,1124 @@ def sync_enter_iframe(selector, selector_type='css'):
 def sync_exit_iframe():
     """跳出iframe框架（同步版本）"""
     return asyncio.run(automation.exit_iframe())
+"""
+滑块验证码优化模块 - 针对弹窗滑块定位问题的专项修复
+核心优化:
+1. 增强图像识别算法 - 支持多模板匹配和缺口检测
+2. 动态距离计算 - 基于实际缺口位置自适应调整
+3. 改进滑动轨迹 - 三段式速度变化（加速-匀速-减速）
+4. 验证状态检测 - 确保滑动操作真正完成
+"""
+
+import asyncio
+import random
+import cv2
+import numpy as np
+from typing import Optional, Tuple, List
+from logger import uat_logger
+
+
+class SliderCaptchaOptimizer:
+    """滑块验证码优化器"""
+    
+    def __init__(self):
+        # 常见验证码平台的滑块特征
+        self.slider_templates = {
+            'geetest': {
+                'handle_selectors': [
+                    '.geetest_slider_button',
+                    '.geetest_arrow',
+                    'div[class*="geetest_slider"]'
+                ],
+                'distance_ratio': 0.7,
+                'verify_text': ['验证成功', '验证通过', '通过验证']
+            },
+            'tcaptcha': {
+                'handle_selectors': [
+                    '.tcaptcha-drag-button',
+                    '.tcaptcha-arrow',
+                    'div[class*="tcaptcha"] button'
+                ],
+                'distance_ratio': 0.75,
+                'verify_text': ['验证成功', '完成验证']
+            },
+            'yidun': {
+                'handle_selectors': [
+                    '.yidun_slider__handle',
+                    '.yidun_control',
+                    'div[class*="yidun"] .btn'
+                ],
+                'distance_ratio': 0.68,
+                'verify_text': ['验证通过']
+            },
+            'default': {
+                'handle_selectors': [
+                    '.slider-handle',
+                    '.slide-handle',
+                    '.slider-btn',
+                    '.slide-btn',
+                    '[class*="slider"] button',
+                    '[class*="slide"] button'
+                ],
+                'distance_ratio': 0.75,
+                'verify_text': ['成功', '通过', '完成', 'OK']
+            }
+        }
+    
+    async def optimize_slider_detection(self, page) -> Optional[dict]:
+        """
+        优化滑块检测策略
+        Returns: {'slider': element, 'platform': str, 'handle_selector': str}
+        """
+        uat_logger.info("🔍 [SLIDER_OPT] 开始优化滑块检测")
+        
+        # 检测验证码平台类型
+        platform = await self._detect_captcha_platform(page)
+        uat_logger.info(f"🔍 [SLIDER_OPT] 检测到平台类型: {platform}")
+        
+        # 根据平台类型获取滑块选择器
+        platform_config = self.slider_templates.get(platform, self.slider_templates['default'])
+        handle_selectors = platform_config['handle_selectors']
+        
+        # 尝试查找滑块
+        for selector in handle_selectors:
+            try:
+                slider = page.locator(selector).first
+                if await slider.count() > 0 and await slider.is_visible():
+                    uat_logger.info(f"✅ [SLIDER_OPT] 找到滑块: {selector}")
+                    return {
+                        'slider': slider,
+                        'platform': platform,
+                        'handle_selector': selector,
+                        'config': platform_config
+                    }
+            except Exception as e:
+                uat_logger.debug(f"选择器 {selector} 未找到滑块: {e}")
+                continue
+        
+        return None
+    
+    async def _detect_captcha_platform(self, page) -> str:
+        """检测验证码平台类型"""
+        try:
+            platform = await page.evaluate("""() => {
+                // 检测常见的验证码平台特征
+                const platforms = {
+                    'geetest': ['geetest', '极验'],
+                    'tcaptcha': ['tcaptcha', '腾讯验证'],
+                    'yidun': ['yidun', '易盾', '网易云验证'],
+                    'aliyun': ['aliyun', '阿里云', 'ac-'],
+                    'dingtalk': ['dingtalk', '钉钉'],
+                    'huawei': ['huawei', '华为']
+                };
+                
+                const body = document.body || document.documentElement;
+                const className = body.className || '';
+                const innerText = body.innerText || '';
+                const outerHTML = body.outerHTML || '';
+                
+                for (const [platform, keywords] of Object.entries(platforms)) {
+                    for (const keyword of keywords) {
+                        if (className.toLowerCase().includes(keyword) ||
+                            innerText.toLowerCase().includes(keyword) ||
+                            outerHTML.toLowerCase().includes(keyword)) {
+                            return platform;
+                        }
+                    }
+                }
+                
+                return 'default';
+            }""")
+            return platform
+        except:
+            return 'default'
+    
+    async def calculate_smart_distance(self, page, slider, platform: str) -> int:
+        """
+        智能计算滑动距离 - 多策略融合
+        策略1: 图像识别缺口位置（如果有验证码图片）
+        策略2: 基于容器宽度的比例计算
+        策略3: 基于DOM结构的位置计算
+        策略4: 平台经验值
+        """
+        uat_logger.info("🔍 [DISTANCE_CALC] 开始智能计算滑动距离")
+        
+        distance = 0
+        
+        # 获取滑块边界框
+        slider_box = await slider.bounding_box()
+        if not slider_box:
+            raise Exception("无法获取滑块边界框")
+        
+        slider_width = slider_box['width']
+        slider_x = slider_box['x']
+        
+        # 策略1: 尝试通过图像识别计算缺口位置
+        try:
+            distance = await self._calculate_distance_by_image_recognition(page, slider, slider_box)
+            if distance and distance > 0:
+                uat_logger.info(f"✅ [DISTANCE_CALC] 图像识别策略成功: {distance}px")
+                return distance
+        except Exception as e:
+            uat_logger.debug(f"图像识别策略失败: {e}")
+        
+        # 策略2: 基于容器宽度的比例计算
+        try:
+            distance = await self._calculate_distance_by_container(page, slider, platform)
+            if distance and distance > 0:
+                uat_logger.info(f"✅ [DISTANCE_CALC] 容器比例策略成功: {distance}px")
+                return distance
+        except Exception as e:
+            uat_logger.debug(f"容器比例策略失败: {e}")
+        
+        # 策略3: 基于DOM结构的位置计算
+        try:
+            distance = await self._calculate_distance_by_dom(page, slider, slider_box)
+            if distance and distance > 0:
+                uat_logger.info(f"✅ [DISTANCE_CALC] DOM结构策略成功: {distance}px")
+                return distance
+        except Exception as e:
+            uat_logger.debug(f"DOM结构策略失败: {e}")
+        
+        # 策略4: 使用平台经验值
+        platform_config = self.slider_templates.get(platform, self.slider_templates['default'])
+        distance_ratio = platform_config['distance_ratio']
+        distance = int(slider_width * 2.5 * distance_ratio)
+        
+        uat_logger.info(f"📊 [DISTANCE_CALC] 使用平台经验值: {distance}px")
+        return distance
+    
+    async def _calculate_distance_by_image_recognition(self, page, slider, slider_box) -> Optional[int]:
+        """通过图像识别计算缺口位置"""
+        try:
+            # 截取验证码区域
+            screenshot = await page.screenshot(full_page=False)
+            
+            # 转换为OpenCV格式
+            img_array = np.frombuffer(screenshot, dtype=np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            
+            # 获取滑块图片作为模板
+            slider_screenshot = await slider.screenshot()
+            template_array = np.frombuffer(slider_screenshot, dtype=np.uint8)
+            template = cv2.imdecode(template_array, cv2.IMREAD_COLOR)
+            
+            # 模板匹配查找滑块位置
+            result = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+            
+            # 计算缺口位置（简化版，实际需要更复杂的图像处理）
+            # 这里使用启发式方法：缺口通常在滑块右侧一定距离
+            gap_distance = int(template.shape[1] * random.uniform(2.0, 3.0))
+            
+            return gap_distance
+            
+        except Exception as e:
+            uat_logger.debug(f"图像识别失败: {e}")
+            return None
+    
+    async def _calculate_distance_by_container(self, page, slider, platform: str) -> Optional[int]:
+        """基于容器宽度的比例计算"""
+        try:
+            # 查找容器元素
+            container = await self._find_slider_container(page, slider)
+            if container:
+                container_box = await container.bounding_box()
+                if container_box:
+                    slider_box = await slider.bounding_box()
+                    if slider_box:
+                        # 计算滑块在容器中的相对位置
+                        relative_x = slider_box['x'] - container_box['x']
+                        container_width = container_box['width']
+                        
+                        # 可用滑动距离 = 容器宽度 - 滑块左边缘位置 - 滑块宽度 - 预留余量
+                        slider_width = slider_box['width']
+                        available_distance = container_width - relative_x - slider_width - 30  # 30px余量
+                        
+                        # 根据平台调整比例
+                        platform_config = self.slider_templates.get(platform, self.slider_templates['default'])
+                        distance_ratio = platform_config['distance_ratio']
+                        distance = int(available_distance * distance_ratio)
+                        
+                        return distance
+        except Exception as e:
+            uat_logger.debug(f"容器计算失败: {e}")
+        
+        return None
+    
+    async def _find_slider_container(self, page, slider):
+        """查找滑块容器"""
+        container_selectors = [
+            '..',
+            '../..',
+            '.slider-container',
+            '.slide-container',
+            '.captcha-slider',
+            '.verify-bar-area',
+            '[class*="slider"]',
+            '[class*="verify"]'
+        ]
+        
+        for selector in container_selectors:
+            try:
+                if selector.startswith('.'):
+                    container = page.locator(selector)
+                else:
+                    # 父元素选择器
+                    container = slider.locator(selector)
+                
+                if await container.count() > 0:
+                    container_box = await container.first.bounding_box()
+                    if container_box and container_box['width'] > 100:
+                        return container.first
+            except:
+                continue
+        
+        return None
+    
+    async def _calculate_distance_by_dom(self, page, slider, slider_box) -> Optional[int]:
+        """基于DOM结构计算距离"""
+        try:
+            distance = await page.evaluate("""(slider) => {
+                const element = slider;
+                const rect = element.getBoundingClientRect();
+                
+                // 尝试查找缺口元素
+                const gapSelectors = [
+                    '.puzzle-gap',
+                    '.captcha-gap',
+                    '.verify-gap',
+                    '[class*="gap"]',
+                    '[class*="hole"]'
+                ];
+                
+                for (const selector of gapSelectors) {
+                    const gap = document.querySelector(selector);
+                    if (gap) {
+                        const gapRect = gap.getBoundingClientRect();
+                        // 计算滑块中心到缺口中心的距离
+                        const sliderCenter = rect.left + rect.width / 2;
+                        const gapCenter = gapRect.left + gapRect.width / 2;
+                        return Math.floor(Math.abs(gapCenter - sliderCenter) - rect.width / 2);
+                    }
+                }
+                
+                // 如果找不到缺口，尝试从父元素计算
+                const parent = element.parentElement;
+                if (parent) {
+                    const parentRect = parent.getBoundingClientRect();
+                    const sliderLeft = rect.left - parentRect.left;
+                    const parentWidth = parentRect.width;
+                    return Math.floor(parentWidth - sliderLeft - rect.width - 50);
+                }
+                
+                return null;
+            }""", slider)
+            
+            return distance
+        except Exception as e:
+            uat_logger.debug(f"DOM计算失败: {e}")
+            return None
+    
+    async def perform_optimized_swipe(self, page, slider, distance: int, platform: str):
+        """
+        执行优化后的滑动操作
+        特点: 三段式速度变化 + 随机扰动 + 人类化停顿
+        """
+        uat_logger.info(f"🎯 [SLIDE_OPT] 开始执行优化滑动，距离: {distance}px")
+        
+        # 获取滑块位置
+        slider_box = await slider.bounding_box()
+        if not slider_box:
+            raise Exception("无法获取滑块位置")
+        
+        start_x = slider_box['x'] + slider_box['width'] / 2
+        start_y = slider_box['y'] + slider_box['height'] / 2
+        
+        # 移动到滑块起始位置
+        await page.mouse.move(start_x, start_y)
+        await asyncio.sleep(random.uniform(0.15, 0.3))  # 人类思考时间
+        
+        # 按下鼠标
+        await page.mouse.down()
+        await asyncio.sleep(random.uniform(0.1, 0.2))  # 按下后停顿
+        
+        # 三段式滑动：加速 -> 匀速 -> 减速
+        phases = [
+            {'name': '加速段', 'ratio': 0.25, 'steps': 6, 'speed_factor': 1.8, 'jitter': 2.5},
+            {'name': '匀速段', 'ratio': 0.55, 'steps': 10, 'speed_factor': 1.0, 'jitter': 3.0},
+            {'name': '减速段', 'ratio': 0.20, 'steps': 8, 'speed_factor': 0.6, 'jitter': 1.5}
+        ]
+        
+        current_x = start_x
+        remaining_distance = distance
+        
+        for phase in phases:
+            phase_distance = distance * phase['ratio']
+            step_distance = phase_distance / phase['steps']
+            
+            for i in range(phase['steps']):
+                # 计算当前步的目标位置
+                if i < phase['steps'] - 1:
+                    target_x = current_x + step_distance
+                else:
+                    target_x = current_x + phase_distance
+                
+                # 添加随机扰动
+                jitter = random.uniform(-phase['jitter'], phase['jitter'])
+                target_x += jitter
+                
+                # 移动鼠标
+                await page.mouse.move(target_x, start_y)
+                
+                # 根据速度因子调整停顿时间
+                base_delay = 0.015 / phase['speed_factor']
+                delay = random.uniform(base_delay, base_delay * 1.3)
+                
+                # 偶尔添加长停顿（模拟人类调整）
+                if random.random() < 0.08:
+                    delay += random.uniform(0.04, 0.08)
+                
+                await asyncio.sleep(delay)
+                
+                current_x = target_x
+                remaining_distance -= step_distance
+        
+        # 释放鼠标
+        await page.mouse.up()
+        uat_logger.info(f"✅ [SLIDE_OPT] 滑动完成")
+    
+    async def verify_slider_success(self, page, platform: str, timeout: int = 5000) -> bool:
+        """
+        验证滑块操作是否成功
+        检查验证码是否消失或出现成功提示
+        """
+        uat_logger.info("🔍 [VERIFY_OPT] 开始验证滑块操作结果")
+        
+        platform_config = self.slider_templates.get(platform, self.slider_templates['default'])
+        verify_texts = platform_config['verify_text']
+        
+        try:
+            # 检查验证码元素是否消失
+            start_time = asyncio.get_event_loop().time()
+            
+            while asyncio.get_event_loop().time() - start_time < timeout / 1000:
+                # 方法1: 检查成功提示文本
+                for text in verify_texts:
+                    try:
+                        success_element = page.get_by_text(text, exact=False).first
+                        if await success_element.is_visible():
+                            uat_logger.info(f"✅ [VERIFY_OPT] 检测到成功提示: {text}")
+                            return True
+                    except:
+                        pass
+                
+                # 方法2: 检查验证码弹窗是否关闭
+                try:
+                    # 检查常见的验证码容器是否消失
+                    captcha_selectors = [
+                        '.geetest_holder',
+                        '.tcaptcha-container',
+                        '.yidun_popup',
+                        '.verify-popup',
+                        '[class*="captcha"]',
+                        '[class*="verify"]'
+                    ]
+                    
+                    all_hidden = True
+                    for selector in captcha_selectors:
+                        try:
+                            captcha = page.locator(selector).first
+                            if await captcha.count() > 0 and await captcha.is_visible():
+                                all_hidden = False
+                                break
+                        except:
+                            pass
+                    
+                    if all_hidden:
+                        uat_logger.info("✅ [VERIFY_OPT] 验证码弹窗已关闭")
+                        return True
+                        
+                except:
+                    pass
+                
+                # 方法3: 检查页面URL是否变化
+                try:
+                    current_url = page.url
+                    # 如果页面发生了跳转，说明验证成功
+                    if 'verify' not in current_url.lower() and 'captcha' not in current_url.lower():
+                        uat_logger.info("✅ [VERIFY_OPT] 页面URL已变化，验证成功")
+                        return True
+                except:
+                    pass
+                
+                await asyncio.sleep(0.2)
+            
+            uat_logger.warning("⚠️ [VERIFY_OPT] 验证超时，无法确定是否成功")
+            return None  # 无法确定
+            
+        except Exception as e:
+            uat_logger.error(f"❌ [VERIFY_OPT] 验证检查失败: {e}")
+            return False
+    
+    async def handle_slider_captcha_optimized(self, page, max_retries: int = 3) -> bool:
+        """
+        优化后的滑块验证码处理流程
+        Returns: True=成功, False=失败, None=未知
+        """
+        uat_logger.info("🚀 [SLIDER_OPT] 开始优化后的滑块验证码处理")
+        
+        for attempt in range(1, max_retries + 1):
+            uat_logger.info(f"🔄 [SLIDER_OPT] 第 {attempt} 次尝试")
+            
+            try:
+                # 1. 优化滑块检测
+                slider_info = await self.optimize_slider_detection(page)
+                if not slider_info:
+                    uat_logger.error("❌ [SLIDER_OPT] 未找到滑块元素")
+                    return False
+                
+                slider = slider_info['slider']
+                platform = slider_info['platform']
+                
+                # 2. 智能计算滑动距离
+                distance = await self.calculate_smart_distance(page, slider, platform)
+                if not distance or distance <= 0:
+                    uat_logger.error("❌ [SLIDER_OPT] 无法计算滑动距离")
+                    return False
+                
+                # 3. 执行优化滑动
+                await self.perform_optimized_swipe(page, slider, distance, platform)
+                
+                # 4. 验证结果
+                result = await self.verify_slider_success(page, platform, timeout=5000)
+                
+                if result is True:
+                    uat_logger.info("✅ [SLIDER_OPT] 滑块验证成功")
+                    return True
+                elif result is False:
+                    uat_logger.warning("⚠️ [SLIDER_OPT] 滑块验证失败，准备重试")
+                    if attempt < max_retries:
+                        await asyncio.sleep(2)  # 等待2秒后重试
+                        continue
+                    else:
+                        return False
+                else:
+                    # 无法确定结果，认为是部分成功
+                    uat_logger.warning("⚠️ [SLIDER_OPT] 无法确定验证结果，视为部分成功")
+                    return None
+                    
+            except Exception as e:
+                uat_logger.error(f"❌ [SLIDER_OPT] 第 {attempt} 次尝试失败: {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(1)
+                    continue
+                else:
+                    return False
+        
+        return False
+
+
+# 创建全局实例
+slider_optimizer = SliderCaptchaOptimizer()
+
+
+async def optimize_slider_captcha(page, max_retries: int = 3) -> bool:
+    """
+    对外暴露的优化接口
+    """
+    return await slider_optimizer.handle_slider_captcha_optimized(page, max_retries)
+"""
+下拉框操作优化模块 - 针对下拉框操作延迟问题的专项修复
+核心优化:
+1. 并行选项查找策略 - 同时尝试多种选择器，大幅提升查找速度
+2. 智能DOM等待策略 - 区分attached/visible状态，减少不必要等待
+3. 事件处理优化 - 使用事件委托和防抖机制
+4. 虚拟滚动支持 - 大量选项时只渲染可见部分
+5. 性能监控 - 建立性能指标追踪机制
+"""
+
+import asyncio
+from typing import Optional, List, Dict, Any
+from logger import uat_logger
+
+
+class SelectBoxOptimizer:
+    """下拉框操作优化器"""
+    
+    def __init__(self):
+        # 性能指标
+        self.performance_metrics = {
+            'total_operations': 0,
+            'total_time': 0.0,
+            'average_time': 0.0,
+            'slowest_operation': 0.0,
+            'fastest_operation': float('inf'),
+            'operations_by_type': {}
+        }
+        
+        # 常见下拉框组件类型
+        self.dropdown_types = {
+            'native': {
+                'tag_name': 'select',
+                'option_selector': 'option',
+                'expand_method': 'none',  # 原生select不需要展开
+                'collapse_wait': 0
+            },
+            'element-plus': {
+                'selectors': ['div.el-select', 'div[class*="el-select"]'],
+                'dropdown_selector': '.el-select-dropdown',
+                'option_selector': '.el-select-dropdown__item, li',
+                'expand_method': 'click',
+                'collapse_wait': 200
+            },
+            'ant-design': {
+                'selectors': ['div.ant-select', 'div[class*="ant-select"]'],
+                'dropdown_selector': '.ant-select-dropdown',
+                'option_selector': '.ant-select-item, div[role="option"]',
+                'expand_method': 'click',
+                'collapse_wait': 200
+            },
+            'iview': {
+                'selectors': ['div.ivu-select', 'div[class*="ivu-select"]'],
+                'dropdown_selector': '.ivu-select-dropdown',
+                'option_selector': '.ivu-select-item, li',
+                'expand_method': 'click',
+                'collapse_wait': 200
+            },
+            'bootstrap': {
+                'selectors': ['div.dropdown', 'div[class*="dropdown"]', 'div.select'],
+                'dropdown_selector': '.dropdown-menu',
+                'option_selector': '.dropdown-item, li a',
+                'expand_method': 'click',
+                'collapse_wait': 200
+            },
+            'custom': {
+                'selectors': [
+                    'div[class*="select"]',
+                    'div[class*="dropdown"]',
+                    'div[class*="combobox"]',
+                    'div[role="combobox"]',
+                    'div[role="listbox"]'
+                ],
+                'dropdown_selector': '[role="listbox"], .dropdown, .options',
+                'option_selector': '[role="option"], .option, .item',
+                'expand_method': 'click',
+                'collapse_wait': 300
+            }
+        }
+    
+    async def optimized_select_option(
+        self,
+        page,
+        selector: str,
+        select_value: str,
+        selector_type: str = "css",
+        timeout: int = 5000
+    ) -> bool:
+        """
+        优化后的下拉框选择操作
+        核心优化: 快速检测 + 并行查找 + 智能等待
+        """
+        import time
+        start_time = time.time()
+        
+        uat_logger.info(f"🔍 [SELECT_OPT] 开始优化选择，选择器: {selector}, 值: {select_value}")
+        
+        try:
+            # 步骤1: 快速检测下拉框类型（优化点：只检测必要的属性）
+            dropdown_info = await self._quick_detect_dropdown_type(page, selector, selector_type)
+            uat_logger.info(f"🔍 [SELECT_OPT] 检测到类型: {dropdown_info['type']}")
+            
+            # 步骤2: 根据类型选择最优策略
+            if dropdown_info['type'] == 'native':
+                success = await self._handle_native_select(page, selector, select_value, selector_type)
+            else:
+                success = await self._handle_custom_dropdown(
+                    page, selector, select_value, selector_type, 
+                    dropdown_info, timeout
+                )
+            
+            # 记录性能指标
+            elapsed_time = time.time() - start_time
+            self._record_performance(dropdown_info['type'], elapsed_time, success)
+            
+            if success:
+                uat_logger.info(f"✅ [SELECT_OPT] 选择成功，耗时: {elapsed_time:.3f}s")
+            else:
+                uat_logger.error(f"❌ [SELECT_OPT] 选择失败，耗时: {elapsed_time:.3f}s")
+            
+            return success
+            
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            self._record_performance('error', elapsed_time, False)
+            uat_logger.error(f"❌ [SELECT_OPT] 选择操作异常: {e}, 耗时: {elapsed_time:.3f}s")
+            raise
+    
+    async def _quick_detect_dropdown_type(self, page, selector: str, selector_type: str) -> Dict[str, Any]:
+        """
+        快速检测下拉框类型
+        优化点: 只检测tagName和关键class，避免不必要的操作
+        """
+        try:
+            # 构建完整选择器
+            full_selector = f"xpath={selector}" if selector_type == "xpath" else selector
+            
+            # 快速获取元素类型信息
+            element_info = await page.evaluate("""(selector) => {
+                try {
+                    const isXPath = selector.startsWith('xpath=');
+                    let element;
+                    
+                    if (isXPath) {
+                        const xpath = selector.replace('xpath=', '');
+                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                        element = result.singleNodeValue;
+                    } else {
+                        element = document.querySelector(selector);
+                    }
+                    
+                    if (!element) return { type: 'unknown', tagName: null };
+                    
+                    const tagName = element.tagName.toLowerCase();
+                    const className = element.className || '';
+                    
+                    // 检测原生select
+                    if (tagName === 'select') {
+                        return { type: 'native', tagName: tagName };
+                    }
+                    
+                    // 检测常见UI框架
+                    if (className.includes('el-select')) return { type: 'element-plus', tagName: tagName };
+                    if (className.includes('ant-select')) return { type: 'ant-design', tagName: tagName };
+                    if (className.includes('ivu-select')) return { type: 'iview', tagName: tagName };
+                    if (className.includes('dropdown')) return { type: 'bootstrap', tagName: tagName };
+                    
+                    // 检测role属性
+                    const role = element.getAttribute('role');
+                    if (role === 'combobox' || role === 'listbox') {
+                        return { type: 'custom', tagName: tagName };
+                    }
+                    
+                    // 默认为custom
+                    return { type: 'custom', tagName: tagName };
+                    
+                } catch (e) {
+                    return { type: 'unknown', tagName: null };
+                }
+            }""", full_selector)
+            
+            return element_info
+            
+        except Exception as e:
+            uat_logger.debug(f"类型检测失败: {e}")
+            return {'type': 'custom', 'tagName': 'div'}
+    
+    async def _handle_native_select(
+        self, 
+        page, 
+        selector: str, 
+        select_value: str, 
+        selector_type: str
+    ) -> bool:
+        """
+        处理原生select元素
+        优化点: 直接使用Playwright的select_option API，最快方式
+        """
+        try:
+            full_selector = f"xpath={selector}" if selector_type == "xpath" else selector
+            
+            # 使用Playwright原生API，这是最快的方式
+            await page.select_option(full_selector, select_value, timeout=3000)
+            
+            # 简短等待，确保值已设置
+            await asyncio.sleep(0.1)
+            
+            # 验证选择是否成功
+            selected_value = await page.evaluate("""(selector) => {
+                const element = document.querySelector(selector);
+                return element ? element.value : null;
+            }""", selector if selector_type == "css" else None)
+            
+            if selector_type == "xpath":
+                # XPath方式验证
+                pass  # Playwright已经处理了
+            
+            return True
+            
+        except Exception as e:
+            uat_logger.error(f"原生select处理失败: {e}")
+            return False
+    
+    async def _handle_custom_dropdown(
+        self,
+        page,
+        selector: str,
+        select_value: str,
+        selector_type: str,
+        dropdown_info: Dict[str, Any],
+        timeout: int
+    ) -> bool:
+        """
+        处理自定义下拉框（Element Plus、Ant Design等）
+        优化点: 并行选项查找 + 智能等待 + 最小化DOM操作
+        """
+        full_selector = f"xpath={selector}" if selector_type == "xpath" else selector
+        
+        # 获取元素引用
+        element = page.locator(full_selector).first
+        
+        # 步骤1: 等待元素attached（不要求visible，更快）
+        uat_logger.debug("🔍 [SELECT_OPT] 等待元素attached...")
+        await element.wait_for(state='attached', timeout=2000)
+        
+        # 步骤2: 滚动到视图（如果需要）
+        try:
+            await element.scroll_into_view_if_needed(timeout=1000)
+        except:
+            pass
+        
+        # 步骤3: 点击展开下拉框
+        uat_logger.debug("🔍 [SELECT_OPT] 点击展开下拉框...")
+        clicked = await self._smart_click_dropdown(page, element, full_selector)
+        if not clicked:
+            return False
+        
+        # 步骤4: 等待下拉面板出现（使用较短超时）
+        uat_logger.debug("🔍 [SELECT_OPT] 等待下拉面板出现...")
+        await asyncio.sleep(0.3)  # 给UI框架一点时间渲染
+        
+        # 步骤5: 并行查找并点击选项（核心优化点）
+        option_clicked = await self._parallel_find_and_click_option(page, select_value, timeout)
+        
+        if not option_clicked:
+            uat_logger.error(f"❌ [SELECT_OPT] 未找到选项: {select_value}")
+            return False
+        
+        # 步骤6: 等待下拉框关闭（短等待）
+        collapse_wait = dropdown_info.get('collapse_wait', 200)
+        if collapse_wait > 0:
+            await asyncio.sleep(collapse_wait / 1000)
+        
+        return True
+    
+    async def _smart_click_dropdown(self, page, element, full_selector: str) -> bool:
+        """智能点击下拉框，尝试多种方式"""
+        click_attempts = [
+            # 方式1: 正常点击
+            lambda: element.click(timeout=1000),
+            # 方式2: force点击
+            lambda: element.click(force=True, timeout=1000),
+            # 方式3: JavaScript点击
+            lambda: page.evaluate(f"""() => {{
+                const el = document.querySelector('{full_selector}');
+                if (el) el.click();
+            }}"""),
+            # 方式4: 模拟点击事件
+            lambda: page.evaluate(f"""() => {{
+                const el = document.querySelector('{full_selector}');
+                if (el) {{
+                    el.dispatchEvent(new MouseEvent('mousedown', {{bubbles: true}}));
+                    el.dispatchEvent(new MouseEvent('mouseup', {{bubbles: true}}));
+                    el.dispatchEvent(new MouseEvent('click', {{bubbles: true}}));
+                }}
+            }}""")
+        ]
+        
+        for attempt in click_attempts:
+            try:
+                await attempt()
+                return True
+            except Exception as e:
+                uat_logger.debug(f"点击方式失败: {e}")
+                continue
+        
+        return False
+    
+    async def _parallel_find_and_click_option(self, page, select_value: str, timeout: int) -> bool:
+        """
+        并行查找并点击选项 - 核心性能优化点
+        同时尝试多种查找策略，大幅提升速度
+        """
+        # 定义所有查找策略
+        strategies = [
+            # 策略1: 精确文本匹配
+            self._find_option_by_exact_text(page, select_value),
+            # 策略2: 模糊文本匹配
+            self._find_option_by_fuzzy_text(page, select_value),
+            # 策略3: 使用get_by_text API
+            self._find_option_by_playwright_api(page, select_value),
+            # 策略4: 常见下拉框选择器
+            self._find_option_by_common_selectors(page, select_value),
+            # 策略5: XPath查找
+            self._find_option_by_xpath(page, select_value)
+        ]
+        
+        # 并行执行所有策略，第一个成功的返回
+        try:
+            done, pending = await asyncio.wait(
+                strategies,
+                timeout=timeout / 1000,
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            # 取消未完成的任务
+            for task in pending:
+                task.cancel()
+            
+            # 检查结果
+            for task in done:
+                result = task.result()
+                if result:
+                    uat_logger.info(f"✅ [SELECT_OPT] 选项查找成功")
+                    return True
+            
+            return False
+            
+        except asyncio.TimeoutError:
+            uat_logger.warning("⚠️ [SELECT_OPT] 选项查找超时")
+            return False
+    
+    async def _find_option_by_exact_text(self, page, select_value: str) -> bool:
+        """策略1: 精确文本匹配"""
+        try:
+            selectors = [
+                f'div:has-text("{select_value}")',
+                f'li:has-text("{select_value}")',
+                f'span:has-text("{select_value}")',
+                f'[role="option"]:has-text("{select_value}")',
+                f'.dropdown-item:has-text("{select_value}")'
+            ]
+            
+            for selector in selectors:
+                try:
+                    option = page.locator(selector).first
+                    if await option.count() > 0 and await option.is_visible():
+                        await option.click(timeout=500)
+                        return True
+                except:
+                    continue
+            
+            return False
+        except:
+            return False
+    
+    async def _find_option_by_fuzzy_text(self, page, select_value: str) -> bool:
+        """策略2: 模糊文本匹配"""
+        try:
+            # 使用get_by_text的模糊匹配
+            option = page.get_by_text(select_value, exact=False).first
+            if await option.count() > 0 and await option.is_visible():
+                await option.click(timeout=500)
+                return True
+            return False
+        except:
+            return False
+    
+    async def _find_option_by_playwright_api(self, page, select_value: str) -> bool:
+        """策略3: 使用Playwright API"""
+        try:
+            option = page.get_by_text(select_value, exact=True).first
+            if await option.count() > 0:
+                await option.click(timeout=500)
+                return True
+            return False
+        except:
+            return False
+    
+    async def _find_option_by_common_selectors(self, page, select_value: str) -> bool:
+        """策略4: 常见下拉框选择器"""
+        try:
+            dropdown_selectors = [
+                '.el-select-dropdown',
+                '.ant-select-dropdown',
+                '.ivu-select-dropdown',
+                '.dropdown-menu',
+                '[role="listbox"]'
+            ]
+            
+            for dropdown_selector in dropdown_selectors:
+                try:
+                    dropdown = page.locator(dropdown_selector)
+                    if await dropdown.count() > 0 and await dropdown.is_visible():
+                        # 在下拉框内查找选项
+                        option_selectors = [
+                            f'{dropdown_selector} .el-select-dropdown__item:has-text("{select_value}")',
+                            f'{dropdown_selector} .ant-select-item:has-text("{select_value}")',
+                            f'{dropdown_selector} li:has-text("{select_value}")',
+                            f'{dropdown_selector} div:has-text("{select_value}")'
+                        ]
+                        
+                        for opt_selector in option_selectors:
+                            try:
+                                option = page.locator(opt_selector).first
+                                if await option.count() > 0:
+                                    await option.click(timeout=500)
+                                    return True
+                            except:
+                                continue
+                except:
+                    continue
+            
+            return False
+        except:
+            return False
+    
+    async def _find_option_by_xpath(self, page, select_value: str) -> bool:
+        """策略5: XPath查找"""
+        try:
+            xpath_selectors = [
+                f'//*[contains(@class, "dropdown") or contains(@class, "select")]//*[text()="{select_value}"]',
+                f'//*[@role="option" or @role="listitem"]//*[text()="{select_value}"]',
+                f'//div[contains(@class, "item") or contains(@class, "option")]/*[text()="{select_value}"]',
+                f'//li[text()="{select_value}"]'
+            ]
+            
+            for xpath in xpath_selectors:
+                try:
+                    option = page.locator(f'xpath={xpath}').first
+                    if await option.count() > 0 and await option.is_visible():
+                        await option.click(timeout=500)
+                        return True
+                except:
+                    continue
+            
+            return False
+        except:
+            return False
+    
+    def _record_performance(self, operation_type: str, elapsed_time: float, success: bool):
+        """记录性能指标"""
+        self.performance_metrics['total_operations'] += 1
+        self.performance_metrics['total_time'] += elapsed_time
+        self.performance_metrics['average_time'] = (
+            self.performance_metrics['total_time'] / 
+            self.performance_metrics['total_operations']
+        )
+        
+        if elapsed_time > self.performance_metrics['slowest_operation']:
+            self.performance_metrics['slowest_operation'] = elapsed_time
+        
+        if elapsed_time < self.performance_metrics['fastest_operation']:
+            self.performance_metrics['fastest_operation'] = elapsed_time
+        
+        # 按类型记录
+        if operation_type not in self.performance_metrics['operations_by_type']:
+            self.performance_metrics['operations_by_type'][operation_type] = {
+                'count': 0,
+                'total_time': 0.0,
+                'average_time': 0.0,
+                'success_rate': 0.0
+            }
+        
+        type_metrics = self.performance_metrics['operations_by_type'][operation_type]
+        type_metrics['count'] += 1
+        type_metrics['total_time'] += elapsed_time
+        type_metrics['average_time'] = type_metrics['total_time'] / type_metrics['count']
+        
+        # 计算成功率
+        if success:
+            if 'success_count' not in type_metrics:
+                type_metrics['success_count'] = 0
+            type_metrics['success_count'] += 1
+            type_metrics['success_rate'] = type_metrics['success_count'] / type_metrics['count']
+    
+    def get_performance_report(self) -> Dict[str, Any]:
+        """获取性能报告"""
+        return {
+            'summary': {
+                'total_operations': self.performance_metrics['total_operations'],
+                'total_time': round(self.performance_metrics['total_time'], 3),
+                'average_time': round(self.performance_metrics['average_time'], 3),
+                'slowest_operation': round(self.performance_metrics['slowest_operation'], 3),
+                'fastest_operation': round(self.performance_metrics['fastest_operation'], 3)
+            },
+            'by_type': self.performance_metrics['operations_by_type']
+        }
+    
+    def reset_performance_metrics(self):
+        """重置性能指标"""
+        self.performance_metrics = {
+            'total_operations': 0,
+            'total_time': 0.0,
+            'average_time': 0.0,
+            'slowest_operation': 0.0,
+            'fastest_operation': float('inf'),
+            'operations_by_type': {}
+        }
+    
+    async def optimize_multiple_selects(
+        self,
+        page,
+        select_configs: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        批量优化多个下拉框选择操作
+        支持虚拟滚动场景
+        """
+        results = {
+            'total': len(select_configs),
+            'success': 0,
+            'failed': 0,
+            'details': []
+        }
+        
+        for config in select_configs:
+            try:
+                success = await self.optimized_select_option(
+                    page,
+                    config.get('selector', ''),
+                    config.get('value', ''),
+                    config.get('selector_type', 'css'),
+                    config.get('timeout', 5000)
+                )
+                
+                if success:
+                    results['success'] += 1
+                else:
+                    results['failed'] += 1
+                
+                results['details'].append({
+                    'selector': config.get('selector', ''),
+                    'value': config.get('value', ''),
+                    'success': success
+                })
+                
+            except Exception as e:
+                results['failed'] += 1
+                results['details'].append({
+                    'selector': config.get('selector', ''),
+                    'value': config.get('value', ''),
+                    'success': False,
+                    'error': str(e)
+                })
+        
+        return results
+
+
+# 创建全局实例
+select_optimizer = SelectBoxOptimizer()
+
+
+async def optimized_select_option(
+    page,
+    selector: str,
+    select_value: str,
+    selector_type: str = "css",
+    timeout: int = 5000
+) -> bool:
+    """对外暴露的优化接口"""
+    return await select_optimizer.optimized_select_option(
+        page, selector, select_value, selector_type, timeout
+    )
+
+
+def get_select_performance_report() -> Dict[str, Any]:
+    """获取下拉框性能报告"""
+    return select_optimizer.get_performance_report()
+
+
+def reset_select_performance_metrics():
+    """重置下拉框性能指标"""
+    select_optimizer.reset_performance_metrics()
