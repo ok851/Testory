@@ -72,10 +72,12 @@
     <!-- 导航栏 -->
     <nav class="bg-white shadow-md">
         <div class="container mx-auto px-4 py-3 flex justify-between items-center">
-            <div class="flex items-center gap-2">
+            <!-- 左侧：Logo -->
+            <div class="flex items-center gap-3">
                 <i class="fas fa-robot text-primary text-2xl"></i>
-                <h1 class="text-xl font-bold text-gray-800">UI自动化测试平台</h1>
+                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
             </div>
+            <!-- 右侧：功能按钮 + 用户信息 -->
             <div class="flex items-center gap-4">
                 <a href="/" class="btn btn-primary">
                     <i class="fas fa-home"></i>
@@ -97,8 +99,8 @@
                     <i class="fas fa-chart-bar"></i>
                     测试报告
                 </a>
-                <!-- 用户信息区 -->
-                <div id="userArea" class="flex items-center gap-2">
+                <!-- 用户信息区（最右边） -->
+                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
                     <span id="userLabel" class="text-sm text-gray-600 hidden"></span>
                     <button id="logoutBtn" onclick="handleLogout()" class="hidden btn bg-gray-100 text-gray-700 hover:bg-gray-200 text-sm">
                         <i class="fas fa-sign-out-alt"></i> 注销
@@ -344,7 +346,7 @@
                 .then(data => {
                     if (data.success) {
                         const user = data.user;
-                        document.getElementById('userLabel').textContent = `👤 ${user.username} (${user.role === 'admin' ? '管理员' : user.role === 'tester' ? '测试员' : '查看者'})`;
+                        document.getElementById('userLabel').textContent = `👤 ${user.username}`;
                         document.getElementById('userLabel').classList.remove('hidden');
                         document.getElementById('logoutBtn').classList.remove('hidden');
                         document.getElementById('loginBtn').classList.add('hidden');

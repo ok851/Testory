@@ -925,7 +925,8 @@ class Database:
                 'extracted_text': row[5],
                 'created_at': row[6],
                 'expected_text': row[7] if len(row) > 7 else '',
-                'case_name': row[8] if len(row) > 8 else ''
+                'case_name': row[8] if len(row) > 8 else '',
+                'screenshots': row[9] if len(row) > 9 else None
             })
         
         conn.close()
