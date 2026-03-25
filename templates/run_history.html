@@ -485,16 +485,21 @@
         
         // 加载项目列表
         function loadProjects() {
+            const projectFilter = document.getElementById('projectFilter');
+            if (!projectFilter) {
+                console.error('找不到项目过滤器元素');
+                return;
+            }
+            
             // 使用XMLHttpRequest代替fetch，提高兼容性
             const xhr = new XMLHttpRequest();
             xhr.open('GET', '/api/projects', true);
             xhr.onreadystatechange = function() {
-                if (xhr.readyState === 4 && xhr.status === 200) {
-                    try {
-                        const data = JSON.parse(xhr.responseText);
-                        if (data && data.projects) {
-                            const projectFilter = document.getElementById('projectFilter');
-                            if (projectFilter) {
+                if (xhr.readyState === 4) {
+                    if (xhr.status === 200) {
+                        try {
+                            const data = JSON.parse(xhr.responseText);
+                            if (data && data.projects && Array.isArray(data.projects)) {
                                 // 清空现有选项，保留"所有项目"
                                 projectFilter.innerHTML = '<option value="">所有项目</option>';
                                 // 添加项目选项
@@ -507,30 +512,48 @@
                                         projectFilter.appendChild(option);
                                     }
                                 }
+                            } else {
+                                console.warn('项目列表数据格式不正确或为空');
+                                projectFilter.innerHTML = '<option value="">所有项目</option>';
                             }
+                        } catch (error) {
+                            console.error('解析项目列表数据失败:', error);
+                            projectFilter.innerHTML = '<option value="">所有项目</option>';
                         }
-                    } catch (error) {
-                        console.error('解析项目列表数据失败:', error);
+                    } else {
+                        console.error('加载项目列表失败:', xhr.status, xhr.statusText);
+                        projectFilter.innerHTML = '<option value="">所有项目</option>';
                     }
                 }
             };
             xhr.onerror = function() {
-                console.error('加载项目列表失败:', xhr.statusText);
+                console.error('加载项目列表网络错误');
+                projectFilter.innerHTML = '<option value="">所有项目</option>';
             };
             xhr.send();
         }
         
         // 加载运行历史记录
         function loadRunHistory(ignoreCaseId = false) {
-            const projectId = document.getElementById('projectFilter').value;
-            const searchText = document.getElementById('searchInput').value;
-            const statusFilter = document.getElementById('statusFilter').value;
+            const projectFilter = document.getElementById('projectFilter');
+            const searchInput = document.getElementById('searchInput');
+            const statusFilter = document.getElementById('statusFilter');
+            const container = document.getElementById('historyContainer');
+            
+            // 检查必要的DOM元素是否存在
+            if (!projectFilter || !searchInput || !statusFilter || !container) {
+                console.error('找不到必要的页面元素');
+                return;
+            }
+            
+            const projectId = projectFilter.value;
+            const searchText = searchInput.value;
+            const statusFilterValue = statusFilter.value;
             
             // 获取URL中的case_id参数
             const urlParams = new URLSearchParams(window.location.search);
             const caseId = ignoreCaseId ? null : urlParams.get('case_id');
             
-            const container = document.getElementById('historyContainer');
             container.innerHTML = '<div class="loading">加载中...</div>';
             
             // 构建API请求URL
@@ -541,38 +564,45 @@
             if (projectId && projectId !== '') {
                 apiUrl += `&project_id=${projectId}`;
             }
-            if (searchText) {
-                apiUrl += `&search_text=${encodeURIComponent(searchText)}`;
+            if (searchText && searchText.trim()) {
+                apiUrl += `&search_text=${encodeURIComponent(searchText.trim())}`;
             }
             
             // 发送分页参数到后端
             fetch(apiUrl)
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
-                    if (data.success) {
-                        let history = data.history;
+                    if (data && data.success) {
+                        let history = data.history || [];
+                        const total = data.total || 0;
                         
                         // 应用状态过滤器
-                        if (statusFilter) {
-                            if (statusFilter === 'passed') {
+                        if (statusFilterValue) {
+                            if (statusFilterValue === 'passed') {
                                 // 当过滤"通过"状态时，同时显示 'passed' 和 'success' 状态的记录
-                                history = history.filter(item => ['passed', 'success'].includes(item.status));
-                            } else if (statusFilter === 'failed') {
+                                history = history.filter(item => item && ['passed', 'success'].includes(item.status));
+                            } else if (statusFilterValue === 'failed') {
                                 // 当过滤"失败"状态时，显示除了 'passed' 和 'success' 之外的所有状态
-                                history = history.filter(item => !['passed', 'success'].includes(item.status));
+                                history = history.filter(item => item && !['passed', 'success'].includes(item.status));
                             } else {
-                                history = history.filter(item => item.status === statusFilter);
+                                history = history.filter(item => item && item.status === statusFilterValue);
                             }
                             // 状态过滤后重新计算总页数
                             totalPages = Math.ceil(history.length / pageSize);
                         } else {
                             // 计算总页数（基于后端返回的总数）
-                            totalPages = Math.ceil(data.total / pageSize);
+                            totalPages = Math.ceil(total / pageSize);
                         }
                         
                         renderHistoryTable(history, totalPages);
                     } else {
-                        container.innerHTML = '<div class="empty-state"><i>📋</i><p>获取历史记录失败</p></div>';
+                        const errorMsg = data && data.error ? data.error : '获取历史记录失败';
+                        container.innerHTML = `<div class="empty-state"><i>📋</i><p>${errorMsg}</p></div>`;
                     }
                 })
                 .catch(error => {
@@ -584,6 +614,18 @@
         // 渲染历史记录表格
         function renderHistoryTable(history, totalPages) {
             const container = document.getElementById('historyContainer');
+            
+            if (!container) {
+                console.error('找不到历史记录容器元素');
+                return;
+            }
+            
+            // 确保history是数组
+            if (!Array.isArray(history)) {
+                console.error('历史记录数据不是数组格式:', history);
+                container.innerHTML = '<div class="empty-state"><i>📋</i><p>数据格式错误</p></div>';
+                return;
+            }
             
             if (history.length === 0) {
                 container.innerHTML = '<div class="empty-state"><i>📋</i><p>暂无运行历史记录</p></div>';
@@ -608,31 +650,45 @@
             `;
             
             history.forEach(item => {
+                // 确保item存在且具有必要的属性
+                if (!item || typeof item !== 'object') {
+                    console.warn('发现无效的历史记录项:', item);
+                    return;
+                }
+                
+                const itemId = item.id || '';
+                const caseName = item.case_name || '未知用例';
+                const status = item.status || 'unknown';
+                const duration = item.duration || 0;
+                const extractedText = item.extracted_text || '';
+                const errorMsg = item.error || '';
+                const createdAt = item.created_at || '';
+                
                 tableHTML += `
                     <tr>
-                        <td>${item.id}</td>
-                        <td>${item.case_name}</td>
+                        <td>${itemId}</td>
+                        <td>${caseName}</td>
                         <td>
-                            <span class="status-badge status-${item.status}">
-                                ${['passed', 'success'].includes(item.status) ? '通过' : '失败'}
+                            <span class="status-badge status-${status}">
+                                ${['passed', 'success'].includes(status) ? '通过' : '失败'}
                             </span>
                         </td>
-                        <td>${item.duration}</td>
+                        <td>${duration}</td>
                         <td>
-                            <div class="text-preview" title="${item.extracted_text}">
-                                ${item.extracted_text ? (item.extracted_text.length > 50 ? item.extracted_text.substring(0, 50) + '...' : item.extracted_text) : '-'}
+                            <div class="text-preview" title="${extractedText}">
+                                ${extractedText ? (extractedText.length > 50 ? extractedText.substring(0, 50) + '...' : extractedText) : '-'}
                             </div>
                         </td>
                         <td>
-                            <div class="error-message" title="${item.error}">
-                                ${item.error ? item.error.substring(0, 50) + '...' : '-'}
+                            <div class="error-message" title="${errorMsg}">
+                                ${errorMsg ? errorMsg.substring(0, 50) + '...' : '-'}
                             </div>
                         </td>
-                        <td>${formatDateTime(item.created_at)}</td>
+                        <td>${formatDateTime(createdAt)}</td>
                         <td>
                             <div class="action-buttons">
-                                <button onclick="viewRunHistoryDetails(${item.id})" class="detail-btn">详情</button>
-                                <button onclick="deleteRunHistory(${item.id})" class="delete-btn">删除</button>
+                                <button onclick="viewRunHistoryDetails(${itemId})" class="detail-btn">详情</button>
+                                <button onclick="deleteRunHistory(${itemId})" class="delete-btn">删除</button>
                             </div>
                         </td>
                     </tr>

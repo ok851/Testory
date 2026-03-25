@@ -3,7 +3,7 @@ from flask_cors import CORS
 import os
 import time
 from database import Database
-from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_start_recording, sync_stop_recording, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe  # 使用全局实例和同步包装器
+from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_start_recording, sync_stop_recording, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe, sync_wait_for_page_stable  # 使用全局实例和同步包装器
 from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 import json
@@ -939,11 +939,16 @@ def api_run_case(case_id):
                 if url and url.strip():
                     # 清理URL
                     url = url.strip()
-                    # 自动添加协议前缀
-                    if not url.startswith(('http://', 'https://')):
-                        url = 'http://' + url
-                    uat_logger.log_automation_step("navigate", url, "测试开始时导航")
-                    sync_navigate_to(url)
+                    
+                    # 🔥 修复：跳过无意义的默认URL（如 example.com）
+                    if 'example.com' in url.lower():
+                        uat_logger.warning(f"检测到无意义的默认URL ({url})，跳过初始导航，等待步骤中的导航操作")
+                    else:
+                        # 自动添加协议前缀
+                        if not url.startswith(('http://', 'https://')):
+                            url = 'http://' + url
+                        uat_logger.log_automation_step("navigate", url, "测试开始时导航")
+                        sync_navigate_to(url)
                 else:
                     uat_logger.warning("测试用例URL为空或无效，跳过初始导航")
             
@@ -1004,32 +1009,85 @@ def api_run_case(case_id):
                             if selector_value:
                                 try:
                                     sync_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                                    # 点击后等待页面响应
-                                    sync_wait_for_timeout(2000)
                                 except Exception as click_error:
                                     uat_logger.error(f"执行点击操作时出错: {click_error}")
                                     # 直接抛出错误，视为测试用例执行失败
                                     raise
                 elif action == 'input':
                     if selector_value and input_value:
-                        sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                        # 输入后等待页面响应
-                        sync_wait_for_timeout(1000)
+                        try:
+                            uat_logger.info(f"🔍 准备执行输入操作: 步骤ID={step.get('id', 'unknown')}, 选择器类型={selector_type}, 选择器值={selector_value}, 输入值={input_value}")
+                            
+                            # 🔥 添加详细的诊断信息
+                            if len(selector_value) > 200:
+                                uat_logger.warning(f"⚠️ 检测到超长CSS选择器（{len(selector_value)}字符），建议优化选择器")
+                                uat_logger.warning(f"   当前选择器前100字符: {selector_value[:100]}...")
+                            
+                            # 🔥 检查选择器类型
+                            if selector_type == "css" and "nth-child" in selector_value:
+                                uat_logger.warning(f"⚠️ 检测到使用nth-child定位，可能不够稳定，建议改用ID或类名")
+                            
+                            sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            uat_logger.info(f"✅ 输入操作执行完成: 步骤ID={step.get('id', 'unknown')}")
+                            
+                        except Exception as input_error:
+                            uat_logger.error(f"🔥 输入操作执行失败详情:")
+                            uat_logger.error(f"   步骤ID: {step.get('id', 'unknown')}")
+                            uat_logger.error(f"   选择器类型: {selector_type}")
+                            uat_logger.error(f"   选择器值: {selector_value}")
+                            uat_logger.error(f"   输入值: {input_value}")
+                            uat_logger.error(f"   错误信息: {input_error}")
+                            uat_logger.error(f"   iframe选择器: {iframe_selector if enter_iframe else None}")
+                            
+                            # 🔥 提供改进建议
+                            if len(selector_value) > 200:
+                                uat_logger.error(f"   💡 建议: 选择器过长，尝试使用更简单的选择器，如ID、类名或文本定位")
+                            if "nth-child" in selector_value:
+                                uat_logger.error(f"   💡 建议: 避免使用nth-child，改用更稳定的定位方式")
+                            if "h-[" in selector_value or "w-[" in selector_value or "calc(" in selector_value:
+                                uat_logger.error(f"   💡 建议: 避免使用Tailwind动态类名，这些类名容易变化")
+                            
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
                 elif action == 'hover':
                     if selector_value:
-                        sync_hover_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                        # 悬停后等待页面响应
-                        sync_wait_for_timeout(1000)
+                        try:
+                            sync_hover_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            # 悬停后等待页面响应
+                            sync_wait_for_timeout(1000)
+                        except Exception as hover_error:
+                            uat_logger.error(f"执行悬停操作时出错: {hover_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
+                    else:
+                        uat_logger.error("悬停操作缺少选择器")
+                        raise Exception("悬停操作缺少选择器")
                 elif action == 'double_click':
                     if selector_value:
-                        sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                        # 双击后等待页面响应
-                        sync_wait_for_timeout(2000)
+                        try:
+                            sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            # 双击后等待页面响应
+                            sync_wait_for_timeout(2000)
+                        except Exception as double_click_error:
+                            uat_logger.error(f"执行双击操作时出错: {double_click_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
+                    else:
+                        uat_logger.error("双击操作缺少选择器")
+                        raise Exception("双击操作缺少选择器")
                 elif action == 'right_click':
                     if selector_value:
-                        sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                        # 右键点击后等待页面响应
-                        sync_wait_for_timeout(1000)
+                        try:
+                            sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            # 右键点击后等待页面响应
+                            sync_wait_for_timeout(1000)
+                        except Exception as right_click_error:
+                            uat_logger.error(f"执行右键点击操作时出错: {right_click_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
+                    else:
+                        uat_logger.error("右键点击操作缺少选择器")
+                        raise Exception("右键点击操作缺少选择器")
                 elif action == 'wait':
                     # 修复：wait操作应该等待时间，而不是等待选择器
                     if input_value:
@@ -1038,10 +1096,12 @@ def api_run_case(case_id):
                             wait_time = int(input_value) * 1000 if int(input_value) < 1000 else int(input_value)
                             sync_wait_for_timeout(wait_time)
                         except ValueError:
-                            uat_logger.warning(f"无效的等待时间值: {input_value}，使用默认值1000毫秒")
-                            sync_wait_for_timeout(1000)
+                            uat_logger.error(f"无效的等待时间值: {input_value}")
+                            # 🔥 修复：无效的等待时间应该视为测试失败
+                            raise Exception(f"无效的等待时间值: {input_value}")
                     else:
-                        # 如果没有输入值，默认等待1秒
+                        # 🔥 修复：如果没有输入值，应该视为失败（或者使用默认值但记录警告）
+                        uat_logger.warning("等待操作缺少输入值，使用默认值1000毫秒")
                         sync_wait_for_timeout(1000)
                 elif action == 'select':
                     # 修复：添加下拉框选择操作
@@ -1124,9 +1184,9 @@ def api_run_case(case_id):
                             # 保存到extracted_text变量，而不是覆盖
                             extracted_text = current_extracted
                         except Exception as extract_error:
-                            uat_logger.warning(f"提取文本失败: {extract_error}")
-                            # 仅在提取失败时才将当前提取结果设为空，不影响之前的提取结果
-                            current_extracted = ""
+                            uat_logger.error(f"提取文本失败: {extract_error}")
+                            # 🔥 修复：提取文本失败应该视为测试失败
+                            raise Exception(f"提取文本失败: {extract_error}")
                         
                         # 检查是否需要验证文本
                         current_expected = input_value or description
@@ -1175,8 +1235,9 @@ def api_run_case(case_id):
                             # 保存到extracted_text变量
                             extracted_text = current_extracted
                         except Exception as extract_error:
-                            uat_logger.warning(f"提取页面文本失败: {extract_error}")
-                            current_extracted = ""
+                            uat_logger.error(f"提取页面文本失败: {extract_error}")
+                            # 🔥 修复：提取页面文本失败应该视为测试失败
+                            raise Exception(f"提取页面文本失败: {extract_error}")
                         
                         # 检查是否需要验证文本
                         current_expected = input_value or description
@@ -1209,11 +1270,12 @@ def api_run_case(case_id):
                                 
                                 uat_logger.info("页面文本验证成功")
                             else:
-                                # 如果没有提取到文本，且是text_compare操作，则跳过验证
+                                # 🔥 修复：如果没有提取到文本，应该视为失败（除非是text_compare）
                                 if action == 'text_compare':
                                     uat_logger.warning("未提取到页面文本，跳过文本验证")
                                 else:
-                                    uat_logger.info("提取页面文本操作完成（未提取到文本）")
+                                    uat_logger.error("提取页面文本操作失败：未提取到文本")
+                                    raise Exception("提取页面文本操作失败：未提取到文本")
                         
                         # 提取后等待页面响应
                         sync_wait_for_timeout(1000)
@@ -1226,9 +1288,13 @@ def api_run_case(case_id):
                             # 保存到extracted_text变量，以便在结果中显示
                             extracted_text = str(json_data)
                         except Exception as extract_error:
-                            uat_logger.warning(f"提取JSON数据失败: {extract_error}")
+                            uat_logger.error(f"提取JSON数据失败: {extract_error}")
+                            # 🔥 修复：提取JSON数据失败应该视为测试失败
+                            raise Exception(f"提取JSON数据失败: {extract_error}")
                     else:
-                        uat_logger.warning("提取JSON数据时缺少选择器")
+                        uat_logger.error("提取JSON数据时缺少选择器")
+                        # 🔥 修复：缺少选择器应该视为测试失败
+                        raise Exception("提取JSON数据时缺少选择器")
                     
                     # 提取后等待页面响应
                     sync_wait_for_timeout(1000)

@@ -127,8 +127,30 @@ class Database:
         except sqlite3.OperationalError:
             pass
         
+        # 添加数据库索引以优化查询性能
+        self._create_indexes(cursor)
+        
         conn.commit()
         conn.close()
+    
+    def _create_indexes(self, cursor):
+        """创建数据库索引以优化查询性能"""
+        # 为运行历史记录表创建索引
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_run_history_case_id ON run_history(case_id)",
+            "CREATE INDEX IF NOT EXISTS idx_run_history_created_at ON run_history(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_run_history_status ON run_history(status)",
+            "CREATE INDEX IF NOT EXISTS idx_test_cases_project_id ON test_cases(project_id)",
+            "CREATE INDEX IF NOT EXISTS idx_test_cases_name ON test_cases(name)",
+            "CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)"
+        ]
+        
+        for index_sql in indexes:
+            try:
+                cursor.execute(index_sql)
+            except sqlite3.Error as e:
+                # 记录错误但继续执行，避免因为索引创建失败影响主要功能
+                print(f"创建索引失败: {index_sql}, 错误: {e}")
     
     def create_test_case(self, name: str, description: str = "", url: str = "") -> int:
         """创建测试用例"""

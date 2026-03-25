@@ -49,6 +49,29 @@
                 @apply bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg shadow-md p-6 border-l-4 border-primary;
             }
         }
+        
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(255, 255, 255, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            border-radius: 0.5rem;
+        }
+        
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="bg-gray-100 font-sans">
@@ -276,48 +299,151 @@
         });
 
         function loadProjects() {
+            const select = document.getElementById('projectFilter');
+            if (!select) {
+                console.error('找不到项目过滤器元素');
+                return;
+            }
+            
             fetch('/api/projects')
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
-                    const select = document.getElementById('projectFilter');
-                    data.projects.forEach(project => {
-                        const option = document.createElement('option');
-                        option.value = project.id;
-                        option.textContent = project.name;
-                        select.appendChild(option);
-                    });
+                    if (data && data.projects && Array.isArray(data.projects)) {
+                        data.projects.forEach(project => {
+                            if (project && project.id && project.name) {
+                                const option = document.createElement('option');
+                                option.value = project.id;
+                                option.textContent = project.name;
+                                select.appendChild(option);
+                            }
+                        });
+                    } else {
+                        console.warn('项目数据格式不正确或为空');
+                    }
                 })
                 .catch(error => console.error('加载项目失败:', error));
         }
 
         function loadReportData() {
-            const projectId = document.getElementById('projectFilter').value;
-            const startDate = document.getElementById('startDate').value;
-            const endDate = document.getElementById('endDate').value;
+            const projectFilter = document.getElementById('projectFilter');
+            const startDateInput = document.getElementById('startDate');
+            const endDateInput = document.getElementById('endDate');
+            
+            if (!projectFilter || !startDateInput || !endDateInput) {
+                console.error('找不到必要的表单元素');
+                return;
+            }
+            
+            const projectId = projectFilter.value;
+            const startDate = startDateInput.value;
+            const endDate = endDateInput.value;
 
             const params = new URLSearchParams();
             if (projectId) params.append('project_id', projectId);
             if (startDate) params.append('start_date', startDate);
             if (endDate) params.append('end_date', endDate);
 
+            // 显示加载状态
+            showLoadingState();
+
             Promise.all([
-                fetch(`/api/report/overview?${params}`).then(r => r.json()),
-                fetch(`/api/report/status-distribution?${params}`).then(r => r.json()),
-                fetch(`/api/report/duration-distribution?${params}`).then(r => r.json()),
-                fetch(`/api/report/trend?${params}`).then(r => r.json()),
-                fetch(`/api/report/case-statistics?${params}`).then(r => r.json()),
-                fetch(`/api/report/project-statistics?${params}`).then(r => r.json())
+                fetch(`/api/report/overview?${params}`).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                }),
+                fetch(`/api/report/status-distribution?${params}`).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                }),
+                fetch(`/api/report/duration-distribution?${params}`).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                }),
+                fetch(`/api/report/trend?${params}`).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                }),
+                fetch(`/api/report/case-statistics?${params}`).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                }),
+                fetch(`/api/report/project-statistics?${params}`).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                })
             ]).then(([overview, statusDist, durationDist, trend, caseStats, projectStats]) => {
+                // 隐藏加载状态
+                hideLoadingState();
+                
+                // 检查数据是否有效
+                if (!overview || !overview.success || !overview.data) {
+                    throw new Error('统计数据格式错误');
+                }
+                
                 updateOverview(overview.data);
-                updateStatusChart(statusDist.data);
-                updateDurationChart(durationDist.data);
-                updateTrendChart(trend.data);
-                updateCaseStatsTable(caseStats.data);
-                updateProjectStatsTable(projectStats.data);
+                updateStatusChart(statusDist.data || []);
+                updateDurationChart(durationDist.data || {});
+                updateTrendChart(trend.data || {});
+                updateCaseStatsTable(caseStats.data || []);
+                updateProjectStatsTable(projectStats.data || []);
             }).catch(error => {
                 console.error('加载报告数据失败:', error);
-                alert('加载报告数据失败，请重试');
+                hideLoadingState();
+                showErrorState('加载报告数据失败: ' + error.message);
             });
+        }
+        
+        function showLoadingState() {
+            // 显示所有卡片的加载状态
+            const cards = document.querySelectorAll('.card');
+            cards.forEach(card => {
+                if (!card.querySelector('.loading-overlay')) {
+                    const overlay = document.createElement('div');
+                    overlay.className = 'loading-overlay';
+                    overlay.innerHTML = `
+                        <div class="flex items-center justify-center p-8">
+                            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                            <span class="ml-3 text-gray-600">加载中...</span>
+                        </div>
+                    `;
+                    card.style.position = 'relative';
+                    card.appendChild(overlay);
+                }
+            });
+        }
+        
+        function hideLoadingState() {
+            // 隐藏所有卡片的加载状态
+            const overlays = document.querySelectorAll('.loading-overlay');
+            overlays.forEach(overlay => {
+                overlay.remove();
+            });
+        }
+        
+        function showErrorState(message) {
+            // 显示错误信息
+            const container = document.querySelector('.container');
+            if (container) {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-6';
+                errorDiv.innerHTML = `
+                    <strong class="font-bold">错误!</strong>
+                    <span class="block sm:inline"> ${message}</span>
+                `;
+                container.insertBefore(errorDiv, container.firstChild);
+                
+                // 5秒后自动移除错误提示
+                setTimeout(() => {
+                    if (errorDiv.parentNode) {
+                        errorDiv.parentNode.removeChild(errorDiv);
+                    }
+                }, 5000);
+            }
         }
 
         function updateOverview(data) {
@@ -467,18 +593,45 @@
 
         function updateCaseStatsTable(data) {
             const tbody = document.getElementById('caseStatsTable');
+            if (!tbody) {
+                console.error('找不到用例统计表表格体元素');
+                return;
+            }
+            
             tbody.innerHTML = '';
 
+            if (!Array.isArray(data) || data.length === 0) {
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = `
+                    <td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">暂无用例统计数据</td>
+                `;
+                tbody.appendChild(emptyRow);
+                return;
+            }
+
             data.forEach(item => {
+                if (!item || typeof item !== 'object') {
+                    console.warn('发现无效的用例统计项:', item);
+                    return;
+                }
+                
+                const caseName = item.case_name || '未知用例';
+                const totalRuns = item.total_runs || 0;
+                const passedRuns = item.passed_runs || 0;
+                const failedRuns = item.failed_runs || 0;
+                const passRate = item.pass_rate || 0;
+                const avgDuration = item.avg_duration || 0;
+                const lastRunTime = item.last_run_time || '-';
+                
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.case_name}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.total_runs}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.passed_runs}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.failed_runs}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.pass_rate}%</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.avg_duration}秒</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.last_run_time || '-'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${caseName}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${totalRuns}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${passedRuns}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${failedRuns}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${passRate}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${avgDuration}秒</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${lastRunTime}</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -486,18 +639,45 @@
 
         function updateProjectStatsTable(data) {
             const tbody = document.getElementById('projectStatsTable');
+            if (!tbody) {
+                console.error('找不到项目统计表格体元素');
+                return;
+            }
+            
             tbody.innerHTML = '';
 
+            if (!Array.isArray(data) || data.length === 0) {
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = `
+                    <td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">暂无项目统计数据</td>
+                `;
+                tbody.appendChild(emptyRow);
+                return;
+            }
+
             data.forEach(item => {
+                if (!item || typeof item !== 'object') {
+                    console.warn('发现无效的项目统计项:', item);
+                    return;
+                }
+                
+                const projectName = item.project_name || '未知项目';
+                const totalCases = item.total_cases || 0;
+                const totalRuns = item.total_runs || 0;
+                const passedRuns = item.passed_runs || 0;
+                const failedRuns = item.failed_runs || 0;
+                const passRate = item.pass_rate || 0;
+                const avgDuration = item.avg_duration || 0;
+                
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.project_name}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.total_cases}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.total_runs}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.passed_runs}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.failed_runs}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.pass_rate}%</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${item.avg_duration}秒</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${projectName}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${totalCases}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${totalRuns}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${passedRuns}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${failedRuns}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${passRate}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${avgDuration}秒</td>
                 `;
                 tbody.appendChild(row);
             });
