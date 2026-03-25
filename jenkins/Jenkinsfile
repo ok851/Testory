@@ -1,0 +1,144 @@
+pipeline {
+    agent any
+    
+    environment {
+        UAT_PLATFORM_URL = credentials('uat-platform-url')
+        UAT_API_TOKEN = credentials('uat-api-token')
+    }
+    
+    parameters {
+        string(name: 'PROJECT_ID', defaultValue: '1', description: '测试项目ID')
+        string(name: 'CASE_IDS', defaultValue: '', description: '指定用例ID，多个用逗号分隔（为空则执行全部）')
+        choice(name: 'BROWSER', choices: ['chromium', 'chrome', 'firefox', 'webkit'], description: '浏览器类型')
+        booleanParam(name: 'RECORD_VIDEO', defaultValue: true, description: '是否录制视频')
+        string(name: 'NOTIFY_WEBHOOK', defaultValue: '', description: '通知Webhook地址（钉钉/企微）')
+    }
+    
+    stages {
+        stage('触发测试执行') {
+            steps {
+                script {
+                    def payload = [
+                        project_id: params.PROJECT_ID.toInteger(),
+                        browser: params.BROWSER,
+                        record_video: params.RECORD_VIDEO
+                    ]
+                    
+                    if (params.CASE_IDS) {
+                        payload.case_ids = params.CASE_IDS.split(',').collect { it.trim().toInteger() }
+                    }
+                    
+                    def response = httpRequest(
+                        url: "${env.UAT_PLATFORM_URL}/api/trigger/${params.PROJECT_ID}",
+                        httpMode: 'POST',
+                        contentType: 'APPLICATION_JSON',
+                        requestBody: groovy.json.JsonBuilder(payload).toString(),
+                        customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]]
+                    )
+                    
+                    def result = readJSON text: response.content
+                    if (!result.success) {
+                        error("触发测试执行失败: ${result.error}")
+                    }
+                    
+                    env.EXECUTION_ID = result.execution_id
+                    echo "测试执行已触发，执行ID: ${env.EXECUTION_ID}"
+                }
+            }
+        }
+        
+        stage('等待执行完成') {
+            steps {
+                script {
+                    def maxAttempts = 60  // 最多等待60次，每次10秒
+                    def attempt = 0
+                    def completed = false
+                    
+                    while (attempt < maxAttempts && !completed) {
+                        sleep(10)
+                        attempt++
+                        
+                        def response = httpRequest(
+                            url: "${env.UAT_PLATFORM_URL}/api/execution/${env.EXECUTION_ID}/status",
+                            httpMode: 'GET',
+                            customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]]
+                        )
+                        
+                        def result = readJSON text: response.content
+                        if (result.status == 'completed') {
+                            completed = true
+                            env.TEST_RESULT = result.success ? 'SUCCESS' : 'FAILURE'
+                            env.TEST_SUMMARY = "用例: ${result.total_cases}, 成功: ${result.successful_cases}, 失败: ${result.failed_cases}"
+                        }
+                    }
+                    
+                    if (!completed) {
+                        error("等待测试执行超时")
+                    }
+                }
+            }
+        }
+        
+        stage('下载测试报告') {
+            steps {
+                script {
+                    // 下载HTML报告
+                    httpRequest(
+                        url: "${env.UAT_PLATFORM_URL}/api/execution/${env.EXECUTION_ID}/report",
+                        httpMode: 'GET',
+                        outputFile: 'test-report.html',
+                        customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]]
+                    )
+                    
+                    // 下载JUnit XML报告（用于Jenkins展示）
+                    httpRequest(
+                        url: "${env.UAT_PLATFORM_URL}/api/execution/${env.EXECUTION_ID}/report/junit",
+                        httpMode: 'GET',
+                        outputFile: 'junit-report.xml',
+                        customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]]
+                    )
+                    
+                    // 归档报告
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: '.',
+                        reportFiles: 'test-report.html',
+                        reportName: 'UAT Test Report'
+                    ])
+                    
+                    junit 'junit-report.xml'
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                if (params.NOTIFY_WEBHOOK) {
+                    def status = currentBuild.currentResult
+                    def color = status == 'SUCCESS' ? 'green' : (status == 'UNSTABLE' ? 'yellow' : 'red')
+                    
+                    def message = """
+                    {
+                        "msgtype": "markdown",
+                        "markdown": {
+                            "title": "测试执行报告",
+                            "text": "## 测试执行${status == 'SUCCESS' ? '成功' : '失败'}\\n\\n**项目**: ${params.PROJECT_ID}\\n**浏览器**: ${params.BROWSER}\\n**结果**: ${env.TEST_SUMMARY}\\n**构建**: ${env.BUILD_URL}"
+                        }
+                    }
+                    """
+                    
+                    httpRequest(
+                        url: params.NOTIFY_WEBHOOK,
+                        httpMode: 'POST',
+                        contentType: 'APPLICATION_JSON',
+                        requestBody: message
+                    )
+                }
+            }
+        }
+    }
+}

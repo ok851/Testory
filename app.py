@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, make_response
+from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -12,6 +12,7 @@ from playwright_automation import automation, sync_start_browser, sync_navigate_
 from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 from logger import uat_logger
+from license_manager import license_manager, LicenseType
 
 # 统一的API错误处理装饰器
 def api_error_handler(func):
@@ -126,6 +127,115 @@ def token_or_login_required(func):
         return jsonify({'success': False, 'error': '未认证'}), 401
     return wrapper
 
+
+def project_access_required(min_role='viewer'):
+    """项目访问权限装饰器 - 检查用户是否有指定项目的访问权限"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if not current_user.is_authenticated:
+                return jsonify({'success': False, 'error': '未登录'}), 401
+
+            # 从参数中获取 project_id
+            project_id = kwargs.get('project_id') or request.view_args.get('project_id')
+            if not project_id:
+                # 尝试从请求参数中获取
+                project_id = request.args.get('project_id', type=int) or request.json.get('project_id') if request.json else None
+
+            if project_id:
+                _db = Database()
+                if not _db.check_project_access(current_user.id, project_id, min_role):
+                    return jsonify({'success': False, 'error': '无权限访问此项目'}), 403
+
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def audit_log(action: str, target_type: str):
+    """审计日志装饰器 - 记录用户操作"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+
+            # 异步记录审计日志（不阻塞主流程）
+            try:
+                if current_user.is_authenticated:
+                    _db = Database()
+                    target_id = None
+                    # 尝试从 kwargs 或请求中获取目标ID
+                    if 'id' in kwargs:
+                        target_id = kwargs['id']
+                    elif request.view_args and 'id' in request.view_args:
+                        target_id = request.view_args['id']
+
+                    details = None
+                    if request.is_json:
+                        try:
+                            details = json.dumps(request.get_json(), ensure_ascii=False)
+                        except:
+                            pass
+
+                    _db.add_audit_log(
+                        user_id=current_user.id,
+                        username=current_user.username,
+                        action=action,
+                        target_type=target_type,
+                        target_id=target_id,
+                        details=details,
+                        ip_address=request.remote_addr
+                    )
+            except Exception as e:
+                uat_logger.error(f"记录审计日志失败: {e}")
+
+            return result
+        return wrapper
+    return decorator
+
+
+def feature_required(feature_name: str):
+    """功能可用性检查装饰器 - 检查某功能是否在当前 License 中可用"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if not license_manager.check_feature_available(feature_name):
+                limits = license_manager.get_limits()
+                license_type = limits.get('license_type', 'personal')
+                return jsonify({
+                    'success': False,
+                    'error': f'此功能需要企业版 License。当前版本: {license_type}'
+                }), 403
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def check_limit(limit_type: str, get_current_value_func=None):
+    """限制检查装饰器 - 检查是否超出使用限制"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            current_value = 0
+            if get_current_value_func:
+                try:
+                    current_value = get_current_value_func()
+                except:
+                    pass
+
+            result = license_manager.check_limit(limit_type, current_value)
+            if not result['allowed']:
+                return jsonify({
+                    'success': False,
+                    'error': result['message'],
+                    'limit': result['limit'],
+                    'current': result['current']
+                }), 403
+
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
 # 初始化数据库
 db = Database()
 
@@ -139,6 +249,7 @@ _ensure_admin()
 
 # 主页路由
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
 
@@ -273,6 +384,7 @@ def api_delete_user(user_id):
     return jsonify({'success': success})
 
 @app.route('/create_case_v2')
+@login_required
 def create_case_v2():
     response = make_response(render_template('create_case_v2.html'))
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
@@ -283,23 +395,30 @@ def create_case_v2():
 
 # 项目管理页面
 @app.route('/list_projects')
+@login_required
 def list_projects():
     return render_template('list_projects.html')
 
 # 测试用例管理页面（新版本）
 @app.route('/list_cases_v2/<int:project_id>')
+@login_required
+@project_access_required(min_role='viewer')
 def list_cases_v2(project_id):
     return render_template('list_cases_v2.html', project_id=project_id)
 
 # 测试步骤管理页面
 @app.route('/list_steps')
+@login_required
 def list_steps():
     return render_template('list_steps.html')
 
 # API: 创建测试用例
 @app.route('/api/create_case', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
+@audit_log('CREATE_CASE', 'case')
 def api_create_case():
     data = request.get_json(silent=True) or {}
     name = data.get('name', '')
@@ -314,6 +433,7 @@ def api_create_case():
 
 # API: 获取所有测试用例
 @app.route('/api/test_cases', methods=['GET'])
+@login_required
 @api_error_handler
 @log_api_request
 def api_get_test_cases():
@@ -322,6 +442,7 @@ def api_get_test_cases():
 
 # API: 获取单个测试用例
 @app.route('/api/test_case/<int:case_id>', methods=['GET'])
+@login_required
 @api_error_handler
 @log_api_request
 def api_get_test_case(case_id):
@@ -332,8 +453,11 @@ def api_get_test_case(case_id):
 
 # API: 更新测试用例
 @app.route('/api/test_case/<int:case_id>', methods=['PUT'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
+@audit_log('UPDATE_CASE', 'case')
 def api_update_test_case(case_id):
     data = request.get_json(silent=True) or {}
     name = data.get('name')
@@ -349,8 +473,11 @@ def api_update_test_case(case_id):
 
 # API: 删除测试用例
 @app.route('/api/test_case/<int:case_id>', methods=['DELETE'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
+@audit_log('DELETE_CASE', 'case')
 def api_delete_test_case(case_id):
     success = db.delete_test_case(case_id)
     
@@ -361,6 +488,8 @@ def api_delete_test_case(case_id):
 
 # API: 启动浏览器进行录制
 @app.route('/api/start_recording', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
 def api_start_recording():
@@ -399,6 +528,8 @@ def api_start_recording():
 
 # API: 停止录制并保存步骤
 @app.route('/api/stop_recording', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
 def api_stop_recording():
@@ -423,8 +554,11 @@ def api_stop_recording():
 
 # API: 执行多个测试用例
 @app.route('/api/execute_multiple_cases', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
+@audit_log('EXECUTE_CASES', 'execution')
 def api_execute_multiple_cases():
     data = request.get_json(silent=True) or {}
     case_ids = data.get('case_ids', [])
@@ -507,6 +641,8 @@ def api_execute_multiple_cases():
 
 # API: 导航到指定URL
 @app.route('/api/navigate', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
 def api_navigate():
@@ -846,29 +982,51 @@ def api_extract_json_from_selected_element():
 
 # API: 创建项目
 @app.route('/api/projects', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
 @api_error_handler
 @log_api_request
+@audit_log('CREATE_PROJECT', 'project')
 def api_create_project():
     data = request.get_json(silent=True) or {}
     name = data.get('name', '')
     description = data.get('description', '')
-    
+
     if not name:
         return jsonify({'error': '项目名称不能为空'}), 400
-    
+
+    # 检查项目数量限制
+    _db = Database()
+    user_projects = _db.get_user_projects(current_user.id)
+    limits = license_manager.get_limits()
+    if limits['max_projects'] != -1 and len(user_projects) >= limits['max_projects']:
+        return jsonify({
+            'success': False,
+            'error': f'已达到项目数量限制（{limits["max_projects"]}个）。请升级到企业版。'
+        }), 403
+
     project_id = db.create_project(name, description)
+
+    # 将创建者添加为项目所有者
+    _db.add_project_member(project_id, current_user.id, role='owner')
+
     return jsonify({'success': True, 'project_id': project_id})
 
 # API: 获取所有项目
 @app.route('/api/projects', methods=['GET'])
+@login_required
 @api_error_handler
 @log_api_request
 def api_get_projects():
-    projects = db.get_all_projects()
+    # 只返回用户有权限的项目
+    _db = Database()
+    projects = _db.get_user_projects(current_user.id)
     return jsonify({'projects': projects})
 
 # API: 获取单个项目
 @app.route('/api/projects/<int:project_id>', methods=['GET'])
+@login_required
+@project_access_required(min_role='viewer')
 @api_error_handler
 @log_api_request
 def api_get_project(project_id):
@@ -879,15 +1037,18 @@ def api_get_project(project_id):
 
 # API: 更新项目
 @app.route('/api/projects/<int:project_id>', methods=['PUT'])
+@login_required
+@project_access_required(min_role='editor')
 @api_error_handler
 @log_api_request
+@audit_log('UPDATE_PROJECT', 'project')
 def api_update_project(project_id):
     data = request.get_json(silent=True) or {}
     name = data.get('name')
     description = data.get('description')
-    
+
     success = db.update_project(project_id, name, description)
-    
+
     if success:
         return jsonify({'success': True})
     else:
@@ -895,11 +1056,14 @@ def api_update_project(project_id):
 
 # API: 删除项目
 @app.route('/api/projects/<int:project_id>', methods=['DELETE'])
+@login_required
+@project_access_required(min_role='owner')
 @api_error_handler
 @log_api_request
+@audit_log('DELETE_PROJECT', 'project')
 def api_delete_project(project_id):
     success = db.delete_project(project_id)
-    
+
     if success:
         return jsonify({'success': True})
     else:
@@ -907,6 +1071,8 @@ def api_delete_project(project_id):
 
 # API: 获取项目下的所有测试用例
 @app.route('/api/projects/<int:project_id>/cases', methods=['GET'])
+@login_required
+@project_access_required(min_role='viewer')
 @api_error_handler
 @log_api_request
 def api_get_project_cases(project_id):
@@ -1645,12 +1811,14 @@ def api_run_case(case_id):
         }), 500
 
 @app.route('/run-history', methods=['GET'])
+@login_required
 def run_history_page():
     """运行历史记录页面"""
     return render_template('run_history.html')
 
 
 @app.route('/api/run-history', methods=['GET'])
+@login_required
 def get_run_history():
     """获取所有运行历史记录（支持分页、按测试用例ID过滤、按项目ID过滤和搜索）"""
     try:
@@ -1770,6 +1938,7 @@ def get_case_run_history(case_id):
 
 # 测试报告页面
 @app.route('/test_report')
+@login_required
 def test_report():
     return render_template('test_report.html')
 
@@ -2176,6 +2345,8 @@ def api_trigger_cases():
 # ==================== 数据驱动测试接口 ====================
 
 @app.route('/data-driven')
+@login_required
+@feature_required('data_driven')
 def data_driven_page():
     """数据驱动测试管理页面"""
     return render_template('data_driven.html')
@@ -2491,6 +2662,281 @@ except ImportError:
     scheduler = None
     def _register_schedule_job(*args, **kwargs):
         pass
+
+
+# ==================== License 管理 API ====================
+
+@app.route('/api/license', methods=['GET'])
+@login_required
+@role_required('admin')
+def api_get_license_info():
+    """获取当前 License 信息"""
+    license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
+    return jsonify({
+        'success': True,
+        'license': {
+            'type': license_info.license_type,
+            'issued_to': license_info.issued_to,
+            'issued_at': license_info.issued_at,
+            'expires_at': license_info.expires_at,
+            'features': license_info.features,
+            'limits': limits
+        }
+    })
+
+
+@app.route('/api/license', methods=['POST'])
+@login_required
+@role_required('admin')
+def api_upload_license():
+    """上传并激活 License"""
+    data = request.get_json(silent=True) or {}
+    license_str = data.get('license', '').strip()
+
+    if not license_str:
+        return jsonify({'success': False, 'error': 'License 不能为空'}), 400
+
+    # 验证 License
+    result = license_manager.validate_license(license_str)
+    if not result['valid']:
+        return jsonify({'success': False, 'error': result['message']}), 400
+
+    # 保存 License
+    if license_manager.save_license(license_str):
+        return jsonify({
+            'success': True,
+            'message': 'License 激活成功',
+            'license': {
+                'type': result['info'].license_type,
+                'expires_at': result['info'].expires_at
+            }
+        })
+    else:
+        return jsonify({'success': False, 'error': 'License 保存失败'}), 500
+
+
+# ==================== 审计日志 API ====================
+
+@app.route('/api/audit-logs', methods=['GET'])
+@login_required
+@role_required('admin')
+def api_get_audit_logs():
+    """获取审计日志（仅管理员）"""
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('page_size', 50, type=int)
+    target_type = request.args.get('target_type')
+
+    _db = Database()
+    logs = _db.get_audit_logs(target_type=target_type, page=page, page_size=page_size)
+    total = _db.get_audit_logs_count(target_type=target_type)
+
+    return jsonify({
+        'success': True,
+        'logs': logs,
+        'total': total,
+        'page': page,
+        'page_size': page_size
+    })
+
+
+# ==================== 项目成员管理 API ====================
+
+@app.route('/api/projects/<int:project_id>/members', methods=['GET'])
+@login_required
+@project_access_required(min_role='viewer')
+def api_get_project_members(project_id):
+    """获取项目成员列表"""
+    _db = Database()
+    members = _db.get_project_members(project_id)
+    return jsonify({'success': True, 'members': members})
+
+
+@app.route('/api/projects/<int:project_id>/members', methods=['POST'])
+@login_required
+@project_access_required(min_role='owner')
+@audit_log('ADD_PROJECT_MEMBER', 'project_member')
+def api_add_project_member(project_id):
+    """添加项目成员"""
+    data = request.get_json(silent=True) or {}
+    username = data.get('username', '').strip()
+    role = data.get('role', 'editor')
+
+    if not username:
+        return jsonify({'success': False, 'error': '用户名不能为空'}), 400
+
+    if role not in ('viewer', 'editor', 'owner'):
+        return jsonify({'success': False, 'error': '无效的角色'}), 400
+
+    _db = Database()
+    user = _db.get_user_by_username(username)
+    if not user:
+        return jsonify({'success': False, 'error': '用户不存在'}), 404
+
+    success = _db.add_project_member(project_id, user['id'], role)
+    if success:
+        return jsonify({'success': True, 'message': '成员添加成功'})
+    else:
+        return jsonify({'success': False, 'error': '成员已存在'}), 409
+
+
+@app.route('/api/projects/<int:project_id>/members/<int:user_id>', methods=['PUT'])
+@login_required
+@project_access_required(min_role='owner')
+@audit_log('UPDATE_PROJECT_MEMBER', 'project_member')
+def api_update_project_member(project_id, user_id):
+    """更新项目成员角色"""
+    data = request.get_json(silent=True) or {}
+    role = data.get('role')
+
+    if role not in ('viewer', 'editor', 'owner'):
+        return jsonify({'success': False, 'error': '无效的角色'}), 400
+
+    _db = Database()
+    success = _db.update_project_member_role(project_id, user_id, role)
+    return jsonify({'success': success})
+
+
+@app.route('/api/projects/<int:project_id>/members/<int:user_id>', methods=['DELETE'])
+@login_required
+@project_access_required(min_role='owner')
+@audit_log('REMOVE_PROJECT_MEMBER', 'project_member')
+def api_remove_project_member(project_id, user_id):
+    """移除项目成员"""
+    if user_id == current_user.id:
+        return jsonify({'success': False, 'error': '不能移除自己'}), 400
+
+    _db = Database()
+    success = _db.remove_project_member(project_id, user_id)
+    return jsonify({'success': success})
+
+
+# ==================== 健康检查 API ====================
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """健康检查接口"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.datetime.now().isoformat(),
+        'version': '2.0.0'
+    })
+
+
+# ==================== 通知配置 API ====================
+
+@app.route('/api/notifications/configs', methods=['GET'])
+@login_required
+@role_required('admin')
+def api_get_notification_configs():
+    """获取通知配置列表"""
+    from notification_manager import notification_manager
+    configs = [{
+        'name': c.name,
+        'type': c.type,
+        'enabled': c.enabled,
+        'webhook_url': c.webhook_url[:20] + '...' if c.webhook_url else None
+    } for c in notification_manager.configs]
+    return jsonify({'success': True, 'configs': configs})
+
+
+@app.route('/api/notifications/configs', methods=['POST'])
+@login_required
+@role_required('admin')
+@audit_log('CREATE_NOTIFICATION_CONFIG', 'notification')
+def api_create_notification_config():
+    """创建通知配置"""
+    from notification_manager import notification_manager, NotificationConfig
+
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    config_type = data.get('type', '').strip()
+    webhook_url = data.get('webhook_url', '').strip()
+    secret = data.get('secret', '').strip() or None
+
+    if not name or not config_type or not webhook_url:
+        return jsonify({'success': False, 'error': '名称、类型和Webhook地址不能为空'}), 400
+
+    config = NotificationConfig(
+        name=name,
+        type=config_type,
+        webhook_url=webhook_url,
+        secret=secret,
+        enabled=data.get('enabled', True)
+    )
+
+    notification_manager.add_config(config)
+    return jsonify({'success': True, 'message': '配置创建成功'})
+
+
+@app.route('/api/notifications/test', methods=['POST'])
+@login_required
+@role_required('admin')
+def api_test_notification():
+    """测试通知"""
+    from notification_manager import notification_manager, NotificationConfig
+
+    data = request.get_json(silent=True) or {}
+    config_data = data.get('config', {})
+
+    config = NotificationConfig(
+        name='test',
+        type=config_data.get('type', 'webhook'),
+        webhook_url=config_data.get('webhook_url', ''),
+        secret=config_data.get('secret') or None
+    )
+
+    success = notification_manager.send_notification(
+        config,
+        title="测试通知",
+        content="这是一条测试通知消息",
+        data={'test': True}
+    )
+
+    return jsonify({
+        'success': success,
+        'message': '发送成功' if success else '发送失败'
+    })
+
+
+# ==================== 浏览器支持 API ====================
+
+@app.route('/api/browsers', methods=['GET'])
+@login_required
+def api_get_browsers():
+    """获取支持的浏览器列表"""
+    from browser_manager import BrowserManager
+    browsers = BrowserManager.get_available_browsers()
+    devices = BrowserManager.get_device_presets()
+    return jsonify({
+        'success': True,
+        'browsers': browsers,
+        'device_presets': devices
+    })
+
+
+# ==================== 断言类型 API ====================
+
+@app.route('/api/assertion-types', methods=['GET'])
+@login_required
+def api_get_assertion_types():
+    """获取支持的断言类型"""
+    types = [
+        {'id': 'text_equals', 'name': '文本相等', 'category': 'text'},
+        {'id': 'text_contains', 'name': '文本包含', 'category': 'text'},
+        {'id': 'text_regex', 'name': '文本正则匹配', 'category': 'text'},
+        {'id': 'element_exists', 'name': '元素存在', 'category': 'element'},
+        {'id': 'element_visible', 'name': '元素可见', 'category': 'element'},
+        {'id': 'element_attr', 'name': '元素属性', 'category': 'element'},
+        {'id': 'element_css', 'name': '元素CSS样式', 'category': 'element'},
+        {'id': 'element_count', 'name': '元素数量', 'category': 'element'},
+        {'id': 'url_equals', 'name': 'URL相等', 'category': 'url'},
+        {'id': 'url_contains', 'name': 'URL包含', 'category': 'url'},
+        {'id': 'api_status', 'name': 'API状态码', 'category': 'api'},
+        {'id': 'api_json', 'name': 'API JSON响应', 'category': 'api'},
+        {'id': 'javascript', 'name': 'JavaScript执行', 'category': 'script'}
+    ]
+    return jsonify({'success': True, 'types': types})
 
 
 if __name__ == '__main__':

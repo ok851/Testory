@@ -1,0 +1,151 @@
+# GitLab CI/CD 配置
+# 用于集成 UAT Platform 自动化测试
+
+stages:
+  - test
+  - report
+
+variables:
+  UAT_PLATFORM_URL: "$UAT_PLATFORM_URL"
+  UAT_API_TOKEN: "$UAT_API_TOKEN"
+  PROJECT_ID: "1"
+  BROWSER: "chromium"
+  RECORD_VIDEO: "true"
+
+# 测试执行作业
+uat-test:
+  stage: test
+  image: curlimages/curl:latest
+  script:
+    - |
+      echo "触发 UAT Platform 测试执行..."
+      
+      # 构建请求体
+      PAYLOAD=$(cat <<EOF
+      {
+        "project_id": ${PROJECT_ID},
+        "browser": "${BROWSER}",
+        "record_video": ${RECORD_VIDEO}
+      }
+      EOF
+      )
+      
+      # 触发测试
+      RESPONSE=$(curl -s -X POST "${UAT_PLATFORM_URL}/api/trigger/${PROJECT_ID}" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD")
+      
+      echo "触发响应: $RESPONSE"
+      
+      # 解析执行ID
+      EXECUTION_ID=$(echo $RESPONSE | grep -o '"execution_id":[0-9]*' | cut -d':' -f2)
+      
+      if [ -z "$EXECUTION_ID" ]; then
+        echo "获取执行ID失败"
+        exit 1
+      fi
+      
+      echo "执行ID: $EXECUTION_ID"
+      echo "EXECUTION_ID=$EXECUTION_ID" >> execution.env
+      
+      # 等待执行完成
+      echo "等待测试执行完成..."
+      MAX_ATTEMPTS=60
+      ATTEMPT=0
+      
+      while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+        sleep 10
+        ATTEMPT=$((ATTEMPT + 1))
+        
+        STATUS_RESPONSE=$(curl -s "${UAT_PLATFORM_URL}/api/execution/${EXECUTION_ID}/status" \
+          -H "Authorization: Bearer ${UAT_API_TOKEN}")
+        
+        echo "状态检查 ($ATTEMPT/$MAX_ATTEMPTS): $STATUS_RESPONSE"
+        
+        if echo "$STATUS_RESPONSE" | grep -q '"status":"completed"'; then
+          echo "测试执行完成"
+          
+          # 检查结果
+          if echo "$STATUS_RESPONSE" | grep -q '"success":false'; then
+            echo "测试执行失败"
+            exit 1
+          fi
+          
+          break
+        fi
+      done
+      
+      if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+        echo "等待超时"
+        exit 1
+      fi
+  artifacts:
+    reports:
+      dotenv: execution.env
+    expire_in: 1 week
+
+# 下载报告作业
+download-report:
+  stage: report
+  image: curlimages/curl:latest
+  dependencies:
+    - uat-test
+  script:
+    - |
+      echo "下载测试报告..."
+      
+      # 下载HTML报告
+      curl -s "${UAT_PLATFORM_URL}/api/execution/${EXECUTION_ID}/report" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -o test-report.html
+      
+      # 下载JUnit报告
+      curl -s "${UAT_PLATFORM_URL}/api/execution/${EXECUTION_ID}/report/junit" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -o junit-report.xml
+      
+      echo "报告下载完成"
+  artifacts:
+    name: "test-reports-$CI_JOB_ID"
+    paths:
+      - test-report.html
+      - junit-report.xml
+    expire_in: 30 days
+    reports:
+      junit: junit-report.xml
+  allow_failure: true
+
+# 通知作业（可选）
+notify:
+  stage: report
+  image: curlimages/curl:latest
+  dependencies:
+    - uat-test
+  script:
+    - |
+      if [ -n "$NOTIFY_WEBHOOK" ]; then
+        echo "发送通知..."
+        
+        STATUS="成功"
+        if [ "$CI_JOB_STATUS" != "success" ]; then
+          STATUS="失败"
+        fi
+        
+        MESSAGE=$(cat <<EOF
+      {
+        "msgtype": "markdown",
+        "markdown": {
+          "title": "GitLab CI 测试报告",
+          "text": "## 测试执行${STATUS}\\n\\n**项目**: ${CI_PROJECT_NAME}\\n**分支**: ${CI_COMMIT_REF_NAME}\\n**提交**: ${CI_COMMIT_SHORT_SHA}\\n**执行ID**: ${EXECUTION_ID}\\n**Pipeline**: ${CI_PIPELINE_URL}"
+        }
+      }
+      EOF
+      )
+        
+        curl -s -X POST "$NOTIFY_WEBHOOK" \
+          -H "Content-Type: application/json" \
+          -d "$MESSAGE"
+      fi
+  when: always
+  allow_failure: true

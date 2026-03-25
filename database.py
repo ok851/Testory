@@ -239,6 +239,50 @@ class Database:
             )
         ''')
 
+        # 创建项目成员表（实现项目级权限控制）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS project_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL DEFAULT 'editor',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                UNIQUE(project_id, user_id)
+            )
+        ''')
+
+        # 创建审计日志表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id INTEGER,
+                details TEXT,
+                ip_address TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+
+        # 创建用户操作统计表（用于免费版限制）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_usage_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                stat_date DATE NOT NULL,
+                execution_count INTEGER DEFAULT 0,
+                created_cases INTEGER DEFAULT 0,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(user_id, stat_date)
+            )
+        ''')
+
         # 添加数据库索引以优化查询性能
         self._create_indexes(cursor)
         
@@ -261,6 +305,11 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)",
             "CREATE INDEX IF NOT EXISTS idx_test_data_sets_case ON test_data_sets(case_id)",
             "CREATE INDEX IF NOT EXISTS idx_test_data_rows_dataset ON test_data_rows(dataset_id)",
+            "CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id)",
+            "CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_user_usage_stats_user_date ON user_usage_stats(user_id, stat_date)",
         ]
         
         for index_sql in indexes:
@@ -1568,3 +1617,310 @@ class Database:
                 data = {}
             result.append({'id': r[0], 'row_index': r[1], 'data': data})
         return result
+
+    # ==================== 项目成员权限管理方法 ====================
+
+    def add_project_member(self, project_id: int, user_id: int, role: str = 'editor') -> bool:
+        """添加项目成员"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)",
+                (project_id, user_id, role)
+            )
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
+
+    def remove_project_member(self, project_id: int, user_id: int) -> bool:
+        """移除项目成员"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
+            (project_id, user_id)
+        )
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def update_project_member_role(self, project_id: int, user_id: int, role: str) -> bool:
+        """更新项目成员角色"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?",
+            (role, project_id, user_id)
+        )
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def get_project_members(self, project_id: int) -> List[Dict[str, Any]]:
+        """获取项目所有成员"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT pm.id, pm.user_id, pm.role, pm.created_at, u.username, u.email
+            FROM project_members pm
+            JOIN users u ON pm.user_id = u.id
+            WHERE pm.project_id = ?
+        """, (project_id,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{
+            'id': r[0], 'user_id': r[1], 'role': r[2], 'created_at': r[3],
+            'username': r[4], 'email': r[5]
+        } for r in rows]
+
+    def check_project_access(self, user_id: int, project_id: int, min_role: str = 'viewer') -> bool:
+        """检查用户是否有项目访问权限
+        min_role: viewer/editor/owner
+        权限级别: owner > editor > viewer
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # 管理员拥有所有权限
+        cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        if user_row and user_row[0] == 'admin':
+            conn.close()
+            return True
+
+        # 检查项目成员权限
+        cursor.execute(
+            "SELECT role FROM project_members WHERE project_id = ? AND user_id = ?",
+            (project_id, user_id)
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return False
+
+        user_role = row[0]
+        role_levels = {'viewer': 1, 'editor': 2, 'owner': 3}
+        required_level = role_levels.get(min_role, 1)
+        user_level = role_levels.get(user_role, 1)
+
+        return user_level >= required_level
+
+    def get_user_projects(self, user_id: int) -> List[Dict[str, Any]]:
+        """获取用户有权限访问的所有项目"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # 获取用户是成员的项目 + 管理员可查看所有项目
+        cursor.execute("""
+            SELECT DISTINCT p.* FROM projects p
+            LEFT JOIN project_members pm ON p.id = pm.project_id
+            LEFT JOIN users u ON u.id = ?
+            WHERE pm.user_id = ? OR u.role = 'admin'
+            ORDER BY p.created_at DESC
+        """, (user_id, user_id))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        projects = []
+        for row in rows:
+            projects.append({
+                'id': row[0],
+                'name': row[1],
+                'description': row[2],
+                'created_at': row[3]
+            })
+        return projects
+
+    def is_project_owner(self, user_id: int, project_id: int) -> bool:
+        """检查用户是否是项目所有者"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'owner'",
+            (project_id, user_id)
+        )
+        result = cursor.fetchone() is not None
+        conn.close()
+        return result
+
+    # ==================== 审计日志方法 ====================
+
+    def add_audit_log(self, user_id: int, username: str, action: str, target_type: str,
+                      target_id: int = None, details: str = None, ip_address: str = None) -> int:
+        """添加审计日志"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO audit_logs (user_id, username, action, target_type, target_id, details, ip_address)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, username, action, target_type, target_id, details, ip_address)
+        )
+        log_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return log_id
+
+    def get_audit_logs(self, user_id: int = None, target_type: str = None,
+                       page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
+        """获取审计日志"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        offset = (page - 1) * page_size
+        params = []
+        where_clause = ""
+
+        if user_id:
+            where_clause = "WHERE user_id = ?"
+            params.append(user_id)
+        if target_type:
+            where_clause = (where_clause + " AND " if where_clause else "WHERE ") + "target_type = ?"
+            params.append(target_type)
+
+        cursor.execute(f"""
+            SELECT * FROM audit_logs {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
+        """, params + [page_size, offset])
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [{
+            'id': r[0], 'user_id': r[1], 'username': r[2], 'action': r[3],
+            'target_type': r[4], 'target_id': r[5], 'details': r[6],
+            'ip_address': r[7], 'created_at': r[8]
+        } for r in rows]
+
+    def get_audit_logs_count(self, user_id: int = None, target_type: str = None) -> int:
+        """获取审计日志总数"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        params = []
+        where_clause = ""
+
+        if user_id:
+            where_clause = "WHERE user_id = ?"
+            params.append(user_id)
+        if target_type:
+            where_clause = (where_clause + " AND " if where_clause else "WHERE ") + "target_type = ?"
+            params.append(target_type)
+
+        cursor.execute(f"SELECT COUNT(*) FROM audit_logs {where_clause}", params)
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    # ==================== 用户使用统计方法（免费版限制）====================
+
+    def get_or_create_usage_stats(self, user_id: int, stat_date: str = None) -> Dict[str, Any]:
+        """获取或创建用户使用统计"""
+        import datetime
+        if stat_date is None:
+            stat_date = datetime.date.today().isoformat()
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT * FROM user_usage_stats WHERE user_id = ? AND stat_date = ?",
+            (user_id, stat_date)
+        )
+        row = cursor.fetchone()
+
+        if not row:
+            cursor.execute(
+                "INSERT INTO user_usage_stats (user_id, stat_date) VALUES (?, ?)",
+                (user_id, stat_date)
+            )
+            conn.commit()
+            row = (cursor.lastrowid, user_id, stat_date, 0, 0, datetime.datetime.now())
+
+        conn.close()
+        return {
+            'id': row[0], 'user_id': row[1], 'stat_date': row[2],
+            'execution_count': row[3], 'created_cases': row[4]
+        }
+
+    def increment_execution_count(self, user_id: int) -> int:
+        """增加执行次数，返回当前次数"""
+        import datetime
+        stat_date = datetime.date.today().isoformat()
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO user_usage_stats (user_id, stat_date, execution_count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id, stat_date) DO UPDATE SET
+            execution_count = execution_count + 1,
+            last_updated = CURRENT_TIMESTAMP
+        """, (user_id, stat_date))
+
+        cursor.execute(
+            "SELECT execution_count FROM user_usage_stats WHERE user_id = ? AND stat_date = ?",
+            (user_id, stat_date)
+        )
+        count = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return count
+
+    def increment_created_cases(self, user_id: int) -> int:
+        """增加创建用例计数，返回当前数量"""
+        import datetime
+        stat_date = datetime.date.today().isoformat()
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO user_usage_stats (user_id, stat_date, created_cases)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id, stat_date) DO UPDATE SET
+            created_cases = created_cases + 1,
+            last_updated = CURRENT_TIMESTAMP
+        """, (user_id, stat_date))
+
+        cursor.execute(
+            "SELECT created_cases FROM user_usage_stats WHERE user_id = ? AND stat_date = ?",
+            (user_id, stat_date)
+        )
+        count = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return count
+
+    def get_usage_stats(self, user_id: int, days: int = 30) -> List[Dict[str, Any]]:
+        """获取用户使用统计（最近N天）"""
+        import datetime
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        start_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+
+        cursor.execute("""
+            SELECT stat_date, execution_count, created_cases
+            FROM user_usage_stats
+            WHERE user_id = ? AND stat_date >= ?
+            ORDER BY stat_date DESC
+        """, (user_id, start_date))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [{
+            'stat_date': r[0],
+            'execution_count': r[1],
+            'created_cases': r[2]
+        } for r in rows]

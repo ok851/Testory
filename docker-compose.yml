@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  uat-platform:
+    build: .
+    container_name: uat-platform
+    ports:
+      - "5000:5000"
+    volumes:
+      # 数据持久化
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./screenshots:/app/screenshots
+      - ./videos:/app/videos
+      - ./exports:/app/exports
+      # License文件
+      - ./license.key:/app/license.key:ro
+    environment:
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - DATABASE_PATH=/app/data/test_cases.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：使用 Nginx 作为反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: uat-platform-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - uat-platform
+    restart: unless-stopped
+    profiles:
+      - with-nginx
+
+  # 可选：使用 PostgreSQL 替代 SQLite（企业版推荐）
+  postgres:
+    image: postgres:15-alpine
+    container_name: uat-platform-db
+    environment:
+      - POSTGRES_DB=uat_platform
+      - POSTGRES_USER=uat_user
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    profiles:
+      - with-postgres
+
+volumes:
+  postgres_data:
