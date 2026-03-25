@@ -148,6 +148,11 @@ def index():
 def login_page():
     return render_template('login.html')
 
+@app.route('/profile')
+@login_required
+def profile_page():
+    return render_template('profile.html')
+
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
     data = request.get_json(silent=True) or {}
@@ -179,6 +184,22 @@ def api_logout():
 @login_required
 def api_me():
     return jsonify({'success': True, 'user': {'id': current_user.id, 'username': current_user.username, 'role': current_user.role}})
+
+@app.route('/api/auth/me', methods=['PUT'])
+@login_required
+@api_error_handler
+def api_update_me():
+    """更新当前用户信息"""
+    data = request.get_json(silent=True) or {}
+    email = data.get('email', '').strip()
+
+    if email and '@' not in email:
+        return jsonify({'success': False, 'error': '邮箱格式不正确'}), 400
+
+    _db = Database()
+    _db.update_user(current_user.id, email=email)
+    uat_logger.info(f"用户 {current_user.username} 更新了个人信息")
+    return jsonify({'success': True})
 
 @app.route('/api/auth/change_password', methods=['POST'])
 @login_required

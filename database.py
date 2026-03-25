@@ -916,6 +916,8 @@ class Database:
         
         history = []
         for row in rows:
+            # run_history 表字段: id, case_id, status, duration, error, extracted_text, created_at, expected_text, screenshots
+            # 最后一个是 case_name (来自 JOIN)
             history.append({
                 'id': row[0],
                 'case_id': row[1],
@@ -925,8 +927,8 @@ class Database:
                 'extracted_text': row[5],
                 'created_at': row[6],
                 'expected_text': row[7] if len(row) > 7 else '',
-                'case_name': row[8] if len(row) > 8 else '',
-                'screenshots': row[9] if len(row) > 9 else None
+                'screenshots': row[8] if len(row) > 8 else None,
+                'case_name': row[9] if len(row) > 9 else '未知用例'
             })
         
         conn.close()
@@ -1062,6 +1064,8 @@ class Database:
         row = cursor.fetchone()
         
         if row:
+            # run_history 表字段: id, case_id, status, duration, error, extracted_text, created_at, expected_text, screenshots
+            # 最后一个是 case_name (来自 JOIN)
             result = {
                 'id': row[0],
                 'case_id': row[1],
@@ -1071,7 +1075,8 @@ class Database:
                 'extracted_text': row[5],
                 'created_at': row[6],
                 'expected_text': row[7] if len(row) > 7 else '',
-                'case_name': row[8] if len(row) > 8 else ''
+                'screenshots': row[8] if len(row) > 8 else None,
+                'case_name': row[9] if len(row) > 9 else '未知用例'
             }
             conn.close()
             return result

@@ -50,6 +50,7 @@ class ReportExporter:
         try:
             from openpyxl import Workbook
             from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+            from openpyxl.utils import get_column_letter
         except ImportError:
             raise ImportError("请安装 openpyxl 库: pip install openpyxl")
         
@@ -63,155 +64,250 @@ class ReportExporter:
         ws = wb.active
         ws.title = "测试报告"
         
-        # 定义样式
-        header_font = Font(name='微软雅黑', size=12, bold=True, color='FFFFFF')
-        header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
-        header_alignment = Alignment(horizontal='center', vertical='center')
-        cell_alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+        # 定义样式 - 使用更美观的配色
+        title_font = Font(name='微软雅黑', size=20, bold=True, color='1890FF')
+        section_font = Font(name='微软雅黑', size=14, bold=True, color='333333')
+        header_font = Font(name='微软雅黑', size=11, bold=True, color='FFFFFF')
+        normal_font = Font(name='微软雅黑', size=10, color='333333')
+        number_font = Font(name='微软雅黑', size=11, bold=True, color='1890FF')
+        
+        # 填充色
+        primary_fill = PatternFill(start_color='1890FF', end_color='1890FF', fill_type='solid')
+        success_fill = PatternFill(start_color='52C41A', end_color='52C41A', fill_type='solid')
+        error_fill = PatternFill(start_color='FF4D4F', end_color='FF4D4F', fill_type='solid')
+        header_fill = PatternFill(start_color='F0F2F5', end_color='F0F2F5', fill_type='solid')
+        alt_row_fill = PatternFill(start_color='FAFAFA', end_color='FAFAFA', fill_type='solid')
+        card_fill = PatternFill(start_color='F8F9FA', end_color='F8F9FA', fill_type='solid')
+        
+        # 对齐方式
+        center_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        left_align = Alignment(horizontal='left', vertical='center', wrap_text=True)
+        right_align = Alignment(horizontal='right', vertical='center')
+        
+        # 边框
         thin_border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
+            left=Side(style='thin', color='D9D9D9'),
+            right=Side(style='thin', color='D9D9D9'),
+            top=Side(style='thin', color='D9D9D9'),
+            bottom=Side(style='thin', color='D9D9D9')
         )
         
-        # 写入标题
-        ws.merge_cells('A1:E1')
+        # 写入主标题
+        ws.merge_cells('A1:G1')
         title_cell = ws['A1']
-        title_cell.value = f"测试报告 - {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}"
-        title_cell.font = Font(name='微软雅黑', size=16, bold=True)
-        title_cell.alignment = header_alignment
+        title_cell.value = 'UI自动化测试报告'
+        title_cell.font = title_font
+        title_cell.alignment = center_align
+        ws.row_dimensions[1].height = 35
         
-        # 写入概览信息
+        # 写入生成时间
+        ws.merge_cells('A2:G2')
+        time_cell = ws['A2']
+        time_cell.value = f'生成时间: {datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")}'
+        time_cell.font = Font(name='微软雅黑', size=10, color='999999')
+        time_cell.alignment = center_align
+        ws.row_dimensions[2].height = 20
+        
+        current_row = 4
         overview = data.get('overview', {})
-        row = 3
         
-        ws[f'A{row}'] = '统计概览'
-        ws[f'A{row}'].font = header_font
-        ws[f'A{row}'].fill = header_fill
-        ws[f'A{row}'].alignment = header_alignment
-        ws[f'A{row}'].border = thin_border
+        # 统计概览 - 使用卡片式布局
+        ws[f'A{current_row}'] = '统计概览'
+        ws[f'A{current_row}'].font = section_font
+        ws.merge_cells(f'A{current_row}:G{current_row}')
+        current_row += 1
         
-        ws[f'B{row}'] = '总执行次数'
-        ws[f'B{row}'].font = header_font
-        ws[f'B{row}'].fill = header_fill
-        ws[f'B{row}'].alignment = header_alignment
-        ws[f'B{row}'].border = thin_border
+        # 创建5个统计卡片
+        card_row = current_row
+        ws.row_dimensions[card_row].height = 60
         
-        ws[f'C{row}'] = overview.get('total_runs', 0)
-        ws[f'C{row}'].alignment = cell_alignment
-        ws[f'C{row}'].border = thin_border
+        stats = [
+            ('总执行次数', overview.get('total_runs', 0), '1890FF'),
+            ('通过次数', overview.get('passed_runs', 0), '52C41A'),
+            ('失败次数', overview.get('failed_runs', 0), 'FF4D4F'),
+            ('通过率', f"{overview.get('pass_rate', 0):.1f}%", '1890FF'),
+            ('平均耗时', f"{overview.get('avg_duration', 0):.1f}s", '1890FF')
+        ]
         
-        row += 1
-        ws[f'A{row}'] = ''
-        ws[f'A{row}'].border = thin_border
-        ws[f'B{row}'] = '通过次数'
-        ws[f'B{row}'].font = header_font
-        ws[f'B{row}'].fill = header_fill
-        ws[f'B{row}'].alignment = header_alignment
-        ws[f'B{row}'].border = thin_border
+        col_width = 16
+        for i, (label, value, color) in enumerate(stats):
+            col_start = i * 2 + 1
+            col_end = col_start + 1
+            
+            # 合并单元格作为卡片
+            ws.merge_cells(start_row=card_row, start_column=col_start, end_row=card_row, end_column=col_end)
+            cell = ws.cell(row=card_row, column=col_start)
+            cell.value = f'{label}\n{value}'
+            cell.font = Font(name='微软雅黑', size=10, color=color, bold=True)
+            cell.alignment = center_align
+            cell.fill = card_fill
+            cell.border = thin_border
         
-        ws[f'C{row}'] = overview.get('passed_runs', 0)
-        ws[f'C{row}'].alignment = cell_alignment
-        ws[f'C{row}'].border = thin_border
+        current_row += 2
         
-        row += 1
-        ws[f'A{row}'] = ''
-        ws[f'A{row}'].border = thin_border
-        ws[f'B{row}'] = '失败次数'
-        ws[f'B{row}'].font = header_font
-        ws[f'B{row}'].fill = header_fill
-        ws[f'B{row}'].alignment = header_alignment
-        ws[f'B{row}'].border = thin_border
+        # 状态分布表格
+        status_dist = data.get('status_distribution', [])
+        if status_dist:
+            ws[f'A{current_row}'] = '状态分布'
+            ws[f'A{current_row}'].font = section_font
+            ws.merge_cells(f'A{current_row}:G{current_row}')
+            current_row += 1
+            
+            # 表头
+            headers = ['状态', '次数', '占比']
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col)
+                cell.value = header
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_align
+                cell.border = thin_border
+            current_row += 1
+            
+            # 数据行
+            total = overview.get('total_runs', 1)
+            for i, item in enumerate(status_dist):
+                status = item.get('status', '未知')
+                count = item.get('count', 0)
+                percentage = (count / total * 100) if total > 0 else 0
+                status_label = '通过' if status == 'passed' else '失败' if status == 'failed' else status
+                
+                values = [status_label, count, f"{percentage:.2f}%"]
+                for col, val in enumerate(values, 1):
+                    cell = ws.cell(row=current_row, column=col)
+                    cell.value = val
+                    cell.font = normal_font
+                    cell.alignment = center_align
+                    cell.border = thin_border
+                    if i % 2 == 1:
+                        cell.fill = alt_row_fill
+                current_row += 1
+            current_row += 1
         
-        ws[f'C{row}'] = overview.get('failed_runs', 0)
-        ws[f'C{row}'].alignment = cell_alignment
-        ws[f'C{row}'].border = thin_border
+        # 耗时分布表格
+        duration_dist_dict = data.get('duration_distribution', {})
+        duration_dist = duration_dist_dict.get('distribution', []) if isinstance(duration_dist_dict, dict) else []
+        if duration_dist:
+            ws[f'A{current_row}'] = '耗时分布'
+            ws[f'A{current_row}'].font = section_font
+            ws.merge_cells(f'A{current_row}:G{current_row}')
+            current_row += 1
+            
+            headers = ['耗时区间', '用例数', '占比']
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col)
+                cell.value = header
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_align
+                cell.border = thin_border
+            current_row += 1
+            
+            for i, item in enumerate(duration_dist):
+                range_label = item.get('range', '未知')
+                count = item.get('count', 0)
+                percentage = (count / total * 100) if total > 0 else 0
+                
+                values = [range_label, count, f"{percentage:.2f}%"]
+                for col, val in enumerate(values, 1):
+                    cell = ws.cell(row=current_row, column=col)
+                    cell.value = val
+                    cell.font = normal_font
+                    cell.alignment = center_align
+                    cell.border = thin_border
+                    if i % 2 == 1:
+                        cell.fill = alt_row_fill
+                current_row += 1
+            current_row += 1
         
-        row += 1
-        ws[f'A{row}'] = ''
-        ws[f'A{row}'].border = thin_border
-        ws[f'B{row}'] = '通过率'
-        ws[f'B{row}'].font = header_font
-        ws[f'B{row}'].fill = header_fill
-        ws[f'B{row}'].alignment = header_alignment
-        ws[f'B{row}'].border = thin_border
-        
-        ws[f'C{row}'] = f"{overview.get('pass_rate', 0)}%"
-        ws[f'C{row}'].alignment = cell_alignment
-        ws[f'C{row}'].border = thin_border
-        
-        row += 1
-        ws[f'A{row}'] = ''
-        ws[f'A{row}'].border = thin_border
-        ws[f'B{row}'] = '平均执行时间'
-        ws[f'B{row}'].font = header_font
-        ws[f'B{row}'].fill = header_fill
-        ws[f'B{row}'].alignment = header_alignment
-        ws[f'B{row}'].border = thin_border
-        
-        ws[f'C{row}'] = f"{overview.get('avg_duration', 0)}秒"
-        ws[f'C{row}'].alignment = cell_alignment
-        ws[f'C{row}'].border = thin_border
-        
-        # 写入用例统计
-        row += 2
+        # 用例统计表格
         case_stats = data.get('case_statistics', [])
+        if case_stats:
+            ws[f'A{current_row}'] = '用例统计'
+            ws[f'A{current_row}'].font = section_font
+            ws.merge_cells(f'A{current_row}:G{current_row}')
+            current_row += 1
+            
+            headers = ['用例名称', '执行次数', '通过', '失败', '通过率', '平均耗时']
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col)
+                cell.value = header
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_align
+                cell.border = thin_border
+            current_row += 1
+            
+            for i, item in enumerate(case_stats):
+                case_name = item.get('case_name', item.get('name', '未知'))
+                values = [
+                    case_name,
+                    item.get('total_runs', 0),
+                    item.get('passed_runs', 0),
+                    item.get('failed_runs', 0),
+                    f"{item.get('pass_rate', 0):.1f}%",
+                    f"{item.get('avg_duration', 0):.1f}s"
+                ]
+                for col, val in enumerate(values, 1):
+                    cell = ws.cell(row=current_row, column=col)
+                    cell.value = val
+                    cell.font = normal_font
+                    cell.alignment = left_align if col == 1 else center_align
+                    cell.border = thin_border
+                    if i % 2 == 1:
+                        cell.fill = alt_row_fill
+                current_row += 1
+            current_row += 1
         
-        ws[f'A{row}'] = '用例统计'
-        ws[f'A{row}'].font = header_font
-        ws[f'A{row}'].fill = header_fill
-        ws[f'A{row}'].alignment = header_alignment
-        ws[f'A{row}'].border = thin_border
-        
-        ws[f'B{row}'] = '用例名称'
-        ws[f'B{row}'].font = header_font
-        ws[f'B{row}'].fill = header_fill
-        ws[f'B{row}'].alignment = header_alignment
-        ws[f'B{row}'].border = thin_border
-        
-        ws[f'C{row}'] = '总执行次数'
-        ws[f'C{row}'].font = header_font
-        ws[f'C{row}'].fill = header_fill
-        ws[f'C{row}'].alignment = header_alignment
-        ws[f'C{row}'].border = thin_border
-        
-        ws[f'D{row}'] = '通过次数'
-        ws[f'D{row}'].font = header_font
-        ws[f'D{row}'].fill = header_fill
-        ws[f'D{row}'].alignment = header_alignment
-        ws[f'D{row}'].border = thin_border
-        
-        ws[f'E{row}'] = '失败次数'
-        ws[f'E{row}'].font = header_font
-        ws[f'E{row}'].fill = header_fill
-        ws[f'E{row}'].alignment = header_alignment
-        ws[f'E{row}'].border = thin_border
-        
-        row += 1
-        for case in case_stats:
-            ws[f'A{row}'] = ''
-            ws[f'A{row}'].border = thin_border
-            ws[f'B{row}'] = case.get('case_name', '')
-            ws[f'B{row}'].alignment = cell_alignment
-            ws[f'B{row}'].border = thin_border
-            ws[f'C{row}'] = case.get('total_runs', 0)
-            ws[f'C{row}'].alignment = cell_alignment
-            ws[f'C{row}'].border = thin_border
-            ws[f'D{row}'] = case.get('passed_runs', 0)
-            ws[f'D{row}'].alignment = cell_alignment
-            ws[f'D{row}'].border = thin_border
-            ws[f'E{row}'] = case.get('failed_runs', 0)
-            ws[f'E{row}'].alignment = cell_alignment
-            ws[f'E{row}'].border = thin_border
-            row += 1
+        # 项目统计表格
+        project_stats = data.get('project_statistics', [])
+        if project_stats:
+            ws[f'A{current_row}'] = '项目统计'
+            ws[f'A{current_row}'].font = section_font
+            ws.merge_cells(f'A{current_row}:G{current_row}')
+            current_row += 1
+            
+            headers = ['项目名称', '用例数', '执行次数', '通过', '失败', '通过率']
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col)
+                cell.value = header
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center_align
+                cell.border = thin_border
+            current_row += 1
+            
+            for i, item in enumerate(project_stats):
+                project_name = item.get('project_name', item.get('name', '未知'))
+                values = [
+                    project_name,
+                    item.get('total_cases', 0),
+                    item.get('total_runs', 0),
+                    item.get('passed_runs', 0),
+                    item.get('failed_runs', 0),
+                    f"{item.get('pass_rate', 0):.1f}%"
+                ]
+                for col, val in enumerate(values, 1):
+                    cell = ws.cell(row=current_row, column=col)
+                    cell.value = val
+                    cell.font = normal_font
+                    cell.alignment = left_align if col == 1 else center_align
+                    cell.border = thin_border
+                    if i % 2 == 1:
+                        cell.fill = alt_row_fill
+                current_row += 1
         
         # 调整列宽
-        ws.column_dimensions['A'].width = 5
-        ws.column_dimensions['B'].width = 30
-        ws.column_dimensions['C'].width = 15
-        ws.column_dimensions['D'].width = 15
-        ws.column_dimensions['E'].width = 15
+        ws.column_dimensions['A'].width = 35  # 名称列
+        ws.column_dimensions['B'].width = 12
+        ws.column_dimensions['C'].width = 12
+        ws.column_dimensions['D'].width = 12
+        ws.column_dimensions['E'].width = 12
+        ws.column_dimensions['F'].width = 12
+        ws.column_dimensions['G'].width = 12
+        
+        # 冻结首行
+        ws.freeze_panes = 'A5'
         
         # 保存文件
         wb.save(filepath)
@@ -228,248 +324,243 @@ class ReportExporter:
         Returns:
             导出文件的完整路径
         """
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.units import cm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.lib.colors import HexColor, white, black
+        
         if not filename:
             filename = "test_report_" + datetime.now().strftime("%Y%m%d_%H%M%S")
         
         filepath = os.path.join(self.export_dir, filename + ".pdf")
         
-        # 尝试使用reportlab库生成PDF
+        # 注册中文字体
+        font_name = 'Helvetica'
+        font_name_bold = 'Helvetica-Bold'
         try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.pdfgen import canvas
-            from reportlab.lib.units import cm
-            from reportlab.pdfbase import pdfmetrics
-            from reportlab.pdfbase.ttfonts import TTFont
-            
-            # 尝试注册中文字体
-            try:
-                # 尝试使用Windows系统自带的SimHei字体
-                simhei_path = "C:\\Windows\\Fonts\\simhei.ttf"
-                if os.path.exists(simhei_path):
-                    pdfmetrics.registerFont(TTFont('SimHei', simhei_path))
-                    print("成功注册SimHei字体")
-                else:
-                    print("SimHei字体文件不存在，将使用默认字体")
-            except Exception as e:
-                print("注册中文字体失败:", str(e))
-            
-            # 创建PDF画布
-            c = canvas.Canvas(filepath, pagesize=A4)
-            width, height = A4
-            
-            # 设置字体
-            try:
-                # 尝试使用注册的SimHei字体
-                c.setFont('SimHei', 16)
-            except:
-                # 如果没有SimHei字体，使用默认字体
-                c.setFont('Helvetica-Bold', 16)
-            
-            # 添加标题
-            c.drawCentredString(width/2, height - 2*cm, '测试报告')
-            
-            # 设置字体大小
-            try:
-                c.setFont('SimHei', 10)
-            except:
-                c.setFont('Helvetica', 10)
-            
-            # 添加生成时间
-            c.drawCentredString(width/2, height - 3*cm, '生成时间: ' + datetime.now().strftime('%Y年%m月%d日 %H:%M:%S'))
-            
-            # 定义起始位置
-            y = height - 5*cm
-            line_height = 0.8*cm
-            bottom_margin = 2*cm
-            
-            # 检查是否需要分页的辅助函数
-            def check_page_break(needed_lines=1):
-                nonlocal y
-                if y - needed_lines * line_height < bottom_margin:
-                    c.showPage()  # 新建一页
-                    try:
-                        c.setFont('SimHei', 10)
-                    except:
-                        c.setFont('Helvetica', 10)
-                    y = height - 2*cm  # 新页的起始位置
-                    return True
-                return False
-            
-            # 添加统计概览
-            try:
-                c.setFont('SimHei', 12)
-            except:
-                c.setFont('Helvetica-Bold', 12)
-            c.drawString(2*cm, y, '统计概览')
-            y -= line_height
-            
-            try:
-                c.setFont('SimHei', 10)
-            except:
-                c.setFont('Helvetica', 10)
-            overview = data.get('overview', {})
-            check_page_break(5)  # 统计概览需要5行
-            c.drawString(3*cm, y, '总执行次数: ' + str(overview.get('total_runs', 0)))
-            y -= line_height
-            c.drawString(3*cm, y, '通过次数: ' + str(overview.get('passed_runs', 0)))
-            y -= line_height
-            c.drawString(3*cm, y, '失败次数: ' + str(overview.get('failed_runs', 0)))
-            y -= line_height
-            c.drawString(3*cm, y, '通过率: ' + str(round(overview.get('pass_rate', 0), 2)) + '%')
-            y -= line_height
-            c.drawString(3*cm, y, '平均执行时间: ' + str(round(overview.get('avg_duration', 0), 2)) + '秒')
-            y -= 2*line_height
-            
-            # 添加状态分布
-            try:
-                c.setFont('SimHei', 12)
-            except:
-                c.setFont('Helvetica-Bold', 12)
-            c.drawString(2*cm, y, '状态分布')
-            y -= line_height
-            
-            try:
-                c.setFont('SimHei', 10)
-            except:
-                c.setFont('Helvetica', 10)
-            status_dist = data.get('status_distribution', [])
-            for item in status_dist:
-                check_page_break(1)
-                status = item.get('status', '未知')
-                count = item.get('count', 0)
-                percentage = item.get('percentage', 0)
-                c.drawString(3*cm, y, status + ': ' + str(count) + ' (' + str(round(percentage, 2)) + '%)')
-                y -= line_height
-            y -= 2*line_height
-            
-            # 添加耗时分布
-            try:
-                c.setFont('SimHei', 12)
-            except:
-                c.setFont('Helvetica-Bold', 12)
-            c.drawString(2*cm, y, '耗时分布')
-            y -= line_height
-            
-            try:
-                c.setFont('SimHei', 10)
-            except:
-                c.setFont('Helvetica', 10)
-            duration_dist_dict = data.get('duration_distribution', {})
-            duration_dist = duration_dist_dict.get('distribution', []) if isinstance(duration_dist_dict, dict) else []
-            for item in duration_dist:
-                check_page_break(1)
-                duration_range = item.get('range', '未知')
-                count = item.get('count', 0)
-                percentage = item.get('percentage', 0)
-                c.drawString(3*cm, y, duration_range + ': ' + str(count) + ' (' + str(round(percentage, 2)) + '%)')
-                y -= line_height
-            y -= 2*line_height
-            
-            # 添加用例统计
-            try:
-                c.setFont('SimHei', 12)
-            except:
-                c.setFont('Helvetica-Bold', 12)
+            # 尝试使用Windows系统自带的微软雅黑字体
+            font_paths = [
+                "C:\\Windows\\Fonts\\msyh.ttc",
+                "C:\\Windows\\Fonts\\msyh.ttf",
+                "C:\\Windows\\Fonts\\simhei.ttf",
+                "C:\\Windows\\Fonts\\simsun.ttc"
+            ]
+            for font_path in font_paths:
+                if os.path.exists(font_path):
+                    font_name = 'ChineseFont'
+                    font_name_bold = 'ChineseFont'
+                    pdfmetrics.registerFont(TTFont(font_name, font_path))
+                    break
+        except Exception as e:
+            print(f"注册中文字体失败: {e}")
+        
+        # 创建PDF画布
+        c = canvas.Canvas(filepath, pagesize=A4)
+        width, height = A4
+        
+        # 定义颜色
+        primary_color = HexColor('#1890ff')
+        success_color = HexColor('#52c41a')
+        error_color = HexColor('#ff4d4f')
+        header_bg = HexColor('#f0f2f5')
+        border_color = HexColor('#d9d9d9')
+        
+        def draw_header():
+            """绘制页眉"""
+            c.setFillColor(primary_color)
+            c.rect(0, height - 1.5*cm, width, 1.5*cm, fill=1, stroke=0)
+            c.setFillColor(white)
+            c.setFont(font_name_bold, 16)
+            c.drawCentredString(width/2, height - 1*cm, 'UI自动化测试报告')
+        
+        def draw_footer(page_num):
+            """绘制页脚"""
+            c.setStrokeColor(border_color)
+            c.line(2*cm, 1.5*cm, width - 2*cm, 1.5*cm)
+            c.setFillColor(HexColor('#999999'))
+            c.setFont(font_name, 9)
+            c.drawString(2*cm, 1*cm, f'生成时间: {datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")}')
+            c.drawRightString(width - 2*cm, 1*cm, f'第 {page_num} 页')
+        
+        def draw_card(x, y, w, h, label, value, color):
+            """绘制统计卡片"""
+            # 卡片背景
+            c.setFillColor(HexColor('#f8f9fa'))
+            c.roundRect(x, y - h, w, h, 5, fill=1, stroke=0)
+            # 顶部色条
+            c.setFillColor(color)
+            c.roundRect(x, y - 0.3*cm, w, 0.3*cm, 2, fill=1, stroke=0)
+            # 标签
+            c.setFillColor(HexColor('#666666'))
+            c.setFont(font_name, 10)
+            c.drawCentredString(x + w/2, y - 0.8*cm, label)
+            # 数值
+            c.setFillColor(color)
+            c.setFont(font_name_bold, 20)
+            c.drawCentredString(x + w/2, y - 1.5*cm, str(value))
+        
+        def draw_table_header(cols, y):
+            """绘制表格表头"""
+            c.setFillColor(header_bg)
+            c.setStrokeColor(border_color)
+            row_height = 0.6*cm
+            c.rect(2*cm, y - row_height, width - 4*cm, row_height, fill=1, stroke=1)
+            c.setFillColor(black)
+            c.setFont(font_name_bold, 10)
+            col_width = (width - 4*cm) / len(cols)
+            for i, col in enumerate(cols):
+                c.drawCentredString(2*cm + i*col_width + col_width/2, y - 0.4*cm, col)
+            return y - row_height
+        
+        def draw_table_row(values, y, is_alt=False):
+            """绘制表格行"""
+            row_height = 0.5*cm
+            if is_alt:
+                c.setFillColor(HexColor('#fafafa'))
+                c.rect(2*cm, y - row_height, width - 4*cm, row_height, fill=1, stroke=0)
+            c.setStrokeColor(border_color)
+            c.line(2*cm, y - row_height, width - 2*cm, y - row_height)
+            c.setFillColor(black)
+            c.setFont(font_name, 9)
+            col_width = (width - 4*cm) / len(values)
+            for i, val in enumerate(values):
+                c.drawCentredString(2*cm + i*col_width + col_width/2, y - 0.35*cm, str(val))
+            return y - row_height
+        
+        # 开始绘制第一页
+        page_num = 1
+        draw_header()
+        
+        y = height - 3*cm
+        
+        # 统计概览 - 卡片布局
+        c.setFillColor(black)
+        c.setFont(font_name_bold, 14)
+        c.drawString(2*cm, y, '统计概览')
+        y -= 0.5*cm
+        
+        overview = data.get('overview', {})
+        card_width = (width - 4.8*cm) / 5
+        card_height = 2*cm
+        card_y = y - card_height
+        
+        draw_card(2*cm, card_y + card_height, card_width, card_height, 
+                  '总执行次数', overview.get('total_runs', 0), primary_color)
+        draw_card(2*cm + card_width + 0.2*cm, card_y + card_height, card_width, card_height,
+                  '通过次数', overview.get('passed_runs', 0), success_color)
+        draw_card(2*cm + 2*(card_width + 0.2*cm), card_y + card_height, card_width, card_height,
+                  '失败次数', overview.get('failed_runs', 0), error_color)
+        draw_card(2*cm + 3*(card_width + 0.2*cm), card_y + card_height, card_width, card_height,
+                  '通过率', f"{overview.get('pass_rate', 0):.1f}%", primary_color)
+        draw_card(2*cm + 4*(card_width + 0.2*cm), card_y + card_height, card_width, card_height,
+                  '平均耗时', f"{overview.get('avg_duration', 0):.1f}s", primary_color)
+        
+        y = card_y - 0.8*cm
+        
+        # 检查是否需要新页
+        def check_new_page(needed_height):
+            nonlocal y, page_num
+            if y - needed_height < 2.5*cm:
+                draw_footer(page_num)
+                c.showPage()
+                page_num += 1
+                draw_header()
+                y = height - 3*cm
+                return True
+            return False
+        
+        # 状态分布表格
+        check_new_page(3*cm)
+        c.setFillColor(black)
+        c.setFont(font_name_bold, 14)
+        c.drawString(2*cm, y, '状态分布')
+        y -= 0.6*cm
+        
+        status_dist = data.get('status_distribution', [])
+        total = overview.get('total_runs', 1)
+        y = draw_table_header(['状态', '次数', '占比'], y)
+        for i, item in enumerate(status_dist):
+            status = item.get('status', '未知')
+            count = item.get('count', 0)
+            percentage = (count / total * 100) if total > 0 else 0
+            status_label = '通过' if status == 'passed' else '失败' if status == 'failed' else status
+            y = draw_table_row([status_label, count, f"{percentage:.2f}%"], y, i % 2 == 1)
+        y -= 0.5*cm
+        
+        # 耗时分布表格
+        check_new_page(3*cm)
+        c.setFillColor(black)
+        c.setFont(font_name_bold, 14)
+        c.drawString(2*cm, y, '耗时分布')
+        y -= 0.6*cm
+        
+        duration_dist_dict = data.get('duration_distribution', {})
+        duration_dist = duration_dist_dict.get('distribution', []) if isinstance(duration_dist_dict, dict) else []
+        y = draw_table_header(['耗时区间', '用例数', '占比'], y)
+        for i, item in enumerate(duration_dist):
+            range_label = item.get('range', '未知')
+            count = item.get('count', 0)
+            percentage = (count / total * 100) if total > 0 else 0
+            y = draw_table_row([range_label, count, f"{percentage:.2f}%"], y, i % 2 == 1)
+        y -= 0.5*cm
+        
+        # 用例统计表格
+        case_stats = data.get('case_statistics', [])
+        if case_stats:
+            check_new_page(3*cm)
+            c.setFillColor(black)
+            c.setFont(font_name_bold, 14)
             c.drawString(2*cm, y, '用例统计')
-            y -= line_height
+            y -= 0.6*cm
             
-            try:
-                c.setFont('SimHei', 10)
-            except:
-                c.setFont('Helvetica', 10)
-            case_stats = data.get('case_statistics', [])
-            for item in case_stats:
-                check_page_break(6)  # 每个用例需要6行
-                # 优先使用case_name键，兼容name键
+            y = draw_table_header(['用例名称', '执行次数', '通过', '失败', '通过率', '平均耗时'], y)
+            for i, item in enumerate(case_stats):
                 case_name = item.get('case_name', item.get('name', '未知'))
+                if len(case_name) > 20:
+                    case_name = case_name[:17] + '...'
                 total_runs = item.get('total_runs', 0)
-                passed_runs = item.get('passed_runs', 0)
-                failed_runs = item.get('failed_runs', 0)
+                passed = item.get('passed_runs', 0)
+                failed = item.get('failed_runs', 0)
                 pass_rate = item.get('pass_rate', 0)
-                avg_duration = item.get('avg_duration', 0)
-                c.drawString(3*cm, y, '用例名称: ' + case_name)
-                y -= line_height
-                c.drawString(4*cm, y, '总执行次数: ' + str(total_runs))
-                y -= line_height
-                c.drawString(4*cm, y, '通过次数: ' + str(passed_runs))
-                y -= line_height
-                c.drawString(4*cm, y, '失败次数: ' + str(failed_runs))
-                y -= line_height
-                c.drawString(4*cm, y, '通过率: ' + str(round(pass_rate, 2)) + '%')
-                y -= line_height
-                c.drawString(4*cm, y, '平均耗时: ' + str(round(avg_duration, 2)) + '秒')
-                y -= 2*line_height
-            y -= 2*line_height
-            
-            # 添加项目统计
-            try:
-                c.setFont('SimHei', 12)
-            except:
-                c.setFont('Helvetica-Bold', 12)
+                avg_dur = item.get('avg_duration', 0)
+                y = draw_table_row([
+                    case_name, total_runs, passed, failed,
+                    f"{pass_rate:.1f}%", f"{avg_dur:.1f}s"
+                ], y, i % 2 == 1)
+            y -= 0.5*cm
+        
+        # 项目统计表格
+        project_stats = data.get('project_statistics', [])
+        if project_stats:
+            check_new_page(3*cm)
+            c.setFillColor(black)
+            c.setFont(font_name_bold, 14)
             c.drawString(2*cm, y, '项目统计')
-            y -= line_height
+            y -= 0.6*cm
             
-            try:
-                c.setFont('SimHei', 10)
-            except:
-                c.setFont('Helvetica', 10)
-            project_stats = data.get('project_statistics', [])
-            for item in project_stats:
-                check_page_break(7)  # 每个项目需要7行
-                # 优先使用project_name键，兼容name键
+            y = draw_table_header(['项目名称', '用例数', '执行次数', '通过', '失败', '通过率'], y)
+            for i, item in enumerate(project_stats):
                 project_name = item.get('project_name', item.get('name', '未知'))
+                if len(project_name) > 15:
+                    project_name = project_name[:12] + '...'
                 total_cases = item.get('total_cases', 0)
                 total_runs = item.get('total_runs', 0)
-                passed_runs = item.get('passed_runs', 0)
-                failed_runs = item.get('failed_runs', 0)
+                passed = item.get('passed_runs', 0)
+                failed = item.get('failed_runs', 0)
                 pass_rate = item.get('pass_rate', 0)
-                avg_duration = item.get('avg_duration', 0)
-                c.drawString(3*cm, y, '项目名称: ' + project_name)
-                y -= line_height
-                c.drawString(4*cm, y, '用例数: ' + str(total_cases))
-                y -= line_height
-                c.drawString(4*cm, y, '总执行次数: ' + str(total_runs))
-                y -= line_height
-                c.drawString(4*cm, y, '通过次数: ' + str(passed_runs))
-                y -= line_height
-                c.drawString(4*cm, y, '失败次数: ' + str(failed_runs))
-                y -= line_height
-                c.drawString(4*cm, y, '通过率: ' + str(round(pass_rate, 2)) + '%')
-                y -= line_height
-                c.drawString(4*cm, y, '平均耗时: ' + str(round(avg_duration, 2)) + '秒')
-                y -= 2*line_height
-            
-            # 保存PDF
-            c.save()
-            print("使用reportlab库生成PDF成功")
-            return filepath
-        except Exception as e:
-            print("reportlab库使用失败:", str(e))
-            # 如果reportlab失败，尝试使用xhtml2pdf
-            pass
+                y = draw_table_row([
+                    project_name, total_cases, total_runs, passed, failed,
+                    f"{pass_rate:.1f}%"
+                ], y, i % 2 == 1)
         
-        # 生成HTML内容
-        html_content = self._generate_simplified_html_report(data)
+        # 绘制页脚
+        draw_footer(page_num)
         
-        # 尝试使用xhtml2pdf生成PDF
-        try:
-            from xhtml2pdf import pisa
-            
-            # 将HTML内容写入PDF文件
-            with open(filepath, "wb") as pdf_file:
-                pisa_status = pisa.CreatePDF(
-                    html_content,
-                    dest=pdf_file
-                )
-            
-            if pisa_status.err:
-                raise Exception("xhtml2pdf生成PDF失败: " + str(pisa_status.err))
-            
-            print("使用xhtml2pdf库生成PDF成功")
-            return filepath
-        except Exception as e:
-            print("xhtml2pdf库使用失败:", str(e))
-            raise Exception("PDF导出失败: " + str(e))
+        # 保存PDF
+        c.save()
+        return filepath
     
     def _generate_simplified_html_report(self, data: Dict[str, Any]) -> str:
         """生成简化版HTML报告内容，避免触发OCR
