@@ -2152,6 +2152,269 @@ def api_trigger_cases():
         uat_logger.error(f"CI 触发执行失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# ==================== 数据驱动测试接口 ====================
+
+@app.route('/data-driven')
+def data_driven_page():
+    """数据驱动测试管理页面"""
+    return render_template('data_driven.html')
+
+@app.route('/api/datasets', methods=['GET'])
+@login_required
+def api_list_datasets():
+    """获取数据集列表"""
+    _db = Database()
+    case_id = request.args.get('case_id', type=int)
+    project_id = request.args.get('project_id', type=int)
+    datasets = _db.get_all_datasets(case_id=case_id, project_id=project_id)
+    return jsonify({'success': True, 'datasets': datasets})
+
+@app.route('/api/datasets', methods=['POST'])
+@login_required
+def api_create_dataset():
+    """创建数据集（手动创建，不含数据行）"""
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': '数据集名称不能为空'}), 400
+    _db = Database()
+    dataset_id = _db.create_dataset(
+        name=name,
+        case_id=data.get('case_id'),
+        project_id=data.get('project_id'),
+        description=data.get('description', '')
+    )
+    return jsonify({'success': True, 'dataset_id': dataset_id})
+
+@app.route('/api/datasets/<int:dataset_id>', methods=['GET'])
+@login_required
+def api_get_dataset(dataset_id):
+    """获取数据集详情及数据行"""
+    _db = Database()
+    dataset = _db.get_dataset(dataset_id)
+    if not dataset:
+        return jsonify({'success': False, 'error': '数据集不存在'}), 404
+    rows = _db.get_data_rows(dataset_id)
+    dataset['rows'] = rows
+    return jsonify({'success': True, 'dataset': dataset})
+
+@app.route('/api/datasets/<int:dataset_id>', methods=['DELETE'])
+@login_required
+def api_delete_dataset(dataset_id):
+    """删除数据集"""
+    _db = Database()
+    success = _db.delete_dataset(dataset_id)
+    return jsonify({'success': success})
+
+@app.route('/api/datasets/upload', methods=['POST'])
+@login_required
+def api_upload_dataset():
+    """上传 CSV 或 Excel 文件创建数据集"""
+    import csv
+    import io
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': '缺少文件'}), 400
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'success': False, 'error': '文件名为空'}), 400
+    filename = file.filename.lower()
+    name = request.form.get('name', '').strip() or file.filename.rsplit('.', 1)[0]
+    case_id = request.form.get('case_id', type=int)
+    project_id = request.form.get('project_id', type=int)
+    description = request.form.get('description', '')
+
+    rows_data = []
+    try:
+        if filename.endswith('.csv'):
+            content = file.read().decode('utf-8-sig')
+            reader = csv.DictReader(io.StringIO(content))
+            for row in reader:
+                rows_data.append(dict(row))
+        elif filename.endswith(('.xlsx', '.xls')):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
+                ws = wb.active
+                headers = None
+                for row in ws.iter_rows(values_only=True):
+                    if headers is None:
+                        headers = [str(c) if c is not None else f'col{i}' for i, c in enumerate(row)]
+                    else:
+                        row_dict = {headers[i]: (str(v) if v is not None else '') for i, v in enumerate(row)}
+                        rows_data.append(row_dict)
+                wb.close()
+            except ImportError:
+                return jsonify({'success': False, 'error': '解析 Excel 需要安装 openpyxl: pip install openpyxl==3.1.2'}), 400
+        else:
+            return jsonify({'success': False, 'error': '只支持 .csv / .xlsx / .xls 格式'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'文件解析失败: {str(e)}'}), 400
+
+    if not rows_data:
+        return jsonify({'success': False, 'error': '文件中没有数据行'}), 400
+
+    _db = Database()
+    dataset_id = _db.create_dataset(name=name, case_id=case_id, project_id=project_id, description=description)
+    count = _db.add_data_rows(dataset_id, rows_data)
+    columns = list(rows_data[0].keys()) if rows_data else []
+    return jsonify({'success': True, 'dataset_id': dataset_id, 'row_count': count, 'columns': columns})
+
+@app.route('/api/datasets/<int:dataset_id>/run', methods=['POST'])
+@login_required
+def api_run_dataset(dataset_id):
+    """数据驱动执行：用数据集的每行数据执行指定测试用例"""
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id')
+    if not case_id:
+        return jsonify({'success': False, 'error': '缺少 case_id 参数'}), 400
+
+    _db = Database()
+    dataset = _db.get_dataset(dataset_id)
+    if not dataset:
+        return jsonify({'success': False, 'error': '数据集不存在'}), 404
+
+    rows = _db.get_data_rows(dataset_id)
+    if not rows:
+        return jsonify({'success': False, 'error': '数据集没有数据行'}), 400
+
+    case = _db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+
+    steps = _db.get_case_steps(case_id)
+    if not steps:
+        return jsonify({'success': False, 'error': '测试用例没有步骤'}), 400
+
+    uat_logger.info(f"数据驱动执行：数据集#{dataset_id}，用例#{case_id}，共{len(rows)}行数据")
+
+    run_results = []
+    total_success = 0
+    total_fail = 0
+
+    for row_info in rows:
+        row_data = row_info['data']
+        row_index = row_info['row_index']
+        import time as _time
+
+        # 将行数据注入变量替换：支持 {{row.字段名}} 格式
+        def resolve_with_row(text, row_dict):
+            if not text:
+                return text
+            import re
+            def replace(m):
+                key = m.group(1).strip()
+                if key.startswith('row.'):
+                    field = key[4:]
+                    return str(row_dict.get(field, m.group(0)))
+                return m.group(0)
+            return re.sub(r'\{\{(.+?)\}\}', replace, text)
+
+        start_time = _time.time()
+        status = 'success'
+        error_msg = ''
+        step_results_list = []
+
+        try:
+            for step_idx, step in enumerate(steps):
+                selector_value = resolve_with_row(
+                    _db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id),
+                    row_data
+                )
+                input_value = resolve_with_row(
+                    _db.resolve_variables(step.get('input_value', ''), project_id=case.get('project_id'), case_id=case_id),
+                    row_data
+                )
+                url_value = resolve_with_row(step.get('url', '') or '', row_data)
+
+                step_start = _time.time()
+                step_status = 'success'
+                step_error = ''
+                try:
+                    action = step.get('action', '')
+                    selector_type = step.get('selector_type', 'css')
+                    enter_iframe = step.get('enter_iframe', False)
+                    iframe_sel = step.get('iframe_selector', '') if enter_iframe else None
+                    if action == 'navigate':
+                        nav_url = url_value or input_value or case.get('url', '')
+                        if nav_url:
+                            if not nav_url.startswith(('http://', 'https://')):
+                                nav_url = 'http://' + nav_url
+                            sync_navigate_to(nav_url)
+                    elif action == 'click':
+                        if selector_value:
+                            sync_click_element(selector_value, selector_type, iframe_selector=iframe_sel)
+                    elif action == 'input':
+                        if selector_value and input_value:
+                            sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_sel)
+                    elif action == 'wait':
+                        wait_ms = int(input_value) * 1000 if input_value and int(input_value) < 1000 else (int(input_value) if input_value else 1000)
+                        sync_wait_for_timeout(wait_ms)
+                    elif action == 'select':
+                        if selector_value and input_value:
+                            sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_sel)
+                    elif action == 'scroll':
+                        sync_scroll_page('down', 500, iframe_selector=iframe_sel)
+                    # 其他 action 忽略
+                except Exception as e:
+                    step_status = 'fail'
+                    step_error = str(e)
+                    status = 'fail'
+                    error_msg = f"行{row_index} 步骤{step_idx+1}({step.get('action','')}) 失败: {e}"
+
+                step_results_list.append({
+                    'step_order': step_idx + 1,
+                    'action': step.get('action', ''),
+                    'selector_value': selector_value,
+                    'input_value': input_value,
+                    'status': step_status,
+                    'error': step_error,
+                    'duration': round(_time.time() - step_start, 3)
+                })
+                if status == 'fail':
+                    break
+        except Exception as e:
+            status = 'fail'
+            error_msg = str(e)
+
+        duration = round(_time.time() - start_time, 3)
+        # 保存历史记录
+        history_id = _db.create_run_history(
+            case_id=case_id,
+            status=status,
+            duration=duration,
+            error=f"[数据驱动 行{row_index}] {error_msg}" if error_msg else '',
+            extracted_text=f"数据驱动 行{row_index}: {str(row_data)}"
+        )
+
+        if status == 'success':
+            total_success += 1
+        else:
+            total_fail += 1
+
+        run_results.append({
+            'row_index': row_index,
+            'row_data': row_data,
+            'status': status,
+            'error': error_msg,
+            'duration': duration,
+            'history_id': history_id,
+            'steps': step_results_list
+        })
+
+    try:
+        sync_close_browser()
+    except Exception:
+        pass
+
+    uat_logger.info(f"数据驱动执行完成：成功{total_success}行，失败{total_fail}行")
+    return jsonify({
+        'success': True,
+        'total': len(rows),
+        'successful_rows': total_success,
+        'failed_rows': total_fail,
+        'results': run_results
+    })
+
 # ==================== 调度器初始化 ====================
 
 try:

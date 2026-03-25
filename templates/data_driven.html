@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据驱动测试 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .status-success { color: #10b981; }
+        .status-fail    { color: #ef4444; }
+        .status-running { color: #3b82f6; }
+        .row-success { background-color: #f0fdf4; border-left: 3px solid #10b981; }
+        .row-fail    { background-color: #fef2f2; border-left: 3px solid #ef4444; }
+        .progress-bar { transition: width 0.3s ease; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- 顶部导航 -->
+<nav class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex justify-between items-center h-14">
+            <div class="flex items-center gap-3">
+                <a href="/" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                    <i class="fas fa-arrow-left mr-1"></i>返回主页
+                </a>
+                <span class="text-gray-300">|</span>
+                <h1 class="text-lg font-semibold text-gray-800">
+                    <i class="fas fa-table mr-2 text-blue-500"></i>数据驱动测试
+                </h1>
+            </div>
+            <div id="userArea" class="flex items-center gap-2">
+                <span id="userLabel" class="text-sm text-gray-500 hidden"></span>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<div class="max-w-7xl mx-auto px-4 py-6">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        <!-- 左侧：数据集管理 -->
+        <div class="lg:col-span-1 space-y-4">
+
+            <!-- 上传新数据集 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <h2 class="text-base font-semibold text-gray-800 mb-4">
+                    <i class="fas fa-upload mr-2 text-blue-500"></i>上传数据集
+                </h2>
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">数据集名称</label>
+                        <input id="datasetName" type="text" placeholder="如：登录测试数据"
+                            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">关联测试用例</label>
+                        <select id="datasetCaseId"
+                            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">-- 选择用例（可选）--</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">描述</label>
+                        <input id="datasetDesc" type="text" placeholder="可选备注"
+                            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-600 mb-1">
+                            选择文件 <span class="text-gray-400">（CSV / XLSX / XLS）</span>
+                        </label>
+                        <div id="dropZone"
+                            class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 transition-colors"
+                            onclick="document.getElementById('fileInput').click()">
+                            <i class="fas fa-file-csv text-3xl text-gray-300 mb-2"></i>
+                            <p id="dropLabel" class="text-sm text-gray-400">点击选择或拖拽文件</p>
+                        </div>
+                        <input id="fileInput" type="file" accept=".csv,.xlsx,.xls" class="hidden">
+                    </div>
+                    <div class="text-xs text-gray-500 bg-blue-50 rounded-lg p-3">
+                        <p class="font-medium text-blue-700 mb-1"><i class="fas fa-info-circle mr-1"></i>变量占位符说明</p>
+                        <p>在测试步骤中使用 <code class="bg-white px-1 rounded border">{{row.字段名}}</code> 引用数据</p>
+                        <p class="mt-1">如 CSV 表头为 <code class="bg-white px-1 rounded border">username</code>，则写 <code class="bg-white px-1 rounded border">{{row.username}}</code></p>
+                    </div>
+                    <button onclick="uploadDataset()"
+                        class="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
+                        <i class="fas fa-upload mr-1"></i>上传并创建
+                    </button>
+                </div>
+            </div>
+
+            <!-- 数据集列表 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-base font-semibold text-gray-800">
+                        <i class="fas fa-database mr-2 text-green-500"></i>数据集列表
+                    </h2>
+                    <button onclick="loadDatasets()" class="text-xs text-gray-500 hover:text-blue-600">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+                <div id="datasetList" class="space-y-2">
+                    <p class="text-sm text-gray-400 text-center py-4">加载中...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：数据预览与执行 -->
+        <div class="lg:col-span-2 space-y-4">
+
+            <!-- 数据预览 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-base font-semibold text-gray-800">
+                        <i class="fas fa-eye mr-2 text-purple-500"></i>数据预览
+                    </h2>
+                    <div id="previewInfo" class="text-sm text-gray-500 hidden">
+                        <span id="previewDatasetName" class="font-medium"></span>
+                        <span id="previewRowCount" class="ml-2 bg-gray-100 px-2 py-0.5 rounded-full text-xs"></span>
+                    </div>
+                </div>
+                <div id="dataPreview">
+                    <div class="text-center py-12 text-gray-400">
+                        <i class="fas fa-table text-5xl mb-3"></i>
+                        <p class="text-sm">点击左侧数据集查看数据</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 执行配置与结果 -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5" id="runPanel" style="display:none">
+                <h2 class="text-base font-semibold text-gray-800 mb-4">
+                    <i class="fas fa-play-circle mr-2 text-green-500"></i>执行配置
+                </h2>
+                <div class="flex flex-wrap gap-3 items-end mb-4">
+                    <div class="flex-1 min-w-48">
+                        <label class="block text-xs font-medium text-gray-600 mb-1">选择执行用例</label>
+                        <select id="runCaseId"
+                            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+                            <option value="">-- 选择用例 --</option>
+                        </select>
+                    </div>
+                    <button onclick="runDataset()"
+                        class="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors flex items-center gap-2">
+                        <i class="fas fa-play"></i>开始执行
+                    </button>
+                </div>
+                <div id="runProgress" class="hidden mb-4">
+                    <div class="flex justify-between text-sm text-gray-600 mb-1">
+                        <span id="progressText">执行中...</span>
+                        <span id="progressPct">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div id="progressBar" class="bg-blue-500 h-2 rounded-full progress-bar" style="width:0%"></div>
+                    </div>
+                </div>
+                <div id="runResultSummary" class="hidden grid grid-cols-3 gap-3 mb-4">
+                    <div class="text-center bg-gray-50 rounded-lg p-3">
+                        <div id="totalRows" class="text-2xl font-bold text-gray-700">0</div>
+                        <div class="text-xs text-gray-500 mt-1">总行数</div>
+                    </div>
+                    <div class="text-center bg-green-50 rounded-lg p-3">
+                        <div id="successRows" class="text-2xl font-bold text-green-600">0</div>
+                        <div class="text-xs text-gray-500 mt-1">成功</div>
+                    </div>
+                    <div class="text-center bg-red-50 rounded-lg p-3">
+                        <div id="failRows" class="text-2xl font-bold text-red-500">0</div>
+                        <div class="text-xs text-gray-500 mt-1">失败</div>
+                    </div>
+                </div>
+                <div id="runDetails" class="space-y-2"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentDatasetId = null;
+    let allCases = [];
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', () => {
+        loadCases();
+        loadDatasets();
+        initDropZone();
+        initUserArea();
+    });
+
+    function initUserArea() {
+        fetch('/api/auth/me').then(r => r.json()).then(d => {
+            if (d.success) {
+                document.getElementById('userLabel').textContent = d.user.username;
+                document.getElementById('userLabel').classList.remove('hidden');
+            }
+        }).catch(() => {});
+    }
+
+    async function loadCases() {
+        try {
+            const res = await fetch('/api/projects');
+            const data = await res.json();
+            const projects = data.projects || [];
+            const caseSelect = document.getElementById('datasetCaseId');
+            const runCaseSelect = document.getElementById('runCaseId');
+            allCases = [];
+            for (const proj of projects) {
+                const casesRes = await fetch(`/api/projects/${proj.id}/cases`);
+                const casesData = await casesRes.json();
+                const cases = casesData.cases || [];
+                cases.forEach(c => allCases.push({...c, project_name: proj.name}));
+            }
+            const optHtml = allCases.map(c =>
+                `<option value="${c.id}">[${c.project_name}] ${c.name}</option>`
+            ).join('');
+            caseSelect.innerHTML = '<option value="">-- 选择用例（可选）--</option>' + optHtml;
+            runCaseSelect.innerHTML = '<option value="">-- 选择用例 --</option>' + optHtml;
+        } catch (e) {
+            console.error('加载用例失败', e);
+        }
+    }
+
+    async function loadDatasets() {
+        const res = await fetch('/api/datasets');
+        const data = await res.json();
+        const list = document.getElementById('datasetList');
+        if (!data.datasets || data.datasets.length === 0) {
+            list.innerHTML = '<p class="text-sm text-gray-400 text-center py-4">暂无数据集</p>';
+            return;
+        }
+        list.innerHTML = data.datasets.map(ds => `
+            <div class="border border-gray-200 rounded-lg p-3 cursor-pointer hover:bg-blue-50 hover:border-blue-300 transition-colors ${currentDatasetId == ds.id ? 'bg-blue-50 border-blue-300' : ''}"
+                onclick="selectDataset(${ds.id})">
+                <div class="flex justify-between items-start">
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-gray-800 truncate">${escHtml(ds.name)}</p>
+                        <p class="text-xs text-gray-500 mt-0.5">
+                            <i class="fas fa-table mr-1"></i>${ds.row_count} 行数据
+                            ${ds.case_id ? `<span class="ml-2"><i class="fas fa-link mr-1"></i>已关联用例</span>` : ''}
+                        </p>
+                    </div>
+                    <button onclick="event.stopPropagation(); deleteDataset(${ds.id})"
+                        class="text-gray-400 hover:text-red-500 ml-2 flex-shrink-0">
+                        <i class="fas fa-trash text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    async function selectDataset(datasetId) {
+        currentDatasetId = datasetId;
+        await loadDatasets(); // 刷新选中状态
+        const res = await fetch(`/api/datasets/${datasetId}`);
+        const data = await res.json();
+        if (!data.success) return;
+        const ds = data.dataset;
+        const rows = ds.rows || [];
+
+        // 更新预览信息
+        document.getElementById('previewInfo').classList.remove('hidden');
+        document.getElementById('previewDatasetName').textContent = ds.name;
+        document.getElementById('previewRowCount').textContent = `${rows.length} 行`;
+
+        // 渲染数据表格
+        if (rows.length === 0) {
+            document.getElementById('dataPreview').innerHTML = '<p class="text-sm text-gray-400 text-center py-8">数据集为空</p>';
+        } else {
+            const columns = Object.keys(rows[0].data);
+            document.getElementById('dataPreview').innerHTML = `
+                <div class="overflow-auto max-h-64 rounded-lg border border-gray-200">
+                    <table class="min-w-full text-sm">
+                        <thead class="bg-gray-50 sticky top-0">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 border-b">#</th>
+                                ${columns.map(c => `<th class="px-3 py-2 text-left text-xs font-medium text-gray-500 border-b">${escHtml(c)}</th>`).join('')}
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            ${rows.slice(0, 50).map((r, i) => `
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-3 py-1.5 text-gray-400 text-xs">${r.row_index + 1}</td>
+                                    ${columns.map(c => `<td class="px-3 py-1.5 text-gray-700 max-w-xs truncate">${escHtml(String(r.data[c] ?? ''))}</td>`).join('')}
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                    ${rows.length > 50 ? `<p class="text-xs text-gray-400 text-center py-2">仅显示前50行，共${rows.length}行</p>` : ''}
+                </div>
+            `;
+        }
+
+        // 显示执行面板，预填关联用例
+        document.getElementById('runPanel').style.display = 'block';
+        if (ds.case_id) {
+            document.getElementById('runCaseId').value = ds.case_id;
+        }
+        document.getElementById('runDetails').innerHTML = '';
+        document.getElementById('runResultSummary').classList.add('hidden');
+        document.getElementById('runProgress').classList.add('hidden');
+    }
+
+    function initDropZone() {
+        const zone = document.getElementById('dropZone');
+        const input = document.getElementById('fileInput');
+
+        input.addEventListener('change', () => {
+            if (input.files[0]) {
+                document.getElementById('dropLabel').textContent = input.files[0].name;
+                zone.classList.add('border-blue-400', 'bg-blue-50');
+            }
+        });
+
+        zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('border-blue-400'); });
+        zone.addEventListener('dragleave', () => zone.classList.remove('border-blue-400'));
+        zone.addEventListener('drop', e => {
+            e.preventDefault();
+            zone.classList.remove('border-blue-400');
+            const f = e.dataTransfer.files[0];
+            if (f) {
+                input.files = e.dataTransfer.files;
+                document.getElementById('dropLabel').textContent = f.name;
+                zone.classList.add('border-blue-400', 'bg-blue-50');
+            }
+        });
+    }
+
+    async function uploadDataset() {
+        const name = document.getElementById('datasetName').value.trim();
+        const file = document.getElementById('fileInput').files[0];
+        if (!name) { alert('请填写数据集名称'); return; }
+        if (!file) { alert('请选择文件'); return; }
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('name', name);
+        const caseId = document.getElementById('datasetCaseId').value;
+        if (caseId) formData.append('case_id', caseId);
+        const desc = document.getElementById('datasetDesc').value.trim();
+        if (desc) formData.append('description', desc);
+
+        const btn = event.target;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>上传中...';
+
+        try {
+            const res = await fetch('/api/datasets/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.success) {
+                alert(`✅ 上传成功！共导入 ${data.row_count} 行数据\n字段列：${(data.columns || []).join(', ')}`);
+                document.getElementById('datasetName').value = '';
+                document.getElementById('datasetDesc').value = '';
+                document.getElementById('fileInput').value = '';
+                document.getElementById('dropLabel').textContent = '点击选择或拖拽文件';
+                document.getElementById('dropZone').classList.remove('border-blue-400', 'bg-blue-50');
+                await loadDatasets();
+                selectDataset(data.dataset_id);
+            } else {
+                alert('❌ 上传失败：' + data.error);
+            }
+        } catch (e) {
+            alert('上传请求失败：' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-upload mr-1"></i>上传并创建';
+        }
+    }
+
+    async function deleteDataset(datasetId) {
+        if (!confirm('确定要删除该数据集吗？')) return;
+        const res = await fetch(`/api/datasets/${datasetId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.success) {
+            if (currentDatasetId == datasetId) {
+                currentDatasetId = null;
+                document.getElementById('dataPreview').innerHTML = `
+                    <div class="text-center py-12 text-gray-400">
+                        <i class="fas fa-table text-5xl mb-3"></i>
+                        <p class="text-sm">点击左侧数据集查看数据</p>
+                    </div>`;
+                document.getElementById('previewInfo').classList.add('hidden');
+                document.getElementById('runPanel').style.display = 'none';
+            }
+            await loadDatasets();
+        } else {
+            alert('删除失败');
+        }
+    }
+
+    async function runDataset() {
+        if (!currentDatasetId) { alert('请先选择数据集'); return; }
+        const caseId = parseInt(document.getElementById('runCaseId').value);
+        if (!caseId) { alert('请选择要执行的测试用例'); return; }
+
+        const btn = event.target;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>执行中...';
+
+        document.getElementById('runProgress').classList.remove('hidden');
+        document.getElementById('runResultSummary').classList.add('hidden');
+        document.getElementById('runDetails').innerHTML = '';
+        document.getElementById('progressBar').style.width = '10%';
+        document.getElementById('progressText').textContent = '正在执行...';
+        document.getElementById('progressPct').textContent = '10%';
+
+        try {
+            const res = await fetch(`/api/datasets/${currentDatasetId}/run`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ case_id: caseId })
+            });
+            const data = await res.json();
+
+            document.getElementById('progressBar').style.width = '100%';
+            document.getElementById('progressPct').textContent = '100%';
+            document.getElementById('progressText').textContent = '执行完成';
+
+            if (data.success) {
+                // 显示汇总
+                document.getElementById('runResultSummary').classList.remove('hidden');
+                document.getElementById('totalRows').textContent = data.total;
+                document.getElementById('successRows').textContent = data.successful_rows;
+                document.getElementById('failRows').textContent = data.failed_rows;
+
+                // 显示详情
+                document.getElementById('runDetails').innerHTML = data.results.map(r => `
+                    <div class="border rounded-lg p-3 ${r.status === 'success' ? 'row-success' : 'row-fail'}">
+                        <div class="flex justify-between items-center">
+                            <div class="flex items-center gap-2">
+                                <i class="fas ${r.status === 'success' ? 'fa-check-circle status-success' : 'fa-times-circle status-fail'}"></i>
+                                <span class="text-sm font-medium">行 ${r.row_index + 1}</span>
+                                <span class="text-xs text-gray-500">${formatRowData(r.row_data)}</span>
+                            </div>
+                            <span class="text-xs text-gray-400">${r.duration}s</span>
+                        </div>
+                        ${r.error ? `<p class="text-xs text-red-600 mt-1 ml-6"><i class="fas fa-exclamation-triangle mr-1"></i>${escHtml(r.error)}</p>` : ''}
+                    </div>
+                `).join('');
+            } else {
+                alert('执行失败：' + data.error);
+            }
+        } catch (e) {
+            alert('执行请求失败：' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play mr-1"></i>开始执行';
+        }
+    }
+
+    function formatRowData(obj) {
+        const entries = Object.entries(obj).slice(0, 3);
+        return entries.map(([k, v]) => `${k}=${v}`).join(', ') + (Object.keys(obj).length > 3 ? '...' : '');
+    }
+
+    function escHtml(str) {
+        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+</script>
+</body>
+</html>

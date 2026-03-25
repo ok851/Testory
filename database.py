@@ -213,6 +213,32 @@ class Database:
             )
         ''')
 
+        # 创建数据驱动测试数据集表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS test_data_sets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                case_id INTEGER,
+                project_id INTEGER,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES test_cases (id),
+                FOREIGN KEY (project_id) REFERENCES projects (id)
+            )
+        ''')
+
+        # 创建数据驱动测试数据行表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS test_data_rows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dataset_id INTEGER NOT NULL,
+                row_index INTEGER DEFAULT 0,
+                data TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (dataset_id) REFERENCES test_data_sets (id)
+            )
+        ''')
+
         # 添加数据库索引以优化查询性能
         self._create_indexes(cursor)
         
@@ -233,6 +259,8 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_variables_project ON variables(project_id)",
             "CREATE INDEX IF NOT EXISTS idx_schedules_active ON schedules(is_active)",
             "CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)",
+            "CREATE INDEX IF NOT EXISTS idx_test_data_sets_case ON test_data_sets(case_id)",
+            "CREATE INDEX IF NOT EXISTS idx_test_data_rows_dataset ON test_data_rows(dataset_id)",
         ]
         
         for index_sql in indexes:
@@ -1438,3 +1466,99 @@ class Database:
         conn.commit()
         conn.close()
         return success
+
+    # ==================== 数据驱动测试方法 ====================
+
+    def create_dataset(self, name: str, case_id: int = None, project_id: int = None, description: str = '') -> int:
+        """创建数据集"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO test_data_sets (name, case_id, project_id, description) VALUES (?, ?, ?, ?)",
+            (name, case_id, project_id, description)
+        )
+        dataset_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return dataset_id
+
+    def get_all_datasets(self, case_id: int = None, project_id: int = None) -> List[Dict[str, Any]]:
+        """获取数据集列表"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if case_id:
+            cursor.execute(
+                "SELECT ds.*, COUNT(dr.id) as row_count FROM test_data_sets ds LEFT JOIN test_data_rows dr ON ds.id = dr.dataset_id WHERE ds.case_id = ? GROUP BY ds.id ORDER BY ds.created_at DESC",
+                (case_id,)
+            )
+        elif project_id:
+            cursor.execute(
+                "SELECT ds.*, COUNT(dr.id) as row_count FROM test_data_sets ds LEFT JOIN test_data_rows dr ON ds.id = dr.dataset_id WHERE ds.project_id = ? GROUP BY ds.id ORDER BY ds.created_at DESC",
+                (project_id,)
+            )
+        else:
+            cursor.execute(
+                "SELECT ds.*, COUNT(dr.id) as row_count FROM test_data_sets ds LEFT JOIN test_data_rows dr ON ds.id = dr.dataset_id GROUP BY ds.id ORDER BY ds.created_at DESC"
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'name': r[1], 'case_id': r[2], 'project_id': r[3],
+                 'description': r[4], 'created_at': r[5], 'row_count': r[6]} for r in rows]
+
+    def get_dataset(self, dataset_id: int) -> Dict[str, Any]:
+        """获取单个数据集"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM test_data_sets WHERE id = ?", (dataset_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {'id': row[0], 'name': row[1], 'case_id': row[2], 'project_id': row[3],
+                    'description': row[4], 'created_at': row[5]}
+        return None
+
+    def delete_dataset(self, dataset_id: int) -> bool:
+        """删除数据集及其所有数据行"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM test_data_rows WHERE dataset_id = ?", (dataset_id,))
+        cursor.execute("DELETE FROM test_data_sets WHERE id = ?", (dataset_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def add_data_rows(self, dataset_id: int, rows: List[Dict[str, Any]]) -> int:
+        """批量添加数据行（rows 为字典列表）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        # 先清除已有数据行
+        cursor.execute("DELETE FROM test_data_rows WHERE dataset_id = ?", (dataset_id,))
+        for idx, row_data in enumerate(rows):
+            cursor.execute(
+                "INSERT INTO test_data_rows (dataset_id, row_index, data) VALUES (?, ?, ?)",
+                (dataset_id, idx, json.dumps(row_data, ensure_ascii=False))
+            )
+        count = len(rows)
+        conn.commit()
+        conn.close()
+        return count
+
+    def get_data_rows(self, dataset_id: int) -> List[Dict[str, Any]]:
+        """获取数据集的所有数据行"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, row_index, data FROM test_data_rows WHERE dataset_id = ? ORDER BY row_index ASC",
+            (dataset_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        result = []
+        for r in rows:
+            try:
+                data = json.loads(r[2])
+            except Exception:
+                data = {}
+            result.append({'id': r[0], 'row_index': r[1], 'data': data})
+        return result
