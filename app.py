@@ -1,13 +1,16 @@
 from flask import Flask, render_template, request, jsonify, session, make_response
 from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import time
-from database import Database
-from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_start_recording, sync_stop_recording, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe, sync_wait_for_page_stable  # 使用全局实例和同步包装器
-from test_report import TestReportGenerator
-from report_exporter import ReportExporter
+import secrets
 import json
 import functools
+from database import Database
+from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_start_recording, sync_stop_recording, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe, sync_wait_for_page_stable
+from test_report import TestReportGenerator
+from report_exporter import ReportExporter
 from logger import uat_logger
 
 # 统一的API错误处理装饰器
@@ -57,13 +60,196 @@ CORS(app)
 # 设置Flask应用的密钥，用于session加密
 app.secret_key = 'your-secret-key-here'
 
+# ==================== Flask-Login 初始化 ====================
+login_manager = LoginManager(app)
+login_manager.login_view = 'login_page'
+login_manager.login_message = '请先登录'
+
+class UserModel(UserMixin):
+    """Flask-Login 用户模型"""
+    def __init__(self, user_data: dict):
+        self.id = user_data['id']
+        self.username = user_data['username']
+        self.role = user_data['role']
+        self.is_active_flag = bool(user_data.get('is_active', 1))
+
+    def get_id(self):
+        return str(self.id)
+
+    @property
+    def is_active(self):
+        return self.is_active_flag
+
+@login_manager.user_loader
+def load_user(user_id):
+    _db = Database()
+    user_data = _db.get_user_by_id(int(user_id))
+    if user_data:
+        return UserModel(user_data)
+    return None
+
+def role_required(*roles):
+    """角色权限装饰器"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if not current_user.is_authenticated:
+                return jsonify({'success': False, 'error': '未登录'}), 401
+            if current_user.role not in roles:
+                return jsonify({'success': False, 'error': '权限不足'}), 403
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+def token_or_login_required(func):
+    """支持 Bearer Token 或 Flask-Login Session 两种认证方式（用于 Webhook/CI）"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token_val = auth_header[7:]
+            _db = Database()
+            token_info = _db.get_token_by_value(token_val)
+            if not token_info:
+                return jsonify({'success': False, 'error': '无效的 API Token'}), 401
+            import datetime
+            if token_info.get('expires_at'):
+                try:
+                    exp = datetime.datetime.strptime(token_info['expires_at'], '%Y-%m-%d %H:%M:%S')
+                    if exp < datetime.datetime.now():
+                        return jsonify({'success': False, 'error': 'API Token 已过期'}), 401
+                except Exception:
+                    pass
+            return func(*args, **kwargs)
+        if current_user.is_authenticated:
+            return func(*args, **kwargs)
+        return jsonify({'success': False, 'error': '未认证'}), 401
+    return wrapper
+
 # 初始化数据库
 db = Database()
+
+# 首次启动自动创建管理员账号
+def _ensure_admin():
+    if db.count_users() == 0:
+        db.create_user('admin', generate_password_hash('admin123'), role='admin')
+        uat_logger.info("首次启动：已创建默认管理员账号 admin/admin123，请尽快修改密码！")
+
+_ensure_admin()
 
 # 主页路由
 @app.route('/')
 def index():
     return render_template('index.html')
+
+# ==================== 用户认证路由 ====================
+
+@app.route('/login')
+def login_page():
+    return render_template('login.html')
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_login():
+    data = request.get_json(silent=True) or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    if not username or not password:
+        return jsonify({'success': False, 'error': '用户名和密码不能为空'}), 400
+    _db = Database()
+    user_data = _db.get_user_by_username(username)
+    if not user_data or not check_password_hash(user_data['password_hash'], password):
+        return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
+    if not user_data.get('is_active', 1):
+        return jsonify({'success': False, 'error': '账号已被禁用'}), 403
+    user = UserModel(user_data)
+    login_user(user, remember=True)
+    _db.update_user_last_login(user_data['id'])
+    uat_logger.info(f"用户 {username} 登录成功")
+    return jsonify({'success': True, 'user': {'id': user_data['id'], 'username': username, 'role': user_data['role']}})
+
+@app.route('/api/auth/logout', methods=['POST'])
+@login_required
+def api_logout():
+    username = current_user.username
+    logout_user()
+    uat_logger.info(f"用户 {username} 已注销")
+    return jsonify({'success': True})
+
+@app.route('/api/auth/me', methods=['GET'])
+@login_required
+def api_me():
+    return jsonify({'success': True, 'user': {'id': current_user.id, 'username': current_user.username, 'role': current_user.role}})
+
+@app.route('/api/auth/change_password', methods=['POST'])
+@login_required
+def api_change_password():
+    data = request.get_json(silent=True) or {}
+    old_password = data.get('old_password', '')
+    new_password = data.get('new_password', '')
+    if not old_password or not new_password:
+        return jsonify({'success': False, 'error': '密码不能为空'}), 400
+    if len(new_password) < 6:
+        return jsonify({'success': False, 'error': '新密码长度不能小于6位'}), 400
+    _db = Database()
+    user_data = _db.get_user_by_id(current_user.id)
+    if not check_password_hash(user_data['password_hash'], old_password):
+        return jsonify({'success': False, 'error': '原密码错误'}), 401
+    _db.update_user(current_user.id, password_hash=generate_password_hash(new_password))
+    uat_logger.info(f"用户 {current_user.username} 修改了密码")
+    return jsonify({'success': True})
+
+# ==================== 用户管理API（仅管理员） ====================
+
+@app.route('/api/users', methods=['GET'])
+@login_required
+@role_required('admin')
+def api_get_users():
+    _db = Database()
+    users = _db.get_all_users()
+    return jsonify({'success': True, 'users': users})
+
+@app.route('/api/users', methods=['POST'])
+@login_required
+@role_required('admin')
+def api_create_user():
+    data = request.get_json(silent=True) or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    email = data.get('email', '').strip() or None
+    role = data.get('role', 'tester')
+    if not username or not password:
+        return jsonify({'success': False, 'error': '用户名和密码不能为空'}), 400
+    if role not in ('admin', 'tester', 'viewer'):
+        return jsonify({'success': False, 'error': '无效的角色，可选: admin/tester/viewer'}), 400
+    _db = Database()
+    user_id = _db.create_user(username, generate_password_hash(password), email, role)
+    if user_id is None:
+        return jsonify({'success': False, 'error': '用户名或邮箱已存在'}), 409
+    return jsonify({'success': True, 'user_id': user_id})
+
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
+@login_required
+@role_required('admin')
+def api_update_user(user_id):
+    data = request.get_json(silent=True) or {}
+    _db = Database()
+    success = _db.update_user(user_id,
+        email=data.get('email'),
+        role=data.get('role'),
+        is_active=data.get('is_active'),
+        password_hash=generate_password_hash(data['password']) if data.get('password') else None
+    )
+    return jsonify({'success': success})
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+@login_required
+@role_required('admin')
+def api_delete_user(user_id):
+    if user_id == current_user.id:
+        return jsonify({'success': False, 'error': '不能删除当前登录的账号'}), 400
+    _db = Database()
+    success = _db.delete_user(user_id)
+    return jsonify({'success': success})
 
 @app.route('/create_case_v2')
 def create_case_v2():
@@ -926,6 +1112,10 @@ def api_run_case(case_id):
         extracted_text = ""
         # 预期结果
         expected_text = ""
+        # 截图列表（失败截图路径）
+        screenshots = []
+        # 步骤结果列表（用于步骤级记录）
+        step_results_list = []
         
         # 启动浏览器
         sync_start_browser(headless=False)
@@ -956,13 +1146,19 @@ def api_run_case(case_id):
             for step in steps:
                 action = step.get('action', '')
                 selector_type = step.get('selector_type', 'css')
-                selector_value = step.get('selector_value', '')
-                input_value = step.get('input_value', '')
+                # 变量替换：支持 {{变量名}} 语法
+                selector_value = db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id)
+                input_value = db.resolve_variables(step.get('input_value', ''), project_id=case.get('project_id'), case_id=case_id)
                 description = step.get('description', '')
                 # 添加iframe相关字段
                 enter_iframe = step.get('enter_iframe', False)
                 iframe_selector = step.get('iframe_selector', '')
-                                        
+                
+                step_start_time = time.time()
+                step_status = 'success'
+                step_error = ''
+                step_screenshot = ''
+
                 uat_logger.log_automation_step(action, selector_value or input_value, description)
                                         
                 # 详细的调试日志，跟踪 action 值和执行的方法
@@ -1325,15 +1521,29 @@ def api_run_case(case_id):
                         uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
                         # 直接抛出错误，视为测试用例执行失败
                         raise
+
+                # 记录本步骤结果
+                step_duration = round(time.time() - step_start_time, 3)
+                step_results_list.append({
+                    'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                    'action': action, 'selector_value': selector_value,
+                    'input_value': input_value, 'description': description,
+                    'status': step_status, 'error': step_error,
+                    'screenshot': step_screenshot, 'duration': step_duration
+                })
             
             # 计算执行时间
             duration = round(time.time() - start_time, 2)
             
             uat_logger.info(f"测试用例 #{case_id} 运行成功，耗时: {duration}秒")
             
-            # 保存运行历史记录
+            # 保存运行历史记录，并写入步骤结果
             try:
-                db.create_run_history(case_id, 'success', duration, "", extracted_text, expected_text)
+                run_id = db.create_run_history(case_id, 'success', duration, "", extracted_text, expected_text)
+                for sr in step_results_list:
+                    db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
+                        sr['selector_value'], sr['input_value'], sr['description'],
+                        sr['status'], sr['error'], sr['screenshot'], sr['duration'])
             except Exception as history_error:
                 uat_logger.warning(f"保存运行历史记录失败: {history_error}")
             
@@ -1347,17 +1557,49 @@ def api_run_case(case_id):
                 'success': True,
                 'status': 'success',
                 'duration': duration,
-                'message': '测试用例运行成功'
+                'message': '测试用例运行成功',
+                'step_count': len(step_results_list)
             })
             
         except Exception as e:
-            # 执行失败时的处理（不关闭浏览器，便于用户查看页面状态排查问题）
+            # 执行失败时的处理
             duration = round(time.time() - start_time, 2)
             uat_logger.error(f"测试用例 #{case_id} 运行失败: {str(e)}")
+
+            # 失败时自动截图
+            failure_screenshot = ''
+            try:
+                screenshot_dir = os.path.join(os.getcwd(), 'screenshots')
+                os.makedirs(screenshot_dir, exist_ok=True)
+                screenshot_path = os.path.join(screenshot_dir, f'fail_{case_id}_{int(time.time())}.png')
+                sync_take_screenshot(screenshot_path)
+                failure_screenshot = screenshot_path
+                screenshots.append(screenshot_path)
+                uat_logger.info(f"失败截图已保存: {screenshot_path}")
+            except Exception as ss_error:
+                uat_logger.warning(f"截图失败: {ss_error}")
+
+            # 标记最后一步为失败
+            if step_results_list and step_results_list[-1]['status'] == 'success':
+                step_results_list[-1]['status'] = 'error'
+                step_results_list[-1]['error'] = str(e)
+                step_results_list[-1]['screenshot'] = failure_screenshot
             
             # 保存运行历史记录
             try:
-                db.create_run_history(case_id, 'error', duration, str(e), extracted_text, expected_text)
+                run_id = db.create_run_history(case_id, 'error', duration, str(e), extracted_text, expected_text)
+                # 更新 screenshots 字段
+                try:
+                    conn = __import__('sqlite3').connect(db.db_path)
+                    conn.execute("UPDATE run_history SET screenshots = ? WHERE id = ?",
+                                 (json.dumps(screenshots), run_id))
+                    conn.commit(); conn.close()
+                except Exception:
+                    pass
+                for sr in step_results_list:
+                    db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
+                        sr['selector_value'], sr['input_value'], sr['description'],
+                        sr['status'], sr['error'], sr['screenshot'], sr['duration'])
             except Exception as history_error:
                 uat_logger.warning(f"保存运行历史记录失败: {history_error}")
             
@@ -1724,6 +1966,247 @@ def api_export_report():
             'success': False,
             'error': str(e)
         }), 500
+
+
+# ==================== 变量管理API ====================
+
+@app.route('/api/variables', methods=['GET'])
+@login_required
+def api_get_variables():
+    scope = request.args.get('scope')
+    project_id = request.args.get('project_id', type=int)
+    case_id = request.args.get('case_id', type=int)
+    _db = Database()
+    variables = _db.get_variables(scope, project_id, case_id)
+    return jsonify({'success': True, 'variables': variables})
+
+@app.route('/api/variables', methods=['POST'])
+@login_required
+def api_create_variable():
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    value = data.get('value', '')
+    scope = data.get('scope', 'global')
+    if not name:
+        return jsonify({'success': False, 'error': '变量名不能为空'}), 400
+    if scope not in ('global', 'project', 'case'):
+        return jsonify({'success': False, 'error': '无效的作用域'}), 400
+    _db = Database()
+    var_id = _db.create_variable(name, value, scope, data.get('project_id'), data.get('case_id'), data.get('description', ''))
+    return jsonify({'success': True, 'var_id': var_id})
+
+@app.route('/api/variables/<int:var_id>', methods=['PUT'])
+@login_required
+def api_update_variable(var_id):
+    data = request.get_json(silent=True) or {}
+    _db = Database()
+    success = _db.update_variable(var_id, data.get('name'), data.get('value'), data.get('description'))
+    return jsonify({'success': success})
+
+@app.route('/api/variables/<int:var_id>', methods=['DELETE'])
+@login_required
+def api_delete_variable(var_id):
+    _db = Database()
+    success = _db.delete_variable(var_id)
+    return jsonify({'success': success})
+
+# ==================== 步骤执行结果API ====================
+
+@app.route('/api/run-history/<int:record_id>/steps', methods=['GET'])
+def get_run_step_results(record_id):
+    """获取某次运行的步骤级结果"""
+    try:
+        _db = Database()
+        results = _db.get_step_results(record_id)
+        return jsonify({'success': True, 'step_results': results})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ==================== 定时调度API ====================
+
+@app.route('/api/schedules', methods=['GET'])
+@login_required
+def api_get_schedules():
+    _db = Database()
+    schedules = _db.get_all_schedules()
+    return jsonify({'success': True, 'schedules': schedules})
+
+@app.route('/api/schedules', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+def api_create_schedule():
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    case_ids = data.get('case_ids', [])
+    cron_expr = data.get('cron_expr', '').strip()
+    if not name or not case_ids or not cron_expr:
+        return jsonify({'success': False, 'error': '名称、用例ID列表和cron表达式不能为空'}), 400
+    _db = Database()
+    schedule_id = _db.create_schedule(name, case_ids, cron_expr, data.get('project_id'))
+    # 注册到调度器
+    _register_schedule_job(schedule_id, case_ids, cron_expr)
+    return jsonify({'success': True, 'schedule_id': schedule_id})
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['PUT'])
+@login_required
+@role_required('admin', 'tester')
+def api_update_schedule(schedule_id):
+    data = request.get_json(silent=True) or {}
+    _db = Database()
+    success = _db.update_schedule(schedule_id,
+        name=data.get('name'), cron_expr=data.get('cron_expr'),
+        is_active=data.get('is_active'), case_ids=data.get('case_ids'))
+    if success and data.get('cron_expr'):
+        schedules = _db.get_all_schedules()
+        for s in schedules:
+            if s['id'] == schedule_id:
+                _register_schedule_job(schedule_id, s['case_ids'], data['cron_expr'])
+                break
+    return jsonify({'success': success})
+
+@app.route('/api/schedules/<int:schedule_id>', methods=['DELETE'])
+@login_required
+@role_required('admin', 'tester')
+def api_delete_schedule(schedule_id):
+    _db = Database()
+    success = _db.delete_schedule(schedule_id)
+    try:
+        scheduler.remove_job(f'schedule_{schedule_id}')
+    except Exception:
+        pass
+    return jsonify({'success': success})
+
+# ==================== API Token 管理 ====================
+
+@app.route('/api/tokens', methods=['GET'])
+@login_required
+@role_required('admin')
+def api_get_tokens():
+    _db = Database()
+    tokens = _db.get_all_tokens()
+    return jsonify({'success': True, 'tokens': tokens})
+
+@app.route('/api/tokens', methods=['POST'])
+@login_required
+@role_required('admin')
+def api_create_token():
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': 'Token名称不能为空'}), 400
+    token_val = secrets.token_urlsafe(32)
+    _db = Database()
+    token_id = _db.create_api_token(name, token_val, data.get('project_id'), data.get('expires_at'))
+    return jsonify({'success': True, 'token_id': token_id, 'token': token_val,
+                    'message': '请妥善保存此Token，它只显示一次！'})
+
+@app.route('/api/tokens/<int:token_id>', methods=['DELETE'])
+@login_required
+@role_required('admin')
+def api_revoke_token(token_id):
+    _db = Database()
+    success = _db.revoke_token(token_id)
+    return jsonify({'success': success})
+
+# ==================== Webhook/CI 触发接口 ====================
+
+@app.route('/api/trigger/<int:project_id>', methods=['POST'])
+@token_or_login_required
+def api_trigger_project(project_id):
+    """CI/CD 触发指定项目的所有用例执行"""
+    try:
+        _db = Database()
+        cases = _db.get_project_cases(project_id)
+        if not cases:
+            return jsonify({'success': False, 'error': '项目没有测试用例'}), 400
+        case_ids = [c['id'] for c in cases]
+        uat_logger.info(f"CI/CD 触发项目 #{project_id} 执行，共 {len(case_ids)} 个用例")
+        results = sync_execute_multiple_test_cases(case_ids, _db)
+        try:
+            sync_close_browser()
+        except Exception:
+            pass
+        return jsonify({'success': True, 'results': results})
+    except Exception as e:
+        uat_logger.error(f"CI 触发执行失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/trigger/cases', methods=['POST'])
+@token_or_login_required
+def api_trigger_cases():
+    """CI/CD 触发指定用例列表执行"""
+    try:
+        data = request.get_json(silent=True) or {}
+        case_ids = data.get('case_ids', [])
+        if not case_ids:
+            return jsonify({'success': False, 'error': '缺少 case_ids 参数'}), 400
+        _db = Database()
+        uat_logger.info(f"CI/CD 触发用例列表执行: {case_ids}")
+        results = sync_execute_multiple_test_cases(case_ids, _db)
+        try:
+            sync_close_browser()
+        except Exception:
+            pass
+        return jsonify({'success': True, 'results': results})
+    except Exception as e:
+        uat_logger.error(f"CI 触发执行失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ==================== 调度器初始化 ====================
+
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
+
+    def _run_scheduled_cases(schedule_id: int, case_ids: list):
+        """调度器回调：执行定时用例"""
+        import datetime
+        uat_logger.info(f"⏰ 定时任务 #{schedule_id} 开始执行，用例: {case_ids}")
+        _db = Database()
+        try:
+            results = sync_execute_multiple_test_cases(case_ids, _db)
+            uat_logger.info(f"⏰ 定时任务 #{schedule_id} 完成，成功: {results.get('successful_cases',0)}, 失败: {results.get('failed_cases',0)}")
+        except Exception as e:
+            uat_logger.error(f"⏰ 定时任务 #{schedule_id} 执行失败: {e}")
+        finally:
+            try:
+                sync_close_browser()
+            except Exception:
+                pass
+            last_run = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            _db.update_schedule(schedule_id, last_run=last_run)
+
+    def _register_schedule_job(schedule_id: int, case_ids: list, cron_expr: str):
+        """注册/更新定时任务"""
+        job_id = f'schedule_{schedule_id}'
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        parts = cron_expr.strip().split()
+        if len(parts) == 5:
+            minute, hour, day, month, day_of_week = parts
+            trigger = CronTrigger(minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week)
+            scheduler.add_job(_run_scheduled_cases, trigger, args=[schedule_id, case_ids], id=job_id)
+            uat_logger.info(f"定时任务 #{schedule_id} 已注册，cron: {cron_expr}")
+
+    # 启动调度器并加载已有任务
+    scheduler.start()
+    _init_db = Database()
+    for sched in _init_db.get_active_schedules():
+        try:
+            _register_schedule_job(sched['id'], sched['case_ids'], sched['cron_expr'])
+        except Exception as e:
+            uat_logger.warning(f"加载定时任务 #{sched['id']} 失败: {e}")
+    uat_logger.info("APScheduler 调度器已启动")
+
+except ImportError:
+    uat_logger.warning("APScheduler 未安装，定时执行功能不可用。运行: pip install APScheduler==3.10.4")
+    scheduler = None
+    def _register_schedule_job(*args, **kwargs):
+        pass
 
 
 if __name__ == '__main__':

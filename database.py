@@ -12,7 +12,21 @@ class Database:
         """初始化数据库表"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
+        # 创建用户表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                email TEXT UNIQUE,
+                role TEXT NOT NULL DEFAULT 'tester',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        ''')
+
         # 创建项目表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS projects (
@@ -126,7 +140,79 @@ class Database:
             cursor.execute("ALTER TABLE run_history ADD COLUMN expected_text TEXT")
         except sqlite3.OperationalError:
             pass
-        
+
+        # 添加截图列到 run_history（记录失败截图路径）
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN screenshots TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # 创建步骤执行结果表（记录每个步骤的执行状态）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS step_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_history_id INTEGER NOT NULL,
+                step_id INTEGER,
+                step_order INTEGER DEFAULT 0,
+                action TEXT,
+                selector_value TEXT,
+                input_value TEXT,
+                description TEXT,
+                status TEXT NOT NULL,
+                error TEXT,
+                screenshot TEXT,
+                duration REAL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (run_history_id) REFERENCES run_history (id)
+            )
+        ''')
+
+        # 创建全局变量表（支持全局/项目/用例三种作用域）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS variables (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                value TEXT,
+                scope TEXT NOT NULL DEFAULT 'global',
+                project_id INTEGER,
+                case_id INTEGER,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id),
+                FOREIGN KEY (case_id) REFERENCES test_cases (id)
+            )
+        ''')
+
+        # 创建定时调度表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS schedules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                project_id INTEGER,
+                case_ids TEXT NOT NULL,
+                cron_expr TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                last_run TIMESTAMP,
+                next_run TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id)
+            )
+        ''')
+
+        # 创建 API 访问令牌表（用于 Webhook/CI 触发）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                project_id INTEGER,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id)
+            )
+        ''')
+
         # 添加数据库索引以优化查询性能
         self._create_indexes(cursor)
         
@@ -135,14 +221,18 @@ class Database:
     
     def _create_indexes(self, cursor):
         """创建数据库索引以优化查询性能"""
-        # 为运行历史记录表创建索引
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_run_history_case_id ON run_history(case_id)",
             "CREATE INDEX IF NOT EXISTS idx_run_history_created_at ON run_history(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_run_history_status ON run_history(status)",
             "CREATE INDEX IF NOT EXISTS idx_test_cases_project_id ON test_cases(project_id)",
             "CREATE INDEX IF NOT EXISTS idx_test_cases_name ON test_cases(name)",
-            "CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)"
+            "CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)",
+            "CREATE INDEX IF NOT EXISTS idx_step_results_run_id ON step_results(run_history_id)",
+            "CREATE INDEX IF NOT EXISTS idx_variables_scope ON variables(scope)",
+            "CREATE INDEX IF NOT EXISTS idx_variables_project ON variables(project_id)",
+            "CREATE INDEX IF NOT EXISTS idx_schedules_active ON schedules(is_active)",
+            "CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)",
         ]
         
         for index_sql in indexes:
@@ -1003,3 +1093,348 @@ class Database:
             return False
         finally:
             conn.close()
+
+    # ==================== 用户管理方法 ====================
+
+    def create_user(self, username: str, password_hash: str, email: str = None, role: str = 'tester') -> int:
+        """创建用户"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
+                (username, password_hash, email, role)
+            )
+            user_id = cursor.lastrowid
+            conn.commit()
+            return user_id
+        except sqlite3.IntegrityError:
+            return None
+        finally:
+            conn.close()
+
+    def get_user_by_username(self, username: str) -> Dict[str, Any]:
+        """根据用户名获取用户"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, password_hash, email, role, is_active, created_at, last_login FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {'id': row[0], 'username': row[1], 'password_hash': row[2],
+                    'email': row[3], 'role': row[4], 'is_active': row[5],
+                    'created_at': row[6], 'last_login': row[7]}
+        return None
+
+    def get_user_by_id(self, user_id: int) -> Dict[str, Any]:
+        """根据ID获取用户"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, password_hash, email, role, is_active, created_at, last_login FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {'id': row[0], 'username': row[1], 'password_hash': row[2],
+                    'email': row[3], 'role': row[4], 'is_active': row[5],
+                    'created_at': row[6], 'last_login': row[7]}
+        return None
+
+    def get_all_users(self) -> List[Dict[str, Any]]:
+        """获取所有用户"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, username, email, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'username': r[1], 'email': r[2], 'role': r[3],
+                 'is_active': r[4], 'created_at': r[5], 'last_login': r[6]} for r in rows]
+
+    def update_user_last_login(self, user_id: int):
+        """更新用户最后登录时间"""
+        import datetime
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET last_login = ? WHERE id = ?",
+                       (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id))
+        conn.commit()
+        conn.close()
+
+    def update_user(self, user_id: int, email: str = None, role: str = None, is_active: int = None, password_hash: str = None) -> bool:
+        """更新用户信息"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        updates, params = [], []
+        if email is not None:
+            updates.append("email = ?"); params.append(email)
+        if role is not None:
+            updates.append("role = ?"); params.append(role)
+        if is_active is not None:
+            updates.append("is_active = ?"); params.append(is_active)
+        if password_hash is not None:
+            updates.append("password_hash = ?"); params.append(password_hash)
+        if not updates:
+            conn.close()
+            return False
+        params.append(user_id)
+        cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def delete_user(self, user_id: int) -> bool:
+        """删除用户"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def count_users(self) -> int:
+        """获取用户总数（用于判断是否需要初始化管理员）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+
+    # ==================== 步骤执行结果方法 ====================
+
+    def create_step_result(self, run_history_id: int, step_id: int, step_order: int,
+                           action: str, selector_value: str, input_value: str,
+                           description: str, status: str, error: str = "",
+                           screenshot: str = "", duration: float = 0) -> int:
+        """记录单步骤执行结果"""
+        import datetime
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        local_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute(
+            """INSERT INTO step_results
+               (run_history_id, step_id, step_order, action, selector_value, input_value,
+                description, status, error, screenshot, duration, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_history_id, step_id, step_order, action, selector_value, input_value,
+             description, status, error, screenshot, duration, local_time)
+        )
+        result_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return result_id
+
+    def get_step_results(self, run_history_id: int) -> List[Dict[str, Any]]:
+        """获取某次运行的所有步骤结果"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM step_results WHERE run_history_id = ? ORDER BY step_order ASC",
+            (run_history_id,)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'run_history_id': r[1], 'step_id': r[2], 'step_order': r[3],
+                 'action': r[4], 'selector_value': r[5], 'input_value': r[6],
+                 'description': r[7], 'status': r[8], 'error': r[9],
+                 'screenshot': r[10], 'duration': r[11], 'created_at': r[12]} for r in rows]
+
+    # ==================== 变量管理方法 ====================
+
+    def create_variable(self, name: str, value: str, scope: str = 'global',
+                        project_id: int = None, case_id: int = None, description: str = '') -> int:
+        """创建变量"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO variables (name, value, scope, project_id, case_id, description) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, value, scope, project_id, case_id, description)
+        )
+        var_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return var_id
+
+    def get_variables(self, scope: str = None, project_id: int = None, case_id: int = None) -> List[Dict[str, Any]]:
+        """获取变量列表"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if scope == 'global':
+            cursor.execute("SELECT * FROM variables WHERE scope = 'global' ORDER BY name")
+        elif scope == 'project' and project_id:
+            cursor.execute("SELECT * FROM variables WHERE scope IN ('global','project') AND (project_id = ? OR project_id IS NULL) ORDER BY scope, name", (project_id,))
+        elif scope == 'case' and case_id:
+            cursor.execute("SELECT * FROM variables WHERE scope IN ('global','project','case') AND (case_id = ? OR case_id IS NULL) ORDER BY scope, name", (case_id,))
+        else:
+            cursor.execute("SELECT * FROM variables ORDER BY scope, name")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'name': r[1], 'value': r[2], 'scope': r[3],
+                 'project_id': r[4], 'case_id': r[5], 'description': r[6], 'created_at': r[7]} for r in rows]
+
+    def update_variable(self, var_id: int, name: str = None, value: str = None, description: str = None) -> bool:
+        """更新变量"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        updates, params = [], []
+        if name is not None:
+            updates.append("name = ?"); params.append(name)
+        if value is not None:
+            updates.append("value = ?"); params.append(value)
+        if description is not None:
+            updates.append("description = ?"); params.append(description)
+        if not updates:
+            conn.close()
+            return False
+        params.append(var_id)
+        cursor.execute(f"UPDATE variables SET {', '.join(updates)} WHERE id = ?", params)
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def delete_variable(self, var_id: int) -> bool:
+        """删除变量"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM variables WHERE id = ?", (var_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def resolve_variables(self, text: str, project_id: int = None, case_id: int = None) -> str:
+        """将文本中的 {{变量名}} 替换为实际值"""
+        if not text or '{{' not in text:
+            return text
+        import re
+        variables = self.get_variables(scope='case' if case_id else ('project' if project_id else 'global'),
+                                       project_id=project_id, case_id=case_id)
+        var_map = {v['name']: v['value'] for v in variables}
+        def replace_var(match):
+            var_name = match.group(1).strip()
+            return var_map.get(var_name, match.group(0))
+        return re.sub(r'\{\{(.+?)\}\}', replace_var, text)
+
+    # ==================== 定时调度方法 ====================
+
+    def create_schedule(self, name: str, case_ids: list, cron_expr: str, project_id: int = None) -> int:
+        """创建定时调度"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO schedules (name, project_id, case_ids, cron_expr) VALUES (?, ?, ?, ?)",
+            (name, project_id, json.dumps(case_ids), cron_expr)
+        )
+        schedule_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return schedule_id
+
+    def get_all_schedules(self) -> List[Dict[str, Any]]:
+        """获取所有调度任务"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM schedules ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'name': r[1], 'project_id': r[2],
+                 'case_ids': json.loads(r[3]) if r[3] else [],
+                 'cron_expr': r[4], 'is_active': r[5],
+                 'last_run': r[6], 'next_run': r[7], 'created_at': r[8]} for r in rows]
+
+    def get_active_schedules(self) -> List[Dict[str, Any]]:
+        """获取所有激活的调度任务"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM schedules WHERE is_active = 1")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'name': r[1], 'project_id': r[2],
+                 'case_ids': json.loads(r[3]) if r[3] else [],
+                 'cron_expr': r[4], 'is_active': r[5],
+                 'last_run': r[6], 'next_run': r[7], 'created_at': r[8]} for r in rows]
+
+    def update_schedule(self, schedule_id: int, name: str = None, cron_expr: str = None,
+                        is_active: int = None, case_ids: list = None, last_run: str = None) -> bool:
+        """更新调度任务"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        updates, params = [], []
+        if name is not None:
+            updates.append("name = ?"); params.append(name)
+        if cron_expr is not None:
+            updates.append("cron_expr = ?"); params.append(cron_expr)
+        if is_active is not None:
+            updates.append("is_active = ?"); params.append(is_active)
+        if case_ids is not None:
+            updates.append("case_ids = ?"); params.append(json.dumps(case_ids))
+        if last_run is not None:
+            updates.append("last_run = ?"); params.append(last_run)
+        if not updates:
+            conn.close()
+            return False
+        params.append(schedule_id)
+        cursor.execute(f"UPDATE schedules SET {', '.join(updates)} WHERE id = ?", params)
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def delete_schedule(self, schedule_id: int) -> bool:
+        """删除调度任务"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    # ==================== API 令牌管理方法 ====================
+
+    def create_api_token(self, name: str, token: str, project_id: int = None, expires_at: str = None) -> int:
+        """创建 API 令牌"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO api_tokens (name, token, project_id, expires_at) VALUES (?, ?, ?, ?)",
+            (name, token, project_id, expires_at)
+        )
+        token_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return token_id
+
+    def get_token_by_value(self, token: str) -> Dict[str, Any]:
+        """根据 token 值获取令牌信息"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM api_tokens WHERE token = ? AND is_active = 1", (token,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {'id': row[0], 'name': row[1], 'token': row[2], 'project_id': row[3],
+                    'is_active': row[4], 'expires_at': row[5], 'created_at': row[6]}
+        return None
+
+    def get_all_tokens(self) -> List[Dict[str, Any]]:
+        """获取所有令牌（不含 token 明文）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, project_id, is_active, expires_at, created_at FROM api_tokens ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'name': r[1], 'project_id': r[2], 'is_active': r[3],
+                 'expires_at': r[4], 'created_at': r[5]} for r in rows]
+
+    def revoke_token(self, token_id: int) -> bool:
+        """撤销令牌"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE api_tokens SET is_active = 0 WHERE id = ?", (token_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
