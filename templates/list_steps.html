@@ -495,6 +495,7 @@
                     <option value="exit_iframe">跳出iframe</option>
                     <option value="select">下拉框选择</option>
                     <option value="date">日期选择</option>
+                    <option value="assert">断言操作</option>
                 </select>
             </div>
             <div class="form-group">
@@ -529,6 +530,37 @@
                     <option value="auto">自动识别</option>
                     <option value="slider">滑动方块</option>
                     <option value="image">点击图片文字</option>
+                </select>
+            </div>
+            <!-- 断言类型配置 -->
+            <div class="form-group" id="stepAssertType" style="display: none;">
+                <label for="stepAssertTypeSelect">断言类型</label>
+                <select id="stepAssertTypeSelect" onchange="toggleAssertOptions()">
+                    <option value="text_equals">文本相等</option>
+                    <option value="text_contains">文本包含</option>
+                    <option value="text_regex">文本正则匹配</option>
+                    <option value="element_exists">元素存在</option>
+                    <option value="element_visible">元素可见</option>
+                    <option value="element_attr">元素属性</option>
+                    <option value="element_count">元素数量</option>
+                    <option value="url_equals">URL相等</option>
+                    <option value="url_contains">URL包含</option>
+                </select>
+            </div>
+            <!-- 断言属性名称 -->
+            <div class="form-group" id="stepAssertAttr" style="display: none;">
+                <label for="stepAssertAttrInput">属性名称</label>
+                <input type="text" id="stepAssertAttrInput" placeholder="例如: class, href, value">
+            </div>
+            <!-- 断言数量运算符 -->
+            <div class="form-group" id="stepAssertOperator" style="display: none;">
+                <label for="stepAssertOperatorSelect">比较方式</label>
+                <select id="stepAssertOperatorSelect">
+                    <option value="equals">等于</option>
+                    <option value="gt">大于</option>
+                    <option value="lt">小于</option>
+                    <option value="gte">大于等于</option>
+                    <option value="lte">小于等于</option>
                 </select>
             </div>
             <!-- 滚动操作的上下左右输入框 -->
@@ -603,6 +635,7 @@
                     <option value="exit_iframe">跳出iframe</option>
                     <option value="select">下拉框选择</option>
                     <option value="date">日期选择</option>
+                    <option value="assert">断言操作</option>
                 </select>
             </div>
             <div class="form-group">
@@ -637,6 +670,37 @@
                     <option value="auto">自动识别</option>
                     <option value="slider">滑动方块</option>
                     <option value="image">点击图片文字</option>
+                </select>
+            </div>
+            <!-- 断言类型配置 -->
+            <div class="form-group" id="editStepAssertType" style="display: none;">
+                <label for="editStepAssertTypeSelect">断言类型</label>
+                <select id="editStepAssertTypeSelect" onchange="toggleEditAssertOptions()">
+                    <option value="text_equals">文本相等</option>
+                    <option value="text_contains">文本包含</option>
+                    <option value="text_regex">文本正则匹配</option>
+                    <option value="element_exists">元素存在</option>
+                    <option value="element_visible">元素可见</option>
+                    <option value="element_attr">元素属性</option>
+                    <option value="element_count">元素数量</option>
+                    <option value="url_equals">URL相等</option>
+                    <option value="url_contains">URL包含</option>
+                </select>
+            </div>
+            <!-- 断言属性名称 -->
+            <div class="form-group" id="editStepAssertAttr" style="display: none;">
+                <label for="editStepAssertAttrInput">属性名称</label>
+                <input type="text" id="editStepAssertAttrInput" placeholder="例如: class, href, value">
+            </div>
+            <!-- 断言数量运算符 -->
+            <div class="form-group" id="editStepAssertOperator" style="display: none;">
+                <label for="editStepAssertOperatorSelect">比较方式</label>
+                <select id="editStepAssertOperatorSelect">
+                    <option value="equals">等于</option>
+                    <option value="gt">大于</option>
+                    <option value="lt">小于</option>
+                    <option value="gte">大于等于</option>
+                    <option value="lte">小于等于</option>
                 </select>
             </div>
             <!-- 滚动操作的上下左右输入框 -->
@@ -1166,10 +1230,18 @@ function changePage(page) {
             const compareTypeField = document.getElementById('stepCompareType');
             const swipeDirectionField = document.getElementById('swipeDirection');
             const swipeDistanceField = document.getElementById('swipeDistance');
-            // 默认隐藏对比方式选择、滑动方向选择和滑动距离输入
+            const assertTypeField = document.getElementById('stepAssertType');
+            const assertAttrField = document.getElementById('stepAssertAttr');
+            const assertOperatorField = document.getElementById('stepAssertOperator');
+            const verifyTypeField = document.getElementById('stepVerifyType');
+            // 默认隐藏所有特殊字段
             compareTypeField.style.display = 'none';
             swipeDirectionField.style.display = 'none';
             swipeDistanceField.style.display = 'none';
+            assertTypeField.style.display = 'none';
+            assertAttrField.style.display = 'none';
+            assertOperatorField.style.display = 'none';
+            verifyTypeField.style.display = 'none';
             
             if (action === 'navigate') {
                 // 导航操作只需要URL输入框
@@ -1251,11 +1323,91 @@ function changePage(page) {
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = '日期值 (YYYY-MM-DD)';
+            } else if (action === 'assert') {
+                // 断言操作需要选择器、断言类型和预期值
+                selectorTypeField.style.display = 'block';
+                selectorValueField.style.display = 'block';
+                inputValueField.style.display = 'block';
+                scrollFields.style.display = 'none';
+                document.querySelector('label[for="stepInputValue"]').textContent = '预期值';
+                // 显示断言类型选择
+                assertTypeField.style.display = 'block';
+                toggleAssertOptions();
             } else {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = '附加信息 (可选)';
+            }
+        }
+        
+        // 断言选项切换函数
+        function toggleAssertOptions() {
+            const assertType = document.getElementById('stepAssertTypeSelect').value;
+            const assertAttrField = document.getElementById('stepAssertAttr');
+            const assertOperatorField = document.getElementById('stepAssertOperator');
+            const inputValueField = document.querySelector('label[for="stepInputValue"]').parentElement;
+            const selectorTypeField = document.querySelector('label[for="stepSelectorType"]').parentElement;
+            const selectorValueField = document.querySelector('label[for="stepSelectorValue"]').parentElement;
+            
+            // 默认隐藏特殊字段，重置所有字段显示状态
+            assertAttrField.style.display = 'none';
+            assertOperatorField.style.display = 'none';
+            inputValueField.style.display = 'block';
+            selectorTypeField.style.display = 'block';
+            selectorValueField.style.display = 'block';
+            
+            if (assertType === 'element_attr') {
+                // 元素属性断言需要属性名称
+                assertAttrField.style.display = 'block';
+                document.querySelector('label[for="stepInputValue"]').textContent = '预期属性值';
+            } else if (assertType === 'element_count') {
+                // 元素数量断言需要运算符
+                assertOperatorField.style.display = 'block';
+                document.querySelector('label[for="stepInputValue"]').textContent = '预期数量';
+            } else if (assertType === 'element_exists' || assertType === 'element_visible') {
+                // 元素存在/可见不需要预期值
+                inputValueField.style.display = 'none';
+            } else if (assertType === 'url_equals' || assertType === 'url_contains') {
+                // URL断言不需要选择器
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                document.querySelector('label[for="stepInputValue"]').textContent = '预期URL';
+            } else {
+                document.querySelector('label[for="stepInputValue"]').textContent = '预期文本';
+            }
+        }
+        
+        // 编辑模式断言选项切换函数
+        function toggleEditAssertOptions() {
+            const assertType = document.getElementById('editStepAssertTypeSelect').value;
+            const assertAttrField = document.getElementById('editStepAssertAttr');
+            const assertOperatorField = document.getElementById('editStepAssertOperator');
+            const inputValueField = document.querySelector('label[for="editStepInputValue"]').parentElement;
+            const selectorTypeField = document.querySelector('label[for="editStepSelectorType"]').parentElement;
+            const selectorValueField = document.querySelector('label[for="editStepSelectorValue"]').parentElement;
+            
+            // 重置所有字段显示状态
+            assertAttrField.style.display = 'none';
+            assertOperatorField.style.display = 'none';
+            inputValueField.style.display = 'block';
+            selectorTypeField.style.display = 'block';
+            selectorValueField.style.display = 'block';
+            
+            if (assertType === 'element_attr') {
+                assertAttrField.style.display = 'block';
+                document.querySelector('label[for="editStepInputValue"]').textContent = '预期属性值';
+            } else if (assertType === 'element_count') {
+                assertOperatorField.style.display = 'block';
+                document.querySelector('label[for="editStepInputValue"]').textContent = '预期数量';
+            } else if (assertType === 'element_exists' || assertType === 'element_visible') {
+                inputValueField.style.display = 'none';
+            } else if (assertType === 'url_equals' || assertType === 'url_contains') {
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                document.querySelector('label[for="editStepInputValue"]').textContent = '预期URL';
+            } else {
+                document.querySelector('label[for="editStepInputValue"]').textContent = '预期文本';
             }
         }
         
@@ -1268,6 +1420,10 @@ function changePage(page) {
             const editCompareTypeField = document.getElementById('editStepCompareType');
             const editSwipeDirectionField = document.getElementById('editSwipeDirection');
             const editSwipeDistanceField = document.getElementById('editSwipeDistance');
+            const editAssertTypeField = document.getElementById('editStepAssertType');
+            const editAssertAttrField = document.getElementById('editStepAssertAttr');
+            const editAssertOperatorField = document.getElementById('editStepAssertOperator');
+            const editVerifyTypeField = document.getElementById('editStepVerifyType');
             
             // 重置所有字段为默认状态
             selectorTypeField.style.display = 'block';
@@ -1277,6 +1433,10 @@ function changePage(page) {
             editCompareTypeField.style.display = 'none';
             editSwipeDirectionField.style.display = 'none';
             editSwipeDistanceField.style.display = 'none';
+            editAssertTypeField.style.display = 'none';
+            editAssertAttrField.style.display = 'none';
+            editAssertOperatorField.style.display = 'none';
+            editVerifyTypeField.style.display = 'none';
             
             if (action === 'navigate') {
                 // 导航操作只需要URL输入框
@@ -1346,6 +1506,15 @@ function changePage(page) {
                 // 日期选择操作需要选择器和日期值
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = '日期值 (YYYY-MM-DD)';
+            } else if (action === 'assert') {
+                // 断言操作需要选择器、断言类型和预期值
+                selectorTypeField.style.display = 'block';
+                selectorValueField.style.display = 'block';
+                inputValueField.style.display = 'block';
+                document.querySelector('label[for="editStepInputValue"]').textContent = '预期值';
+                // 显示断言类型选择
+                editAssertTypeField.style.display = 'block';
+                toggleEditAssertOptions();
             } else {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';

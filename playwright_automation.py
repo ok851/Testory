@@ -25,6 +25,81 @@ def set_execution_in_progress(status):
     global _currently_executing
     _currently_executing = status
 
+def force_reset_execution_state():
+    """强制重置执行状态、执行锁及浏览器内部状态（用于浏览器异常关闭后的恢复）"""
+    global _currently_executing
+    
+    # 1. 重置执行状态标志
+    _currently_executing = False
+    uat_logger.info("🔄 [FORCE_RESET] 开始强制重置执行状态...")
+    
+    # 2. 强制释放执行锁（多次尝试确保成功）
+    for attempt in range(3):
+        try:
+            if _execution_lock.locked():
+                _execution_lock.release()
+                uat_logger.info(f"🔓 [FORCE_RESET] 第{attempt+1}次尝试: 成功释放执行锁")
+                break
+        except RuntimeError as e:
+            # RuntimeError: release unlocked lock 或 cannot release un-acquired lock
+            uat_logger.debug(f"⚠️ [FORCE_RESET] 第{attempt+1}次尝试: 锁未被当前线程持有 - {e}")
+            break
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [FORCE_RESET] 第{attempt+1}次尝试释放锁失败: {e}")
+    
+    # 3. 强制清空浏览器引用（无论浏览器状态如何）
+    # 🔥 关键修复: 不再检查浏览器是否连接，直接清空所有引用
+    # 这样可以确保下次 start_browser 能完全重新创建浏览器实例
+    try:
+        if automation.browser is not None or automation.page is not None or automation.context is not None:
+            uat_logger.info("🧹 [FORCE_RESET] 强制清空所有浏览器引用...")
+            automation.browser = None
+            automation.page = None
+            automation.context = None
+            automation.playwright = None
+            uat_logger.info("✅ [FORCE_RESET] 浏览器引用已全部清空")
+    except Exception as e:
+        uat_logger.warning(f"⚠️ [FORCE_RESET] 清空浏览器引用时出错: {e}")
+    
+    uat_logger.info("✅ [FORCE_RESET] 执行状态已全面重置完成")
+
+
+_INVALID_URL_SKIP = frozenset([
+    'example.com', '0.0.0.0', '0.0.0.1', '127.0.0.1',
+    'localhost', 'about:blank', 'about:newtab',
+])
+# 🔥 修复：IP 地址正则表达式增加 100-199 范围的匹配 (1[0-9]{2})
+# IP 第一段 (1-255): (25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[1-9])
+# IP 中间/最后段 (0-255): (25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])
+_URL_RE = re.compile(
+    r'^https?://'
+    r'(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}'
+    r'|((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[1-9])\.){1}'
+    r'((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){2}'
+    r'(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9]))'
+    r'(:\d+)?(/.*)?$'
+)
+
+
+def _pa_validate_url(url: str) -> tuple:
+    """校验 URL。返回 (fixed_url, err)。
+    - fixed_url=None, err=None → 跳过（占位符或空）
+    - fixed_url=str, err=None  → 就用 fixed_url
+    - fixed_url=None, err=str  → 报错
+    """
+    if not url or not url.strip():
+        return None, None
+    url = url.strip()
+    for pat in _INVALID_URL_SKIP:
+        if pat in url.lower():
+            uat_logger.warning(f"占位符URL ({url})，跳过")
+            return None, None
+    if not url.startswith(('http://', 'https://')):
+        url = 'http://' + url
+    if not _URL_RE.match(url):
+        return None, f"无效的URL地址: {url}"
+    return url, None
+
 class PlaywrightAutomation:
     def __init__(self):
         self.browser = None
@@ -84,32 +159,49 @@ class PlaywrightAutomation:
     async def start_browser(self, headless=False):
         """启动浏览器"""
         try:
-            # 检查现有浏览器状态
-            browser_valid = self.browser is not None and self.browser.is_connected() if self.browser else False
-            context_valid = self.context is not None
-            page_valid = self.page is not None
-            
-            uat_logger.info(f"🔍 [BROWSER_START] 浏览器状态检查 - Browser: {browser_valid}, Context: {context_valid}, Page: {page_valid}")
-            
-            # 🔥 修复：只在明确需要时才清理浏览器资源，避免在执行过程中误触发
-            # 只有当所有组件都不存在或严重损坏时才清理
-            if not browser_valid and not context_valid and not page_valid:
-                uat_logger.info("🔧 [BROWSER_START] 检测到浏览器完全未初始化，进行初始化...")
-                await self._cleanup_browser_resources()
-            elif browser_valid and (not context_valid or not page_valid):
-                # 如果浏览器还活着但context或page失效，只清理context和page，不清理browser
+            # 检查现有浏览器状态（必须同时检查连接有效性）
+            browser_valid = False
+            try:
+                browser_valid = self.browser is not None and self.browser.is_connected()
+            except Exception:
+                browser_valid = False
+
+            uat_logger.info(f"🔍 [BROWSER_START] 浏览器连接状态: {browser_valid}")
+
+            if not browser_valid:
+                # 浏览器无效（未启动 or 已手动关闭 or 断连），彻底清空所有引用
+                uat_logger.info("🔧 [BROWSER_START] 浏览器无效，强制清空所有引用并重新启动...")
+                # 先尝试优雅关闭，忽略所有异常
+                for attr in ('page', 'context', 'browser'):
+                    obj = getattr(self, attr, None)
+                    if obj is not None:
+                        try:
+                            await obj.close()
+                        except Exception:
+                            pass
+                        finally:
+                            setattr(self, attr, None)
+                # playwright 用 stop() 而不是 close()
+                if self.playwright is not None:
+                    try:
+                        await self.playwright.stop()
+                    except Exception:
+                        pass
+                    finally:
+                        self.playwright = None
+                uat_logger.info("✅ [BROWSER_START] 旧资源清理完毕，准备重新启动")
+            elif self.context is None or self.page is None:
+                # 浏览器有效但 context/page 失效，只清理失效部分
                 uat_logger.info("🔧 [BROWSER_START] 检测到context或page失效，只清理失效组件...")
                 if self.context:
                     try:
                         await self.context.close()
-                        uat_logger.info("✅ [CLEANUP] Context已关闭")
                     except Exception as e:
                         uat_logger.warning(f"⚠️ [CLEANUP] 关闭context时出现警告: {str(e)}")
                     self.context = None
                 if self.page:
                     try:
                         await self.page.close()
-                        uat_logger.info("✅ [CLEANUP] Page已关闭")
                     except Exception as e:
                         uat_logger.warning(f"⚠️ [CLEANUP] 关闭page时出现警告: {str(e)}")
                     self.page = None
@@ -117,7 +209,21 @@ class PlaywrightAutomation:
                 uat_logger.info("✅ [BROWSER_START] 浏览器状态正常，无需清理")
             
             # 确保浏览器相关对象都已正确重置
-            if self.browser is None or not self.browser.is_connected():
+            # 🔥 修复：增强浏览器连接检测的容错性
+            need_start_browser = False
+            if self.browser is None:
+                need_start_browser = True
+            else:
+                try:
+                    need_start_browser = not self.browser.is_connected()
+                except Exception:
+                    need_start_browser = True
+                    # 检测异常说明浏览器对象已失效，清空引用
+                    self.browser = None
+                    self.page = None
+                    self.context = None
+            
+            if need_start_browser:
                 uat_logger.info(f"启动浏览器,headless={headless}")
                 
                 # 1. 确保playwright实例已正确关闭和重置
@@ -1020,18 +1126,14 @@ class PlaywrightAutomation:
     
     async def navigate_to(self, url: str, iframe_selector: str = None, page=None):
         """导航到指定URL,支持iframe导航。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
-        # 验证URL是否有效
-        if not url or not url.strip():
-            raise Exception("导航步骤的URL不能为空")
-
-        # 防止导航到 about:blank
-        if url.strip().lower() == "about:blank":
-            raise Exception("不允许导航到 about:blank 页面")
-
-        # 确保URL以协议开头（http:// 或 https://）
-        if not url.startswith(("http://", "https://")):
-            uat_logger.warning(f"URL可能缺少协议: {url}，尝试添加https://")
-            url = f"https://{url}"
+        # 统一校验URL
+        fixed_url, err = _pa_validate_url(url)
+        if err:
+            raise Exception(f"导航失败: {err}")
+        if fixed_url is None:
+            uat_logger.warning(f"导航跳过，占位符或空URL: {url}")
+            return  # 跳过占位符URL而不报错
+        url = fixed_url
         
         target_page = page if page is not None else self.page
         if target_page is None:
@@ -1045,43 +1147,16 @@ class PlaywrightAutomation:
             if self.recording:
                 await target_page.goto(url, wait_until='domcontentloaded')
             else:
-                # 回放时等待更完整的页面加载状态
-                await target_page.goto(url, wait_until='load')
-                # 额外等待网络请求完成(对于复杂的单页应用)
+                # 🔥 性能优化：回放模式使用更快的等待策略
+                # 使用 domcontentloaded 而非 load，因为大多数页面在 DOM 就绪后即可交互
+                await target_page.goto(url, wait_until='domcontentloaded')
+                # 快速检查 networkidle（仅等待 3 秒，避免 WebSocket/SSE 长连接导致的长时间阻塞）
                 try:
-                    await target_page.wait_for_load_state('networkidle', timeout=25000)
-                except Exception as e:
-                    uat_logger.debug(f"网络idle状态超时(可能是正常的长连接): {str(e)}")
-                # 增加JavaScript渲染等待时间,确保动态内容完全显示
-                await target_page.wait_for_timeout(1000)
-                
-                # 等待页面渲染稳定(无更多DOM变化)
-                await target_page.evaluate("""
-                    () => new Promise(resolve => {
-                        let lastScrollHeight = document.body.scrollHeight;
-                        let checkCount = 0;
-                        const checkInterval = 100;
-                        const maxChecks = 10;
-                        
-                        const checkStability = () => {
-                            const currentScrollHeight = document.body.scrollHeight;
-                            if (currentScrollHeight === lastScrollHeight) {
-                                checkCount++;
-                                if (checkCount >= maxChecks) {
-                                    resolve();
-                                } else {
-                                    setTimeout(checkStability, checkInterval);
-                                }
-                            } else {
-                                lastScrollHeight = currentScrollHeight;
-                                checkCount = 0;
-                                setTimeout(checkStability, checkInterval);
-                            }
-                        };
-                        
-                        setTimeout(checkStability, checkInterval);
-                    })
-                    """)
+                    await target_page.wait_for_load_state('networkidle', timeout=3000)
+                except Exception:
+                    pass  # 超时即认为网络已足够稳定，继续执行
+                # 🔥 移除固定 1 秒延迟和 DOM 稳定性检测（大幅减少不必要的等待）
+                # 原因：domcontentloaded + 3 秒 networkidle 已足够覆盖绝大多数场景
         else:
             uat_logger.error("页面对象为None,无法导航")
             raise Exception("无法创建页面对象")
@@ -6589,9 +6664,7 @@ class PlaywrightAutomation:
         Returns:
             包含所有测试用例执行结果的字典
         """
-        uat_logger.info(f"🚀 [SERIAL_MULTI_CASE] ========== 开始严格串行执行多个测试用例,共 {len(case_ids)} 个用例 ==========")
-        uat_logger.info(f"📋 [SERIAL_MULTI_CASE] 接收的执行顺序: {case_ids}")
-        uat_logger.info("🔧 [SERIAL_MULTI_CASE] 已禁用所有并行执行和多标签页逻辑")
+        uat_logger.info(f"🚀 [SERIAL_MULTI_CASE] 开始串行执行 {len(case_ids)} 个用例: {case_ids}")
         
         all_results = {
             "total_cases": len(case_ids),
@@ -6601,14 +6674,30 @@ class PlaywrightAutomation:
         }
         
         # 确保浏览器已启动
+        browser_need_start = False
         if self.browser is None or self.context is None:
-            uat_logger.info("🔧 [SERIAL_MULTI_CASE] 浏览器未启动，正在启动浏览器...")
+            browser_need_start = True
+        else:
+            try:
+                if not self.browser.is_connected():
+                    self.browser = None
+                    self.page = None
+                    self.context = None
+                    self.playwright = None
+                    browser_need_start = True
+            except Exception:
+                browser_need_start = True
+                self.browser = None
+                self.page = None
+                self.context = None
+                self.playwright = None
+        
+        if browser_need_start:
             try:
                 await self.start_browser(headless=False)
                 uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器启动成功")
             except Exception as browser_error:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器启动失败: {str(browser_error)}")
-                # 所有用例标记为失败
                 for failed_case_id in case_ids:
                     process_case_result({
                         "case_id": failed_case_id,
@@ -6617,8 +6706,6 @@ class PlaywrightAutomation:
                         "error": f"浏览器启动失败: {str(browser_error)}"
                     }, failed_case_id)
                 return all_results
-        else:
-            uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器已处于运行状态")
         
         def build_execution_steps(steps):
             """将数据库步骤格式转换为执行脚本所需的格式"""
@@ -6639,19 +6726,17 @@ class PlaywrightAutomation:
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
                 elif step["action"] == "navigate":
-                    # 🔥 修复：确保导航步骤的URL不为空
-                    url = step.get("url") or step.get("input_value", "")
-                    if not url or not url.strip():
-                        uat_logger.error(f"❌ 导航步骤缺少有效URL: {step}")
-                        exec_step["url"] = "__INVALID_URL_MISSING__"
-                    elif url.strip().lower() == "about:blank":
-                        uat_logger.error(f"❌ 不允许导航到 about:blank: {step}")
-                        exec_step["url"] = "__INVALID_URL_BLANK__"
+                    # 统一校验URL，不再用哨兵字符
+                    raw = step.get("url") or step.get("input_value", "")
+                    fixed_url, url_err = _pa_validate_url(raw)
+                    if url_err:
+                        uat_logger.error(f"构建步骤: 导航URL无效 ({raw}): {url_err}")
+                        exec_step["url"] = "__INVALID_URL__"
+                        exec_step["url_error"] = url_err
+                    elif fixed_url is None:
+                        exec_step["url"] = "__SKIP_URL__"  # 跳过占位符
                     else:
-                        exec_step["url"] = url.strip()
-                        # 如果URL没有协议，添加https://
-                        if not exec_step["url"].startswith(("http://", "https://")):
-                            exec_step["url"] = f"https://{exec_step['url']}"
+                        exec_step["url"] = fixed_url
                 elif step["action"] == "keypress":
                     exec_step["key"] = step["input_value"]
                 elif step["action"] == "wait":
@@ -6706,83 +6791,82 @@ class PlaywrightAutomation:
                 all_results["case_results"].append(result)
                 all_results["failed_cases"] += 1
         
-        # 🔥 严格验证执行顺序，禁用任何并行执行
-        uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 开始强制严格串行执行用例列表")
-        uat_logger.info(f"📋 [SERIAL_MULTI_CASE] 原始执行顺序: {case_ids}")
+        # 🔥 精简执行前日志
+        uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 开始执行用例序列")
         
-        # 🔥 修复: 定义 execution_order 变量
-        execution_order = case_ids
-        uat_logger.info(f"📋 [SERIAL_MULTI_CASE] 验证执行顺序: {execution_order}")
-        uat_logger.info("🚫 [SERIAL_MULTI_CASE] 已禁用所有并行执行、多标签页和异步执行逻辑")
-        
-        # 🔥 添加执行顺序追踪
+        # 执行顺序追踪
         actual_execution_order = []
         
-        for index, case_id in enumerate(execution_order):
+        for index, case_id in enumerate(case_ids):
             case_number = index + 1
             actual_execution_order.append(case_id)
-            
-            # 🔥 添加用例级计时开始
             case_start_time = time.time()
             
-            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] ========== 强制严格串行执行第 {case_number}/{len(execution_order)} 个用例 ==========")
-            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 当前执行位置: {index + 1}/{len(execution_order)}, 用例ID: {case_id}")
-            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 顺序验证 - 这是第 {index + 1} 个应该执行的用例")
-            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 期望顺序对比: {case_ids[index]} vs 实际执行: {case_id}")
+            uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 执行用例 {case_number}/{len(case_ids)}, ID: {case_id}")
             
-            # 🔥 优化：复用浏览器上下文但重置页面状态，确保用例隔离同时提升性能
-            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 为用例 {case_id} 准备执行环境")
+            # 🔥 性能优化：轻量级用例环境准备（复用 context，只创建新 page）
             try:
-                # 为每个用例使用新页面而不是重建整个上下文，大幅提升性能
+                # 关闭旧页面（如果有），使用轻量方式
                 if self.page:
-                    # 🔥 增强页面清理：确保所有弹窗、请求都正确处理
                     try:
-                        await self.page.evaluate("window.stop()")
                         await self.page.close()
-                        uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 用例 {case_id} 的页面已彻底清理")
-                    except Exception as page_cleanup_error:
-                        uat_logger.warning(f"⚠️ [SERIAL_MULTI_CASE] 清理前一用例页面时出现轻微异常，继续执行: {str(page_cleanup_error)}")
-                
-                # 创建新页面而不是新建上下文
-                # 🔥 增强：确保context存在且有效，如果为None或已关闭则重新创建
-                if self.context is None or (hasattr(self.context, 'closed') and self.context.closed):
-                    uat_logger.warning(f"🔧 [SERIAL_MULTI_CASE] 检测到context为None或已关闭，重新创建上下文")
-                    if self.browser is None or not self.browser.is_connected():
-                        uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器已断开连接，需要重新启动浏览器")
-                        # 重试启动浏览器
+                    except Exception:
+                        pass
+                    finally:
+                        self.page = None
+
+                # 检查浏览器连接是否有效（仅在首个用例或异常后检查）
+                browser_alive = False
+                try:
+                    browser_alive = self.browser is not None and self.browser.is_connected()
+                except Exception:
+                    browser_alive = False
+
+                if not browser_alive:
+                    uat_logger.warning(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_id} 执行前浏览器已断连，重新启动...")
+                    try:
+                        await self.start_browser(headless=False)
+                    except Exception as restart_error:
+                        uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器重启失败: {str(restart_error)}")
+                        process_case_result({
+                            "case_id": case_id, "case_name": "未知",
+                            "status": "error", "error": f"浏览器重启失败: {str(restart_error)}"
+                        }, case_id)
+                        continue
+                else:
+                    # 🔥 性能优化：复用 context，避免每个用例都重建上下文
+                    context_alive = False
+                    try:
+                        context_alive = self.context is not None and not (hasattr(self.context, 'closed') and self.context.closed)
+                    except Exception:
+                        context_alive = False
+
+                    if not context_alive:
                         try:
-                            await self.start_browser(headless=False)
-                        except Exception as restart_error:
-                            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 重试启动浏览器失败: {str(restart_error)}")
+                            self.context = await self.browser.new_context(ignore_https_errors=True, no_viewport=True)
+                        except Exception as ctx_error:
+                            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 创建context失败: {str(ctx_error)}")
                             process_case_result({
-                                "case_id": case_id,
-                                "case_name": "未知",
-                                "status": "error",
-                                "error": f"无法恢复浏览器连接: {str(restart_error)}"
+                                "case_id": case_id, "case_name": "未知",
+                                "status": "error", "error": f"创建浏览器上下文失败: {str(ctx_error)}"
                             }, case_id)
                             continue
-                    else:
-                        self.context = await self.browser.new_context(ignore_https_errors=True, no_viewport=True)
-                
+
+                # 在复用的 context 中创建新页面
                 self.page = await self.context.new_page()
-                
-                # 重新设置事件监听器
-                await self._setup_event_listeners()
-                
-                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建新页面成功")
+                # 🔥 性能优化：回放模式下跳过录制事件监听器设置（节省约 200ms）
+                if self.recording:
+                    await self._setup_event_listeners()
+                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_id} 新页面就绪")
             except Exception as e:
-                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 为用例 {case_id} 创建页面失败: {str(e)}")
+                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 环境准备失败: {str(e)}")
                 process_case_result({
-                    "case_id": case_id,
-                    "case_name": "未知",
-                    "status": "error",
-                    "error": f"创建页面失败: {str(e)}"
+                    "case_id": case_id, "case_name": "未知",
+                    "status": "error", "error": f"准备执行环境失败: {str(e)}"
                 }, case_id)
                 continue
             
-            uat_logger.info(f"🔧 [SERIAL_MULTI_CASE] 在独立页面中执行用例 {case_id}")
             try:
-                # 🔥 修复：用例级计时开始，确保每个用例的计时都是独立的
                 case_start_time = time.time()
                 case_info = db.get_test_case_v2(case_id)
                 if not case_info:
@@ -6805,14 +6889,22 @@ class PlaywrightAutomation:
                     }, case_id)
                     continue
                 execution_steps = build_execution_steps(steps)
-                uat_logger.info(f"📋 [STEP_DEBUG] 用例 {case_id} 构建完成 {len(execution_steps)} 个执行步骤")
+                uat_logger.info(f"📋 用例 {case_id} ({case_name}) 共 {len(execution_steps)} 个步骤")
                 
-                # 🔥 修复：每个用例在独立页面中执行，不需要保持当前页面状态
-                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 在独立页面中执行")
+                # 如果用例有初始 URL，先导航到该URL
+                case_url = case_info.get('url', '')
+                if case_url:
+                    fixed_url, url_err = _pa_validate_url(case_url)
+                    if url_err:
+                        uat_logger.warning(f"用例初始URL无效，跳过初始导航: {url_err}")
+                    elif fixed_url:
+                        uat_logger.info(f"用例初始导航到: {fixed_url}")
+                        try:
+                            await self.navigate_to(fixed_url, page=self.page)
+                        except Exception as nav_err:
+                            uat_logger.warning(f"用例初始导航失败，继续执行步骤: {nav_err}")
                 
-                # 🔥 修复：移除全局用例超时限制，让每个步骤自己控制超时
-                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 直接执行，不设置全局超时限制")
-                uat_logger.info(f"⏭️ [SERIAL_MULTI_CASE] 各步骤将使用各自独立的超时控制")
+                # 执行用例步骤
 
                 # 直接执行用例步骤，不使用全局超时
                 try:
@@ -6827,18 +6919,10 @@ class PlaywrightAutomation:
                     # 🔥 修复：在异常情况下也计算时间
                     case_end_time = time.time()
                     case_duration = case_end_time - case_start_time
-                # 🔥 修复：添加详细的日志来追踪用例状态判断
-                uat_logger.info(f"📊 [CASE_STATUS] 开始判断用例 {case_id} 的执行状态")
-                uat_logger.info(f"📊 [CASE_STATUS] case_results 长度: {len(case_results)}")
-                uat_logger.info(f"📊 [CASE_STATUS] case_results 详细内容: {case_results}")
-                
-                # 🔥 修复：检查步骤执行完整性
+                # 🔥 精简状态判断日志
                 if len(case_results) < len(execution_steps):
-                    uat_logger.error(f"❌ [CASE_INTEGRITY] 用例 {case_id} 步骤未全部执行！")
-                    uat_logger.error(f"❌ [CASE_INTEGRITY] 期望步骤数: {len(execution_steps)}, 实际执行数: {len(case_results)}")
                     case_status = "error"
                     extracted_text = ""
-                    # 🔥 修复：在完整性检查分支中也设置 success_count 和 error_count
                     success_count = sum(1 for r in case_results if r.get("status") == "success")
                     error_count = sum(1 for r in case_results if r.get("status") == "error")
                 else:
@@ -6877,42 +6961,33 @@ class PlaywrightAutomation:
                     "execution_time": round(case_duration, 2)
                 }
                 process_case_result(result, case_id)
-                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_number}/{len(case_ids)} 串行执行完成，状态: {case_status}，继续执行下一个用例")
-                uat_logger.info(f"⏱️ [SERIAL_MULTI_CASE] 用例 {case_id} 执行耗时: {result['execution_time']:.2f} 秒")
+                uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_id} 完成，状态: {case_status}，耗时: {result['execution_time']:.2f}s")
             except Exception as e:
-                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 测试用例执行异常,ID: {case_id}, 错误: {str(e)}")
+                uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 异常: {str(e)}")
                 process_case_result({
                     "case_id": case_id,
                     "case_name": case_info.get("name", "未命名用例") if 'case_info' in locals() else "未知",
                     "status": "error",
                     "error": str(e)
                 }, case_id)
-                uat_logger.info(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_number}/{len(case_ids)} 执行失败，继续执行下一个用例")
+                uat_logger.info(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_id} 执行失败，继续下一个")
             finally:
-                # 🔥 修复：在每个用例执行完成后清理浏览器上下文
+                # 🔥 性能优化：不关闭 context，只关闭 page（context 复用给下一个用例）
                 try:
-                    if self.context:
-                        await self.context.close()
-                        self.context = None
-                        self.page = None
-                    uat_logger.info(f"🧹 [CASE_CLEANUP] 用例 {case_id} 浏览器上下文已清理")
-                except Exception as e:
-                    uat_logger.warning(f"🧹 [CASE_CLEANUP] 清理用例 {case_id} 浏览器上下文时出错: {str(e)}")
-                # 🔥 修复：添加用例间的等待时间，确保前一个用例的步骤已经完全执行完成
-                await asyncio.sleep(1)  # 等待1秒
+                    if self.page:
+                        await self.page.close()
+                except Exception:
+                    pass
+                finally:
+                    self.page = None
+                # 🔥 性能优化：用例间等待时间从 1 秒减少到 0.1 秒
+                await asyncio.sleep(0.1)
         
-        uat_logger.info(f"🎉 [SERIAL_MULTI_CASE] ========== 所有测试用例串行执行完成（严格按顺序） ==========")
-        uat_logger.info(f"📊 [SERIAL_MULTI_CASE] 总用例数: {all_results['total_cases']}, 成功: {all_results['successful_cases']}, 失败: {all_results['failed_cases']}")
+        uat_logger.info(f"🎉 [SERIAL_MULTI_CASE] 所有用例执行完成，成功: {all_results['successful_cases']}, 失败: {all_results['failed_cases']}")
         
-        # 🔥 验证执行顺序是否正确
-        if actual_execution_order == case_ids:
-            uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 执行顺序验证通过: {actual_execution_order}")
-        else:
-            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 执行顺序验证失败!")
-            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 期望顺序: {case_ids}")
-            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 实际顺序: {actual_execution_order}")
-        
-        uat_logger.info("✅ [SERIAL_MULTI_CASE] 串行执行模式已完成，所有并行逻辑已禁用，页面重置已移除")
+        # 验证执行顺序
+        if actual_execution_order != case_ids:
+            uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 执行顺序验证失败! 期望: {case_ids}, 实际: {actual_execution_order}")
         
         return all_results
     
@@ -6968,28 +7043,15 @@ class PlaywrightAutomation:
                 break
                 
             except Exception as step_error:
-                # 🔥 修复：添加详细的日志来追踪步骤异常处理
                 import traceback
-                uat_logger.error(f"❌ [CASE_STEP] 步骤 {i+1} 执行异常: {str(step_error)}")
-                uat_logger.error(f"❌ [CASE_STEP] 异常类型: {type(step_error).__name__}")
-                uat_logger.error(f"❌ [CASE_STEP] 异常堆栈: {traceback.format_exc()}")
+                uat_logger.error(f"❌ [CASE_STEP] 步骤 {i+1} 异常: {type(step_error).__name__}: {str(step_error)}")
                 
-                # 添加错误结果到 case_results
                 error_result = { 
                     "status": "error", 
                     "step": step.get('action', 'unknown'), 
                     "error": str(step_error)
                 }
                 case_results.append(error_result)
-                
-                # 检查错误结果是否正确添加
-                uat_logger.info(f"📊 [CASE_STEP] 错误结果已添加到 case_results: {error_result}")
-                uat_logger.info(f"📊 [CASE_STEP] case_results 最新长度: {len(case_results)}")
-                uat_logger.info(f"📊 [CASE_STEP] case_results 最新内容: {case_results}")
-                
-                # 🔥 修改：步骤失败立即终止当前用例执行
-                uat_logger.error(f"🛑 [CASE_STEP] 步骤 {i+1} 失败，立即终止当前用例执行")
-                # 🔥 修改：使用break中断当前用例执行
                 break
         
         return case_results
@@ -7015,22 +7077,22 @@ class PlaywrightAutomation:
         try:
             if action == "navigate":
                 url = step.get("url", "")
-                # 🔥 修复：检查URL是否有效
-                if not url:
-                    raise Exception("导航步骤缺少URL参数")
-                elif url == "__INVALID_URL_MISSING__":
-                    raise Exception("导航步骤的URL为空，请检查测试用例步骤配置")
-                elif url == "__INVALID_URL_BLANK__":
-                    raise Exception("不允许导航到 about:blank 页面，请检查测试用例步骤配置")
-                elif url.strip().lower() == "about:blank":
-                    raise Exception("不允许导航到 about:blank 页面")
-                
-                # 验证URL格式
-                if not url.startswith(("http://", "https://")):
-                    raise Exception(f"导航URL格式无效，必须以 http://或https://开头: {url}")
-                
-                await self.navigate_to(url, page=target_page)
-                results.append({"status": "success", "step": step})
+                # 处理构建阶段标注的占位符
+                if url == "__INVALID_URL__":
+                    raise Exception(step.get("url_error", "导航URL无效"))
+                if url == "__SKIP_URL__":
+                    uat_logger.warning("导航步骤URL为占位符，跳过")
+                    results.append({"status": "skipped", "step": step})
+                else:
+                    fixed_url, url_err = _pa_validate_url(url)
+                    if url_err:
+                        raise Exception(url_err)
+                    elif fixed_url is None:
+                        uat_logger.warning(f"导航步骤URL为空或占位符，跳过: {url}")
+                        results.append({"status": "skipped", "step": step})
+                    else:
+                        await self.navigate_to(fixed_url, page=target_page)
+                        results.append({"status": "success", "step": step})
                     
             elif action == "click":
                 selector = step.get("selector", "")
@@ -8048,16 +8110,32 @@ def sync_extract_json_from_selected_element():
 
 def sync_execute_multiple_test_cases(case_ids: List[int], db):
     """同步执行多个测试用例（带执行锁，防止并发执行）"""
+    # 🔥 增强: 首先检测浏览器状态，如果已断连则强制重置所有状态
+    try:
+        browser_disconnected = False
+        if automation.browser is not None:
+            try:
+                browser_disconnected = not automation.browser.is_connected()
+            except Exception:
+                # is_connected() 抛出异常说明浏览器对象已失效
+                browser_disconnected = True
+        
+        if browser_disconnected:
+            uat_logger.warning("⚠️ [MULTI_EXEC_PRE_CHECK] 检测到浏览器已断连，强制重置所有状态")
+            # 🔥 关键修复: 调用 force_reset_execution_state 而不是只清空引用
+            # 这样可以同时释放执行锁，避免死锁
+            force_reset_execution_state()
+            uat_logger.info("✅ [MULTI_EXEC_PRE_CHECK] 状态已重置，将自动重新启动浏览器")
+    except Exception as pre_check_error:
+        uat_logger.warning(f"⚠️ [MULTI_EXEC_PRE_CHECK] 浏览器状态预检测失败: {pre_check_error}，尝试强制重置")
+        force_reset_execution_state()
+    
     # 🔥 检查是否有其他测试用例正在执行
     if is_execution_in_progress():
-        uat_logger.error(f"❌ [EXECUTION_LOCK] 检测到有测试用例正在执行，拒绝并发执行")
-        return {
-            "total_cases": len(case_ids),
-            "successful_cases": 0,
-            "failed_cases": len(case_ids),
-            "case_results": [],
-            "error": "有其他测试用例正在执行，请等待当前执行完成"
-        }
+        uat_logger.warning(f"⚠️ [EXECUTION_LOCK] 检测到执行状态未清理，尝试自动重置...")
+        # 自动尝试重置残留的锁（可能是上次浏览器异常关闭导致锁没释放）
+        force_reset_execution_state()
+        uat_logger.info("✅ [EXECUTION_LOCK] 已自动重置锁状态，继续执行")
     
     # 🔥 获取执行锁
     if not _execution_lock.acquire(blocking=True, timeout=60):
@@ -8079,18 +8157,28 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db):
             return await automation.execute_multiple_test_cases(case_ids, db)
         return worker.execute(run)
     except Exception as e:
-        uat_logger.error(f"❌ [EXECUTION_LOCK] 多用例执行过程发生异常: {str(e)}")
+        err_str = str(e)
+        uat_logger.error(f"❌ [EXECUTION_LOCK] 多用例执行过程发生异常: {err_str}")
+        # 检测是否是浏览器关闭导致的异常
+        browser_kw = ['browser', 'closed', 'connection', 'target', 'page', 'context', 'crashed', 'disconnected']
+        if any(k in err_str.lower() for k in browser_kw):
+            uat_logger.warning("⚠️ [EXECUTION_LOCK] 检测到浏览器已关闭，强制重置所有状态")
+            # 🔥 关键修复: 使用 force_reset_execution_state 而不是单独清空引用
+            force_reset_execution_state()
         return {
             "total_cases": len(case_ids),
-                "successful_cases": 0,
-                "failed_cases": len(case_ids),
+            "successful_cases": 0,
+            "failed_cases": len(case_ids),
             "case_results": [],
-            "error": f"执行过程异常: {str(e)}"
+            "error": f"执行过程异常: {err_str}"
         }
     finally:
         # 🔥 释放执行锁
         set_execution_in_progress(False)
-        _execution_lock.release()
+        try:
+            _execution_lock.release()
+        except RuntimeError:
+            pass
         uat_logger.info(f"🔓 [EXECUTION_LOCK] 释放执行锁")
 
 

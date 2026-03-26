@@ -237,6 +237,10 @@
             font-size: 22px;
         }
         
+        .modal-close {
+            display: none;
+        }
+        
         .form-group {
             margin-bottom: 20px;
         }
@@ -415,6 +419,8 @@
             <div class="toolbar-right">
                 <button onclick="selectAllCases()" class="btn btn-secondary btn-sm">全选</button>
                 <button onclick="deselectAllCases()" class="btn btn-secondary btn-sm">取消全选</button>
+                <button onclick="showImportModal()" class="btn btn-info">导入</button>
+                <button onclick="showExportModal()" class="btn btn-info">导出</button>
                 <button onclick="backToProjects()" class="btn btn-secondary">← 返回项目列表</button>
             </div>
         </div>
@@ -443,8 +449,20 @@
                 <input type="text" id="caseName" placeholder="请输入测试用例名称">
             </div>
             <div class="form-group">
+                <label for="caseUrl">测试URL</label>
+                <input type="text" id="caseUrl" placeholder="请输入测试URL">
+            </div>
+            <div class="form-group">
                 <label for="caseDescription">用例描述</label>
                 <textarea id="caseDescription" placeholder="请输入测试用例描述"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="casePrecondition">前置条件</label>
+                <textarea id="casePrecondition" placeholder="请输入前置条件"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="caseExpectedResult">预期结果</label>
+                <textarea id="caseExpectedResult" placeholder="请输入预期结果"></textarea>
             </div>
             <div class="modal-footer">
                 <button onclick="closeCreateCaseModal()" class="btn btn-secondary">取消</button>
@@ -463,8 +481,20 @@
                 <input type="text" id="editCaseName">
             </div>
             <div class="form-group">
+                <label for="editCaseUrl">测试URL</label>
+                <input type="text" id="editCaseUrl">
+            </div>
+            <div class="form-group">
                 <label for="editCaseDescription">用例描述</label>
                 <textarea id="editCaseDescription"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="editCasePrecondition">前置条件</label>
+                <textarea id="editCasePrecondition"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="editCaseExpectedResult">预期结果</label>
+                <textarea id="editCaseExpectedResult"></textarea>
             </div>
             <div class="modal-footer">
                 <button onclick="closeEditCaseModal()" class="btn btn-secondary">取消</button>
@@ -486,6 +516,63 @@
             </div>
             <div class="modal-footer">
                 <button onclick="closeRunResultModal()" class="btn btn-primary">关闭</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 导入模态框 -->
+    <div id="importModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>导入用例</h3>
+                <button onclick="closeImportModal()" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>选择文件 <span style="color:#888;font-size:12px;">（仅支持 .xlsx 格式）</span></label>
+                    <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+                        <label for="importFile" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#6366f1;color:#fff;border-radius:6px;cursor:pointer;font-size:14px;transition:background 0.2s;" onmouseover="this.style.background='#4f46e5'" onmouseout="this.style.background='#6366f1'">
+                            <i class="fas fa-upload"></i> 选择文件
+                        </label>
+                        <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none;" onchange="updateFileName(this)">
+                        <span id="importFileName" style="color:#555;font-size:14px;">未选择文件</span>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top:8px;">
+                    <button onclick="downloadTemplate('excel')" class="btn btn-secondary btn-sm">下载Excel模板</button>
+                </div>
+                <div id="importResult"></div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeImportModal()" class="btn btn-secondary">取消</button>
+                <button onclick="importCases()" class="btn btn-primary">导入</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 导出模态框 -->
+    <div id="exportModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>导出用例</h3>
+                <button onclick="closeExportModal()" class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 15px; color: #666;">
+                    <i class="fas fa-info-circle"></i> 
+                    提示: 如果选择了用例，则只导出选中的用例；否则导出整个项目的用例。
+                </p>
+                <div class="form-group">
+                    <button onclick="exportCases('excel')" class="btn btn-primary" style="margin-right: 10px;">
+                        <i class="fas fa-file-excel"></i> 导出为Excel
+                    </button>
+                    <button onclick="exportCases('json')" class="btn btn-info">
+                        <i class="fas fa-file-code"></i> 导出为JSON
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeExportModal()" class="btn btn-secondary">关闭</button>
             </div>
         </div>
     </div>
@@ -630,7 +717,10 @@
         function showCreateCaseModal() {
             document.getElementById('createCaseModal').classList.add('active');
             document.getElementById('caseName').value = '';
+            document.getElementById('caseUrl').value = '';
             document.getElementById('caseDescription').value = '';
+            document.getElementById('casePrecondition').value = '';
+            document.getElementById('caseExpectedResult').value = '';
         }
         
         function closeCreateCaseModal() {
@@ -639,7 +729,10 @@
         
         async function createTestCase() {
             const name = document.getElementById('caseName').value.trim();
+            const url = document.getElementById('caseUrl').value.trim();
             const description = document.getElementById('caseDescription').value.trim();
+            const precondition = document.getElementById('casePrecondition').value.trim();
+            const expected_result = document.getElementById('caseExpectedResult').value.trim();
             
             if (!name) {
                 alert('请输入测试用例名称');
@@ -655,7 +748,10 @@
                     body: JSON.stringify({
                         project_id: currentProjectId,
                         name: name,
-                        description: description
+                        url: url,
+                        description: description,
+                        precondition: precondition,
+                        expected_result: expected_result
                     })
                 });
                 
@@ -673,11 +769,14 @@
             }
         }
         
-        function showEditCaseModal(caseId, name, description) {
+        function showEditCaseModal(caseId, caseData) {
             currentEditingCaseId = caseId;
             document.getElementById('editCaseModal').classList.add('active');
-            document.getElementById('editCaseName').value = name;
-            document.getElementById('editCaseDescription').value = description;
+            document.getElementById('editCaseName').value = caseData.name || '';
+            document.getElementById('editCaseUrl').value = caseData.url || '';
+            document.getElementById('editCaseDescription').value = caseData.description || '';
+            document.getElementById('editCasePrecondition').value = caseData.precondition || '';
+            document.getElementById('editCaseExpectedResult').value = caseData.expected_result || '';
         }
         
         function closeEditCaseModal() {
@@ -691,7 +790,7 @@
                 const data = await response.json();
                 
                 if (data.test_case) {
-                    showEditCaseModal(caseId, data.test_case.name, data.test_case.description);
+                    showEditCaseModal(caseId, data.test_case);
                 } else {
                     alert('获取测试用例信息失败');
                 }
@@ -702,7 +801,10 @@
         
         async function updateTestCase() {
             const name = document.getElementById('editCaseName').value.trim();
+            const url = document.getElementById('editCaseUrl').value.trim();
             const description = document.getElementById('editCaseDescription').value.trim();
+            const precondition = document.getElementById('editCasePrecondition').value.trim();
+            const expected_result = document.getElementById('editCaseExpectedResult').value.trim();
             
             if (!name) {
                 alert('请输入测试用例名称');
@@ -717,7 +819,10 @@
                     },
                     body: JSON.stringify({
                         name: name,
-                        description: description
+                        url: url,
+                        description: description,
+                        precondition: precondition,
+                        expected_result: expected_result
                     })
                 });
                 
@@ -1133,6 +1238,126 @@
         
         function backToProjects() {
             window.location.href = '/list_projects';
+        }
+        
+        // 导入导出功能
+        function showImportModal() {
+            const modal = document.getElementById('importModal');
+            modal.classList.add('active');
+        }
+        
+        function closeImportModal() {
+            const modal = document.getElementById('importModal');
+            modal.classList.remove('active');
+            document.getElementById('importFile').value = '';
+            document.getElementById('importFileName').textContent = '未选择文件';
+            document.getElementById('importResult').innerHTML = '';
+        }
+        
+        function showExportModal() {
+            const modal = document.getElementById('exportModal');
+            modal.classList.add('active');
+        }
+        
+        function closeExportModal() {
+            const modal = document.getElementById('exportModal');
+            modal.classList.remove('active');
+        }
+        
+        async function downloadTemplate(format) {
+            try {
+                const res = await fetch(`/api/cases/template/${format}`);
+                const data = await res.json();
+                if (data.success) {
+                    window.open(data.download_url, '_blank');
+                } else {
+                    alert('下载模板失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('下载模板失败: ' + e.message);
+            }
+        }
+        
+        function updateFileName(input) {
+            const span = document.getElementById('importFileName');
+            if (input.files && input.files.length > 0) {
+                span.textContent = input.files[0].name;
+                span.style.color = '#333';
+            } else {
+                span.textContent = '未选择文件';
+                span.style.color = '#555';
+            }
+        }
+        
+        async function importCases() {
+            const fileInput = document.getElementById('importFile');
+            const resultDiv = document.getElementById('importResult');
+            
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert('请选择文件');
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('project_id', currentProjectId);
+            
+            resultDiv.innerHTML = '<p style="color: #666;">正在导入，请稍候...</p>';
+            
+            try {
+                const res = await fetch('/api/cases/import/excel', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    let html = `<p style="color: green;">导入成功！</p>`;
+                    html += `<p>创建用例: ${data.cases_created} 个</p>`;
+                    html += `<p>创建步骤: ${data.steps_created} 个</p>`;
+                    if (data.errors && data.errors.length > 0) {
+                        html += `<p style="color: orange;">警告: ${data.errors.length} 条</p>`;
+                        html += `<ul style="color: #666; font-size: 12px; max-height: 100px; overflow-y: auto;">`;
+                        data.errors.forEach(err => html += `<li>${err}</li>`);
+                        html += `</ul>`;
+                    }
+                    resultDiv.innerHTML = html;
+                    loadTestCases(); // 刷新列表
+                } else {
+                    resultDiv.innerHTML = `<p style="color: red;">导入失败: ${data.error || '未知错误'}</p>`;
+                }
+            } catch (e) {
+                resultDiv.innerHTML = `<p style="color: red;">导入失败: ${e.message}</p>`;
+            }
+        }
+        
+        async function exportCases(format) {
+            const selectedCases = Array.from(document.querySelectorAll('.case-checkbox input:checked'))
+                .map(cb => parseInt(cb.dataset.caseId));
+            
+            const payload = {
+                project_id: selectedCases.length === 0 ? currentProjectId : undefined,
+                case_ids: selectedCases.length > 0 ? selectedCases : undefined
+            };
+            
+            try {
+                const res = await fetch(`/api/cases/export/${format}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    window.open(data.download_url, '_blank');
+                    closeExportModal();
+                } else {
+                    alert('导出失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('导出失败: ' + e.message);
+            }
         }
         
         document.addEventListener('DOMContentLoaded', async function() {

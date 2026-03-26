@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>缺陷管理 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .severity-critical { background: #dc2626; color: white; }
+        .severity-high { background: #ea580c; color: white; }
+        .severity-medium { background: #ca8a04; color: white; }
+        .severity-low { background: #16a34a; color: white; }
+        .status-open { background: #ef4444; color: white; }
+        .status-in_progress { background: #3b82f6; color: white; }
+        .status-resolved { background: #22c55e; color: white; }
+        .status-closed { background: #6b7280; color: white; }
+        .status-reopened { background: #f59e0b; color: white; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-purple-600 to-indigo-700 min-h-screen p-5">
+    <div class="max-w-7xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden">
+        <!-- 头部 -->
+        <div class="bg-gradient-to-r from-purple-600 to-indigo-700 text-white p-8">
+            <h1 class="text-3xl font-bold mb-2"><i class="fas fa-bug mr-3"></i>缺陷管理</h1>
+            <p class="text-purple-200">跟踪和管理测试过程中发现的所有缺陷</p>
+        </div>
+        
+        <!-- 工具栏 -->
+        <div class="p-5 bg-gray-50 border-b flex flex-wrap gap-4 items-center justify-between">
+            <div class="flex flex-wrap gap-3 items-center">
+                <!-- 项目筛选 -->
+                <select id="filterProject" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <option value="">所有项目</option>
+                </select>
+                <!-- 状态筛选 -->
+                <select id="filterStatus" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <option value="">所有状态</option>
+                    <option value="open">待处理</option>
+                    <option value="in_progress">处理中</option>
+                    <option value="resolved">已解决</option>
+                    <option value="closed">已关闭</option>
+                    <option value="reopened">重新打开</option>
+                </select>
+                <!-- 严重级别筛选 -->
+                <select id="filterSeverity" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <option value="">所有级别</option>
+                    <option value="critical">致命</option>
+                    <option value="high">严重</option>
+                    <option value="medium">一般</option>
+                    <option value="low">轻微</option>
+                </select>
+                <button onclick="loadDefects()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition">
+                    <i class="fas fa-search mr-1"></i>筛选
+                </button>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="showCreateModal()" class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-lg transition">
+                    <i class="fas fa-plus mr-2"></i>新建缺陷
+                </button>
+                <a href="/list_projects" class="bg-gray-500 hover:bg-gray-600 text-white px-5 py-2 rounded-lg transition">
+                    <i class="fas fa-arrow-left mr-2"></i>返回
+                </a>
+            </div>
+        </div>
+        
+        <!-- 统计卡片 -->
+        <div class="p-5 grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div class="bg-red-50 rounded-lg p-4 border border-red-200">
+                <div class="text-red-600 text-2xl font-bold" id="statOpen">0</div>
+                <div class="text-red-500 text-sm">待处理</div>
+            </div>
+            <div class="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                <div class="text-blue-600 text-2xl font-bold" id="statInProgress">0</div>
+                <div class="text-blue-500 text-sm">处理中</div>
+            </div>
+            <div class="bg-green-50 rounded-lg p-4 border border-green-200">
+                <div class="text-green-600 text-2xl font-bold" id="statResolved">0</div>
+                <div class="text-green-500 text-sm">已解决</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <div class="text-gray-600 text-2xl font-bold" id="statClosed">0</div>
+                <div class="text-gray-500 text-sm">已关闭</div>
+            </div>
+            <div class="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                <div class="text-purple-600 text-2xl font-bold" id="statTotal">0</div>
+                <div class="text-purple-500 text-sm">总计</div>
+            </div>
+        </div>
+        
+        <!-- 缺陷列表 -->
+        <div class="p-5">
+            <div class="overflow-x-auto">
+                <table class="w-full border-collapse">
+                    <thead>
+                        <tr class="bg-gray-100">
+                            <th class="p-3 text-left font-semibold">ID</th>
+                            <th class="p-3 text-left font-semibold">标题</th>
+                            <th class="p-3 text-left font-semibold">项目</th>
+                            <th class="p-3 text-left font-semibold">严重级别</th>
+                            <th class="p-3 text-left font-semibold">状态</th>
+                            <th class="p-3 text-left font-semibold">负责人</th>
+                            <th class="p-3 text-left font-semibold">创建时间</th>
+                            <th class="p-3 text-left font-semibold">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="defectList">
+                        <tr><td colspan="8" class="p-8 text-center text-gray-500">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- 分页 -->
+            <div class="mt-5 flex justify-between items-center">
+                <div class="text-gray-500 text-sm" id="paginationInfo">显示 0 - 0 条，共 0 条</div>
+                <div class="flex gap-2" id="paginationButtons"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 新建/编辑缺陷模态框 -->
+    <div id="defectModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div class="p-5 border-b flex justify-between items-center bg-gradient-to-r from-purple-600 to-indigo-700 text-white rounded-t-xl">
+                <h3 class="text-xl font-bold" id="modalTitle"><i class="fas fa-bug mr-2"></i>新建缺陷</h3>
+                <button onclick="closeModal()" class="text-white hover:text-gray-200 text-2xl">&times;</button>
+            </div>
+            <form id="defectForm" class="p-5 space-y-4">
+                <input type="hidden" id="defectId">
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">项目 <span class="text-red-500">*</span></label>
+                        <select id="defectProject" required onchange="loadCasesForProject(this.value)" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            <option value="">请选择项目</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">关联用例</label>
+                        <select id="defectCase" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            <option value="">无</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">标题 <span class="text-red-500">*</span></label>
+                    <input type="text" id="defectTitle" required class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="请输入缺陷标题">
+                </div>
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">描述</label>
+                    <textarea id="defectDescription" rows="4" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="请详细描述缺陷"></textarea>
+                </div>
+                <div class="grid grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">严重级别</label>
+                        <select id="defectSeverity" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            <option value="critical">致命</option>
+                            <option value="high">严重</option>
+                            <option value="medium" selected>一般</option>
+                            <option value="low">轻微</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">优先级</label>
+                        <select id="defectPriority" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            <option value="high">高</option>
+                            <option value="medium" selected>中</option>
+                            <option value="low">低</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">负责人</label>
+                        <select id="defectAssignee" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            <option value="">未分配</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-gray-700 font-medium mb-1">复现步骤</label>
+                    <textarea id="defectReproduceSteps" rows="3" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="描述缺陷的复现步骤"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">预期结果</label>
+                        <textarea id="defectExpected" rows="2" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 font-medium mb-1">实际结果</label>
+                        <textarea id="defectActual" rows="2" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"></textarea>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-3 pt-4 border-t">
+                    <button type="button" onclick="closeModal()" class="px-5 py-2 border rounded-lg hover:bg-gray-100 transition">取消</button>
+                    <button type="submit" class="px-5 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        let currentPage = 1;
+        const pageSize = 20;
+        let projects = [];
+        let users = [];
+        
+        // 页面加载
+        document.addEventListener('DOMContentLoaded', function() {
+            loadProjects();
+            loadUsers();
+            loadDefects();
+            loadStatistics();
+        });
+        
+        // 加载项目列表
+        async function loadProjects() {
+            try {
+                const res = await fetch('/api/projects');
+                const data = await res.json();
+                if (data.success || data.projects) {
+                    projects = data.projects || [];
+                    const filterSelect = document.getElementById('filterProject');
+                    const formSelect = document.getElementById('defectProject');
+                    
+                    projects.forEach(p => {
+                        filterSelect.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+                        formSelect.innerHTML += `<option value="${p.id}">${p.name}</option>`;
+                    });
+                }
+            } catch (e) {
+                console.error('加载项目失败:', e);
+            }
+        }
+        
+        // 根据项目加载用例列表
+        async function loadCasesForProject(projectId) {
+            const caseSelect = document.getElementById('defectCase');
+            caseSelect.innerHTML = '<option value="">无</option>';
+            
+            if (!projectId) return;
+            
+            try {
+                const res = await fetch(`/api/projects/${projectId}/cases`);
+                const data = await res.json();
+                if (data.cases && data.cases.length > 0) {
+                    data.cases.forEach(c => {
+                        caseSelect.innerHTML += `<option value="${c.id}">${c.name}</option>`;
+                    });
+                }
+            } catch (e) {
+                console.error('加载用例失败:', e);
+            }
+        }
+        
+        // 加载用户列表
+        async function loadUsers() {
+            try {
+                const res = await fetch('/api/users');
+                const data = await res.json();
+                if (data.success && data.users) {
+                    users = data.users;
+                    const select = document.getElementById('defectAssignee');
+                    users.forEach(u => {
+                        select.innerHTML += `<option value="${u.id}">${u.username}</option>`;
+                    });
+                }
+            } catch (e) {
+                console.error('加载用户失败:', e);
+            }
+        }
+        
+        // 加载缺陷列表
+        async function loadDefects() {
+            const projectId = document.getElementById('filterProject').value;
+            const status = document.getElementById('filterStatus').value;
+            const severity = document.getElementById('filterSeverity').value;
+            
+            let url = `/api/defects?page=${currentPage}&page_size=${pageSize}`;
+            if (projectId) url += `&project_id=${projectId}`;
+            if (status) url += `&status=${status}`;
+            if (severity) url += `&severity=${severity}`;
+            
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                
+                if (data.success) {
+                    renderDefectList(data.defects);
+                    renderPagination(data.total, data.page, data.total_pages);
+                }
+            } catch (e) {
+                console.error('加载缺陷失败:', e);
+                document.getElementById('defectList').innerHTML = `<tr><td colspan="8" class="p-8 text-center text-red-500">加载失败</td></tr>`;
+            }
+        }
+        
+        // 渲染缺陷列表
+        function renderDefectList(defects) {
+            const tbody = document.getElementById('defectList');
+            
+            if (!defects || defects.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-gray-500">暂无缺陷数据</td></tr>`;
+                return;
+            }
+            
+            const severityLabels = { critical: '致命', high: '严重', medium: '一般', low: '轻微' };
+            const statusLabels = { open: '待处理', in_progress: '处理中', resolved: '已解决', closed: '已关闭', reopened: '重新打开' };
+            
+            tbody.innerHTML = defects.map(d => `
+                <tr class="border-b hover:bg-gray-50 transition">
+                    <td class="p-3 text-gray-600">#${d.id}</td>
+                    <td class="p-3">
+                        <a href="/defects/${d.id}" class="text-purple-600 hover:text-purple-800 font-medium">${escapeHtml(d.title)}</a>
+                        ${d.case_name ? `<div class="text-xs text-gray-400 mt-1"><i class="fas fa-link mr-1"></i>${escapeHtml(d.case_name)}</div>` : ''}
+                    </td>
+                    <td class="p-3 text-gray-600">${d.project_name || '-'}</td>
+                    <td class="p-3">
+                        <span class="px-2 py-1 rounded text-xs severity-${d.severity}">${severityLabels[d.severity] || d.severity}</span>
+                    </td>
+                    <td class="p-3">
+                        <span class="px-2 py-1 rounded text-xs status-${d.status}">${statusLabels[d.status] || d.status}</span>
+                    </td>
+                    <td class="p-3 text-gray-600">${d.assignee_name || '<span class="text-gray-400">未分配</span>'}</td>
+                    <td class="p-3 text-gray-500 text-sm">${formatDate(d.created_at)}</td>
+                    <td class="p-3">
+                        <div class="flex gap-2">
+                            <a href="/defects/${d.id}" class="text-blue-500 hover:text-blue-700" title="查看详情"><i class="fas fa-eye"></i></a>
+                            <button onclick="editDefect(${d.id})" class="text-yellow-500 hover:text-yellow-700" title="编辑"><i class="fas fa-edit"></i></button>
+                            <button onclick="deleteDefect(${d.id})" class="text-red-500 hover:text-red-700" title="删除"><i class="fas fa-trash"></i></button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+        
+        // 渲染分页
+        function renderPagination(total, page, totalPages) {
+            document.getElementById('paginationInfo').textContent = 
+                `显示 ${(page-1)*pageSize+1} - ${Math.min(page*pageSize, total)} 条，共 ${total} 条`;
+            
+            const btns = document.getElementById('paginationButtons');
+            btns.innerHTML = '';
+            
+            if (totalPages <= 1) return;
+            
+            if (page > 1) {
+                btns.innerHTML += `<button onclick="goToPage(${page-1})" class="px-3 py-1 border rounded hover:bg-gray-100">上一页</button>`;
+            }
+            
+            for (let i = Math.max(1, page-2); i <= Math.min(totalPages, page+2); i++) {
+                const active = i === page ? 'bg-purple-600 text-white' : 'hover:bg-gray-100';
+                btns.innerHTML += `<button onclick="goToPage(${i})" class="px-3 py-1 border rounded ${active}">${i}</button>`;
+            }
+            
+            if (page < totalPages) {
+                btns.innerHTML += `<button onclick="goToPage(${page+1})" class="px-3 py-1 border rounded hover:bg-gray-100">下一页</button>`;
+            }
+        }
+        
+        function goToPage(page) {
+            currentPage = page;
+            loadDefects();
+        }
+        
+        // 加载统计
+        async function loadStatistics() {
+            try {
+                const res = await fetch('/api/defects/statistics');
+                const data = await res.json();
+                
+                if (data.success) {
+                    const stats = data.statistics;
+                    document.getElementById('statOpen').textContent = (stats.by_status.open || 0) + (stats.by_status.reopened || 0);
+                    document.getElementById('statInProgress').textContent = stats.by_status.in_progress || 0;
+                    document.getElementById('statResolved').textContent = stats.by_status.resolved || 0;
+                    document.getElementById('statClosed').textContent = stats.by_status.closed || 0;
+                    document.getElementById('statTotal').textContent = stats.total || 0;
+                }
+            } catch (e) {
+                console.error('加载统计失败:', e);
+            }
+        }
+        
+        // 显示新建模态框
+        function showCreateModal() {
+            document.getElementById('modalTitle').innerHTML = '<i class="fas fa-bug mr-2"></i>新建缺陷';
+            document.getElementById('defectId').value = '';
+            document.getElementById('defectForm').reset();
+            document.getElementById('defectModal').classList.remove('hidden');
+        }
+        
+        // 关闭模态框
+        function closeModal() {
+            document.getElementById('defectModal').classList.add('hidden');
+        }
+        
+        // 编辑缺陷
+        async function editDefect(id) {
+            try {
+                const res = await fetch(`/api/defects/${id}`);
+                const data = await res.json();
+                
+                if (data.success) {
+                    const d = data.defect;
+                    document.getElementById('modalTitle').innerHTML = '<i class="fas fa-edit mr-2"></i>编辑缺陷';
+                    document.getElementById('defectId').value = d.id;
+                    document.getElementById('defectProject').value = d.project_id || '';
+                    // 先加载该项目的用例，再设置关联用例
+                    if (d.project_id) {
+                        await loadCasesForProject(d.project_id);
+                    }
+                    document.getElementById('defectCase').value = d.case_id || '';
+                    document.getElementById('defectTitle').value = d.title || '';
+                    document.getElementById('defectDescription').value = d.description || '';
+                    document.getElementById('defectSeverity').value = d.severity || 'medium';
+                    document.getElementById('defectPriority').value = d.priority || 'medium';
+                    document.getElementById('defectAssignee').value = d.assignee_id || '';
+                    document.getElementById('defectReproduceSteps').value = d.reproduce_steps || '';
+                    document.getElementById('defectExpected').value = d.expected_result || '';
+                    document.getElementById('defectActual').value = d.actual_result || '';
+                    document.getElementById('defectModal').classList.remove('hidden');
+                }
+            } catch (e) {
+                alert('加载缺陷失败: ' + e.message);
+            }
+        }
+        
+        // 删除缺陷
+        async function deleteDefect(id) {
+            if (!confirm('确定要删除此缺陷吗？此操作不可撤销。')) return;
+            
+            try {
+                const res = await fetch(`/api/defects/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                
+                if (data.success) {
+                    loadDefects();
+                    loadStatistics();
+                } else {
+                    alert('删除失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('删除失败: ' + e.message);
+            }
+        }
+        
+        // 提交表单
+        document.getElementById('defectForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const id = document.getElementById('defectId').value;
+            const payload = {
+                project_id: parseInt(document.getElementById('defectProject').value),
+                case_id: document.getElementById('defectCase').value ? parseInt(document.getElementById('defectCase').value) : null,
+                title: document.getElementById('defectTitle').value.trim(),
+                description: document.getElementById('defectDescription').value.trim(),
+                severity: document.getElementById('defectSeverity').value,
+                priority: document.getElementById('defectPriority').value,
+                assignee_id: document.getElementById('defectAssignee').value ? parseInt(document.getElementById('defectAssignee').value) : null,
+                reproduce_steps: document.getElementById('defectReproduceSteps').value.trim(),
+                expected_result: document.getElementById('defectExpected').value.trim(),
+                actual_result: document.getElementById('defectActual').value.trim()
+            };
+            
+            try {
+                const url = id ? `/api/defects/${id}` : '/api/defects';
+                const method = id ? 'PUT' : 'POST';
+                
+                const res = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    closeModal();
+                    loadDefects();
+                    loadStatistics();
+                } else {
+                    alert('保存失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('保存失败: ' + e.message);
+            }
+        });
+        
+        // 工具函数
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+        
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const d = new Date(dateStr);
+            return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+    </script>
+</body>
+</html>

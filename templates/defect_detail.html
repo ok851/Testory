@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>缺陷详情 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .severity-critical { background: #dc2626; color: white; }
+        .severity-high { background: #ea580c; color: white; }
+        .severity-medium { background: #ca8a04; color: white; }
+        .severity-low { background: #16a34a; color: white; }
+        .status-open { background: #ef4444; color: white; }
+        .status-in_progress { background: #3b82f6; color: white; }
+        .status-resolved { background: #22c55e; color: white; }
+        .status-closed { background: #6b7280; color: white; }
+        .status-reopened { background: #f59e0b; color: white; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-purple-600 to-indigo-700 min-h-screen p-5">
+    <div class="max-w-5xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden">
+        <!-- 头部 -->
+        <div class="bg-gradient-to-r from-purple-600 to-indigo-700 text-white p-6">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="text-purple-200 mb-2">
+                        <a href="/defects" class="hover:text-white"><i class="fas fa-arrow-left mr-2"></i>返回缺陷列表</a>
+                    </div>
+                    <h1 class="text-2xl font-bold" id="defectTitle">加载中...</h1>
+                    <div class="flex gap-3 mt-3" id="defectTags"></div>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="showStatusModal()" class="bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition">
+                        <i class="fas fa-exchange-alt mr-2"></i>变更状态
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="grid grid-cols-3 gap-6 p-6">
+            <!-- 左侧主内容 -->
+            <div class="col-span-2 space-y-6">
+                <!-- 描述 -->
+                <div class="bg-gray-50 rounded-lg p-5">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-3"><i class="fas fa-file-alt mr-2 text-purple-500"></i>描述</h3>
+                    <div id="defectDescription" class="text-gray-700 whitespace-pre-wrap">-</div>
+                </div>
+                
+                <!-- 复现步骤 -->
+                <div class="bg-gray-50 rounded-lg p-5">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-3"><i class="fas fa-list-ol mr-2 text-purple-500"></i>复现步骤</h3>
+                    <div id="defectReproduceSteps" class="text-gray-700 whitespace-pre-wrap">-</div>
+                </div>
+                
+                <!-- 预期/实际结果 -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-green-50 rounded-lg p-5 border border-green-200">
+                        <h3 class="text-lg font-semibold text-green-800 mb-3"><i class="fas fa-check-circle mr-2"></i>预期结果</h3>
+                        <div id="defectExpected" class="text-gray-700 whitespace-pre-wrap">-</div>
+                    </div>
+                    <div class="bg-red-50 rounded-lg p-5 border border-red-200">
+                        <h3 class="text-lg font-semibold text-red-800 mb-3"><i class="fas fa-times-circle mr-2"></i>实际结果</h3>
+                        <div id="defectActual" class="text-gray-700 whitespace-pre-wrap">-</div>
+                    </div>
+                </div>
+                
+                <!-- 错误信息 -->
+                <div class="bg-red-50 rounded-lg p-5 border border-red-200" id="errorSection" style="display: none;">
+                    <h3 class="text-lg font-semibold text-red-800 mb-3"><i class="fas fa-exclamation-triangle mr-2"></i>错误信息</h3>
+                    <pre id="defectErrorMessage" class="text-red-700 text-sm bg-red-100 p-3 rounded overflow-x-auto"></pre>
+                </div>
+                
+                <!-- 截图 -->
+                <div class="bg-gray-50 rounded-lg p-5" id="screenshotSection" style="display: none;">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-3"><i class="fas fa-image mr-2 text-purple-500"></i>截图</h3>
+                    <div id="defectScreenshots" class="flex flex-wrap gap-3"></div>
+                </div>
+                
+                <!-- 评论 -->
+                <div class="bg-gray-50 rounded-lg p-5">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-3"><i class="fas fa-comments mr-2 text-purple-500"></i>评论</h3>
+                    <div id="commentList" class="space-y-4 mb-4"></div>
+                    <div class="flex gap-3">
+                        <textarea id="commentInput" rows="2" class="flex-1 border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="添加评论..."></textarea>
+                        <button onclick="addComment()" class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-lg transition self-end">
+                            <i class="fas fa-paper-plane mr-1"></i>发送
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 右侧信息栏 -->
+            <div class="space-y-4">
+                <!-- 基本信息 -->
+                <div class="bg-gray-50 rounded-lg p-5">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">基本信息</h3>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">缺陷ID</span>
+                            <span class="font-medium" id="infoId">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">项目</span>
+                            <span class="font-medium" id="infoProject">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">关联用例</span>
+                            <span class="font-medium" id="infoCase">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">严重级别</span>
+                            <span id="infoSeverity">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">优先级</span>
+                            <span class="font-medium" id="infoPriority">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 人员信息 -->
+                <div class="bg-gray-50 rounded-lg p-5">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">人员信息</h3>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">报告人</span>
+                            <span class="font-medium" id="infoReporter">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">负责人</span>
+                            <span class="font-medium" id="infoAssignee">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 时间信息 -->
+                <div class="bg-gray-50 rounded-lg p-5">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">时间信息</h3>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">创建时间</span>
+                            <span class="font-medium" id="infoCreated">-</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">更新时间</span>
+                            <span class="font-medium" id="infoUpdated">-</span>
+                        </div>
+                        <div class="flex justify-between" id="resolvedRow" style="display: none;">
+                            <span class="text-gray-500">解决时间</span>
+                            <span class="font-medium" id="infoResolved">-</span>
+                        </div>
+                        <div class="flex justify-between" id="closedRow" style="display: none;">
+                            <span class="text-gray-500">关闭时间</span>
+                            <span class="font-medium" id="infoClosed">-</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 状态变更历史 -->
+                <div class="bg-gray-50 rounded-lg p-5">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">变更历史</h3>
+                    <div id="historyList" class="space-y-3 text-sm max-h-64 overflow-y-auto"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 状态变更模态框 -->
+    <div id="statusModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div class="p-5 border-b flex justify-between items-center">
+                <h3 class="text-xl font-bold"><i class="fas fa-exchange-alt mr-2 text-purple-500"></i>变更状态</h3>
+                <button onclick="closeStatusModal()" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+            </div>
+            <div class="p-5">
+                <label class="block text-gray-700 font-medium mb-2">选择新状态</label>
+                <select id="newStatus" class="w-full border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                    <option value="open">待处理</option>
+                    <option value="in_progress">处理中</option>
+                    <option value="resolved">已解决</option>
+                    <option value="closed">已关闭</option>
+                    <option value="reopened">重新打开</option>
+                </select>
+                <div class="mt-4" id="resolutionSection" style="display: none;">
+                    <label class="block text-gray-700 font-medium mb-2">解决方案</label>
+                    <textarea id="resolution" rows="3" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="请描述解决方案..."></textarea>
+                </div>
+                <div class="flex justify-end gap-3 mt-5">
+                    <button onclick="closeStatusModal()" class="px-5 py-2 border rounded-lg hover:bg-gray-100 transition">取消</button>
+                    <button onclick="updateStatus()" class="px-5 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const defectId = '{{ defect_id }}';
+        let currentDefect = null;
+        
+        const severityLabels = { critical: '致命', high: '严重', medium: '一般', low: '轻微' };
+        const statusLabels = { open: '待处理', in_progress: '处理中', resolved: '已解决', closed: '已关闭', reopened: '重新打开' };
+        const priorityLabels = { high: '高', medium: '中', low: '低' };
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            loadDefect();
+            loadComments();
+            loadHistory();
+            
+            document.getElementById('newStatus').addEventListener('change', function() {
+                document.getElementById('resolutionSection').style.display = 
+                    this.value === 'resolved' ? 'block' : 'none';
+            });
+        });
+        
+        async function loadDefect() {
+            try {
+                const res = await fetch(`/api/defects/${defectId}`);
+                const data = await res.json();
+                
+                if (data.success) {
+                    currentDefect = data.defect;
+                    renderDefect(currentDefect);
+                } else {
+                    alert('加载缺陷失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('加载缺陷失败: ' + e.message);
+            }
+        }
+        
+        function renderDefect(d) {
+            document.title = `#${d.id} ${d.title} - 缺陷详情`;
+            document.getElementById('defectTitle').textContent = d.title;
+            
+            // 标签
+            document.getElementById('defectTags').innerHTML = `
+                <span class="px-3 py-1 rounded-full text-sm status-${d.status}">${statusLabels[d.status] || d.status}</span>
+                <span class="px-3 py-1 rounded-full text-sm severity-${d.severity}">${severityLabels[d.severity] || d.severity}</span>
+            `;
+            
+            // 内容
+            document.getElementById('defectDescription').textContent = d.description || '无描述';
+            document.getElementById('defectReproduceSteps').textContent = d.reproduce_steps || '无复现步骤';
+            document.getElementById('defectExpected').textContent = d.expected_result || '-';
+            document.getElementById('defectActual').textContent = d.actual_result || '-';
+            
+            // 错误信息
+            if (d.error_message) {
+                document.getElementById('errorSection').style.display = 'block';
+                document.getElementById('defectErrorMessage').textContent = d.error_message;
+            }
+            
+            // 截图
+            if (d.screenshots) {
+                document.getElementById('screenshotSection').style.display = 'block';
+                const screenshots = d.screenshots.split(',').filter(s => s.trim());
+                document.getElementById('defectScreenshots').innerHTML = screenshots.map(s => 
+                    `<img src="${s.trim()}" class="w-48 h-32 object-cover rounded-lg cursor-pointer hover:opacity-80 transition" onclick="window.open('${s.trim()}', '_blank')">`
+                ).join('');
+            }
+            
+            // 信息栏
+            document.getElementById('infoId').textContent = '#' + d.id;
+            document.getElementById('infoProject').textContent = d.project_name || '-';
+            document.getElementById('infoCase').innerHTML = d.case_id 
+                ? `<a href="/list_steps/${d.case_id}" class="text-purple-600 hover:text-purple-800">${d.case_name || '用例#'+d.case_id}</a>` 
+                : '-';
+            document.getElementById('infoSeverity').innerHTML = `<span class="px-2 py-1 rounded text-xs severity-${d.severity}">${severityLabels[d.severity] || d.severity}</span>`;
+            document.getElementById('infoPriority').textContent = priorityLabels[d.priority] || d.priority;
+            document.getElementById('infoReporter').textContent = d.reporter_name || '-';
+            document.getElementById('infoAssignee').textContent = d.assignee_name || '未分配';
+            document.getElementById('infoCreated').textContent = formatDate(d.created_at);
+            document.getElementById('infoUpdated').textContent = formatDate(d.updated_at);
+            
+            if (d.resolved_at) {
+                document.getElementById('resolvedRow').style.display = 'flex';
+                document.getElementById('infoResolved').textContent = formatDate(d.resolved_at);
+            }
+            if (d.closed_at) {
+                document.getElementById('closedRow').style.display = 'flex';
+                document.getElementById('infoClosed').textContent = formatDate(d.closed_at);
+            }
+            
+            // 设置当前状态
+            document.getElementById('newStatus').value = d.status;
+        }
+        
+        async function loadComments() {
+            try {
+                const res = await fetch(`/api/defects/${defectId}/comments`);
+                const data = await res.json();
+                
+                if (data.success) {
+                    const list = document.getElementById('commentList');
+                    if (data.comments.length === 0) {
+                        list.innerHTML = '<div class="text-gray-400 text-center py-4">暂无评论</div>';
+                    } else {
+                        list.innerHTML = data.comments.map(c => `
+                            <div class="bg-white rounded-lg p-4 border">
+                                <div class="flex justify-between items-start mb-2">
+                                    <span class="font-medium text-gray-800"><i class="fas fa-user-circle mr-1 text-purple-500"></i>${c.username || '用户'}</span>
+                                    <span class="text-gray-400 text-xs">${formatDate(c.created_at)}</span>
+                                </div>
+                                <div class="text-gray-700">${escapeHtml(c.content)}</div>
+                            </div>
+                        `).join('');
+                    }
+                }
+            } catch (e) {
+                console.error('加载评论失败:', e);
+            }
+        }
+        
+        async function addComment() {
+            const content = document.getElementById('commentInput').value.trim();
+            if (!content) {
+                alert('请输入评论内容');
+                return;
+            }
+            
+            try {
+                const res = await fetch(`/api/defects/${defectId}/comments`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    document.getElementById('commentInput').value = '';
+                    loadComments();
+                } else {
+                    alert('添加评论失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('添加评论失败: ' + e.message);
+            }
+        }
+        
+        async function loadHistory() {
+            try {
+                const res = await fetch(`/api/defects/${defectId}/history`);
+                const data = await res.json();
+                
+                if (data.success) {
+                    const list = document.getElementById('historyList');
+                    if (data.history.length === 0) {
+                        list.innerHTML = '<div class="text-gray-400 text-center py-2">暂无变更记录</div>';
+                    } else {
+                        list.innerHTML = data.history.map(h => `
+                            <div class="border-l-2 border-purple-300 pl-3 py-1">
+                                <div class="text-gray-600"><strong>${h.username || '用户'}</strong> 将 <strong>${getFieldLabel(h.field_name)}</strong> 从 "${h.old_value || '-'}" 改为 "${h.new_value || '-'}"</div>
+                                <div class="text-gray-400 text-xs mt-1">${formatDate(h.created_at)}</div>
+                            </div>
+                        `).join('');
+                    }
+                }
+            } catch (e) {
+                console.error('加载历史失败:', e);
+            }
+        }
+        
+        function getFieldLabel(field) {
+            const labels = {
+                status: '状态', severity: '严重级别', priority: '优先级',
+                assignee_id: '负责人', title: '标题', description: '描述',
+                resolution: '解决方案'
+            };
+            return labels[field] || field;
+        }
+        
+        function showStatusModal() {
+            document.getElementById('statusModal').classList.remove('hidden');
+        }
+        
+        function closeStatusModal() {
+            document.getElementById('statusModal').classList.add('hidden');
+        }
+        
+        async function updateStatus() {
+            const newStatus = document.getElementById('newStatus').value;
+            const resolution = document.getElementById('resolution').value.trim();
+            
+            const payload = { status: newStatus };
+            if (newStatus === 'resolved' && resolution) {
+                payload.resolution = resolution;
+            }
+            
+            try {
+                const res = await fetch(`/api/defects/${defectId}/status`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    closeStatusModal();
+                    loadDefect();
+                    loadHistory();
+                } else {
+                    alert('状态更新失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('状态更新失败: ' + e.message);
+            }
+        }
+        
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+        
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const d = new Date(dateStr);
+            return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+    </script>
+</body>
+</html>

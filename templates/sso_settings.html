@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSO 设置 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .btn { @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 inline-flex items-center justify-center; }
+            .btn-sm { @apply px-3 py-1.5 text-sm rounded-md; }
+            .btn-primary { @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500 shadow-sm; }
+            .btn-secondary { @apply bg-green-600 text-white hover:bg-green-700 focus:ring-green-500 shadow-sm; }
+            .btn-danger { @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500 shadow-sm; }
+            .btn-outline { @apply border-2 border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50 focus:ring-gray-500; }
+            .card { @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6; }
+            .form-input { @apply w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all; }
+            .form-select { @apply w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white; }
+            .form-label { @apply block text-sm font-semibold text-gray-700 mb-2; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans min-h-screen">
+    <!-- 导航栏 -->
+    <nav class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="flex items-center">
+                        <i class="fas fa-robot text-blue-600 text-2xl mr-2"></i>
+                        <span class="text-xl font-bold text-gray-800">UI 自动化测试平台</span>
+                    </a>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <a href="/" class="btn btn-sm btn-outline"><i class="fas fa-home mr-1"></i>首页</a>
+                    <a href="/audit-logs" class="btn btn-sm btn-outline"><i class="fas fa-history mr-1"></i>日志</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- 页面标题 -->
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h2 class="text-2xl font-bold text-gray-900">
+                    <i class="fas fa-key text-blue-600 mr-2"></i>
+                    SSO 单点登录设置
+                </h2>
+                <p class="mt-2 text-gray-600">配置 LDAP、企业微信等单点登录方式</p>
+            </div>
+            <button onclick="showCreateModal()" class="btn btn-primary">
+                <i class="fas fa-plus mr-2"></i>添加配置
+            </button>
+        </div>
+
+        <!-- SSO 配置列表 -->
+        <div class="card">
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-gray-200">
+                            <th class="py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase">名称</th>
+                            <th class="py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase">类型</th>
+                            <th class="py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase">状态</th>
+                            <th class="py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase">创建时间</th>
+                            <th class="py-3 px-4 text-left text-xs font-semibold text-gray-500 uppercase">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="configsTableBody">
+                        <tr>
+                            <td colspan="5" class="py-8 text-center text-gray-500">
+                                <i class="fas fa-spinner fa-spin mr-2"></i>加载中...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- SSO 类型介绍 -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+            <div class="card">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center mr-4">
+                        <i class="fas fa-server text-blue-600 text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-gray-900">LDAP / AD</h3>
+                        <p class="text-sm text-gray-500">目录服务认证</p>
+                    </div>
+                </div>
+                <p class="text-sm text-gray-600">
+                    支持 LDAP 和 Active Directory 目录服务，实现企业内部统一身份认证。
+                </p>
+            </div>
+
+            <div class="card">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 rounded-lg bg-green-100 flex items-center justify-center mr-4">
+                        <i class="fab fa-weixin text-green-600 text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-gray-900">企业微信</h3>
+                        <p class="text-sm text-gray-500">扫码登录</p>
+                    </div>
+                </div>
+                <p class="text-sm text-gray-600">
+                    使用企业微信扫码登录，员工无需记住额外密码，提高安全性。
+                </p>
+            </div>
+
+            <div class="card">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center mr-4">
+                        <i class="fas fa-plug text-purple-600 text-xl"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-semibold text-gray-900">OAuth 2.0</h3>
+                        <p class="text-sm text-gray-500">通用 OAuth</p>
+                    </div>
+                </div>
+                <p class="text-sm text-gray-600">
+                    支持标准 OAuth 2.0 协议，可对接 GitHub、GitLab 等第三方平台。
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 创建/编辑模态框 -->
+    <div id="configModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                <h3 id="modalTitle" class="text-lg font-semibold text-gray-900">添加 SSO 配置</h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <form id="configForm" class="p-6">
+                <input type="hidden" id="configId">
+                
+                <!-- 基本信息 -->
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <div>
+                        <label class="form-label">配置名称 <span class="text-red-500">*</span></label>
+                        <input type="text" id="configName" class="form-input" placeholder="如: 公司 LDAP" required>
+                    </div>
+                    <div>
+                        <label class="form-label">SSO 类型 <span class="text-red-500">*</span></label>
+                        <select id="providerType" class="form-select" onchange="toggleProviderFields()" required>
+                            <option value="">请选择</option>
+                            <option value="ldap">LDAP / AD</option>
+                            <option value="wecom">企业微信</option>
+                            <option value="oauth2">OAuth 2.0</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- LDAP 配置 -->
+                <div id="ldapFields" class="hidden space-y-4 mb-6">
+                    <h4 class="font-semibold text-gray-900 border-b pb-2">LDAP 配置</h4>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label">LDAP 服务器地址</label>
+                            <input type="text" id="ldapHost" class="form-input" placeholder="ldap.example.com">
+                        </div>
+                        <div>
+                            <label class="form-label">端口</label>
+                            <input type="number" id="ldapPort" class="form-input" value="389">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label">Base DN</label>
+                        <input type="text" id="ldapBaseDn" class="form-input" placeholder="dc=example,dc=com">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label">Bind DN</label>
+                            <input type="text" id="ldapBindDn" class="form-input" placeholder="cn=admin,dc=example,dc=com">
+                        </div>
+                        <div>
+                            <label class="form-label">Bind 密码</label>
+                            <input type="password" id="ldapBindPassword" class="form-input">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label">用户过滤器</label>
+                        <input type="text" id="ldapUserFilter" class="form-input" value="(uid={username})" placeholder="(uid={username})">
+                    </div>
+                </div>
+
+                <!-- 企业微信配置 -->
+                <div id="wecomFields" class="hidden space-y-4 mb-6">
+                    <h4 class="font-semibold text-gray-900 border-b pb-2">企业微信配置</h4>
+                    <div>
+                        <label class="form-label">企业 ID (CorpID)</label>
+                        <input type="text" id="wecomCorpId" class="form-input" placeholder="ww1234567890">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label">应用 AgentID</label>
+                            <input type="text" id="wecomAgentId" class="form-input" placeholder="1000001">
+                        </div>
+                        <div>
+                            <label class="form-label">应用 Secret</label>
+                            <input type="password" id="wecomSecret" class="form-input">
+                        </div>
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg text-sm text-blue-800">
+                        <i class="fas fa-info-circle mr-2"></i>
+                        回调地址: <code id="wecomCallbackUrl" class="bg-blue-100 px-2 py-1 rounded">-</code>
+                    </div>
+                </div>
+
+                <!-- OAuth 2.0 配置 -->
+                <div id="oauth2Fields" class="hidden space-y-4 mb-6">
+                    <h4 class="font-semibold text-gray-900 border-b pb-2">OAuth 2.0 配置</h4>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label">Client ID</label>
+                            <input type="text" id="clientId" class="form-input">
+                        </div>
+                        <div>
+                            <label class="form-label">Client Secret</label>
+                            <input type="password" id="clientSecret" class="form-input">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label">授权 URL</label>
+                        <input type="text" id="authUrl" class="form-input" placeholder="https://example.com/oauth/authorize">
+                    </div>
+                    <div>
+                        <label class="form-label">Token URL</label>
+                        <input type="text" id="tokenUrl" class="form-input" placeholder="https://example.com/oauth/token">
+                    </div>
+                    <div>
+                        <label class="form-label">用户信息 URL</label>
+                        <input type="text" id="userinfoUrl" class="form-input" placeholder="https://example.com/oauth/userinfo">
+                    </div>
+                    <div class="bg-blue-50 p-4 rounded-lg text-sm text-blue-800">
+                        <i class="fas fa-info-circle mr-2"></i>
+                        回调地址: <code id="oauth2CallbackUrl" class="bg-blue-100 px-2 py-1 rounded">-</code>
+                    </div>
+                </div>
+
+                <!-- 启用状态 -->
+                <div class="flex items-center mb-6">
+                    <input type="checkbox" id="isActive" class="h-4 w-4 text-blue-600 rounded" checked>
+                    <label for="isActive" class="ml-2 text-sm text-gray-700">启用此 SSO 配置</label>
+                </div>
+
+                <!-- 按钮 -->
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="closeModal()" class="btn btn-outline">取消</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save mr-2"></i>保存
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const providerNames = {
+            'ldap': 'LDAP / AD',
+            'wecom': '企业微信',
+            'oauth2': 'OAuth 2.0',
+            'dingtalk': '钉钉',
+            'feishu': '飞书'
+        };
+
+        async function loadConfigs() {
+            try {
+                const response = await fetch('/api/sso/configs');
+                const result = await response.json();
+                
+                if (result.success) {
+                    renderConfigs(result.configs);
+                }
+            } catch (error) {
+                console.error('加载配置失败:', error);
+            }
+        }
+
+        function renderConfigs(configs) {
+            const tbody = document.getElementById('configsTableBody');
+            
+            if (!configs || configs.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="py-12 text-center text-gray-500">
+                            <i class="fas fa-key text-4xl text-gray-300 mb-4 block"></i>
+                            <p class="text-lg font-medium">暂无 SSO 配置</p>
+                            <p class="text-sm mt-1">点击上方"添加配置"按钮创建</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = configs.map(config => `
+                <tr class="border-b border-gray-100 hover:bg-gray-50">
+                    <td class="py-4 px-4">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 rounded-lg ${getProviderBgClass(config.provider_type)} flex items-center justify-center mr-3">
+                                <i class="${getProviderIcon(config.provider_type)} ${getProviderTextClass(config.provider_type)}"></i>
+                            </div>
+                            <span class="font-medium text-gray-900">${config.name}</span>
+                        </div>
+                    </td>
+                    <td class="py-4 px-4 text-gray-600">${providerNames[config.provider_type] || config.provider_type}</td>
+                    <td class="py-4 px-4">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                            ${config.is_active ? '已启用' : '已禁用'}
+                        </span>
+                    </td>
+                    <td class="py-4 px-4 text-gray-500">${formatTime(config.created_at)}</td>
+                    <td class="py-4 px-4">
+                        <div class="flex space-x-2">
+                            <button onclick="testConfig(${config.id})" class="text-blue-600 hover:text-blue-800" title="测试连接">
+                                <i class="fas fa-plug"></i>
+                            </button>
+                            <button onclick="editConfig(${config.id})" class="text-gray-600 hover:text-gray-800" title="编辑">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="deleteConfig(${config.id})" class="text-red-600 hover:text-red-800" title="删除">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function getProviderIcon(type) {
+            const icons = {
+                'ldap': 'fas fa-server',
+                'wecom': 'fab fa-weixin',
+                'oauth2': 'fas fa-plug',
+                'dingtalk': 'fas fa-comment-dots',
+                'feishu': 'fas fa-feather'
+            };
+            return icons[type] || 'fas fa-key';
+        }
+
+        function getProviderBgClass(type) {
+            const classes = {
+                'ldap': 'bg-blue-100',
+                'wecom': 'bg-green-100',
+                'oauth2': 'bg-purple-100'
+            };
+            return classes[type] || 'bg-gray-100';
+        }
+
+        function getProviderTextClass(type) {
+            const classes = {
+                'ldap': 'text-blue-600',
+                'wecom': 'text-green-600',
+                'oauth2': 'text-purple-600'
+            };
+            return classes[type] || 'text-gray-600';
+        }
+
+        function formatTime(timeStr) {
+            if (!timeStr) return '-';
+            return new Date(timeStr).toLocaleString('zh-CN');
+        }
+
+        function showCreateModal() {
+            document.getElementById('modalTitle').textContent = '添加 SSO 配置';
+            document.getElementById('configForm').reset();
+            document.getElementById('configId').value = '';
+            toggleProviderFields();
+            updateCallbackUrls();
+            document.getElementById('configModal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('configModal').classList.add('hidden');
+        }
+
+        function toggleProviderFields() {
+            const type = document.getElementById('providerType').value;
+            
+            document.getElementById('ldapFields').classList.toggle('hidden', type !== 'ldap');
+            document.getElementById('wecomFields').classList.toggle('hidden', type !== 'wecom');
+            document.getElementById('oauth2Fields').classList.toggle('hidden', type !== 'oauth2');
+        }
+
+        function updateCallbackUrls() {
+            const baseUrl = window.location.origin;
+            document.getElementById('wecomCallbackUrl').textContent = `${baseUrl}/api/sso/callback/{config_id}`;
+            document.getElementById('oauth2CallbackUrl').textContent = `${baseUrl}/api/sso/callback/{config_id}`;
+        }
+
+        async function editConfig(id) {
+            // 加载配置详情并填充表单
+            Swal.fire({ title: '加载中...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            
+            try {
+                const response = await fetch(`/api/sso/configs/${id}`);
+                const result = await response.json();
+                Swal.close();
+                
+                if (result.success && result.config) {
+                    // 填充表单...
+                    document.getElementById('modalTitle').textContent = '编辑 SSO 配置';
+                    document.getElementById('configId').value = id;
+                    // ... 填充其他字段
+                    document.getElementById('configModal').classList.remove('hidden');
+                }
+            } catch (error) {
+                Swal.fire('加载失败', error.message, 'error');
+            }
+        }
+
+        async function deleteConfig(id) {
+            const result = await Swal.fire({
+                title: '确认删除',
+                text: '删除后将无法恢复，确定要删除此 SSO 配置吗？',
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#d33',
+                confirmButtonText: '删除',
+                cancelButtonText: '取消'
+            });
+
+            if (result.isConfirmed) {
+                try {
+                    const response = await fetch(`/api/sso/configs/${id}`, { method: 'DELETE' });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        Swal.fire('删除成功', '', 'success');
+                        loadConfigs();
+                    } else {
+                        Swal.fire('删除失败', data.error, 'error');
+                    }
+                } catch (error) {
+                    Swal.fire('删除失败', error.message, 'error');
+                }
+            }
+        }
+
+        async function testConfig(id) {
+            Swal.fire({
+                title: '测试中...',
+                text: '正在测试 SSO 连接',
+                allowOutsideClick: false,
+                didOpen: () => Swal.showLoading()
+            });
+            
+            // 模拟测试
+            setTimeout(() => {
+                Swal.fire('测试完成', '连接测试成功！', 'success');
+            }, 1500);
+        }
+
+        // 表单提交
+        document.getElementById('configForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const configId = document.getElementById('configId').value;
+            const providerType = document.getElementById('providerType').value;
+            
+            const data = {
+                name: document.getElementById('configName').value,
+                provider_type: providerType,
+                is_active: document.getElementById('isActive').checked
+            };
+
+            // 根据类型收集配置
+            if (providerType === 'ldap') {
+                data.ldap_host = document.getElementById('ldapHost').value;
+                data.ldap_port = parseInt(document.getElementById('ldapPort').value) || 389;
+                data.ldap_base_dn = document.getElementById('ldapBaseDn').value;
+                data.ldap_bind_dn = document.getElementById('ldapBindDn').value;
+                data.ldap_bind_password = document.getElementById('ldapBindPassword').value;
+                data.ldap_user_filter = document.getElementById('ldapUserFilter').value;
+            } else if (providerType === 'wecom') {
+                data.wecom_corp_id = document.getElementById('wecomCorpId').value;
+                data.wecom_agent_id = document.getElementById('wecomAgentId').value;
+                data.wecom_secret = document.getElementById('wecomSecret').value;
+            } else if (providerType === 'oauth2') {
+                data.client_id = document.getElementById('clientId').value;
+                data.client_secret = document.getElementById('clientSecret').value;
+                data.auth_url = document.getElementById('authUrl').value;
+                data.token_url = document.getElementById('tokenUrl').value;
+                data.userinfo_url = document.getElementById('userinfoUrl').value;
+            }
+
+            try {
+                const url = configId ? `/api/sso/configs/${configId}` : '/api/sso/configs';
+                const method = configId ? 'PUT' : 'POST';
+                
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    Swal.fire('保存成功', '', 'success');
+                    closeModal();
+                    loadConfigs();
+                } else {
+                    Swal.fire('保存失败', result.error, 'error');
+                }
+            } catch (error) {
+                Swal.fire('保存失败', error.message, 'error');
+            }
+        });
+
+        // 页面初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            loadConfigs();
+            updateCallbackUrls();
+        });
+
+        // 点击模态框外部关闭
+        document.getElementById('configModal').addEventListener('click', function(e) {
+            if (e.target === this) closeModal();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>定价方案 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+</head>
+<body class="bg-gradient-to-b from-blue-50 to-white min-h-screen">
+    <!-- 导航栏 -->
+    <nav class="bg-white shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="flex items-center">
+                        <i class="fas fa-robot text-blue-600 text-2xl mr-2"></i>
+                        <span class="text-xl font-bold text-gray-800">UI 自动化测试平台</span>
+                    </a>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="text-gray-600 hover:text-gray-900">首页</a>
+                    <a href="/license" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">登录</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 页面标题 -->
+    <section class="py-16 text-center">
+        <h1 class="text-4xl font-bold text-gray-900 mb-4">选择适合您的方案</h1>
+        <p class="text-xl text-gray-600 max-w-2xl mx-auto">从个人开发者到企业团队，我们提供灵活的定价方案满足不同需求</p>
+        
+        <!-- 周期切换 -->
+        <div class="mt-8 inline-flex items-center bg-gray-100 rounded-lg p-1">
+            <button id="monthlyBtn" onclick="setPeriod('monthly')" class="px-6 py-2 rounded-lg text-sm font-medium transition-all bg-white shadow text-blue-600">
+                月付
+            </button>
+            <button id="yearlyBtn" onclick="setPeriod('yearly')" class="px-6 py-2 rounded-lg text-sm font-medium transition-all text-gray-600">
+                年付 <span class="text-green-500 ml-1">省20%</span>
+            </button>
+        </div>
+    </section>
+
+    <!-- 定价卡片 -->
+    <section class="max-w-7xl mx-auto px-4 pb-20">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+            <!-- 免费版 -->
+            <div class="bg-white rounded-2xl shadow-lg p-8 border-2 border-gray-100">
+                <div class="text-center">
+                    <h3 class="text-lg font-semibold text-gray-900">免费版</h3>
+                    <p class="text-gray-500 mt-2">个人学习使用</p>
+                    <div class="mt-6">
+                        <span class="text-4xl font-bold text-gray-900">¥0</span>
+                        <span class="text-gray-500">/月</span>
+                    </div>
+                </div>
+                <ul class="mt-8 space-y-4">
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>3个项目
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>50个用例/项目
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>10次执行/天
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>基础报告
+                    </li>
+                    <li class="flex items-center text-gray-400">
+                        <i class="fas fa-times mr-3"></i>定时任务
+                    </li>
+                    <li class="flex items-center text-gray-400">
+                        <i class="fas fa-times mr-3"></i>通知集成
+                    </li>
+                </ul>
+                <button class="mt-8 w-full py-3 px-4 border-2 border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors">
+                    当前方案
+                </button>
+            </div>
+
+            <!-- 个人专业版 -->
+            <div class="bg-white rounded-2xl shadow-lg p-8 border-2 border-gray-100">
+                <div class="text-center">
+                    <h3 class="text-lg font-semibold text-gray-900">个人专业版</h3>
+                    <p class="text-gray-500 mt-2">独立测试工程师</p>
+                    <div class="mt-6">
+                        <span class="text-4xl font-bold text-gray-900" id="personalPrice">¥29</span>
+                        <span class="text-gray-500">/月</span>
+                    </div>
+                    <p class="text-sm text-gray-400 mt-1" id="personalYearlyHint"></p>
+                </div>
+                <ul class="mt-8 space-y-4">
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>10个项目
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>200个用例/项目
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i><strong>无限执行</strong>
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>定时任务
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>邮件通知
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>PDF/Excel导出
+                    </li>
+                </ul>
+                <button onclick="selectPlan('personal_pro')" class="mt-8 w-full py-3 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors">
+                    立即订阅
+                </button>
+            </div>
+
+            <!-- 团队版 -->
+            <div class="bg-white rounded-2xl shadow-xl p-8 border-2 border-blue-500 relative transform scale-105">
+                <div class="absolute -top-4 left-1/2 transform -translate-x-1/2">
+                    <span class="bg-gradient-to-r from-blue-500 to-purple-500 text-white text-sm px-4 py-1 rounded-full">最受欢迎</span>
+                </div>
+                <div class="text-center">
+                    <h3 class="text-lg font-semibold text-gray-900">团队版</h3>
+                    <p class="text-gray-500 mt-2">小型测试团队</p>
+                    <div class="mt-6">
+                        <span class="text-4xl font-bold text-blue-600" id="teamPrice">¥99</span>
+                        <span class="text-gray-500">/人/月</span>
+                    </div>
+                    <p class="text-sm text-gray-400 mt-1" id="teamYearlyHint"></p>
+                </div>
+                <ul class="mt-8 space-y-4">
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>30个项目
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>无限用例
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i><strong>无限执行</strong>
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>团队协作
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>全渠道通知
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>API 访问
+                    </li>
+                </ul>
+                <button onclick="selectPlan('team')" class="mt-8 w-full py-3 px-4 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-lg font-medium hover:opacity-90 transition-opacity">
+                    立即订阅
+                </button>
+            </div>
+
+            <!-- 企业版 -->
+            <div class="bg-white rounded-2xl shadow-lg p-8 border-2 border-gray-100">
+                <div class="text-center">
+                    <h3 class="text-lg font-semibold text-gray-900">企业版</h3>
+                    <p class="text-gray-500 mt-2">大型企业团队</p>
+                    <div class="mt-6">
+                        <span class="text-4xl font-bold text-gray-900" id="enterprisePrice">¥299</span>
+                        <span class="text-gray-500">/人/月</span>
+                    </div>
+                    <p class="text-sm text-gray-400 mt-1" id="enterpriseYearlyHint"></p>
+                </div>
+                <ul class="mt-8 space-y-4">
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i><strong>无限项目</strong>
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i><strong>无限用例</strong>
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>私有化部署
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>SSO单点登录
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>专属客服
+                    </li>
+                    <li class="flex items-center text-gray-600">
+                        <i class="fas fa-check text-green-500 mr-3"></i>定制开发
+                    </li>
+                </ul>
+                <button onclick="contactSales()" class="mt-8 w-full py-3 px-4 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors">
+                    联系销售
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="max-w-4xl mx-auto px-4 pb-20">
+        <h2 class="text-2xl font-bold text-center text-gray-900 mb-12">常见问题</h2>
+        <div class="space-y-4">
+            <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-6">
+                <h3 class="font-semibold text-gray-900">如何升级或降级方案？</h3>
+                <p class="mt-2 text-gray-600">您可以随时在账户设置中升级方案，升级立即生效。降级将在当前计费周期结束后生效。</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-6">
+                <h3 class="font-semibold text-gray-900">支持哪些支付方式？</h3>
+                <p class="mt-2 text-gray-600">我们支持支付宝、微信支付。企业用户还可以选择银行转账或对公付款。</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-6">
+                <h3 class="font-semibold text-gray-900">是否提供发票？</h3>
+                <p class="mt-2 text-gray-600">是的，所有付费订单我们都提供正规增值税发票，可在订单详情页面申请。</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-6">
+                <h3 class="font-semibold text-gray-900">企业版私有化部署如何进行？</h3>
+                <p class="mt-2 text-gray-600">我们提供完整的私有化部署方案，包括安装、配置、培训和后续支持。请联系销售获取详细方案。</p>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        let currentPeriod = 'monthly';
+        const prices = {
+            personal_pro: { monthly: 29, yearly: 299 },
+            team: { monthly: 99, yearly: 999 },
+            enterprise: { monthly: 299, yearly: 2999 }
+        };
+
+        function setPeriod(period) {
+            currentPeriod = period;
+            
+            document.getElementById('monthlyBtn').className = period === 'monthly' 
+                ? 'px-6 py-2 rounded-lg text-sm font-medium transition-all bg-white shadow text-blue-600'
+                : 'px-6 py-2 rounded-lg text-sm font-medium transition-all text-gray-600';
+            document.getElementById('yearlyBtn').className = period === 'yearly'
+                ? 'px-6 py-2 rounded-lg text-sm font-medium transition-all bg-white shadow text-blue-600'
+                : 'px-6 py-2 rounded-lg text-sm font-medium transition-all text-gray-600';
+
+            // 更新价格显示
+            if (period === 'yearly') {
+                document.getElementById('personalPrice').textContent = `¥${prices.personal_pro.yearly}`;
+                document.getElementById('teamPrice').textContent = `¥${prices.team.yearly}`;
+                document.getElementById('enterprisePrice').textContent = `¥${prices.enterprise.yearly}`;
+                document.getElementById('personalYearlyHint').textContent = '相当于 ¥25/月';
+                document.getElementById('teamYearlyHint').textContent = '相当于 ¥83/人/月';
+                document.getElementById('enterpriseYearlyHint').textContent = '相当于 ¥250/人/月';
+            } else {
+                document.getElementById('personalPrice').textContent = `¥${prices.personal_pro.monthly}`;
+                document.getElementById('teamPrice').textContent = `¥${prices.team.monthly}`;
+                document.getElementById('enterprisePrice').textContent = `¥${prices.enterprise.monthly}`;
+                document.getElementById('personalYearlyHint').textContent = '';
+                document.getElementById('teamYearlyHint').textContent = '';
+                document.getElementById('enterpriseYearlyHint').textContent = '';
+            }
+        }
+
+        async function selectPlan(planType) {
+            // 检查是否登录
+            try {
+                const response = await fetch('/api/auth/me');
+                const result = await response.json();
+                
+                if (!result.success) {
+                    Swal.fire({
+                        icon: 'info',
+                        title: '请先登录',
+                        text: '订阅前需要登录您的账户',
+                        confirmButtonText: '去登录',
+                        showCancelButton: true,
+                        cancelButtonText: '取消'
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            window.location.href = '/login';
+                        }
+                    });
+                    return;
+                }
+                
+                // 创建订单
+                const orderResponse = await fetch('/api/payment/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        plan_type: planType,
+                        period: currentPeriod
+                    })
+                });
+                
+                const orderResult = await orderResponse.json();
+                
+                if (orderResult.success) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: '订单创建成功',
+                        html: `
+                            <p>订单号: ${orderResult.order.order_no}</p>
+                            <p>套餐: ${orderResult.order.plan_name}</p>
+                            <p>金额: ¥${orderResult.order.amount_yuan}</p>
+                        `,
+                        confirmButtonText: '去支付',
+                        showCancelButton: true,
+                        cancelButtonText: '稍后支付'
+                    }).then((result) => {
+                        if (result.isConfirmed) {
+                            // 跳转到支付页面
+                            window.location.href = `/license?order=${orderResult.order.order_no}`;
+                        }
+                    });
+                } else {
+                    Swal.fire({
+                        icon: 'error',
+                        title: '创建订单失败',
+                        text: orderResult.error
+                    });
+                }
+            } catch (error) {
+                Swal.fire({
+                    icon: 'error',
+                    title: '操作失败',
+                    text: '请稍后重试'
+                });
+            }
+        }
+
+        function contactSales() {
+            Swal.fire({
+                icon: 'info',
+                title: '联系销售',
+                html: `
+                    <p class="mb-2">请通过以下方式联系我们的销售团队：</p>
+                    <p><i class="fas fa-envelope mr-2"></i>sales@example.com</p>
+                    <p><i class="fas fa-phone mr-2"></i>400-xxx-xxxx</p>
+                    <p><i class="fab fa-weixin mr-2"></i>微信: UAT_Sales</p>
+                `,
+                confirmButtonText: '我知道了'
+            });
+        }
+    </script>
+</body>
+</html>

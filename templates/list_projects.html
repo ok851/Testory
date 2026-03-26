@@ -399,11 +399,45 @@
             </div>
         </div>
     </div>
+    
+    <!-- 创建用例模态框 -->
+    <div id="createCaseModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>创建测试用例</h3>
+                <button class="close-btn" onclick="closeCreateCaseModal()">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="caseName">用例名称 *</label>
+                <input type="text" id="caseName" placeholder="请输入测试用例名称">
+            </div>
+            <div class="form-group">
+                <label for="caseUrl">测试URL</label>
+                <input type="text" id="caseUrl" placeholder="请输入测试URL">
+            </div>
+            <div class="form-group">
+                <label for="caseDescription">用例描述</label>
+                <textarea id="caseDescription" placeholder="请输入测试用例描述"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="casePrecondition">前置条件</label>
+                <textarea id="casePrecondition" placeholder="请输入前置条件"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="caseExpectedResult">预期结果</label>
+                <textarea id="caseExpectedResult" placeholder="请输入预期结果"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button onclick="createTestCase()" class="btn btn-success">创建</button>
+                <button onclick="closeCreateCaseModal()" class="btn btn-secondary" style="margin-left: 10px;">取消</button>
+            </div>
+        </div>
+    </div>
 
 
     <script>
-
         let currentEditProjectId = null;
+        let currentProjectIdForCase = null;
 
         function escapeHtml(text) {
             const div = document.createElement('div');
@@ -599,7 +633,65 @@
         }
 
         function createCaseForProject(projectId) {
-            window.location.href = `/create_case_v2?project_id=${projectId}`;
+            currentProjectIdForCase = projectId;
+            document.getElementById('createCaseModal').classList.add('active');
+            document.getElementById('caseName').value = '';
+            document.getElementById('caseUrl').value = '';
+            document.getElementById('caseDescription').value = '';
+            document.getElementById('casePrecondition').value = '';
+            document.getElementById('caseExpectedResult').value = '';
+        }
+        
+        function closeCreateCaseModal() {
+            document.getElementById('createCaseModal').classList.remove('active');
+            currentProjectIdForCase = null;
+        }
+        
+        async function createTestCase() {
+            const name = document.getElementById('caseName').value.trim();
+            const url = document.getElementById('caseUrl').value.trim();
+            const description = document.getElementById('caseDescription').value.trim();
+            const precondition = document.getElementById('casePrecondition').value.trim();
+            const expected_result = document.getElementById('caseExpectedResult').value.trim();
+            
+            if (!name) {
+                alert('请输入测试用例名称');
+                return;
+            }
+            
+            if (!currentProjectIdForCase) {
+                alert('项目ID无效');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/cases', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        project_id: currentProjectIdForCase,
+                        name: name,
+                        url: url,
+                        description: description,
+                        precondition: precondition,
+                        expected_result: expected_result
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('测试用例创建成功！');
+                    closeCreateCaseModal();
+                    loadProjects(); // 刷新项目列表显示最新用例数
+                } else {
+                    alert('创建失败: ' + (data.error || '未知错误'));
+                }
+            } catch (error) {
+                alert('创建测试用例时发生错误: ' + error.message);
+            }
         }
 
         async function deleteCase(caseId, projectId) {

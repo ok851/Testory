@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>License 管理 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .btn {
+                @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 inline-flex items-center justify-center;
+            }
+            .btn-sm {
+                @apply px-3 py-1.5 text-sm rounded-md;
+            }
+            .btn-primary {
+                @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500 shadow-sm;
+            }
+            .btn-secondary {
+                @apply bg-green-600 text-white hover:bg-green-700 focus:ring-green-500 shadow-sm;
+            }
+            .btn-accent {
+                @apply bg-purple-600 text-white hover:bg-purple-700 focus:ring-purple-500 shadow-sm;
+            }
+            .btn-warning {
+                @apply bg-amber-500 text-white hover:bg-amber-600 focus:ring-amber-500 shadow-sm;
+            }
+            .btn-danger {
+                @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500 shadow-sm;
+            }
+            .btn-gray {
+                @apply bg-gray-500 text-white hover:bg-gray-600 focus:ring-gray-500 shadow-sm;
+            }
+            .btn-outline {
+                @apply border-2 border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50 focus:ring-gray-500;
+            }
+            .card {
+                @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6;
+            }
+            .card-header {
+                @apply pb-4 mb-4 border-b border-gray-100;
+            }
+            .form-input {
+                @apply w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all;
+            }
+            .form-label {
+                @apply block text-sm font-semibold text-gray-700 mb-2;
+            }
+            .badge {
+                @apply px-2.5 py-0.5 rounded-full text-xs font-medium;
+            }
+            .badge-success {
+                @apply bg-green-100 text-green-800;
+            }
+            .badge-warning {
+                @apply bg-amber-100 text-amber-800;
+            }
+            .badge-info {
+                @apply bg-blue-100 text-blue-800;
+            }
+            .progress-bar {
+                @apply w-full bg-gray-200 rounded-full h-2.5;
+            }
+            .progress-fill {
+                @apply bg-blue-600 h-2.5 rounded-full transition-all duration-300;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans min-h-screen">
+    <!-- 导航栏 -->
+    <nav class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="flex items-center">
+                        <i class="fas fa-robot text-blue-600 text-2xl mr-2"></i>
+                        <span class="text-xl font-bold text-gray-800">UI 自动化测试平台</span>
+                    </a>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <a href="/" class="btn btn-sm btn-outline">
+                        <i class="fas fa-home mr-1"></i>首页
+                    </a>
+                    <a href="/list_projects" class="btn btn-sm btn-outline">
+                        <i class="fas fa-folder mr-1"></i>项目
+                    </a>
+                    <a href="/run-history" class="btn btn-sm btn-outline">
+                        <i class="fas fa-history mr-1"></i>历史
+                    </a>
+                    <a href="/schedules" class="btn btn-sm btn-outline">
+                        <i class="fas fa-clock mr-1"></i>定时
+                    </a>
+                    <a href="/notifications" class="btn btn-sm btn-outline">
+                        <i class="fas fa-bell mr-1"></i>通知
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- 页面标题 -->
+        <div class="mb-8">
+            <h2 class="text-2xl font-bold text-gray-900">
+                <i class="fas fa-key text-blue-600 mr-2"></i>
+                License 管理
+            </h2>
+            <p class="mt-2 text-gray-600">查看您的使用配额、管理授权许可</p>
+        </div>
+
+        <!-- 当前 License 状态卡片 -->
+        <div class="card mb-8">
+            <div class="card-header">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <div class="w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center mr-4">
+                            <i id="licenseIcon" class="fas fa-crown text-blue-600 text-xl"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-900">当前版本</h3>
+                            <p id="licenseType" class="text-gray-500">加载中...</p>
+                        </div>
+                    </div>
+                    <span id="licenseBadge" class="badge badge-info">免费版</span>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                <div class="text-center p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-500 mb-1">有效期至</p>
+                    <p id="expireDate" class="text-lg font-semibold text-gray-900">-</p>
+                </div>
+                <div class="text-center p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-500 mb-1">项目数量</p>
+                    <p id="projectLimit" class="text-lg font-semibold text-gray-900">-</p>
+                </div>
+                <div class="text-center p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-500 mb-1">用例数量/项目</p>
+                    <p id="caseLimit" class="text-lg font-semibold text-gray-900">-</p>
+                </div>
+                <div class="text-center p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-500 mb-1">每月执行次数</p>
+                    <p id="executionLimit" class="text-lg font-semibold text-gray-900">-</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 今日使用配额 -->
+        <div class="card mb-8" id="dailyQuotaCard">
+            <div class="card-header">
+                <h3 class="text-lg font-semibold text-gray-900">
+                    <i class="fas fa-chart-pie text-blue-600 mr-2"></i>
+                    今日使用配额
+                </h3>
+            </div>
+            
+            <div class="space-y-6">
+                <!-- 执行次数 -->
+                <div>
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-sm font-medium text-gray-700">执行次数</span>
+                        <span class="text-sm text-gray-500">
+                            <span id="executionUsed">0</span> / <span id="executionTotal">10</span>
+                        </span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="executionProgress" class="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">每日 00:00 自动重置</p>
+                </div>
+
+                <!-- 升级提示 -->
+                <div id="upgradeHint" class="hidden bg-amber-50 border border-amber-200 rounded-lg p-4">
+                    <div class="flex items-start">
+                        <i class="fas fa-lightbulb text-amber-500 mt-0.5 mr-3"></i>
+                        <div>
+                            <p class="text-sm font-medium text-amber-800">即将达到今日限制</p>
+                            <p class="text-sm text-amber-700 mt-1">升级至专业版可解除执行次数限制，享受无限测试执行。</p>
+                            <button onclick="showUpgradeModal()" class="btn btn-sm btn-warning mt-2">
+                                <i class="fas fa-arrow-up mr-1"></i>立即升级
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 版本对比 -->
+        <div class="card mb-8">
+            <div class="card-header">
+                <h3 class="text-lg font-semibold text-gray-900">
+                    <i class="fas fa-balance-scale text-blue-600 mr-2"></i>
+                    版本对比
+                </h3>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">功能</th>
+                            <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">免费版</th>
+                            <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">个人专业版</th>
+                            <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">企业版</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">每日执行次数</td>
+                            <td class="px-6 py-4 text-center text-sm text-gray-500">10次</td>
+                            <td class="px-6 py-4 text-center text-sm text-green-600 font-medium">无限</td>
+                            <td class="px-6 py-4 text-center text-sm text-green-600 font-medium">无限</td>
+                        </tr>
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">项目数量</td>
+                            <td class="px-6 py-4 text-center text-sm text-gray-500">3个</td>
+                            <td class="px-6 py-4 text-center text-sm text-gray-500">10个</td>
+                            <td class="px-6 py-4 text-center text-sm text-green-600 font-medium">无限</td>
+                        </tr>
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">用例数量/项目</td>
+                            <td class="px-6 py-4 text-center text-sm text-gray-500">50个</td>
+                            <td class="px-6 py-4 text-center text-sm text-gray-500">200个</td>
+                            <td class="px-6 py-4 text-center text-sm text-green-600 font-medium">无限</td>
+                        </tr>
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">定时任务</td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-times text-gray-400"></i></td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-check text-green-500"></i></td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-check text-green-500"></i></td>
+                        </tr>
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">通知集成</td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-times text-gray-400"></i></td>
+                            <td class="px-6 py-4 text-center text-sm text-gray-500">邮件</td>
+                            <td class="px-6 py-4 text-center text-sm text-green-600">全渠道</td>
+                        </tr>
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">数据驱动测试</td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-times text-gray-400"></i></td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-check text-green-500"></i></td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-check text-green-500"></i></td>
+                        </tr>
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">报告导出</td>
+                            <td class="px-6 py-4 text-center text-sm text-gray-500">HTML</td>
+                            <td class="px-6 py-4 text-center text-sm text-green-600">PDF+Excel</td>
+                            <td class="px-6 py-4 text-center text-sm text-green-600">全格式</td>
+                        </tr>
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-gray-900">团队协作</td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-times text-gray-400"></i></td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-times text-gray-400"></i></td>
+                            <td class="px-6 py-4 text-center"><i class="fas fa-check text-green-500"></i></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 激活 License -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="text-lg font-semibold text-gray-900">
+                    <i class="fas fa-unlock-alt text-blue-600 mr-2"></i>
+                    激活 License
+                </h3>
+            </div>
+            
+            <div class="space-y-4">
+                <p class="text-sm text-gray-600">如果您已购买专业版或企业版 License，请在下方输入激活：</p>
+                
+                <div class="flex gap-3">
+                    <input type="text" id="licenseKey" class="form-input flex-1 font-mono" placeholder="请输入 License 密钥">
+                    <button onclick="activateLicense()" class="btn btn-primary">
+                        <i class="fas fa-check mr-1"></i>激活
+                    </button>
+                </div>
+                
+                <p class="text-xs text-gray-500">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    License 密钥通常通过邮件发送，或联系销售获取
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 升级模态框 -->
+    <div id="upgradeModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-gray-900">选择适合您的版本</h3>
+                <button onclick="closeUpgradeModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- 个人专业版 -->
+                    <div class="border-2 border-gray-200 rounded-xl p-6 hover:border-blue-500 transition-colors">
+                        <div class="text-center mb-4">
+                            <h4 class="text-lg font-semibold text-gray-900">个人专业版</h4>
+                            <p class="text-3xl font-bold text-blue-600 mt-2">¥29<span class="text-sm text-gray-500">/月</span></p>
+                        </div>
+                        <ul class="space-y-2 text-sm text-gray-600 mb-6">
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>无限执行次数</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>10个项目</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>定时任务</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>邮件通知</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>PDF/Excel导出</li>
+                        </ul>
+                        <button onclick="selectPlan('personal')" class="btn btn-primary w-full">选择个人版</button>
+                    </div>
+
+                    <!-- 企业标准版 -->
+                    <div class="border-2 border-blue-500 rounded-xl p-6 relative bg-blue-50">
+                        <div class="absolute -top-3 left-1/2 transform -translate-x-1/2">
+                            <span class="bg-blue-600 text-white text-xs px-3 py-1 rounded-full">推荐</span>
+                        </div>
+                        <div class="text-center mb-4">
+                            <h4 class="text-lg font-semibold text-gray-900">企业标准版</h4>
+                            <p class="text-3xl font-bold text-blue-600 mt-2">¥299<span class="text-sm text-gray-500">/人/月</span></p>
+                        </div>
+                        <ul class="space-y-2 text-sm text-gray-600 mb-6">
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>无限执行次数</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>50个项目</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>全渠道通知</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>团队协作</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>API 访问</li>
+                        </ul>
+                        <button onclick="selectPlan('enterprise')" class="btn btn-primary w-full">选择企业版</button>
+                    </div>
+
+                    <!-- 企业旗舰版 -->
+                    <div class="border-2 border-gray-200 rounded-xl p-6 hover:border-purple-500 transition-colors">
+                        <div class="text-center mb-4">
+                            <h4 class="text-lg font-semibold text-gray-900">企业旗舰版</h4>
+                            <p class="text-3xl font-bold text-purple-600 mt-2">¥599<span class="text-sm text-gray-500">/人/月</span></p>
+                        </div>
+                        <ul class="space-y-2 text-sm text-gray-600 mb-6">
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>企业版全部功能</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>无限项目/用例</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>私有化部署</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>专属客服</li>
+                            <li><i class="fas fa-check text-green-500 mr-2"></i>定制开发</li>
+                        </ul>
+                        <button onclick="selectPlan('flagship')" class="btn btn-accent w-full">联系销售</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 加载 License 信息
+        async function loadLicenseInfo() {
+            try {
+                const response = await fetch('/api/license/info');
+                const result = await response.json();
+                
+                if (result.success) {
+                    const info = result.info;
+                    const limits = result.limits;
+                    const usage = result.usage;
+                    
+                    // 更新 License 类型显示
+                    const typeMap = {
+                        'personal': { name: '个人免费版', icon: 'fa-user', badge: 'badge-gray' },
+                        'enterprise': { name: '企业版', icon: 'fa-building', badge: 'badge-success' },
+                        'trial': { name: '试用版', icon: 'fa-flask', badge: 'badge-warning' }
+                    };
+                    const typeInfo = typeMap[info.license_type] || typeMap['personal'];
+                    
+                    document.getElementById('licenseType').textContent = typeInfo.name;
+                    document.getElementById('licenseIcon').className = `fas ${typeInfo.icon} text-blue-600 text-xl`;
+                    document.getElementById('licenseBadge').className = `badge ${typeInfo.badge}`;
+                    document.getElementById('licenseBadge').textContent = typeInfo.name;
+                    
+                    // 更新限制信息
+                    document.getElementById('expireDate').textContent = info.expires_at === '2099-12-31T23:59:59' ? '永久' : new Date(info.expires_at).toLocaleDateString('zh-CN');
+                    document.getElementById('projectLimit').textContent = limits.max_projects === -1 ? '无限' : limits.max_projects;
+                    document.getElementById('caseLimit').textContent = limits.max_cases_per_project === -1 ? '无限' : limits.max_cases_per_project;
+                    document.getElementById('executionLimit').textContent = limits.max_executions_per_month === -1 ? '无限' : limits.max_executions_per_month;
+                    
+                    // 更新今日配额
+                    if (info.license_type === 'personal') {
+                        const used = usage.today_executions || 0;
+                        const total = 10;
+                        const percentage = (used / total) * 100;
+                        
+                        document.getElementById('executionUsed').textContent = used;
+                        document.getElementById('executionTotal').textContent = total;
+                        document.getElementById('executionProgress').style.width = `${percentage}%`;
+                        
+                        // 根据使用率改变颜色
+                        const progressBar = document.getElementById('executionProgress');
+                        if (percentage >= 80) {
+                            progressBar.classList.remove('bg-blue-600');
+                            progressBar.classList.add('bg-red-500');
+                            document.getElementById('upgradeHint').classList.remove('hidden');
+                        } else if (percentage >= 50) {
+                            progressBar.classList.remove('bg-blue-600');
+                            progressBar.classList.add('bg-amber-500');
+                        }
+                    } else {
+                        // 非免费版隐藏配额卡片
+                        document.getElementById('dailyQuotaCard').classList.add('hidden');
+                    }
+                }
+            } catch (error) {
+                console.error('加载 License 信息失败:', error);
+            }
+        }
+
+        // 激活 License
+        async function activateLicense() {
+            const licenseKey = document.getElementById('licenseKey').value.trim();
+            
+            if (!licenseKey) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: '请输入 License 密钥',
+                    confirmButtonText: '确定'
+                });
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/license/activate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ license_key: licenseKey })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: '激活成功',
+                        text: `已升级至 ${result.license_type}，有效期至 ${new Date(result.expires_at).toLocaleDateString('zh-CN')}`,
+                        confirmButtonText: '确定'
+                    }).then(() => {
+                        location.reload();
+                    });
+                } else {
+                    Swal.fire({
+                        icon: 'error',
+                        title: '激活失败',
+                        text: result.error || 'License 密钥无效',
+                        confirmButtonText: '确定'
+                    });
+                }
+            } catch (error) {
+                Swal.fire({
+                    icon: 'error',
+                    title: '激活失败',
+                    text: '网络错误，请重试',
+                    confirmButtonText: '确定'
+                });
+            }
+        }
+
+        // 显示升级模态框
+        function showUpgradeModal() {
+            document.getElementById('upgradeModal').classList.remove('hidden');
+        }
+
+        // 关闭升级模态框
+        function closeUpgradeModal() {
+            document.getElementById('upgradeModal').classList.add('hidden');
+        }
+
+        // 选择套餐
+        function selectPlan(plan) {
+            Swal.fire({
+                icon: 'info',
+                title: '联系销售',
+                text: '请发送邮件至 sales@example.com 或拨打 400-xxx-xxxx 联系我们的销售团队',
+                confirmButtonText: '确定'
+            });
+        }
+
+        // 页面加载
+        document.addEventListener('DOMContentLoaded', loadLicenseInfo);
+
+        // 点击模态框外部关闭
+        document.getElementById('upgradeModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeUpgradeModal();
+            }
+        });
+    </script>
+</body>
+</html>

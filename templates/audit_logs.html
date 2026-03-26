@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>审计日志 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .btn {
+                @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 inline-flex items-center justify-center;
+            }
+            .btn-sm { @apply px-3 py-1.5 text-sm rounded-md; }
+            .btn-primary { @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500 shadow-sm; }
+            .btn-outline { @apply border-2 border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50 focus:ring-gray-500; }
+            .card { @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6; }
+            .form-input { @apply w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all; }
+            .form-select { @apply w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all bg-white; }
+            .data-table th { @apply px-6 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50; }
+            .data-table td { @apply px-6 py-4 whitespace-nowrap text-sm text-gray-700; }
+            .badge { @apply px-2.5 py-0.5 rounded-full text-xs font-medium; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans min-h-screen">
+    <!-- 导航栏 -->
+    <nav class="bg-white shadow-sm border-b border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/" class="flex items-center">
+                        <i class="fas fa-robot text-blue-600 text-2xl mr-2"></i>
+                        <span class="text-xl font-bold text-gray-800">UI 自动化测试平台</span>
+                    </a>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <a href="/" class="btn btn-sm btn-outline"><i class="fas fa-home mr-1"></i>首页</a>
+                    <a href="/list_projects" class="btn btn-sm btn-outline"><i class="fas fa-folder mr-1"></i>项目</a>
+                    <a href="/license" class="btn btn-sm btn-outline"><i class="fas fa-key mr-1"></i>授权</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- 页面标题 -->
+        <div class="mb-6">
+            <h2 class="text-2xl font-bold text-gray-900">
+                <i class="fas fa-history text-blue-600 mr-2"></i>
+                审计日志
+            </h2>
+            <p class="mt-2 text-gray-600">查看系统所有关键操作记录</p>
+        </div>
+
+        <!-- 筛选器 -->
+        <div class="card mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">操作类型</label>
+                    <select id="filterTargetType" class="form-select" onchange="loadLogs()">
+                        <option value="">全部类型</option>
+                        <option value="case">用例操作</option>
+                        <option value="project">项目操作</option>
+                        <option value="project_member">成员操作</option>
+                        <option value="schedule">定时任务</option>
+                        <option value="notification">通知配置</option>
+                        <option value="sso_config">SSO配置</option>
+                        <option value="order">订单</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">用户名</label>
+                    <input type="text" id="filterUsername" class="form-input" placeholder="输入用户名" onchange="loadLogs()">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">每页显示</label>
+                    <select id="filterPageSize" class="form-select" onchange="loadLogs()">
+                        <option value="20">20条</option>
+                        <option value="50" selected>50条</option>
+                        <option value="100">100条</option>
+                    </select>
+                </div>
+                <div class="flex items-end">
+                    <button onclick="exportLogs()" class="btn btn-outline w-full">
+                        <i class="fas fa-download mr-1"></i>导出
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日志列表 -->
+        <div class="card">
+            <div class="overflow-x-auto">
+                <table class="min-w-full data-table">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>用户</th>
+                            <th>操作</th>
+                            <th>目标类型</th>
+                            <th>目标ID</th>
+                            <th>IP地址</th>
+                            <th>详情</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsTableBody">
+                        <tr>
+                            <td colspan="7" class="text-center py-8 text-gray-500">
+                                <i class="fas fa-spinner fa-spin mr-2"></i>加载中...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 分页 -->
+            <div class="mt-4 flex items-center justify-between border-t border-gray-200 pt-4">
+                <div class="text-sm text-gray-500">
+                    共 <span id="totalCount">0</span> 条记录
+                </div>
+                <div class="flex space-x-2">
+                    <button id="prevPageBtn" onclick="changePage(-1)" class="btn btn-sm btn-outline" disabled>
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <span class="px-3 py-1.5 text-sm text-gray-700">
+                        第 <span id="currentPage">1</span> 页
+                    </span>
+                    <button id="nextPageBtn" onclick="changePage(1)" class="btn btn-sm btn-outline">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 详情模态框 -->
+    <div id="detailModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-gray-900">操作详情</h3>
+                <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="p-6">
+                <pre id="detailContent" class="bg-gray-50 p-4 rounded-lg text-sm overflow-x-auto whitespace-pre-wrap"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPage = 1;
+        let totalPages = 1;
+
+        // 操作名称映射
+        const actionNames = {
+            'CREATE_CASE': '创建用例',
+            'UPDATE_CASE': '更新用例',
+            'DELETE_CASE': '删除用例',
+            'CREATE_PROJECT': '创建项目',
+            'UPDATE_PROJECT': '更新项目',
+            'DELETE_PROJECT': '删除项目',
+            'ADD_PROJECT_MEMBER': '添加成员',
+            'UPDATE_PROJECT_MEMBER': '更新成员',
+            'REMOVE_PROJECT_MEMBER': '移除成员',
+            'EXECUTE_CASES': '执行用例',
+            'CREATE_SCHEDULE': '创建定时任务',
+            'UPDATE_SCHEDULE': '更新定时任务',
+            'DELETE_SCHEDULE': '删除定时任务',
+            'CREATE_NOTIFICATION': '创建通知配置',
+            'UPDATE_NOTIFICATION': '更新通知配置',
+            'DELETE_NOTIFICATION': '删除通知配置',
+            'CREATE_SSO_CONFIG': '创建SSO配置',
+            'UPDATE_SSO_CONFIG': '更新SSO配置',
+            'DELETE_SSO_CONFIG': '删除SSO配置',
+            'CREATE_ORDER': '创建订单'
+        };
+
+        // 目标类型映射
+        const targetTypeNames = {
+            'case': '用例',
+            'project': '项目',
+            'project_member': '项目成员',
+            'schedule': '定时任务',
+            'notification': '通知配置',
+            'sso_config': 'SSO配置',
+            'order': '订单'
+        };
+
+        async function loadLogs() {
+            const targetType = document.getElementById('filterTargetType').value;
+            const pageSize = document.getElementById('filterPageSize').value;
+
+            try {
+                const params = new URLSearchParams({
+                    page: currentPage,
+                    page_size: pageSize
+                });
+                if (targetType) params.append('target_type', targetType);
+
+                const response = await fetch(`/api/audit-logs?${params}`);
+                const result = await response.json();
+
+                if (result.success) {
+                    renderLogs(result.logs);
+                    document.getElementById('totalCount').textContent = result.total;
+                    totalPages = Math.ceil(result.total / parseInt(pageSize));
+                    updatePagination();
+                }
+            } catch (error) {
+                console.error('加载审计日志失败:', error);
+            }
+        }
+
+        function renderLogs(logs) {
+            const tbody = document.getElementById('logsTableBody');
+            
+            if (!logs || logs.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" class="text-center py-8 text-gray-500">
+                            <i class="fas fa-inbox mr-2"></i>暂无日志记录
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = logs.map(log => `
+                <tr class="hover:bg-gray-50">
+                    <td class="text-gray-500">${formatTime(log.created_at)}</td>
+                    <td>
+                        <span class="font-medium text-gray-900">${log.username || '-'}</span>
+                    </td>
+                    <td>
+                        <span class="badge ${getActionBadgeClass(log.action)}">
+                            ${actionNames[log.action] || log.action}
+                        </span>
+                    </td>
+                    <td>${targetTypeNames[log.target_type] || log.target_type}</td>
+                    <td class="font-mono text-gray-500">${log.target_id || '-'}</td>
+                    <td class="text-gray-500">${log.ip_address || '-'}</td>
+                    <td>
+                        ${log.details ? `
+                            <button onclick='showDetail(${JSON.stringify(log.details).replace(/'/g, "&apos;")})' class="text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        ` : '-'}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function getActionBadgeClass(action) {
+            if (action.startsWith('CREATE')) return 'bg-green-100 text-green-800';
+            if (action.startsWith('UPDATE')) return 'bg-blue-100 text-blue-800';
+            if (action.startsWith('DELETE') || action.startsWith('REMOVE')) return 'bg-red-100 text-red-800';
+            if (action.startsWith('EXECUTE')) return 'bg-purple-100 text-purple-800';
+            return 'bg-gray-100 text-gray-800';
+        }
+
+        function formatTime(timeStr) {
+            if (!timeStr) return '-';
+            const date = new Date(timeStr);
+            return date.toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        function showDetail(details) {
+            try {
+                const parsed = typeof details === 'string' ? JSON.parse(details) : details;
+                document.getElementById('detailContent').textContent = JSON.stringify(parsed, null, 2);
+            } catch {
+                document.getElementById('detailContent').textContent = details;
+            }
+            document.getElementById('detailModal').classList.remove('hidden');
+        }
+
+        function closeDetailModal() {
+            document.getElementById('detailModal').classList.add('hidden');
+        }
+
+        function changePage(delta) {
+            currentPage += delta;
+            if (currentPage < 1) currentPage = 1;
+            if (currentPage > totalPages) currentPage = totalPages;
+            loadLogs();
+        }
+
+        function updatePagination() {
+            document.getElementById('currentPage').textContent = currentPage;
+            document.getElementById('prevPageBtn').disabled = currentPage <= 1;
+            document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+        }
+
+        async function exportLogs() {
+            alert('导出功能开发中...');
+        }
+
+        // 页面加载
+        document.addEventListener('DOMContentLoaded', loadLogs);
+
+        // 点击模态框外部关闭
+        document.getElementById('detailModal').addEventListener('click', function(e) {
+            if (e.target === this) closeDetailModal();
+        });
+    </script>
+</body>
+</html>

@@ -22,8 +22,25 @@ class Database:
                 email TEXT UNIQUE,
                 role TEXT NOT NULL DEFAULT 'tester',
                 is_active INTEGER NOT NULL DEFAULT 1,
+                tenant_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_login TIMESTAMP
+                last_login TIMESTAMP,
+                FOREIGN KEY (tenant_id) REFERENCES tenants (id)
+            )
+        ''')
+
+        # 创建租户表（多租户隔离）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tenants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                display_name TEXT,
+                plan_type TEXT NOT NULL DEFAULT 'free',
+                max_users INTEGER DEFAULT 5,
+                max_projects INTEGER DEFAULT 10,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
             )
         ''')
 
@@ -33,7 +50,9 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                tenant_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tenant_id) REFERENCES tenants (id)
             )
         ''')
         
@@ -192,10 +211,51 @@ class Database:
                 case_ids TEXT NOT NULL,
                 cron_expr TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
+                retry_count INTEGER NOT NULL DEFAULT 3,
+                retry_interval INTEGER NOT NULL DEFAULT 5,
                 last_run TIMESTAMP,
                 next_run TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects (id)
+            )
+        ''')
+
+        # 为旧版 schedules 表添加缺失的列（数据库迁移）
+        try:
+            cursor.execute("ALTER TABLE schedules ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 3")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE schedules ADD COLUMN retry_interval INTEGER NOT NULL DEFAULT 5")
+        except sqlite3.OperationalError:
+            pass
+
+        # 创建调度执行历史表（用于记录每次执行和重跑）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS schedule_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schedule_id INTEGER NOT NULL,
+                case_ids TEXT NOT NULL,
+                status TEXT NOT NULL,
+                retry_count INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 3,
+                error_message TEXT,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (schedule_id) REFERENCES schedules (id)
+            )
+        ''')
+
+        # 创建通知配置表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS notification_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                config TEXT NOT NULL,
+                events TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
@@ -286,6 +346,18 @@ class Database:
         # 添加数据库索引以优化查询性能
         self._create_indexes(cursor)
         
+        # 多租户数据库迁移（为现有表添加 tenant_id 字段）
+        self._migrate_multi_tenant(cursor)
+        
+        # 创建SSO相关表
+        self._create_sso_tables(cursor)
+        
+        # 创建支付相关表
+        self._create_payment_tables(cursor)
+        
+        # 创建缺陷管理相关表
+        self._create_defect_tables(cursor)
+        
         conn.commit()
         conn.close()
     
@@ -310,6 +382,9 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_user_usage_stats_user_date ON user_usage_stats(user_id, stat_date)",
+            # 多租户索引
+            "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id)",
         ]
         
         for index_sql in indexes:
@@ -318,6 +393,227 @@ class Database:
             except sqlite3.Error as e:
                 # 记录错误但继续执行，避免因为索引创建失败影响主要功能
                 print(f"创建索引失败: {index_sql}, 错误: {e}")
+
+    def _migrate_multi_tenant(self, cursor):
+        """多租户数据库迁移 - 为现有表添加 tenant_id 字段"""
+        # 为 users 表添加 tenant_id
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN tenant_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        
+        # 为 projects 表添加 tenant_id
+        try:
+            cursor.execute("ALTER TABLE projects ADD COLUMN tenant_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        
+        # 为 users 表添加 display_name 和 phone 字段
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+    def _create_sso_tables(self, cursor):
+        """创建SSO相关表"""
+        # SSO配置表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sso_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER,
+                provider_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                client_id TEXT,
+                client_secret TEXT,
+                auth_url TEXT,
+                token_url TEXT,
+                userinfo_url TEXT,
+                callback_url TEXT,
+                ldap_host TEXT,
+                ldap_port INTEGER DEFAULT 389,
+                ldap_base_dn TEXT,
+                ldap_bind_dn TEXT,
+                ldap_bind_password TEXT,
+                ldap_user_filter TEXT DEFAULT '(uid={username})',
+                wecom_corp_id TEXT,
+                wecom_agent_id TEXT,
+                wecom_secret TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tenant_id) REFERENCES tenants (id)
+            )
+        ''')
+        
+        # SSO登录记录表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sso_login_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                provider_type TEXT NOT NULL,
+                external_id TEXT,
+                login_ip TEXT,
+                user_agent TEXT,
+                login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # 用户绑定SSO账号表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_sso_bindings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                provider_type TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                external_username TEXT,
+                external_email TEXT,
+                bind_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                UNIQUE(user_id, provider_type)
+            )
+        ''')
+
+    def _create_payment_tables(self, cursor):
+        """创建支付相关表"""
+        # 订单表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_no TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                tenant_id INTEGER,
+                plan_type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                currency TEXT DEFAULT 'CNY',
+                status TEXT NOT NULL DEFAULT 'pending',
+                payment_method TEXT,
+                payment_channel TEXT,
+                transaction_id TEXT,
+                paid_at TIMESTAMP,
+                expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                FOREIGN KEY (tenant_id) REFERENCES tenants (id)
+            )
+        ''')
+        
+        # 支付记录表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS payment_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL,
+                payment_method TEXT NOT NULL,
+                transaction_id TEXT,
+                amount REAL NOT NULL,
+                status TEXT NOT NULL,
+                raw_response TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (order_id) REFERENCES orders (id)
+            )
+        ''')
+        
+        # 订阅记录表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                tenant_id INTEGER,
+                plan_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                auto_renew INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                FOREIGN KEY (tenant_id) REFERENCES tenants (id)
+            )
+        ''')
+
+    def _create_defect_tables(self, cursor):
+        """创建缺陷管理相关表"""
+        # 缺陷主表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS defects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER,
+                title TEXT NOT NULL,
+                description TEXT,
+                severity TEXT NOT NULL DEFAULT 'medium',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                status TEXT NOT NULL DEFAULT 'open',
+                assignee_id INTEGER,
+                reporter_id INTEGER NOT NULL,
+                case_id INTEGER,
+                run_history_id INTEGER,
+                step_result_id INTEGER,
+                error_message TEXT,
+                screenshots TEXT,
+                environment TEXT,
+                browser_info TEXT,
+                reproduce_steps TEXT,
+                expected_result TEXT,
+                actual_result TEXT,
+                resolution TEXT,
+                resolved_at TIMESTAMP,
+                closed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id),
+                FOREIGN KEY (assignee_id) REFERENCES users (id),
+                FOREIGN KEY (reporter_id) REFERENCES users (id),
+                FOREIGN KEY (case_id) REFERENCES test_cases (id),
+                FOREIGN KEY (run_history_id) REFERENCES run_history (id),
+                FOREIGN KEY (step_result_id) REFERENCES step_results (id)
+            )
+        ''')
+        
+        # 缺陷评论表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS defect_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                defect_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (defect_id) REFERENCES defects (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # 缺陷状态变更历史表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS defect_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                defect_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                field_name TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (defect_id) REFERENCES defects (id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        
+        # 缺陷索引
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_defects_project ON defects(project_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_defects_status ON defects(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_defects_assignee ON defects(assignee_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_defects_case ON defects(case_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_defect_comments_defect ON defect_comments(defect_id)")
+        except sqlite3.Error:
+            pass
     
     def create_test_case(self, name: str, description: str = "", url: str = "") -> int:
         """创建测试用例"""
@@ -1402,13 +1698,14 @@ class Database:
 
     # ==================== 定时调度方法 ====================
 
-    def create_schedule(self, name: str, case_ids: list, cron_expr: str, project_id: int = None) -> int:
+    def create_schedule(self, name: str, case_ids: list, cron_expr: str, project_id: int = None,
+                        retry_count: int = 3, retry_interval: int = 5, is_active: int = 1) -> int:
         """创建定时调度"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO schedules (name, project_id, case_ids, cron_expr) VALUES (?, ?, ?, ?)",
-            (name, project_id, json.dumps(case_ids), cron_expr)
+            "INSERT INTO schedules (name, project_id, case_ids, cron_expr, is_active, retry_count, retry_interval) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (name, project_id, json.dumps(case_ids), cron_expr, is_active, retry_count, retry_interval)
         )
         schedule_id = cursor.lastrowid
         conn.commit()
@@ -1425,7 +1722,8 @@ class Database:
         return [{'id': r[0], 'name': r[1], 'project_id': r[2],
                  'case_ids': json.loads(r[3]) if r[3] else [],
                  'cron_expr': r[4], 'is_active': r[5],
-                 'last_run': r[6], 'next_run': r[7], 'created_at': r[8]} for r in rows]
+                 'retry_count': r[6], 'retry_interval': r[7],
+                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10]} for r in rows]
 
     def get_active_schedules(self) -> List[Dict[str, Any]]:
         """获取所有激活的调度任务"""
@@ -1437,10 +1735,12 @@ class Database:
         return [{'id': r[0], 'name': r[1], 'project_id': r[2],
                  'case_ids': json.loads(r[3]) if r[3] else [],
                  'cron_expr': r[4], 'is_active': r[5],
-                 'last_run': r[6], 'next_run': r[7], 'created_at': r[8]} for r in rows]
+                 'retry_count': r[6], 'retry_interval': r[7],
+                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10]} for r in rows]
 
     def update_schedule(self, schedule_id: int, name: str = None, cron_expr: str = None,
-                        is_active: int = None, case_ids: list = None, last_run: str = None) -> bool:
+                        is_active: int = None, case_ids: list = None, last_run: str = None,
+                        project_id: int = None) -> bool:
         """更新调度任务"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1455,6 +1755,8 @@ class Database:
             updates.append("case_ids = ?"); params.append(json.dumps(case_ids))
         if last_run is not None:
             updates.append("last_run = ?"); params.append(last_run)
+        if project_id is not None:
+            updates.append("project_id = ?"); params.append(project_id)
         if not updates:
             conn.close()
             return False
@@ -1470,6 +1772,146 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def create_schedule_history(self, schedule_id: int, case_ids: list, status: str,
+                                retry_count: int = 0, max_retries: int = 3, error_message: str = None) -> int:
+        """创建调度执行历史记录"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO schedule_history (schedule_id, case_ids, status, retry_count, max_retries, error_message) VALUES (?, ?, ?, ?, ?, ?)",
+            (schedule_id, json.dumps(case_ids), status, retry_count, max_retries, error_message)
+        )
+        history_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return history_id
+
+    def update_schedule_history(self, history_id: int, status: str = None, error_message: str = None):
+        """更新调度执行历史记录"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        updates, params = [], []
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+        if not updates:
+            conn.close()
+            return
+        params.append(history_id)
+        cursor.execute(f"UPDATE schedule_history SET {', '.join(updates)}, completed_at = CURRENT_TIMESTAMP WHERE id = ?", params)
+        conn.commit()
+        conn.close()
+
+    def get_schedule_history(self, schedule_id: int = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """获取调度执行历史"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if schedule_id:
+            cursor.execute("SELECT * FROM schedule_history WHERE schedule_id = ? ORDER BY started_at DESC LIMIT ?",
+                          (schedule_id, limit))
+        else:
+            cursor.execute("SELECT * FROM schedule_history ORDER BY started_at DESC LIMIT ?", (limit,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'schedule_id': r[1],
+                 'case_ids': json.loads(r[2]) if r[2] else [],
+                 'status': r[3], 'retry_count': r[4], 'max_retries': r[5],
+                 'error_message': r[6], 'started_at': r[7], 'completed_at': r[8]} for r in rows]
+
+    # ==================== 通知配置管理方法 ====================
+
+    def create_notification_config(self, name: str, type: str, config: dict, events: list, is_active: int = 1) -> int:
+        """创建通知配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO notification_configs (name, type, config, events, is_active) VALUES (?, ?, ?, ?, ?)",
+            (name, type, json.dumps(config), json.dumps(events), is_active)
+        )
+        config_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return config_id
+
+    def get_all_notification_configs(self) -> List[Dict[str, Any]]:
+        """获取所有通知配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM notification_configs ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{'id': r[0], 'name': r[1], 'type': r[2],
+                 'config': json.loads(r[3]) if r[3] else {},
+                 'events': json.loads(r[4]) if r[4] else [],
+                 'is_active': r[5], 'created_at': r[6]} for r in rows]
+
+    def get_active_notification_configs(self, event_type: str = None) -> List[Dict[str, Any]]:
+        """获取激活的通知配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if event_type:
+            cursor.execute("SELECT * FROM notification_configs WHERE is_active = 1")
+            rows = cursor.fetchall()
+            conn.close()
+            configs = [{'id': r[0], 'name': r[1], 'type': r[2],
+                       'config': json.loads(r[3]) if r[3] else {},
+                       'events': json.loads(r[4]) if r[4] else [],
+                       'is_active': r[5], 'created_at': r[6]} for r in rows]
+            # 过滤包含指定事件的配置
+            return [c for c in configs if event_type in c['events']]
+        else:
+            cursor.execute("SELECT * FROM notification_configs WHERE is_active = 1")
+            rows = cursor.fetchall()
+            conn.close()
+            return [{'id': r[0], 'name': r[1], 'type': r[2],
+                     'config': json.loads(r[3]) if r[3] else {},
+                     'events': json.loads(r[4]) if r[4] else [],
+                     'is_active': r[5], 'created_at': r[6]} for r in rows]
+
+    def update_notification_config(self, config_id: int, name: str = None, type: str = None,
+                                   config: dict = None, events: list = None, is_active: int = None) -> bool:
+        """更新通知配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        updates, params = [], []
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if type is not None:
+            updates.append("type = ?")
+            params.append(type)
+        if config is not None:
+            updates.append("config = ?")
+            params.append(json.dumps(config))
+        if events is not None:
+            updates.append("events = ?")
+            params.append(json.dumps(events))
+        if is_active is not None:
+            updates.append("is_active = ?")
+            params.append(is_active)
+        if not updates:
+            conn.close()
+            return False
+        params.append(config_id)
+        cursor.execute(f"UPDATE notification_configs SET {', '.join(updates)} WHERE id = ?", params)
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return success
+
+    def delete_notification_config(self, config_id: int) -> bool:
+        """删除通知配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM notification_configs WHERE id = ?", (config_id,))
         success = cursor.rowcount > 0
         conn.commit()
         conn.close()
@@ -1924,3 +2366,343 @@ class Database:
             'execution_count': r[1],
             'created_cases': r[2]
         } for r in rows]
+
+    # ==================== 缺陷管理方法 ====================
+
+    def create_defect(self, project_id: int, title: str, reporter_id: int,
+                      description: str = "", severity: str = "medium",
+                      priority: str = "medium", assignee_id: int = None,
+                      case_id: int = None, run_history_id: int = None,
+                      step_result_id: int = None, error_message: str = "",
+                      screenshots: str = "", environment: str = "",
+                      browser_info: str = "", reproduce_steps: str = "",
+                      expected_result: str = "", actual_result: str = "") -> int:
+        """创建缺陷"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO defects (
+                project_id, title, description, severity, priority, status,
+                assignee_id, reporter_id, case_id, run_history_id, step_result_id,
+                error_message, screenshots, environment, browser_info,
+                reproduce_steps, expected_result, actual_result
+            ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (project_id, title, description, severity, priority, assignee_id,
+              reporter_id, case_id, run_history_id, step_result_id, error_message,
+              screenshots, environment, browser_info, reproduce_steps,
+              expected_result, actual_result))
+        
+        defect_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return defect_id
+
+    def get_defect(self, defect_id: int) -> Dict[str, Any]:
+        """获取缺陷详情"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT d.*, 
+                   u1.username as reporter_name,
+                   u2.username as assignee_name,
+                   tc.name as case_name,
+                   p.name as project_name
+            FROM defects d
+            LEFT JOIN users u1 ON d.reporter_id = u1.id
+            LEFT JOIN users u2 ON d.assignee_id = u2.id
+            LEFT JOIN test_cases tc ON d.case_id = tc.id
+            LEFT JOIN projects p ON d.project_id = p.id
+            WHERE d.id = ?
+        ''', (defect_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return dict(row)
+        return None
+
+    def get_defects(self, project_id: int = None, status: str = None,
+                    assignee_id: int = None, severity: str = None,
+                    case_id: int = None, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+        """获取缺陷列表（支持筛选和分页）"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        where_conditions = []
+        params = []
+        
+        if project_id:
+            where_conditions.append("d.project_id = ?")
+            params.append(project_id)
+        if status:
+            where_conditions.append("d.status = ?")
+            params.append(status)
+        if assignee_id:
+            where_conditions.append("d.assignee_id = ?")
+            params.append(assignee_id)
+        if severity:
+            where_conditions.append("d.severity = ?")
+            params.append(severity)
+        if case_id:
+            where_conditions.append("d.case_id = ?")
+            params.append(case_id)
+        
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        # 获取总数
+        cursor.execute(f"SELECT COUNT(*) FROM defects d WHERE {where_clause}", params)
+        total = cursor.fetchone()[0]
+        
+        # 获取分页数据
+        offset = (page - 1) * page_size
+        cursor.execute(f'''
+            SELECT d.*, 
+                   u1.username as reporter_name,
+                   u2.username as assignee_name,
+                   tc.name as case_name,
+                   p.name as project_name
+            FROM defects d
+            LEFT JOIN users u1 ON d.reporter_id = u1.id
+            LEFT JOIN users u2 ON d.assignee_id = u2.id
+            LEFT JOIN test_cases tc ON d.case_id = tc.id
+            LEFT JOIN projects p ON d.project_id = p.id
+            WHERE {where_clause}
+            ORDER BY d.created_at DESC
+            LIMIT ? OFFSET ?
+        ''', params + [page_size, offset])
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return {
+            'defects': [dict(row) for row in rows],
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': (total + page_size - 1) // page_size
+        }
+
+    def update_defect(self, defect_id: int, user_id: int, **kwargs) -> bool:
+        """更新缺陷（并记录历史）"""
+        allowed_fields = ['title', 'description', 'severity', 'priority', 'status',
+                          'assignee_id', 'resolution', 'environment', 'browser_info',
+                          'reproduce_steps', 'expected_result', 'actual_result']
+        
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # 获取当前缺陷状态
+        cursor.execute("SELECT * FROM defects WHERE id = ?", (defect_id,))
+        old_defect = cursor.fetchone()
+        if not old_defect:
+            conn.close()
+            return False
+        
+        old_defect = dict(old_defect)
+        updates = []
+        params = []
+        
+        import datetime
+        
+        for field, value in kwargs.items():
+            if field in allowed_fields and value != old_defect.get(field):
+                updates.append(f"{field} = ?")
+                params.append(value)
+                
+                # 记录历史
+                cursor.execute('''
+                    INSERT INTO defect_history (defect_id, user_id, field_name, old_value, new_value)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (defect_id, user_id, field, str(old_defect.get(field, '')), str(value)))
+        
+        if updates:
+            updates.append("updated_at = ?")
+            params.append(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            
+            # 处理特殊状态时间戳
+            if 'status' in kwargs:
+                if kwargs['status'] == 'resolved':
+                    updates.append("resolved_at = ?")
+                    params.append(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                elif kwargs['status'] == 'closed':
+                    updates.append("closed_at = ?")
+                    params.append(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            
+            params.append(defect_id)
+            cursor.execute(f"UPDATE defects SET {', '.join(updates)} WHERE id = ?", params)
+        
+        conn.commit()
+        conn.close()
+        return True
+
+    def update_defect_status(self, defect_id: int, user_id: int, new_status: str) -> bool:
+        """更新缺陷状态（状态流转）"""
+        valid_statuses = ['open', 'in_progress', 'resolved', 'closed', 'reopened']
+        if new_status not in valid_statuses:
+            return False
+        return self.update_defect(defect_id, user_id, status=new_status)
+
+    def add_defect_comment(self, defect_id: int, user_id: int, content: str) -> int:
+        """添加缺陷评论"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO defect_comments (defect_id, user_id, content)
+            VALUES (?, ?, ?)
+        ''', (defect_id, user_id, content))
+        
+        comment_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return comment_id
+
+    def get_defect_comments(self, defect_id: int) -> List[Dict[str, Any]]:
+        """获取缺陷评论列表"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT dc.*, u.username
+            FROM defect_comments dc
+            LEFT JOIN users u ON dc.user_id = u.id
+            WHERE dc.defect_id = ?
+            ORDER BY dc.created_at ASC
+        ''', (defect_id,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_defect_history(self, defect_id: int) -> List[Dict[str, Any]]:
+        """获取缺陷状态变更历史"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT dh.*, u.username
+            FROM defect_history dh
+            LEFT JOIN users u ON dh.user_id = u.id
+            WHERE dh.defect_id = ?
+            ORDER BY dh.created_at DESC
+        ''', (defect_id,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_defect_statistics(self, project_id: int = None) -> Dict[str, Any]:
+        """获取缺陷统计数据"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        where_clause = "WHERE project_id = ?" if project_id else ""
+        params = [project_id] if project_id else []
+        
+        # 按状态统计
+        cursor.execute(f'''
+            SELECT status, COUNT(*) as count
+            FROM defects {where_clause}
+            GROUP BY status
+        ''', params)
+        status_stats = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # 按严重级统计
+        cursor.execute(f'''
+            SELECT severity, COUNT(*) as count
+            FROM defects {where_clause}
+            GROUP BY severity
+        ''', params)
+        severity_stats = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # 总数
+        cursor.execute(f"SELECT COUNT(*) FROM defects {where_clause}", params)
+        total = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            'total': total,
+            'by_status': status_stats,
+            'by_severity': severity_stats,
+            'open_count': status_stats.get('open', 0) + status_stats.get('in_progress', 0) + status_stats.get('reopened', 0),
+            'resolved_count': status_stats.get('resolved', 0) + status_stats.get('closed', 0)
+        }
+
+    def delete_defect(self, defect_id: int) -> bool:
+        """删除缺陷（同时删除评论和历史）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("DELETE FROM defect_comments WHERE defect_id = ?", (defect_id,))
+        cursor.execute("DELETE FROM defect_history WHERE defect_id = ?", (defect_id,))
+        cursor.execute("DELETE FROM defects WHERE id = ?", (defect_id,))
+        
+        conn.commit()
+        conn.close()
+        return True
+
+    def create_defect_from_failure(self, run_history_id: int, reporter_id: int,
+                                    title: str = None, assignee_id: int = None) -> int:
+        """从失败的执行历史一键创建缺陷"""
+        # 获取执行历史详情
+        history = self.get_run_history_detail(run_history_id)
+        if not history:
+            return None
+        
+        # 获取用例信息
+        case = self.get_test_case_v2(history['case_id'])
+        if not case:
+            return None
+        
+        # 获取失败的步骤结果
+        step_results = self.get_step_results(run_history_id)
+        failed_steps = [s for s in step_results if s['status'] in ('failed', 'error')]
+        
+        # 构建复现步骤
+        reproduce_steps = f"""用例名称: {case.get('name', '')}
+用例URL: {case.get('url', '')}
+
+执行步骤:
+"""
+        for i, step in enumerate(step_results, 1):
+            status_icon = 'X' if step['status'] in ('failed', 'error') else 'O'
+            reproduce_steps += f"{i}. [{status_icon}] {step.get('action', '')} - {step.get('description', '')}\n"
+        
+        # 错误信息
+        error_message = history.get('error', '')
+        if failed_steps:
+            error_message = failed_steps[0].get('error', error_message)
+        
+        # 自动生成标题
+        if not title:
+            title = f"[用例失败] {case.get('name', '未知用例')}"
+        
+        # 创建缺陷
+        defect_id = self.create_defect(
+            project_id=case.get('project_id'),
+            title=title,
+            reporter_id=reporter_id,
+            description=f"用例执行失败，自动创建缺陷。\n\n错误信息: {error_message}",
+            severity='high' if 'error' in history.get('status', '') else 'medium',
+            priority='high',
+            assignee_id=assignee_id,
+            case_id=history['case_id'],
+            run_history_id=run_history_id,
+            step_result_id=failed_steps[0]['id'] if failed_steps else None,
+            error_message=error_message,
+            screenshots=history.get('screenshots', ''),
+            reproduce_steps=reproduce_steps,
+            expected_result=case.get('expected_result', ''),
+            actual_result=f"执行状态: {history.get('status', '')}"
+        )
+        
+        return defect_id
