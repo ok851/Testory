@@ -9,8 +9,8 @@ from license_manager import LicenseManager, LicenseType
 
 def main():
     parser = argparse.ArgumentParser(description='UAT Platform License 生成工具')
-    parser.add_argument('type', choices=['enterprise', 'trial', 'personal'],
-                        help='License 类型')
+    parser.add_argument('type', choices=['enterprise', 'professional', 'free'],
+                        help='License 类型 (enterprise: 企业版, professional: 个人专业版, free: 免费版)')
     parser.add_argument('--to', '-t', required=True,
                         help='授权对象（公司名或个人名）')
     parser.add_argument('--days', '-d', type=int, default=365,
@@ -31,8 +31,8 @@ def main():
     # 确定 License 类型
     license_type_map = {
         'enterprise': LicenseType.ENTERPRISE,
-        'trial': LicenseType.TRIAL,
-        'personal': LicenseType.PERSONAL
+        'professional': LicenseType.PROFESSIONAL,
+        'free': LicenseType.FREE
     }
     license_type = license_type_map[args.type]
 
@@ -80,7 +80,7 @@ def main():
         print(f"  - 最大用户数: {'无限制' if info.max_users == -1 else info.max_users}")
         print(f"  - 最大项目数: {'无限制' if info.max_projects == -1 else info.max_projects}")
         print(f"  - 每项目用例数: {'无限制' if info.max_cases_per_project == -1 else info.max_cases_per_project}")
-        print(f"  - 每月执行次数: {'无限制' if info.max_executions_per_month == -1 else info.max_executions_per_month}")
+        print(f"  - 每日执行次数: {'无限制' if info.max_executions_per_day == -1 else info.max_executions_per_day}")
         print(f"\n可用功能:")
         for feature in info.features:
             print(f"  - {feature}")

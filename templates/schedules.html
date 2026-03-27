@@ -98,34 +98,61 @@
 </head>
 <body class="bg-gray-50 font-sans min-h-screen">
     <!-- 导航栏 -->
-    <nav class="bg-white shadow-sm border-b border-gray-200">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between h-16">
-                <div class="flex items-center">
-                    <a href="/" class="flex items-center">
-                        <i class="fas fa-robot text-blue-600 text-2xl mr-2"></i>
-                        <span class="text-xl font-bold text-gray-800">UI 自动化测试平台</span>
-                    </a>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <a href="/" class="btn btn-sm btn-outline">
-                        <i class="fas fa-home mr-1"></i>首页
-                    </a>
-                    <a href="/list_projects" class="btn btn-sm btn-outline">
-                        <i class="fas fa-folder mr-1"></i>项目
-                    </a>
-                    <a href="/run-history" class="btn btn-sm btn-outline">
-                        <i class="fas fa-history mr-1"></i>历史
-                    </a>
-                    <a href="/schedules" class="btn btn-sm btn-primary">
-                        <i class="fas fa-clock mr-1"></i>定时
-                    </a>
-                    <a href="/notifications" class="btn btn-sm btn-outline">
-                        <i class="fas fa-bell mr-1"></i>通知
-                    </a>
-                    <a href="/license" class="btn btn-sm btn-outline">
-                        <i class="fas fa-key mr-1"></i>授权
-                    </a>
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <!-- 左侧：Logo -->
+            <div class="flex items-center gap-3">
+                <i class="fas fa-robot text-primary text-2xl"></i>
+                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
+            </div>
+            <!-- 右侧：功能按钮 + 用户信息 -->
+            <div class="flex items-center gap-2">
+                <a href="/" class="btn btn-primary" title="首页">
+                    <i class="fas fa-home"></i>
+                </a>
+                <a href="/list_projects" class="btn btn-secondary" title="项目管理">
+                    <i class="fas fa-folder mr-1"></i>项目
+                </a>
+                <a href="/run-history" class="btn btn-accent" title="运行历史">
+                    <i class="fas fa-history mr-1"></i>历史
+                </a>
+                <a href="/data-driven" class="btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500" title="数据驱动">
+                    <i class="fas fa-table mr-1"></i>数据
+                </a>
+                <a href="/test_report" class="btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" title="测试报告">
+                    <i class="fas fa-chart-bar mr-1"></i>报告
+                </a>
+                <a href="/schedules" class="btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500" title="定时任务">
+                    <i class="fas fa-clock mr-1"></i>定时
+                </a>
+                <a href="/notifications" class="btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500" title="通知配置">
+                    <i class="fas fa-bell mr-1"></i>通知
+                </a>
+                <a href="/defects" class="btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500" title="缺陷管理">
+                    <i class="fas fa-bug mr-1"></i>缺陷
+                </a>
+                <!-- 用户信息区（最右边） -->
+                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
+                    <!-- 用户下拉菜单 -->
+                    <div id="userDropdown" class="relative hidden">
+                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
+                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
+                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
+                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
+                        </button>
+                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
+                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
+                            </a>
+                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
+                            </a>
+                            <div class="border-t border-gray-100 my-1"></div>
+                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
+                                <i class="fas fa-sign-out-alt mr-2"></i>注销
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -156,7 +183,6 @@
                             <th>任务名称</th>
                             <th>执行用例</th>
                             <th>Cron表达式</th>
-                            <th>下次执行</th>
                             <th>状态</th>
                             <th>操作</th>
                         </tr>
@@ -220,6 +246,12 @@
                     </div>
                     <p id="cronDesc" class="text-sm text-blue-600 mt-2 font-medium"></p>
                     <p class="text-xs text-gray-500 mt-1">格式：秒 分 时 日 月 周（例如：0 0 2 * * ? 表示每天凌晨2点）</p>
+                </div>
+
+                <div>
+                    <label class="form-label">执行次数 <span class="text-gray-400 font-normal">(可选，0表示无限次)</span></label>
+                    <input type="number" id="executionCount" class="form-input" placeholder="0" min="0" value="0">
+                    <p class="text-xs text-gray-500 mt-1">设置任务执行的总次数，达到次数后任务自动停止</p>
                 </div>
 
                 <div class="flex items-center bg-gray-50 p-3 rounded-lg">
@@ -411,9 +443,6 @@
                         <code class="text-sm bg-gray-100 px-2 py-1 rounded font-mono">${s.cron_expr}</code>
                     </td>
                     <td>
-                        <div class="text-gray-900">${s.next_run || '-'}</div>
-                    </td>
-                    <td>
                         <span class="badge ${s.is_active ? 'badge-success' : 'badge-gray'}">
                             ${s.is_active ? '启用' : '禁用'}
                         </span>
@@ -511,6 +540,7 @@
             document.getElementById('modalTitle').textContent = '编辑定时任务';
             document.getElementById('scheduleName').value = schedule.name;
             document.getElementById('cronExpr').value = schedule.cron_expr;
+            document.getElementById('executionCount').value = schedule.execution_count || 0;
             document.getElementById('isActive').checked = schedule.is_active;
 
             // 加载项目列表并设置选中状态
@@ -595,12 +625,15 @@
                 return;
             }
 
+            const executionCount = parseInt(document.getElementById('executionCount').value) || 0;
+            
             const data = {
                 name,
                 cron_expr: cronExpr,
                 case_ids: caseIds,
                 is_active: isActive,
-                project_id: parseInt(projectId)
+                project_id: parseInt(projectId),
+                execution_count: executionCount
             };
 
             try {
@@ -836,9 +869,56 @@
             closeCronModal();
         }
 
+        // ==================== 登录状态管理 ====================
+        function initUserArea() {
+            fetch('/api/auth/me')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        const user = data.user;
+                        document.getElementById('userLabel').textContent = user.username;
+                        document.getElementById('userDropdown').classList.remove('hidden');
+                        document.getElementById('loginBtn').classList.add('hidden');
+                    } else {
+                        document.getElementById('loginBtn').classList.remove('hidden');
+                        document.getElementById('userDropdown').classList.add('hidden');
+                    }
+                })
+                .catch(() => {
+                    document.getElementById('loginBtn').classList.remove('hidden');
+                    document.getElementById('userDropdown').classList.add('hidden');
+                });
+        }
+
+        // 切换用户菜单显示
+        function toggleUserMenu() {
+            const menu = document.getElementById('userMenu');
+            menu.classList.toggle('hidden');
+        }
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', function(e) {
+            const dropdown = document.getElementById('userDropdown');
+            const menu = document.getElementById('userMenu');
+            if (dropdown && !dropdown.contains(e.target)) {
+                menu.classList.add('hidden');
+            }
+        });
+
+        async function handleLogout() {
+            try {
+                await fetch('/api/auth/logout', {method: 'POST'});
+                localStorage.removeItem('currentUser');
+                window.location.href = '/login';
+            } catch(e) {
+                window.location.href = '/login';
+            }
+        }
+
         // 页面加载
         document.addEventListener('DOMContentLoaded', function() {
             loadSchedules();
+            initUserArea();
         });
     </script>
 </body>

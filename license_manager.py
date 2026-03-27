@@ -12,9 +12,9 @@ from enum import Enum
 
 
 class LicenseType(Enum):
-    PERSONAL = "personal"      # 个人免费版
+    FREE = "free"              # 免费版
+    PROFESSIONAL = "professional"  # 个人专业版(团队版)
     ENTERPRISE = "enterprise"  # 企业版
-    TRIAL = "trial"           # 试用版
 
 
 @dataclass
@@ -27,7 +27,7 @@ class LicenseInfo:
     max_users: int            # 最大用户数
     max_projects: int         # 最大项目数
     max_cases_per_project: int # 每项目最大用例数
-    max_executions_per_month: int  # 每月最大执行次数
+    max_executions_per_day: int  # 每日最大执行次数
     features: list            # 可用功能列表
     signature: str = ""       # 签名（用于验证）
 
@@ -38,6 +38,9 @@ class LicenseInfo:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'LicenseInfo':
+        # 兼容旧版数据：将 max_executions_per_month 映射到 max_executions_per_day
+        if 'max_executions_per_month' in data and 'max_executions_per_day' not in data:
+            data['max_executions_per_day'] = data.pop('max_executions_per_month')
         return cls(**data)
 
 
@@ -47,45 +50,45 @@ class LicenseManager:
     # 功能定义
     FEATURES = {
         'basic': ['project_management', 'case_management', 'test_execution', 'basic_report'],
-        'personal': ['project_management', 'case_management', 'test_execution', 'basic_report'],
+        'free': ['project_management', 'case_management', 'test_execution', 'basic_report'],
+        'professional': [
+            'project_management', 'case_management', 'test_execution',
+            'advanced_report', 'schedule', 'data_driven',
+            'export_pdf', 'export_excel', 'webhook', 'email_notification'
+        ],
         'enterprise': [
             'project_management', 'case_management', 'test_execution',
             'advanced_report', 'schedule', 'webhook', 'data_driven',
             'parallel_execution', 'audit_log', 'export_pdf', 'export_excel',
             'email_notification', 'api_access', 'team_collaboration'
-        ],
-        'trial': [
-            'project_management', 'case_management', 'test_execution',
-            'advanced_report', 'schedule', 'data_driven',
-            'export_pdf', 'export_excel', 'team_collaboration'
         ]
     }
 
-    # 各版本限制
+    # 各版本限制 - 按照截图中的版本对比表配置
     LIMITS = {
-        LicenseType.PERSONAL: {
+        LicenseType.FREE: {
             'max_users': 1,
             'max_projects': 3,
             'max_cases_per_project': 50,
-            'max_executions_per_month': 100,
+            'max_executions_per_day': 10,  # 每日执行次数
             'history_retention_days': 7,
-            'features': FEATURES['personal']
+            'features': FEATURES['free']
+        },
+        LicenseType.PROFESSIONAL: {
+            'max_users': 1,
+            'max_projects': 10,
+            'max_cases_per_project': 200,
+            'max_executions_per_day': -1,  # 无限
+            'history_retention_days': 30,
+            'features': FEATURES['professional']
         },
         LicenseType.ENTERPRISE: {
             'max_users': -1,  # 无限制
             'max_projects': -1,
             'max_cases_per_project': -1,
-            'max_executions_per_month': -1,
+            'max_executions_per_day': -1,
             'history_retention_days': -1,
             'features': FEATURES['enterprise']
-        },
-        LicenseType.TRIAL: {
-            'max_users': 5,
-            'max_projects': 5,
-            'max_cases_per_project': 100,
-            'max_executions_per_month': 500,
-            'history_retention_days': 30,
-            'features': FEATURES['trial']
         }
     }
 
@@ -140,7 +143,7 @@ class LicenseManager:
             max_users=limits['max_users'],
             max_projects=limits['max_projects'],
             max_cases_per_project=limits['max_cases_per_project'],
-            max_executions_per_month=limits['max_executions_per_month'],
+            max_executions_per_day=limits.get('max_executions_per_day', limits.get('max_executions_per_month', 10)),
             features=limits['features']
         )
 
@@ -169,12 +172,12 @@ class LicenseManager:
             license_str = self._load_license_file()
 
         if not license_str:
-            # 无 License 文件，使用个人版默认配置
+            # 无 License 文件，使用免费版默认配置
             return {
                 'valid': True,
-                'license_type': LicenseType.PERSONAL.value,
-                'message': '使用个人免费版',
-                'info': self._create_default_personal_license()
+                'license_type': LicenseType.FREE.value,
+                'message': '使用免费版',
+                'info': self._create_default_free_license()
             }
 
         try:
@@ -220,18 +223,18 @@ class LicenseManager:
                 'info': None
             }
 
-    def _create_default_personal_license(self) -> LicenseInfo:
-        """创建默认个人版 License"""
-        limits = self.LIMITS[LicenseType.PERSONAL]
+    def _create_default_free_license(self) -> LicenseInfo:
+        """创建默认免费版 License"""
+        limits = self.LIMITS[LicenseType.FREE]
         return LicenseInfo(
-            license_type=LicenseType.PERSONAL.value,
-            issued_to='Personal User',
+            license_type=LicenseType.FREE.value,
+            issued_to='Free User',
             issued_at=datetime.now().isoformat(),
-            expires_at='2099-12-31T23:59:59',  # 个人版永不过期
+            expires_at='2099-12-31T23:59:59',  # 免费版永不过期
             max_users=limits['max_users'],
             max_projects=limits['max_projects'],
             max_cases_per_project=limits['max_cases_per_project'],
-            max_executions_per_month=limits['max_executions_per_month'],
+            max_executions_per_day=limits.get('max_executions_per_day', 10),
             features=limits['features'],
             signature=''
         )
@@ -261,7 +264,7 @@ class LicenseManager:
         if result['valid'] and result['info']:
             return result['info']
 
-        return self._create_default_personal_license()
+        return self._create_default_free_license()
 
     def check_feature_available(self, feature_name: str) -> bool:
         """检查某功能是否可用"""
@@ -275,7 +278,7 @@ class LicenseManager:
             'max_users': license_info.max_users,
             'max_projects': license_info.max_projects,
             'max_cases_per_project': license_info.max_cases_per_project,
-            'max_executions_per_month': license_info.max_executions_per_month,
+            'max_executions_per_day': license_info.max_executions_per_day,
             'license_type': license_info.license_type,
             'expires_at': license_info.expires_at
         }
@@ -295,10 +298,10 @@ class LicenseManager:
 
         if current_value >= limit_value:
             license_type = limits['license_type']
-            if license_type == LicenseType.PERSONAL.value:
-                message = f'已达到个人版限制（{limit_type}: {limit_value}）。请升级到企业版解除限制。'
-            elif license_type == LicenseType.TRIAL.value:
-                message = f'已达到试用版限制（{limit_type}: {limit_value}）。请联系销售购买正式授权。'
+            if license_type == LicenseType.FREE.value:
+                message = f'已达到免费版限制（{limit_type}: {limit_value}）。请升级到个人专业版或企业版解除限制。'
+            elif license_type == LicenseType.PROFESSIONAL.value:
+                message = f'已达到个人专业版限制（{limit_type}: {limit_value}）。请升级到企业版解除限制。'
             else:
                 message = f'已达到限制（{limit_type}: {limit_value}）。'
 
@@ -328,13 +331,13 @@ if __name__ == '__main__':
     )
     print(f"企业版 License: {enterprise_license}")
 
-    # 生成试用版 License
-    trial_license = lm.generate_license(
-        LicenseType.TRIAL,
-        issued_to='Trial User',
-        expires_days=30
+    # 生成个人专业版 License
+    professional_license = lm.generate_license(
+        LicenseType.PROFESSIONAL,
+        issued_to='Professional User',
+        expires_days=365
     )
-    print(f"\n试用版 License: {trial_license}")
+    print(f"\n个人专业版 License: {professional_license}")
 
     # 验证
     result = lm.validate_license(enterprise_license)

@@ -60,6 +60,12 @@
             .badge-info {
                 @apply bg-blue-100 text-blue-800;
             }
+            .badge-gray {
+                @apply bg-gray-100 text-gray-800;
+            }
+            .badge-blue {
+                @apply bg-blue-100 text-blue-800;
+            }
             .progress-bar {
                 @apply w-full bg-gray-200 rounded-full h-2.5;
             }
@@ -71,31 +77,65 @@
 </head>
 <body class="bg-gray-50 font-sans min-h-screen">
     <!-- 导航栏 -->
-    <nav class="bg-white shadow-sm border-b border-gray-200">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between h-16">
-                <div class="flex items-center">
-                    <a href="/" class="flex items-center">
-                        <i class="fas fa-robot text-blue-600 text-2xl mr-2"></i>
-                        <span class="text-xl font-bold text-gray-800">UI 自动化测试平台</span>
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <!-- 左侧：Logo -->
+            <div class="flex items-center gap-3">
+                <i class="fas fa-robot text-primary text-2xl"></i>
+                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
+            </div>
+            <!-- 右侧：功能按钮 + 用户信息 -->
+            <div class="flex items-center gap-2">
+                <a href="/" class="btn btn-primary" title="首页">
+                    <i class="fas fa-home"></i>
+                </a>
+                <a href="/list_projects" class="btn btn-secondary" title="项目管理">
+                    <i class="fas fa-folder mr-1"></i>项目
+                </a>
+                <a href="/run-history" class="btn btn-accent" title="运行历史">
+                    <i class="fas fa-history mr-1"></i>历史
+                </a>
+                <a href="/data-driven" class="btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500" title="数据驱动">
+                    <i class="fas fa-table mr-1"></i>数据
+                </a>
+                <a href="/test_report" class="btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" title="测试报告">
+                    <i class="fas fa-chart-bar mr-1"></i>报告
+                </a>
+                <a href="/schedules" class="btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500" title="定时任务">
+                    <i class="fas fa-clock mr-1"></i>定时
+                </a>
+                <a href="/notifications" class="btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500" title="通知配置">
+                    <i class="fas fa-bell mr-1"></i>通知
+                </a>
+                <a href="/defects" class="btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500" title="缺陷管理">
+                    <i class="fas fa-bug mr-1"></i>缺陷
+                </a>
+                <!-- 用户信息区（最右边） -->
+                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
+                    <!-- 登录按钮 -->
+                    <a href="/login" id="loginBtn" class="btn btn-gray hidden">
+                        <i class="fas fa-sign-in-alt mr-1"></i>登录
                     </a>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <a href="/" class="btn btn-sm btn-outline">
-                        <i class="fas fa-home mr-1"></i>首页
-                    </a>
-                    <a href="/list_projects" class="btn btn-sm btn-outline">
-                        <i class="fas fa-folder mr-1"></i>项目
-                    </a>
-                    <a href="/run-history" class="btn btn-sm btn-outline">
-                        <i class="fas fa-history mr-1"></i>历史
-                    </a>
-                    <a href="/schedules" class="btn btn-sm btn-outline">
-                        <i class="fas fa-clock mr-1"></i>定时
-                    </a>
-                    <a href="/notifications" class="btn btn-sm btn-outline">
-                        <i class="fas fa-bell mr-1"></i>通知
-                    </a>
+                    <!-- 用户下拉菜单 -->
+                    <div id="userDropdown" class="relative hidden">
+                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
+                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
+                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
+                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
+                        </button>
+                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
+                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
+                            </a>
+                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
+                            </a>
+                            <div class="border-t border-gray-100 my-1"></div>
+                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
+                                <i class="fas fa-sign-out-alt mr-2"></i>注销
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -143,7 +183,7 @@
                     <p id="caseLimit" class="text-lg font-semibold text-gray-900">-</p>
                 </div>
                 <div class="text-center p-4 bg-gray-50 rounded-lg">
-                    <p class="text-sm text-gray-500 mb-1">每月执行次数</p>
+                    <p class="text-sm text-gray-500 mb-1">每月可执行次数</p>
                     <p id="executionLimit" class="text-lg font-semibold text-gray-900">-</p>
                 </div>
             </div>
@@ -313,7 +353,7 @@
                             <li><i class="fas fa-check text-green-500 mr-2"></i>邮件通知</li>
                             <li><i class="fas fa-check text-green-500 mr-2"></i>PDF/Excel导出</li>
                         </ul>
-                        <button onclick="selectPlan('personal')" class="btn btn-primary w-full">选择个人版</button>
+                        <button onclick="selectPlan('professional')" class="btn btn-primary w-full">选择个人专业版</button>
                     </div>
 
                     <!-- 企业标准版 -->
@@ -363,34 +403,42 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    const info = result.info;
-                    const limits = result.limits;
-                    const usage = result.usage;
+                    const info = result.info || {};
+                    const limits = result.limits || {};
+                    const usage = result.usage || {};
                     
                     // 更新 License 类型显示
                     const typeMap = {
-                        'personal': { name: '个人免费版', icon: 'fa-user', badge: 'badge-gray' },
-                        'enterprise': { name: '企业版', icon: 'fa-building', badge: 'badge-success' },
-                        'trial': { name: '试用版', icon: 'fa-flask', badge: 'badge-warning' }
+                        'free': { name: '免费版', icon: 'fa-user', badge: 'badge-gray' },
+                        'professional': { name: '个人专业版', icon: 'fa-user-tie', badge: 'badge-blue' },
+                        'enterprise': { name: '企业版', icon: 'fa-building', badge: 'badge-success' }
                     };
-                    const typeInfo = typeMap[info.license_type] || typeMap['personal'];
+                    const typeInfo = typeMap[info.license_type] || typeMap['free'];
                     
                     document.getElementById('licenseType').textContent = typeInfo.name;
                     document.getElementById('licenseIcon').className = `fas ${typeInfo.icon} text-blue-600 text-xl`;
                     document.getElementById('licenseBadge').className = `badge ${typeInfo.badge}`;
                     document.getElementById('licenseBadge').textContent = typeInfo.name;
                     
-                    // 更新限制信息
-                    document.getElementById('expireDate').textContent = info.expires_at === '2099-12-31T23:59:59' ? '永久' : new Date(info.expires_at).toLocaleDateString('zh-CN');
-                    document.getElementById('projectLimit').textContent = limits.max_projects === -1 ? '无限' : limits.max_projects;
-                    document.getElementById('caseLimit').textContent = limits.max_cases_per_project === -1 ? '无限' : limits.max_cases_per_project;
-                    document.getElementById('executionLimit').textContent = limits.max_executions_per_month === -1 ? '无限' : limits.max_executions_per_month;
+                    // 更新限制信息 - 添加默认值处理
+                    const expireDate = info.expires_at || '2099-12-31T23:59:59';
+                    document.getElementById('expireDate').textContent = expireDate === '2099-12-31T23:59:59' ? '永久' : new Date(expireDate).toLocaleDateString('zh-CN');
+                    
+                    const maxProjects = limits.max_projects !== undefined ? limits.max_projects : 3;
+                    document.getElementById('projectLimit').textContent = maxProjects === -1 ? '无限' : maxProjects;
+                    
+                    const maxCases = limits.max_cases_per_project !== undefined ? limits.max_cases_per_project : 50;
+                    document.getElementById('caseLimit').textContent = maxCases === -1 ? '无限' : maxCases;
+                    
+                    const maxExecutions = limits.max_executions_per_day !== undefined ? limits.max_executions_per_day : 10;
+                    document.getElementById('executionLimit').textContent = maxExecutions === -1 ? '无限' : maxExecutions;
                     
                     // 更新今日配额
-                    if (info.license_type === 'personal') {
+                    const licenseType = info.license_type || 'free';
+                    if (licenseType === 'free') {
                         const used = usage.today_executions || 0;
                         const total = 10;
-                        const percentage = (used / total) * 100;
+                        const percentage = Math.min((used / total) * 100, 100);
                         
                         document.getElementById('executionUsed').textContent = used;
                         document.getElementById('executionTotal').textContent = total;
@@ -406,13 +454,35 @@
                             progressBar.classList.remove('bg-blue-600');
                             progressBar.classList.add('bg-amber-500');
                         }
+                        document.getElementById('dailyQuotaCard').classList.remove('hidden');
+                    } else if (licenseType === 'professional') {
+                        // 个人专业版显示无限配额
+                        document.getElementById('executionUsed').textContent = '0';
+                        document.getElementById('executionTotal').textContent = '无限';
+                        document.getElementById('executionProgress').style.width = '0%';
+                        document.getElementById('dailyQuotaCard').classList.remove('hidden');
+                        document.getElementById('quotaTitle').textContent = '今日执行配额（无限）';
                     } else {
-                        // 非免费版隐藏配额卡片
+                        // 企业版隐藏配额卡片
                         document.getElementById('dailyQuotaCard').classList.add('hidden');
                     }
+                } else {
+                    console.error('获取 License 信息失败:', result.error || '未知错误');
+                    // 显示默认数据
+                    document.getElementById('licenseType').textContent = '免费版';
+                    document.getElementById('expireDate').textContent = '永久';
+                    document.getElementById('projectLimit').textContent = '3';
+                    document.getElementById('caseLimit').textContent = '50';
+                    document.getElementById('executionLimit').textContent = '10';
                 }
             } catch (error) {
                 console.error('加载 License 信息失败:', error);
+                // 显示默认数据
+                document.getElementById('licenseType').textContent = '免费版';
+                document.getElementById('expireDate').textContent = '永久';
+                document.getElementById('projectLimit').textContent = '3';
+                document.getElementById('caseLimit').textContent = '50';
+                document.getElementById('executionLimit').textContent = '10';
             }
         }
 
@@ -485,8 +555,57 @@
             });
         }
 
+        // ==================== 登录状态管理 ====================
+        function initUserArea() {
+            fetch('/api/auth/me')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        const user = data.user;
+                        document.getElementById('userLabel').textContent = user.username;
+                        document.getElementById('userDropdown').classList.remove('hidden');
+                        document.getElementById('loginBtn').classList.add('hidden');
+                    } else {
+                        document.getElementById('loginBtn').classList.remove('hidden');
+                        document.getElementById('userDropdown').classList.add('hidden');
+                    }
+                })
+                .catch(() => {
+                    document.getElementById('loginBtn').classList.remove('hidden');
+                    document.getElementById('userDropdown').classList.add('hidden');
+                });
+        }
+
+        // 切换用户菜单显示
+        function toggleUserMenu() {
+            const menu = document.getElementById('userMenu');
+            menu.classList.toggle('hidden');
+        }
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', function(e) {
+            const dropdown = document.getElementById('userDropdown');
+            const menu = document.getElementById('userMenu');
+            if (dropdown && !dropdown.contains(e.target)) {
+                menu.classList.add('hidden');
+            }
+        });
+
+        async function handleLogout() {
+            try {
+                await fetch('/api/auth/logout', {method: 'POST'});
+                localStorage.removeItem('currentUser');
+                window.location.href = '/login';
+            } catch(e) {
+                window.location.href = '/login';
+            }
+        }
+
         // 页面加载
-        document.addEventListener('DOMContentLoaded', loadLicenseInfo);
+        document.addEventListener('DOMContentLoaded', function() {
+            loadLicenseInfo();
+            initUserArea();
+        });
 
         // 点击模态框外部关闭
         document.getElementById('upgradeModal').addEventListener('click', function(e) {

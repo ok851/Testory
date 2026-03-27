@@ -3,51 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>运行历史记录 - 测试平台</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/antd@5.12.8/dist/reset.css">
+    <title>运行历史记录 - UI自动化测试平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background-color: #f5f5f5;
             margin: 0;
             padding: 0;
-        }
-        
-        .header {
-            background-color: #1890ff;
-            color: white;
-            padding: 16px 32px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-        }
-        
-        .header h1 {
-            margin: 0;
-            font-size: 24px;
-            font-weight: 600;
-        }
-        
-        .header .nav {
-            margin-top: 8px;
-        }
-        
-        .header .nav a {
-            color: white;
-            text-decoration: none;
-            margin-right: 12px;
-            font-size: 14px;
-            padding: 6px 12px;
-            border-radius: 4px;
-            background-color: rgba(255, 255, 255, 0.2);
-            transition: all 0.3s ease;
-        }
-        
-        .header .nav a:hover {
-            text-decoration: none;
-            background-color: rgba(255, 255, 255, 0.3);
-        }
-        
-        .header .nav a[style*="font-weight: bold"] {
-            background-color: rgba(255, 255, 255, 0.4);
         }
         
         .container {
@@ -422,16 +386,66 @@
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>测试平台</h1>
-        <div class="nav">
-            <a href="/">首页</a>
-            <a href="/list_projects">项目管理</a>
-            <a href="/list_projects">测试用例</a>
-            <a href="/run-history" style="font-weight: bold;">运行历史</a>
-            <a href="/test_report">测试报告</a>
+        <!-- 导航栏 -->
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <!-- 左侧：Logo -->
+            <div class="flex items-center gap-3">
+                <i class="fas fa-robot text-blue-600 text-2xl"></i>
+                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
+            </div>
+            <!-- 右侧：功能按钮 + 用户信息 -->
+            <div class="flex items-center gap-2">
+                <a href="/" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-500 text-white hover:bg-blue-600" title="首页">
+                    <i class="fas fa-home"></i>
+                </a>
+                <a href="/list_projects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-green-500 text-white hover:bg-green-600" title="项目管理">
+                    <i class="fas fa-folder mr-1"></i>项目
+                </a>
+                <a href="/run-history" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600" title="运行历史">
+                    <i class="fas fa-history mr-1"></i>历史
+                </a>
+                <a href="/data-driven" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-600 text-white hover:bg-purple-700" title="数据驱动">
+                    <i class="fas fa-table mr-1"></i>数据
+                </a>
+                <a href="/test_report" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700" title="测试报告">
+                    <i class="fas fa-chart-bar mr-1"></i>报告
+                </a>
+                <a href="/schedules" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-orange-500 text-white hover:bg-orange-600" title="定时任务">
+                    <i class="fas fa-clock mr-1"></i>定时
+                </a>
+                <a href="/notifications" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-pink-500 text-white hover:bg-pink-600" title="通知配置">
+                    <i class="fas fa-bell mr-1"></i>通知
+                </a>
+                <a href="/defects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-red-600 text-white hover:bg-red-700" title="缺陷管理">
+                    <i class="fas fa-bug mr-1"></i>缺陷
+                </a>
+                <!-- 用户信息区（最右边） -->
+                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
+                    <!-- 用户下拉菜单 -->
+                    <div id="userDropdown" class="relative hidden">
+                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
+                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
+                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
+                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
+                        </button>
+                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
+                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
+                            </a>
+                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
+                            </a>
+                            <div class="border-t border-gray-100 my-1"></div>
+                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
+                                <i class="fas fa-sign-out-alt mr-2"></i>注销
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-    </div>
+    </nav>
     
     <div class="container">
         <div class="card">
@@ -870,6 +884,57 @@
                 modal.style.display = 'none';
             }
         }
+
+        // ==================== 登录状态管理 ====================
+        function initUserArea() {
+            fetch('/api/auth/me')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        const user = data.user;
+                        document.getElementById('userLabel').textContent = user.username;
+                        document.getElementById('userDropdown').classList.remove('hidden');
+                        document.getElementById('loginBtn').classList.add('hidden');
+                    } else {
+                        document.getElementById('loginBtn').classList.remove('hidden');
+                        document.getElementById('userDropdown').classList.add('hidden');
+                    }
+                })
+                .catch(() => {
+                    document.getElementById('loginBtn').classList.remove('hidden');
+                    document.getElementById('userDropdown').classList.add('hidden');
+                });
+        }
+
+        // 切换用户菜单显示
+        function toggleUserMenu() {
+            const menu = document.getElementById('userMenu');
+            menu.classList.toggle('hidden');
+        }
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', function(e) {
+            const dropdown = document.getElementById('userDropdown');
+            const menu = document.getElementById('userMenu');
+            if (dropdown && !dropdown.contains(e.target)) {
+                menu.classList.add('hidden');
+            }
+        });
+
+        async function handleLogout() {
+            try {
+                await fetch('/api/auth/logout', {method: 'POST'});
+                localStorage.removeItem('currentUser');
+                window.location.href = '/login';
+            } catch(e) {
+                window.location.href = '/login';
+            }
+        }
+
+        // 页面加载
+        document.addEventListener('DOMContentLoaded', function() {
+            initUserArea();
+        });
     </script>
 </body>
 </html>

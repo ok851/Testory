@@ -628,7 +628,7 @@ def api_execute_multiple_cases():
     
     # 获取当前 License 信息
     license_info = license_manager.get_current_license()
-    is_free_user = license_info.license_type == LicenseType.PERSONAL.value
+    is_free_user = license_info.license_type == LicenseType.FREE.value
     
     if is_free_user:
         # 获取今日已执行次数
@@ -1225,7 +1225,7 @@ def api_create_case_v2():
         }), 403
     
     # 记录创建用例计数（仅免费版）
-    if license_info.license_type == LicenseType.PERSONAL.value:
+    if license_info.license_type == LicenseType.FREE.value:
         _db.increment_created_cases(current_user.id)
     
     case_id = db.create_test_case_v2(project_id, name, url, description, precondition, expected_result)
@@ -1968,7 +1968,7 @@ def api_run_case(case_id):
                         # 直接抛出错误，视为测试用例执行失败
                         raise
 
-                # 记录本步骤结果
+                # ⭐⭐ 记录成功步骤结果
                 step_duration = round(time.time() - step_start_time, 3)
                 step_results_list.append({
                     'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
@@ -2040,8 +2040,25 @@ def api_run_case(case_id):
                 except Exception as ss_error:
                     uat_logger.warning(f"截图失败: {ss_error}")
 
-            # 标记最后一步为失败
-            if step_results_list and step_results_list[-1]['status'] == 'success':
+            # ⭐⭐ 记录失败步骤：将当前步骤添加到列表（如果该步骤未被记录）
+            # 失败的步骤在 raise 后跳过了步骤记录代码，需要在此处补充记录
+            # 通过检查 step_results_list 的最后一条记录是否是该失败步骤
+            already_recorded = (
+                step_results_list and
+                step_results_list[-1].get('step_id') == step.get('id')
+            ) if 'step' in dir() else False
+            if not already_recorded and 'step' in dir() and step:
+                failed_step_duration = round(time.time() - step_start_time, 3) if 'step_start_time' in dir() else 0
+                step_results_list.append({
+                    'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                    'action': step.get('action', ''), 'selector_value': step.get('selector_value', ''),
+                    'input_value': step.get('input_value', ''), 'description': step.get('description', ''),
+                    'status': 'error', 'error': error_msg,
+                    'screenshot': failure_screenshot, 'duration': failed_step_duration
+                })
+                uat_logger.error(f"⭐⭐ [步骤记录] 当前失败步骤 ID={step.get('id')} 已记录到列表")
+            elif step_results_list and step_results_list[-1]['status'] == 'success':
+                # 备用：如果上述逆转属不到，把最后一条成功记录改为失败
                 step_results_list[-1]['status'] = 'error'
                 step_results_list[-1]['error'] = error_msg
                 step_results_list[-1]['screenshot'] = failure_screenshot
@@ -2523,7 +2540,8 @@ def api_create_schedule():
             return jsonify({'success': False, 'error': '名称、用例ID列表和cron表达式不能为空'}), 400
         _db = Database()
         project_id = data.get('project_id')
-        schedule_id = _db.create_schedule(name, case_ids, cron_expr, project_id=project_id, is_active=is_active)
+        execution_count = data.get('execution_count', 0)
+        schedule_id = _db.create_schedule(name, case_ids, cron_expr, project_id=project_id, is_active=is_active, execution_count=execution_count)
         # 注册到调度器
         if is_active:
             _register_schedule_job(schedule_id, case_ids, cron_expr)
@@ -2542,7 +2560,7 @@ def api_update_schedule(schedule_id):
         success = _db.update_schedule(schedule_id,
             name=data.get('name'), cron_expr=data.get('cron_expr'),
             is_active=data.get('is_active'), case_ids=data.get('case_ids'),
-            project_id=data.get('project_id'))
+            project_id=data.get('project_id'), execution_count=data.get('execution_count'))
         if success and data.get('cron_expr'):
             case_ids = data.get('case_ids')
             if not case_ids:
@@ -3123,33 +3141,49 @@ def license_page():
     """License 管理页面"""
     return render_template('license.html')
 
+@app.route('/user-management')
+@login_required
+@role_required('admin')
+def user_management_page():
+    """用户管理页面（仅管理员）"""
+    return render_template('user_management.html')
+
 
 @app.route('/api/license/info', methods=['GET'])
 @login_required
+@api_error_handler
 def api_get_user_license_info():
     """获取当前用户的 License 信息和使用情况"""
-    license_info = license_manager.get_current_license()
-    limits = license_manager.get_limits()
-    
-    # 获取今日使用统计
-    _db = Database()
-    today_stats = _db.get_user_usage_stats(current_user.id)
-    
-    return jsonify({
-        'success': True,
-        'info': {
-            'license_type': license_info.license_type,
-            'issued_to': license_info.issued_to,
-            'issued_at': license_info.issued_at,
-            'expires_at': license_info.expires_at,
-            'features': license_info.features
-        },
-        'limits': limits,
-        'usage': {
-            'today_executions': today_stats.get('execution_count', 0) if today_stats else 0,
-            'today_created_cases': today_stats.get('created_cases', 0) if today_stats else 0
-        }
-    })
+    try:
+        # 清除缓存，强制重新读取 license 文件
+        license_manager._cached_license = None
+        license_info = license_manager.get_current_license()
+        limits = license_manager.get_limits()
+        
+        # 获取今日使用统计
+        _db = Database()
+        today_stats = _db.get_user_usage_stats(current_user.id)
+        
+        return jsonify({
+            'success': True,
+            'info': {
+                'license_type': license_info.license_type,
+                'issued_to': license_info.issued_to,
+                'issued_at': license_info.issued_at,
+                'expires_at': license_info.expires_at,
+                'features': license_info.features
+            },
+            'limits': limits,
+            'usage': {
+                'today_executions': today_stats.get('execution_count', 0) if today_stats else 0,
+                'today_created_cases': today_stats.get('created_cases', 0) if today_stats else 0
+            }
+        })
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] api_get_user_license_info: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/license/activate', methods=['POST'])
@@ -3967,6 +4001,61 @@ def api_create_defect():
     
     return jsonify({'success': True, 'defect_id': defect_id})
 
+@app.route('/api/defects/batch_from_cases', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_batch_create_defects_from_cases():
+    """从选中的测试用例批量创建缺陷"""
+    data = request.get_json(silent=True) or {}
+    
+    case_ids = data.get('case_ids', [])
+    project_id = data.get('project_id')
+    
+    if not case_ids or not isinstance(case_ids, list):
+        return jsonify({'success': False, 'error': '请选择至少一个测试用例'}), 400
+    if not project_id:
+        return jsonify({'success': False, 'error': '项目ID不能为空'}), 400
+    
+    title_template = data.get('title_template', '').strip()
+    description = data.get('description', '').strip()
+    severity = data.get('severity', 'medium')
+    priority = data.get('priority', 'medium')
+    assignee_id = data.get('assignee_id')
+    environment = data.get('environment', '').strip()
+    expected_result = data.get('expected_result', '').strip()
+    actual_result = data.get('actual_result', '').strip()
+    
+    valid_severities = ['critical', 'high', 'medium', 'low']
+    if severity not in valid_severities:
+        severity = 'medium'
+    valid_priorities = ['urgent', 'high', 'medium', 'low']
+    if priority not in valid_priorities:
+        priority = 'medium'
+    
+    _db = Database()
+    created_ids = _db.batch_create_defects_from_cases(
+        case_ids=case_ids,
+        project_id=project_id,
+        reporter_id=current_user.id,
+        title_template=title_template,
+        description=description,
+        severity=severity,
+        priority=priority,
+        assignee_id=assignee_id,
+        environment=environment,
+        expected_result=expected_result,
+        actual_result=actual_result
+    )
+    
+    return jsonify({
+        'success': True,
+        'created_count': len(created_ids),
+        'defect_ids': created_ids,
+        'message': f'成功创建 {len(created_ids)} 个缺陷记录'
+    })
+
 @app.route('/api/defects/<int:defect_id>', methods=['GET'])
 @login_required
 @api_error_handler
@@ -4019,6 +4108,8 @@ def api_update_defect_status(defect_id):
     data = request.get_json(silent=True) or {}
     new_status = data.get('status')
     
+    print(f"[DEBUG] Update defect status: defect_id={defect_id}, new_status={new_status}, user_id={current_user.id}")
+    
     if not new_status:
         return jsonify({'success': False, 'error': '状态不能为空'}), 400
     
@@ -4027,11 +4118,21 @@ def api_update_defect_status(defect_id):
         return jsonify({'success': False, 'error': f'无效状态，允许的状态: {valid_statuses}'}), 400
     
     _db = Database()
+    
+    # 先获取当前缺陷状态
+    current_defect = _db.get_defect(defect_id)
+    if not current_defect:
+        return jsonify({'success': False, 'error': '缺陷不存在'}), 404
+    
+    print(f"[DEBUG] Current defect status: {current_defect.get('status')}, new_status: {new_status}")
+    
     success = _db.update_defect_status(defect_id, current_user.id, new_status)
+    
+    print(f"[DEBUG] Update result: success={success}")
     
     if success:
         return jsonify({'success': True})
-    return jsonify({'success': False, 'error': '状态更新失败'}), 400
+    return jsonify({'success': False, 'error': '状态更新失败，可能是状态未发生变化'}), 400
 
 @app.route('/api/defects/<int:defect_id>/comments', methods=['GET'])
 @login_required

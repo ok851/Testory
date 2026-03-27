@@ -130,6 +130,15 @@
             background: #138496;
         }
         
+        .btn-defect {
+            background: #e67e22;
+            color: white;
+        }
+        
+        .btn-defect:hover {
+            background: #d35400;
+        }
+        
         .btn-sm {
             padding: 6px 12px;
             font-size: 12px;
@@ -421,6 +430,7 @@
                 <button onclick="deselectAllCases()" class="btn btn-secondary btn-sm">取消全选</button>
                 <button onclick="showImportModal()" class="btn btn-info">导入</button>
                 <button onclick="showExportModal()" class="btn btn-info">导出</button>
+                <button onclick="showMarkDefectModal()" class="btn btn-defect" id="markDefectBtn">⚠ 标记缺陷</button>
                 <button onclick="backToProjects()" class="btn btn-secondary">← 返回项目列表</button>
             </div>
         </div>
@@ -573,6 +583,66 @@
             </div>
             <div class="modal-footer">
                 <button onclick="closeExportModal()" class="btn btn-secondary">关闭</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 标记缺陷模态框 -->
+    <div id="markDefectModal" class="modal">
+        <div class="modal-content" style="width: 620px; max-width: 95%;">
+            <div class="modal-header">
+                <h3>⚠ 批量标记缺陷</h3>
+            </div>
+            <div class="modal-body">
+                <!-- 已选用例展示 -->
+                <div id="defectCaseList" style="margin-bottom: 18px; padding: 12px; background: #fef9e7; border: 1px solid #f39c12; border-radius: 6px;">
+                    <div style="font-weight:600; color:#e67e22; margin-bottom:8px; font-size:13px;">⚠ 将对以下用例创建缺陷记录：</div>
+                    <div id="defectCaseNames" style="font-size:13px; color:#555; line-height:1.8;"></div>
+                </div>
+                <!-- 缺陷信息填写 -->
+                <div class="form-group">
+                    <label>缺陷标题模板 <span style="color:#888;font-size:12px;">（可用 {case_name} 代表用例名称，留空则为『[缺陷]用例名』）</span></label>
+                    <input type="text" id="defectTitleTemplate" placeholder="例：{case_name} 执行失败 - 有缺陷" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
+                    <div class="form-group">
+                        <label>严重程度</label>
+                        <select id="defectSeverity" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                            <option value="critical">严重 (Critical)</option>
+                            <option value="high">高 (High)</option>
+                            <option value="medium" selected>中 (Medium)</option>
+                            <option value="low">低 (Low)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>优先级</label>
+                        <select id="defectPriority" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                            <option value="urgent">紧急 (Urgent)</option>
+                            <option value="high">高 (High)</option>
+                            <option value="medium" selected>中 (Medium)</option>
+                            <option value="low">低 (Low)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>错误描述 <span style="color:#888;font-size:12px;">（统一填写，留空则自动使用用例描述）</span></label>
+                    <textarea id="defectDescription" rows="3" placeholder="请描述缺陷表现、影响范围等..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>实际结果 <span style="color:#888;font-size:12px;">（实际观察到的错误现象）</span></label>
+                    <textarea id="defectActualResult" rows="2" placeholder="请描述实际发生的情况..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>测试环境 <span style="color:#888;font-size:12px;">（可选）</span></label>
+                    <input type="text" id="defectEnvironment" placeholder="例：Chrome 120 / Windows 11 / 测试环境" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                </div>
+                <div style="padding:10px; background:#e8f4fd; border-radius:6px; font-size:12px; color:#2c7be5;">
+                    ℹ 系统将自动提取每个用例的测试步骤作为『复现步骤』，和用例预期结果作为『期望结果』填入缺陷记录。
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeMarkDefectModal()" class="btn btn-secondary">取消</button>
+                <button onclick="submitMarkDefects()" class="btn btn-defect" id="submitDefectBtn">✔ 确认创建缺陷</button>
             </div>
         </div>
     </div>
@@ -1238,6 +1308,104 @@
         
         function backToProjects() {
             window.location.href = '/list_projects';
+        }
+        
+        // 标记缺陷相关功能
+        function showMarkDefectModal() {
+            if (selectedCaseIdsOrdered.length === 0) {
+                // 如果没有选中的用例，尝试获取所有已勾选的用例
+                const checked = document.querySelectorAll('.case-checkbox input:checked');
+                if (checked.length === 0) {
+                    alert('请先勾选要标记缺陷的测试用例');
+                    return;
+                }
+                checked.forEach(cb => {
+                    const caseId = parseInt(cb.id.replace('select-', ''));
+                    if (!selectedCaseIdsOrdered.includes(caseId)) {
+                        selectedCaseIdsOrdered.push(caseId);
+                    }
+                });
+            }
+            // 展示选中用例名称
+            const namesHtml = selectedCaseIdsOrdered.map((id, idx) => {
+                const name = caseNamesById[id] || ('用例 #' + id);
+                return `<span style="display:inline-block; padding:2px 8px; background:#fff; border:1px solid #f39c12; border-radius:12px; margin:2px 4px;">${idx+1}. ${escapeHtml(name)}</span>`;
+            }).join('');
+            document.getElementById('defectCaseNames').innerHTML = namesHtml;
+            // 重置表单
+            document.getElementById('defectTitleTemplate').value = '';
+            document.getElementById('defectSeverity').value = 'medium';
+            document.getElementById('defectPriority').value = 'medium';
+            document.getElementById('defectDescription').value = '';
+            document.getElementById('defectActualResult').value = '';
+            document.getElementById('defectEnvironment').value = '';
+            document.getElementById('markDefectModal').classList.add('active');
+        }
+        
+        function closeMarkDefectModal() {
+            document.getElementById('markDefectModal').classList.remove('active');
+        }
+        
+        async function submitMarkDefects() {
+            const caseIds = [...selectedCaseIdsOrdered];
+            if (caseIds.length === 0) {
+                alert('请先选择要标记缺陷的测试用例');
+                return;
+            }
+            
+            const submitBtn = document.getElementById('submitDefectBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = '创建中...';
+            
+            const payload = {
+                case_ids: caseIds,
+                project_id: parseInt(currentProjectId),
+                title_template: document.getElementById('defectTitleTemplate').value.trim(),
+                description: document.getElementById('defectDescription').value.trim(),
+                severity: document.getElementById('defectSeverity').value,
+                priority: document.getElementById('defectPriority').value,
+                actual_result: document.getElementById('defectActualResult').value.trim(),
+                environment: document.getElementById('defectEnvironment').value.trim()
+            };
+            
+            try {
+                const response = await fetch('/api/defects/batch_from_cases', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    closeMarkDefectModal();
+                    const severityLabels = { critical: '严重', high: '高', medium: '中', low: '低' };
+                    const priorityLabels = { urgent: '紧急', high: '高', medium: '中', low: '低' };
+                    const caseNames = caseIds.map(id => caseNamesById[id] || ('用例 #' + id));
+                    showRunResultModal(`
+                        <div style="padding:16px;">
+                            <div style="color:#27ae60; font-size:18px; font-weight:600; margin-bottom:12px;">✔ 缺陷创建成功</div>
+                            <p style="margin-bottom:8px;"><strong>创建数量：</strong>${data.created_count} 个缺陷记录</p>
+                            <p style="margin-bottom:8px;"><strong>涉及用例：</strong></p>
+                            <ul style="margin:0 0 10px 18px; font-size:13px; color:#555;">
+                                ${caseNames.map(n => '<li>' + escapeHtml(n) + '</li>').join('')}
+                            </ul>
+                            <p style="margin-bottom:4px;"><strong>严重程度：</strong>${severityLabels[payload.severity] || payload.severity}</p>
+                            <p style="margin-bottom:4px;"><strong>优先级：</strong>${priorityLabels[payload.priority] || payload.priority}</p>
+                            <div style="margin-top:12px; padding:8px 12px; background:#e8f4fd; border-radius:6px; font-size:12px; color:#2c7be5;">
+                                可前往『缺陷管理』页面查看和管理所有缺陷记录。
+                            </div>
+                        </div>
+                    `, false);
+                } else {
+                    alert('创建失败：' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                console.error('标记缺陷失败:', e);
+                alert('请求失败：' + e.message);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '✔ 确认创建缺陷';
+            }
         }
         
         // 导入导出功能

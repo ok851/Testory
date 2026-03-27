@@ -229,6 +229,10 @@ class Database:
             cursor.execute("ALTER TABLE schedules ADD COLUMN retry_interval INTEGER NOT NULL DEFAULT 5")
         except sqlite3.OperationalError:
             pass
+        try:
+            cursor.execute("ALTER TABLE schedules ADD COLUMN execution_count INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
 
         # 创建调度执行历史表（用于记录每次执行和重跑）
         cursor.execute('''
@@ -1699,13 +1703,14 @@ class Database:
     # ==================== 定时调度方法 ====================
 
     def create_schedule(self, name: str, case_ids: list, cron_expr: str, project_id: int = None,
-                        retry_count: int = 3, retry_interval: int = 5, is_active: int = 1) -> int:
+                        retry_count: int = 3, retry_interval: int = 5, is_active: int = 1,
+                        execution_count: int = 0) -> int:
         """创建定时调度"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO schedules (name, project_id, case_ids, cron_expr, is_active, retry_count, retry_interval) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (name, project_id, json.dumps(case_ids), cron_expr, is_active, retry_count, retry_interval)
+            "INSERT INTO schedules (name, project_id, case_ids, cron_expr, is_active, retry_count, retry_interval, execution_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, project_id, json.dumps(case_ids), cron_expr, is_active, retry_count, retry_interval, execution_count)
         )
         schedule_id = cursor.lastrowid
         conn.commit()
@@ -1723,7 +1728,8 @@ class Database:
                  'case_ids': json.loads(r[3]) if r[3] else [],
                  'cron_expr': r[4], 'is_active': r[5],
                  'retry_count': r[6], 'retry_interval': r[7],
-                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10]} for r in rows]
+                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10],
+                 'execution_count': r[11] if len(r) > 11 else 0} for r in rows]
 
     def get_active_schedules(self) -> List[Dict[str, Any]]:
         """获取所有激活的调度任务"""
@@ -1736,11 +1742,12 @@ class Database:
                  'case_ids': json.loads(r[3]) if r[3] else [],
                  'cron_expr': r[4], 'is_active': r[5],
                  'retry_count': r[6], 'retry_interval': r[7],
-                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10]} for r in rows]
+                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10],
+                 'execution_count': r[11] if len(r) > 11 else 0} for r in rows]
 
     def update_schedule(self, schedule_id: int, name: str = None, cron_expr: str = None,
                         is_active: int = None, case_ids: list = None, last_run: str = None,
-                        project_id: int = None) -> bool:
+                        project_id: int = None, execution_count: int = None) -> bool:
         """更新调度任务"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1757,6 +1764,8 @@ class Database:
             updates.append("last_run = ?"); params.append(last_run)
         if project_id is not None:
             updates.append("project_id = ?"); params.append(project_id)
+        if execution_count is not None:
+            updates.append("execution_count = ?"); params.append(execution_count)
         if not updates:
             conn.close()
             return False
@@ -2367,6 +2376,10 @@ class Database:
             'created_cases': r[2]
         } for r in rows]
 
+    def get_user_usage_stats(self, user_id: int) -> Dict[str, Any]:
+        """获取用户今日使用统计（用于License页面）"""
+        return self.get_or_create_usage_stats(user_id)
+
     # ==================== 缺陷管理方法 ====================
 
     def create_defect(self, project_id: int, title: str, reporter_id: int,
@@ -2397,6 +2410,96 @@ class Database:
         conn.commit()
         conn.close()
         return defect_id
+
+    def batch_create_defects_from_cases(self, case_ids: list, project_id: int, reporter_id: int,
+                                            title_template: str = '', description: str = '',
+                                            severity: str = 'medium', priority: str = 'medium',
+                                            assignee_id: int = None, environment: str = '',
+                                            expected_result: str = '', actual_result: str = '') -> list:
+        """从多个测试用例批量创建缺陷，自动提取用例步骤信息作为复现步骤"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        created_defect_ids = []
+        
+        try:
+            for case_id in case_ids:
+                # 获取测试用例信息（使用 row_factory 直接按列名访问）
+                cursor.execute("SELECT * FROM test_cases WHERE id = ?", (case_id,))
+                case_row = cursor.fetchone()
+                if not case_row:
+                    continue
+                
+                case_keys = case_row.keys()
+                case_dict = dict(case_row)
+                case_name = case_dict.get('name', '') or ''
+                case_url = case_dict.get('url', '') or case_dict.get('target_url', '') or ''
+                case_expected = case_dict.get('expected_result', '') or ''
+                case_desc_val = case_dict.get('description', '') or ''
+                
+                # 获取该用例的所有步骤
+                cursor.execute(
+                    "SELECT action, selector_type, selector_value, input_value, description, step_order "
+                    "FROM test_steps WHERE case_id = ? ORDER BY step_order ASC",
+                    (case_id,)
+                )
+                step_rows = cursor.fetchall()
+                
+                # 构建复现步骤文本
+                reproduce_steps_text = f"用例名称: {case_name}\n"
+                if case_url:
+                    reproduce_steps_text += f"测试URL: {case_url}\n"
+                reproduce_steps_text += "\n复现步骤:\n"
+                for i, step_row in enumerate(step_rows, 1):
+                    action = step_row[0] or ''
+                    step_desc = step_row[4] or ''
+                    input_val = step_row[3] or ''
+                    action_label = {
+                        'click': '点击', 'input': '输入', 'navigate': '导航到', 'assert': '断言',
+                        'wait': '等待', 'scroll': '滚动', 'select': '选择', 'hover': '悬停'
+                    }.get(action, action)
+                    step_line = f"{i}. {action_label}"
+                    if step_desc:
+                        step_line += f" - {step_desc}"
+                    if input_val and action == 'input':
+                        step_line += f" (输入值: {input_val})"
+                    reproduce_steps_text += step_line + "\n"
+                
+                # 构建缺陷标题
+                if title_template:
+                    defect_title = title_template.replace('{case_name}', case_name)
+                else:
+                    defect_title = f"[缺陷] {case_name}"
+                
+                # 构建缺陷描述
+                defect_desc = description
+                if not defect_desc and case_desc_val:
+                    defect_desc = f"用例描述: {case_desc_val}"
+                
+                # 期望结果：优先用传入的，其次用用例自带的
+                final_expected = expected_result or case_expected or ''
+                
+                cursor.execute('''
+                    INSERT INTO defects (
+                        project_id, title, description, severity, priority, status,
+                        assignee_id, reporter_id, case_id,
+                        environment, reproduce_steps, expected_result, actual_result
+                    ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    project_id, defect_title, defect_desc, severity, priority,
+                    assignee_id, reporter_id, case_id,
+                    environment, reproduce_steps_text, final_expected, actual_result
+                ))
+                created_defect_ids.append(cursor.lastrowid)
+            
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        
+        return created_defect_ids
 
     def get_defect(self, defect_id: int) -> Dict[str, Any]:
         """获取缺陷详情"""
@@ -2487,6 +2590,7 @@ class Database:
             'total_pages': (total + page_size - 1) // page_size
         }
 
+
     def update_defect(self, defect_id: int, user_id: int, **kwargs) -> bool:
         """更新缺陷（并记录历史）"""
         allowed_fields = ['title', 'description', 'severity', 'priority', 'status',
@@ -2507,19 +2611,24 @@ class Database:
         old_defect = dict(old_defect)
         updates = []
         params = []
+        has_changes = False
         
         import datetime
         
         for field, value in kwargs.items():
-            if field in allowed_fields and value != old_defect.get(field):
-                updates.append(f"{field} = ?")
-                params.append(value)
-                
-                # 记录历史
-                cursor.execute('''
-                    INSERT INTO defect_history (defect_id, user_id, field_name, old_value, new_value)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (defect_id, user_id, field, str(old_defect.get(field, '')), str(value)))
+            if field in allowed_fields:
+                old_value = old_defect.get(field)
+                # 处理 None 和空字符串的情况
+                if old_value != value:
+                    has_changes = True
+                    updates.append(f"{field} = ?")
+                    params.append(value)
+                    
+                    # 记录历史
+                    cursor.execute('''
+                        INSERT INTO defect_history (defect_id, user_id, field_name, old_value, new_value)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (defect_id, user_id, field, str(old_value if old_value is not None else ''), str(value if value is not None else '')))
         
         if updates:
             updates.append("updated_at = ?")
@@ -2536,6 +2645,9 @@ class Database:
             
             params.append(defect_id)
             cursor.execute(f"UPDATE defects SET {', '.join(updates)} WHERE id = ?", params)
+            print(f"[DB DEBUG] Executed UPDATE: {updates}")
+        else:
+            print(f"[DB DEBUG] No changes detected. kwargs={kwargs}, old_status={old_defect.get('status')}")
         
         conn.commit()
         conn.close()

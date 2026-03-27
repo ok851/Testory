@@ -19,8 +19,69 @@
         .status-reopened { background: #f59e0b; color: white; }
     </style>
 </head>
-<body class="bg-gradient-to-br from-purple-600 to-indigo-700 min-h-screen p-5">
-    <div class="max-w-7xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden">
+<body class="bg-gradient-to-br from-purple-600 to-indigo-700 min-h-screen">
+    <!-- 导航栏 -->
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <!-- 左侧：Logo -->
+            <div class="flex items-center gap-3">
+                <i class="fas fa-robot text-blue-600 text-2xl"></i>
+                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
+            </div>
+            <!-- 右侧：功能按钮 + 用户信息 -->
+            <div class="flex items-center gap-2">
+                <a href="/" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-500 text-white hover:bg-blue-600" title="首页">
+                    <i class="fas fa-home"></i>
+                </a>
+                <a href="/list_projects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-green-500 text-white hover:bg-green-600" title="项目管理">
+                    <i class="fas fa-folder mr-1"></i>项目
+                </a>
+                <a href="/run-history" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600" title="运行历史">
+                    <i class="fas fa-history mr-1"></i>历史
+                </a>
+                <a href="/data-driven" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-600 text-white hover:bg-purple-700" title="数据驱动">
+                    <i class="fas fa-table mr-1"></i>数据
+                </a>
+                <a href="/test_report" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700" title="测试报告">
+                    <i class="fas fa-chart-bar mr-1"></i>报告
+                </a>
+                <a href="/schedules" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-orange-500 text-white hover:bg-orange-600" title="定时任务">
+                    <i class="fas fa-clock mr-1"></i>定时
+                </a>
+                <a href="/notifications" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-pink-500 text-white hover:bg-pink-600" title="通知配置">
+                    <i class="fas fa-bell mr-1"></i>通知
+                </a>
+                <a href="/defects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-red-600 text-white hover:bg-red-700" title="缺陷管理">
+                    <i class="fas fa-bug mr-1"></i>缺陷
+                </a>
+                <!-- 用户信息区（最右边） -->
+                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
+                    <!-- 用户下拉菜单 -->
+                    <div id="userDropdown" class="relative hidden">
+                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
+                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
+                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
+                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
+                        </button>
+                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
+                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
+                            </a>
+                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
+                            </a>
+                            <div class="border-t border-gray-100 my-1"></div>
+                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
+                                <i class="fas fa-sign-out-alt mr-2"></i>注销
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden mt-5">
         <!-- 头部 -->
         <div class="bg-gradient-to-r from-purple-600 to-indigo-700 text-white p-8">
             <h1 class="text-3xl font-bold mb-2"><i class="fas fa-bug mr-3"></i>缺陷管理</h1>
@@ -59,8 +120,8 @@
                 <button onclick="showCreateModal()" class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-lg transition">
                     <i class="fas fa-plus mr-2"></i>新建缺陷
                 </button>
-                <a href="/list_projects" class="bg-gray-500 hover:bg-gray-600 text-white px-5 py-2 rounded-lg transition">
-                    <i class="fas fa-arrow-left mr-2"></i>返回
+                <a href="/" class="bg-gray-500 hover:bg-gray-600 text-white px-5 py-2 rounded-lg transition">
+                    <i class="fas fa-arrow-left mr-2"></i>返回首页
                 </a>
             </div>
         </div>
@@ -173,6 +234,22 @@
                         <select id="defectAssignee" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
                             <option value="">未分配</option>
                         </select>
+                    </div>
+                </div>
+                <!-- 编辑时显示状态变更选项 -->
+                <div id="statusEditRow" style="display:none;">
+                    <label class="block text-gray-700 font-medium mb-1"><i class="fas fa-exchange-alt mr-1 text-purple-500"></i>变更状态</label>
+                    <div class="flex gap-3 items-start">
+                        <select id="defectStatus" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" style="min-width:160px;" onchange="toggleResolutionField()">
+                            <option value="open">待处理</option>
+                            <option value="in_progress">处理中</option>
+                            <option value="resolved">已解决</option>
+                            <option value="closed">已关闭</option>
+                            <option value="reopened">重新打开</option>
+                        </select>
+                        <div id="resolutionEditSection" style="display:none; flex:1;">
+                            <textarea id="defectResolution" rows="2" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="解决方案说明..."></textarea>
+                        </div>
                     </div>
                 </div>
                 <div>
@@ -385,6 +462,8 @@
             document.getElementById('modalTitle').innerHTML = '<i class="fas fa-bug mr-2"></i>新建缺陷';
             document.getElementById('defectId').value = '';
             document.getElementById('defectForm').reset();
+            document.getElementById('statusEditRow').style.display = 'none';
+            document.getElementById('resolutionEditSection').style.display = 'none';
             document.getElementById('defectModal').classList.remove('hidden');
         }
         
@@ -417,6 +496,11 @@
                     document.getElementById('defectReproduceSteps').value = d.reproduce_steps || '';
                     document.getElementById('defectExpected').value = d.expected_result || '';
                     document.getElementById('defectActual').value = d.actual_result || '';
+                    // 显示状态变更行
+                    document.getElementById('statusEditRow').style.display = 'block';
+                    document.getElementById('defectStatus').value = d.status || 'open';
+                    document.getElementById('defectResolution').value = d.resolution || '';
+                    toggleResolutionField();
                     document.getElementById('defectModal').classList.remove('hidden');
                 }
             } catch (e) {
@@ -460,6 +544,12 @@
                 expected_result: document.getElementById('defectExpected').value.trim(),
                 actual_result: document.getElementById('defectActual').value.trim()
             };
+            // 编辑时附带状态和解决方案
+            if (id) {
+                payload.status = document.getElementById('defectStatus').value;
+                const resolution = document.getElementById('defectResolution').value.trim();
+                if (resolution) payload.resolution = resolution;
+            }
             
             try {
                 const url = id ? `/api/defects/${id}` : '/api/defects';
@@ -485,6 +575,13 @@
             }
         });
         
+        // 切换解决方案输入框显示
+        function toggleResolutionField() {
+            const status = document.getElementById('defectStatus').value;
+            document.getElementById('resolutionEditSection').style.display =
+                status === 'resolved' ? 'block' : 'none';
+        }
+        
         // 工具函数
         function escapeHtml(str) {
             if (!str) return '';
@@ -496,6 +593,57 @@
             const d = new Date(dateStr);
             return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
+
+        // ==================== 登录状态管理 ====================
+        function initUserArea() {
+            fetch('/api/auth/me')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        const user = data.user;
+                        document.getElementById('userLabel').textContent = user.username;
+                        document.getElementById('userDropdown').classList.remove('hidden');
+                        document.getElementById('loginBtn').classList.add('hidden');
+                    } else {
+                        document.getElementById('loginBtn').classList.remove('hidden');
+                        document.getElementById('userDropdown').classList.add('hidden');
+                    }
+                })
+                .catch(() => {
+                    document.getElementById('loginBtn').classList.remove('hidden');
+                    document.getElementById('userDropdown').classList.add('hidden');
+                });
+        }
+
+        // 切换用户菜单显示
+        function toggleUserMenu() {
+            const menu = document.getElementById('userMenu');
+            menu.classList.toggle('hidden');
+        }
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', function(e) {
+            const dropdown = document.getElementById('userDropdown');
+            const menu = document.getElementById('userMenu');
+            if (dropdown && !dropdown.contains(e.target)) {
+                menu.classList.add('hidden');
+            }
+        });
+
+        async function handleLogout() {
+            try {
+                await fetch('/api/auth/logout', {method: 'POST'});
+                localStorage.removeItem('currentUser');
+                window.location.href = '/login';
+            } catch(e) {
+                window.location.href = '/login';
+            }
+        }
+
+        // 页面加载
+        document.addEventListener('DOMContentLoaded', function() {
+            initUserArea();
+        });
     </script>
 </body>
 </html>

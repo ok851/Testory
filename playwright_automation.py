@@ -1395,6 +1395,7 @@ class PlaywrightAutomation:
                 uat_logger.info(f"🔍 [SELECT_DEBUG] 查找选项: {select_value}")
                 
                 # ✅ 恢复：平衡的策略，既保证性能又确保可靠性
+                # 🔥 新增：使用contains()进行模糊匹配，处理文本包含空格或额外字符的情况
                 option_selectors = [
                     f"xpath=//*[contains(@class, 'dropdown')]//div[text()='{select_value}']",
                     f"xpath=//*[contains(@class, 'select-dropdown')]//div[text()='{select_value}']",
@@ -1406,6 +1407,12 @@ class PlaywrightAutomation:
                     f"xpath=//div[@role='option']//span[text()='{select_value}']",
                     f"xpath=//li[@role='option'][text()='{select_value}']",
                     f"xpath=//div[@role='listbox']//div[text()='{select_value}']",
+                    # 🔥 新增：模糊匹配策略（使用contains）
+                    f"xpath=//*[contains(@class, 'el-select-dropdown')]//div[contains(text(), '{select_value}')]",
+                    f"xpath=//*[contains(@class, 'el-select-dropdown')]//li[contains(text(), '{select_value}')]",
+                    f"xpath=//*[contains(@class, 'dropdown')]//div[contains(text(), '{select_value}')]",
+                    f"xpath=//div[@role='option'][contains(text(), '{select_value}')]",
+                    f"xpath=//li[@role='option'][contains(text(), '{select_value}')]",
                 ]
                 
                 option_clicked = False
@@ -2225,70 +2232,264 @@ class PlaywrightAutomation:
                     uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
                     element_clicked = True
             except Exception as e2:
-                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式2失败: {str(e2)}, 尝试方式3: JavaScript点击")
+                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式2失败: {str(e2)}, 尝试方式3: SVG子元素点击（处理图标按钮）")
                 
-                # 方式3: 尝试使用JavaScript点击
+                # 方式3: 智能元素点击 - 处理SVG/IMG元素和父元素点击
                 try:
-                    uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式3: JavaScript点击")
-                    # 检查元素是否存在并点击
+                    uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式3: 智能元素点击（支持SVG子元素和父元素点击）")
+                    
+                    clicked_result = False
+                    
                     if selector_type == "css":
-                        if hasattr(target_context, 'evaluate'):
-                            element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
-                            if element_exists:
-                                # 使用JavaScript点击,正常触发所有事件
-                                await target_context.evaluate("""(selector) => {
-                                    const element = document.querySelector(selector);
-                                    if (element) {
-                                        // 直接使用click(),触发所有相关事件
-                                        element.click();
+                        clicked_result = await target_context.evaluate("""(selector) => {
+                            const element = document.querySelector(selector);
+                            if (!element) return { success: false, reason: 'not_found' };
+                            
+                            const tagName = element.tagName.toLowerCase();
+                            
+                            // 情况1: 如果当前元素本身就是SVG或IMG，直接点击该元素本身
+                            if (tagName === 'svg' || tagName === 'img') {
+                                const rect = element.getBoundingClientRect();
+                                const clickX = rect.left + rect.width / 2;
+                                const clickY = rect.top + rect.height / 2;
+                                
+                                const clickEvent = new MouseEvent('click', {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    view: window,
+                                    clientX: clickX,
+                                    clientY: clickY
+                                });
+                                element.dispatchEvent(clickEvent);
+                                
+                                return { 
+                                    success: true, 
+                                    method: 'self_svg_img_click', 
+                                    elementType: tagName,
+                                    x: clickX, 
+                                    y: clickY,
+                                    rect: { width: rect.width, height: rect.height }
+                                };
+                            }
+                            
+                            // 情况2: 查找子元素：优先SVG，其次IMG，然后任何可见子元素
+                            let targetElement = null;
+                            let targetType = '';
+                            
+                            // 1. 尝试查找直接子SVG
+                            const svgChild = element.querySelector(':scope > svg');
+                            if (svgChild) {
+                                targetElement = svgChild;
+                                targetType = 'direct_svg';
+                            }
+                            // 2. 尝试查找任何子SVG
+                            else if (element.querySelector('svg')) {
+                                targetElement = element.querySelector('svg');
+                                targetType = 'nested_svg';
+                            }
+                            // 3. 尝试查找IMG子元素
+                            else if (element.querySelector('img')) {
+                                targetElement = element.querySelector('img');
+                                targetType = 'img';
+                            }
+                            // 4. 尝试查找任何可见的子元素
+                            else {
+                                const children = element.children;
+                                for (let child of children) {
+                                    const style = window.getComputedStyle(child);
+                                    if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                        targetElement = child;
+                                        targetType = 'visible_child';
+                                        break;
                                     }
-                                }""", selector)
-                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                element_clicked = True
-                            else:
-                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法使用JavaScript点击: {selector}")
-                        else:
-                            # 如果是frame_locator对象,使用其locator方法
-                            element = target_context.locator(selector)
-                            count = await element.count()
-                            if count > 0:
-                                await element.click(timeout=10000, force=True)
-                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                element_clicked = True
-                            else:
-                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法点击: {selector}")
+                                }
+                            }
+                            
+                            // 如果找到子元素，点击子元素的中心
+                            if (targetElement) {
+                                const rect = targetElement.getBoundingClientRect();
+                                const clickX = rect.left + rect.width / 2;
+                                const clickY = rect.top + rect.height / 2;
+                                
+                                const clickEvent = new MouseEvent('click', {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    view: window,
+                                    clientX: clickX,
+                                    clientY: clickY
+                                });
+                                targetElement.dispatchEvent(clickEvent);
+                                
+                                return { 
+                                    success: true, 
+                                    method: 'child_element', 
+                                    childType: targetType,
+                                    x: clickX, 
+                                    y: clickY,
+                                    childRect: { width: rect.width, height: rect.height }
+                                };
+                            }
+                            
+                            // 没有子元素，点击原元素
+                            element.click();
+                            return { success: true, method: 'self_click' };
+                        }""", selector)
                     else:  # xpath
-                        if hasattr(target_context, 'evaluate'):
-                            element_exists = await target_context.evaluate("""(xpath) => {
-                                const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                return result.singleNodeValue !== null;
-                            }""", selector)
-                            if element_exists:
-                                # 使用JavaScript点击,正常触发所有相关事件
-                                await target_context.evaluate("""(xpath) => {
-                                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                    const element = result.singleNodeValue;
-                                    if (element) {
-                                        // 直接使用click(),触发所有相关事件
-                                        element.click();
+                        clicked_result = await target_context.evaluate("""(xpath) => {
+                            const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                            const element = result.singleNodeValue;
+                            if (!element) return { success: false, reason: 'not_found' };
+                            
+                            const tagName = element.tagName.toLowerCase();
+                            
+                            // 情况1: 如果当前元素本身就是SVG或IMG，直接点击该元素本身
+                            if (tagName === 'svg' || tagName === 'img') {
+                                const rect = element.getBoundingClientRect();
+                                const clickX = rect.left + rect.width / 2;
+                                const clickY = rect.top + rect.height / 2;
+                                
+                                const clickEvent = new MouseEvent('click', {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    view: window,
+                                    clientX: clickX,
+                                    clientY: clickY
+                                });
+                                element.dispatchEvent(clickEvent);
+                                
+                                return { 
+                                    success: true, 
+                                    method: 'self_svg_img_click', 
+                                    elementType: tagName,
+                                    x: clickX, 
+                                    y: clickY,
+                                    rect: { width: rect.width, height: rect.height }
+                                };
+                            }
+                            
+                            // 情况2: 查找子元素
+                            let targetElement = null;
+                            let targetType = '';
+                            
+                            const svgChild = element.querySelector(':scope > svg');
+                            if (svgChild) {
+                                targetElement = svgChild;
+                                targetType = 'direct_svg';
+                            }
+                            else if (element.querySelector('svg')) {
+                                targetElement = element.querySelector('svg');
+                                targetType = 'nested_svg';
+                            }
+                            else if (element.querySelector('img')) {
+                                targetElement = element.querySelector('img');
+                                targetType = 'img';
+                            }
+                            else {
+                                const children = element.children;
+                                for (let child of children) {
+                                    const style = window.getComputedStyle(child);
+                                    if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                        targetElement = child;
+                                        targetType = 'visible_child';
+                                        break;
                                     }
-                                }""", selector)
-                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                element_clicked = True
-                            else:
-                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法使用JavaScript点击: {selector}")
+                                }
+                            }
+                            
+                            if (targetElement) {
+                                const rect = targetElement.getBoundingClientRect();
+                                const clickX = rect.left + rect.width / 2;
+                                const clickY = rect.top + rect.height / 2;
+                                
+                                const clickEvent = new MouseEvent('click', {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    view: window,
+                                    clientX: clickX,
+                                    clientY: clickY
+                                });
+                                targetElement.dispatchEvent(clickEvent);
+                                
+                                return { 
+                                    success: true, 
+                                    method: 'child_element', 
+                                    childType: targetType,
+                                    x: clickX, 
+                                    y: clickY,
+                                    childRect: { width: rect.width, height: rect.height }
+                                };
+                            }
+                            
+                            element.click();
+                            return { success: true, method: 'self_click' };
+                        }""", selector)
+                    
+                    if clicked_result and clicked_result.get('success'):
+                        method = clicked_result.get('method')
+                        if method == 'child_element':
+                            uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击子元素: {selector}, 类型: {clicked_result.get('childType')}, 坐标: ({clicked_result.get('x'):.1f}, {clicked_result.get('y'):.1f})")
+                        elif method == 'self_svg_img_click':
+                            uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击SVG/IMG本身: {selector}, 元素类型: {clicked_result.get('elementType')}, 坐标: ({clicked_result.get('x'):.1f}, {clicked_result.get('y'):.1f}), 尺寸: {clicked_result.get('rect')}")
                         else:
-                            # 如果是frame_locator对象,使用其locator方法
-                            element = target_context.locator(f"xpath={selector}")
-                            count = await element.count()
-                            if count > 0:
-                                await element.click(timeout=5000, force=True)
-                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}, 选择器类型: {selector_type}")
-                                element_clicked = True
-                            else:
-                                uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在,无法点击: {selector}")
+                            uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}")
+                        element_clicked = True
+                    else:
+                        uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式3未成功: {clicked_result}")
+                        
                 except Exception as e3:
-                    uat_logger.error(f"❌ [CLICK_DEBUG] 方式3失败: {str(e3)}")
+                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式3失败: {str(e3)}, 尝试方式4: 中心点坐标点击")
+                    
+                    # 方式4: 标准JavaScript点击
+                    try:
+                        uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式4: 标准JavaScript点击")
+                        if selector_type == "css":
+                            if hasattr(target_context, 'evaluate'):
+                                element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
+                                if element_exists:
+                                    await target_context.evaluate("""(selector) => {
+                                        const element = document.querySelector(selector);
+                                        if (element) element.click();
+                                    }""", selector)
+                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                    element_clicked = True
+                                else:
+                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                            else:
+                                element = target_context.locator(selector)
+                                count = await element.count()
+                                if count > 0:
+                                    await element.click(timeout=10000, force=True)
+                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                    element_clicked = True
+                                else:
+                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                        else:  # xpath
+                            if hasattr(target_context, 'evaluate'):
+                                element_exists = await target_context.evaluate("""(xpath) => {
+                                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                    return result.singleNodeValue !== null;
+                                }""", selector)
+                                if element_exists:
+                                    await target_context.evaluate("""(xpath) => {
+                                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                        const element = result.singleNodeValue;
+                                        if (element) element.click();
+                                    }""", selector)
+                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                    element_clicked = True
+                                else:
+                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                            else:
+                                element = target_context.locator(f"xpath={selector}")
+                                count = await element.count()
+                                if count > 0:
+                                    await element.click(timeout=5000, force=True)
+                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                    element_clicked = True
+                                else:
+                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                    except Exception as e4:
+                        uat_logger.error(f"❌ [CLICK_DEBUG] 方式4失败: {str(e4)}")
                     
         if not element_clicked:
             # 如果所有点击方式都失败,抛出异常
@@ -2416,6 +2617,20 @@ class PlaywrightAutomation:
             if selector_type == "xpath":
                 full_selector = f"xpath={selector}"
         
+        # 🔥 智能输入框定位：如果原始选择器找不到input，尝试通过placeholder或label查找
+        original_selector = selector
+        original_selector_type = selector_type
+        smart_locate_result = await self._smart_locate_input(target_context, selector, selector_type)
+        if smart_locate_result and smart_locate_result.get('found'):
+            uat_logger.info(f"🔍 [SMART_LOCATE] 智能定位到输入框: {smart_locate_result.get('description')}, 选择器: {smart_locate_result.get('selector')}")
+            selector = smart_locate_result.get('selector')
+            selector_type = smart_locate_result.get('selector_type', 'css')
+            # 重新构建完整的选择器
+            if selector_type == "xpath":
+                full_selector = f"xpath={selector}"
+            else:
+                full_selector = selector
+        
         # 🔥 添加元素存在性和类型预检查
         element_check_result = await self._check_element_type(target_context, full_selector, selector_type)
         if not element_check_result['exists']:
@@ -2425,6 +2640,16 @@ class PlaywrightAutomation:
         
         # 尝试多种填充方式,增加成功概率
         fill_success = False
+        
+        # 🔥 前置验证：确保目标元素是真正可见且可交互的输入框
+        try:
+            element_validation = await self._validate_input_element(target_context, full_selector, selector_type, text)
+            if not element_validation.get('valid'):
+                uat_logger.warning(f"⚠️ [INPUT_VALIDATION] 输入框验证失败: {element_validation.get('reason')}")
+            else:
+                uat_logger.info(f"✅ [INPUT_VALIDATION] 输入框验证通过: {element_validation.get('info')}")
+        except Exception as ve:
+            uat_logger.warning(f"⚠️ [INPUT_VALIDATION] 验证过程出错: {ve}")
         
         # 方式1: 使用Playwright的fill方法
         try:
@@ -2853,6 +3078,546 @@ class PlaywrightAutomation:
                 "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
             }
             self.recorded_steps.append(step)
+
+    async def _smart_locate_input(self, context, selector: str, selector_type: str) -> dict:
+        """
+        智能定位输入框
+        当选择器指向包装层或动态ID元素时，尝试通过placeholder或label查找真正的input元素
+        
+        Returns:
+            dict: {'found': bool, 'selector': str, 'selector_type': str, 'description': str}
+        """
+        result = {'found': False, 'selector': selector, 'selector_type': selector_type, 'description': ''}
+        
+        try:
+            if not hasattr(context, 'evaluate'):
+                return result
+            
+            # 首先检查当前选择器指向的元素
+            element_info = None
+            if selector_type == "css":
+                element_info = await context.evaluate("""(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return null;
+                    return {
+                        tagName: el.tagName.toLowerCase(),
+                        className: el.className || '',
+                        id: el.id || '',
+                        placeholder: el.placeholder || '',
+                        isContentEditable: el.isContentEditable,
+                        parentTagName: el.parentElement ? el.parentElement.tagName.toLowerCase() : null,
+                        parentClassName: el.parentElement ? (el.parentElement.className || '') : ''
+                    };
+                }""", selector)
+            elif selector_type == "xpath":
+                element_info = await context.evaluate("""(xpath) => {
+                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                    const el = result.singleNodeValue;
+                    if (!el) return null;
+                    return {
+                        tagName: el.tagName.toLowerCase(),
+                        className: el.className || '',
+                        id: el.id || '',
+                        placeholder: el.placeholder || '',
+                        isContentEditable: el.isContentEditable,
+                        parentTagName: el.parentElement ? el.parentElement.tagName.toLowerCase() : null,
+                        parentClassName: el.parentElement ? (el.parentElement.className || '') : ''
+                    };
+                }""", selector)
+            
+            if not element_info:
+                # ⭐ 元素不存在时，尝试通过XPath派生查找内部input
+                # 场景：XPath指向父级包装层但因为结构差异找不到，尝试在父级路径下查找input
+                if selector_type == "xpath":
+                    uat_logger.info(f"🔍 [SMART_LOCATE] 原始XPath找不到元素，尝试派生查找内部input: {selector}")
+                    derived_result = await context.evaluate("""(xpath) => {
+                        // 尝试在xpath基础上追加 //input 或 //textarea 来查找内部input
+                        const tryXpaths = [
+                            xpath + '/descendant::input[contains(@class,"el-input__inner")]',
+                            xpath + '/descendant::textarea[contains(@class,"el-textarea__inner")]',
+                            xpath + '//input',
+                            xpath + '//textarea',
+                            xpath + '/input',
+                            xpath + '/textarea',
+                        ];
+                        for (const tryXpath of tryXpaths) {
+                            try {
+                                const r = document.evaluate(tryXpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                const el = r.singleNodeValue;
+                                if (el) {
+                                    return {
+                                        found: true,
+                                        xpath: tryXpath,
+                                        id: el.id || '',
+                                        placeholder: el.placeholder || '',
+                                        tagName: el.tagName.toLowerCase(),
+                                        className: el.className || ''
+                                    };
+                                }
+                            } catch(e) {}
+                        }
+                        return null;
+                    }""", selector)
+                    if derived_result and derived_result.get('found'):
+                        el_id = derived_result.get('id', '')
+                        el_placeholder = derived_result.get('placeholder', '')
+                        el_xpath = derived_result.get('xpath', '')
+                        # ⭐⭐ 关键修复：元素不存在时的派生查找，必须使用派生XPath路径，保持位置精确性
+                        # 不能使用全局CSS placeholder（会定位到页面第一个匹配元素！）
+                        # 优先用派生xpath（位置精确），其次用ID，不使用全局CSS placeholder
+                        if el_xpath:
+                            return {'found': True, 'selector': el_xpath, 'selector_type': 'xpath',
+                                    'description': f'XPath元素不存在，派生xpath精确找到input'}
+                        elif el_id:
+                            return {'found': True, 'selector': f'#{el_id}', 'selector_type': 'css',
+                                    'description': f'XPath元素不存在，派生通过id找到input: {el_id}'}
+                        else:
+                            # placeholder作为最后备选（可能有重复，但总比什么都没有好）
+                            escaped = el_placeholder.replace('"', '\\"')
+                            return {'found': True, 'selector': f'input[placeholder="{escaped}"], textarea[placeholder="{escaped}"]',
+                                    'selector_type': 'css',
+                                    'description': f'XPath元素不存在，使用placeholder备选找到input: {el_placeholder}'}
+                return result
+            
+            # 如果已经是input或textarea，不需要智能定位
+            if element_info['tagName'] in ['input', 'textarea']:
+                return result
+            
+            uat_logger.info(f"🔍 [SMART_LOCATE] 当前元素是 {element_info['tagName']}.{element_info['className']}, 尝试智能定位内部input...")
+            
+            # 策畧1: 如果当前元素是包装层（如el-input），查找内部的input
+            # 注意：使用Python的 'in' 运算符，而非 JavaScript 的 .includes() 方法
+            if element_info['tagName'] == 'div' and (
+                'el-input' in element_info['className'] or
+                'el-textarea' in element_info['className']
+            ):
+                if selector_type == "css":
+                    inner_input = await context.evaluate("""(sel) => {
+                        const wrapper = document.querySelector(sel);
+                        if (!wrapper) return null;
+                        const input = wrapper.querySelector('input.el-input__inner, textarea.el-textarea__inner');
+                        if (input) {
+                            return {
+                                found: true,
+                                inputId: input.id || '',
+                                placeholder: input.placeholder || '',
+                                className: input.className || ''
+                            };
+                        }
+                        return null;
+                    }""", selector)
+                else:  # xpath
+                    inner_input = await context.evaluate("""(xpath) => {
+                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                        const wrapper = result.singleNodeValue;
+                        if (!wrapper) return null;
+                        const input = wrapper.querySelector('input.el-input__inner, textarea.el-textarea__inner');
+                        if (input) {
+                            return {
+                                found: true,
+                                inputId: input.id || '',
+                                placeholder: input.placeholder || '',
+                                className: input.className || ''
+                            };
+                        }
+                        return null;
+                    }""", selector)
+                            
+                if inner_input and inner_input.get('found'):
+                    input_id = inner_input.get('inputId', '')
+                    input_placeholder = inner_input.get('placeholder', '')
+                    # ⭐⭐ 关键修复：当原始选择器是XPath时，必须使用基于XPath的descendant路径
+                    # 而不能用全局CSS placeholder选择器（会定位到页面上第一个匹配的元素！）
+                    if selector_type == "xpath":
+                        # XPath选择器：始终使用descendant精确定位，保留位置所属的路径
+                        derived_xpath = (
+                            selector + '/descendant::input[contains(@class,"el-input__inner")] | ' +
+                            selector + '/descendant::textarea[contains(@class,"el-textarea__inner")]'
+                        )
+                        result = {
+                            'found': True,
+                            'selector': derived_xpath,
+                            'selector_type': 'xpath',
+                            'description': f"从XPath包装层 {element_info['className'][:30]} 派生找到内郢input"
+                        }
+                    else:
+                        # CSS选择器：使用唯一ID（最精确）
+                        if input_id:
+                            result = {
+                                'found': True,
+                                'selector': f'#{input_id}',
+                                'selector_type': 'css',
+                                'description': f"从CSS包装层找到内部input（id={input_id}）"
+                            }
+                        elif input_placeholder:
+                            # CSS模式下如果placeholder唯一才用CSS，否则用外层CSS+内层子选择器
+                            escaped = input_placeholder.replace('"', '\\"')
+                            result = {
+                                'found': True,
+                                'selector': f'{selector} input.el-input__inner, {selector} textarea.el-textarea__inner',
+                                'selector_type': 'css',
+                                'description': f"从CSS包装层找到内部input（placeholder={input_placeholder}）"
+                            }
+                        else:
+                            # 没有id和placeholder时用CSS子选择器
+                            result = {
+                                'found': True,
+                                'selector': f'{selector} input.el-input__inner, {selector} textarea.el-textarea__inner',
+                                'selector_type': 'css',
+                                'description': f"从CSS包装层派生找到内部input"
+                            }
+                    return result
+            
+            # 策略2: 通过placeholder查找关联的input
+            # 尝试从当前元素的文本内容或属性中提取placeholder关键词
+            if selector_type == "css":
+                placeholder_hints = await context.evaluate("""(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return [];
+                    
+                    const hints = [];
+                    // 获取元素自身的placeholder
+                    if (el.placeholder) hints.push(el.placeholder);
+                    
+                    // 获取父元素中的label文本
+                    let parent = el.parentElement;
+                    for (let i = 0; i < 3 && parent; i++) {
+                        const label = parent.querySelector('label');
+                        if (label) {
+                            hints.push(label.textContent.trim());
+                        }
+                        // 检查是否有placeholder属性
+                        const inputs = parent.querySelectorAll('input[placeholder], textarea[placeholder]');
+                        inputs.forEach(input => {
+                            if (input.placeholder) hints.push(input.placeholder);
+                        });
+                        parent = parent.parentElement;
+                    }
+                    
+                    return hints.filter(h => h && h.length > 0);
+                }""", selector)
+            else:  # xpath
+                placeholder_hints = await context.evaluate("""(xpath) => {
+                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                    const el = result.singleNodeValue;
+                    if (!el) return [];
+                    
+                    const hints = [];
+                    if (el.placeholder) hints.push(el.placeholder);
+                    
+                    let parent = el.parentElement;
+                    for (let i = 0; i < 3 && parent; i++) {
+                        const label = parent.querySelector('label');
+                        if (label) {
+                            hints.push(label.textContent.trim());
+                        }
+                        const inputs = parent.querySelectorAll('input[placeholder], textarea[placeholder]');
+                        inputs.forEach(input => {
+                            if (input.placeholder) hints.push(input.placeholder);
+                        });
+                        parent = parent.parentElement;
+                    }
+                    
+                    return hints.filter(h => h && h.length > 0);
+                }""", selector)
+            
+            if placeholder_hints and len(placeholder_hints) > 0:
+                uat_logger.info(f"🔍 [SMART_LOCATE] 找到placeholder提示: {placeholder_hints}")
+                
+                # 尝试通过placeholder查找input
+                for hint in placeholder_hints[:2] if len(placeholder_hints) > 2 else placeholder_hints:  # 只尝试前两个
+                    escaped_hint = hint.replace('"', '\\"')
+                    found_input = await context.evaluate(f"""() => {{
+                        const input = document.querySelector('input[placeholder="{escaped_hint}"], textarea[placeholder="{escaped_hint}"]');
+                        if (input) {{
+                            return {{
+                                found: true,
+                                tagName: input.tagName.toLowerCase(),
+                                id: input.id,
+                                className: input.className,
+                                placeholder: input.placeholder
+                            }};
+                        }}
+                        return null;
+                    }}""")
+                    
+                    if found_input and found_input.get('found'):
+                        # 构建稳定的选择器
+                        if found_input.get('id'):
+                            result = {
+                                'found': True,
+                                'selector': f"#{found_input['id']}",
+                                'selector_type': 'css',
+                                'description': f"通过placeholder='{hint}'找到input"
+                            }
+                        else:
+                            result = {
+                                'found': True,
+                                'selector': f"input[placeholder=\"{escaped_hint}\"]",
+                                'selector_type': 'css',
+                                'description': f"通过placeholder='{hint}'找到input"
+                            }
+                        return result
+            
+            # 策略3: 通过label的for属性查找关联的input
+            if selector_type == "css":
+                label_result = await context.evaluate("""(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return null;
+                    
+                    // 向上查找包含label的父元素
+                    let parent = el.parentElement;
+                    for (let i = 0; i < 5 && parent; i++) {
+                        const label = parent.querySelector('label');
+                        if (label) {
+                            const forAttr = label.getAttribute('for');
+                            if (forAttr) {
+                                const input = document.getElementById(forAttr);
+                                if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) {
+                                    return {
+                                        found: true,
+                                        method: 'label_for',
+                                        labelText: label.textContent.trim(),
+                                        inputId: forAttr,
+                                        inputTag: input.tagName.toLowerCase()
+                                    };
+                                }
+                            }
+                            // label包裹input的情况
+                            const wrappedInput = label.querySelector('input, textarea');
+                            if (wrappedInput) {
+                                return {
+                                    found: true,
+                                    method: 'label_wrapped',
+                                    labelText: label.textContent.trim(),
+                                    inputId: wrappedInput.id,
+                                    inputTag: wrappedInput.tagName.toLowerCase()
+                                };
+                            }
+                        }
+                        parent = parent.parentElement;
+                    }
+                    return null;
+                }""", selector)
+            else:  # xpath
+                label_result = await context.evaluate("""(xpath) => {
+                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                    const el = result.singleNodeValue;
+                    if (!el) return null;
+                    
+                    let parent = el.parentElement;
+                    for (let i = 0; i < 5 && parent; i++) {
+                        const label = parent.querySelector('label');
+                        if (label) {
+                            const forAttr = label.getAttribute('for');
+                            if (forAttr) {
+                                const input = document.getElementById(forAttr);
+                                if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) {
+                                    return {
+                                        found: true,
+                                        method: 'label_for',
+                                        labelText: label.textContent.trim(),
+                                        inputId: forAttr,
+                                        inputTag: input.tagName.toLowerCase()
+                                    };
+                                }
+                            }
+                            const wrappedInput = label.querySelector('input, textarea');
+                            if (wrappedInput) {
+                                return {
+                                    found: true,
+                                    method: 'label_wrapped',
+                                    labelText: label.textContent.trim(),
+                                    inputId: wrappedInput.id,
+                                    inputTag: wrappedInput.tagName.toLowerCase()
+                                };
+                            }
+                        }
+                        parent = parent.parentElement;
+                    }
+                    return null;
+                }""", selector)
+            
+            if label_result and label_result.get('found'):
+                input_id = label_result.get('inputId')
+                if input_id:
+                    result = {
+                        'found': True,
+                        'selector': f"#{input_id}",
+                        'selector_type': 'css',
+                        'description': f"通过label='{label_result.get('labelText')}'找到关联input"
+                    }
+                else:
+                    # 使用XPath通过label文本查找
+                    label_text = label_result.get('labelText', '').replace('"', '\\"')
+                    result = {
+                        'found': True,
+                        'selector': f"//label[contains(text(), '{label_text}')]/following::input[1] | //label[contains(text(), '{label_text}')]//input",
+                        'selector_type': 'xpath',
+                        'description': f"通过label='{label_text}'找到关联input"
+                    }
+                return result
+            
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [SMART_LOCATE] 智能定位失败: {e}")
+        
+        return result
+
+    async def _validate_input_element(self, context, full_selector: str, selector_type: str, expected_text: str) -> dict:
+        """
+        验证输入框元素是否正确可见且可交互
+        防止将文本输入到错误的元素
+        """
+        result = {'valid': False, 'reason': '', 'info': ''}
+        
+        try:
+            if not hasattr(context, 'evaluate'):
+                result['valid'] = True
+                result['info'] = 'frame_locator模式，跳过详细验证'
+                return result
+            
+            validation_result = None
+            if selector_type == "css":
+                selector = full_selector
+                validation_result = await context.evaluate("""(params) => {
+                    const { selector, expectedText } = params;
+                    const el = document.querySelector(selector);
+                    if (!el) return { valid: false, reason: '元素不存在' };
+                    
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    
+                    // 检查可见性
+                    if (style.display === 'none') return { valid: false, reason: '元素display:none' };
+                    if (style.visibility === 'hidden') return { valid: false, reason: '元素visibility:hidden' };
+                    if (rect.width === 0 || rect.height === 0) return { valid: false, reason: '元素尺寸为0' };
+                    
+                    // 检查是否在视口内
+                    const inViewport = rect.top >= 0 && rect.left >= 0 && 
+                                       rect.bottom <= window.innerHeight && 
+                                       rect.right <= window.innerWidth;
+                    
+                    // 检查元素类型
+                    const tagName = el.tagName.toLowerCase();
+                    const isInput = tagName === 'input' || tagName === 'textarea';
+                    const isContentEditable = el.isContentEditable;
+                    
+                    // 检查是否被其他元素遮挡
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+                    const topElement = document.elementFromPoint(centerX, centerY);
+                    const isObscured = topElement && topElement !== el && !el.contains(topElement) && !topElement.contains(el);
+                    
+                    // 检查placeholder或label是否匹配预期文本（简单启发式）
+                    let textMatch = false;
+                    if (expectedText && expectedText.length > 3) {
+                        const placeholder = el.placeholder || '';
+                        const ariaLabel = el.getAttribute('aria-label') || '';
+                        const title = el.title || '';
+                        // 检查是否有相关文本提示
+                        if (placeholder.includes(expectedText.substring(0, 5)) ||
+                            ariaLabel.includes(expectedText.substring(0, 5)) ||
+                            title.includes(expectedText.substring(0, 5))) {
+                            textMatch = true;
+                        }
+                    }
+                    
+                    return {
+                        valid: true,
+                        tagName: tagName,
+                        isInput: isInput,
+                        isContentEditable: isContentEditable,
+                        inViewport: inViewport,
+                        isObscured: isObscured,
+                        rect: { width: rect.width, height: rect.height, top: rect.top, left: rect.left },
+                        textMatch: textMatch,
+                        disabled: el.disabled,
+                        readonly: el.readOnly
+                    };
+                }""", {'selector': selector, 'expectedText': expected_text})
+                
+            elif selector_type == "xpath":
+                xpath = full_selector.replace('xpath=', '')
+                validation_result = await context.evaluate("""(params) => {
+                    const { xpath, expectedText } = params;
+                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                    const el = result.singleNodeValue;
+                    if (!el) return { valid: false, reason: '元素不存在' };
+                    
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    
+                    if (style.display === 'none') return { valid: false, reason: '元素display:none' };
+                    if (style.visibility === 'hidden') return { valid: false, reason: '元素visibility:hidden' };
+                    if (rect.width === 0 || rect.height === 0) return { valid: false, reason: '元素尺寸为0' };
+                    
+                    const inViewport = rect.top >= 0 && rect.left >= 0 && 
+                                       rect.bottom <= window.innerHeight && 
+                                       rect.right <= window.innerWidth;
+                    
+                    const tagName = el.tagName.toLowerCase();
+                    const isInput = tagName === 'input' || tagName === 'textarea';
+                    const isContentEditable = el.isContentEditable;
+                    
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+                    const topElement = document.elementFromPoint(centerX, centerY);
+                    const isObscured = topElement && topElement !== el && !el.contains(topElement) && !topElement.contains(el);
+                    
+                    let textMatch = false;
+                    if (expectedText && expectedText.length > 3) {
+                        const placeholder = el.placeholder || '';
+                        const ariaLabel = el.getAttribute('aria-label') || '';
+                        if (placeholder.includes(expectedText.substring(0, 5)) ||
+                            ariaLabel.includes(expectedText.substring(0, 5))) {
+                            textMatch = true;
+                        }
+                    }
+                    
+                    return {
+                        valid: true,
+                        tagName: tagName,
+                        isInput: isInput,
+                        isContentEditable: isContentEditable,
+                        inViewport: inViewport,
+                        isObscured: isObscured,
+                        rect: { width: rect.width, height: rect.height },
+                        textMatch: textMatch,
+                        disabled: el.disabled,
+                        readonly: el.readOnly
+                    };
+                }""", {'xpath': xpath, 'expectedText': expected_text})
+            
+            if validation_result:
+                if not validation_result.get('valid'):
+                    result['reason'] = validation_result.get('reason', '未知原因')
+                else:
+                    result['valid'] = True
+                    info_parts = [
+                        f"标签: {validation_result.get('tagName')}",
+                        f"尺寸: {validation_result.get('rect', {}).get('width')}x{validation_result.get('rect', {}).get('height')}",
+                        f"视口内: {'是' if validation_result.get('inViewport') else '否'}",
+                        f"被遮挡: {'是' if validation_result.get('isObscured') else '否'}"
+                    ]
+                    if validation_result.get('disabled'):
+                        info_parts.append("disabled:是")
+                    if validation_result.get('readonly'):
+                        info_parts.append("readonly:是")
+                    result['info'] = ', '.join(info_parts)
+                    
+                    # 如果被遮挡，发出警告
+                    if validation_result.get('isObscured'):
+                        result['valid'] = False
+                        result['reason'] = '元素被其他元素遮挡'
+                    
+            else:
+                result['valid'] = True  # 无法验证时默认通过
+                result['info'] = '验证结果为空，默认通过'
+                
+        except Exception as e:
+            result['reason'] = f'验证异常: {str(e)}'
+        
+        return result
 
     def _optimize_selector(self, selector: str, selector_type: str) -> str:
         """优化选择器，简化过于复杂的CSS选择器"""
