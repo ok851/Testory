@@ -54,13 +54,15 @@ class LicenseManager:
         'professional': [
             'project_management', 'case_management', 'test_execution',
             'advanced_report', 'schedule', 'data_driven',
-            'export_pdf', 'export_excel', 'webhook', 'email_notification'
+            'export_pdf', 'export_excel', 'webhook', 'email_notification',
+            'defect_management'  # 个人专业版包含缺陷管理
         ],
         'enterprise': [
             'project_management', 'case_management', 'test_execution',
             'advanced_report', 'schedule', 'webhook', 'data_driven',
             'parallel_execution', 'audit_log', 'export_pdf', 'export_excel',
-            'email_notification', 'api_access', 'team_collaboration'
+            'email_notification', 'api_access', 'team_collaboration',
+            'defect_management', 'sso', 'custom_integration'  # 企业版额外功能
         ]
     }
 
@@ -280,7 +282,8 @@ class LicenseManager:
             'max_cases_per_project': license_info.max_cases_per_project,
             'max_executions_per_day': license_info.max_executions_per_day,
             'license_type': license_info.license_type,
-            'expires_at': license_info.expires_at
+            'expires_at': license_info.expires_at,
+            'features': license_info.features
         }
 
     def check_limit(self, limit_type: str, current_value: int) -> Dict[str, Any]:

@@ -85,22 +85,22 @@
                 <a href="/list_projects" class="btn btn-secondary" title="项目管理">
                     <i class="fas fa-folder mr-1"></i>项目
                 </a>
-                <a href="/run-history" class="btn btn-accent" title="运行历史">
+                <a href="/run-history" class="nav-btn btn btn-accent" data-feature="basic" title="运行历史">
                     <i class="fas fa-history mr-1"></i>历史
                 </a>
-                <a href="/data-driven" class="btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500" title="数据驱动">
+                <a href="/data-driven" id="navDataDriven" class="nav-btn btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500 hidden" data-feature="data_driven" title="数据驱动">
                     <i class="fas fa-table mr-1"></i>数据
                 </a>
-                <a href="/test_report" class="btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" title="测试报告">
+                <a href="/test_report" class="nav-btn btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" data-feature="basic" title="测试报告">
                     <i class="fas fa-chart-bar mr-1"></i>报告
                 </a>
-                <a href="/schedules" class="btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500" title="定时任务">
+                <a href="/schedules" id="navSchedules" class="nav-btn btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500 hidden" data-feature="schedule" title="定时任务">
                     <i class="fas fa-clock mr-1"></i>定时
                 </a>
-                <a href="/notifications" class="btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500" title="通知配置">
+                <a href="/notifications" id="navNotifications" class="nav-btn btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500 hidden" data-feature="email_notification" data-role="admin" title="通知配置">
                     <i class="fas fa-bell mr-1"></i>通知
                 </a>
-                <a href="/defects" class="btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500" title="缺陷管理">
+                <a href="/defects" id="navDefects" class="nav-btn btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500 hidden" data-feature="defect_management" title="缺陷管理">
                     <i class="fas fa-bug mr-1"></i>缺陷
                 </a>
                 <!-- 用户信息区（最右边） -->
@@ -364,24 +364,83 @@
             fetch('/api/auth/me')
                 .then(res => res.json())
                 .then(data => {
+                    const userLabel = document.getElementById('userLabel');
+                    const userDropdown = document.getElementById('userDropdown');
+                    const loginBtn = document.getElementById('loginBtn');
+
                     if (data.success) {
                         const user = data.user;
-                        document.getElementById('userLabel').textContent = user.username;
-                        document.getElementById('userDropdown').classList.remove('hidden');
-                        document.getElementById('loginBtn').classList.add('hidden');
+                        if (userLabel) userLabel.textContent = user.username;
+                        if (userDropdown) userDropdown.classList.remove('hidden');
+                        if (loginBtn) loginBtn.classList.add('hidden');
                         // 管理员显示用户管理入口
                         if (user.role === 'admin') {
-                            document.getElementById('userManagementLink').style.display = 'block';
+                            const userManagementLink = document.getElementById('userManagementLink');
+                            if (userManagementLink) userManagementLink.style.display = 'block';
                         }
+                        // 根据 License 和角色显示/隐藏导航按钮
+                        updateNavigationButtons(data);
                     } else {
-                        document.getElementById('loginBtn').classList.remove('hidden');
-                        document.getElementById('userDropdown').classList.add('hidden');
+                        if (loginBtn) loginBtn.classList.remove('hidden');
+                        if (userDropdown) userDropdown.classList.add('hidden');
                     }
                 })
                 .catch(() => {
-                    document.getElementById('loginBtn').classList.remove('hidden');
-                    document.getElementById('userDropdown').classList.add('hidden');
+                    const loginBtn = document.getElementById('loginBtn');
+                    const userDropdown = document.getElementById('userDropdown');
+                    if (loginBtn) loginBtn.classList.remove('hidden');
+                    if (userDropdown) userDropdown.classList.add('hidden');
                 });
+        }
+
+        // 根据用户权限更新导航按钮显示
+        function updateNavigationButtons(data) {
+            console.log('[DEBUG] updateNavigationButtons called with data:', data);
+
+            // 安全地获取数据
+            const userRole = (data.user && data.user.role) ? data.user.role : 'viewer';
+            const features = (data.license && data.license.features) ? data.license.features : [];
+
+            console.log('[DEBUG] User role:', userRole, 'Features:', features);
+
+            // 确保 features 是数组
+            if (!Array.isArray(features)) {
+                console.error('[DEBUG] Features is not an array:', features);
+                return;
+            }
+
+            // 获取所有需要权限控制的导航按钮
+            const navButtons = document.querySelectorAll('.nav-btn[data-feature]');
+            console.log('[DEBUG] Found nav buttons:', navButtons.length);
+
+            navButtons.forEach(function(btn) {
+                const requiredFeature = btn.getAttribute('data-feature');
+                const requiredRole = btn.getAttribute('data-role');
+                const btnText = btn.textContent.trim();
+
+                let shouldShow = true;
+
+                // 检查功能权限
+                if (requiredFeature && requiredFeature !== 'basic') {
+                    shouldShow = features.indexOf(requiredFeature) !== -1;
+                    console.log('[DEBUG] Button "' + btnText + '" requires feature "' + requiredFeature + '", has it: ' + shouldShow);
+                }
+
+                // 检查角色权限
+                if (shouldShow && requiredRole) {
+                    shouldShow = userRole === requiredRole;
+                    console.log('[DEBUG] Button "' + btnText + '" requires role "' + requiredRole + '", user has: ' + userRole + ', match: ' + shouldShow);
+                }
+
+                // 显示或隐藏按钮
+                if (shouldShow) {
+                    btn.classList.remove('hidden');
+                    console.log('[DEBUG] Showing button: ' + btnText);
+                } else {
+                    btn.classList.add('hidden');
+                    console.log('[DEBUG] Hiding button: ' + btnText);
+                }
+            });
         }
 
         // 切换用户菜单显示

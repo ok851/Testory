@@ -381,8 +381,8 @@
                 const historyResponse = await fetch(historyUrl);
                 const historyResult = await historyResponse.json();
                 
-                if (historyResult.histories) {
-                    renderCasesList(historyResult.histories);
+                if (historyResult.history) {
+                    renderCasesList(historyResult.history);
                 }
                 
                 // 更新报告时间

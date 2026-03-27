@@ -7,6 +7,12 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        /* 隐藏类 - 用于权限控制 */
+        .hidden {
+            display: none !important;
+        }
+    </style>
     <style type="text/tailwindcss">
         @layer utilities {
             .btn {
@@ -92,22 +98,22 @@
                 <a href="/list_projects" class="btn btn-secondary" title="项目管理">
                     <i class="fas fa-folder mr-1"></i>项目
                 </a>
-                <a href="/run-history" class="btn btn-accent" title="运行历史">
+                <a href="/run-history" class="nav-btn btn btn-accent" data-feature="basic" title="运行历史">
                     <i class="fas fa-history mr-1"></i>历史
                 </a>
-                <a href="/data-driven" class="btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500" title="数据驱动">
+                <a href="/data-driven" id="navDataDriven" class="nav-btn btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500 hidden" data-feature="data_driven" title="数据驱动">
                     <i class="fas fa-table mr-1"></i>数据
                 </a>
-                <a href="/test_report" class="btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" title="测试报告">
+                <a href="/test_report" class="nav-btn btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" data-feature="basic" title="测试报告">
                     <i class="fas fa-chart-bar mr-1"></i>报告
                 </a>
-                <a href="/schedules" class="btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500" title="定时任务">
+                <a href="/schedules" id="navSchedules" class="nav-btn btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500 hidden" data-feature="schedule" title="定时任务">
                     <i class="fas fa-clock mr-1"></i>定时
                 </a>
-                <a href="/notifications" class="btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500" title="通知配置">
+                <a href="/notifications" id="navNotifications" class="nav-btn btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500 hidden" data-feature="email_notification" data-role="admin" title="通知配置">
                     <i class="fas fa-bell mr-1"></i>通知
                 </a>
-                <a href="/defects" class="btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500" title="缺陷管理">
+                <a href="/defects" id="navDefects" class="nav-btn btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500 hidden" data-feature="defect_management" title="缺陷管理">
                     <i class="fas fa-bug mr-1"></i>缺陷
                 </a>
                 <!-- 用户信息区（最右边） -->
@@ -152,8 +158,14 @@
             <p class="mt-2 text-gray-600">查看您的使用配额、管理授权许可</p>
         </div>
 
+        <!-- 加载状态 -->
+        <div id="loadingState" class="card mb-8 text-center py-12">
+            <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p class="mt-2 text-gray-600">加载中...</p>
+        </div>
+
         <!-- 当前 License 状态卡片 -->
-        <div class="card mb-8">
+        <div id="licenseCard" class="card mb-8 hidden">
             <div class="card-header">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center">
@@ -398,9 +410,16 @@
     <script>
         // 加载 License 信息
         async function loadLicenseInfo() {
+            const loadingState = document.getElementById('loadingState');
+            const licenseCard = document.getElementById('licenseCard');
+            
             try {
                 const response = await fetch('/api/license/info');
                 const result = await response.json();
+                
+                // 隐藏加载状态，显示内容
+                if (loadingState) loadingState.classList.add('hidden');
+                if (licenseCard) licenseCard.classList.remove('hidden');
                 
                 if (result.success) {
                     const info = result.info || {};
@@ -435,15 +454,16 @@
                     
                     // 更新今日配额
                     const licenseType = info.license_type || 'free';
+                    const used = usage.today_executions || 0;
+
                     if (licenseType === 'free') {
-                        const used = usage.today_executions || 0;
                         const total = 10;
                         const percentage = Math.min((used / total) * 100, 100);
-                        
+
                         document.getElementById('executionUsed').textContent = used;
                         document.getElementById('executionTotal').textContent = total;
-                        document.getElementById('executionProgress').style.width = `${percentage}%`;
-                        
+                        document.getElementById('executionProgress').style.width = percentage + '%';
+
                         // 根据使用率改变颜色
                         const progressBar = document.getElementById('executionProgress');
                         if (percentage >= 80) {
@@ -456,15 +476,19 @@
                         }
                         document.getElementById('dailyQuotaCard').classList.remove('hidden');
                     } else if (licenseType === 'professional') {
-                        // 个人专业版显示无限配额
-                        document.getElementById('executionUsed').textContent = '0';
+                        // 个人专业版显示今日执行次数（无限配额）
+                        document.getElementById('executionUsed').textContent = used;
                         document.getElementById('executionTotal').textContent = '无限';
                         document.getElementById('executionProgress').style.width = '0%';
                         document.getElementById('dailyQuotaCard').classList.remove('hidden');
                         document.getElementById('quotaTitle').textContent = '今日执行配额（无限）';
                     } else {
-                        // 企业版隐藏配额卡片
-                        document.getElementById('dailyQuotaCard').classList.add('hidden');
+                        // 企业版显示今日执行次数（无限配额）
+                        document.getElementById('executionUsed').textContent = used;
+                        document.getElementById('executionTotal').textContent = '无限';
+                        document.getElementById('executionProgress').style.width = '0%';
+                        document.getElementById('dailyQuotaCard').classList.remove('hidden');
+                        document.getElementById('quotaTitle').textContent = '今日执行配额（无限）';
                     }
                 } else {
                     console.error('获取 License 信息失败:', result.error || '未知错误');
@@ -477,6 +501,9 @@
                 }
             } catch (error) {
                 console.error('加载 License 信息失败:', error);
+                // 隐藏加载状态，显示内容（使用默认数据）
+                if (loadingState) loadingState.classList.add('hidden');
+                if (licenseCard) licenseCard.classList.remove('hidden');
                 // 显示默认数据
                 document.getElementById('licenseType').textContent = '免费版';
                 document.getElementById('expireDate').textContent = '永久';
@@ -560,20 +587,78 @@
             fetch('/api/auth/me')
                 .then(res => res.json())
                 .then(data => {
+                    const userLabel = document.getElementById('userLabel');
+                    const userDropdown = document.getElementById('userDropdown');
+                    const loginBtn = document.getElementById('loginBtn');
+
                     if (data.success) {
                         const user = data.user;
-                        document.getElementById('userLabel').textContent = user.username;
-                        document.getElementById('userDropdown').classList.remove('hidden');
-                        document.getElementById('loginBtn').classList.add('hidden');
+                        if (userLabel) userLabel.textContent = user.username;
+                        if (userDropdown) userDropdown.classList.remove('hidden');
+                        if (loginBtn) loginBtn.classList.add('hidden');
+                        // 根据 License 和角色显示/隐藏导航按钮
+                        updateNavigationButtons(data);
                     } else {
-                        document.getElementById('loginBtn').classList.remove('hidden');
-                        document.getElementById('userDropdown').classList.add('hidden');
+                        if (loginBtn) loginBtn.classList.remove('hidden');
+                        if (userDropdown) userDropdown.classList.add('hidden');
                     }
                 })
                 .catch(() => {
-                    document.getElementById('loginBtn').classList.remove('hidden');
-                    document.getElementById('userDropdown').classList.add('hidden');
+                    const loginBtn = document.getElementById('loginBtn');
+                    const userDropdown = document.getElementById('userDropdown');
+                    if (loginBtn) loginBtn.classList.remove('hidden');
+                    if (userDropdown) userDropdown.classList.add('hidden');
                 });
+        }
+
+        // 根据用户权限更新导航按钮显示
+        function updateNavigationButtons(data) {
+            console.log('[DEBUG] updateNavigationButtons called with data:', data);
+
+            // 安全地获取数据
+            const userRole = (data.user && data.user.role) ? data.user.role : 'viewer';
+            const features = (data.license && data.license.features) ? data.license.features : [];
+
+            console.log('[DEBUG] User role:', userRole, 'Features:', features);
+
+            // 确保 features 是数组
+            if (!Array.isArray(features)) {
+                console.error('[DEBUG] Features is not an array:', features);
+                return;
+            }
+
+            // 获取所有需要权限控制的导航按钮
+            const navButtons = document.querySelectorAll('.nav-btn[data-feature]');
+            console.log('[DEBUG] Found nav buttons:', navButtons.length);
+
+            navButtons.forEach(function(btn) {
+                const requiredFeature = btn.getAttribute('data-feature');
+                const requiredRole = btn.getAttribute('data-role');
+                const btnText = btn.textContent.trim();
+
+                let shouldShow = true;
+
+                // 检查功能权限
+                if (requiredFeature && requiredFeature !== 'basic') {
+                    shouldShow = features.indexOf(requiredFeature) !== -1;
+                    console.log('[DEBUG] Button "' + btnText + '" requires feature "' + requiredFeature + '", has it: ' + shouldShow);
+                }
+
+                // 检查角色权限
+                if (shouldShow && requiredRole) {
+                    shouldShow = userRole === requiredRole;
+                    console.log('[DEBUG] Button "' + btnText + '" requires role "' + requiredRole + '", user has: ' + userRole + ', match: ' + shouldShow);
+                }
+
+                // 显示或隐藏按钮
+                if (shouldShow) {
+                    btn.classList.remove('hidden');
+                    console.log('[DEBUG] Showing button: ' + btnText);
+                } else {
+                    btn.classList.add('hidden');
+                    console.log('[DEBUG] Hiding button: ' + btnText);
+                }
+            });
         }
 
         // 切换用户菜单显示

@@ -266,6 +266,7 @@ def profile_page():
 
 @app.route('/schedules')
 @login_required
+@feature_required('schedule')
 def schedules_page():
     return render_template('schedules.html')
 
@@ -305,7 +306,36 @@ def api_logout():
 @app.route('/api/auth/me', methods=['GET'])
 @login_required
 def api_me():
-    return jsonify({'success': True, 'user': {'id': current_user.id, 'username': current_user.username, 'role': current_user.role}})
+    """获取当前用户信息（包含权限和License信息）"""
+    # 获取当前 License 信息
+    license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
+    
+    # 获取今日使用统计
+    _db = Database()
+    today_stats = _db.get_user_usage_stats(current_user.id)
+    
+    return jsonify({
+        'success': True, 
+        'user': {
+            'id': current_user.id, 
+            'username': current_user.username, 
+            'role': current_user.role
+        },
+        'license': {
+            'type': license_info.license_type,
+            'features': limits['features'],  # 使用 get_limits 返回的 features
+            'limits': {
+                'max_projects': limits['max_projects'],
+                'max_cases_per_project': limits['max_cases_per_project'],
+                'max_executions_per_day': limits['max_executions_per_day']
+            }
+        },
+        'usage': {
+            'today_executions': today_stats.get('execution_count', 0) if today_stats else 0,
+            'today_created_cases': today_stats.get('created_cases', 0) if today_stats else 0
+        }
+    })
 
 @app.route('/api/auth/me', methods=['PUT'])
 @login_required
@@ -622,20 +652,24 @@ def api_execute_multiple_cases():
     if not isinstance(case_ids, list):
         return jsonify({'success': False, 'error': 'case_ids参数必须是数组'}), 400
     
-    # ===== 免费版执行次数限制检查 =====
+    # ===== 执行次数限制检查 =====
     user_id = current_user.id
     _db = Database()
     
     # 获取当前 License 信息
     license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
     is_free_user = license_info.license_type == LicenseType.FREE.value
     
+    # 获取今日已执行次数
+    today_stats = _db.get_user_usage_stats(user_id)
+    current_count = today_stats.get('execution_count', 0) if today_stats else 0
+    
+    # 获取每日执行限制（-1表示无限制）
+    daily_limit = limits.get('max_executions_per_day', -1)
+    
+    # 免费版每日限制10次
     if is_free_user:
-        # 获取今日已执行次数
-        today_stats = _db.get_user_usage_stats(user_id)
-        current_count = today_stats.get('execution_count', 0) if today_stats else 0
-        
-        # 免费版每日限制10次
         DAILY_LIMIT = 10
         
         if current_count >= DAILY_LIMIT:
@@ -660,8 +694,17 @@ def api_execute_multiple_cases():
                 'remaining': remaining,
                 'upgrade_url': '/upgrade'
             }), 403
+    elif daily_limit > 0 and current_count >= daily_limit:
+        # 非免费版但有每日限制的情况
+        return jsonify({
+            'success': False,
+            'error': f'今日执行次数已达上限（{daily_limit}次）。请联系管理员。',
+            'limit_reached': True,
+            'current_count': current_count,
+            'daily_limit': daily_limit
+        }), 403
     
-    # 记录执行次数（在限制检查通过后）
+    # 记录执行次数（所有版本都记录，用于统计和显示）
     new_count = _db.increment_execution_count(user_id)
     uat_logger.info(f"📊 [LICENSE] 用户 {user_id} 今日执行次数: {new_count}")
     
@@ -1434,20 +1477,63 @@ def api_update_step_order(case_id):
 
 # API: 运行测试用例
 @app.route('/api/cases/<int:case_id>/run', methods=['POST'])
+@login_required
 @api_error_handler
 @log_api_request
 def api_run_case(case_id):
     # 记录开始时间
     start_time = time.time()
-    
+
     # 初始化数据库连接（修复变量作用域问题）
     db = Database()
-    
+
+    # ===== 执行次数限制检查 =====
+    user_id = current_user.id
+
+    # 获取当前 License 信息
+    license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
+    is_free_user = license_info.license_type == LicenseType.FREE.value
+
+    # 获取今日已执行次数
+    today_stats = db.get_user_usage_stats(user_id)
+    current_count = today_stats.get('execution_count', 0) if today_stats else 0
+
+    # 获取每日执行限制（-1表示无限制）
+    daily_limit = limits.get('max_executions_per_day', -1)
+
+    # 免费版每日限制10次
+    if is_free_user:
+        DAILY_LIMIT = 10
+
+        if current_count >= DAILY_LIMIT:
+            return jsonify({
+                'success': False,
+                'error': f'今日执行次数已达上限（{DAILY_LIMIT}次）。请升级至专业版解除限制。',
+                'limit_reached': True,
+                'current_count': current_count,
+                'daily_limit': DAILY_LIMIT,
+                'upgrade_url': '/upgrade'
+            }), 403
+    elif daily_limit > 0 and current_count >= daily_limit:
+        # 非免费版但有每日限制的情况
+        return jsonify({
+            'success': False,
+            'error': f'今日执行次数已达上限（{daily_limit}次）。请联系管理员。',
+            'limit_reached': True,
+            'current_count': current_count,
+            'daily_limit': daily_limit
+        }), 403
+
+    # 记录执行次数（所有版本都记录，用于统计和显示）
+    new_count = db.increment_execution_count(user_id)
+    uat_logger.info(f"📊 [LICENSE] 用户 {user_id} 今日执行次数: {new_count}")
+
     # 获取测试用例信息
     case = db.get_test_case_v2(case_id)
     if not case:
         return jsonify({'error': '测试用例不存在'}), 404
-    
+
     # 获取测试步骤
     steps = db.get_case_steps(case_id)
     if not steps:
@@ -1456,7 +1542,7 @@ def api_run_case(case_id):
         uat_logger.warning(f"测试用例 #{case_id} 没有步骤，无法执行")
         return jsonify({'success': False, 'status': 'error', 'duration': 0,
                         'error': '该用例尚未添加任何步骤，请先编辑用例添加步骤后再执行。'})
-    
+
     uat_logger.info(f"开始运行测试用例 #{case_id}: {case['name']}")
     uat_logger.info(f"测试用例共有 {len(steps)} 个步骤")
     
@@ -2521,6 +2607,7 @@ def get_run_step_results(record_id):
 
 @app.route('/api/schedules', methods=['GET'])
 @login_required
+@feature_required('schedule')
 def api_get_schedules():
     _db = Database()
     schedules = _db.get_all_schedules()
@@ -2528,6 +2615,7 @@ def api_get_schedules():
 
 @app.route('/api/schedules', methods=['POST'])
 @login_required
+@feature_required('schedule')
 @role_required('admin', 'tester')
 def api_create_schedule():
     try:
@@ -2552,6 +2640,7 @@ def api_create_schedule():
 
 @app.route('/api/schedules/<int:schedule_id>', methods=['PUT'])
 @login_required
+@feature_required('schedule')
 @role_required('admin', 'tester')
 def api_update_schedule(schedule_id):
     try:
@@ -2577,6 +2666,7 @@ def api_update_schedule(schedule_id):
 
 @app.route('/api/schedules/<int:schedule_id>', methods=['DELETE'])
 @login_required
+@feature_required('schedule')
 @role_required('admin', 'tester')
 def api_delete_schedule(schedule_id):
     _db = Database()
@@ -2589,6 +2679,7 @@ def api_delete_schedule(schedule_id):
 
 @app.route('/api/schedules/<int:schedule_id>/run', methods=['POST'])
 @login_required
+@feature_required('schedule')
 @role_required('admin', 'tester')
 def api_run_schedule_now(schedule_id):
     """立即执行定时任务"""
@@ -2618,6 +2709,7 @@ def api_run_schedule_now(schedule_id):
 
 @app.route('/api/schedules/<int:schedule_id>/history', methods=['GET'])
 @login_required
+@feature_required('schedule')
 def api_get_schedule_history(schedule_id):
     """获取定时任务执行历史"""
     _db = Database()
@@ -3168,8 +3260,8 @@ def user_management_page():
 def api_get_user_license_info():
     """获取当前用户的 License 信息和使用情况"""
     try:
-        # 清除缓存，强制重新读取 license 文件
-        license_manager._cached_license = None
+        # 使用缓存的 license 信息，提高性能
+        # 只有在激活新 license 时才需要清除缓存
         license_info = license_manager.get_current_license()
         limits = license_manager.get_limits()
         
@@ -3216,6 +3308,8 @@ def api_activate_license():
     
     # 保存 License
     if license_manager.save_license(license_key):
+        # 清除缓存，使新 license 立即生效
+        license_manager._cached_license = None
         return jsonify({
             'success': True,
             'message': 'License 激活成功',
@@ -3942,6 +4036,7 @@ def allure_report_page():
 
 @app.route('/defects')
 @login_required
+@feature_required('defect_management')
 def defects_page():
     """缺陷管理页面"""
     return render_template('defects.html')
@@ -3954,6 +4049,7 @@ def defect_detail_page(defect_id):
 
 @app.route('/api/defects', methods=['GET'])
 @login_required
+@feature_required('defect_management')
 @api_error_handler
 @log_api_request
 def api_get_defects():
@@ -3975,6 +4071,7 @@ def api_get_defects():
 
 @app.route('/api/defects', methods=['POST'])
 @login_required
+@feature_required('defect_management')
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
@@ -4016,6 +4113,7 @@ def api_create_defect():
 
 @app.route('/api/defects/batch_from_cases', methods=['POST'])
 @login_required
+@feature_required('defect_management')
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
@@ -4071,6 +4169,7 @@ def api_batch_create_defects_from_cases():
 
 @app.route('/api/defects/<int:defect_id>', methods=['GET'])
 @login_required
+@feature_required('defect_management')
 @api_error_handler
 @log_api_request
 def api_get_defect(defect_id):
@@ -4083,6 +4182,7 @@ def api_get_defect(defect_id):
 
 @app.route('/api/defects/<int:defect_id>', methods=['PUT'])
 @login_required
+@feature_required('defect_management')
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
@@ -4100,6 +4200,7 @@ def api_update_defect(defect_id):
 
 @app.route('/api/defects/<int:defect_id>', methods=['DELETE'])
 @login_required
+@feature_required('defect_management')
 @role_required('admin', 'project_manager')
 @api_error_handler
 @log_api_request
@@ -4112,6 +4213,7 @@ def api_delete_defect(defect_id):
 
 @app.route('/api/defects/<int:defect_id>/status', methods=['PUT'])
 @login_required
+@feature_required('defect_management')
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
@@ -4149,6 +4251,7 @@ def api_update_defect_status(defect_id):
 
 @app.route('/api/defects/<int:defect_id>/comments', methods=['GET'])
 @login_required
+@feature_required('defect_management')
 @api_error_handler
 @log_api_request
 def api_get_defect_comments(defect_id):
@@ -4159,6 +4262,7 @@ def api_get_defect_comments(defect_id):
 
 @app.route('/api/defects/<int:defect_id>/comments', methods=['POST'])
 @login_required
+@feature_required('defect_management')
 @api_error_handler
 @log_api_request
 def api_add_defect_comment(defect_id):
@@ -4175,6 +4279,7 @@ def api_add_defect_comment(defect_id):
 
 @app.route('/api/defects/<int:defect_id>/history', methods=['GET'])
 @login_required
+@feature_required('defect_management')
 @api_error_handler
 @log_api_request
 def api_get_defect_history(defect_id):
@@ -4185,6 +4290,7 @@ def api_get_defect_history(defect_id):
 
 @app.route('/api/defects/from-failure', methods=['POST'])
 @login_required
+@feature_required('defect_management')
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
@@ -4211,6 +4317,7 @@ def api_create_defect_from_failure():
 
 @app.route('/api/defects/statistics', methods=['GET'])
 @login_required
+@feature_required('defect_management')
 @api_error_handler
 @log_api_request
 def api_get_defect_statistics():

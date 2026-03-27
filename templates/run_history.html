@@ -1,940 +1,762 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>运行历史记录 - UI自动化测试平台</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background-color: #f5f5f5;
-            margin: 0;
-            padding: 0;
-        }
-        
-        .container {
-            max-width: 1400px;
-            margin: 32px auto;
-            padding: 0 16px;
-        }
-        
-        .card {
-            background-color: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-            padding: 24px;
-            margin-bottom: 24px;
-        }
-        
-        .card h2 {
-            margin-top: 0;
-            margin-bottom: 20px;
-            font-size: 18px;
-            font-weight: 600;
-            color: #333;
-        }
-        
-        .filter-bar {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }
-        
-        .filter-bar input,
-        .filter-bar select {
-            padding: 8px 12px;
-            border: 1px solid #d9d9d9;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        
-        .filter-bar button {
-            padding: 8px 16px;
-            background-color: #1890ff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        
-        .filter-bar button:hover {
-            background-color: #40a9ff;
-        }
-        
-        .filter-bar .delete-all-btn {
-            background-color: #ff4d4f;
-        }
-        
-        .filter-bar .delete-all-btn:hover {
-            background-color: #ff7875;
-        }
-        
-        .history-table {
-            width: 100%;
-            border-collapse: collapse;
-            table-layout: fixed;
-        }
-        
-        .history-table th:nth-child(1),
-        .history-table td:nth-child(1) {
-            width: 60px;
-        }
-        
-        .history-table th:nth-child(2),
-        .history-table td:nth-child(2) {
-            width: 150px;
-        }
-        
-        .history-table th:nth-child(3),
-        .history-table td:nth-child(3) {
-            width: 80px;
-        }
-        
-        .history-table th:nth-child(4),
-        .history-table td:nth-child(4) {
-            width: 80px;
-        }
-        
-        .history-table th:nth-child(5),
-        .history-table td:nth-child(5) {
-            width: 250px;
-        }
-        
-        .history-table th:nth-child(6),
-        .history-table td:nth-child(6) {
-            width: 400px;
-        }
-        
-        .history-table th:nth-child(7),
-        .history-table td:nth-child(7) {
-            width: 150px;
-        }
-        
-        .history-table th:nth-child(8),
-        .history-table td:nth-child(8) {
-            width: 140px;
-        }
-        
-        .history-table th,
-        .history-table td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #f0f0f0;
-            writing-mode: horizontal-tb;
-            vertical-align: middle;
-        }
-        
-        .history-table th {
-            background-color: #fafafa;
-            font-weight: 600;
-            font-size: 14px;
-            color: #333;
-        }
-        
-        .history-table td {
-            font-size: 14px;
-            color: #666;
-        }
-        
-        .status-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .status-passed {
-            background-color: #f6ffed;
-            color: #52c41a;
-            border: 1px solid #b7eb8f;
-        }
-        
-        .status-failed {
-            background-color: #fff2f0;
-            color: #ff4d4f;
-            border: 1px solid #ffccc7;
-        }
-        
-        .text-preview {
-            max-width: 300px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            cursor: pointer;
-        }
-        
-        .text-preview:hover {
-            overflow: visible;
-            white-space: normal;
-            background-color: #f9f9f9;
-            padding: 4px;
-            border-radius: 4px;
-            position: relative;
-            z-index: 10;
-        }
-        
-        .error-message {
-            color: #ff4d4f;
-            font-size: 12px;
-            max-width: 100%;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            cursor: pointer;
-        }
-        
-        .error-message:hover {
-            overflow: visible;
-            white-space: normal;
-            background-color: #f9f9f9;
-            padding: 4px;
-            border-radius: 4px;
-            position: relative;
-            z-index: 10;
-        }
-        
-        .action-buttons {
-            display: flex;
-            gap: 8px;
-        }
-        
-        .action-buttons button {
-            padding: 4px 12px;
-            border: 1px solid #d9d9d9;
-            border-radius: 4px;
-            background-color: #f0f0f0;
-            cursor: pointer;
-            font-size: 12px;
-            white-space: nowrap;
-            writing-mode: horizontal-tb;
-            width: 50px;
-        }
-        
-        .action-buttons button:hover {
-            border-color: #1890ff;
-            color: #1890ff;
-            background-color: #e6f7ff;
-        }
-        
-        .action-buttons .detail-btn {
-            border-color: #1890ff;
-            color: white;
-            background-color: #1890ff;
-        }
-        
-        .action-buttons .detail-btn:hover {
-            background-color: #40a9ff;
-            border-color: #40a9ff;
-        }
-        
-        .action-buttons .delete-btn {
-            border-color: #ff4d4f;
-            color: white;
-            background-color: #ff4d4f;
-        }
-        
-        .action-buttons .delete-btn:hover {
-            background-color: #ff7875;
-            border-color: #ff7875;
-        }
-        
-        /* 详情模态框样式 */
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.4);
-        }
-        
-        .modal-content {
-            background-color: #fefefe;
-            margin: 15% auto;
-            padding: 20px;
-            border: 1px solid #888;
-            width: 80%;
-            max-width: 800px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #e8e8e8;
-        }
-        
-        .modal-header h3 {
-            margin: 0;
-            font-size: 16px;
-            font-weight: 600;
-            color: #333;
-        }
-        
-        .close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        
-        .close:hover,
-        .close:focus {
-            color: black;
-            text-decoration: none;
-            cursor: pointer;
-        }
-        
-        .detail-section {
-            margin-bottom: 16px;
-        }
-        
-        .detail-label {
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 4px;
-            display: block;
-            font-size: 14px;
-        }
-        
-        .detail-value {
-            font-size: 14px;
-            color: #666;
-            line-height: 1.5;
-        }
-        
-        .detail-value pre {
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            background-color: #f9f9f9;
-            padding: 12px;
-            border-radius: 4px;
-            border: 1px solid #e8e8e8;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: #999;
-        }
-        
-        .empty-state i {
-            font-size: 48px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-        
-        .empty-state p {
-            margin: 0;
-            font-size: 14px;
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 40px 20px;
-            color: #666;
-        }
-        
-        .pagination {
-            margin-top: 20px;
-            display: flex;
-            justify-content: flex-end;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .pagination button {
-            padding: 4px 12px;
-            border: 1px solid #d9d9d9;
-            border-radius: 4px;
-            background-color: #f0f0f0;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        
-        .pagination button:hover {
-            border-color: #1890ff;
-            color: #1890ff;
-            background-color: #e6f7ff;
-        }
-        
-        .pagination button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            background-color: #fafafa;
-        }
-        
-        .pagination .page-info {
-            font-size: 14px;
-            color: #666;
-        }
-    </style>
-</head>
-<body>
-        <!-- 导航栏 -->
-    <nav class="bg-white shadow-md">
-        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
-            <!-- 左侧：Logo -->
-            <div class="flex items-center gap-3">
-                <i class="fas fa-robot text-blue-600 text-2xl"></i>
-                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
-            </div>
-            <!-- 右侧：功能按钮 + 用户信息 -->
-            <div class="flex items-center gap-2">
-                <a href="/" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-500 text-white hover:bg-blue-600" title="首页">
-                    <i class="fas fa-home"></i>
-                </a>
-                <a href="/list_projects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-green-500 text-white hover:bg-green-600" title="项目管理">
-                    <i class="fas fa-folder mr-1"></i>项目
-                </a>
-                <a href="/run-history" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600" title="运行历史">
-                    <i class="fas fa-history mr-1"></i>历史
-                </a>
-                <a href="/data-driven" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-600 text-white hover:bg-purple-700" title="数据驱动">
-                    <i class="fas fa-table mr-1"></i>数据
-                </a>
-                <a href="/test_report" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700" title="测试报告">
-                    <i class="fas fa-chart-bar mr-1"></i>报告
-                </a>
-                <a href="/schedules" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-orange-500 text-white hover:bg-orange-600" title="定时任务">
-                    <i class="fas fa-clock mr-1"></i>定时
-                </a>
-                <a href="/notifications" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-pink-500 text-white hover:bg-pink-600" title="通知配置">
-                    <i class="fas fa-bell mr-1"></i>通知
-                </a>
-                <a href="/defects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-red-600 text-white hover:bg-red-700" title="缺陷管理">
-                    <i class="fas fa-bug mr-1"></i>缺陷
-                </a>
-                <!-- 用户信息区（最右边） -->
-                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
-                    <!-- 用户下拉菜单 -->
-                    <div id="userDropdown" class="relative hidden">
-                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
-                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
-                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
-                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
-                        </button>
-                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
-                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
-                            </a>
-                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
-                            </a>
-                            <div class="border-t border-gray-100 my-1"></div>
-                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
-                                <i class="fas fa-sign-out-alt mr-2"></i>注销
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </nav>
+{% extends "base.html" %}
+
+{% block title %}运行历史记录 - UI自动化测试平台{% endblock %}
+
+{% block head %}
+<style>
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        background-color: #f5f5f5;
+        margin: 0;
+        padding: 0;
+    }
     
-    <div class="container">
-        <div class="card">
-            <h2>运行历史记录</h2>
-            
-            <div class="filter-bar">
-                <select id="projectFilter">
-                    <option value="">所有项目</option>
-                </select>
-                <input type="text" id="searchInput" placeholder="搜索测试用例名称...">
-                <select id="statusFilter">
-                    <option value="">所有状态</option>
-                    <option value="passed">通过</option>
-                    <option value="failed">失败</option>
-                </select>
-                <button onclick="searchHistory()">查询</button>
-                <button onclick="deleteAllHistory()" class="delete-all-btn">全部删除</button>
-            </div>
-            
-            <div id="historyContainer">
-                <div class="loading">加载中...</div>
-            </div>
+    .container {
+        max-width: 1400px;
+        margin: 32px auto;
+        padding: 0 16px;
+    }
+    
+    .card {
+        background-color: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        padding: 24px;
+        margin-bottom: 24px;
+    }
+    
+    .card h2 {
+        margin-top: 0;
+        margin-bottom: 20px;
+        font-size: 18px;
+        font-weight: 600;
+        color: #333;
+    }
+    
+    .filter-bar {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+    
+    .filter-bar input,
+    .filter-bar select {
+        padding: 8px 12px;
+        border: 1px solid #d9d9d9;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+    
+    .filter-bar button {
+        padding: 8px 16px;
+        background-color: #1890ff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+    }
+    
+    .filter-bar button:hover {
+        background-color: #40a9ff;
+    }
+    
+    .filter-bar .delete-all-btn {
+        background-color: #ff4d4f;
+    }
+    
+    .filter-bar .delete-all-btn:hover {
+        background-color: #ff7875;
+    }
+    
+    .history-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+    
+    .history-table th:nth-child(1),
+    .history-table td:nth-child(1) {
+        width: 60px;
+    }
+    
+    .history-table th:nth-child(2),
+    .history-table td:nth-child(2) {
+        width: 150px;
+    }
+    
+    .history-table th:nth-child(3),
+    .history-table td:nth-child(3) {
+        width: 80px;
+    }
+    
+    .history-table th:nth-child(4),
+    .history-table td:nth-child(4) {
+        width: 80px;
+    }
+    
+    .history-table th:nth-child(5),
+    .history-table td:nth-child(5) {
+        width: 250px;
+    }
+    
+    .history-table th:nth-child(6),
+    .history-table td:nth-child(6) {
+        width: 400px;
+    }
+    
+    .history-table th:nth-child(7),
+    .history-table td:nth-child(7) {
+        width: 150px;
+    }
+    
+    .history-table th:nth-child(8),
+    .history-table td:nth-child(8) {
+        width: 140px;
+    }
+    
+    .history-table th,
+    .history-table td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid #f0f0f0;
+        writing-mode: horizontal-tb;
+        vertical-align: middle;
+    }
+    
+    .history-table th {
+        background-color: #fafafa;
+        font-weight: 600;
+        font-size: 14px;
+        color: #333;
+    }
+    
+    .history-table td {
+        font-size: 14px;
+        color: #666;
+    }
+    
+    .status-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    
+    .status-passed {
+        background-color: #f6ffed;
+        color: #52c41a;
+        border: 1px solid #b7eb8f;
+    }
+    
+    .status-failed {
+        background-color: #fff2f0;
+        color: #ff4d4f;
+        border: 1px solid #ffccc7;
+    }
+    
+    .text-preview {
+        max-width: 300px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: pointer;
+    }
+    
+    .text-preview:hover {
+        overflow: visible;
+        white-space: normal;
+        background-color: #f9f9f9;
+        padding: 4px;
+        border-radius: 4px;
+        position: relative;
+        z-index: 10;
+    }
+    
+    .error-message {
+        color: #ff4d4f;
+        font-size: 12px;
+        max-width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: pointer;
+    }
+    
+    .error-message:hover {
+        overflow: visible;
+        white-space: normal;
+        background-color: #f9f9f9;
+        padding: 4px;
+        border-radius: 4px;
+        position: relative;
+        z-index: 10;
+    }
+    
+    .action-buttons {
+        display: flex;
+        gap: 8px;
+    }
+    
+    .action-buttons button {
+        padding: 4px 12px;
+        border: 1px solid #d9d9d9;
+        border-radius: 4px;
+        background-color: #f0f0f0;
+        cursor: pointer;
+        font-size: 12px;
+        white-space: nowrap;
+        writing-mode: horizontal-tb;
+        width: 50px;
+    }
+    
+    .action-buttons button:hover {
+        border-color: #1890ff;
+        color: #1890ff;
+        background-color: #e6f7ff;
+    }
+    
+    .action-buttons .detail-btn {
+        border-color: #1890ff;
+        color: white;
+        background-color: #1890ff;
+    }
+    
+    .action-buttons .detail-btn:hover {
+        background-color: #40a9ff;
+        border-color: #40a9ff;
+    }
+    
+    .action-buttons .delete-btn {
+        border-color: #ff4d4f;
+        color: white;
+        background-color: #ff4d4f;
+    }
+    
+    .action-buttons .delete-btn:hover {
+        background-color: #ff7875;
+        border-color: #ff7875;
+    }
+    
+    /* 详情模态框样式 */
+    .modal {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        background-color: rgba(0,0,0,0.4);
+    }
+    
+    .modal-content {
+        background-color: #fefefe;
+        margin: 15% auto;
+        padding: 20px;
+        border: 1px solid #888;
+        width: 80%;
+        max-width: 800px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #e8e8e8;
+    }
+    
+    .modal-header h3 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        color: #333;
+    }
+    
+    .close {
+        color: #aaa;
+        float: right;
+        font-size: 28px;
+        font-weight: bold;
+        cursor: pointer;
+    }
+    
+    .close:hover,
+    .close:focus {
+        color: black;
+        text-decoration: none;
+        cursor: pointer;
+    }
+    
+    .detail-section {
+        margin-bottom: 16px;
+    }
+    
+    .detail-label {
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 4px;
+        display: block;
+        font-size: 14px;
+    }
+    
+    .detail-value {
+        font-size: 14px;
+        color: #666;
+        line-height: 1.5;
+    }
+    
+    .detail-value pre {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        background-color: #f9f9f9;
+        padding: 12px;
+        border-radius: 4px;
+        border: 1px solid #e8e8e8;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: #999;
+    }
+    
+    .empty-state i {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.5;
+    }
+    
+    .empty-state p {
+        margin: 0;
+        font-size: 14px;
+    }
+    
+    .loading {
+        text-align: center;
+        padding: 40px 20px;
+        color: #666;
+    }
+    
+    .pagination {
+        margin-top: 20px;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .pagination button {
+        padding: 4px 12px;
+        border: 1px solid #d9d9d9;
+        border-radius: 4px;
+        background-color: #f0f0f0;
+        cursor: pointer;
+        font-size: 12px;
+    }
+    
+    .pagination button:hover {
+        border-color: #1890ff;
+        color: #1890ff;
+        background-color: #e6f7ff;
+    }
+    
+    .pagination button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        background-color: #fafafa;
+    }
+    
+    .pagination .page-info {
+        font-size: 14px;
+        color: #666;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h2>运行历史记录</h2>
+        
+        <div class="filter-bar">
+            <select id="projectFilter">
+                <option value="">所有项目</option>
+            </select>
+            <input type="text" id="searchInput" placeholder="搜索测试用例名称...">
+            <select id="statusFilter">
+                <option value="">所有状态</option>
+                <option value="passed">通过</option>
+                <option value="failed">失败</option>
+            </select>
+            <button onclick="searchHistory()">查询</button>
+            <button onclick="deleteAllHistory()" class="delete-all-btn">全部删除</button>
+        </div>
+        
+        <div id="historyContainer">
+            <div class="loading">加载中...</div>
         </div>
     </div>
-    
-    <!-- 详情模态框 -->
-    <div id="detailModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>运行记录详情</h3>
-                <span class="close">&times;</span>
-            </div>
-            <div id="detailContent">
-                <div class="loading">加载中...</div>
-            </div>
+</div>
+
+<!-- 详情模态框 -->
+<div id="detailModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>运行记录详情</h3>
+            <span class="close">&times;</span>
+        </div>
+        <div id="detailContent">
+            <div class="loading">加载中...</div>
         </div>
     </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentPage = 1;
+    let totalPages = 1;
+    const pageSize = 20;
     
-    <script>
-        let currentPage = 1;
-        let totalPages = 1;
-        const pageSize = 20;
+    // 页面加载时获取运行历史记录和项目列表
+    document.addEventListener('DOMContentLoaded', function() {
+        // 延迟加载项目列表，确保页面已经完全加载
+        setTimeout(loadProjects, 100);
+        // 延迟加载运行历史记录，确保项目列表已经加载完成
+        setTimeout(loadRunHistory, 200);
+    });
+    
+    // 加载项目列表
+    function loadProjects() {
+        const projectFilter = document.getElementById('projectFilter');
+        if (!projectFilter) {
+            console.error('找不到项目过滤器元素');
+            return;
+        }
         
-        // 页面加载时获取运行历史记录和项目列表
-        document.addEventListener('DOMContentLoaded', function() {
-            // 延迟加载项目列表，确保页面已经完全加载
-            setTimeout(loadProjects, 100);
-            // 延迟加载运行历史记录，确保项目列表已经加载完成
-            setTimeout(loadRunHistory, 200);
-        });
-        
-        // 加载项目列表
-        function loadProjects() {
-            const projectFilter = document.getElementById('projectFilter');
-            if (!projectFilter) {
-                console.error('找不到项目过滤器元素');
-                return;
-            }
-            
-            // 使用XMLHttpRequest代替fetch，提高兼容性
-            const xhr = new XMLHttpRequest();
-            xhr.open('GET', '/api/projects', true);
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState === 4) {
-                    if (xhr.status === 200) {
-                        try {
-                            const data = JSON.parse(xhr.responseText);
-                            if (data && data.projects && Array.isArray(data.projects)) {
-                                // 清空现有选项，保留"所有项目"
-                                projectFilter.innerHTML = '<option value="">所有项目</option>';
-                                // 添加项目选项
-                                for (let i = 0; i < data.projects.length; i++) {
-                                    const project = data.projects[i];
-                                    if (project && project.id && project.name) {
-                                        const option = document.createElement('option');
-                                        option.value = project.id;
-                                        option.textContent = project.name;
-                                        projectFilter.appendChild(option);
-                                    }
+        // 使用XMLHttpRequest代替fetch，提高兼容性
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', '/api/projects', true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        if (data && data.projects && Array.isArray(data.projects)) {
+                            // 清空现有选项，保留"所有项目"
+                            projectFilter.innerHTML = '<option value="">所有项目</option>';
+                            // 添加项目选项
+                            for (let i = 0; i < data.projects.length; i++) {
+                                const project = data.projects[i];
+                                if (project && project.id && project.name) {
+                                    const option = document.createElement('option');
+                                    option.value = project.id;
+                                    option.textContent = project.name;
+                                    projectFilter.appendChild(option);
                                 }
-                            } else {
-                                console.warn('项目列表数据格式不正确或为空');
-                                projectFilter.innerHTML = '<option value="">所有项目</option>';
                             }
-                        } catch (error) {
-                            console.error('解析项目列表数据失败:', error);
+                        } else {
+                            console.warn('项目列表数据格式不正确或为空');
                             projectFilter.innerHTML = '<option value="">所有项目</option>';
                         }
-                    } else {
-                        console.error('加载项目列表失败:', xhr.status, xhr.statusText);
+                    } catch (error) {
+                        console.error('解析项目列表数据失败:', error);
                         projectFilter.innerHTML = '<option value="">所有项目</option>';
                     }
+                } else {
+                    console.error('加载项目列表失败:', xhr.status, xhr.statusText);
+                    projectFilter.innerHTML = '<option value="">所有项目</option>';
                 }
-            };
-            xhr.onerror = function() {
-                console.error('加载项目列表网络错误');
-                projectFilter.innerHTML = '<option value="">所有项目</option>';
-            };
-            xhr.send();
+            }
+        };
+        xhr.onerror = function() {
+            console.error('加载项目列表网络错误');
+            projectFilter.innerHTML = '<option value="">所有项目</option>';
+        };
+        xhr.send();
+    }
+    
+    // 加载运行历史记录
+    function loadRunHistory(ignoreCaseId = false) {
+        const projectFilter = document.getElementById('projectFilter');
+        const searchInput = document.getElementById('searchInput');
+        const statusFilter = document.getElementById('statusFilter');
+        const container = document.getElementById('historyContainer');
+        
+        // 检查必要的DOM元素是否存在
+        if (!projectFilter || !searchInput || !statusFilter || !container) {
+            console.error('找不到必要的页面元素');
+            return;
         }
         
-        // 加载运行历史记录
-        function loadRunHistory(ignoreCaseId = false) {
-            const projectFilter = document.getElementById('projectFilter');
-            const searchInput = document.getElementById('searchInput');
-            const statusFilter = document.getElementById('statusFilter');
-            const container = document.getElementById('historyContainer');
-            
-            // 检查必要的DOM元素是否存在
-            if (!projectFilter || !searchInput || !statusFilter || !container) {
-                console.error('找不到必要的页面元素');
-                return;
-            }
-            
-            const projectId = projectFilter.value;
-            const searchText = searchInput.value;
-            const statusFilterValue = statusFilter.value;
-            
-            // 获取URL中的case_id参数
-            const urlParams = new URLSearchParams(window.location.search);
-            const caseId = ignoreCaseId ? null : urlParams.get('case_id');
-            
-            container.innerHTML = '<div class="loading">加载中...</div>';
-            
-            // 构建API请求URL
-            let apiUrl = `/api/run-history?page=${currentPage}&page_size=${pageSize}`;
-            if (caseId) {
-                apiUrl += `&case_id=${caseId}`;
-            }
-            if (projectId && projectId !== '') {
-                apiUrl += `&project_id=${projectId}`;
-            }
-            if (searchText && searchText.trim()) {
-                apiUrl += `&search_text=${encodeURIComponent(searchText.trim())}`;
-            }
-            
-            // 发送分页参数到后端
-            fetch(apiUrl)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data && data.success) {
-                        let history = data.history || [];
-                        const total = data.total || 0;
-                        
-                        // 应用状态过滤器
-                        if (statusFilterValue) {
-                            if (statusFilterValue === 'passed') {
-                                // 当过滤"通过"状态时，同时显示 'passed' 和 'success' 状态的记录
-                                history = history.filter(item => item && ['passed', 'success'].includes(item.status));
-                            } else if (statusFilterValue === 'failed') {
-                                // 当过滤"失败"状态时，显示除了 'passed' 和 'success' 之外的所有状态
-                                history = history.filter(item => item && !['passed', 'success'].includes(item.status));
-                            } else {
-                                history = history.filter(item => item && item.status === statusFilterValue);
-                            }
-                            // 状态过滤后重新计算总页数
-                            totalPages = Math.ceil(history.length / pageSize);
-                        } else {
-                            // 计算总页数（基于后端返回的总数）
-                            totalPages = Math.ceil(total / pageSize);
+        const projectId = projectFilter.value;
+        const searchText = searchInput.value;
+        const statusFilterValue = statusFilter.value;
+        
+        // 获取URL中的case_id参数
+        const urlParams = new URLSearchParams(window.location.search);
+        const caseId = ignoreCaseId ? null : urlParams.get('case_id');
+        
+        container.innerHTML = '<div class="loading">加载中...</div>';
+        
+        // 构建API请求URL
+        let apiUrl = `/api/run-history?page=${currentPage}&page_size=${pageSize}`;
+        if (caseId) {
+            apiUrl += `&case_id=${caseId}`;
+        }
+        if (projectId && projectId !== '') {
+            apiUrl += `&project_id=${projectId}`;
+        }
+        if (searchText && searchText.trim()) {
+            apiUrl += `&search_text=${encodeURIComponent(searchText.trim())}`;
+        }
+        
+        // 发送分页参数到后端
+        fetch(apiUrl)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data && data.success) {
+                    let history = data.history || [];
+                    const total = data.total || 0;
+                    
+                    // 应用状态过滤器
+                    if (statusFilterValue) {
+                        if (statusFilterValue === 'passed') {
+                            history = history.filter(item => item.status === 'passed' || item.status === 'success');
+                        } else if (statusFilterValue === 'failed') {
+                            history = history.filter(item => item.status === 'failed' || item.status === 'error');
                         }
-                        
-                        renderHistoryTable(history, totalPages);
-                    } else {
-                        const errorMsg = data && data.error ? data.error : '获取历史记录失败';
-                        container.innerHTML = `<div class="empty-state"><i>📋</i><p>${errorMsg}</p></div>`;
                     }
-                })
-                .catch(error => {
-                    console.error('Error loading run history:', error);
-                    container.innerHTML = '<div class="empty-state"><i>📋</i><p>网络错误，请刷新页面重试</p></div>';
-                });
-        }
-        
-        // 渲染历史记录表格
-        function renderHistoryTable(history, totalPages) {
-            const container = document.getElementById('historyContainer');
-            
-            if (!container) {
-                console.error('找不到历史记录容器元素');
-                return;
-            }
-            
-            // 确保history是数组
-            if (!Array.isArray(history)) {
-                console.error('历史记录数据不是数组格式:', history);
-                container.innerHTML = '<div class="empty-state"><i>📋</i><p>数据格式错误</p></div>';
-                return;
-            }
-            
-            if (history.length === 0) {
-                container.innerHTML = '<div class="empty-state"><i>📋</i><p>暂无运行历史记录</p></div>';
-                return;
-            }
-            
-            let tableHTML = `
-                <table class="history-table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>测试用例</th>
-                            <th>状态</th>
-                            <th>耗时(秒)</th>
-                            <th>提取文本</th>
-                            <th>错误信息</th>
-                            <th>运行时间</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-            `;
-            
-            history.forEach(item => {
-                // 确保item存在且具有必要的属性
-                if (!item || typeof item !== 'object') {
-                    console.warn('发现无效的历史记录项:', item);
-                    return;
-                }
-                
-                const itemId = item.id || '';
-                const caseName = item.case_name || '未知用例';
-                const status = item.status || 'unknown';
-                const duration = item.duration || 0;
-                const extractedText = item.extracted_text || '';
-                const errorMsg = item.error || '';
-                const createdAt = item.created_at || '';
-                
-                tableHTML += `
-                    <tr>
-                        <td>${itemId}</td>
-                        <td>${caseName}</td>
-                        <td>
-                            <span class="status-badge status-${status}">
-                                ${['passed', 'success'].includes(status) ? '通过' : '失败'}
-                            </span>
-                        </td>
-                        <td>${duration}</td>
-                        <td>
-                            <div class="text-preview" title="${extractedText}">
-                                ${extractedText ? (extractedText.length > 50 ? extractedText.substring(0, 50) + '...' : extractedText) : '-'}
-                            </div>
-                        </td>
-                        <td>
-                            <div class="error-message" title="${errorMsg}">
-                                ${errorMsg ? errorMsg.substring(0, 50) + '...' : '-'}
-                            </div>
-                        </td>
-                        <td>${formatDateTime(createdAt)}</td>
-                        <td>
-                            <div class="action-buttons">
-                                <button onclick="viewRunHistoryDetails(${itemId})" class="detail-btn">详情</button>
-                                <button onclick="deleteRunHistory(${itemId})" class="delete-btn">删除</button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            });
-            
-            tableHTML += `
-                    </tbody>
-                </table>
-            `;
-            
-            // 添加分页
-            if (totalPages > 1) {
-                tableHTML += `
-                    <div class="pagination">
-                        <button onclick="changePage(1)" ${currentPage === 1 ? 'disabled' : ''}>首页</button>
-                        <button onclick="changePage(currentPage - 1)" ${currentPage === 1 ? 'disabled' : ''}>上一页</button>
-                        <span class="page-info">第 ${currentPage} / ${totalPages} 页</span>
-                        <button onclick="changePage(currentPage + 1)" ${currentPage === totalPages ? 'disabled' : ''}>下一页</button>
-                        <button onclick="changePage(totalPages)" ${currentPage === totalPages ? 'disabled' : ''}>末页</button>
-                    </div>
-                `;
-            }
-            
-            container.innerHTML = tableHTML;
-        }
-        
-        // 切换分页
-        function changePage(page) {
-            currentPage = page;
-            loadRunHistory();
-        }
-        
-        // 搜索历史记录
-        function searchHistory() {
-            currentPage = 1;
-            loadRunHistory(true);
-        }
-        
-        // 删除运行历史记录
-        function deleteRunHistory(recordId) {
-            if (!confirm('确定要删除这条运行记录吗？')) {
-                return;
-            }
-            
-            fetch(`/api/run-history/${recordId}`, {
-                method: 'DELETE'
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        alert('删除成功');
-                        loadRunHistory();
-                    } else {
-                        alert('删除失败');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error deleting run history:', error);
-                    alert('删除失败，请重试');
-                });
-        }
-        
-        // 删除所有运行历史记录
-        function deleteAllHistory() {
-            if (!confirm('确定要删除所有运行记录吗？此操作不可恢复！')) {
-                return;
-            }
-            
-            fetch('/api/run-history', {
-                method: 'DELETE'
-            })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        alert(data.message || '删除成功');
-                        loadRunHistory();
-                    } else {
-                        alert('删除失败');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error deleting all run history:', error);
-                    alert('删除失败，请重试');
-                });
-        }
-        
-        // 格式化日期时间
-        function formatDateTime(dateTimeStr) {
-            const date = new Date(dateTimeStr);
-            return date.toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit'
-            });
-        }
-        
-        // 查看运行历史记录详情
-        function viewRunHistoryDetails(recordId) {
-            const modal = document.getElementById('detailModal');
-            const content = document.getElementById('detailContent');
-            content.innerHTML = '<div class="loading">加载中...</div>';
-            
-            // 显示模态框
-            modal.style.display = 'block';
-            
-            // 发送请求获取详情
-            fetch(`/api/run-history/${recordId}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        const record = data.record;
-                        content.innerHTML = `
-                            <div class="detail-section">
-                                <span class="detail-label">ID</span>
-                                <span class="detail-value">${record.id}</span>
-                            </div>
-                            <div class="detail-section">
-                                <span class="detail-label">测试用例</span>
-                                <span class="detail-value">${record.case_name}</span>
-                            </div>
-                            <div class="detail-section">
-                                <span class="detail-label">状态</span>
-                                <span class="detail-value">
-                                    <span class="status-badge status-${record.status}">
-                                        ${['passed', 'success'].includes(record.status) ? '通过' : '失败'}
-                                    </span>
-                                </span>
-                            </div>
-                            <div class="detail-section">
-                                <span class="detail-label">耗时(秒)</span>
-                                <span class="detail-value">${record.duration}</span>
-                            </div>
-                            <div class="detail-section">
-                                <span class="detail-label">提取文本</span>
-                                <span class="detail-value">
-                                    ${record.extracted_text ? `<pre>${record.extracted_text}</pre>` : '<span style="color: #999;">-</span>'}
-                                </span>
-                            </div>
-                            <div class="detail-section">
-                                <span class="detail-label">预期结果</span>
-                                <span class="detail-value">
-                                    ${record.expected_text ? `<pre>${record.expected_text}</pre>` : '<span style="color: #999;">-</span>'}
-                                </span>
-                            </div>
-                            <div class="detail-section">
-                                <span class="detail-label">错误信息</span>
-                                <span class="detail-value">
-                                    ${record.error ? `<pre>${record.error}</pre>` : '<span style="color: #999;">-</span>'}
-                                </span>
-                            </div>
-                            <div class="detail-section">
-                                <span class="detail-label">运行时间</span>
-                                <span class="detail-value">${formatDateTime(record.created_at)}</span>
+                    
+                    // 更新总页数
+                    totalPages = Math.ceil(total / pageSize) || 1;
+                    
+                    if (history.length === 0) {
+                        container.innerHTML = `
+                            <div class="empty-state">
+                                <i class="fas fa-inbox"></i>
+                                <p>暂无运行历史记录</p>
                             </div>
                         `;
                     } else {
-                        content.innerHTML = '<div style="color: #ff4d4f;">获取详情失败</div>';
+                        renderHistoryTable(history, total);
                     }
-                })
-                .catch(error => {
-                    console.error('Error loading run history details:', error);
-                    content.innerHTML = '<div style="color: #ff4d4f;">网络错误，请重试</div>';
-                });
-        }
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-exclamation-circle"></i>
+                            <p>加载失败: ${data.message || '未知错误'}</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error('加载运行历史记录失败:', error);
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <p>加载失败，请稍后重试</p>
+                    </div>
+                `;
+            });
+    }
+    
+    // 渲染历史记录表格
+    function renderHistoryTable(history, total) {
+        const container = document.getElementById('historyContainer');
         
-        // 关闭模态框
-        document.querySelector('.close').onclick = function() {
-            document.getElementById('detailModal').style.display = 'none';
-        }
+        let html = `
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>用例名称</th>
+                        <th>用例ID</th>
+                        <th>状态</th>
+                        <th>执行时间</th>
+                        <th>输出预览</th>
+                        <th>错误信息</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
         
-        // 点击模态框外部关闭
-        window.onclick = function(event) {
-            const modal = document.getElementById('detailModal');
-            if (event.target == modal) {
-                modal.style.display = 'none';
-            }
-        }
-
-        // ==================== 登录状态管理 ====================
-        function initUserArea() {
-            fetch('/api/auth/me')
-                .then(res => res.json())
-                .then(data => {
-                    if (data.success) {
-                        const user = data.user;
-                        document.getElementById('userLabel').textContent = user.username;
-                        document.getElementById('userDropdown').classList.remove('hidden');
-                        document.getElementById('loginBtn').classList.add('hidden');
-                    } else {
-                        document.getElementById('loginBtn').classList.remove('hidden');
-                        document.getElementById('userDropdown').classList.add('hidden');
-                    }
-                })
-                .catch(() => {
-                    document.getElementById('loginBtn').classList.remove('hidden');
-                    document.getElementById('userDropdown').classList.add('hidden');
-                });
-        }
-
-        // 切换用户菜单显示
-        function toggleUserMenu() {
-            const menu = document.getElementById('userMenu');
-            menu.classList.toggle('hidden');
-        }
-
-        // 点击外部关闭菜单
-        document.addEventListener('click', function(e) {
-            const dropdown = document.getElementById('userDropdown');
-            const menu = document.getElementById('userMenu');
-            if (dropdown && !dropdown.contains(e.target)) {
-                menu.classList.add('hidden');
-            }
+        history.forEach(item => {
+            const statusClass = item.status === 'passed' || item.status === 'success' ? 'status-passed' : 'status-failed';
+            const statusText = item.status === 'passed' || item.status === 'success' ? '通过' : '失败';
+            // 使用 extracted_text 作为输出，error 作为错误信息，created_at 作为执行时间
+            const outputPreview = item.extracted_text ? item.extracted_text.substring(0, 100) + (item.extracted_text.length > 100 ? '...' : '') : '-';
+            const errorMessage = item.error || '-';
+            const executedAt = item.created_at || '-';
+            
+            html += `
+                <tr>
+                    <td>${item.id}</td>
+                    <td>${item.case_name || '-'}</td>
+                    <td>${item.case_id || '-'}</td>
+                    <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                    <td>${executedAt}</td>
+                    <td class="text-preview" title="${item.extracted_text || ''}">${outputPreview}</td>
+                    <td class="error-message" title="${errorMessage}">${errorMessage}</td>
+                    <td>
+                        <div class="action-buttons">
+                            <button class="detail-btn" onclick="showDetail(${item.id})">详情</button>
+                            <button class="delete-btn" onclick="deleteHistory(${item.id})">删除</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
         });
-
-        async function handleLogout() {
-            try {
-                await fetch('/api/auth/logout', {method: 'POST'});
-                localStorage.removeItem('currentUser');
-                window.location.href = '/login';
-            } catch(e) {
-                window.location.href = '/login';
-            }
+        
+        html += '</tbody></table>';
+        
+        // 添加分页
+        html += renderPagination(total);
+        
+        container.innerHTML = html;
+    }
+    
+    // 渲染分页
+    function renderPagination(total) {
+        const totalPages = Math.ceil(total / pageSize) || 1;
+        
+        return `
+            <div class="pagination">
+                <button onclick="changePage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>上一页</button>
+                <span class="page-info">第 ${currentPage} / ${totalPages} 页 (共 ${total} 条)</span>
+                <button onclick="changePage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>下一页</button>
+            </div>
+        `;
+    }
+    
+    // 切换页面
+    function changePage(page) {
+        if (page < 1 || page > totalPages) return;
+        currentPage = page;
+        loadRunHistory(true);
+    }
+    
+    // 搜索历史记录
+    function searchHistory() {
+        currentPage = 1;
+        loadRunHistory(true);
+    }
+    
+    // 显示详情
+    function showDetail(id) {
+        const modal = document.getElementById('detailModal');
+        const content = document.getElementById('detailContent');
+        
+        content.innerHTML = '<div class="loading">加载中...</div>';
+        modal.style.display = 'block';
+        
+        fetch(`/api/run-history/${id}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const item = data.record;
+                    content.innerHTML = `
+                        <div class="detail-section">
+                            <span class="detail-label">ID:</span>
+                            <span class="detail-value">${item.id}</span>
+                        </div>
+                        <div class="detail-section">
+                            <span class="detail-label">用例名称:</span>
+                            <span class="detail-value">${item.case_name || '-'}</span>
+                        </div>
+                        <div class="detail-section">
+                            <span class="detail-label">用例ID:</span>
+                            <span class="detail-value">${item.case_id || '-'}</span>
+                        </div>
+                        <div class="detail-section">
+                            <span class="detail-label">状态:</span>
+                            <span class="detail-value">${item.status}</span>
+                        </div>
+                        <div class="detail-section">
+                            <span class="detail-label">执行时间:</span>
+                            <span class="detail-value">${item.created_at || '-'}</span>
+                        </div>
+                        <div class="detail-section">
+                            <span class="detail-label">输出:</span>
+                            <div class="detail-value"><pre>${item.extracted_text || '无输出'}</pre></div>
+                        </div>
+                        <div class="detail-section">
+                            <span class="detail-label">错误信息:</span>
+                            <span class="detail-value">${item.error || '无错误'}</span>
+                        </div>
+                    `;
+                } else {
+                    content.innerHTML = '<p>加载详情失败</p>';
+                }
+            })
+            .catch(() => {
+                content.innerHTML = '<p>加载详情失败</p>';
+            });
+    }
+    
+    // 删除历史记录
+    function deleteHistory(id) {
+        if (!confirm('确定要删除这条记录吗？')) return;
+        
+        fetch(`/api/run-history/${id}`, { method: 'DELETE' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    loadRunHistory(true);
+                } else {
+                    alert('删除失败: ' + data.message);
+                }
+            })
+            .catch(() => {
+                alert('删除失败');
+            });
+    }
+    
+    // 删除所有历史记录
+    function deleteAllHistory() {
+        if (!confirm('确定要删除所有历史记录吗？此操作不可恢复！')) return;
+        
+        fetch('/api/run-history', { method: 'DELETE' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    currentPage = 1;
+                    loadRunHistory(true);
+                } else {
+                    alert('删除失败: ' + data.message);
+                }
+            })
+            .catch(() => {
+                alert('删除失败');
+            });
+    }
+    
+    // 关闭模态框
+    document.querySelector('.close').onclick = function() {
+        document.getElementById('detailModal').style.display = 'none';
+    }
+    
+    window.onclick = function(event) {
+        const modal = document.getElementById('detailModal');
+        if (event.target === modal) {
+            modal.style.display = 'none';
         }
-
-        // 页面加载
-        document.addEventListener('DOMContentLoaded', function() {
-            initUserArea();
-        });
-    </script>
-</body>
-</html>
+    }
+</script>
+{% endblock %}

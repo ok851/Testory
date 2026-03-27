@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}UI自动化测试平台{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        secondary: '#10b981',
+                        accent: '#8b5cf6',
+                        danger: '#ef4444',
+                        warning: '#f59e0b',
+                        info: '#3b82f6',
+                    }
+                }
+            }
+        }
+    </script>
+    {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}bg-gray-50 min-h-screen{% endblock %}">
+    <!-- 统一导航栏 -->
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <!-- 左侧：Logo -->
+            <div class="flex items-center gap-3">
+                <i class="fas fa-robot text-blue-600 text-2xl"></i>
+                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
+            </div>
+            <!-- 右侧：功能按钮 + 用户信息 -->
+            <div class="flex items-center gap-2">
+                <a href="/" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-500 text-white hover:bg-blue-600" title="首页">
+                    <i class="fas fa-home"></i>
+                </a>
+                <a href="/list_projects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-green-500 text-white hover:bg-green-600" title="项目管理">
+                    <i class="fas fa-folder mr-1"></i>项目
+                </a>
+                <a href="/run-history" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600" data-feature="basic" title="运行历史">
+                    <i class="fas fa-history mr-1"></i>历史
+                </a>
+                <a href="/data-driven" id="navDataDriven" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-600 text-white hover:bg-purple-700 hidden" data-feature="data_driven" title="数据驱动">
+                    <i class="fas fa-table mr-1"></i>数据
+                </a>
+                <a href="/test_report" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700" data-feature="basic" title="测试报告">
+                    <i class="fas fa-chart-bar mr-1"></i>报告
+                </a>
+                <a href="/schedules" id="navSchedules" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-orange-500 text-white hover:bg-orange-600 hidden" data-feature="schedule" title="定时任务">
+                    <i class="fas fa-clock mr-1"></i>定时
+                </a>
+                <a href="/notifications" id="navNotifications" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-pink-500 text-white hover:bg-pink-600 hidden" data-feature="email_notification" data-role="admin" title="通知配置">
+                    <i class="fas fa-bell mr-1"></i>通知
+                </a>
+                <a href="/defects" id="navDefects" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-red-600 text-white hover:bg-red-700 hidden" data-feature="defect_management" title="缺陷管理">
+                    <i class="fas fa-bug mr-1"></i>缺陷
+                </a>
+                <!-- 用户信息区（最右边） -->
+                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
+                    <!-- 用户下拉菜单 -->
+                    <div id="userDropdown" class="relative hidden">
+                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
+                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
+                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
+                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
+                        </button>
+                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
+                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
+                            </a>
+                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
+                            </a>
+                            <a href="/user-management" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" id="userManagementLink" style="display: none;">
+                                <i class="fas fa-users-cog mr-2 text-gray-400"></i>用户管理
+                            </a>
+                            <div class="border-t border-gray-100 my-1"></div>
+                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
+                                <i class="fas fa-sign-out-alt mr-2"></i>注销
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+
+    <script>
+        // 用户菜单切换
+        function toggleUserMenu() {
+            const menu = document.getElementById('userMenu');
+            menu.classList.toggle('hidden');
+        }
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', function(e) {
+            const dropdown = document.getElementById('userDropdown');
+            const menu = document.getElementById('userMenu');
+            if (dropdown && !dropdown.contains(e.target)) {
+                menu.classList.add('hidden');
+            }
+        });
+
+        // 加载用户信息
+        async function loadUserInfo() {
+            try {
+                const response = await fetch('/api/auth/me');
+                const data = await response.json();
+                if (data.success) {
+                    const userLabel = document.getElementById('userLabel');
+                    const userDropdown = document.getElementById('userDropdown');
+                    if (userLabel) userLabel.textContent = data.user.username;
+                    if (userDropdown) userDropdown.classList.remove('hidden');
+                    
+                    // 显示用户管理链接（仅管理员）
+                    if (data.user.role === 'admin') {
+                        const userManagementLink = document.getElementById('userManagementLink');
+                        if (userManagementLink) userManagementLink.style.display = 'block';
+                    }
+                    
+                    // 根据 License 和角色显示/隐藏导航按钮
+                    updateNavigationButtons(data);
+                }
+            } catch (error) {
+                console.error('加载用户信息失败:', error);
+            }
+        }
+        
+        // 根据用户权限更新导航按钮显示
+        function updateNavigationButtons(data) {
+            console.log('[DEBUG] updateNavigationButtons called with data:', data);
+            
+            // 安全地获取数据，兼容旧浏览器
+            const userRole = (data.user && data.user.role) ? data.user.role : 'viewer';
+            const licenseType = (data.license && data.license.type) ? data.license.type : 'free';
+            const features = (data.license && data.license.features) ? data.license.features : [];
+            
+            console.log('[DEBUG] User role:', userRole, 'License type:', licenseType, 'Features:', features);
+            
+            // 确保 features 是数组
+            if (!Array.isArray(features)) {
+                console.error('[DEBUG] Features is not an array:', features);
+                return;
+            }
+            
+            // 获取所有需要权限控制的导航按钮
+            const navButtons = document.querySelectorAll('.nav-btn[data-feature]');
+            console.log('[DEBUG] Found nav buttons:', navButtons.length);
+            
+            navButtons.forEach(function(btn) {
+                const requiredFeature = btn.getAttribute('data-feature');
+                const requiredRole = btn.getAttribute('data-role');
+                const btnText = btn.textContent.trim();
+                
+                let shouldShow = true;
+                
+                // 检查功能权限
+                if (requiredFeature && requiredFeature !== 'basic') {
+                    shouldShow = features.indexOf(requiredFeature) !== -1;
+                    console.log('[DEBUG] Button "' + btnText + '" requires feature "' + requiredFeature + '", has it: ' + shouldShow);
+                }
+                
+                // 检查角色权限
+                if (shouldShow && requiredRole) {
+                    shouldShow = userRole === requiredRole;
+                    console.log('[DEBUG] Button "' + btnText + '" requires role "' + requiredRole + '", user has: ' + userRole + ', match: ' + shouldShow);
+                }
+                
+                // 显示或隐藏按钮
+                if (shouldShow) {
+                    btn.classList.remove('hidden');
+                    console.log('[DEBUG] Showing button: ' + btnText);
+                } else {
+                    btn.classList.add('hidden');
+                    console.log('[DEBUG] Hiding button: ' + btnText);
+                }
+            });
+        }
+
+        // 处理注销
+        async function handleLogout() {
+            try {
+                const response = await fetch('/logout', { method: 'POST' });
+                if (response.ok) {
+                    window.location.href = '/login';
+                }
+            } catch (error) {
+                console.error('注销失败:', error);
+            }
+        }
+
+        // 页面加载时获取用户信息
+        document.addEventListener('DOMContentLoaded', loadUserInfo);
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

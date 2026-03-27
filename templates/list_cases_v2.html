@@ -1171,11 +1171,23 @@
                 });
                 
                 if (!response.ok) {
+                    if (response.status === 403) {
+                        showRunResultModal(`
+                            <div style="padding: 20px; color: #e74c3c;">
+                                <h4 style="margin-bottom: 10px;"><i class="fas fa-exclamation-circle"></i> 运行次数已达上限</h4>
+                                <p>您今日的测试运行次数已达到限制，请明天再试或升级至专业版/企业版以获取更多配额。</p>
+                                <div style="margin-top: 15px;">
+                                    <a href="/license" style="color: #3498db; text-decoration: underline;">查看授权信息 →</a>
+                                </div>
+                            </div>
+                        `, true);
+                        return;
+                    }
                     throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
                 }
-                
+
                 const data = await response.json();
-                
+
                 if (data.success) {
                     const results = data.results;
                     let content = `
@@ -1256,11 +1268,23 @@
                 clearTimeout(timeoutId);
                 
                 if (!response.ok) {
+                    if (response.status === 403) {
+                        showRunResultModal(`
+                            <div style="padding: 20px; color: #e74c3c;">
+                                <h4 style="margin-bottom: 10px;"><i class="fas fa-exclamation-circle"></i> 运行次数已达上限</h4>
+                                <p>您今日的测试运行次数已达到限制，请明天再试或升级至专业版/企业版以获取更多配额。</p>
+                                <div style="margin-top: 15px;">
+                                    <a href="/license" style="color: #3498db; text-decoration: underline;">查看授权信息 →</a>
+                                </div>
+                            </div>
+                        `, true);
+                        return;
+                    }
                     throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
                 }
-                
+
                 const data = await response.json();
-                
+
                 if (data.success) {
                     showRunResultModal(`
                         <div style="padding: 20px;">
