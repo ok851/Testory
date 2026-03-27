@@ -2846,6 +2846,19 @@ def api_run_dataset(dataset_id):
         row_index = row_info['row_index']
         import time as _time
 
+        # 🔥 修复：每条数据执行前重启浏览器，确保干净的执行环境
+        uat_logger.info(f"[数据驱动] 准备执行第{row_index}行数据，重启浏览器...")
+        try:
+            sync_close_browser()
+            uat_logger.info(f"[数据驱动] 浏览器已关闭")
+        except Exception as e:
+            uat_logger.debug(f"[数据驱动] 关闭浏览器时出错（可忽略）: {e}")
+        
+        # 等待浏览器完全关闭
+        _time.sleep(0.5)
+        
+        uat_logger.info(f"[数据驱动] 启动新浏览器实例...")
+
         # 将行数据注入变量替换：支持 {{row.字段名}} 格式
         def resolve_with_row(text, row_dict):
             if not text:
