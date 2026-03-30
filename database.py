@@ -1004,13 +1004,13 @@ class Database:
         """创建测试步骤"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        # 如果没有指定step_order，自动计算最大顺序值
+            
+        # 如果没有指定 step_order，自动计算最大顺序值
         if step_order is None:
             cursor.execute("SELECT MAX(step_order) FROM test_steps WHERE case_id = ?", (case_id,))
             max_order = cursor.fetchone()[0]
             step_order = (max_order or 0) + 1
-        
+            
         cursor.execute(
             """INSERT INTO test_steps 
                (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type) 
@@ -1018,11 +1018,60 @@ class Database:
             (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type)
         )
         step_id = cursor.lastrowid
-        
+            
         conn.commit()
         conn.close()
-        
+            
         return step_id
+        
+    def batch_insert_steps(self, case_id: int, steps: List[Dict[str, Any]]) -> bool:
+        """批量插入测试步骤（用于录制功能）"""
+        if not steps:
+            return True
+                
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+            
+        try:
+            # 获取当前最大 step_order
+            cursor.execute("SELECT MAX(step_order) FROM test_steps WHERE case_id = ?", (case_id,))
+            max_order = cursor.fetchone()[0] or 0
+                
+            # 批量插入步骤
+            for i, step in enumerate(steps):
+                # 映射录制步骤格式到数据库格式
+                operation_type = step.get('operation_type', 'click')
+                locator = step.get('operation_locator', '')
+                value = step.get('operation_value', '')
+                desc = step.get('description', '')
+                sort_order = step.get('sort_order', max_order + i + 1)
+                    
+                # 根据操作类型转换为对应的 action
+                action_map = {
+                    'click': 'click',
+                    'input': 'fill',
+                    'select': 'select'
+                }
+                action = action_map.get(operation_type, 'click')
+                    
+                # 确定 selector_type（简单判断 CSS 或 XPath）
+                selector_type = 'xpath' if locator.startswith('//') or locator.startswith('/') else 'css'
+                    
+                cursor.execute(
+                    """INSERT INTO test_steps 
+                       (case_id, action, selector_type, selector_value, input_value, description, step_order) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (case_id, action, selector_type, locator, value, desc, sort_order)
+                )
+                
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"批量插入步骤失败：{e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
     
     def get_test_step(self, step_id: int) -> Dict[str, Any]:
         """获取测试步骤"""

@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>测试用例步骤管理 - UI自动化测试平台</title>
+    <title>测试用例步骤管理 - UI 自动化测试平台</title>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <style>
         * {
             margin: 0;
@@ -121,6 +122,67 @@
             background: #545b62;
         }
         
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .btn-info:hover {
+            background: #138496;
+        }
+        
+        /* 录制状态动画 */
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.5;
+                transform: scale(0.95);
+            }
+        }
+        
+        #recordingStatus {
+            animation: pulse 2s infinite;
+        }
+        
+        /* 步骤预览卡片悬停效果 */
+        #recordedStepsList > div:hover {
+            transform: translateX(5px);
+            transition: all 0.3s ease;
+        }
+        
+        /* 录制按钮闪烁效果 */
+        @keyframes blink {
+            0%, 100% {
+                box-shadow: 0 0 10px rgba(40, 167, 69, 0.5);
+            }
+            50% {
+                box-shadow: 0 0 20px rgba(40, 167, 69, 0.8), 0 0 30px rgba(40, 167, 69, 0.6);
+            }
+        }
+        
+        #startRecordBtn:not(:disabled):hover {
+            animation: blink 1.5s infinite;
+        }
+        
+        /* 浮动控制条动画 */
+        @keyframes slideInRight {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        #floatingControls {
+            animation: slideInRight 0.3s ease-out;
+        }
+        
         .btn-sm {
             padding: 6px 12px;
             font-size: 12px;
@@ -203,7 +265,7 @@
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
         }
 
-        .step-item.dragging {
+        .step-item.ging {
             opacity: 0.8;
             transform: rotate(1deg) scale(1.02);
             box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
@@ -281,6 +343,10 @@
             justify-content: center;
         }
         
+        .modal[style*="display: flex"] {
+            display: flex !important;
+        }
+        
         .modal.active {
             display: flex;
         }
@@ -302,6 +368,19 @@
         .modal-header h3 {
             color: #333;
             font-size: 22px;
+        }
+        
+        .modal-body {
+            padding: 20px 0;
+        }
+        
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
         }
         
         .form-group {
@@ -455,6 +534,9 @@
             <div class="toolbar-left">
                 <button onclick="showCreateStepModal()" class="btn btn-primary">+ 添加步骤</button>
                 <button onclick="runTestCase()" class="btn btn-success">▶ 运行用例</button>
+                <button onclick="showRecordingModal()" class="btn btn-info" id="recordBtn">
+                    🎬 开始录制
+                </button>
             </div>
             <div class="toolbar-right">
                 <button onclick="backToCases()" class="btn btn-secondary">← 返回用例列表</button>
@@ -773,6 +855,62 @@
         </div>
     </div>
     
+    <!-- 步骤录制模态框 -->
+    <div id="recordingModal" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3>🎬 步骤录制器</h3>
+            </div>
+            <div class="modal-body">
+                <div style="padding: 20px;">
+                    <!-- 录制控制区 -->
+                    <div id="recordingControls" style="display: flex; gap: 10px; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                        <input type="text" id="recordingUrl" placeholder="输入要录制的页面 URL" 
+                               style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+                        <button onclick="startRecording()" class="btn btn-success" id="startRecordBtn">
+                            ▶ 开始录制
+                        </button>
+                        <button onclick="stopRecording()" class="btn btn-danger" id="stopRecordBtn" style="display: none;">
+                            ⏹ 停止录制
+                        </button>
+                        <button onclick="closeRecordingModal()" class="btn btn-secondary">
+                            关闭
+                        </button>
+                    </div>
+                    
+                    <!-- 录制状态 -->
+                    <div id="recordingStatus" style="display: none; padding: 15px; background: #e7f3ff; border-radius: 8px; margin-bottom: 20px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <div class="loading-spinner" style="width: 20px; height: 20px; border: 3px solid #667eea; border-top-color: transparent;"></div>
+                            <span style="color: #667eea; font-weight: 500;">正在录制中，请在浏览器中操作...</span>
+                            <span id="recordingStepCount" style="margin-left: auto; color: #28a745; font-weight: 600;">已录制 0 步</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 实时步骤预览 -->
+                    <div id="recordingPreview" style="border: 1px solid #e9ecef; border-radius: 8px; overflow: hidden;">
+                        <div style="background: #f8f9fa; padding: 15px; border-bottom: 1px solid #e9ecef;">
+                            <h4 style="margin: 0; color: #495057;">📋 实时步骤预览</h4>
+                        </div>
+                        <div id="recordedStepsList" style="max-height: 400px; overflow-y: auto; padding: 15px;">
+                            <div style="text-align: center; color: #6c757d; padding: 40px;">
+                                暂无录制步骤，点击上方"开始录制"按钮并在浏览器中操作
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="saveRecording()" class="btn btn-primary" id="saveRecordingBtn" style="display: none;">
+                    💾 保存步骤到用例
+                </button>
+                <button onclick="discardRecording()" class="btn btn-secondary" id="discardRecordingBtn" style="display: none;">
+                    放弃录制
+                </button>
+            </div>
+        </div>
+    </div>
+    
     <script>
         let currentCaseId = null;
         let currentCaseName = '';
@@ -1007,9 +1145,9 @@ function changePage(page) {
             if (page < 1 || page > totalPages) return;
             if (!draggedStepId || !isDragging) return;
             if (page === currentPage) return;
-
-            console.log(`跨页拖动: 切换到页面 ${page}`);
-
+        
+            console.log(`跨页拖动：切换到页面 ${page}`);
+        
             // 清除计时器
             if (pageSwitchTimer) {
                 clearTimeout(pageSwitchTimer);
@@ -1019,27 +1157,24 @@ function changePage(page) {
                 clearTimeout(pageSwitchDebounceTimer);
                 pageSwitchDebounceTimer = null;
             }
-
-            // 保存当前拖拽状态
+        
+            // 关键修复：不再保存 draggedElement，只保存 draggedStepId
             const savedDraggedStepId = draggedStepId;
-            const savedDraggedElement = draggedElement;
-
+        
             // 切换页面
             currentPage = page;
             await loadSteps();
-
-            // 恢复拖拽状态
+        
+            // 恢复拖拽状态 - 但不恢复 draggedElement
             draggedStepId = savedDraggedStepId;
-            draggedElement = savedDraggedElement;
             isDragging = true;
-
-            // 高亮被拖拽的步骤
-            const stepElement = document.querySelector(`[data-step-id="${draggedStepId}"]`);
-            if (stepElement) {
-                stepElement.classList.add('dragging', 'cross-page-drag');
-            }
-
+        
+            // 不再高亮任何元素，因为元素不在当前页面 DOM 中
             console.log(`已切换到页面 ${page}，可以继续拖拽放置`);
+                    
+            // 添加全局标记，表示正在跨页拖动
+            window.isCrossPageDrag = true;
+            window.crossPageDragStepId = draggedStepId;
         }
         
         // 清除页面切换计时器（简化版本）
@@ -1964,42 +2099,74 @@ function changePage(page) {
         }
         
         // 处理拖动结束
-        function handleDragEnd(e) {
-            // 移除所有拖动状态
-            document.querySelectorAll('.step-item').forEach(item => {
-                item.classList.remove('dragging', 'drag-over', 'drag-before', 'drag-after', 'cross-page-drag');
-                // 清除内联样式
-                item.style.cursor = '';
-                item.style.transform = '';
-                item.style.boxShadow = '';
-                item.style.zIndex = '';
-                item.style.position = '';
-            });
+        async function handleDragEnd(e) {
+            console.log('handleDragEnd 被调用');
             
-            // 清除页面切换指示器
-            updatePageSwitchIndicator(null);
-            
-            isDragging = false;
-            draggedElement = null;
-            draggedStepId = null;
-            isNearPageBoundary = false;
-            
-            // 清除计时器
-            if (pageSwitchTimer) {
-                clearTimeout(pageSwitchTimer);
-                pageSwitchTimer = null;
+            try {
+                // 关键修复：处理跨页拖动情况
+                const draggedItem = document.querySelector('.dragging');
+                if (window.isCrossPageDrag && !draggedItem) {
+                    console.log('检测到跨页拖动，使用特殊处理逻辑');
+                    
+                    const stepIdToUse = window.crossPageDragStepId || draggedStepId;
+                    
+                    if (!stepIdToUse) {
+                        console.error('错误：没有找到要拖动的步骤 ID');
+                        cleanupDragState();
+                        return;
+                    }
+                    
+                    // 计算放置位置
+                    const container = document.getElementById('stepsListContainer');
+                    const y = e.clientY - container.getBoundingClientRect().top;
+                    const items = Array.from(container.querySelectorAll('.step-item'));
+                    
+                    let targetItem = null;
+                    let insertPosition = 'end';
+                    
+                    if (items.length > 0) {
+                        if (y < 40) {
+                            targetItem = items[0];
+                            insertPosition = 'start';
+                        } else if (y > container.getBoundingClientRect().height - 40) {
+                            targetItem = items[items.length - 1];
+                            insertPosition = 'end';
+                        } else {
+                            for (let item of items) {
+                                const itemRect = item.getBoundingClientRect();
+                                const itemTop = itemRect.top - container.getBoundingClientRect().top;
+                                const itemBottom = itemTop + itemRect.height;
+                                
+                                if (y >= itemTop - 10 && y <= itemBottom + 10) {
+                                    targetItem = item;
+                                    const targetMiddle = itemTop + itemRect.height / 2;
+                                    insertPosition = y < targetMiddle ? 'before' : 'after';
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    console.log(`跨页拖动放置：步骤 ${stepIdToUse}, 位置：${insertPosition}`);
+                    
+                    // 调用跨页拖动专用更新函数
+                    await updateStepOrderAfterCrossPageDrop(
+                        stepIdToUse,
+                        targetItem,
+                        insertPosition,
+                        currentPage
+                    );
+                    
+                    cleanupDragState();
+                    return;
+                }
+            } catch (error) {
+                console.error('handleDragEnd 处理过程中发生错误:', error);
+            } finally {
+                // 确保清理拖动状态
+                cleanupDragState();
             }
-            if (pageSwitchDebounceTimer) {
-                clearTimeout(pageSwitchDebounceTimer);
-                pageSwitchDebounceTimer = null;
-            }
-            lastPageSwitchDirection = null;
-            
-            // 移除拖动事件监听器
-            document.removeEventListener('drag', handleDrag);
-            console.log('拖动结束，清理完成');
         }
-        
         // 页面切换防抖计时器
         let pageSwitchDebounceTimer = null;
         let lastPageSwitchDirection = null; // 记录上一次页面切换的方向
@@ -2176,10 +2343,11 @@ function changePage(page) {
             const draggedItem = document.querySelector('.dragging');
             
             if (!draggedItem) return;
-            
-            const draggedStepId = parseInt(draggedItem.getAttribute('data-step-id'));
-            
-            // 重要：立即保存最终页面信息，因为后续操作可能会改变currentPage
+                        
+            // 使用全局变量 draggedStepId
+            draggedStepId = parseInt(draggedItem.getAttribute('data-step-id'));
+                        
+            // 重要：立即保存最终页面信息，因为后续操作可能会改变 currentPage
             const finalPage = currentPage;
             
             // 计算放置位置
@@ -2356,8 +2524,154 @@ function changePage(page) {
                 console.error('===== 保存失败 =====');
                 console.error('错误:', error.message);
                 console.error('堆栈:', error.stack);
-                alert(`保存失败: ${error.message}`);
+                alert(`保存失败：${error.message}`);
             }
+        }
+                
+        // 处理跨页拖动放置后的步骤顺序更新
+        async function updateStepOrderAfterCrossPageDrop(draggedStepId, targetItem, insertPosition, targetPage) {
+            try {
+                console.log('===== 开始跨页拖动保存 =====');
+                console.log(`步骤 ID: ${draggedStepId}, 目标页：${targetPage}, 位置：${insertPosition}`);
+                        
+                // 获取目标页的所有步骤
+                const targetPageResponse = await fetch(`/api/cases/${currentCaseId}/steps?page=${targetPage}&page_size=${pageSize}`);
+                
+                if (!targetPageResponse.ok) {
+                    throw new Error(`获取目标页步骤失败：HTTP ${targetPageResponse.status}`);
+                }
+                
+                const targetPageData = await targetPageResponse.json();
+                        
+                if (!targetPageData.steps) {
+                    throw new Error('获取目标页步骤失败：响应数据格式错误');
+                }
+                        
+                // 获取被拖动步骤的当前信息
+                const draggedStepResponse = await fetch(`/api/steps/${draggedStepId}`);
+                
+                if (!draggedStepResponse.ok) {
+                    throw new Error(`获取被拖动步骤失败：HTTP ${draggedStepResponse.status}`);
+                }
+                
+                const draggedStepData = await draggedStepResponse.json();
+                        
+                if (!draggedStepData.step) {
+                    throw new Error('获取被拖动步骤失败：响应数据格式错误');
+                }
+                        
+                const draggedStep = draggedStepData.step;
+                const targetPageSteps = targetPageData.steps;
+                        
+                // 计算插入位置索引
+                let insertIndex;
+                switch (insertPosition) {
+                    case 'start':
+                        insertIndex = 0;
+                        break;
+                    case 'before':
+                        insertIndex = targetPageSteps.findIndex(s => s.id == targetItem.getAttribute('data-step-id'));
+                        break;
+                    case 'after':
+                        insertIndex = targetPageSteps.findIndex(s => s.id == targetItem.getAttribute('data-step-id')) + 1;
+                        break;
+                    case 'end':
+                        insertIndex = targetPageSteps.length;
+                        break;
+                }
+                        
+                if (insertIndex === -1) insertIndex = targetPageSteps.length;
+                        
+                // 构建新的步骤顺序
+                const newStepsOrder = [];
+                        
+                // 先添加目标页原有步骤（排除被拖动的那个，如果它在目标页）
+                targetPageSteps.forEach(step => {
+                    if (step.id !== draggedStepId) {
+                        newStepsOrder.push(step);
+                    }
+                });
+                        
+                // 在指定位置插入被拖动的步骤
+                newStepsOrder.splice(insertIndex, 0, draggedStep);
+                        
+                // 构建更新请求
+                const stepUpdates = newStepsOrder.map((step, index) => {
+                    return {
+                        id: step.id,
+                        order: (targetPage - 1) * pageSize + index + 1
+                    };
+                });
+                        
+                console.log(`批量更新 ${stepUpdates.length} 个步骤...`);
+                        
+                // 执行更新
+                const response = await fetch(`/api/cases/${currentCaseId}/steps/order`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ steps: stepUpdates })
+                });
+                        
+                if (!response.ok) {
+                    throw new Error(`更新失败：${response.status}`);
+                }
+                        
+                const result = await response.json();
+                if (!result.success) {
+                    throw new Error(`更新失败：${result.error || '未知错误'}`);
+                }
+                        
+                console.log('✓ 保存成功');
+                        
+                // 重新加载目标页
+                currentPage = targetPage;
+                await loadSteps();
+                        
+            } catch (error) {
+                console.error('===== 跨页拖动保存失败 =====');
+                console.error('错误:', error.message);
+                console.error('堆栈:', error.stack);
+                        
+                // 重新加载步骤以恢复原始顺序
+                await loadSteps();
+            }
+        }
+                
+        // 清理拖动状态
+        function cleanupDragState() {
+            window.isCrossPageDrag = false;
+            window.crossPageDragStepId = null;
+                    
+            const container = document.getElementById('stepsListContainer');
+            if (container) {
+                const items = container.querySelectorAll('.step-item');
+                items.forEach(item => {
+                    item.classList.remove('drag-over', 'drag-before', 'drag-after', 'cross-page-drag');
+                    item.style.cursor = '';
+                    item.style.transform = '';
+                    item.style.boxShadow = '';
+                    item.style.zIndex = '';
+                    item.style.position = '';
+                });
+            }
+                    
+            isDragging = false;
+            draggedElement = null;
+            draggedStepId = null;
+            isNearPageBoundary = false;
+                    
+            if (pageSwitchTimer) {
+                clearTimeout(pageSwitchTimer);
+                pageSwitchTimer = null;
+            }
+            if (pageSwitchDebounceTimer) {
+                clearTimeout(pageSwitchDebounceTimer);
+                pageSwitchDebounceTimer = null;
+            }
+            lastPageSwitchDirection = null;
+                    
+            document.removeEventListener('drag', handleDrag);
+            console.log('拖动状态已清理');
         }
         
         // 更新步骤编号
@@ -2413,6 +2727,433 @@ function changePage(page) {
             await loadCaseInfo();
             loadSteps();
         });
+        
+        // ==================== 步骤录制功能 ====================
+        let recordingSessionId = null;
+        let recordingInterval = null;
+        let isRecording = false;
+        
+        // 显示录制模态框
+        function showRecordingModal() {
+            document.getElementById('recordingModal').style.display = 'flex';
+        }
+        
+        // 关闭录制模态框
+        function closeRecordingModal() {
+            if (isRecording) {
+                // 如果正在录制，不真正关闭，只隐藏
+                document.getElementById('recordingModal').style.display = 'none';
+                return;
+            }
+            document.getElementById('recordingModal').style.display = 'none';
+        }
+        
+        // 开始录制
+        async function startRecording() {
+            const url = document.getElementById('recordingUrl').value.trim();
+            
+            if (!url) {
+                Swal.fire({
+                    icon: 'error',
+                    title: '错误',
+                    text: '请输入要录制的页面 URL',
+                    confirmButtonText: '确定'
+                });
+                return;
+            }
+            
+            try {
+                // 禁用开始按钮
+                document.getElementById('startRecordBtn').disabled = true;
+                
+                // 显示加载提示（允许点击外部关闭）
+                Swal.fire({
+                    icon: 'info',
+                    title: '正在启动浏览器',
+                    text: '请稍候...',
+                    timer: 10000,
+                    showConfirmButton: false,
+                    allowOutsideClick: true
+                });
+                
+                const response = await fetch('/api/steps/recording/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        url: url,
+                        case_id: currentCaseId,
+                        project_id: currentProjectId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // 关闭加载提示
+                Swal.close();
+                
+                if (data.success) {
+                    recordingSessionId = data.session_id;
+                    isRecording = true;
+                    
+                    // 更新 UI 状态
+                    document.getElementById('startRecordBtn').style.display = 'none';
+                    document.getElementById('stopRecordBtn').style.display = 'inline-block';
+                    document.getElementById('recordingStatus').style.display = 'block';
+                    document.getElementById('saveRecordingBtn').style.display = 'none';
+                    document.getElementById('discardRecordingBtn').style.display = 'none';
+                    
+                    // 定时获取录制的步骤
+                    recordingInterval = setInterval(pollRecordingSteps, 2000);
+                    
+                    // 显示简短提示，3 秒后自动关闭
+                    Swal.fire({
+                        icon: 'success',
+                        title: '录制已开始',
+                        text: '请在打开的浏览器中操作',
+                        timer: 3000,
+                        showConfirmButton: false,
+                        toast: true,
+                        position: 'top-end',
+                        showConfirmButton: false,
+                        timerProgressBar: true
+                    });
+                    
+                    // 最小化录制面板，避免遮挡浏览器
+                    closeRecordingModal();
+                    
+                    // 显示浮动控制条
+                    showFloatingControls();
+                } else {
+                    throw new Error(data.error || '启动录制失败');
+                }
+            } catch (error) {
+                console.error('启动录制失败:', error);
+                Swal.close();
+                Swal.fire({
+                    icon: 'error',
+                    title: '启动录制失败',
+                    text: error.message || '请稍后重试',
+                    confirmButtonText: '确定'
+                });
+            } finally {
+                document.getElementById('startRecordBtn').disabled = false;
+            }
+        }
+        
+        // 停止录制
+        async function stopRecording() {
+            if (!recordingSessionId) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/steps/recording/stop', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        session_id: recordingSessionId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    isRecording = false;
+                    clearInterval(recordingInterval);
+                    
+                    // 更新 UI 状态
+                    document.getElementById('stopRecordBtn').style.display = 'none';
+                    document.getElementById('startRecordBtn').style.display = 'inline-block';
+                    document.getElementById('recordingStatus').style.display = 'none';
+                    
+                    if (data.total_steps > 0) {
+                        document.getElementById('saveRecordingBtn').style.display = 'inline-block';
+                        document.getElementById('discardRecordingBtn').style.display = 'inline-block';
+                    }
+                } else {
+                    throw new Error(data.error || '停止录制失败');
+                }
+            } catch (error) {
+                console.error('停止录制失败:', error);
+                Swal.fire({
+                    icon: 'error',
+                    title: '停止录制失败',
+                    text: error.message || '请稍后重试',
+                    confirmButtonText: '确定'
+                });
+            }
+        }
+        
+        // 轮询获取录制步骤
+        async function pollRecordingSteps() {
+            if (!recordingSessionId || !isRecording) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/steps/recording/steps?session_id=${recordingSessionId}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateRecordingPreview(data.steps);
+                    document.getElementById('recordingStepCount').textContent = `已录制 ${data.total_steps} 步`;
+                    updateFloatingStepCount(data.total_steps); // 更新浮动控制条
+                    
+                    // 检查是否还有步骤在增加，如果没有增加可能浏览器已关闭
+                    if (lastStepCount > 0 && data.total_steps === lastStepCount && data.total_steps > 0) {
+                        unchangedCount++;
+                        // 如果连续 3 次轮询步骤数没有变化（6 秒），可能浏览器已关闭
+                        if (unchangedCount >= 3) {
+                            console.log('检测到浏览器可能已关闭');
+                            // 不再自动停止，等待用户手动操作
+                        }
+                    } else {
+                        unchangedCount = 0;
+                    }
+                    lastStepCount = data.total_steps;
+                } else {
+                    // 如果获取失败，可能是会话已结束
+                    console.log('获取步骤失败，可能录制已结束');
+                    isRecording = false;
+                    clearInterval(recordingInterval);
+                    handleBrowserClosed();
+                }
+            } catch (error) {
+                console.error('获取录制步骤失败:', error);
+            }
+        }
+        
+        // 处理浏览器关闭
+        function handleBrowserClosed() {
+            if (isRecording) {
+                isRecording = false;
+                document.getElementById('stopRecordBtn').style.display = 'none';
+                document.getElementById('startRecordBtn').style.display = 'inline-block';
+                document.getElementById('recordingStatus').style.display = 'none';
+                
+                const stepCount = document.getElementById('recordedStepsList').children.length;
+                if (stepCount > 0) {
+                    document.getElementById('saveRecordingBtn').style.display = 'inline-block';
+                    document.getElementById('discardRecordingBtn').style.display = 'inline-block';
+                    
+                    Swal.fire({
+                        icon: 'info',
+                        title: '浏览器已关闭',
+                        text: `已录制 ${stepCount} 个步骤，请预览后保存`,
+                        timer: 3000,
+                        showConfirmButton: false
+                    });
+                }
+                
+                // 隐藏浮动控制条
+                hideFloatingControls();
+            }
+        }
+        
+        let lastStepCount = 0;
+        let unchangedCount = 0;
+        
+        // ==================== 浮动控制条功能 ====================
+        let floatingControlsVisible = false;
+        
+        // 显示浮动控制条
+        function showFloatingControls() {
+            if (document.getElementById('floatingControls')) {
+                document.getElementById('floatingControls').style.display = 'flex';
+                return;
+            }
+            
+            const controlsHTML = `
+                <div id="floatingControls" style="
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    background: rgba(255, 255, 255, 0.95);
+                    border: 2px solid #667eea;
+                    border-radius: 12px;
+                    padding: 15px 20px;
+                    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+                    z-index: 9999;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                    min-width: 200px;
+                    backdrop-filter: blur(10px);
+                ">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
+                        <div style="width: 12px; height: 12px; background: #28a745; border-radius: 50%; animation: pulse 1.5s infinite;"></div>
+                        <strong style="color: #667eea;">🔴 正在录制</strong>
+                    </div>
+                    <div style="font-size: 13px; color: #6c757d;">
+                        已录制：<span id="floatingStepCount" style="color: #28a745; font-weight: 600;">0</span> 步
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-top: 5px;">
+                        <button onclick="stopRecordingFromFloat()" class="btn btn-danger btn-sm" style="flex: 1; padding: 6px 12px; font-size: 12px;">
+                            ⏹ 停止
+                        </button>
+                        <button onclick="showRecordingModal()" class="btn btn-info btn-sm" style="flex: 1; padding: 6px 12px; font-size: 12px;">
+                            📋 查看
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.insertAdjacentHTML('beforeend', controlsHTML);
+            floatingControlsVisible = true;
+        }
+        
+        // 隐藏浮动控制条
+        function hideFloatingControls() {
+            const controls = document.getElementById('floatingControls');
+            if (controls) {
+                controls.remove();
+            }
+            floatingControlsVisible = false;
+        }
+        
+        // 从浮动控制条停止录制
+        function stopRecordingFromFloat() {
+            stopRecording();
+            hideFloatingControls();
+            
+            // 显示录制面板以便用户保存
+            showRecordingModal();
+        }
+        
+        // 更新浮动控制条的步骤计数
+        function updateFloatingStepCount(count) {
+            const stepCountEl = document.getElementById('floatingStepCount');
+            if (stepCountEl) {
+                stepCountEl.textContent = count;
+            }
+        }
+        
+        // 更新录制预览
+        function updateRecordingPreview(steps) {
+            const container = document.getElementById('recordedStepsList');
+            
+            if (steps.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; color: #6c757d; padding: 40px;">
+                        暂无录制步骤，点击上方"开始录制"按钮并在浏览器中操作
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            steps.forEach((step, index) => {
+                const icon = step.operation_type === 'click' ? '👆' : 
+                            step.operation_type === 'input' ? '⌨️' : '📋';
+                
+                html += `
+                    <div style="padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #667eea;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 18px;">${icon}</span>
+                            <strong style="color: #495057;">步骤 ${index + 1}:</strong>
+                            <span style="color: #6c757d; font-size: 12px;">${step.description}</span>
+                        </div>
+                        <div style="margin-top: 8px; font-size: 12px; color: #6c757d;">
+                            <strong>定位器:</strong> ${step.operation_locator}
+                            ${step.operation_value ? `<br><strong>值:</strong> ${step.operation_value}` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        // 保存录制步骤
+        async function saveRecording() {
+            if (!recordingSessionId) {
+                return;
+            }
+            
+            // 获取当前录制的步骤数量
+            const stepCount = document.getElementById('recordedStepsList').children.length;
+            
+            Swal.fire({
+                icon: 'question',
+                title: '确认保存',
+                html: `<p>即将保存 <strong style="color: #667eea;">${stepCount}</strong> 个步骤到当前用例</p>`,
+                showCancelButton: true,
+                confirmButtonText: '✅ 保存',
+                cancelButtonText: '❌ 取消',
+                confirmButtonColor: '#667eea',
+                cancelButtonColor: '#6c757d'
+            }).then(async (result) => {
+                if (result.isConfirmed) {
+                    try {
+                        const response = await fetch('/api/steps/recording/save', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                session_id: recordingSessionId,
+                                case_id: currentCaseId
+                            })
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            Swal.fire({
+                                icon: 'success',
+                                title: '保存成功',
+                                text: `已成功保存 ${data.saved_steps} 个步骤到用例`,
+                                timer: 2000,
+                                showConfirmButton: false
+                            }).then(() => {
+                                closeRecordingModal();
+                                loadSteps(); // 重新加载步骤列表
+                            });
+                        } else {
+                            throw new Error(data.error || '保存步骤失败');
+                        }
+                    } catch (error) {
+                        console.error('保存录制步骤失败:', error);
+                        Swal.fire({
+                            icon: 'error',
+                            title: '保存失败',
+                            text: error.message || '请稍后重试',
+                            confirmButtonText: '确定'
+                        });
+                    }
+                }
+            });
+        }
+        
+        // 放弃录制
+        function discardRecording() {
+            Swal.fire({
+                icon: 'warning',
+                title: '确认放弃',
+                text: '确定要放弃本次录制的所有步骤吗？',
+                showCancelButton: true,
+                confirmButtonText: '确定放弃',
+                cancelButtonText: '继续编辑'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    if (recordingSessionId && isRecording) {
+                        stopRecording();
+                    }
+                    document.getElementById('recordedStepsList').innerHTML = `
+                        <div style="text-align: center; color: #6c757d; padding: 40px;">
+                            暂无录制步骤，点击上方"开始录制"按钮并在浏览器中操作
+                        </div>
+                    `;
+                    document.getElementById('recordingStepCount').textContent = '已录制 0 步';
+                    closeRecordingModal();
+                }
+            });
+        }
     </script>
 </body>
 </html>

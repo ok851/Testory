@@ -161,9 +161,11 @@
                 
                 let shouldShow = true;
                 
-                // 检查功能权限
+                // 检查功能权限 - 使用 includes 或 indexOf 兼容不同浏览器
                 if (requiredFeature && requiredFeature !== 'basic') {
-                    shouldShow = features.indexOf(requiredFeature) !== -1;
+                    // 使用 includes 方法（如果支持）或 indexOf
+                    const hasFeature = features.includes ? features.includes(requiredFeature) : features.indexOf(requiredFeature) !== -1;
+                    shouldShow = hasFeature;
                     console.log('[DEBUG] Button "' + btnText + '" requires feature "' + requiredFeature + '", has it: ' + shouldShow);
                 }
                 

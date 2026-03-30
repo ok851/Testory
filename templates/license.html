@@ -173,7 +173,7 @@
                             <i id="licenseIcon" class="fas fa-crown text-blue-600 text-xl"></i>
                         </div>
                         <div>
-                            <h3 class="text-lg font-semibold text-gray-900">当前版本</h3>
+                            <h3 class="text-lg font-semibold text-gray-900">当前授权类型</h3>
                             <p id="licenseType" class="text-gray-500">加载中...</p>
                         </div>
                     </div>
@@ -426,34 +426,61 @@
                     const limits = result.limits || {};
                     const usage = result.usage || {};
                     
+                    console.log('[DEBUG] License Info:', info);
+                    console.log('[DEBUG] Limits:', limits);
+                    console.log('[DEBUG] Usage:', usage);
+                    console.log('[DEBUG] license_type from API:', info.license_type);
+                    console.log('[DEBUG] max_projects from API:', limits.max_projects);
+                    console.log('[DEBUG] max_cases_per_project from API:', limits.max_cases_per_project);
+                    console.log('[DEBUG] max_executions_per_day from API:', limits.max_executions_per_day);
+                    
                     // 更新 License 类型显示
                     const typeMap = {
                         'free': { name: '免费版', icon: 'fa-user', badge: 'badge-gray' },
                         'professional': { name: '个人专业版', icon: 'fa-user-tie', badge: 'badge-blue' },
                         'enterprise': { name: '企业版', icon: 'fa-building', badge: 'badge-success' }
                     };
-                    const typeInfo = typeMap[info.license_type] || typeMap['free'];
+                    const licenseType = info.license_type || 'free';
+                    console.log('[DEBUG] Mapped licenseType:', licenseType);
+                    const typeInfo = typeMap[licenseType] || typeMap['free'];
+                    console.log('[DEBUG] typeInfo:', typeInfo);
                     
                     document.getElementById('licenseType').textContent = typeInfo.name;
                     document.getElementById('licenseIcon').className = `fas ${typeInfo.icon} text-blue-600 text-xl`;
                     document.getElementById('licenseBadge').className = `badge ${typeInfo.badge}`;
                     document.getElementById('licenseBadge').textContent = typeInfo.name;
                     
-                    // 更新限制信息 - 添加默认值处理
+                    // 更新限制信息 - 优先从 limits 读取，如果不存在则根据 license_type 使用默认值
                     const expireDate = info.expires_at || '2099-12-31T23:59:59';
                     document.getElementById('expireDate').textContent = expireDate === '2099-12-31T23:59:59' ? '永久' : new Date(expireDate).toLocaleDateString('zh-CN');
                     
-                    const maxProjects = limits.max_projects !== undefined ? limits.max_projects : 3;
+                    // 根据 license_type 判断配额 - 优先使用 limits 中的值
+                    let maxProjects, maxCases, maxExecutions;
+                    
+                    if (limits.max_projects !== undefined) {
+                        maxProjects = limits.max_projects;
+                    } else {
+                        // 如果 limits 中没有，则根据 license_type 使用默认值
+                        maxProjects = licenseType === 'enterprise' ? -1 : (licenseType === 'professional' ? 10 : 3);
+                    }
+                    
+                    if (limits.max_cases_per_project !== undefined) {
+                        maxCases = limits.max_cases_per_project;
+                    } else {
+                        maxCases = licenseType === 'enterprise' ? -1 : (licenseType === 'professional' ? 200 : 50);
+                    }
+                    
+                    if (limits.max_executions_per_day !== undefined) {
+                        maxExecutions = limits.max_executions_per_day;
+                    } else {
+                        maxExecutions = licenseType === 'enterprise' ? -1 : (licenseType === 'professional' ? -1 : 10);
+                    }
+                    
                     document.getElementById('projectLimit').textContent = maxProjects === -1 ? '无限' : maxProjects;
-                    
-                    const maxCases = limits.max_cases_per_project !== undefined ? limits.max_cases_per_project : 50;
                     document.getElementById('caseLimit').textContent = maxCases === -1 ? '无限' : maxCases;
-                    
-                    const maxExecutions = limits.max_executions_per_day !== undefined ? limits.max_executions_per_day : 10;
                     document.getElementById('executionLimit').textContent = maxExecutions === -1 ? '无限' : maxExecutions;
                     
                     // 更新今日配额
-                    const licenseType = info.license_type || 'free';
                     const used = usage.today_executions || 0;
 
                     if (licenseType === 'free') {
@@ -480,36 +507,48 @@
                         document.getElementById('executionUsed').textContent = used;
                         document.getElementById('executionTotal').textContent = '无限';
                         document.getElementById('executionProgress').style.width = '0%';
-                        document.getElementById('dailyQuotaCard').classList.remove('hidden');
-                        document.getElementById('quotaTitle').textContent = '今日执行配额（无限）';
+                        const dailyQuotaCard = document.getElementById('dailyQuotaCard');
+                        if (dailyQuotaCard) dailyQuotaCard.classList.remove('hidden');
                     } else {
                         // 企业版显示今日执行次数（无限配额）
                         document.getElementById('executionUsed').textContent = used;
                         document.getElementById('executionTotal').textContent = '无限';
                         document.getElementById('executionProgress').style.width = '0%';
-                        document.getElementById('dailyQuotaCard').classList.remove('hidden');
-                        document.getElementById('quotaTitle').textContent = '今日执行配额（无限）';
+                        const dailyQuotaCard = document.getElementById('dailyQuotaCard');
+                        if (dailyQuotaCard) dailyQuotaCard.classList.remove('hidden');
                     }
                 } else {
                     console.error('获取 License 信息失败:', result.error || '未知错误');
-                    // 显示默认数据
-                    document.getElementById('licenseType').textContent = '免费版';
-                    document.getElementById('expireDate').textContent = '永久';
-                    document.getElementById('projectLimit').textContent = '3';
-                    document.getElementById('caseLimit').textContent = '50';
-                    document.getElementById('executionLimit').textContent = '10';
+                    // 显示默认数据（仅在元素存在时设置）
+                    const licenseTypeEl = document.getElementById('licenseType');
+                    const expireDateEl = document.getElementById('expireDate');
+                    const projectLimitEl = document.getElementById('projectLimit');
+                    const caseLimitEl = document.getElementById('caseLimit');
+                    const executionLimitEl = document.getElementById('executionLimit');
+                    
+                    if (licenseTypeEl) licenseTypeEl.textContent = '免费版';
+                    if (expireDateEl) expireDateEl.textContent = '永久';
+                    if (projectLimitEl) projectLimitEl.textContent = '3';
+                    if (caseLimitEl) caseLimitEl.textContent = '50';
+                    if (executionLimitEl) executionLimitEl.textContent = '10';
                 }
             } catch (error) {
                 console.error('加载 License 信息失败:', error);
                 // 隐藏加载状态，显示内容（使用默认数据）
                 if (loadingState) loadingState.classList.add('hidden');
                 if (licenseCard) licenseCard.classList.remove('hidden');
-                // 显示默认数据
-                document.getElementById('licenseType').textContent = '免费版';
-                document.getElementById('expireDate').textContent = '永久';
-                document.getElementById('projectLimit').textContent = '3';
-                document.getElementById('caseLimit').textContent = '50';
-                document.getElementById('executionLimit').textContent = '10';
+                // 显示默认数据（仅在元素存在时设置）
+                const licenseTypeEl = document.getElementById('licenseType');
+                const expireDateEl = document.getElementById('expireDate');
+                const projectLimitEl = document.getElementById('projectLimit');
+                const caseLimitEl = document.getElementById('caseLimit');
+                const executionLimitEl = document.getElementById('executionLimit');
+                
+                if (licenseTypeEl) licenseTypeEl.textContent = '免费版';
+                if (expireDateEl) expireDateEl.textContent = '永久';
+                if (projectLimitEl) projectLimitEl.textContent = '3';
+                if (caseLimitEl) caseLimitEl.textContent = '50';
+                if (executionLimitEl) executionLimitEl.textContent = '10';
             }
         }
 
@@ -638,9 +677,11 @@
 
                 let shouldShow = true;
 
-                // 检查功能权限
+                // 检查功能权限 - 使用 includes 或 indexOf 兼容不同浏览器
                 if (requiredFeature && requiredFeature !== 'basic') {
-                    shouldShow = features.indexOf(requiredFeature) !== -1;
+                    // 使用 includes 方法（如果支持）或 indexOf
+                    const hasFeature = features.includes ? features.includes(requiredFeature) : features.indexOf(requiredFeature) !== -1;
+                    shouldShow = hasFeature;
                     console.log('[DEBUG] Button "' + btnText + '" requires feature "' + requiredFeature + '", has it: ' + shouldShow);
                 }
 

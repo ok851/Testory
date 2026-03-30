@@ -9,6 +9,7 @@ import json
 import functools
 from database import Database
 from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_start_recording, sync_stop_recording, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe, sync_wait_for_page_stable, force_reset_execution_state
+from step_recorder import create_recorder, get_recorder, remove_recorder
 from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 from logger import uat_logger
@@ -1474,6 +1475,158 @@ def api_update_step_order(case_id):
         return jsonify({'success': True})
     else:
         return jsonify({'success': False, 'error': '更新步骤顺序失败'}), 400
+
+# ==================== 步骤录制相关 API ====================
+
+# API: 开始录制步骤（智能录制器）
+@app.route('/api/steps/recording/start', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_start_smart_recording():
+    """开始录制测试步骤（智能录制器）"""
+    data = request.get_json(silent=True) or {}
+    url = data.get('url')
+    case_id = data.get('case_id')
+    project_id = data.get('project_id')
+    
+    if not url:
+        return jsonify({'success': False, 'error': '缺少 URL 参数'}), 400
+    
+    # 生成会话 ID
+    session_id = f"recording_{current_user.id}_{int(time.time())}"
+    
+    # 创建录制器
+    recorder = create_recorder(session_id)
+    recorder.set_case_info(case_id, project_id)
+    
+    # 启动浏览器（异步）
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        loop.run_until_complete(recorder.start(url, headless=False))
+    except Exception as e:
+        remove_recorder(session_id)
+        return jsonify({'success': False, 'error': f'启动录制失败：{str(e)}'}), 500
+    
+    return jsonify({
+        'success': True,
+        'session_id': session_id,
+        'message': '录制已开始，请在浏览器中操作'
+    })
+
+# API: 停止录制步骤（智能录制器）
+@app.route('/api/steps/recording/stop', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_stop_smart_recording():
+    """停止录制测试步骤（智能录制器）"""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id')
+    
+    if not session_id:
+        return jsonify({'success': False, 'error': '缺少会话 ID'}), 400
+    
+    recorder = get_recorder(session_id)
+    if not recorder:
+        # 如果录制器不存在，可能是已经停止过了
+        return jsonify({
+            'success': True,
+            'steps': [],
+            'total_steps': 0,
+            'message': '录制已结束'
+        })
+    
+    # 停止录制
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        recorded_steps = loop.run_until_complete(recorder.stop())
+        # 注意：不立即删除录制器，等待保存时再删除
+        # remove_recorder(session_id)
+        
+        return jsonify({
+            'success': True,
+            'steps': recorded_steps,
+            'total_steps': len(recorded_steps),
+            'message': '录制已结束'
+        })
+    except Exception as e:
+        remove_recorder(session_id)
+        return jsonify({'success': False, 'error': f'停止录制失败：{str(e)}'}), 500
+
+# API: 获取录制的步骤（智能录制器）
+@app.route('/api/steps/recording/steps', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_get_smart_recording_steps():
+    """获取当前录制的步骤（智能录制器）"""
+    session_id = request.args.get('session_id')
+    
+    if not session_id:
+        return jsonify({'success': False, 'error': '缺少会话 ID'}), 400
+    
+    recorder = get_recorder(session_id)
+    if not recorder:
+        return jsonify({'success': False, 'error': '录制会话不存在'}), 404
+    
+    steps = recorder.get_recorded_steps()
+    
+    return jsonify({
+        'success': True,
+        'steps': steps,
+        'total_steps': len(steps)
+    })
+
+# API: 保存录制的步骤到数据库（智能录制器）
+@app.route('/api/steps/recording/save', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_save_smart_recording_steps():
+    """保存录制的步骤到数据库（智能录制器）"""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id')
+    case_id = data.get('case_id')
+    
+    if not session_id or not case_id:
+        return jsonify({'success': False, 'error': '缺少必要参数'}), 400
+    
+    recorder = get_recorder(session_id)
+    if not recorder:
+        return jsonify({'success': False, 'error': '录制会话不存在'}), 404
+    
+    steps = recorder.get_recorded_steps()
+    
+    # 批量插入步骤
+    success = db.batch_insert_steps(case_id, steps)
+    
+    if success:
+        # 停止录制并清理资源
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            loop.run_until_complete(recorder.stop())
+        except:
+            pass
+        finally:
+            remove_recorder(session_id)
+        
+        return jsonify({
+            'success': True,
+            'saved_steps': len(steps),
+            'message': '步骤已保存到用例'
+        })
+    else:
+        return jsonify({'success': False, 'error': '保存步骤失败'}), 500
 
 # API: 运行测试用例
 @app.route('/api/cases/<int:case_id>/run', methods=['POST'])
