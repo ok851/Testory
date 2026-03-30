@@ -2389,8 +2389,14 @@ class Database:
                       step_result_id: int = None, error_message: str = "",
                       screenshots: str = "", environment: str = "",
                       browser_info: str = "", reproduce_steps: str = "",
-                      expected_result: str = "", actual_result: str = "") -> int:
+                      expected_result: str = "", actual_result: str = "",
+                      status: str = "open") -> int:
         """创建缺陷"""
+        # 验证状态值有效性
+        valid_statuses = ['open', 'in_progress', 'resolved', 'closed', 'reopened']
+        if status not in valid_statuses:
+            status = 'open'
+        
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -2400,8 +2406,8 @@ class Database:
                 assignee_id, reporter_id, case_id, run_history_id, step_result_id,
                 error_message, screenshots, environment, browser_info,
                 reproduce_steps, expected_result, actual_result
-            ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (project_id, title, description, severity, priority, assignee_id,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (project_id, title, description, severity, priority, status, assignee_id,
               reporter_id, case_id, run_history_id, step_result_id, error_message,
               screenshots, environment, browser_info, reproduce_steps,
               expected_result, actual_result))

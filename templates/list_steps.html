@@ -506,11 +506,22 @@
                     <option value="id">ID</option>
                     <option value="class">Class</option>
                     <option value="name">Name</option>
+                    <option value="text">文本内容</option>
+                    <option value="partial_text">部分文本</option>
+                    <option value="placeholder">Placeholder</option>
+                    <option value="label">关联Label</option>
+                    <option value="title">Title属性</option>
+                    <option value="alt">Alt属性</option>
+                    <option value="data">Data属性</option>
+                    <option value="aria">ARIA标签</option>
                 </select>
             </div>
             <div class="form-group">
                 <label for="stepSelectorValue">选择器值</label>
-                <input type="text" id="stepSelectorValue" placeholder="例如: #username 或 //input[@id='username']">
+                <input type="text" id="stepSelectorValue" placeholder="输入选择器值，根据定位方式自动转换">
+                <small id="selectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
+                    选择定位方式后，只需输入简单的值即可，如：ID输入"username"，文本输入"提交"
+                </small>
             </div>
             <div class="form-group">
                 <label for="stepInputValue">输入值/预期文本</label>
@@ -646,11 +657,22 @@
                     <option value="id">ID</option>
                     <option value="class">Class</option>
                     <option value="name">Name</option>
+                    <option value="text">文本内容</option>
+                    <option value="partial_text">部分文本</option>
+                    <option value="placeholder">Placeholder</option>
+                    <option value="label">关联Label</option>
+                    <option value="title">Title属性</option>
+                    <option value="alt">Alt属性</option>
+                    <option value="data">Data属性</option>
+                    <option value="aria">ARIA标签</option>
                 </select>
             </div>
             <div class="form-group">
                 <label for="editStepSelectorValue">选择器值</label>
-                <input type="text" id="editStepSelectorValue" placeholder="例如: #username 或 //input[@id='username']">
+                <input type="text" id="editStepSelectorValue" placeholder="输入选择器值，根据定位方式自动转换">
+                <small id="editSelectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
+                    选择定位方式后，只需输入简单的值即可
+                </small>
             </div>
             <div class="form-group">
                 <label for="editStepInputValue">输入值/预期文本</label>
@@ -1144,6 +1166,9 @@ function changePage(page) {
             document.getElementById('scrollLeft').value = '';
             document.getElementById('scrollRight').value = '';
             
+            // 更新选择器帮助文本
+            updateSelectorHelp();
+            
             toggleActionFields();
         }
         
@@ -1159,6 +1184,9 @@ function changePage(page) {
             document.getElementById('editStepSelectorValue').value = step.selector_value || '';
             document.getElementById('editStepInputValue').value = step.input_value || '';
             document.getElementById('editStepDescription').value = step.description || '';
+            
+            // 更新选择器帮助文本
+            updateEditSelectorHelp();
             
             // 处理对比方式选择
             if (step.action === 'extract_text') {
@@ -1214,6 +1242,43 @@ function changePage(page) {
             document.getElementById('editStepModal').classList.remove('active');
             currentEditingStepId = null;
         }
+        
+        // 选择器类型帮助文本
+        const selectorTypeHelp = {
+            'css': 'CSS选择器: 输入完整CSS选择器，如 #username 或 .btn-primary',
+            'xpath': 'XPath: 输入完整XPath路径，如 //input[@id="username"]',
+            'id': 'ID: 只需输入ID值，如 username（自动转换为 #username）',
+            'class': 'Class: 只需输入类名，如 btn-primary（自动转换为 .btn-primary）',
+            'name': 'Name: 只需输入name属性值，如 username（自动转换为 [name="username"]）',
+            'text': '文本内容: 输入元素完整文本，如"提交"、"登录"（自动转换为XPath）',
+            'partial_text': '部分文本: 输入部分文本内容，如"用户"（自动模糊匹配）',
+            'placeholder': 'Placeholder: 输入placeholder值，如"请输入用户名"',
+            'label': '关联Label: 输入label文本，如"用户名"（自动查找关联input）',
+            'title': 'Title属性: 输入title属性值，如"帮助"',
+            'alt': 'Alt属性: 输入alt属性值，如"图片说明"',
+            'data': 'Data属性: 输入 data-属性名=值，如 test-id=123 或只输入值',
+            'aria': 'ARIA标签: 输入aria-label值，如"搜索"'
+        };
+        
+        // 更新选择器帮助文本
+        function updateSelectorHelp() {
+            const selectorType = document.getElementById('stepSelectorType').value;
+            const helpText = selectorTypeHelp[selectorType] || '输入选择器值';
+            document.getElementById('selectorHelp').textContent = helpText;
+        }
+        
+        // 绑定选择器类型变化事件
+        document.getElementById('stepSelectorType').addEventListener('change', updateSelectorHelp);
+        
+        // 更新编辑模态框的选择器帮助文本
+        function updateEditSelectorHelp() {
+            const selectorType = document.getElementById('editStepSelectorType').value;
+            const helpText = selectorTypeHelp[selectorType] || '输入选择器值';
+            document.getElementById('editSelectorHelp').textContent = helpText;
+        }
+        
+        // 绑定编辑模态框的选择器类型变化事件
+        document.getElementById('editStepSelectorType').addEventListener('change', updateEditSelectorHelp);
         
         function toggleActionFields() {
             const action = document.getElementById('stepAction').value;

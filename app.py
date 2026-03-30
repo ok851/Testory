@@ -4106,7 +4106,8 @@ def api_create_defect():
         browser_info=data.get('browser_info', ''),
         reproduce_steps=data.get('reproduce_steps', ''),
         expected_result=data.get('expected_result', ''),
-        actual_result=data.get('actual_result', '')
+        actual_result=data.get('actual_result', ''),
+        status=data.get('status', 'open')
     )
     
     return jsonify({'success': True, 'defect_id': defect_id})

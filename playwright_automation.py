@@ -11,6 +11,15 @@ import ctypes  # 用于调用Windows API获取真实屏幕尺寸
 import threading
 import re
 
+# 🔥 导入增强型定位器模块
+from enhanced_locator import (
+    ElementLocatorManager, 
+    EnhancedLocatorGenerator,
+    DynamicClassNameFilter,
+    create_locator_manager,
+    ElementInfo
+)
+
 # 🔥 添加全局执行锁，防止并发执行多个测试用例集
 _execution_lock = threading.Lock()
 _currently_executing = False
@@ -111,6 +120,162 @@ class PlaywrightAutomation:
         self.page_events = []  # 存储页面事件以便后续处理
         self.sync_task = None  # 用于同步录制事件的后台任务
         self.playwright = None  # 初始化playwright实例变量
+        self.locator_manager = None  # 🔥 增强型定位管理器
+    
+    def convert_selector(self, selector_value: str, selector_type: str) -> tuple:
+        """
+        将简化的选择器类型转换为实际可用的选择器和类型
+        
+        Args:
+            selector_value: 选择器值
+            selector_type: 简化的选择器类型
+            
+        Returns:
+            tuple: (转换后的选择器值, 实际的选择器类型)
+        """
+        if selector_type == 'id':
+            # ID定位: username -> #username
+            return f"#{selector_value}", 'css'
+        
+        elif selector_type == 'class':
+            # Class定位: btn-primary -> .btn-primary
+            return f".{selector_value}", 'css'
+        
+        elif selector_type == 'name':
+            # Name定位: username -> [name="username"]
+            return f'[name="{selector_value}"]', 'css'
+        
+        elif selector_type == 'text':
+            # 文本定位: 提交 -> xpath=//*[text()='提交']
+            return f"//*[text()='{selector_value}']", 'xpath'
+        
+        elif selector_type == 'partial_text':
+            # 部分文本定位: 提交 -> xpath=//*[contains(text(),'提交')]
+            return f"//*[contains(text(),'{selector_value}')]", 'xpath'
+        
+        elif selector_type == 'placeholder':
+            # Placeholder定位: 请输入用户名 -> [placeholder="请输入用户名"]
+            return f'[placeholder="{selector_value}"]', 'css'
+        
+        elif selector_type == 'label':
+            # Label关联定位: 用户名 -> 查找label文本对应的input
+            # 返回特殊的标记，让后续方法处理
+            return selector_value, 'label'
+        
+        elif selector_type == 'title':
+            # Title属性定位: 帮助 -> [title="帮助"]
+            return f'[title="{selector_value}"]', 'css'
+        
+        elif selector_type == 'alt':
+            # Alt属性定位: 图片说明 -> [alt="图片说明"]
+            return f'[alt="{selector_value}"]', 'css'
+        
+        elif selector_type == 'data':
+            # Data属性定位: test-id=123 -> [data-test-id="123"]
+            if '=' in selector_value:
+                key, value = selector_value.split('=', 1)
+                return f'[data-{key}="{value}"]', 'css'
+            else:
+                # 如果只提供值，尝试常见的data属性
+                return f'[data-testid="{selector_value}"], [data-test="{selector_value}"], [data-id="{selector_value}"]', 'css'
+        
+        elif selector_type == 'aria':
+            # ARIA标签定位: 搜索 -> [aria-label="搜索"]
+            return f'[aria-label="{selector_value}"]', 'css'
+        
+        else:
+            # 其他类型保持不变
+            return selector_value, selector_type
+    
+    async def find_element_by_label(self, label_text: str, page=None):
+        """
+        通过label文本查找关联的input元素
+        
+        Args:
+            label_text: label的文本内容
+            page: 可选，指定页面
+            
+        Returns:
+            找到的元素locator
+        """
+        target_page = page if page is not None else self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        
+        uat_logger.info(f"🔍 [LABEL_LOCATE] 通过label文本查找元素: {label_text}")
+        
+        # 使用JavaScript查找与label关联的input
+        js_result = await target_page.evaluate("""(labelText) => {
+            // 策略1: 通过label的for属性查找
+            const labels = document.querySelectorAll('label');
+            for (const label of labels) {
+                if (label.textContent.trim() === labelText || label.textContent.trim().includes(labelText)) {
+                    const forAttr = label.getAttribute('for');
+                    if (forAttr) {
+                        const input = document.getElementById(forAttr);
+                        if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA' || input.tagName === 'SELECT')) {
+                            return {
+                                found: true,
+                                selector: `#${forAttr}`,
+                                selectorType: 'css',
+                                method: 'for_attribute'
+                            };
+                        }
+                    }
+                    
+                    // 策略2: label内部包含input
+                    const innerInput = label.querySelector('input, textarea, select');
+                    if (innerInput) {
+                        const id = innerInput.id;
+                        if (id) {
+                            return {
+                                found: true,
+                                selector: `#${id}`,
+                                selectorType: 'css',
+                                method: 'label_inner'
+                            };
+                        }
+                        // 使用XPath定位
+                        return {
+                            found: true,
+                            selector: `//label[contains(text(),'${labelText}')]//input | //label[contains(text(),'${labelText}')]//textarea | //label[contains(text(),'${labelText}')]//select`,
+                            selectorType: 'xpath',
+                            method: 'label_inner_xpath'
+                        };
+                    }
+                }
+            }
+            
+            // 策略3: 查找相邻的input（label后面紧跟着input）
+            for (const label of labels) {
+                if (label.textContent.trim() === labelText || label.textContent.trim().includes(labelText)) {
+                    const parent = label.parentElement;
+                    if (parent) {
+                        const siblingInput = parent.querySelector('input, textarea, select');
+                        if (siblingInput) {
+                            const id = siblingInput.id;
+                            if (id) {
+                                return {
+                                    found: true,
+                                    selector: `#${id}`,
+                                    selectorType: 'css',
+                                    method: 'sibling'
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return { found: false };
+        }""", label_text)
+        
+        if js_result and js_result.get('found'):
+            uat_logger.info(f"✅ [LABEL_LOCATE] 通过label找到元素: {js_result.get('method')}")
+            return js_result.get('selector'), js_result.get('selectorType')
+        else:
+            uat_logger.error(f"❌ [LABEL_LOCATE] 未找到与label关联的元素: {label_text}")
+            return None, None
     
     async def _cleanup_browser_resources(self):
         """清理浏览器相关资源"""
@@ -300,6 +465,10 @@ class PlaywrightAutomation:
                 
                 uat_logger.info("浏览器已启动并最大化,设置事件监听器")
                 
+                # 🔥 初始化增强型定位管理器
+                self.locator_manager = create_locator_manager(self.page)
+                await self.locator_manager.setup_tracking()
+                
                 # 设置事件监听器用于录制用户操作
                 await self._setup_event_listeners()
                 
@@ -372,19 +541,33 @@ class PlaywrightAutomation:
                         // 处理类名,过滤掉动态类名
                         if (element.className) {
                             const allClasses = element.className.split(' ').filter(c => c.length > 2); // 过滤掉太短的类名
+                            // 🔥 增强型动态类名过滤模式
                             const dynamicClassPatterns = [
-                                /^is-\w+$/, /^has-\w+$/, /^\w+-\w+-(leave|enter|active|done)$/, 
+                                // CSS-in-JS / Styled Components
+                                /^css-[a-zA-Z0-9]{5,}$/, /^styled__[a-zA-Z0-9]+$/, 
+                                /^sc-[a-zA-Z]+$/, /^emotion-\d+$/, /^jss\d+$/,
+                                /^makeStyles-[a-zA-Z0-9-]+$/,
+                                
+                                // 动画状态类
+                                /^is-\w+$/, /^has-\w+$/, /^\w+-\w+-(leave|enter|active|done|start|end)$/,
+                                /^anim-\w+-\d+$/, /^transition-\w+-\d+$/,
+                                
+                                // 框架特定
                                 /^el-\w+(-\w+)*$/, /^ant-\w+(-\w+)*$/, /^t-[a-zA-Z0-9]{8}$/, 
-                                /^weui-\w+(-\w+)*$/, /^layui-\w+(-\w+)*$/, /^v-\w+$/, 
-                                /^ng-\w+$/, /^vue-\w+$/, /^react-\w+$/, /^svelte-\w+$/, 
-                                /^css-\w+$/, /^scss-\w+$/, /^style-\w+$/, /^component-\w+$/, 
-                                /^theme-\w+$/, /^mode-\w+$/, /^state-\w+$/, /^variant-\w+$/, 
-                                /^hover-\w+$/, /^focus-\w+$/, /^active-\w+$/, /^disabled-\w+$/, 
-                                /^selected-\w+$/, /^checked-\w+$/, /^expanded-\w+$/, /^collapsed-\w+$/, /^open-\w+$/, /^closed-\w+$/, 
-                                /^loading-\w+$/, /^error-\w+$/, /^success-\w+$/, /^warning-\w+$/, /^info-\w+$/, 
-                                /^\d+-\w+$/, /^\w+-\d+$/, /^[a-f0-9]{6,}$/, /^\w+-[a-f0-9]{6,16}$/, 
-                                /^\w+-[0-9a-z]{8,}$/, /^[a-z]{3,6}-[0-9a-z]{5,10}$/, 
-                                /^v?\d+\.\d+\.\d+$/, /^[0-9]+$/, 
+                                /^weui-\w+(-\w+)*$/, /^layui-\w+(-\w+)*$/, 
+                                /^ivu-\w+(-\w+)*$/, /^van-\w+$/, /^uni-\w+$/,
+                                /^v-\w+$/, /^ng-\w+$/, /^vue-\w+$/, /^react-\w+$/, /^svelte-\w+$/,
+                                /^data-v-[a-f0-9]{8}$/, // Vue scoped
+                                
+                                // 时间戳和随机ID
+                                /^\d{10,}$/, /^\d{4}-\d{2}-\d{2}.*$/, /^time-\d+$/, /^timestamp-\d+$/,
+                                /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/, // UUID
+                                /^[a-f0-9]{32}$/, /^[a-zA-Z0-9]{20,}$/, // MD5/长随机
+                                
+                                // 工具类框架
+                                /^tw-[a-z]+(-\w+)*$/, /^tailwind-[a-z]+(-\w+)*$/,
+                                
+                                // 布局工具类
                                 /^flex$/, /^grid$/, /^block$/, /^inline$/, /^hidden$/, /^visible$/, 
                                 /^absolute$/, /^relative$/, /^fixed$/, /^sticky$/, 
                                 /^left-\d+$/, /^right-\d+$/, /^top-\d+$/, /^bottom-\d+$/, 
@@ -392,8 +575,19 @@ class PlaywrightAutomation:
                                 /^p-\d+$/, /^m-\d+$/, /^mt-\d+$/, /^mr-\d+$/, /^mb-\d+$/, /^ml-\d+$/, 
                                 /^pt-\d+$/, /^pr-\d+$/, /^pb-\d+$/, /^pl-\d+$/, 
                                 /^text-\w+$/, /^bg-\w+$/, /^border-\w+$/, /^rounded-\w+$/, 
-                                /^lang-\w+$/, /^i18n-\w+$/, /^ltr$/, /^rtl$/, 
-                                /^mobile-\w+$/, /^tablet-\w+$/, /^desktop-\w+$/, /^xl-\w+$/, /^sm-\w+$/, /^md-\w+$/, /^lg-\w+$/
+                                
+                                // 响应式类
+                                /^mobile-\w+$/, /^tablet-\w+$/, /^desktop-\w+$/, 
+                                /^xl-\w+$/, /^sm-\w+$/, /^md-\w+$/, /^lg-\w+$/,
+                                /^lang-\w+$/, /^i18n-\w+$/, /^ltr$/, /^rtl$/,
+                                
+                                // 版本号
+                                /^v?\d+\.\d+\.\d+(-[a-z]+\.?\d*)?$/,
+                                
+                                // 纯数字和短类名
+                                /^\d+$/, /^\d+-\w+$/, /^\w+-\d+$/, /^[a-f0-9]{6,}$/, 
+                                /^\w+-[a-f0-9]{6,16}$/, /^\w+-[0-9a-z]{8,}$/, 
+                                /^[a-z]{3,6}-[0-9a-z]{5,10}$/
                             ];
                             
                             const stableClasses = allClasses.filter(c => {
@@ -1191,6 +1385,19 @@ class PlaywrightAutomation:
         if target_page is None:
             raise Exception("浏览器未启动")
         
+        # 🔥 转换简化的选择器类型
+        original_selector_type = selector_type
+        if selector_type in ['id', 'class', 'name', 'text', 'partial_text', 'placeholder', 
+                             'label', 'title', 'alt', 'data', 'aria']:
+            if selector_type == 'label':
+                # Label类型需要异步查找
+                selector, selector_type = await self.find_element_by_label(selector, target_page)
+                if selector is None:
+                    raise Exception(f"未找到与label关联的元素: {original_selector_type}={selector}")
+            else:
+                selector, selector_type = self.convert_selector(selector, selector_type)
+            uat_logger.info(f"🔍 [SELECTOR_CONVERT] 选择器转换: {original_selector_type} -> {selector_type}, 值: {selector}")
+        
         uat_logger.info(f"🔍 [SELECT_DEBUG] 开始选择下拉框选项,选择器: {selector}, 选择值: {select_value}, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
         
         # 构建完整的选择器
@@ -1293,12 +1500,46 @@ class PlaywrightAutomation:
                             const selectInner = element.querySelector('.el-input__inner');
                             if (selectInner) {
                                 // 尝试找到对应的选项值
-                                // 首先尝试从下拉面板中查找选项
-                                const dropdown = document.querySelector('.el-select-dropdown');
+                                // 🔥 修复：获取所有下拉面板，找到与当前元素关联的那个
                                 let optionValue = null;
                                 
-                                if (dropdown) {
-                                    const options = dropdown.querySelectorAll('.el-select-dropdown__item');
+                                // 方法1: 通过元素位置找到对应的下拉面板
+                                const elementRect = element.getBoundingClientRect();
+                                const allDropdowns = document.querySelectorAll('.el-select-dropdown');
+                                let targetDropdown = null;
+                                
+                                for (const dropdown of allDropdowns) {
+                                    // 检查下拉面板是否可见
+                                    const style = window.getComputedStyle(dropdown);
+                                    if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                        const dropdownRect = dropdown.getBoundingClientRect();
+                                        // 🔥 修复：同时支持向下展开和向上展开的下拉框
+                                        // 向下展开：下拉面板在输入框下方 (dropdownRect.top >= elementRect.bottom - 10)
+                                        // 向上展开：下拉面板在输入框上方 (dropdownRect.bottom <= elementRect.top + 10)
+                                        const isDownward = Math.abs(dropdownRect.left - elementRect.left) < 50 && 
+                                                           dropdownRect.top >= elementRect.bottom - 10;
+                                        const isUpward = Math.abs(dropdownRect.left - elementRect.left) < 50 && 
+                                                         dropdownRect.bottom <= elementRect.top + 10;
+                                        if (isDownward || isUpward) {
+                                            targetDropdown = dropdown;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // 如果没找到关联的，使用最后一个可见的（通常是最新打开的）
+                                if (!targetDropdown && allDropdowns.length > 0) {
+                                    for (let i = allDropdowns.length - 1; i >= 0; i--) {
+                                        const style = window.getComputedStyle(allDropdowns[i]);
+                                        if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                            targetDropdown = allDropdowns[i];
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                if (targetDropdown) {
+                                    const options = targetDropdown.querySelectorAll('.el-select-dropdown__item');
                                     for (const opt of options) {
                                         if (opt.textContent.trim() === value || opt.textContent.trim().includes(value)) {
                                             optionValue = opt.getAttribute('data-value') || opt.textContent.trim();
@@ -1391,6 +1632,27 @@ class PlaywrightAutomation:
                     # 🔥 优化：减少固定等待时间从300ms到100ms
                     await target_page.wait_for_timeout(100)
                 
+                # 🔥 关键修复：对于动态加载数据的下拉框，等待选项实际渲染到DOM中
+                # 检测是否有选项元素存在
+                uat_logger.info(f"🔍 [SELECT_DEBUG] 等待选项渲染到DOM...")
+                option_rendered = False
+                option_selectors_check = [
+                    '.el-select-dropdown__item', 
+                    '.ant-select-item',
+                    '[role="option"]'
+                ]
+                for opt_sel in option_selectors_check:
+                    try:
+                        await target_page.wait_for_selector(opt_sel, state='visible', timeout=800)
+                        option_rendered = True
+                        uat_logger.info(f"✅ [SELECT_DEBUG] 选项已渲染: {opt_sel}")
+                        break
+                    except Exception:
+                        continue
+                
+                if not option_rendered:
+                    uat_logger.info(f"🔍 [SELECT_DEBUG] 选项未立即渲染，继续尝试...")
+                
                 # 查找并点击选项 - 使用平衡的性能和可靠性策略
                 uat_logger.info(f"🔍 [SELECT_DEBUG] 查找选项: {select_value}")
                 
@@ -1449,6 +1711,29 @@ class PlaywrightAutomation:
                 
                 if not option_clicked:
                     uat_logger.error(f"❌ [SELECT_DEBUG] 无法找到并点击选项: {select_value}")
+                    # 🔥 调试：打印实际可用的选项文本（从所有可见的下拉面板中收集）
+                    try:
+                        available_options = await target_page.evaluate("""() => {
+                            const allDropdowns = document.querySelectorAll('.el-select-dropdown, .ant-select-dropdown, [role="listbox"]');
+                            const allOptions = [];
+                            for (const dropdown of allDropdowns) {
+                                const style = window.getComputedStyle(dropdown);
+                                if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                    const items = dropdown.querySelectorAll('.el-select-dropdown__item, .ant-select-item, [role="option"], li');
+                                    for (const item of items) {
+                                        const text = item.textContent.trim();
+                                        if (text && !allOptions.includes(text)) {
+                                            allOptions.push(text);
+                                        }
+                                    }
+                                }
+                            }
+                            return allOptions;
+                        }""")
+                        uat_logger.info(f"🔍 [SELECT_DEBUG] 当前所有可见下拉框的可用选项: {available_options}")
+                        uat_logger.info(f"🔍 [SELECT_DEBUG] 共找到 {available_options.length} 个可见下拉面板")
+                    except Exception as debug_e:
+                        uat_logger.debug(f"🔍 [SELECT_DEBUG] 获取可用选项失败: {debug_e}")
                     uat_logger.info(f"🔍 [SELECT_DEBUG] 提示: 可能需要调整选择值或检查下拉框结构")
                     raise Exception(f"无法找到并点击选项: {select_value}")
                 
@@ -2157,6 +2442,19 @@ class PlaywrightAutomation:
         if target_page is None:
             raise Exception("浏览器未启动")
         
+        # 🔥 转换简化的选择器类型
+        original_selector_type = selector_type
+        if selector_type in ['id', 'class', 'name', 'text', 'partial_text', 'placeholder', 
+                             'label', 'title', 'alt', 'data', 'aria']:
+            if selector_type == 'label':
+                # Label类型需要异步查找
+                selector, selector_type = await self.find_element_by_label(selector, target_page)
+                if selector is None:
+                    raise Exception(f"未找到与label关联的元素: {original_selector_type}={selector}")
+            else:
+                selector, selector_type = self.convert_selector(selector, selector_type)
+            uat_logger.info(f"🔍 [SELECTOR_CONVERT] 选择器转换: {original_selector_type} -> {selector_type}, 值: {selector}")
+        
         # 检查页面是否已经被关闭
         try:
             if hasattr(target_page, 'url'):
@@ -2491,6 +2789,27 @@ class PlaywrightAutomation:
                     except Exception as e4:
                         uat_logger.error(f"❌ [CLICK_DEBUG] 方式4失败: {str(e4)}")
                     
+                    # 🔥 方式5: 增强型智能定位器降级机制
+                    if not element_clicked and self.locator_manager:
+                        try:
+                            uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式5: 增强型智能定位器降级")
+                            
+                            # 尝试提取元素信息并使用智能定位
+                            element_info = await self.locator_manager.extract_element_info(selector if selector_type == "css" else None)
+                            if element_info:
+                                uat_logger.info(f"🔍 [CLICK_DEBUG] 提取到元素信息: {element_info.tag_name}")
+                                locator = await self.locator_manager.find_element(element_info, max_attempts=3)
+                                if locator:
+                                    await locator.click(timeout=10000)
+                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式5成功点击元素: 使用智能定位器")
+                                    element_clicked = True
+                                else:
+                                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 智能定位器未找到元素")
+                            else:
+                                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 无法提取元素信息")
+                        except Exception as e5:
+                            uat_logger.error(f"❌ [CLICK_DEBUG] 方式5失败: {str(e5)}")
+                    
         if not element_clicked:
             # 如果所有点击方式都失败,抛出异常
             raise Exception(f"无法点击元素: {selector}, 选择器类型: {selector_type}, 所有点击方式均失败")
@@ -2595,6 +2914,19 @@ class PlaywrightAutomation:
         if target_page is None:
             raise Exception("浏览器未启动")
         
+        # 🔥 转换简化的选择器类型
+        original_selector_type = selector_type
+        if selector_type in ['id', 'class', 'name', 'text', 'partial_text', 'placeholder', 
+                             'label', 'title', 'alt', 'data', 'aria']:
+            if selector_type == 'label':
+                # Label类型需要异步查找
+                selector, selector_type = await self.find_element_by_label(selector, target_page)
+                if selector is None:
+                    raise Exception(f"未找到与label关联的元素: {original_selector_type}={selector}")
+            else:
+                selector, selector_type = self.convert_selector(selector, selector_type)
+            uat_logger.info(f"🔍 [SELECTOR_CONVERT] 选择器转换: {original_selector_type} -> {selector_type}, 值: {selector}")
+        
         # 构建完整的选择器
         full_selector = selector
         if selector_type == "xpath":
@@ -2635,7 +2967,37 @@ class PlaywrightAutomation:
         element_check_result = await self._check_element_type(target_context, full_selector, selector_type)
         if not element_check_result['exists']:
             raise Exception(f"元素不存在: {selector}")
-        if element_check_result['type'] not in ['input', 'textarea', 'contenteditable']:
+        
+        # 🔥 Element UI 下拉框特殊检测
+        is_el_select_component = False
+        el_select_info = None
+        if element_check_result['type'] == 'div':
+            # 检测是否是el-select组件
+            try:
+                el_select_info = await target_context.evaluate("""(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return null;
+                    const className = el.className || '';
+                    const isElSelect = className.includes('el-select');
+                    const isFilterable = className.includes('is-filterable');
+                    const placeholder = el.querySelector('.el-input__inner')?.placeholder || '';
+                    const ariaLabel = el.querySelector('.el-input__inner')?.getAttribute('aria-label') || '';
+                    return { 
+                        isElSelect, 
+                        isFilterable, 
+                        placeholder,
+                        ariaLabel,
+                        className
+                    };
+                }""", selector)
+                
+                if el_select_info and el_select_info.get('isElSelect'):
+                    is_el_select_component = True
+                    uat_logger.info(f"🔍 [EL_SELECT] 检测到Element UI下拉框组件: {el_select_info}")
+            except Exception as e:
+                uat_logger.debug(f"🔍 [EL_SELECT] 检测失败: {e}")
+        
+        if element_check_result['type'] not in ['input', 'textarea', 'contenteditable'] and not is_el_select_component:
             uat_logger.warning(f"元素类型可能不支持输入: {element_check_result['type']}，继续尝试填充")
         
         # 尝试多种填充方式,增加成功概率
@@ -2650,6 +3012,35 @@ class PlaywrightAutomation:
                 uat_logger.info(f"✅ [INPUT_VALIDATION] 输入框验证通过: {element_validation.get('info')}")
         except Exception as ve:
             uat_logger.warning(f"⚠️ [INPUT_VALIDATION] 验证过程出错: {ve}")
+        
+        # 🔥 方式0: Element UI 下拉框优先处理
+        if is_el_select_component and self.locator_manager:
+            try:
+                uat_logger.info(f"🔍 [EL_SELECT] 使用专用方法填充Element UI下拉框")
+                
+                # 使用专用方法填充el-select
+                fill_success = await self.locator_manager.fill_el_select(
+                    selector=selector,
+                    value=text,
+                    placeholder=el_select_info.get('placeholder')
+                )
+                
+                if fill_success:
+                    uat_logger.info(f"✅ [EL_SELECT] Element UI下拉框填充成功")
+                    return
+                
+                # 如果是可搜索下拉框，尝试搜索方式
+                if el_select_info.get('isFilterable'):
+                    fill_success = await self.locator_manager.fill_el_select_searchable(
+                        selector=selector,
+                        value=text,
+                        placeholder=el_select_info.get('placeholder')
+                    )
+                    if fill_success:
+                        uat_logger.info(f"✅ [EL_SELECT] 可搜索下拉框填充成功")
+                        return
+            except Exception as e:
+                uat_logger.warning(f"⚠️ [EL_SELECT] 专用方法失败: {e}，尝试常规方法")
         
         # 方式1: 使用Playwright的fill方法
         try:
@@ -2971,6 +3362,68 @@ class PlaywrightAutomation:
                                     uat_logger.error(f"元素不存在,无法使用JavaScript填充: {selector}")
                         except Exception as e5:
                             uat_logger.error(f"JavaScript填充失败: {str(e5)}")
+                            
+                            # 🔥 方式6: Element UI 下拉框专用处理
+                            if not fill_success:
+                                try:
+                                    uat_logger.info(f"🔍 [FILL_DEBUG] 尝试方式6: Element UI下拉框专用处理")
+                                    
+                                    # 检测是否是el-select组件
+                                    is_el_select = await target_context.evaluate("""(sel) => {
+                                        const el = document.querySelector(sel);
+                                        if (!el) return { isSelect: false };
+                                        const className = el.className || '';
+                                        const isSelect = className.includes('el-select');
+                                        const isFilterable = className.includes('is-filterable');
+                                        const placeholder = el.querySelector('.el-input__inner')?.placeholder || '';
+                                        return { isSelect, isFilterable, placeholder };
+                                    }""", selector)
+                                    
+                                    if is_el_select and is_el_select.get('isSelect'):
+                                        uat_logger.info(f"✅ [FILL_DEBUG] 检测到Element UI下拉框，使用专用填充方法")
+                                        
+                                        # 使用专用方法填充el-select
+                                        if self.locator_manager:
+                                            fill_success = await self.locator_manager.fill_el_select(
+                                                selector=selector,
+                                                value=text,
+                                                placeholder=is_el_select.get('placeholder')
+                                            )
+                                            if fill_success:
+                                                uat_logger.info(f"✅ [FILL_DEBUG] Element UI下拉框填充成功")
+                                        
+                                        # 如果是可搜索下拉框，尝试搜索方式
+                                        if not fill_success and is_el_select.get('isFilterable'):
+                                            fill_success = await self.locator_manager.fill_el_select_searchable(
+                                                selector=selector,
+                                                value=text,
+                                                placeholder=is_el_select.get('placeholder')
+                                            )
+                                    else:
+                                        uat_logger.info(f"🔍 [FILL_DEBUG] 不是Element UI下拉框，继续尝试其他方式")
+                                except Exception as e6:
+                                    uat_logger.error(f"❌ [FILL_DEBUG] 方式6失败: {str(e6)}")
+                            
+                            # 🔥 方式7: 增强型智能定位器降级机制
+                            if not fill_success and self.locator_manager:
+                                try:
+                                    uat_logger.info(f"🔍 [FILL_DEBUG] 尝试方式7: 增强型智能定位器降级")
+                                    
+                                    # 尝试提取元素信息并使用智能定位
+                                    element_info = await self.locator_manager.extract_element_info(selector if selector_type == "css" else None)
+                                    if element_info:
+                                        uat_logger.info(f"🔍 [FILL_DEBUG] 提取到元素信息: {element_info.tag_name}")
+                                        locator = await self.locator_manager.find_element(element_info, max_attempts=3)
+                                        if locator:
+                                            await locator.fill(text, timeout=10000)
+                                            uat_logger.info(f"✅ [FILL_DEBUG] 方式7成功填充元素: 使用智能定位器")
+                                            fill_success = True
+                                        else:
+                                            uat_logger.warning(f"⚠️ [FILL_DEBUG] 智能定位器未找到元素")
+                                    else:
+                                        uat_logger.warning(f"⚠️ [FILL_DEBUG] 无法提取元素信息")
+                                except Exception as e7:
+                                    uat_logger.error(f"❌ [FILL_DEBUG] 方式7失败: {str(e7)}")
         
         # 🔥 最终验证：确保输入真正成功
         if fill_success:
