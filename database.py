@@ -1056,7 +1056,11 @@ class Database:
                         'input': 'input',
                         'select': 'select',
                         'hover': 'hover',
-                        'keypress': 'keypress'
+                        'keypress': 'keypress',
+                        'navigate': 'navigate',
+                        'scroll': 'scroll',
+                        'double_click': 'double_click',
+                        'right_click': 'right_click',
                     }
                     action = action_map.get(operation_type, 'click')
                     selector_value = step.get('operation_locator', '')

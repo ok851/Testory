@@ -14,6 +14,8 @@ from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 from logger import uat_logger
 from license_manager import license_manager, LicenseType
+import asyncio
+import threading
 
 # 统一的API错误处理装饰器
 def api_error_handler(func):
@@ -1533,6 +1535,39 @@ def api_update_step_order(case_id):
 
 # ==================== 步骤录制相关 API ====================
 _active_recording_sessions = {}
+_recording_loop = None
+_recording_loop_thread = None
+
+
+def _recording_loop_worker(loop: asyncio.AbstractEventLoop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+def _ensure_recording_loop() -> asyncio.AbstractEventLoop:
+    global _recording_loop, _recording_loop_thread
+    if _recording_loop and _recording_loop.is_running():
+        return _recording_loop
+
+    # Playwright 必须通过 asyncio 拉起浏览器子进程。Python 3.11+ 在 Windows 上若强制
+    # WindowsSelectorEventLoopPolicy，SelectorEventLoop 对 subprocess 支持不完整，会抛
+    # NotImplementedError，导致 /api/recordings/start 直接 500。此处使用进程默认策略
+    #（一般为 Proactor），仅在独立线程的 loop 上运行，不影响 Flask 主线程。
+    _recording_loop = asyncio.new_event_loop()
+    _recording_loop_thread = threading.Thread(
+        target=_recording_loop_worker,
+        args=(_recording_loop,),
+        name="step-recorder-loop",
+        daemon=True
+    )
+    _recording_loop_thread.start()
+    return _recording_loop
+
+
+def _run_in_recording_loop(coro, timeout: float = 10):
+    loop = _ensure_recording_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=timeout)
 
 # API: 开始录制步骤（智能录制器）
 @app.route('/api/steps/recording/start', methods=['POST'])
@@ -1562,11 +1597,8 @@ def api_start_smart_recording():
             return
         recorder_to_stop = get_recorder(session_to_stop)
         if recorder_to_stop:
-            import asyncio
-            stop_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(stop_loop)
             try:
-                stop_loop.run_until_complete(recorder_to_stop.stop())
+                _run_in_recording_loop(recorder_to_stop.stop(), timeout=4)
             except Exception as stop_e:
                 uat_logger.warning(f"清理录制会话失败(session={session_to_stop}): {stop_e}")
         remove_recorder(session_to_stop)
@@ -1581,13 +1613,9 @@ def api_start_smart_recording():
     recorder = create_recorder(session_id)
     recorder.set_case_info(case_id, project_id)
     
-    # 启动浏览器（异步）
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
+    # 启动浏览器（后台常驻事件循环，保证前台事件持续被捕捉）
     try:
-        loop.run_until_complete(recorder.start(url, headless=False))
+        _run_in_recording_loop(recorder.start(url, headless=False), timeout=30)
     except Exception as e:
         remove_recorder(session_id)
         return jsonify({'success': False, 'error': f'启动录制失败：{str(e)}'}), 500
@@ -1628,13 +1656,9 @@ def api_stop_smart_recording():
             'message': '录制已结束'
         })
     
-    # 停止录制
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
+    # 停止录制（复用后台常驻事件循环，避免请求线程阻塞）
     try:
-        recorded_steps = loop.run_until_complete(asyncio.wait_for(recorder.stop(), timeout=8))
+        recorded_steps = _run_in_recording_loop(recorder.stop(), timeout=6)
         auto_saved = False
         auto_saved_count = 0
         # 自动闭环：停止录制后，如果已绑定 case_id，后台自动按当前步骤格式落库
@@ -1792,12 +1816,8 @@ def api_save_smart_recording_steps():
     
     if success:
         # 停止录制并清理资源
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
         try:
-            loop.run_until_complete(recorder.stop())
+            _run_in_recording_loop(recorder.stop(), timeout=6)
         except:
             pass
         finally:

@@ -3087,11 +3087,15 @@ function changePage(page) {
                     ? step.operation_value
                     : (step.input_value || '');
 
-                const icon = stepType === 'click' ? '👆' : 
-                            stepType === 'input' ? '✍️' : 
+                const icon = stepType === 'click' ? '👆' :
+                            stepType === 'input' ? '✍️' :
                             stepType === 'hover' ? '👋' :
                             stepType === 'keypress' ? '⌨️' :
-                            stepType === 'select' ? '🔽' : '📋';
+                            stepType === 'select' ? '🔽' :
+                            stepType === 'navigate' ? '🔗' :
+                            stepType === 'scroll' ? '📜' :
+                            stepType === 'double_click' ? '👆👆' :
+                            stepType === 'right_click' ? '🖱️' : '📋';
                 
                 html += `
                     <div style="padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #667eea;">
