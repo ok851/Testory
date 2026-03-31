@@ -1039,29 +1039,41 @@ class Database:
                 
             # 批量插入步骤
             for i, step in enumerate(steps):
-                # 映射录制步骤格式到数据库格式
-                operation_type = step.get('operation_type', 'click')
-                locator = step.get('operation_locator', '')
-                value = step.get('operation_value', '')
+                # 兼容两种录制格式：
+                # 新格式：action/selector_type/selector_value/input_value/step_order
+                # 旧格式：operation_type/operation_locator/operation_value/sort_order
+                action = step.get('action')
+                selector_type = step.get('selector_type')
+                selector_value = step.get('selector_value')
+                input_value = step.get('input_value')
                 desc = step.get('description', '')
-                sort_order = step.get('sort_order', max_order + i + 1)
-                    
-                # 根据操作类型转换为对应的 action
-                action_map = {
-                    'click': 'click',
-                    'input': 'fill',
-                    'select': 'select'
-                }
-                action = action_map.get(operation_type, 'click')
-                    
-                # 确定 selector_type（简单判断 CSS 或 XPath）
-                selector_type = 'xpath' if locator.startswith('//') or locator.startswith('/') else 'css'
+                sort_order = step.get('step_order', step.get('sort_order', max_order + i + 1))
+
+                if not action:
+                    operation_type = step.get('operation_type', 'click')
+                    action_map = {
+                        'click': 'click',
+                        'input': 'input',
+                        'select': 'select',
+                        'hover': 'hover',
+                        'keypress': 'keypress'
+                    }
+                    action = action_map.get(operation_type, 'click')
+                    selector_value = step.get('operation_locator', '')
+                    input_value = step.get('operation_value', '')
+
+                if selector_value is None:
+                    selector_value = ''
+                if input_value is None:
+                    input_value = ''
+                if not selector_type:
+                    selector_type = 'xpath' if str(selector_value).startswith('//') or str(selector_value).startswith('/') else 'css'
                     
                 cursor.execute(
                     """INSERT INTO test_steps 
                        (case_id, action, selector_type, selector_value, input_value, description, step_order) 
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (case_id, action, selector_type, locator, value, desc, sort_order)
+                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order)
                 )
                 
             conn.commit()
@@ -1765,6 +1777,66 @@ class Database:
         conn.commit()
         conn.close()
         return schedule_id
+
+    def consume_schedule_execution(self, schedule_id: int) -> Dict[str, Any]:
+        """
+        原子消耗一次定时任务执行次数。
+        规则：
+        - execution_count = 0: 视为无限次，不扣减
+        - execution_count > 0: 每次触发扣减1，扣减到0时自动禁用任务（is_active=0）
+        返回:
+            {
+              'allowed': bool,
+              'reason': str | None,
+              'remaining': int | None,
+              'unlimited': bool,
+              'exhausted': bool
+            }
+        """
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn.isolation_level = None  # 手动事务控制
+        cursor = conn.cursor()
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute("SELECT is_active, execution_count FROM schedules WHERE id = ?", (schedule_id,))
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute("ROLLBACK")
+                return {'allowed': False, 'reason': 'not_found', 'remaining': None, 'unlimited': False, 'exhausted': False}
+
+            is_active, execution_count = row[0], row[1] if row[1] is not None else 0
+            if not is_active:
+                cursor.execute("ROLLBACK")
+                return {'allowed': False, 'reason': 'inactive', 'remaining': execution_count, 'unlimited': execution_count == 0, 'exhausted': execution_count == 0}
+
+            # 0 表示无限次
+            if execution_count == 0:
+                cursor.execute("COMMIT")
+                return {'allowed': True, 'reason': None, 'remaining': 0, 'unlimited': True, 'exhausted': False}
+
+            # 有限次数：原子扣减
+            new_count = max(0, int(execution_count) - 1)
+            new_active = 1 if new_count > 0 else 0
+            cursor.execute(
+                "UPDATE schedules SET execution_count = ?, is_active = ? WHERE id = ?",
+                (new_count, new_active, schedule_id)
+            )
+            cursor.execute("COMMIT")
+            return {
+                'allowed': True,
+                'reason': None,
+                'remaining': new_count,
+                'unlimited': False,
+                'exhausted': new_count == 0
+            }
+        except Exception:
+            try:
+                cursor.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def get_all_schedules(self) -> List[Dict[str, Any]]:
         """获取所有调度任务"""

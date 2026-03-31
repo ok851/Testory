@@ -483,6 +483,61 @@ def _validate_and_fix_url(url: str) -> tuple:
 
     return url, None
 
+
+def _get_first_valid_step_url(steps) -> tuple:
+    """从步骤中提取首个有效URL。返回 (fixed_url, source_desc)。"""
+    if not steps:
+        return None, None
+
+    for step in steps:
+        action = (step.get('action') or '').strip().lower()
+        candidates = []
+
+        if step.get('url'):
+            candidates.append(('step.url', step.get('url')))
+        if action == 'navigate' and step.get('input_value'):
+            candidates.append(('navigate.input_value', step.get('input_value')))
+
+        for source, raw in candidates:
+            fixed_url, url_err = _validate_and_fix_url(raw)
+            if fixed_url:
+                return fixed_url, source
+            if url_err:
+                uat_logger.warning(f"步骤URL无效，已跳过（{source}）: {url_err}")
+
+    return None, None
+
+
+def _resolve_case_navigation_url(case: dict = None, case_id: int = None, steps: list = None, fallback_url: str = None) -> tuple:
+    """统一解析运行/录制前导航URL。优先级：case.url > step.url/navigate.input_value > fallback_url"""
+    local_case = case or {}
+    if not local_case and case_id:
+        local_case = db.get_test_case(case_id) or {}
+
+    case_url = local_case.get('url')
+    if case_url:
+        fixed_url, url_err = _validate_and_fix_url(case_url)
+        if fixed_url:
+            return fixed_url, 'case.url'
+        if url_err:
+            uat_logger.warning(f"用例URL无效，继续尝试步骤URL: {url_err}")
+
+    local_steps = steps
+    if local_steps is None and case_id:
+        local_steps = db.get_case_steps(case_id)
+    step_url, step_source = _get_first_valid_step_url(local_steps or [])
+    if step_url:
+        return step_url, step_source
+
+    if fallback_url:
+        fixed_url, url_err = _validate_and_fix_url(fallback_url)
+        if fixed_url:
+            return fixed_url, 'request.url'
+        if url_err:
+            return None, f"无效的URL地址: {fallback_url}"
+
+    return None, None
+
 # 测试用例管理页面（新版本）
 @app.route('/list_cases_v2/<int:project_id>')
 @login_required
@@ -1477,6 +1532,7 @@ def api_update_step_order(case_id):
         return jsonify({'success': False, 'error': '更新步骤顺序失败'}), 400
 
 # ==================== 步骤录制相关 API ====================
+_active_recording_sessions = {}
 
 # API: 开始录制步骤（智能录制器）
 @app.route('/api/steps/recording/start', methods=['POST'])
@@ -1489,12 +1545,37 @@ def api_start_smart_recording():
     url = data.get('url')
     case_id = data.get('case_id')
     project_id = data.get('project_id')
-    
-    if not url:
-        return jsonify({'success': False, 'error': '缺少 URL 参数'}), 400
+
+    nav_url, nav_source = _resolve_case_navigation_url(case_id=case_id, fallback_url=url)
+    if not nav_url:
+        return jsonify({
+            'success': False,
+            'error': '启动录制失败：未找到可用URL，请先配置用例URL或新增导航步骤(URL)'
+        }), 400
+    url = nav_url
     
     # 生成会话 ID
     session_id = f"recording_{current_user.id}_{int(time.time())}"
+
+    def _stop_and_cleanup_session(session_to_stop: str):
+        if not session_to_stop:
+            return
+        recorder_to_stop = get_recorder(session_to_stop)
+        if recorder_to_stop:
+            import asyncio
+            stop_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(stop_loop)
+            try:
+                stop_loop.run_until_complete(recorder_to_stop.stop())
+            except Exception as stop_e:
+                uat_logger.warning(f"清理录制会话失败(session={session_to_stop}): {stop_e}")
+        remove_recorder(session_to_stop)
+
+    # 同一用户只允许一个活跃录制会话：启动新会话前先清理旧会话
+    old_session_id = _active_recording_sessions.get(current_user.id)
+    if old_session_id:
+        _stop_and_cleanup_session(old_session_id)
+        _active_recording_sessions.pop(current_user.id, None)
     
     # 创建录制器
     recorder = create_recorder(session_id)
@@ -1510,10 +1591,14 @@ def api_start_smart_recording():
     except Exception as e:
         remove_recorder(session_id)
         return jsonify({'success': False, 'error': f'启动录制失败：{str(e)}'}), 500
+
+    _active_recording_sessions[current_user.id] = session_id
     
     return jsonify({
         'success': True,
         'session_id': session_id,
+        'navigated_url': url,
+        'url_source': nav_source or 'unknown',
         'message': '录制已开始，请在浏览器中操作'
     })
 
@@ -1526,9 +1611,12 @@ def api_stop_smart_recording():
     """停止录制测试步骤（智能录制器）"""
     data = request.get_json(silent=True) or {}
     session_id = data.get('session_id')
-    
+
+    # 兼容前端 session_id 丢失：回退到当前用户活跃会话
     if not session_id:
-        return jsonify({'success': False, 'error': '缺少会话 ID'}), 400
+        session_id = _active_recording_sessions.get(current_user.id)
+    if not session_id:
+        return jsonify({'success': True, 'steps': [], 'total_steps': 0, 'message': '无活跃录制会话'})
     
     recorder = get_recorder(session_id)
     if not recorder:
@@ -1546,19 +1634,45 @@ def api_stop_smart_recording():
     asyncio.set_event_loop(loop)
     
     try:
-        recorded_steps = loop.run_until_complete(recorder.stop())
-        # 注意：不立即删除录制器，等待保存时再删除
-        # remove_recorder(session_id)
+        recorded_steps = loop.run_until_complete(asyncio.wait_for(recorder.stop(), timeout=8))
+        auto_saved = False
+        auto_saved_count = 0
+        # 自动闭环：停止录制后，如果已绑定 case_id，后台自动按当前步骤格式落库
+        if recorder.current_case_id and recorded_steps and not getattr(recorder, 'saved_to_case', False):
+            try:
+                auto_saved = db.batch_insert_steps(recorder.current_case_id, recorded_steps)
+                if auto_saved:
+                    auto_saved_count = len(recorded_steps)
+                    recorder.saved_to_case = True
+            except Exception as save_e:
+                uat_logger.error(f"录制自动保存失败(session={session_id}): {save_e}")
         
+        remove_recorder(session_id)
+        if _active_recording_sessions.get(current_user.id) == session_id:
+            _active_recording_sessions.pop(current_user.id, None)
+
         return jsonify({
             'success': True,
             'steps': recorded_steps,
             'total_steps': len(recorded_steps),
+            'auto_saved': auto_saved,
+            'saved_steps': auto_saved_count,
             'message': '录制已结束'
         })
     except Exception as e:
+        # 强制清理，避免前端出现“无法停止”的僵尸会话
         remove_recorder(session_id)
-        return jsonify({'success': False, 'error': f'停止录制失败：{str(e)}'}), 500
+        if _active_recording_sessions.get(current_user.id) == session_id:
+            _active_recording_sessions.pop(current_user.id, None)
+        uat_logger.warning(f"停止录制出现异常，已强制清理会话(session={session_id}): {e}")
+        return jsonify({
+            'success': True,
+            'steps': [],
+            'total_steps': 0,
+            'auto_saved': False,
+            'saved_steps': 0,
+            'message': '录制会话已强制结束'
+        })
 
 # API: 获取录制的步骤（智能录制器）
 @app.route('/api/steps/recording/steps', methods=['GET'])
@@ -1570,18 +1684,68 @@ def api_get_smart_recording_steps():
     session_id = request.args.get('session_id')
     
     if not session_id:
-        return jsonify({'success': False, 'error': '缺少会话 ID'}), 400
+        session_id = _active_recording_sessions.get(current_user.id)
+    if not session_id:
+        return jsonify({'success': True, 'steps': [], 'total_steps': 0, 'active': False})
     
     recorder = get_recorder(session_id)
     if not recorder:
-        return jsonify({'success': False, 'error': '录制会话不存在'}), 404
+        if _active_recording_sessions.get(current_user.id) == session_id:
+            _active_recording_sessions.pop(current_user.id, None)
+        return jsonify({'success': True, 'steps': [], 'total_steps': 0, 'active': False})
     
     steps = recorder.get_recorded_steps()
     
     return jsonify({
         'success': True,
         'steps': steps,
-        'total_steps': len(steps)
+        'total_steps': len(steps),
+        'active': True
+    })
+
+
+# ==================== 录制功能 V3 接口（新） ====================
+@app.route('/api/recordings/start', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_recordings_start_v3():
+    return api_start_smart_recording()
+
+
+@app.route('/api/recordings/stop', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_recordings_stop_v3():
+    return api_stop_smart_recording()
+
+
+@app.route('/api/recordings/steps', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_recordings_steps_v3():
+    return api_get_smart_recording_steps()
+
+
+@app.route('/api/recordings/status', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_recordings_status_v3():
+    session_id = _active_recording_sessions.get(current_user.id)
+    if not session_id:
+        return jsonify({'success': True, 'active': False, 'session_id': None, 'total_steps': 0})
+    recorder = get_recorder(session_id)
+    if not recorder:
+        _active_recording_sessions.pop(current_user.id, None)
+        return jsonify({'success': True, 'active': False, 'session_id': None, 'total_steps': 0})
+    return jsonify({
+        'success': True,
+        'active': True,
+        'session_id': session_id,
+        'total_steps': len(recorder.get_recorded_steps())
     })
 
 # API: 保存录制的步骤到数据库（智能录制器）
@@ -1595,14 +1759,33 @@ def api_save_smart_recording_steps():
     session_id = data.get('session_id')
     case_id = data.get('case_id')
     
-    if not session_id or not case_id:
-        return jsonify({'success': False, 'error': '缺少必要参数'}), 400
+    if not session_id:
+        session_id = _active_recording_sessions.get(current_user.id)
+    if not case_id:
+        return jsonify({'success': False, 'error': '缺少必要参数(case_id)'}), 400
+    if not session_id:
+        return jsonify({'success': False, 'error': '录制会话不存在'}), 404
     
     recorder = get_recorder(session_id)
     if not recorder:
         return jsonify({'success': False, 'error': '录制会话不存在'}), 404
     
     steps = recorder.get_recorded_steps()
+
+    # 已自动保存过时，幂等返回，避免重复插入
+    if getattr(recorder, 'saved_to_case', False):
+        try:
+            remove_recorder(session_id)
+            if _active_recording_sessions.get(current_user.id) == session_id:
+                _active_recording_sessions.pop(current_user.id, None)
+        except Exception:
+            pass
+        return jsonify({
+            'success': True,
+            'saved_steps': 0,
+            'already_saved': True,
+            'message': '步骤已自动保存，无需重复保存'
+        })
     
     # 批量插入步骤
     success = db.batch_insert_steps(case_id, steps)
@@ -1619,6 +1802,9 @@ def api_save_smart_recording_steps():
             pass
         finally:
             remove_recorder(session_id)
+            if _active_recording_sessions.get(current_user.id) == session_id:
+                _active_recording_sessions.pop(current_user.id, None)
+            recorder.saved_to_case = True
         
         return jsonify({
             'success': True,
@@ -1739,16 +1925,13 @@ def api_run_case(case_id):
         
         # 执行测试步骤
         try:
-            # 如果有目标URL，先导航到该URL
-            if case.get('url'):
-                fixed_url, url_err = _validate_and_fix_url(case['url'])
-                if url_err:
-                    uat_logger.warning(f"用例初始 URL 无效，跳过初始导航: {url_err}")
-                elif fixed_url:
-                    uat_logger.log_automation_step("navigate", fixed_url, "测试开始时导航")
-                    sync_navigate_to(fixed_url)
-                else:
-                    uat_logger.warning("用例 URL 为空或占位符，跳过初始导航")
+            # 统一导航优先级：case.url > step.url/navigate.input_value
+            initial_nav_url, nav_source = _resolve_case_navigation_url(case=case, case_id=case_id, steps=steps)
+            if initial_nav_url:
+                uat_logger.log_automation_step("navigate", initial_nav_url, f"测试开始时导航({nav_source})")
+                sync_navigate_to(initial_nav_url)
+            else:
+                uat_logger.warning("未找到可用初始URL，跳过测试开始导航")
             
             # 执行所有步骤
             for step in steps:
@@ -1763,14 +1946,15 @@ def api_run_case(case_id):
                 iframe_selector = step.get('iframe_selector', '')
                 
                 step_start_time = time.time()
-                step_status = 'success'
+                # 🔥 修复：初始化为 error，只有执行成功才改为 success
+                step_status = 'error'
                 step_error = ''
                 step_screenshot = ''
-
+                
                 uat_logger.log_automation_step(action, selector_value or input_value, description)
-                                        
+                                                        
                 # 详细的调试日志，跟踪 action 值和执行的方法
-                uat_logger.debug(f"执行步骤: ID={step.get('id')}, Action={action}, SelectorType={selector_type}, SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, IframeSelector={iframe_selector}")
+                uat_logger.debug(f"执行步骤：ID={step.get('id')}, Action={action}, SelectorType={selector_type}, SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, IframeSelector={iframe_selector}")
                 
                 if action == 'navigate':
                     # 获取URL并进行有效性检查
@@ -1793,8 +1977,12 @@ def api_run_case(case_id):
                                     # 直接抛出错误，视为测试用例执行失败
                                     raise
                 elif action == 'input':
-                    if selector_value and input_value:
+                    if selector_value:
                         try:
+                            # 严格模式：未配置输入值时直接失败，避免误清空
+                            if input_value is None or str(input_value) == '':
+                                raise Exception(f"输入步骤缺少有效输入值: step_id={step.get('id', 'unknown')}")
+                            safe_input_value = input_value
                             uat_logger.info(f"🔍 准备执行输入操作: 步骤ID={step.get('id', 'unknown')}, 选择器类型={selector_type}, 选择器值={selector_value}, 输入值={input_value}")
                             
                             # 🔥 添加详细的诊断信息
@@ -1806,7 +1994,7 @@ def api_run_case(case_id):
                             if selector_type == "css" and "nth-child" in selector_value:
                                 uat_logger.warning(f"⚠️ 检测到使用nth-child定位，可能不够稳定，建议改用ID或类名")
                             
-                            sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            sync_fill_input(selector_value, safe_input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
                             uat_logger.info(f"✅ 输入操作执行完成: 步骤ID={step.get('id', 'unknown')}")
                             
                         except Exception as input_error:
@@ -1828,6 +2016,9 @@ def api_run_case(case_id):
                             
                             # 直接抛出错误，视为测试用例执行失败
                             raise
+                    else:
+                        uat_logger.error("输入操作缺少选择器，步骤不能执行")
+                        raise Exception("输入操作缺少选择器")
                 elif action == 'hover':
                     if selector_value:
                         try:
@@ -2207,6 +2398,10 @@ def api_run_case(case_id):
                         # 直接抛出错误，视为测试用例执行失败
                         raise
 
+                # 🔥 修复：步骤执行到这里说明成功，更新状态为 success
+                step_status = 'success'
+                step_error = ''
+                
                 # ⭐⭐ 记录成功步骤结果
                 step_duration = round(time.time() - step_start_time, 3)
                 step_results_list.append({
@@ -3152,8 +3347,13 @@ def api_run_dataset(dataset_id):
                         if selector_value:
                             sync_click_element(selector_value, selector_type, iframe_selector=iframe_sel)
                     elif action == 'input':
-                        if selector_value and input_value:
-                            sync_fill_input(selector_value, input_value, selector_type, iframe_selector=iframe_sel)
+                        if selector_value:
+                            if input_value is None or str(input_value) == '':
+                                raise Exception("输入步骤缺少有效输入值")
+                            safe_input_value = input_value
+                            sync_fill_input(selector_value, safe_input_value, selector_type, iframe_selector=iframe_sel)
+                        else:
+                            raise Exception("输入操作缺少选择器")
                     elif action == 'wait':
                         wait_ms = int(input_value) * 1000 if input_value and int(input_value) < 1000 else (int(input_value) if input_value else 1000)
                         sync_wait_for_timeout(wait_ms)
@@ -3238,6 +3438,35 @@ try:
         from notifications import notify
 
         _db = Database()
+        # 仅首次触发消耗执行次数，重试不重复扣减
+        if retry_count == 0:
+            try:
+                consume_result = _db.consume_schedule_execution(schedule_id)
+            except Exception as consume_err:
+                uat_logger.error(f"⏰ 定时任务 #{schedule_id} 扣减执行次数失败: {consume_err}")
+                return
+
+            if not consume_result.get('allowed'):
+                reason = consume_result.get('reason')
+                uat_logger.warning(f"⏰ 定时任务 #{schedule_id} 跳过执行: {reason}")
+                try:
+                    # 若任务已失效/不存在，尝试移除本地job，避免后续重复触发
+                    scheduler.remove_job(f'schedule_{schedule_id}')
+                except Exception:
+                    pass
+                return
+
+            if consume_result.get('unlimited'):
+                uat_logger.info(f"⏰ 定时任务 #{schedule_id} 执行次数模式: 无限次")
+            else:
+                uat_logger.info(f"⏰ 定时任务 #{schedule_id} 执行次数已扣减，剩余: {consume_result.get('remaining')}")
+                if consume_result.get('exhausted'):
+                    uat_logger.info(f"⏰ 定时任务 #{schedule_id} 达到执行次数上限，已自动禁用")
+                    try:
+                        scheduler.remove_job(f'schedule_{schedule_id}')
+                    except Exception:
+                        pass
+
         schedule = None
         for s in _db.get_all_schedules():
             if s['id'] == schedule_id:
@@ -3369,7 +3598,16 @@ try:
             else:
                 uat_logger.warning(f"定时任务 #{schedule_id} cron表达式格式不正确: {cron_expr}")
                 return
-            scheduler.add_job(_run_scheduled_cases, trigger, args=[schedule_id, case_ids], id=job_id)
+            scheduler.add_job(
+                _run_scheduled_cases,
+                trigger,
+                args=[schedule_id, case_ids],
+                id=job_id,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=30
+            )
             uat_logger.info(f"定时任务 #{schedule_id} 已注册，cron: {cron_expr}")
         except Exception as e:
             uat_logger.error(f"注册定时任务 #{schedule_id} 失败: {e}")

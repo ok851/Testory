@@ -1427,23 +1427,15 @@ class PlaywrightAutomation:
         
         # 获取元素引用
         element = target_context.locator(full_selector)
-        
-        # 滚动到视图，确保元素可见
-        uat_logger.info(f"🔍 [SELECT_DEBUG] 滚动元素到视图...")
         try:
-            await element.scroll_into_view_if_needed(timeout=2000)
-            uat_logger.info(f"✅ [SELECT_DEBUG] 滚动完成")
-        except Exception as e:
-            uat_logger.warning(f"⚠️ [SELECT_DEBUG] 滚动失败: {str(e)}, 继续尝试")
-        
-        # 再次等待元素可见
-        uat_logger.info(f"🔍 [SELECT_DEBUG] 等待元素可见...")
-        try:
-            await target_context.wait_for_selector(full_selector, state='visible', timeout=3000)
-            uat_logger.info(f"✅ [SELECT_DEBUG] 元素可见")
-        except Exception as e:
-            uat_logger.warning(f"⚠️ [SELECT_DEBUG] 元素可能不可见: {str(e)}, 继续尝试操作")
-        
+            matched_count = await element.count()
+            if matched_count and matched_count > 1:
+                uat_logger.warning(
+                    f"⚠️ [SELECT_DEBUG] 下拉触发器选择器存在歧义: full_selector={full_selector}, 命中数量={matched_count}. 将只操作第一个匹配元素（element.first）。"
+                )
+        except Exception:
+            pass
+                
         uat_logger.info(f"🔍 [SELECT_DEBUG] 检测下拉框类型")
         
         # 检查是否是原生select元素
@@ -1455,9 +1447,25 @@ class PlaywrightAutomation:
             tag_name = "div"
         
         if tag_name == "select":
-            # 处理原生select元素
-            uat_logger.info(f"🔍 [SELECT_DEBUG] 检测到原生select元素，使用原生方法")
-            
+            # 处理原生 select 元素
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 检测到原生 select 元素，使用原生方法")
+                    
+            # 滚动到视图，确保元素可见（仅原生 select 需要）
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 滚动元素到视图...")
+            try:
+                await element.scroll_into_view_if_needed(timeout=2000)
+                uat_logger.info(f"✅ [SELECT_DEBUG] 滚动完成")
+            except Exception as e:
+                uat_logger.warning(f"⚠️ [SELECT_DEBUG] 滚动失败：{str(e)}, 继续尝试")
+                    
+            # 再次等待元素可见
+            uat_logger.info(f"🔍 [SELECT_DEBUG] 等待元素可见...")
+            try:
+                await target_context.wait_for_selector(full_selector, state='visible', timeout=3000)
+                uat_logger.info(f"✅ [SELECT_DEBUG] 元素可见")
+            except Exception as e:
+                uat_logger.warning(f"⚠️ [SELECT_DEBUG] 元素可能不可见：{str(e)}, 继续尝试操作")
+                    
             # 获取所有选项文本
             options = await target_context.locator(f"{full_selector} option").all()
             option_texts = []
@@ -1486,93 +1494,86 @@ class PlaywrightAutomation:
             try:
                 if selector_type == "css":
                     # 尝试通过 Element UI 的 API 直接设置值
-                    js_result = await target_context.evaluate("""(params) => {
-                        const { selector, value } = params;
-                        const element = document.querySelector(selector);
-                        if (!element) return { success: false, error: 'Element not found' };
-                        
+                    # 注意：这里必须对“当前匹配到的触发器实例”操作，不能用 document.querySelector(selector)
+                    # 否则同一 selector 匹配到多个下拉时，会把值写到别的实例上。
+                    js_result = await asyncio.wait_for(element.first.evaluate("""(el, params) => {
+                        const { value } = params;
+                        const normalize = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+
                         // 检查是否是 Element UI 的 el-select 组件
-                        const isElSelect = element.classList.contains('el-select') || 
-                                          element.querySelector('.el-input__inner') !== null;
-                        
-                        if (isElSelect) {
-                            // 获取 el-select 组件的 Vue 实例
-                            const selectInner = element.querySelector('.el-input__inner');
-                            if (selectInner) {
-                                // 尝试找到对应的选项值
-                                // 🔥 修复：获取所有下拉面板，找到与当前元素关联的那个
-                                let optionValue = null;
-                                
-                                // 方法1: 通过元素位置找到对应的下拉面板
-                                const elementRect = element.getBoundingClientRect();
-                                const allDropdowns = document.querySelectorAll('.el-select-dropdown');
-                                let targetDropdown = null;
-                                
-                                for (const dropdown of allDropdowns) {
-                                    // 检查下拉面板是否可见
-                                    const style = window.getComputedStyle(dropdown);
-                                    if (style.display !== 'none' && style.visibility !== 'hidden') {
-                                        const dropdownRect = dropdown.getBoundingClientRect();
-                                        // 🔥 修复：同时支持向下展开和向上展开的下拉框
-                                        // 向下展开：下拉面板在输入框下方 (dropdownRect.top >= elementRect.bottom - 10)
-                                        // 向上展开：下拉面板在输入框上方 (dropdownRect.bottom <= elementRect.top + 10)
-                                        const isDownward = Math.abs(dropdownRect.left - elementRect.left) < 50 && 
-                                                           dropdownRect.top >= elementRect.bottom - 10;
-                                        const isUpward = Math.abs(dropdownRect.left - elementRect.left) < 50 && 
-                                                         dropdownRect.bottom <= elementRect.top + 10;
-                                        if (isDownward || isUpward) {
-                                            targetDropdown = dropdown;
-                                            break;
-                                        }
-                                    }
-                                }
-                                
-                                // 如果没找到关联的，使用最后一个可见的（通常是最新打开的）
-                                if (!targetDropdown && allDropdowns.length > 0) {
-                                    for (let i = allDropdowns.length - 1; i >= 0; i--) {
-                                        const style = window.getComputedStyle(allDropdowns[i]);
-                                        if (style.display !== 'none' && style.visibility !== 'hidden') {
-                                            targetDropdown = allDropdowns[i];
-                                            break;
-                                        }
-                                    }
-                                }
-                                
-                                if (targetDropdown) {
-                                    const options = targetDropdown.querySelectorAll('.el-select-dropdown__item');
-                                    for (const opt of options) {
-                                        if (opt.textContent.trim() === value || opt.textContent.trim().includes(value)) {
-                                            optionValue = opt.getAttribute('data-value') || opt.textContent.trim();
-                                            break;
-                                        }
-                                    }
-                                }
-                                
-                                // 如果找到了选项值，设置到 input 上并触发事件
-                                if (optionValue !== null) {
-                                    selectInner.value = optionValue;
-                                    selectInner.dispatchEvent(new Event('input', { bubbles: true }));
-                                    selectInner.dispatchEvent(new Event('change', { bubbles: true }));
-                                    
-                                    // 触发 Vue 的更新
-                                    selectInner.dispatchEvent(new Event('blur', { bubbles: true }));
-                                    
-                                    return { success: true, method: 'vue_input_set' };
-                                }
-                                
-                                // 如果没找到选项值，直接设置显示文本（适用于某些简单场景）
-                                selectInner.value = value;
-                                selectInner.dispatchEvent(new Event('input', { bubbles: true }));
-                                selectInner.dispatchEvent(new Event('change', { bubbles: true }));
-                                return { success: true, method: 'direct_text_set' };
+                        const isElSelect = el.classList && (el.classList.contains('el-select') ||
+                            el.querySelector && el.querySelector('.el-input__inner') !== null);
+
+                        if (!isElSelect) return { success: false, error: 'not_el_select' };
+
+                        const selectInner = el.querySelector('.el-input__inner');
+                        if (!selectInner) return { success: false, error: 'select_inner_not_found' };
+
+                        // 触发元素：优先使用内部带 aria-controls 的 input，其次外层 el-select
+                        let triggerEl = el;
+                        if (!(triggerEl.getAttribute && triggerEl.getAttribute('aria-controls'))) {
+                            const inner = el.querySelector && el.querySelector('[aria-controls]');
+                            if (inner) triggerEl = inner;
+                        }
+
+                        // 尝试找到与当前触发器“最近”的下拉面板
+                        let optionValue = null;
+                        const elementRect = triggerEl.getBoundingClientRect();
+                        const targetText = normalize(value);
+
+                        const allDropdowns = document.querySelectorAll('.el-select-dropdown, .ant-select-dropdown, [role="listbox"]');
+                        let targetDropdown = null;
+                        let bestScore = Infinity;
+
+                        for (const dropdown of allDropdowns) {
+                            const style = window.getComputedStyle(dropdown);
+                            if (!style || style.display === 'none' || style.visibility === 'hidden') continue;
+                            const r = dropdown.getBoundingClientRect();
+                            // 以触发器中心点为基准选择“最近面板”
+                            const dx = (r.left + r.width / 2) - (elementRect.left + elementRect.width / 2);
+                            const dy = (r.top + r.height / 2) - (elementRect.top + elementRect.height / 2);
+                            const score = Math.abs(dx) + Math.abs(dy) * 0.2;
+                            if (score < bestScore) {
+                                bestScore = score;
+                                targetDropdown = dropdown;
                             }
                         }
-                        
-                        return { success: false, error: 'Not a supported dropdown type' };
-                    }""", {'selector': selector, 'value': select_value})
+
+                        if (targetDropdown) {
+                            const options = targetDropdown.querySelectorAll('.el-select-dropdown__item, .ant-select-item, [role="option"], li');
+                            for (const opt of options) {
+                                const itemText = normalize(opt.textContent);
+                                const dataValue = normalize(opt.getAttribute && (opt.getAttribute('data-value') || opt.getAttribute('value')));
+                                if (!itemText) continue;
+                                const textMatch = itemText === targetText || itemText.includes(targetText);
+                                const valueMatch = dataValue && (dataValue === targetText || dataValue.includes(targetText));
+                                if (textMatch || valueMatch) {
+                                    optionValue = (opt.getAttribute && (opt.getAttribute('data-value') || opt.getAttribute('value'))) || itemText;
+                                    break;
+                                }
+                            }
+                        }
+
+                        const setValue = optionValue !== null ? optionValue : value;
+                        selectInner.value = setValue;
+                        selectInner.dispatchEvent(new Event('input', { bubbles: true }));
+                        selectInner.dispatchEvent(new Event('change', { bubbles: true }));
+                        selectInner.dispatchEvent(new Event('blur', { bubbles: true }));
+
+                        // 校验当前触发器显示/内部值是否贴近目标值
+                        const innerValue = normalize(selectInner.value);
+                        const selectedTextNode = el.querySelector('.el-select__selected');
+                        const selectedText = normalize(selectedTextNode ? selectedTextNode.textContent : '');
+                        const ok = (innerValue.includes(targetText) || targetText.includes(innerValue) ||
+                                    (selectedText && selectedText.includes(targetText)));
+
+                        return { success: ok, method: optionValue !== null ? 'vue_input_set' : 'direct_text_set', innerValue, selectedText };
+                    }""", {'value': select_value}), timeout=6)
                     
                     if js_result and js_result.get('success'):
-                        uat_logger.info(f"✅ [SELECT_DEBUG] JavaScript静默设置成功: {select_value}, 方法: {js_result.get('method')}")
+                        uat_logger.info(
+                            f"✅ [SELECT_DEBUG] JavaScript静默设置成功: {select_value}, 方法: {js_result.get('method')}, innerValue: {js_result.get('innerValue')}, selectedText: {js_result.get('selectedText')}"
+                        )
                         js_set_success = True
                     else:
                         uat_logger.debug(f"🔍 [SELECT_DEBUG] JavaScript静默设置失败: {js_result}")
@@ -1587,10 +1588,12 @@ class PlaywrightAutomation:
                 # 尝试点击下拉框展开选项
                 uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试点击下拉框展开选项")
                 clicked = False
-                for attempt in range(3):  # 最多尝试3次
+                for attempt in range(2):  # 最多尝试2次，减少耗时
                     try:
                         uat_logger.info(f"🔍 [SELECT_DEBUG] 第{attempt+1}次尝试点击下拉框")
-                        await element.click(timeout=3000)
+                        # 用 JS click 避免 Playwright click 的自动滚动行为
+                        # 这是导致“无故上下滑动/漂移”的常见原因之一
+                        await element.evaluate("el => el.click()")
                         uat_logger.info(f"✅ [SELECT_DEBUG] 下拉框点击成功")
                         clicked = True
                         break
@@ -1598,18 +1601,51 @@ class PlaywrightAutomation:
                         uat_logger.warning(f"⚠️ [SELECT_DEBUG] 第{attempt+1}次点击失败: {str(e)}")
                         # 尝试使用force点击
                         try:
-                            await element.click(force=True, timeout=2000)
+                            # force click 也可能触发滚动；仅作为兜底
+                            await element.click(force=True, timeout=1200)
                             uat_logger.info(f"✅ [SELECT_DEBUG] force点击成功")
                             clicked = True
                             break
                         except Exception as e2:
                             uat_logger.warning(f"⚠️ [SELECT_DEBUG] force点击也失败: {str(e2)}")
                             # 缩短固定等待时间，使用更短的短暂等待
-                            await target_page.wait_for_timeout(150)
+                            await target_page.wait_for_timeout(80)
                 
                 if not clicked:
                     uat_logger.error(f"❌ [SELECT_DEBUG] 所有点击尝试都失败")
                     raise Exception(f"无法点击下拉框: {selector}")
+
+                # 快速路径：Element Plus 下拉一般可通过 trigger input 的 aria-controls
+                # 直接定位到对应 listbox，再点击目标选项，避免多轮全局搜索导致变慢。
+                try:
+                    listbox_id = await asyncio.wait_for(
+                        element.first.evaluate("""(el) => {
+                            let triggerEl = el;
+                            if (!(triggerEl.getAttribute && triggerEl.getAttribute('aria-controls'))) {
+                                const inner = el.querySelector && el.querySelector('[aria-controls]');
+                                if (inner) triggerEl = inner;
+                            }
+                            return triggerEl.getAttribute ? triggerEl.getAttribute('aria-controls') : null;
+                        }"""),
+                        timeout=2
+                    )
+                except Exception:
+                    listbox_id = None
+
+                if listbox_id:
+                    try:
+                        fast_option = target_page.locator(
+                            f"ul#{listbox_id} li.el-select-dropdown__item",
+                            has_text=select_value
+                        ).first
+                        await fast_option.wait_for(state='visible', timeout=1200)
+                        await asyncio.wait_for(fast_option.evaluate("el => el.click()"), timeout=1.2)
+                        uat_logger.info(f"✅ [SELECT_DEBUG] 快速路径命中成功(listbox={listbox_id}): {select_value}")
+                        await target_page.keyboard.press('Escape')
+                        await target_page.wait_for_timeout(60)
+                        return
+                    except Exception as fast_e:
+                        uat_logger.debug(f"🔍 [SELECT_DEBUG] 快速路径未命中，回退通用策略: {fast_e}")
                 
                 # 等待下拉选项展开 - 使用更快的混合检测策略
                 uat_logger.info(f"🔍 [SELECT_DEBUG] 等待下拉面板出现...")
@@ -1622,7 +1658,7 @@ class PlaywrightAutomation:
                 for dropdown_sel in dropdown_selectors:
                     try:
                         # 🔥 优化：从1000ms降低到500ms，减少无谓等待时间
-                        await target_page.wait_for_selector(dropdown_sel, state='visible', timeout=500)
+                        await target_page.wait_for_selector(dropdown_sel, state='visible', timeout=300)
                         dropdown_found = True
                         break
                     except Exception:
@@ -1630,7 +1666,7 @@ class PlaywrightAutomation:
                 
                 if not dropdown_found:
                     # 🔥 优化：减少固定等待时间从300ms到100ms
-                    await target_page.wait_for_timeout(100)
+                    await target_page.wait_for_timeout(60)
                 
                 # 🔥 关键修复：对于动态加载数据的下拉框，等待选项实际渲染到DOM中
                 # 检测是否有选项元素存在
@@ -1643,7 +1679,7 @@ class PlaywrightAutomation:
                 ]
                 for opt_sel in option_selectors_check:
                     try:
-                        await target_page.wait_for_selector(opt_sel, state='visible', timeout=800)
+                        await target_page.wait_for_selector(opt_sel, state='visible', timeout=300)
                         option_rendered = True
                         uat_logger.info(f"✅ [SELECT_DEBUG] 选项已渲染: {opt_sel}")
                         break
@@ -1678,63 +1714,145 @@ class PlaywrightAutomation:
                 ]
                 
                 option_clicked = False
-                
-                # 🔥 修复：优先使用Playwright内置文本查找，但保持合理的超时时间
-                uat_logger.info(f"🔍 [SELECT_DEBUG] 优先使用内置文本查找")
+
+                # 优先用 JS 在“关联当前触发器的下拉面板”内点击匹配选项，
+                # 避免 get_by_text(...).first 误命中其他同名下拉/选项，导致“只某一个无法选择”。
+                uat_logger.info(f"🔍 [SELECT_DEBUG] 使用 JS 在关联面板内点击选项")
                 try:
-                    await target_page.get_by_text(select_value, exact=True).first.click(timeout=1500)
-                    uat_logger.info(f"✅ [SELECT_DEBUG] 通过精确文本点击成功")
-                    option_clicked = True
-                except Exception as e:
-                    uat_logger.debug(f"🔍 [SELECT_DEBUG] 精确文本查找失败: {str(e)}")
-                    
-                    # 尝试模糊匹配 
-                    try:
-                        await target_page.get_by_text(select_value).first.click(timeout=1500)
-                        uat_logger.info(f"✅ [SELECT_DEBUG] 通过模糊文本点击成功")
+                    js_click_result = await asyncio.wait_for(
+                        element.first.evaluate("""(el, params) => {
+                        const { value } = params;
+                        
+                        const normalize = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+                        
+                        // 触发元素：优先使用内部带 aria-controls 的 input，其次外层 el-select
+                        let triggerEl = el;
+                        if (!(triggerEl.getAttribute && triggerEl.getAttribute('aria-controls'))) {
+                            const inner = el.querySelector && el.querySelector('[aria-controls]');
+                            if (inner) triggerEl = inner;
+                        }
+                        
+                        // 优先：Element/组件通常会在触发器上提供 aria-controls 指向面板
+                        const triggerRect = triggerEl.getBoundingClientRect();
+                        const ariaControls = triggerEl.getAttribute && triggerEl.getAttribute('aria-controls');
+                        let targetDropdown = null;
+                        if (ariaControls) {
+                            targetDropdown = document.getElementById(ariaControls) || document.querySelector(`#${ariaControls}`);
+                        }
+
+                        const allDropdowns = Array.from(
+                            document.querySelectorAll('.el-select-dropdown, .ant-select-dropdown, [role=\"listbox\"]')
+                        );
+
+                        const isVisible = (el) => {
+                            if (!el) return false;
+                            const style = window.getComputedStyle(el);
+                            return style && style.display !== 'none' && style.visibility !== 'hidden';
+                        };
+
+                        // 兜底：根据“触发器中心点”和面板中心点距离打分，选最像的那个面板
+                        if (!targetDropdown) {
+                            let bestScore = Infinity;
+                            const triggerCx = triggerRect.left + triggerRect.width / 2;
+                            const triggerCy = triggerRect.top + triggerRect.height / 2;
+                            for (const dropdown of allDropdowns) {
+                                if (!isVisible(dropdown)) continue;
+                                const r = dropdown.getBoundingClientRect();
+                                const cx = r.left + r.width / 2;
+                                const cy = r.top + r.height / 2;
+                                const dx = Math.abs(cx - triggerCx);
+                                const dy = Math.abs(cy - triggerCy);
+                                const score = dx + dy * 0.2;
+                                if (score < bestScore) {
+                                    bestScore = score;
+                                    targetDropdown = dropdown;
+                                }
+                            }
+                        }
+
+                        if (!targetDropdown) {
+                            return { success: false, error: 'dropdown_not_found' };
+                        }
+
+                        const targetText = normalize(value);
+                        let items = Array.from(
+                            targetDropdown.querySelectorAll(
+                                '.el-select-dropdown__item, .el-option, .ant-select-item, [role=\"option\"], li'
+                            )
+                        );
+                        // 如果按照常规类名/role没有匹配到任何候选项，则退化为“面板内所有后代节点”兜底匹配
+                        if (items.length === 0) {
+                            items = Array.from(targetDropdown.querySelectorAll('*'));
+                        }
+
+                        const pickClickable = (node) => {
+                            if (!node) return node;
+                            return node.closest('.el-select-dropdown__item') ||
+                                   node.closest('[role=\"option\"]') ||
+                                   node.closest('li') ||
+                                   node;
+                        };
+
+                        for (const item of items) {
+                            const itemText = normalize(item.textContent);
+                            const dataValue = normalize(item.getAttribute && (item.getAttribute('data-value') || item.getAttribute('value')));
+                            if (!itemText) continue;
+
+                            const textMatch = itemText === targetText || itemText.includes(targetText);
+                            const valueMatch = dataValue && (dataValue === targetText || dataValue.includes(targetText));
+
+                            if (textMatch || valueMatch) {
+                                const clickable = pickClickable(item);
+                                clickable && clickable.click && clickable.click();
+                                // 尝试校验触发器内部值是否已更新
+                                const selectInner = el.querySelector && el.querySelector('.el-input__inner');
+                                const innerValue = selectInner ? normalize(selectInner.value) : '';
+                                const selectedTextNode = el.querySelector && el.querySelector('.el-select__selected');
+                                const selectedText = selectedTextNode ? normalize(selectedTextNode.textContent) : '';
+                                return {
+                                    success: true,
+                                    method: 'panel_click',
+                                    matchedText: itemText,
+                                    innerValue,
+                                    selectedText,
+                                    updated: (innerValue.includes(targetText) || (selectedText && selectedText.includes(targetText)))
+                                };
+                            }
+                        }
+
+                        return { success: false, error: 'option_not_found' };
+                    }""", {'value': select_value}),
+                        timeout=3
+                    )
+
+                    if js_click_result and js_click_result.get('success'):
+                        uat_logger.info(
+                            f"✅ [SELECT_DEBUG] 面板内 JS 点击成功: {js_click_result.get('matchedText')}, innerValue: {js_click_result.get('innerValue')}, selectedText: {js_click_result.get('selectedText')}, updated: {js_click_result.get('updated')}"
+                        )
+                        # 以 JS 点击结果的 success 为准
+                        # updated 取决于 el 内部某些节点是否存在/可读，某些场景会出现“已点中但 updated=false”的误判
                         option_clicked = True
-                    except Exception as e:
-                        uat_logger.debug(f"🔍 [SELECT_DEBUG] 模糊文本查找失败: {str(e)}")
-                
+                    else:
+                        uat_logger.debug(f"🔍 [SELECT_DEBUG] 面板内 JS 点击失败: {js_click_result}")
+                except Exception as js_click_err:
+                    uat_logger.debug(f"🔍 [SELECT_DEBUG] 面板内 JS 点击异常: {str(js_click_err)}")
+
                 if not option_clicked:
-                    # 退回到XPath策略，减少超时时间但保持可靠性
-                    for idx, opt_selector in enumerate(option_selectors, 1):
+                    # 退回到XPath/通用策略，但仍使用 JS click 避免自动滚动
+                    # 控制策略数量，避免在失败场景下拖到超时
+                    for idx, opt_selector in enumerate(option_selectors[:3], 1):
                         try:
                             uat_logger.info(f"🔍 [SELECT_DEBUG] 尝试策略{idx}: {opt_selector}")
-                            # 🔥 优化：将超时从2000ms减少到1500ms
-                            await target_page.locator(opt_selector).first.click(timeout=1500)
+                            opt_loc = target_page.locator(opt_selector).first
+                            await asyncio.wait_for(opt_loc.evaluate("el => el.click()"), timeout=1.5)
                             uat_logger.info(f"✅ [SELECT_DEBUG] 策略{idx}成功，选项点击成功")
                             option_clicked = True
                             break
                         except Exception as e:
-                            uat_logger.debug(f"🔍 [SELECT_DEBUG] 策略{idx}未找到选项: {str(e)}")
+                            uat_logger.debug(f"🔍 [SELECT_DEBUG] 策略{idx}未找到/点击选项: {str(e)}")
                 
                 if not option_clicked:
                     uat_logger.error(f"❌ [SELECT_DEBUG] 无法找到并点击选项: {select_value}")
-                    # 🔥 调试：打印实际可用的选项文本（从所有可见的下拉面板中收集）
-                    try:
-                        available_options = await target_page.evaluate("""() => {
-                            const allDropdowns = document.querySelectorAll('.el-select-dropdown, .ant-select-dropdown, [role="listbox"]');
-                            const allOptions = [];
-                            for (const dropdown of allDropdowns) {
-                                const style = window.getComputedStyle(dropdown);
-                                if (style.display !== 'none' && style.visibility !== 'hidden') {
-                                    const items = dropdown.querySelectorAll('.el-select-dropdown__item, .ant-select-item, [role="option"], li');
-                                    for (const item of items) {
-                                        const text = item.textContent.trim();
-                                        if (text && !allOptions.includes(text)) {
-                                            allOptions.push(text);
-                                        }
-                                    }
-                                }
-                            }
-                            return allOptions;
-                        }""")
-                        uat_logger.info(f"🔍 [SELECT_DEBUG] 当前所有可见下拉框的可用选项: {available_options}")
-                        uat_logger.info(f"🔍 [SELECT_DEBUG] 共找到 {available_options.length} 个可见下拉面板")
-                    except Exception as debug_e:
-                        uat_logger.debug(f"🔍 [SELECT_DEBUG] 获取可用选项失败: {debug_e}")
-                    uat_logger.info(f"🔍 [SELECT_DEBUG] 提示: 可能需要调整选择值或检查下拉框结构")
                     raise Exception(f"无法找到并点击选项: {select_value}")
                 
                 uat_logger.info(f"✅ [SELECT_DEBUG] 自定义下拉框选择成功: {select_value}")
@@ -1748,21 +1866,12 @@ class PlaywrightAutomation:
                 except Exception as e:
                     uat_logger.debug(f"🔍 [SELECT_DEBUG] 按Escape键关闭下拉框失败: {str(e)}")
                 
-                # 方法2: 点击页面空白处关闭下拉框（如果Escape无效）
-                try:
-                    # 等待下拉面板消失
-                    await target_page.wait_for_timeout(200)
-                    # 点击页面 body 确保下拉框关闭
-                    await target_page.locator('body').click(position={'x': 0, 'y': 0}, force=True, timeout=1000)
-                    uat_logger.info(f"✅ [SELECT_DEBUG] 已点击页面空白处关闭下拉框")
-                except Exception as e:
-                    uat_logger.debug(f"🔍 [SELECT_DEBUG] 点击空白处关闭下拉框失败: {str(e)}")
-                
-                # 最终等待确保面板关闭
-                await target_page.wait_for_timeout(300)
+                # 🔥 修复：移除点击 body(0,0) 的方式，因为会导致页面跳动
+                # 仅使用 Escape 键关闭，然后短暂等待框架自动关闭
+                await target_page.wait_for_timeout(80)
             else:
                 # JavaScript 设置成功，短暂等待确保值生效
-                await target_page.wait_for_timeout(200)
+                await target_page.wait_for_timeout(80)
 
     async def simple_select_option(self, selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None, page=None):
         """简化版选择下拉框选项。自动检测原生select或自定义下拉框"""
@@ -1799,16 +1908,17 @@ class PlaywrightAutomation:
             # 等待下拉框展开
             await target_page.wait_for_timeout(200)
             
-            # 直接查找并点击选项 - 保持稳定性和可靠性
+            # 直接查找并点击选项 - 使用 JS 点击避免滚动
             try:
-                # 优先尝试内置文本查找
-                await target_page.get_by_text(select_value, exact=True).first.click(timeout=1500)
+                # 优先尝试内置文本查找 + JS 点击 (不滚动)
+                option_element = target_page.get_by_text(select_value, exact=True).first
+                await option_element.evaluate("el => el.click()")
             except Exception:
                 # 降级到传统方式
                 try:
                     await target_page.click(f"text={select_value}")
                 except Exception:
-                    # 最后尝试XPath
+                    # 最后尝试 XPath
                     await target_page.click(f"//*[text()='{select_value}']")
             
             uat_logger.info(f"自定义下拉框选择成功: {select_value}")
@@ -3012,6 +3122,52 @@ class PlaywrightAutomation:
                 uat_logger.info(f"✅ [INPUT_VALIDATION] 输入框验证通过: {element_validation.get('info')}")
         except Exception as ve:
             uat_logger.warning(f"⚠️ [INPUT_VALIDATION] 验证过程出错: {ve}")
+
+        # 日期/时间输入框快速提交路径：避免“输入后被组件回滚清空”
+        try:
+            date_commit_result = await target_context.evaluate("""(params) => {
+                const { selector, selectorType, value } = params;
+                let root = null;
+                if (selectorType === 'xpath') {
+                    const r = document.evaluate(selector, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                    root = r.singleNodeValue;
+                } else {
+                    root = document.querySelector(selector);
+                }
+                if (!root) return { isDateLike: false, committed: false, reason: 'root_not_found' };
+
+                let target = root;
+                const wrapperClass = (root.className || '').toString();
+                if (root.tagName && root.tagName.toLowerCase() === 'div' &&
+                    (wrapperClass.includes('el-input') || wrapperClass.includes('el-date-editor') || wrapperClass.includes('el-input__wrapper'))) {
+                    const inner = root.querySelector('input, textarea');
+                    if (inner) target = inner;
+                }
+
+                const placeholder = (target.getAttribute && target.getAttribute('placeholder')) || '';
+                const ariaHaspopup = (target.getAttribute && target.getAttribute('aria-haspopup')) || '';
+                const cls = (target.className || '').toString();
+                const isDateLike = /日期|时间/.test(placeholder) ||
+                    ariaHaspopup === 'dialog' ||
+                    cls.includes('el-date-editor');
+
+                if (!isDateLike) return { isDateLike: false, committed: false };
+
+                target.focus && target.focus();
+                target.value = value;
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+                target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+                target.dispatchEvent(new Event('blur', { bubbles: true }));
+                return { isDateLike: true, committed: true, current: target.value, placeholder };
+            }""", {'selector': selector, 'selectorType': selector_type, 'value': text})
+
+            if date_commit_result and date_commit_result.get('isDateLike') and date_commit_result.get('committed'):
+                uat_logger.info(f"✅ [INPUT_DATE_FASTPATH] 日期/时间输入快速提交成功: {date_commit_result.get('current')}")
+                fill_success = True
+        except Exception as date_e:
+            uat_logger.debug(f"🔍 [INPUT_DATE_FASTPATH] 快速路径未命中/失败: {date_e}")
         
         # 🔥 方式0: Element UI 下拉框优先处理
         if is_el_select_component and self.locator_manager:
@@ -3356,8 +3512,8 @@ class PlaywrightAutomation:
                                         else:
                                             uat_logger.error(f"JavaScript填充验证失败: 期望值 '{text}'，实际值 '{actual_value}'")
                                     except Exception as verify_error:
-                                        uat_logger.warning(f"JavaScript填充验证失败: {verify_error}，但仍标记为成功")
-                                        fill_success = True  # 如果验证失败也认为是成功
+                                        uat_logger.error(f"JavaScript填充验证异常: {verify_error}，判定为失败")
+                                        fill_success = False
                                 else:
                                     uat_logger.error(f"元素不存在,无法使用JavaScript填充: {selector}")
                         except Exception as e5:
@@ -3428,95 +3584,86 @@ class PlaywrightAutomation:
         # 🔥 最终验证：确保输入真正成功
         if fill_success:
             try:
-                # 等待一小段确保页面更新
-                await asyncio.sleep(0.1)
-                
-                # 最终验证输入值
-                if selector_type == "css":
-                    actual_value = await target_context.evaluate(
-                        """(selector) => {
-                            let element = document.querySelector(selector);
-                            if (!element) return null;
-                            
-                            // 🔥 修复：处理 el-textarea 等组件包装层的情况
-                            const tagName = element.tagName.toLowerCase();
-                            const isWrapper = tagName === 'div' && (
-                                element.classList.contains('el-textarea') ||
-                                element.classList.contains('el-input') ||
-                                element.classList.contains('el-input__wrapper')
-                            );
-                            
-                            if (isWrapper) {
-                                // 查找内部的 input 或 textarea
-                                const innerInput = element.querySelector('input, textarea');
-                                if (innerInput) {
-                                    element = innerInput;
+                async def _read_current_value():
+                    # 最终验证输入值
+                    if selector_type == "css":
+                        return await target_context.evaluate(
+                            """(selector) => {
+                                let element = document.querySelector(selector);
+                                if (!element) return null;
+                                const tagName = element.tagName.toLowerCase();
+                                const isWrapper = tagName === 'div' && (
+                                    element.classList.contains('el-textarea') ||
+                                    element.classList.contains('el-input') ||
+                                    element.classList.contains('el-input__wrapper')
+                                );
+                                if (isWrapper) {
+                                    const innerInput = element.querySelector('input, textarea');
+                                    if (innerInput) element = innerInput;
                                 }
-                            }
-                            
-                            return element ? element.value : null;
-                        }""",
-                        selector
-                    )
-                elif selector_type in ["link_text", "partial_link_text"]:
-                    # 🔥 修复：处理 link_text 选择器类型的验证
-                    actual_value = await target_context.evaluate(
-                        """(text) => {
-                            // 策略1: 通过placeholder查找input
-                            let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
-                            if (input) return input.value;
-                            
-                            // 策略2: 通过label的for属性查找关联input
-                            const labels = document.querySelectorAll('label');
-                            for (const label of labels) {
-                                if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
-                                    const forAttr = label.getAttribute('for');
-                                    if (forAttr) {
-                                        input = document.getElementById(forAttr);
-                                        if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) {
-                                            return input.value;
+                                return element ? element.value : null;
+                            }""",
+                            selector
+                        )
+                    elif selector_type in ["link_text", "partial_link_text"]:
+                        return await target_context.evaluate(
+                            """(text) => {
+                                let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
+                                if (input) return input.value;
+                                const labels = document.querySelectorAll('label');
+                                for (const label of labels) {
+                                    if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
+                                        const forAttr = label.getAttribute('for');
+                                        if (forAttr) {
+                                            input = document.getElementById(forAttr);
+                                            if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) return input.value;
                                         }
-                                    }
-                                    // 策略3: label内包含input
-                                    input = label.querySelector('input, textarea');
-                                    if (input) return input.value;
-                                }
-                            }
-                            
-                            // 策略4: 通过包含文本的元素向上查找父级表单元素
-                            const textElements = document.querySelectorAll('*');
-                            for (const el of textElements) {
-                                if (el.textContent && (el.textContent.trim() === text || el.textContent.trim().includes(text))) {
-                                    let parent = el.parentElement;
-                                    for (let i = 0; i < 3 && parent; i++) {
-                                        input = parent.querySelector('input, textarea');
+                                        input = label.querySelector('input, textarea');
                                         if (input) return input.value;
-                                        parent = parent.parentElement;
                                     }
                                 }
-                            }
-                            
-                            return null;
-                        }""",
-                        selector
+                                return null;
+                            }""",
+                            selector
+                        )
+                    else:  # xpath
+                        return await target_context.evaluate(
+                            """(xpath) => {
+                                const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                let element = result.singleNodeValue;
+                                if (!element) return null;
+                                const tagName = (element.tagName || '').toLowerCase();
+                                const className = element.className || '';
+                                const isWrapper = tagName === 'div' && (
+                                    className.includes('el-textarea') ||
+                                    className.includes('el-input') ||
+                                    className.includes('el-input__wrapper')
+                                );
+                                if (isWrapper) {
+                                    const innerInput = element.querySelector('input, textarea');
+                                    if (innerInput) element = innerInput;
+                                }
+                                return element ? element.value : null;
+                            }""",
+                            selector
+                        )
+
+                # 严格验证：两次回读都必须匹配，避免“输入后被组件清空”误判成功
+                await asyncio.sleep(0.2)
+                first_value = await _read_current_value()
+                await asyncio.sleep(0.35)
+                second_value = await _read_current_value()
+
+                if first_value != text or second_value != text:
+                    uat_logger.error(
+                        f"🔥 输入验证失败: 期望值 '{text}'，首次回读 '{first_value}'，二次回读 '{second_value}'"
                     )
-                else:  # xpath
-                    actual_value = await target_context.evaluate(
-                        """(xpath) => {
-                            const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                            const element = result.singleNodeValue;
-                            return element ? element.value : null;
-                        }""",
-                        selector
-                    )
-                
-                if actual_value != text:
-                    uat_logger.error(f"🔥 输入验证失败: 期望值 '{text}'，实际值 '{actual_value}'，判别为真正失败")
                     fill_success = False
                 else:
-                    uat_logger.debug(f"✅ 输入验证成功: 值 '{text}' 已正确设置")
+                    uat_logger.debug(f"✅ 输入严格验证成功: 值 '{text}' 稳定存在")
             except Exception as verify_error:
-                uat_logger.warning(f"输入验证出错: {verify_error}，但认为操作成功")
+                uat_logger.error(f"输入验证异常: {verify_error}，判定为失败")
+                fill_success = False
         
         if not fill_success:
             raise Exception(f"无法填充元素: {selector}, 选择器类型: {selector_type}, 所有填充方式均失败")
@@ -10350,17 +10497,14 @@ class SelectBoxOptimizer:
         # 获取元素引用
         element = page.locator(full_selector).first
         
-        # 步骤1: 等待元素attached（不要求visible，更快）
-        uat_logger.debug("🔍 [SELECT_OPT] 等待元素attached...")
+        # 步骤 1: 等待元素 attached（不要求 visible，更快）
+        uat_logger.debug("🔍 [SELECT_OPT] 等待元素 attached...")
         await element.wait_for(state='attached', timeout=2000)
-        
-        # 步骤2: 滚动到视图（如果需要）
-        try:
-            await element.scroll_into_view_if_needed(timeout=1000)
-        except:
-            pass
-        
-        # 步骤3: 点击展开下拉框
+                
+        # 步骤 2: 不再自动滚动，避免页面跳动（仅在需要时由点击操作触发）
+        # 移除 scroll_into_view_if_needed，采用静默模式
+                
+        # 步骤 3: 点击展开下拉框
         uat_logger.debug("🔍 [SELECT_OPT] 点击展开下拉框...")
         clicked = await self._smart_click_dropdown(page, element, full_selector)
         if not clicked:
