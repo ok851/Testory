@@ -234,6 +234,27 @@ class Database:
         except sqlite3.OperationalError:
             pass
 
+        # 定时任务 execution_count 语义：-1=无限次，0=不自动执行，>0=剩余次数
+        # 一次性迁移：旧版「0 表示无限」→ -1（避免与「0=不跑」混淆）
+        try:
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS _schema_patches (patch_id TEXT PRIMARY KEY)"
+            )
+            cursor.execute(
+                "SELECT 1 FROM _schema_patches WHERE patch_id = ?",
+                ("sched_exec_minus_one_unlimited",),
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    "UPDATE schedules SET execution_count = -1 WHERE execution_count = 0"
+                )
+                cursor.execute(
+                    "INSERT INTO _schema_patches (patch_id) VALUES (?)",
+                    ("sched_exec_minus_one_unlimited",),
+                )
+        except sqlite3.OperationalError:
+            pass
+
         # 创建调度执行历史表（用于记录每次执行和重跑）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS schedule_history (
@@ -1769,7 +1790,7 @@ class Database:
 
     def create_schedule(self, name: str, case_ids: list, cron_expr: str, project_id: int = None,
                         retry_count: int = 3, retry_interval: int = 5, is_active: int = 1,
-                        execution_count: int = 0) -> int:
+                        execution_count: int = -1) -> int:
         """创建定时调度"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1786,7 +1807,8 @@ class Database:
         """
         原子消耗一次定时任务执行次数。
         规则：
-        - execution_count = 0: 视为无限次，不扣减
+        - execution_count < 0（通常为 -1）: 无限次，不扣减
+        - execution_count = 0: 不允许执行（定时与「立即执行」均不应触发）
         - execution_count > 0: 每次触发扣减1，扣减到0时自动禁用任务（is_active=0）
         返回:
             {
@@ -1811,12 +1833,27 @@ class Database:
             is_active, execution_count = row[0], row[1] if row[1] is not None else 0
             if not is_active:
                 cursor.execute("ROLLBACK")
-                return {'allowed': False, 'reason': 'inactive', 'remaining': execution_count, 'unlimited': execution_count == 0, 'exhausted': execution_count == 0}
+                return {
+                    'allowed': False,
+                    'reason': 'inactive',
+                    'remaining': execution_count,
+                    'unlimited': execution_count is not None and int(execution_count) < 0,
+                    'exhausted': False,
+                }
 
-            # 0 表示无限次
-            if execution_count == 0:
+            if int(execution_count) == 0:
+                cursor.execute("ROLLBACK")
+                return {
+                    'allowed': False,
+                    'reason': 'zero_executions',
+                    'remaining': 0,
+                    'unlimited': False,
+                    'exhausted': True,
+                }
+
+            if int(execution_count) < 0:
                 cursor.execute("COMMIT")
-                return {'allowed': True, 'reason': None, 'remaining': 0, 'unlimited': True, 'exhausted': False}
+                return {'allowed': True, 'reason': None, 'remaining': -1, 'unlimited': True, 'exhausted': False}
 
             # 有限次数：原子扣减
             new_count = max(0, int(execution_count) - 1)

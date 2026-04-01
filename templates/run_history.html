@@ -157,42 +157,61 @@
         border: 1px solid #ffccc7;
     }
     
-    .text-preview {
-        max-width: 300px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        cursor: pointer;
-    }
-    
-    .text-preview:hover {
-        overflow: visible;
-        white-space: normal;
-        background-color: #f9f9f9;
-        padding: 4px;
-        border-radius: 4px;
+    /* 输出/错误列：默认单行省略，悬停在格内浮层展示全文，限制宽高避免盖住「操作」列 */
+    .history-table td.preview-cell {
         position: relative;
-        z-index: 10;
+        vertical-align: top;
+        min-width: 0;
+        overflow: visible;
     }
-    
-    .error-message {
-        color: #ff4d4f;
-        font-size: 12px;
+
+    .preview-line {
+        display: block;
         max-width: 100%;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        cursor: pointer;
+        cursor: default;
+        line-height: 1.4;
     }
-    
-    .error-message:hover {
-        overflow: visible;
-        white-space: normal;
-        background-color: #f9f9f9;
-        padding: 4px;
-        border-radius: 4px;
-        position: relative;
-        z-index: 10;
+
+    .preview-line--error {
+        color: #ff4d4f;
+        font-size: 12px;
+    }
+
+    .preview-popover {
+        display: none;
+        position: absolute;
+        top: 0;
+        right: 0;
+        left: auto;
+        z-index: 200;
+        min-width: 200px;
+        max-width: min(420px, calc(100vw - 48px));
+        max-height: min(300px, 50vh);
+        overflow: auto;
+        padding: 10px 12px;
+        box-sizing: border-box;
+        background: #fff;
+        color: #333;
+        border: 1px solid #d9d9d9;
+        border-radius: 6px;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+        font-size: 12px;
+        line-height: 1.45;
+        text-align: left;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+    }
+
+    .preview-popover--error {
+        color: #cf132f;
+    }
+
+    .preview-cell:hover .preview-popover {
+        display: block;
     }
     
     .action-buttons {
@@ -576,6 +595,16 @@
             });
     }
     
+    function escapeHtml(text) {
+        if (text === undefined || text === null) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     // 渲染历史记录表格
     function renderHistoryTable(history, total) {
         const container = document.getElementById('historyContainer');
@@ -600,20 +629,29 @@
         history.forEach(item => {
             const statusClass = item.status === 'passed' || item.status === 'success' ? 'status-passed' : 'status-failed';
             const statusText = item.status === 'passed' || item.status === 'success' ? '通过' : '失败';
-            // 使用 extracted_text 作为输出，error 作为错误信息，created_at 作为执行时间
-            const outputPreview = item.extracted_text ? item.extracted_text.substring(0, 100) + (item.extracted_text.length > 100 ? '...' : '') : '-';
-            const errorMessage = item.error || '-';
+            const rawOut = item.extracted_text != null && item.extracted_text !== '' ? String(item.extracted_text) : '';
+            const rawErr = item.error != null && item.error !== '' ? String(item.error) : '';
+            const outputPreview = rawOut ? (rawOut.length > 100 ? rawOut.substring(0, 100) + '...' : rawOut) : '-';
+            const errorShort = rawErr ? (rawErr.length > 100 ? rawErr.substring(0, 100) + '...' : rawErr) : '-';
+            const popoverOut = rawOut || '-';
+            const popoverErr = rawErr || '-';
             const executedAt = item.created_at || '-';
             
             html += `
                 <tr>
                     <td>${item.id}</td>
-                    <td>${item.case_name || '-'}</td>
-                    <td>${item.case_id || '-'}</td>
+                    <td>${escapeHtml(item.case_name || '-')}</td>
+                    <td>${escapeHtml(item.case_id != null ? String(item.case_id) : '-')}</td>
                     <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-                    <td>${executedAt}</td>
-                    <td class="text-preview" title="${item.extracted_text || ''}">${outputPreview}</td>
-                    <td class="error-message" title="${errorMessage}">${errorMessage}</td>
+                    <td>${escapeHtml(executedAt)}</td>
+                    <td class="preview-cell">
+                        <span class="preview-line">${escapeHtml(outputPreview)}</span>
+                        <div class="preview-popover">${escapeHtml(popoverOut)}</div>
+                    </td>
+                    <td class="preview-cell">
+                        <span class="preview-line preview-line--error">${escapeHtml(errorShort)}</span>
+                        <div class="preview-popover preview-popover--error">${escapeHtml(popoverErr)}</div>
+                    </td>
                     <td>
                         <div class="action-buttons">
                             <button class="detail-btn" onclick="showDetail(${item.id})">详情</button>

@@ -252,9 +252,9 @@
                 </div>
 
                 <div>
-                    <label class="form-label">执行次数 <span class="text-gray-400 font-normal">(可选，0表示无限次)</span></label>
-                    <input type="number" id="executionCount" class="form-input" placeholder="0" min="0" value="0">
-                    <p class="text-xs text-gray-500 mt-1">设置任务执行的总次数，达到次数后任务自动停止</p>
+                    <label class="form-label">执行次数 <span class="text-gray-400 font-normal">(-1=无限；0=不按计划/不执行；≥1=剩余次数)</span></label>
+                    <input type="number" id="executionCount" class="form-input" placeholder="-1" min="-1" value="-1">
+                    <p class="text-xs text-gray-500 mt-1">达到设定次数后任务自动停用；0 时不注册定时触发也不会执行「立即执行」</p>
                 </div>
 
                 <div class="flex items-center bg-gray-50 p-3 rounded-lg">
@@ -530,6 +530,7 @@
             document.getElementById('cronExpr').value = '';
             document.getElementById('cronDesc').textContent = '';
             document.getElementById('isActive').checked = true;
+            document.getElementById('executionCount').value = '-1';
             loadProjects();
             document.getElementById('scheduleModal').classList.remove('hidden');
         }
@@ -543,7 +544,10 @@
             document.getElementById('modalTitle').textContent = '编辑定时任务';
             document.getElementById('scheduleName').value = schedule.name;
             document.getElementById('cronExpr').value = schedule.cron_expr;
-            document.getElementById('executionCount').value = schedule.execution_count || 0;
+            {
+                const ec = schedule.execution_count;
+                document.getElementById('executionCount').value = (ec === undefined || ec === null) ? -1 : ec;
+            }
             document.getElementById('isActive').checked = schedule.is_active;
 
             // 加载项目列表并设置选中状态
@@ -628,7 +632,9 @@
                 return;
             }
 
-            const executionCount = parseInt(document.getElementById('executionCount').value) || 0;
+            const rawEc = document.getElementById('executionCount').value.trim();
+            let executionCount = parseInt(rawEc, 10);
+            if (Number.isNaN(executionCount)) executionCount = -1;
             
             const data = {
                 name,

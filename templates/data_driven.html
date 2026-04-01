@@ -368,9 +368,9 @@
         document.getElementById('runProgress').classList.remove('hidden');
         document.getElementById('runResultSummary').classList.add('hidden');
         document.getElementById('runDetails').innerHTML = '';
-        document.getElementById('progressBar').style.width = '10%';
-        document.getElementById('progressText').textContent = '正在执行...';
-        document.getElementById('progressPct').textContent = '10%';
+        document.getElementById('progressBar').style.width = '0%';
+        document.getElementById('progressText').textContent = '正在启动...';
+        document.getElementById('progressPct').textContent = '0%';
 
         try {
             const res = await fetch(`/api/datasets/${currentDatasetId}/run`, {
@@ -378,21 +378,48 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ case_id: caseId })
             });
-            const data = await res.json();
+            const startData = await res.json();
+            if (!startData.success) {
+                alert('执行失败：' + (startData.error || '无法启动任务'));
+                return;
+            }
 
-            document.getElementById('progressBar').style.width = '100%';
-            document.getElementById('progressPct').textContent = '100%';
-            document.getElementById('progressText').textContent = '执行完成';
+            const runId = startData.run_id;
+            const total = Math.max(1, parseInt(startData.total, 10) || 1);
 
-            if (data.success) {
-                // 显示汇总
-                document.getElementById('runResultSummary').classList.remove('hidden');
-                document.getElementById('totalRows').textContent = data.total;
-                document.getElementById('successRows').textContent = data.successful_rows;
-                document.getElementById('failRows').textContent = data.failed_rows;
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-                // 显示详情
-                document.getElementById('runDetails').innerHTML = data.results.map(r => `
+            for (;;) {
+                await sleep(500);
+                const stRes = await fetch(`/api/datasets/run-status/${encodeURIComponent(runId)}`);
+                const j = await stRes.json();
+                if (!stRes.ok || !j.success) {
+                    alert('获取执行进度失败：' + (j.error || `HTTP ${stRes.status}`));
+                    break;
+                }
+
+                const pct = total > 0 ? Math.min(99, Math.round((j.completed / total) * 100)) : 0;
+                document.getElementById('progressBar').style.width = j.finished ? '100%' : (pct + '%');
+                document.getElementById('progressPct').textContent = (j.finished ? 100 : pct) + '%';
+
+                if (!j.finished) {
+                    const cur = (j.current_row_index != null) ? (j.current_row_index + 1) : Math.min(j.completed + 1, total);
+                    document.getElementById('progressText').textContent =
+                        `正在执行第 ${cur} / ${total} 行（已完成 ${j.completed} 行）`;
+                    continue;
+                }
+
+                document.getElementById('progressBar').style.width = '100%';
+                document.getElementById('progressPct').textContent = '100%';
+                document.getElementById('progressText').textContent = '执行完成';
+
+                if (j.run_success && Array.isArray(j.results)) {
+                    document.getElementById('runResultSummary').classList.remove('hidden');
+                    document.getElementById('totalRows').textContent = j.total;
+                    document.getElementById('successRows').textContent = j.successful_rows;
+                    document.getElementById('failRows').textContent = j.failed_rows;
+
+                    document.getElementById('runDetails').innerHTML = j.results.map(r => `
                     <div class="border rounded-lg p-3 ${r.status === 'success' ? 'row-success' : 'row-fail'}">
                         <div class="flex justify-between items-center">
                             <div class="flex items-center gap-2">
@@ -405,8 +432,10 @@
                         ${r.error ? `<p class="text-xs text-red-600 mt-1 ml-6"><i class="fas fa-exclamation-triangle mr-1"></i>${escHtml(r.error)}</p>` : ''}
                     </div>
                 `).join('');
-            } else {
-                alert('执行失败：' + data.error);
+                } else {
+                    alert('执行失败：' + (j.error || '未知错误'));
+                }
+                break;
             }
         } catch (e) {
             alert('执行请求失败：' + e.message);

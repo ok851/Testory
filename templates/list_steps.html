@@ -230,6 +230,7 @@
         .step-content {
             flex: 1;
             padding: 0 15px;
+            min-width: 0;
         }
         
         .step-content h4 {
@@ -859,7 +860,7 @@
     <div id="recordingModal" class="modal">
         <div class="modal-content" style="max-width: 960px; border-radius: 14px;">
             <div class="modal-header">
-                <h3>录制步骤 V3</h3>
+                <h3>录制步骤</h3>
             </div>
             <div class="modal-body">
                 <div style="padding: 20px;">
@@ -925,6 +926,14 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function truncateMiddle(str, maxLen) {
+            if (!str || str.length <= maxLen) return String(str);
+            const keep = maxLen - 3;
+            const a = Math.ceil(keep / 2);
+            const b = Math.floor(keep / 2);
+            return str.slice(0, a) + '…' + str.slice(-b);
         }
         
         function getCaseIdFromSession() {
@@ -1131,15 +1140,24 @@
                             default: actionText = step.action;
                         }
                         
+                        const isNavigate = step.action === 'navigate';
+                        const showInputRow = step.input_value && step.input_value.trim() && (
+                            step.action === 'input' || step.action === 'fill' || step.action === 'wait' ||
+                            step.action === 'scroll' || step.action === 'swipe' || step.action === 'extract_text' ||
+                            step.action === 'verify' || step.action === 'text_compare' || step.action === 'select'
+                        );
+                        const navigateUrlRow = isNavigate && step.input_value && step.input_value.trim()
+                            ? `<div class="step-nav-url"><strong>完整地址:</strong> <span title="${escapeHtml(step.input_value)}">${escapeHtml(truncateMiddle(step.input_value, 72))}</span></div>`
+                            : '';
                         stepItem.innerHTML = `
                             <div class="step-number">${actualStepNumber}</div>
                             <div class="step-content">
-                                <h4>${step.description || actionText}</h4>
+                                <h4>${escapeHtml(step.description || actionText)}</h4>
                                 <div class="step-details">
-                                    ${step.selector_type ? `<div><strong>定位方式:</strong> ${escapeHtml(step.selector_type)}</div>` : ''}
+                                    ${step.selector_value ? `<div><strong>定位方式:</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
                                     ${step.selector_value ? `<div><strong>选择器:</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
-                                    ${(step.action === 'input' || step.action === 'fill' || step.action === 'navigate' || step.action === 'wait' || step.action === 'scroll' || step.action === 'swipe' || step.action === 'extract_text' || step.action === 'verify' || step.action === 'text_compare' || step.action === 'select') && step.input_value && step.input_value.trim() ? `<div><strong>输入值:</strong> ${escapeHtml(step.input_value)}</div>` : ''}
-                                    ${step.description ? `<div><strong>描述:</strong> ${escapeHtml(step.description)}</div>` : ''}
+                                    ${navigateUrlRow}
+                                    ${showInputRow ? `<div><strong>输入值:</strong> ${escapeHtml(step.input_value)}</div>` : ''}
                                 </div>
                             </div>
                             <div class="step-actions">
@@ -2904,6 +2922,21 @@ function changePage(page) {
             }
         }
 
+        function resetRecordingPreview() {
+            const container = document.getElementById('recordedStepsList');
+            if (container) {
+                container.innerHTML = `
+                    <div style="text-align: center; color: #6c757d; padding: 40px;">
+                        暂无录制步骤，点击上方"开始录制"按钮并在浏览器中操作
+                    </div>
+                `;
+            }
+            const cnt = document.getElementById('recordingStepCount');
+            if (cnt) {
+                cnt.textContent = '已录制 0 步';
+            }
+        }
+
         async function syncRecordingStatus() {
             try {
                 const resp = await fetch('/api/recordings/status');
@@ -2952,6 +2985,7 @@ function changePage(page) {
                 setRecordingNotice('warning', '已有录制会话在运行，请先停止后再开始。');
                 return;
             }
+            resetRecordingPreview();
             
             try {
                 // 禁用开始按钮

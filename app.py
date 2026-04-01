@@ -17,6 +17,10 @@ from license_manager import license_manager, LicenseType
 import asyncio
 import threading
 
+# 数据驱动批量执行进度（内存态，按 run_id + 用户隔离；完成后首次拉取状态即清理）
+_dataset_run_jobs: dict = {}
+_dataset_run_lock = threading.Lock()
+
 # 统一的API错误处理装饰器
 def api_error_handler(func):
     @functools.wraps(func)
@@ -2996,11 +3000,13 @@ def api_create_schedule():
             return jsonify({'success': False, 'error': '名称、用例ID列表和cron表达式不能为空'}), 400
         _db = Database()
         project_id = data.get('project_id')
-        execution_count = data.get('execution_count', 0)
+        raw_ec = data.get('execution_count', -1)
+        try:
+            execution_count = int(raw_ec)
+        except (TypeError, ValueError):
+            execution_count = -1
         schedule_id = _db.create_schedule(name, case_ids, cron_expr, project_id=project_id, is_active=is_active, execution_count=execution_count)
-        # 注册到调度器
-        if is_active:
-            _register_schedule_job(schedule_id, case_ids, cron_expr)
+        _sync_schedule_job(schedule_id)
         return jsonify({'success': True, 'schedule_id': schedule_id})
     except Exception as e:
         uat_logger.error(f"创建定时任务失败: {e}")
@@ -3014,19 +3020,19 @@ def api_update_schedule(schedule_id):
     try:
         data = request.get_json(silent=True) or {}
         _db = Database()
+        raw_ec = data.get('execution_count')
+        execution_count = None
+        if raw_ec is not None:
+            try:
+                execution_count = int(raw_ec)
+            except (TypeError, ValueError):
+                execution_count = None
         success = _db.update_schedule(schedule_id,
             name=data.get('name'), cron_expr=data.get('cron_expr'),
             is_active=data.get('is_active'), case_ids=data.get('case_ids'),
-            project_id=data.get('project_id'), execution_count=data.get('execution_count'))
-        if success and data.get('cron_expr'):
-            case_ids = data.get('case_ids')
-            if not case_ids:
-                # 如果未传case_ids，从数据库获取
-                for s in _db.get_all_schedules():
-                    if s['id'] == schedule_id:
-                        case_ids = s['case_ids']
-                        break
-            _register_schedule_job(schedule_id, case_ids or [], data['cron_expr'])
+            project_id=data.get('project_id'), execution_count=execution_count)
+        if success:
+            _sync_schedule_job(schedule_id)
         return jsonify({'success': success})
     except Exception as e:
         uat_logger.error(f"更新定时任务失败: {e}")
@@ -3061,6 +3067,13 @@ def api_run_schedule_now(schedule_id):
 
     if not schedule:
         return jsonify({'success': False, 'error': '定时任务不存在'}), 404
+
+    try:
+        ec = int(schedule.get('execution_count', 0))
+    except (TypeError, ValueError):
+        ec = 0
+    if ec == 0:
+        return jsonify({'success': False, 'error': '剩余执行次数为 0（请设为 -1 无限次或大于 0）'}), 400
 
     try:
         # 异步执行
@@ -3161,6 +3174,202 @@ def api_trigger_cases():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # ==================== 数据驱动测试接口 ====================
+
+def _dataset_job_update(run_id: str, **kwargs):
+    with _dataset_run_lock:
+        if run_id in _dataset_run_jobs:
+            _dataset_run_jobs[run_id].update(kwargs)
+
+
+def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int):
+    """后台线程：按数据行执行用例，每行更新进度。"""
+    import time as _time
+
+    def resolve_with_row(text, row_dict):
+        if not text:
+            return text
+        import re
+
+        def replace(m):
+            key = m.group(1).strip()
+            if key.startswith('row.'):
+                field = key[4:]
+                return str(row_dict.get(field, m.group(0)))
+            return m.group(0)
+
+        return re.sub(r'\{\{(.+?)\}\}', replace, text)
+
+    try:
+        _db = Database()
+        dataset = _db.get_dataset(dataset_id)
+        if not dataset:
+            _dataset_job_update(run_id, finished=True, success=False, error='数据集不存在')
+            return
+        rows = _db.get_data_rows(dataset_id)
+        if not rows:
+            _dataset_job_update(run_id, finished=True, success=False, error='数据集没有数据行')
+            return
+        case = _db.get_test_case_v2(case_id)
+        if not case:
+            _dataset_job_update(run_id, finished=True, success=False, error='测试用例不存在')
+            return
+        steps = _db.get_case_steps(case_id)
+        if not steps:
+            _dataset_job_update(run_id, finished=True, success=False, error='测试用例没有步骤')
+            return
+
+        with _dataset_run_lock:
+            if run_id in _dataset_run_jobs:
+                _dataset_run_jobs[run_id]['total'] = len(rows)
+
+        uat_logger.info(f"数据驱动执行：数据集#{dataset_id}，用例#{case_id}，共{len(rows)}行数据")
+
+        run_results = []
+        total_success = 0
+        total_fail = 0
+
+        for row_info in rows:
+            row_data = row_info['data']
+            row_index = row_info['row_index']
+            _dataset_job_update(run_id, current_row_index=row_index)
+
+            uat_logger.info(f"[数据驱动] 准备执行第{row_index}行数据，重启浏览器...")
+            try:
+                sync_close_browser()
+                uat_logger.info(f"[数据驱动] 浏览器已关闭")
+            except Exception as e:
+                uat_logger.debug(f"[数据驱动] 关闭浏览器时出错（可忽略）: {e}")
+
+            _time.sleep(0.5)
+            uat_logger.info(f"[数据驱动] 启动新浏览器实例...")
+
+            start_time = _time.time()
+            status = 'success'
+            error_msg = ''
+            step_results_list = []
+
+            try:
+                for step_idx, step in enumerate(steps):
+                    selector_value = resolve_with_row(
+                        _db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id),
+                        row_data
+                    )
+                    input_value = resolve_with_row(
+                        _db.resolve_variables(step.get('input_value', ''), project_id=case.get('project_id'), case_id=case_id),
+                        row_data
+                    )
+                    url_value = resolve_with_row(step.get('url', '') or '', row_data)
+
+                    step_start = _time.time()
+                    step_status = 'success'
+                    step_error = ''
+                    try:
+                        action = step.get('action', '')
+                        selector_type = step.get('selector_type', 'css')
+                        enter_iframe = step.get('enter_iframe', False)
+                        iframe_sel = step.get('iframe_selector', '') if enter_iframe else None
+                        if action == 'navigate':
+                            nav_url = url_value or input_value or case.get('url', '')
+                            if nav_url:
+                                if not nav_url.startswith(('http://', 'https://')):
+                                    nav_url = 'http://' + nav_url
+                                sync_navigate_to(nav_url)
+                        elif action == 'click':
+                            if selector_value:
+                                sync_click_element(selector_value, selector_type, iframe_selector=iframe_sel)
+                        elif action == 'input':
+                            if selector_value:
+                                if input_value is None or str(input_value) == '':
+                                    raise Exception("输入步骤缺少有效输入值")
+                                safe_input_value = input_value
+                                sync_fill_input(selector_value, safe_input_value, selector_type, iframe_selector=iframe_sel)
+                            else:
+                                raise Exception("输入操作缺少选择器")
+                        elif action == 'wait':
+                            wait_ms = int(input_value) * 1000 if input_value and int(input_value) < 1000 else (int(input_value) if input_value else 1000)
+                            sync_wait_for_timeout(wait_ms)
+                        elif action == 'select':
+                            if selector_value and input_value:
+                                sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_sel)
+                        elif action == 'scroll':
+                            sync_scroll_page('down', 500, iframe_selector=iframe_sel)
+                    except Exception as e:
+                        step_status = 'fail'
+                        step_error = str(e)
+                        status = 'fail'
+                        error_msg = f"行{row_index} 步骤{step_idx+1}({step.get('action','')}) 失败: {e}"
+
+                    step_results_list.append({
+                        'step_order': step_idx + 1,
+                        'action': step.get('action', ''),
+                        'selector_value': selector_value,
+                        'input_value': input_value,
+                        'status': step_status,
+                        'error': step_error,
+                        'duration': round(_time.time() - step_start, 3)
+                    })
+                    if status == 'fail':
+                        break
+            except Exception as e:
+                status = 'fail'
+                error_msg = str(e)
+
+            duration = round(_time.time() - start_time, 3)
+            history_id = _db.create_run_history(
+                case_id=case_id,
+                status=status,
+                duration=duration,
+                error=f"[数据驱动 行{row_index}] {error_msg}" if error_msg else '',
+                extracted_text=f"数据驱动 行{row_index}: {str(row_data)}"
+            )
+
+            if status == 'success':
+                total_success += 1
+            else:
+                total_fail += 1
+
+            run_results.append({
+                'row_index': row_index,
+                'row_data': row_data,
+                'status': status,
+                'error': error_msg,
+                'duration': duration,
+                'history_id': history_id,
+                'steps': step_results_list
+            })
+
+            _dataset_job_update(
+                run_id,
+                completed=len(run_results),
+                successful_rows=total_success,
+                failed_rows=total_fail,
+                current_row_index=row_index,
+            )
+
+        try:
+            sync_close_browser()
+        except Exception:
+            pass
+
+        uat_logger.info(f"数据驱动执行完成：成功{total_success}行，失败{total_fail}行")
+        _dataset_job_update(
+            run_id,
+            finished=True,
+            success=True,
+            successful_rows=total_success,
+            failed_rows=total_fail,
+            completed=len(rows),
+            results=run_results,
+            error=None,
+        )
+    except Exception as e:
+        uat_logger.log_exception("dataset_run_worker", e)
+        try:
+            sync_close_browser()
+        except Exception:
+            pass
+        _dataset_job_update(run_id, finished=True, success=False, error=str(e))
+
 
 @app.route('/data-driven')
 @login_required
@@ -3272,11 +3481,16 @@ def api_upload_dataset():
 @app.route('/api/datasets/<int:dataset_id>/run', methods=['POST'])
 @login_required
 def api_run_dataset(dataset_id):
-    """数据驱动执行：用数据集的每行数据执行指定测试用例"""
+    """启动数据驱动后台任务，立即返回 run_id；前端轮询 /api/datasets/run-status/<run_id> 更新进度"""
     data = request.get_json(silent=True) or {}
     case_id = data.get('case_id')
     if not case_id:
         return jsonify({'success': False, 'error': '缺少 case_id 参数'}), 400
+
+    try:
+        case_id_int = int(case_id)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'case_id 无效'}), 400
 
     _db = Database()
     dataset = _db.get_dataset(dataset_id)
@@ -3287,161 +3501,83 @@ def api_run_dataset(dataset_id):
     if not rows:
         return jsonify({'success': False, 'error': '数据集没有数据行'}), 400
 
-    case = _db.get_test_case_v2(case_id)
+    case = _db.get_test_case_v2(case_id_int)
     if not case:
         return jsonify({'success': False, 'error': '测试用例不存在'}), 404
 
-    steps = _db.get_case_steps(case_id)
+    steps = _db.get_case_steps(case_id_int)
     if not steps:
         return jsonify({'success': False, 'error': '测试用例没有步骤'}), 400
 
-    uat_logger.info(f"数据驱动执行：数据集#{dataset_id}，用例#{case_id}，共{len(rows)}行数据")
+    run_id = secrets.token_urlsafe(24)
+    uid = current_user.id
+    with _dataset_run_lock:
+        _dataset_run_jobs[run_id] = {
+            'user_id': uid,
+            'dataset_id': dataset_id,
+            'case_id': case_id_int,
+            'finished': False,
+            'success': None,
+            'error': None,
+            'total': len(rows),
+            'completed': 0,
+            'successful_rows': 0,
+            'failed_rows': 0,
+            'results': [],
+            'current_row_index': None,
+        }
 
-    run_results = []
-    total_success = 0
-    total_fail = 0
+    thread = threading.Thread(
+        target=_dataset_run_worker,
+        args=(run_id, uid, dataset_id, case_id_int),
+        daemon=True,
+        name=f'dataset-run-{run_id[:10]}',
+    )
+    thread.start()
 
-    for row_info in rows:
-        row_data = row_info['data']
-        row_index = row_info['row_index']
-        import time as _time
-
-        # 🔥 修复：每条数据执行前重启浏览器，确保干净的执行环境
-        uat_logger.info(f"[数据驱动] 准备执行第{row_index}行数据，重启浏览器...")
-        try:
-            sync_close_browser()
-            uat_logger.info(f"[数据驱动] 浏览器已关闭")
-        except Exception as e:
-            uat_logger.debug(f"[数据驱动] 关闭浏览器时出错（可忽略）: {e}")
-        
-        # 等待浏览器完全关闭
-        _time.sleep(0.5)
-        
-        uat_logger.info(f"[数据驱动] 启动新浏览器实例...")
-
-        # 将行数据注入变量替换：支持 {{row.字段名}} 格式
-        def resolve_with_row(text, row_dict):
-            if not text:
-                return text
-            import re
-            def replace(m):
-                key = m.group(1).strip()
-                if key.startswith('row.'):
-                    field = key[4:]
-                    return str(row_dict.get(field, m.group(0)))
-                return m.group(0)
-            return re.sub(r'\{\{(.+?)\}\}', replace, text)
-
-        start_time = _time.time()
-        status = 'success'
-        error_msg = ''
-        step_results_list = []
-
-        try:
-            for step_idx, step in enumerate(steps):
-                selector_value = resolve_with_row(
-                    _db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id),
-                    row_data
-                )
-                input_value = resolve_with_row(
-                    _db.resolve_variables(step.get('input_value', ''), project_id=case.get('project_id'), case_id=case_id),
-                    row_data
-                )
-                url_value = resolve_with_row(step.get('url', '') or '', row_data)
-
-                step_start = _time.time()
-                step_status = 'success'
-                step_error = ''
-                try:
-                    action = step.get('action', '')
-                    selector_type = step.get('selector_type', 'css')
-                    enter_iframe = step.get('enter_iframe', False)
-                    iframe_sel = step.get('iframe_selector', '') if enter_iframe else None
-                    if action == 'navigate':
-                        nav_url = url_value or input_value or case.get('url', '')
-                        if nav_url:
-                            if not nav_url.startswith(('http://', 'https://')):
-                                nav_url = 'http://' + nav_url
-                            sync_navigate_to(nav_url)
-                    elif action == 'click':
-                        if selector_value:
-                            sync_click_element(selector_value, selector_type, iframe_selector=iframe_sel)
-                    elif action == 'input':
-                        if selector_value:
-                            if input_value is None or str(input_value) == '':
-                                raise Exception("输入步骤缺少有效输入值")
-                            safe_input_value = input_value
-                            sync_fill_input(selector_value, safe_input_value, selector_type, iframe_selector=iframe_sel)
-                        else:
-                            raise Exception("输入操作缺少选择器")
-                    elif action == 'wait':
-                        wait_ms = int(input_value) * 1000 if input_value and int(input_value) < 1000 else (int(input_value) if input_value else 1000)
-                        sync_wait_for_timeout(wait_ms)
-                    elif action == 'select':
-                        if selector_value and input_value:
-                            sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_sel)
-                    elif action == 'scroll':
-                        sync_scroll_page('down', 500, iframe_selector=iframe_sel)
-                    # 其他 action 忽略
-                except Exception as e:
-                    step_status = 'fail'
-                    step_error = str(e)
-                    status = 'fail'
-                    error_msg = f"行{row_index} 步骤{step_idx+1}({step.get('action','')}) 失败: {e}"
-
-                step_results_list.append({
-                    'step_order': step_idx + 1,
-                    'action': step.get('action', ''),
-                    'selector_value': selector_value,
-                    'input_value': input_value,
-                    'status': step_status,
-                    'error': step_error,
-                    'duration': round(_time.time() - step_start, 3)
-                })
-                if status == 'fail':
-                    break
-        except Exception as e:
-            status = 'fail'
-            error_msg = str(e)
-
-        duration = round(_time.time() - start_time, 3)
-        # 保存历史记录
-        history_id = _db.create_run_history(
-            case_id=case_id,
-            status=status,
-            duration=duration,
-            error=f"[数据驱动 行{row_index}] {error_msg}" if error_msg else '',
-            extracted_text=f"数据驱动 行{row_index}: {str(row_data)}"
-        )
-
-        if status == 'success':
-            total_success += 1
-        else:
-            total_fail += 1
-
-        run_results.append({
-            'row_index': row_index,
-            'row_data': row_data,
-            'status': status,
-            'error': error_msg,
-            'duration': duration,
-            'history_id': history_id,
-            'steps': step_results_list
-        })
-
-    try:
-        sync_close_browser()
-    except Exception:
-        pass
-
-    uat_logger.info(f"数据驱动执行完成：成功{total_success}行，失败{total_fail}行")
     return jsonify({
         'success': True,
+        'run_id': run_id,
         'total': len(rows),
-        'successful_rows': total_success,
-        'failed_rows': total_fail,
-        'results': run_results
     })
+
+
+@app.route('/api/datasets/run-status/<run_id>', methods=['GET'])
+@login_required
+def api_dataset_run_status(run_id):
+    """查询数据驱动任务进度；完成后首次请求返回明细并移除任务缓存"""
+    with _dataset_run_lock:
+        job = _dataset_run_jobs.get(run_id)
+    if not job:
+        return jsonify({'success': False, 'error': '任务不存在或已结束'}), 404
+    if job.get('user_id') != current_user.id:
+        return jsonify({'success': False, 'error': '无权访问该任务'}), 403
+
+    resp = {
+        'success': True,
+        'finished': job['finished'],
+        'total': job['total'],
+        'completed': job['completed'],
+        'successful_rows': job['successful_rows'],
+        'failed_rows': job['failed_rows'],
+        'current_row_index': job.get('current_row_index'),
+    }
+
+    if not job['finished']:
+        return jsonify(resp)
+
+    resp['run_success'] = bool(job.get('success'))
+    if job.get('error'):
+        resp['error'] = job['error']
+    if job.get('success'):
+        resp['results'] = job.get('results') or []
+        resp['successful_rows'] = job['successful_rows']
+        resp['failed_rows'] = job['failed_rows']
+    with _dataset_run_lock:
+        _dataset_run_jobs.pop(run_id, None)
+
+    return jsonify(resp)
+
 
 # ==================== 调度器初始化 ====================
 
@@ -3632,20 +3768,58 @@ try:
         except Exception as e:
             uat_logger.error(f"注册定时任务 #{schedule_id} 失败: {e}")
 
-    # 启动调度器并加载已有任务
-    scheduler.start()
-    _init_db = Database()
-    for sched in _init_db.get_active_schedules():
+    def _sync_schedule_job(schedule_id: int):
+        """根据数据库状态注册或移除 APScheduler 任务（启用、次数、Cron 变更时调用）。"""
+        if scheduler is None or not getattr(scheduler, "running", False):
+            return
+        _db = Database()
+        sched = None
+        for s in _db.get_all_schedules():
+            if s["id"] == schedule_id:
+                sched = s
+                break
+        job_id = f"schedule_{schedule_id}"
         try:
-            _register_schedule_job(sched['id'], sched['case_ids'], sched['cron_expr'])
-        except Exception as e:
-            uat_logger.warning(f"加载定时任务 #{sched['id']} 失败: {e}")
-    uat_logger.info("APScheduler 调度器已启动")
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        if not sched:
+            return
+        try:
+            ec = int(sched.get("execution_count", 0))
+        except (TypeError, ValueError):
+            ec = 0
+        if sched.get("is_active") and ec != 0:
+            _register_schedule_job(schedule_id, sched["case_ids"], sched["cron_expr"])
+
+    # 启动调度器并加载已有任务（仅在实际提供 HTTP 的进程启动，避免 Flask debug 重载父子双进程各启一调度器）
+    _werkzeug_main = os.environ.get("WERKZEUG_RUN_MAIN")
+    _start_apscheduler = _werkzeug_main == "true" or (_werkzeug_main is None and not app.debug)
+    if _start_apscheduler:
+        scheduler.start()
+        _init_db = Database()
+        for sched in _init_db.get_active_schedules():
+            try:
+                try:
+                    ec = int(sched.get("execution_count", 0))
+                except (TypeError, ValueError):
+                    ec = 0
+                if ec == 0:
+                    continue
+                _register_schedule_job(sched["id"], sched["case_ids"], sched["cron_expr"])
+            except Exception as e:
+                uat_logger.warning(f"加载定时任务 #{sched['id']} 失败: {e}")
+        uat_logger.info("APScheduler 调度器已启动")
+    else:
+        uat_logger.info("APScheduler：当前进程为 Flask 重载监视进程，跳过启动，避免定时任务重复触发")
 
 except ImportError:
     uat_logger.warning("APScheduler 未安装，定时执行功能不可用。运行: pip install APScheduler==3.10.4")
     scheduler = None
     def _register_schedule_job(*args, **kwargs):
+        pass
+
+    def _sync_schedule_job(*args, **kwargs):
         pass
 
 
