@@ -26,6 +26,26 @@ except ModuleNotFoundError:
 # 数据驱动批量执行进度（内存态，按 run_id + 用户隔离；完成后首次拉取状态即清理）
 _dataset_run_jobs: dict = {}
 _dataset_run_lock = threading.Lock()
+_case_run_jobs: dict = {}
+_case_run_lock = threading.Lock()
+
+
+def _case_job_update(user_id: int, **kwargs):
+    with _case_run_lock:
+        if user_id in _case_run_jobs:
+            _case_run_jobs[user_id].update(kwargs)
+
+
+def _force_stop_browser_async():
+    """异步强制停止浏览器，避免阻塞停止接口响应。"""
+    try:
+        sync_close_browser()
+    except Exception:
+        pass
+    try:
+        force_reset_execution_state()
+    except Exception:
+        pass
 
 # 统一的API错误处理装饰器
 def api_error_handler(func):
@@ -781,6 +801,20 @@ def api_execute_multiple_cases():
     uat_logger.info(f"📥 [API_ENTRY] 用例数量: {len(case_ids)}")
     
     uat_logger.info(f"开始执行多个测试用例，共 {len(case_ids)} 个用例")
+    with _case_run_lock:
+        _case_run_jobs[user_id] = {
+            'active': True,
+            'cancel_requested': False,
+            'run_mode': 'multiple_cases',
+            'case_id': None,
+            'case_name': '批量执行',
+            'total_steps': len(case_ids),
+            'completed_steps': 0,
+            'current_step_order': 0,
+            'current_action': 'batch_run',
+            'message': f'正在批量执行 {len(case_ids)} 个用例',
+            'started_at': time.time(),
+        }
     
     results = None
     
@@ -798,7 +832,11 @@ def api_execute_multiple_cases():
             
             # 直接在主线程中同步执行测试用例，确保严格的执行顺序
             uat_logger.info(f"🚀 [API] 在主线程中同步执行测试用例序列: {case_ids}")
-            results = sync_execute_multiple_test_cases(case_ids, thread_db)
+            def _should_stop_batch():
+                with _case_run_lock:
+                    return bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
+
+            results = sync_execute_multiple_test_cases(case_ids, thread_db, should_stop=_should_stop_batch)
             uat_logger.info(f"✅ [API] 多个测试用例同步执行完成")
         except Exception as e:
             uat_logger.error(f"❌ [API] 执行测试用例时发生异常: {str(e)}")
@@ -820,6 +858,12 @@ def api_execute_multiple_cases():
         
         # 记录执行结果
         uat_logger.info(f"多个测试用例执行完成，成功: {results['successful_cases']}, 失败: {results['failed_cases']}")
+        _case_job_update(
+            user_id,
+            completed_steps=len(case_ids),
+            current_step_order=len(case_ids),
+            message=f"批量执行完成：成功 {results.get('successful_cases', 0)}，失败 {results.get('failed_cases', 0)}",
+        )
         
     except Exception as e:
         uat_logger.error(f"执行测试用例时出错: {e}")
@@ -845,8 +889,16 @@ def api_execute_multiple_cases():
             uat_logger.info("✅ [API_CLEANUP] 浏览器资源清理完成")
         except Exception as close_error:
             uat_logger.warning(f"⚠️ [API_CLEANUP] 清理浏览器时出现警告: {close_error}")
+        with _case_run_lock:
+            job = _case_run_jobs.get(user_id)
+            if job:
+                job['active'] = False
+                job['finished_at'] = time.time()
+                job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
     
-    response_data = {'success': True, 'results': results}
+    with _case_run_lock:
+        stopped = bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
+    response_data = {'success': True, 'results': results, 'stopped': stopped}
     return jsonify(response_data)
 
 # API: 导航到指定URL
@@ -1914,6 +1966,19 @@ def api_run_case(case_id):
 
     uat_logger.info(f"开始运行测试用例 #{case_id}: {case['name']}")
     uat_logger.info(f"测试用例共有 {len(steps)} 个步骤")
+    with _case_run_lock:
+        _case_run_jobs[user_id] = {
+            'active': True,
+            'cancel_requested': False,
+            'case_id': case_id,
+            'case_name': case.get('name', ''),
+            'total_steps': len(steps),
+            'completed_steps': 0,
+            'current_step_order': 0,
+            'current_action': '',
+            'message': '准备执行...',
+            'started_at': time.time(),
+        }
     
     # 提取的文本
     extracted_text = ""
@@ -1965,6 +2030,11 @@ def api_run_case(case_id):
             
             # 执行所有步骤
             for step in steps:
+                with _case_run_lock:
+                    cancel_requested = bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
+                if cancel_requested:
+                    raise Exception("用户已停止执行")
+
                 action = step.get('action', '')
                 selector_type = step.get('selector_type', 'css')
                 # 变量替换：支持 {{变量名}} 语法
@@ -1982,6 +2052,12 @@ def api_run_case(case_id):
                 step_screenshot = ''
                 
                 uat_logger.log_automation_step(action, selector_value or input_value, description)
+                _case_job_update(
+                    user_id,
+                    current_step_order=step.get('step_order', 0),
+                    current_action=action,
+                    message=f"正在执行步骤 {step.get('step_order', 0)}/{len(steps)}: {action}",
+                )
                                                         
                 # 详细的调试日志，跟踪 action 值和执行的方法
                 uat_logger.debug(f"执行步骤：ID={step.get('id')}, Action={action}, SelectorType={selector_type}, SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, IframeSelector={iframe_selector}")
@@ -2441,6 +2517,11 @@ def api_run_case(case_id):
                     'status': step_status, 'error': step_error,
                     'screenshot': step_screenshot, 'duration': step_duration
                 })
+                _case_job_update(
+                    user_id,
+                    completed_steps=len(step_results_list),
+                    message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
+                )
             
             # 计算执行时间
             duration = round(time.time() - start_time, 2)
@@ -2558,7 +2639,8 @@ def api_run_case(case_id):
                 'status': 'error',
                 'duration': duration,
                 'error': error_msg,
-                'browser_closed': browser_closed_manually
+                'browser_closed': browser_closed_manually,
+                'stopped': ('用户已停止执行' in error_msg)
             })
             
     except Exception as e:
@@ -2578,6 +2660,72 @@ def api_run_case(case_id):
             'success': False,
             'error': error_msg
         }), 500
+    finally:
+        with _case_run_lock:
+            job = _case_run_jobs.get(user_id)
+            if job:
+                job['active'] = False
+                job['finished_at'] = time.time()
+                job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
+
+
+@app.route('/api/cases/current-run/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_case_run_status():
+    user_id = current_user.id
+    with _case_run_lock:
+        job = _case_run_jobs.get(user_id)
+    if not job:
+        return jsonify({
+            'success': True,
+            'active': False,
+            'total_steps': 0,
+            'completed_steps': 0,
+            'progress': 0,
+            'message': '暂无运行任务'
+        })
+
+    total_steps = max(1, int(job.get('total_steps', 0) or 0))
+    completed_steps = int(job.get('completed_steps', 0) or 0)
+    progress = min(100, int((completed_steps / total_steps) * 100))
+    return jsonify({
+        'success': True,
+        'active': bool(job.get('active')),
+        'case_id': job.get('case_id'),
+        'case_name': job.get('case_name', ''),
+        'total_steps': int(job.get('total_steps', 0) or 0),
+        'completed_steps': completed_steps,
+        'current_step_order': int(job.get('current_step_order', 0) or 0),
+        'current_action': job.get('current_action', ''),
+        'progress': progress,
+        'cancel_requested': bool(job.get('cancel_requested')),
+        'message': job.get('message', ''),
+        'duration': job.get('duration'),
+    })
+
+
+@app.route('/api/cases/current-run/stop', methods=['POST'])
+@login_required
+@api_error_handler
+def api_stop_case_run():
+    user_id = current_user.id
+    with _case_run_lock:
+        job = _case_run_jobs.get(user_id)
+        if not job or not job.get('active'):
+            # 幂等：避免前端在状态切换瞬间看到“没有任务在运行”的误报弹窗
+            return jsonify({'success': True, 'message': '当前没有运行任务'})
+        job['cancel_requested'] = True
+        job['active'] = False
+        job['message'] = '已停止执行'
+        total_steps = int(job.get('total_steps', 0) or 0)
+        job['completed_steps'] = total_steps
+        job['finished_at'] = time.time()
+        job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
+
+    threading.Thread(target=_force_stop_browser_async, daemon=True, name='stop-case-run').start()
+
+    return jsonify({'success': True, 'message': '已发送停止请求'})
 
 @app.route('/run-history', methods=['GET'])
 @login_required
@@ -3235,8 +3383,13 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
         run_results = []
         total_success = 0
         total_fail = 0
+        cancelled = False
 
         for row_info in rows:
+            with _dataset_run_lock:
+                if _dataset_run_jobs.get(run_id, {}).get('cancel_requested'):
+                    cancelled = True
+                    break
             row_data = row_info['data']
             row_index = row_info['row_index']
             _dataset_job_update(run_id, current_row_index=row_index)
@@ -3258,6 +3411,9 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
 
             try:
                 for step_idx, step in enumerate(steps):
+                    with _dataset_run_lock:
+                        if _dataset_run_jobs.get(run_id, {}).get('cancel_requested'):
+                            raise Exception('用户已停止执行')
                     selector_value = resolve_with_row(
                         _db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id),
                         row_data
@@ -3358,6 +3514,17 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
             sync_close_browser()
         except Exception:
             pass
+
+        if cancelled:
+            _dataset_job_update(
+                run_id,
+                finished=True,
+                success=False,
+                error='用户已停止执行',
+                completed=len(run_results),
+                results=run_results,
+            )
+            return
 
         uat_logger.info(f"数据驱动执行完成：成功{total_success}行，失败{total_fail}行")
         _dataset_job_update(
@@ -3533,6 +3700,7 @@ def api_run_dataset(dataset_id):
             'failed_rows': 0,
             'results': [],
             'current_row_index': None,
+            'cancel_requested': False,
         }
 
     thread = threading.Thread(
@@ -3585,6 +3753,27 @@ def api_dataset_run_status(run_id):
         _dataset_run_jobs.pop(run_id, None)
 
     return jsonify(resp)
+
+
+@app.route('/api/datasets/run-stop/<run_id>', methods=['POST'])
+@login_required
+def api_dataset_run_stop(run_id):
+    with _dataset_run_lock:
+        job = _dataset_run_jobs.get(run_id)
+        if not job:
+            return jsonify({'success': False, 'error': '任务不存在或已结束'}), 404
+        if job.get('user_id') != current_user.id:
+            return jsonify({'success': False, 'error': '无权访问该任务'}), 403
+        if job.get('finished'):
+            return jsonify({'success': False, 'error': '任务已结束'}), 400
+        job['cancel_requested'] = True
+        job['finished'] = True
+        job['success'] = False
+        job['error'] = '用户已停止执行'
+        job['completed'] = int(job.get('total', 0) or 0)
+        job['current_row_index'] = None
+    threading.Thread(target=_force_stop_browser_async, daemon=True, name='stop-dataset-run').start()
+    return jsonify({'success': True, 'message': '已发送停止请求'})
 
 
 # ==================== 调度器初始化 ====================

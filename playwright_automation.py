@@ -445,23 +445,33 @@ class PlaywrightAutomation:
                     '--no-sandbox',
                     '--disable-dev-shm-usage',
                 ]
+                if headless:
+                    # 无头模式下 start-maximized/resizeTo 经常不生效，显式窗口尺寸更稳定
+                    args.extend([
+                        f'--window-size={screen_width},{screen_height}',
+                        '--force-device-scale-factor=1',
+                        '--disable-gpu',
+                    ])
                 
                 self.browser = await self.playwright.chromium.launch(
                     headless=headless,
                     args=args
                 )
                 
-                # 创建上下文时不强制设置viewport大小,让浏览器自动适应窗口尺寸
-                # 这样可以确保页面渲染和滚动行为与普通浏览器一致
-                self.context = await self.browser.new_context(
-                    ignore_https_errors=True,
-                    no_viewport=True  # 让浏览器自动管理视口大小
-                )
+                # headed 模式让浏览器自行管理视口；headless 模式固定视口，避免元素布局抖动
+                context_kwargs = {
+                    "ignore_https_errors": True,
+                }
+                if headless:
+                    context_kwargs["viewport"] = {"width": screen_width, "height": screen_height}
+                else:
+                    context_kwargs["no_viewport"] = True
+                self.context = await self.browser.new_context(**context_kwargs)
                 
                 # 创建新页面
                 self.page = await self.context.new_page()
                 
-                if sys.platform == 'win32':
+                if sys.platform == 'win32' and not headless:
                     user32 = ctypes.windll.user32
                     screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
                     screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
@@ -469,7 +479,10 @@ class PlaywrightAutomation:
                     await self.page.evaluate(f"window.resizeTo({screen_width}, {screen_height})")
                     await self.page.evaluate("window.moveTo(0, 0)")
                 else:
-                    uat_logger.info("非 Windows 环境，跳过 window.resizeTo/moveTo（服务器无 windll；已使用 no_viewport）")
+                    if headless:
+                        uat_logger.info(f"无头模式：固定视口 {screen_width}x{screen_height}，跳过 window.resizeTo/moveTo")
+                    else:
+                        uat_logger.info("非 Windows 环境，跳过 window.resizeTo/moveTo（服务器无 windll；已使用 no_viewport）")
                 
                 # 直接获取浏览器窗口的实际尺寸
                 viewport_size = await self.page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
@@ -8183,6 +8196,10 @@ class PlaywrightAutomation:
         actual_execution_order = []
         
         for index, case_id in enumerate(case_ids):
+            stop_checker = getattr(self, "_external_stop_checker", None)
+            if callable(stop_checker) and stop_checker():
+                uat_logger.warning("🛑 [SERIAL_MULTI_CASE] 检测到外部停止请求，终止批量执行")
+                break
             case_number = index + 1
             actual_execution_order.append(case_id)
             case_start_time = time.time()
@@ -8389,6 +8406,14 @@ class PlaywrightAutomation:
         
         # 逐个执行步骤
         for i, step in enumerate(execution_steps):
+            stop_checker = getattr(self, "_external_stop_checker", None)
+            if callable(stop_checker) and stop_checker():
+                case_results.append({
+                    "status": "stopped",
+                    "step": step.get('action', 'unknown'),
+                    "error": "用户已停止执行"
+                })
+                break
             uat_logger.info(f"🎯 [CASE_STEP] 执行步骤 {i+1}/{len(execution_steps)}: {step.get('action', 'unknown')}")
             
             try:
@@ -9493,7 +9518,7 @@ def sync_extract_json_from_selected_element():
         return await automation.extract_json_from_selected_element()
     return worker.execute(run)
 
-def sync_execute_multiple_test_cases(case_ids: List[int], db):
+def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None):
     """同步执行多个测试用例（带执行锁，防止并发执行）"""
     # 🔥 增强: 首先检测浏览器状态，如果已断连则强制重置所有状态
     try:
@@ -9538,6 +9563,7 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db):
     uat_logger.info(f"🔒 [EXECUTION_LOCK] 成功获取执行锁，开始执行测试用例")
     
     try:
+        automation._external_stop_checker = should_stop
         async def run():
             return await automation.execute_multiple_test_cases(case_ids, db)
         return worker.execute(run)
@@ -9558,6 +9584,10 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db):
             "error": f"执行过程异常: {err_str}"
         }
     finally:
+        try:
+            automation._external_stop_checker = None
+        except Exception:
+            pass
         # 🔥 释放执行锁
         set_execution_in_progress(False)
         try:

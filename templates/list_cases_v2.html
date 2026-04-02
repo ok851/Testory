@@ -85,6 +85,20 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
         
+        .btn:disabled {
+            opacity: 1;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+            background: #e5e7eb !important;
+            color: #9ca3af !important;
+        }
+
+        .btn:disabled:hover {
+            transform: none;
+            box-shadow: none;
+        }
+        
         .btn-primary {
             background: #667eea;
             color: white;
@@ -424,6 +438,7 @@
             <div class="toolbar-left">
                 <button onclick="showCreateCaseModal()" class="btn btn-primary">+ 创建用例</button>
                 <button onclick="executeSelectedCases()" class="btn btn-success">▶ 执行选中的用例</button>
+                <button onclick="stopCaseRun()" class="btn btn-danger" id="stopCaseRunBtn" disabled>⏹ 停止运行</button>
             </div>
             <div class="toolbar-right">
                 <button onclick="selectAllCases()" class="btn btn-secondary btn-sm">全选</button>
@@ -655,6 +670,8 @@
         let caseNamesById = {};
         let allCasesList = [];
         let draggedOrderIndex = null;
+        let caseRunStatusTimer = null;
+        let localCaseExecutionRunning = false;
         
         function escapeHtml(text) {
             if (!text) return '';
@@ -1152,6 +1169,9 @@
                 runButton.disabled = true;
                 runButton.textContent = '执行中...';
             }
+            localCaseExecutionRunning = true;
+            const stopButton = document.getElementById('stopCaseRunBtn');
+            if (stopButton) stopButton.disabled = false;
             
             try {
                 // 如果只选择了一个测试用例，使用单个测试用例的API端点
@@ -1189,6 +1209,9 @@
                 const data = await response.json();
 
                 if (data.success) {
+                    if (data.stopped) {
+                        return;
+                    }
                     const results = data.results;
                     let content = `
                         <div style="margin-bottom: 20px;">
@@ -1241,6 +1264,7 @@
                     runButton.disabled = false;
                     runButton.textContent = '▶ 执行选中的用例';
                 }
+                localCaseExecutionRunning = false;
             }
         }
         
@@ -1248,12 +1272,15 @@
         async function runTestCase(caseId) {
             // 显示加载状态，防止重复点击
             const runButtons = document.querySelectorAll('button.btn-success.btn-sm');
+            const stopButton = document.getElementById('stopCaseRunBtn');
+            localCaseExecutionRunning = true;
             runButtons.forEach(btn => {
                 if (btn.onclick && btn.onclick.toString().includes(`runTestCase(${caseId})`)) {
                     btn.disabled = true;
                     btn.textContent = '执行中...';
                 }
             });
+            if (stopButton) stopButton.disabled = false;
             
             try {
                 // 设置请求超时时间为10分钟
@@ -1295,6 +1322,10 @@
                         </div>
                     `, false);
                 } else {
+                    const stopped = data.stopped || ((data.error || '').includes('用户已停止执行'));
+                    if (stopped) {
+                        return;
+                    }
                     showRunResultModal(`
                         <div style="padding: 20px; color: red;">
                             <h4>执行失败</h4>
@@ -1304,6 +1335,10 @@
                 }
             } catch (error) {
                 console.error('执行测试用例时发生错误:', error);
+                const msg = String(error && error.message ? error.message : '');
+                if (msg.includes('用户已停止执行')) {
+                    return;
+                }
                 if (error.name === 'AbortError') {
                     showRunResultModal(`
                         <div style="padding: 20px; color: red;">
@@ -1327,6 +1362,38 @@
                         btn.textContent = '运行';
                     }
                 });
+                localCaseExecutionRunning = false;
+                if (stopButton) stopButton.disabled = true;
+            }
+        }
+
+        async function stopCaseRun() {
+            const stopBtn = document.getElementById('stopCaseRunBtn');
+            if (stopBtn) stopBtn.disabled = true;
+            try {
+                const resp = await fetch('/api/cases/current-run/stop', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${resp.status}`);
+                }
+                localCaseExecutionRunning = false;
+                // 手动停止不弹任何提示弹窗，避免干扰批量执行场景
+            } catch (error) {
+                console.warn('停止运行失败:', error.message);
+            }
+        }
+
+        async function syncCaseRunButtonState() {
+            try {
+                const resp = await fetch('/api/cases/current-run/status');
+                const data = await resp.json();
+                const stopBtn = document.getElementById('stopCaseRunBtn');
+                if (!stopBtn) return;
+                const backendActive = !!(resp.ok && data.success && data.active);
+                stopBtn.disabled = !(backendActive || localCaseExecutionRunning);
+            } catch (_) {
+                const stopBtn = document.getElementById('stopCaseRunBtn');
+                if (stopBtn) stopBtn.disabled = !localCaseExecutionRunning;
             }
         }
         
@@ -1555,6 +1622,8 @@
         document.addEventListener('DOMContentLoaded', async function() {
             await loadProjectInfo();
             loadTestCases();
+            await syncCaseRunButtonState();
+            caseRunStatusTimer = setInterval(syncCaseRunButtonState, 1000);
         });
     </script>
 </body>
