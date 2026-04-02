@@ -1,8 +1,9 @@
-version: '3.8'
 
 services:
   uat-platform:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: uat-platform
     ports:
       - "5000:5000"
@@ -17,6 +18,7 @@ services:
       - ./license.key:/app/license.key:ro
     environment:
       - FLASK_ENV=production
+      - FLASK_DEBUG=0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - DATABASE_PATH=/app/data/test_cases.db
     restart: unless-stopped

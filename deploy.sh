@@ -22,6 +22,20 @@ echo_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+COMPOSE_CMD=()
+
+# 兼容 docker-compose 与 docker compose（某些服务器只有 docker compose 插件）
+init_compose_cmd() {
+    if command -v docker-compose &> /dev/null; then
+        COMPOSE_CMD=(docker-compose)
+    elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
+        COMPOSE_CMD=(docker compose)
+    else
+        echo_error "Docker Compose 未安装，请先安装 docker-compose 或 Docker Compose 插件"
+        exit 1
+    fi
+}
+
 # 检查依赖
 check_dependencies() {
     echo_info "检查依赖..."
@@ -31,10 +45,7 @@ check_dependencies() {
         exit 1
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
-        echo_error "Docker Compose 未安装，请先安装 Docker Compose"
-        exit 1
-    fi
+    init_compose_cmd
     
     echo_info "依赖检查通过"
 }
@@ -58,13 +69,28 @@ generate_config() {
     echo_info "生成配置文件..."
     
     # 生成随机密钥
-    SECRET_KEY=$(openssl rand -hex 32)
+    if command -v openssl &> /dev/null; then
+        SECRET_KEY=$(openssl rand -hex 32)
+        DB_PASSWORD=$(openssl rand -base64 32)
+    else
+        # 部分精简系统可能没有 openssl，这里用 python 兜底生成
+        SECRET_KEY=$(python - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+)
+        DB_PASSWORD=$(python - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+)
+    fi
     
     # 创建环境变量文件
     cat > .env << EOF
 # UAT Platform 环境配置
 SECRET_KEY=${SECRET_KEY}
-DB_PASSWORD=$(openssl rand -base64 32)
+DB_PASSWORD=${DB_PASSWORD}
 FLASK_ENV=production
 EOF
     
@@ -75,7 +101,7 @@ EOF
 build_image() {
     echo_info "构建 Docker 镜像..."
     
-    docker-compose build
+    "${COMPOSE_CMD[@]}" build
     
     echo_info "镜像构建完成"
 }
@@ -84,17 +110,27 @@ build_image() {
 start_services() {
     echo_info "启动服务..."
     
-    docker-compose up -d
+    "${COMPOSE_CMD[@]}" up -d
     
     echo_info "服务启动完成"
     echo_info "等待服务初始化..."
     sleep 5
     
     # 检查健康状态
-    if curl -f http://localhost:5000/api/health &> /dev/null; then
-        echo_info "服务运行正常"
+    if command -v curl &> /dev/null; then
+        if curl -f http://localhost:5000/api/health &> /dev/null; then
+            echo_info "服务运行正常"
+        else
+            echo_warn "服务可能还在启动中，请稍后检查"
+        fi
+    elif command -v wget &> /dev/null; then
+        if wget -qO- http://localhost:5000/api/health &> /dev/null; then
+            echo_info "服务运行正常"
+        else
+            echo_warn "服务可能还在启动中，请稍后检查"
+        fi
     else
-        echo_warn "服务可能还在启动中，请稍后检查"
+        echo_warn "宿主机没有 curl/wget，跳过健康检查"
     fi
 }
 
@@ -133,7 +169,6 @@ main() {
     echo "========================================"
     echo ""
     
-    check_dependencies
     create_directories
     generate_config
     build_image
@@ -142,22 +177,23 @@ main() {
 }
 
 # 处理命令行参数
+check_dependencies
 case "${1:-}" in
     "stop")
         echo_info "停止服务..."
-        docker-compose down
+        "${COMPOSE_CMD[@]}" down
         ;;
     "restart")
         echo_info "重启服务..."
-        docker-compose restart
+        "${COMPOSE_CMD[@]}" restart
         ;;
     "logs")
-        docker-compose logs -f
+        "${COMPOSE_CMD[@]}" logs -f
         ;;
     "update")
         echo_info "更新服务..."
-        docker-compose pull
-        docker-compose up -d
+        "${COMPOSE_CMD[@]}" pull
+        "${COMPOSE_CMD[@]}" up -d
         ;;
     *)
         main

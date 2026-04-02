@@ -7,12 +7,11 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     unzip \
     fonts-liberation \
+    ca-certificates \
     libappindicator3-1 \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -59,18 +58,26 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 安装Playwright浏览器
 RUN playwright install chromium
-RUN playwright install-deps chromium
+# 注意：不要使用 `playwright install-deps chromium`，因为某些精简镜像/包源会导致
+# 依赖包缺失（例如 ttf-unifont 无 installation candidate）从而构建失败。
 
 # 复制应用代码
 COPY . .
 
 # 创建必要的目录
-RUN mkdir -p logs screenshots videos exports har screenshots
+RUN mkdir -p \
+    /app/data \
+    /app/logs \
+    /app/screenshots \
+    /app/videos \
+    /app/exports
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
+ENV FLASK_RUN_HOST=0.0.0.0
+ENV FLASK_RUN_PORT=5000
 
 # 暴露端口
 EXPOSE 5000
@@ -80,6 +87,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5000/api/health || exit 1
 
 # 启动命令
-CMD ["python", "app.py"]
-
-RUN mkdir -p /data
+CMD ["flask", "run", "--host=0.0.0.0", "--port=5000"]
