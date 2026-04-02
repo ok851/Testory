@@ -2591,10 +2591,12 @@ def get_run_history():
         case_id = request.args.get('case_id', type=int)
         project_id = request.args.get('project_id', type=int)
         search_text = request.args.get('search_text', type=str)
+        raw_status = request.args.get('status', type=str) or ''
+        status_filter = raw_status if raw_status in ('passed', 'failed') else None
         
         db = Database()
-        history = db.get_all_run_history(page, page_size, case_id, search_text, project_id)
-        total = db.get_run_history_count(case_id, search_text, project_id)
+        history = db.get_all_run_history(page, page_size, case_id, search_text, project_id, status_filter=status_filter)
+        total = db.get_run_history_count(case_id, search_text, project_id, status_filter=status_filter)
         
         return jsonify({
             'success': True,
@@ -3294,9 +3296,9 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                         elif action == 'scroll':
                             sync_scroll_page('down', 500, iframe_selector=iframe_sel)
                     except Exception as e:
-                        step_status = 'fail'
+                        step_status = 'failed'
                         step_error = str(e)
-                        status = 'fail'
+                        status = 'failed'
                         error_msg = f"行{row_index} 步骤{step_idx+1}({step.get('action','')}) 失败: {e}"
 
                     step_results_list.append({
@@ -3308,10 +3310,10 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                         'error': step_error,
                         'duration': round(_time.time() - step_start, 3)
                     })
-                    if status == 'fail':
+                    if status == 'failed':
                         break
             except Exception as e:
-                status = 'fail'
+                status = 'failed'
                 error_msg = str(e)
 
             duration = round(_time.time() - start_time, 3)

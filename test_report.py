@@ -65,7 +65,7 @@ class TestReportGenerator:
             SELECT COUNT(*) 
             FROM run_history rh 
             LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-            WHERE (rh.status = 'failed' OR rh.status = 'error') AND {where_clause}
+            WHERE (rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail') AND {where_clause}
         """, params)
         failed_runs = cursor.fetchone()[0]
         
@@ -74,7 +74,7 @@ class TestReportGenerator:
             SELECT COUNT(*) 
             FROM run_history rh 
             LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-            WHERE rh.status NOT IN ('passed', 'failed', 'success', 'error') AND {where_clause}
+            WHERE rh.status NOT IN ('passed', 'failed', 'success', 'error', 'fail') AND {where_clause}
         """, params)
         other_runs = cursor.fetchone()[0]
         
@@ -278,7 +278,7 @@ class TestReportGenerator:
                 DATE(rh.created_at) as date,
                 COUNT(*) as total,
                 SUM(CASE WHEN rh.status = 'passed' OR rh.status = 'success' THEN 1 ELSE 0 END) as passed,
-                SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' THEN 1 ELSE 0 END) as failed
+                SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail' THEN 1 ELSE 0 END) as failed
             FROM run_history rh 
             LEFT JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE {where_clause}
@@ -336,7 +336,7 @@ class TestReportGenerator:
                 tc.name as case_name,
                 COUNT(rh.id) as total_runs,
                 SUM(CASE WHEN rh.status = 'passed' OR rh.status = 'success' THEN 1 ELSE 0 END) as passed_runs,
-                SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' THEN 1 ELSE 0 END) as failed_runs,
+                SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail' THEN 1 ELSE 0 END) as failed_runs,
                 AVG(rh.duration) as avg_duration,
                 MAX(rh.created_at) as last_run_time
             FROM test_cases tc
@@ -404,7 +404,7 @@ class TestReportGenerator:
                 COUNT(DISTINCT tc.id) as total_cases,
                 COUNT(rh.id) as total_runs,
                 SUM(CASE WHEN rh.status = 'passed' OR rh.status = 'success' THEN 1 ELSE 0 END) as passed_runs,
-                SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' THEN 1 ELSE 0 END) as failed_runs,
+                SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail' THEN 1 ELSE 0 END) as failed_runs,
                 AVG(rh.duration) as avg_duration
             FROM projects p
             LEFT JOIN test_cases tc ON p.id = tc.project_id

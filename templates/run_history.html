@@ -539,8 +539,11 @@
         if (searchText && searchText.trim()) {
             apiUrl += `&search_text=${encodeURIComponent(searchText.trim())}`;
         }
+        if (statusFilterValue) {
+            apiUrl += `&status=${encodeURIComponent(statusFilterValue)}`;
+        }
         
-        // 发送分页参数到后端
+        // 发送分页参数到后端（状态筛选在服务端与分页一致，避免整表仅当前页过滤）
         fetch(apiUrl)
             .then(response => {
                 if (!response.ok) {
@@ -552,15 +555,6 @@
                 if (data && data.success) {
                     let history = data.history || [];
                     const total = data.total || 0;
-                    
-                    // 应用状态过滤器
-                    if (statusFilterValue) {
-                        if (statusFilterValue === 'passed') {
-                            history = history.filter(item => item.status === 'passed' || item.status === 'success');
-                        } else if (statusFilterValue === 'failed') {
-                            history = history.filter(item => item.status === 'failed' || item.status === 'error');
-                        }
-                    }
                     
                     // 更新总页数
                     totalPages = Math.ceil(total / pageSize) || 1;
@@ -627,8 +621,9 @@
         `;
         
         history.forEach(item => {
-            const statusClass = item.status === 'passed' || item.status === 'success' ? 'status-passed' : 'status-failed';
-            const statusText = item.status === 'passed' || item.status === 'success' ? '通过' : '失败';
+            const st = item.status || '';
+            const statusClass = (st === 'passed' || st === 'success') ? 'status-passed' : 'status-failed';
+            const statusText = (st === 'passed' || st === 'success') ? '通过' : '失败';
             const rawOut = item.extracted_text != null && item.extracted_text !== '' ? String(item.extracted_text) : '';
             const rawErr = item.error != null && item.error !== '' ? String(item.error) : '';
             const outputPreview = rawOut ? (rawOut.length > 100 ? rawOut.substring(0, 100) + '...' : rawOut) : '-';

@@ -6,9 +6,12 @@ from playwright.async_api import async_playwright
 from typing import List, Dict, Any, Optional
 import json
 import time
+import sys
+import os
 from logger import uat_logger
-import ctypes  # 用于调用Windows API获取真实屏幕尺寸
 import threading
+if sys.platform == 'win32':
+    import ctypes  # 仅 Windows：获取屏幕尺寸（Linux 无 ctypes.windll）
 import re
 
 # 🔥 导入增强型定位器模块
@@ -402,21 +405,26 @@ class PlaywrightAutomation:
                 # 2. 使用Windows API直接获取真实的屏幕尺寸(不依赖浏览器)
                 self.playwright = await async_playwright().start()
                 
-                # 调用Windows API获取真实屏幕尺寸
-                user32 = ctypes.windll.user32
-                # 获取主显示器的屏幕尺寸
-                screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
-                screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
-                
-                # 获取可用工作区尺寸(减去任务栏等)
-                avail_width = user32.GetSystemMetrics(78)  # SM_CXAVAILABLE
-                avail_height = user32.GetSystemMetrics(79)  # SM_CYAVAILABLE
-                
-                screen_size = {"width": screen_width, "height": screen_height}
-                avail_screen_size = {"width": avail_width, "height": avail_height}
-                
-                uat_logger.info(f"Windows API获取的屏幕尺寸: {screen_size['width']}x{screen_size['height']}")
-                uat_logger.info(f"Windows API获取的可用工作区尺寸: {avail_screen_size['width']}x{avail_screen_size['height']}")
+                if sys.platform == 'win32':
+                    user32 = ctypes.windll.user32
+                    screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
+                    screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+                    avail_width = user32.GetSystemMetrics(78)  # SM_CXAVAILABLE
+                    avail_height = user32.GetSystemMetrics(79)  # SM_CYAVAILABLE
+                    screen_size = {"width": screen_width, "height": screen_height}
+                    avail_screen_size = {"width": avail_width, "height": avail_height}
+                    uat_logger.info(f"Windows API获取的屏幕尺寸: {screen_size['width']}x{screen_size['height']}")
+                    uat_logger.info(f"Windows API获取的可用工作区尺寸: {avail_screen_size['width']}x{avail_screen_size['height']}")
+                else:
+                    try:
+                        screen_width = int(os.environ.get("PLAYWRIGHT_SCREEN_WIDTH", "1920"))
+                        screen_height = int(os.environ.get("PLAYWRIGHT_SCREEN_HEIGHT", "1080"))
+                    except ValueError:
+                        screen_width, screen_height = 1920, 1080
+                    uat_logger.info(
+                        f"非 Windows 环境，跳过 Win32 屏幕检测；参考尺寸 {screen_width}x{screen_height} "
+                        f"(可通过环境变量 PLAYWRIGHT_SCREEN_WIDTH/HEIGHT 调整)"
+                    )
                 
                 # 2. 使用获取到的可用工作区尺寸启动真正的浏览器实例
                 # 使用可用工作区尺寸可以避免与任务栏等系统UI冲突
@@ -441,15 +449,15 @@ class PlaywrightAutomation:
                 # 创建新页面
                 self.page = await self.context.new_page()
                 
-                # 使用Windows API获取真实屏幕尺寸
-                user32 = ctypes.windll.user32
-                screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
-                screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
-                
-                # 设置浏览器窗口大小为真实屏幕尺寸
-                uat_logger.info(f"将浏览器窗口设置为真实屏幕尺寸: {screen_width}x{screen_height}")
-                await self.page.evaluate(f"window.resizeTo({screen_width}, {screen_height})")
-                await self.page.evaluate("window.moveTo(0, 0)")
+                if sys.platform == 'win32':
+                    user32 = ctypes.windll.user32
+                    screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
+                    screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+                    uat_logger.info(f"将浏览器窗口设置为真实屏幕尺寸: {screen_width}x{screen_height}")
+                    await self.page.evaluate(f"window.resizeTo({screen_width}, {screen_height})")
+                    await self.page.evaluate("window.moveTo(0, 0)")
+                else:
+                    uat_logger.info("非 Windows 环境，跳过 window.resizeTo/moveTo（服务器无 windll；已使用 no_viewport）")
                 
                 # 直接获取浏览器窗口的实际尺寸
                 viewport_size = await self.page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")

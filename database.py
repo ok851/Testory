@@ -166,6 +166,12 @@ class Database:
         except sqlite3.OperationalError:
             pass
 
+        # 数据驱动等场景曾写入 status='fail'，与报表/筛选使用的 'failed' 不一致，统一为 failed
+        try:
+            cursor.execute("UPDATE run_history SET status = 'failed' WHERE status = 'fail'")
+        except sqlite3.OperationalError:
+            pass
+
         # 创建步骤执行结果表（记录每个步骤的执行状态）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS step_results (
@@ -1283,67 +1289,73 @@ class Database:
         
         return history_id
     
-    def get_all_run_history(self, page: int = 1, page_size: int = 20, case_id: int = None, search_text: str = None, project_id: int = None) -> List[Dict[str, Any]]:
-        """获取所有运行历史记录（支持分页、按测试用例ID过滤、按项目ID过滤和搜索）"""
+    def get_all_run_history(self, page: int = 1, page_size: int = 20, case_id: int = None, search_text: str = None, project_id: int = None, status_filter: str = None) -> List[Dict[str, Any]]:
+        """获取所有运行历史记录（支持分页、按测试用例ID过滤、按项目ID过滤、搜索、执行状态过滤：passed/failed）"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         offset = (page - 1) * page_size
+        st_rh = ""
+        if status_filter == 'passed':
+            st_rh = " AND (rh.status IN ('passed', 'success'))"
+        elif status_filter == 'failed':
+            st_rh = " AND (rh.status IN ('failed', 'error', 'fail'))"
         
         if case_id:
             if search_text:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT rh.*, tc.name as case_name 
                     FROM run_history rh 
                     LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                    WHERE rh.case_id = ? AND tc.name LIKE ?
+                    WHERE rh.case_id = ? AND tc.name LIKE ?{st_rh}
                     ORDER BY rh.created_at DESC
                     LIMIT ? OFFSET ?
                 """, (case_id, f'%{search_text}%', page_size, offset))
             else:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT rh.*, tc.name as case_name 
                     FROM run_history rh 
                     LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                    WHERE rh.case_id = ?
+                    WHERE rh.case_id = ?{st_rh}
                     ORDER BY rh.created_at DESC
                     LIMIT ? OFFSET ?
                 """, (case_id, page_size, offset))
         else:
             if project_id:
                 if search_text:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT rh.*, tc.name as case_name 
                         FROM run_history rh 
                         LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ? AND tc.name LIKE ?
+                        WHERE tc.project_id = ? AND tc.name LIKE ?{st_rh}
                         ORDER BY rh.created_at DESC
                         LIMIT ? OFFSET ?
                     """, (project_id, f'%{search_text}%', page_size, offset))
                 else:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT rh.*, tc.name as case_name 
                         FROM run_history rh 
                         LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ?
+                        WHERE tc.project_id = ?{st_rh}
                         ORDER BY rh.created_at DESC
                         LIMIT ? OFFSET ?
                     """, (project_id, page_size, offset))
             else:
                 if search_text:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT rh.*, tc.name as case_name 
                         FROM run_history rh 
                         LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.name LIKE ?
+                        WHERE tc.name LIKE ?{st_rh}
                         ORDER BY rh.created_at DESC
                         LIMIT ? OFFSET ?
                     """, (f'%{search_text}%', page_size, offset))
                 else:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT rh.*, tc.name as case_name 
                         FROM run_history rh 
                         LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+                        WHERE 1=1{st_rh}
                         ORDER BY rh.created_at DESC
                         LIMIT ? OFFSET ?
                     """, (page_size, offset))
@@ -1369,47 +1381,59 @@ class Database:
         conn.close()
         return history
 
-    def get_run_history_count(self, case_id: int = None, search_text: str = None, project_id: int = None) -> int:
-        """获取运行历史记录总数（支持按测试用例ID过滤、按项目ID过滤和搜索）"""
+    def get_run_history_count(self, case_id: int = None, search_text: str = None, project_id: int = None, status_filter: str = None) -> int:
+        """获取运行历史记录总数（支持按测试用例ID过滤、按项目ID过滤、搜索和执行状态过滤）"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
+        st_rh = ""
+        st_plain = ""
+        if status_filter == 'passed':
+            st_rh = " AND (rh.status IN ('passed', 'success'))"
+            st_plain = " AND status IN ('passed', 'success')"
+        elif status_filter == 'failed':
+            st_rh = " AND (rh.status IN ('failed', 'error', 'fail'))"
+            st_plain = " AND status IN ('failed', 'error', 'fail')"
+        
         if case_id:
             if search_text:
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT COUNT(*) 
                     FROM run_history rh 
                     LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                    WHERE rh.case_id = ? AND tc.name LIKE ?
+                    WHERE rh.case_id = ? AND tc.name LIKE ?{st_rh}
                 """, (case_id, f'%{search_text}%'))
             else:
-                cursor.execute("SELECT COUNT(*) FROM run_history WHERE case_id = ?", (case_id,))
+                cursor.execute(f"SELECT COUNT(*) FROM run_history WHERE case_id = ?{st_plain}", (case_id,))
         else:
             if project_id:
                 if search_text:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT COUNT(*) 
                         FROM run_history rh 
                         LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ? AND tc.name LIKE ?
+                        WHERE tc.project_id = ? AND tc.name LIKE ?{st_rh}
                     """, (project_id, f'%{search_text}%'))
                 else:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT COUNT(*) 
                         FROM run_history rh 
                         LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ?
+                        WHERE tc.project_id = ?{st_rh}
                     """, (project_id,))
             else:
                 if search_text:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         SELECT COUNT(*) 
                         FROM run_history rh 
                         LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.name LIKE ?
+                        WHERE tc.name LIKE ?{st_rh}
                     """, (f'%{search_text}%',))
                 else:
-                    cursor.execute("SELECT COUNT(*) FROM run_history")
+                    if st_plain:
+                        cursor.execute(f"SELECT COUNT(*) FROM run_history WHERE 1=1{st_plain}")
+                    else:
+                        cursor.execute("SELECT COUNT(*) FROM run_history")
         count = cursor.fetchone()[0]
         
         conn.close()
