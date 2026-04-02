@@ -16,7 +16,11 @@ from logger import uat_logger
 from license_manager import license_manager, LicenseType
 import asyncio
 import threading
-from flask_migrate import Migrate
+# `flask_migrate` 只用于数据库迁移；某些部署环境可能未安装，需保证应用可正常启动。
+try:
+    from flask_migrate import Migrate  # type: ignore
+except ModuleNotFoundError:
+    Migrate = None
 
 # 数据驱动批量执行进度（内存态，按 run_id + 用户隔离；完成后首次拉取状态即清理）
 _dataset_run_jobs: dict = {}
