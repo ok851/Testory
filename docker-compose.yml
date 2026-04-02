@@ -4,7 +4,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: uat-platform
     ports:
       - "5000:5000"
     volumes:
@@ -32,7 +31,6 @@ services:
   # 可选：使用 Nginx 作为反向代理
   nginx:
     image: nginx:alpine
-    container_name: uat-platform-nginx
     ports:
       - "80:80"
       - "443:443"
@@ -48,7 +46,6 @@ services:
   # 可选：使用 PostgreSQL 替代 SQLite（企业版推荐）
   postgres:
     image: postgres:15-alpine
-    container_name: uat-platform-db
     environment:
       - POSTGRES_DB=uat_platform
       - POSTGRES_USER=uat_user
