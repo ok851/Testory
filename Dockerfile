@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     fonts-liberation \
     ca-certificates \
+    libgl1 \
     libappindicator3-1 \
     libasound2 \
     libatk-bridge2.0-0 \
