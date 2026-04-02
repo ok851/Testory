@@ -16,6 +16,7 @@ from logger import uat_logger
 from license_manager import license_manager, LicenseType
 import asyncio
 import threading
+from flask_migrate import Migrate
 
 # 数据驱动批量执行进度（内存态，按 run_id + 用户隔离；完成后首次拉取状态即清理）
 _dataset_run_jobs: dict = {}
