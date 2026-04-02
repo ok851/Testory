@@ -81,3 +81,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # 启动命令
 CMD ["python", "app.py"]
+
+RUN mkdir -p /data
