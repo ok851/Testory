@@ -1,10 +1,16 @@
 import sqlite3
+import os
 import json
 from datetime import datetime
 from typing import List, Dict, Any
 
 class Database:
     def __init__(self, db_path: str = "test_cases.db"):
+        # 部署（Docker/服务器）时可能通过环境变量指定持久化数据库路径
+        # 例如 docker-compose.yml 里的 DATABASE_PATH=/app/data/test_cases.db
+        env_db_path = os.environ.get("DATABASE_PATH")
+        if env_db_path and (db_path == "test_cases.db"):
+            db_path = env_db_path
         self.db_path = db_path
         self.init_db()
     
@@ -137,6 +143,13 @@ class Database:
         
         try:
             cursor.execute("ALTER TABLE test_steps ADD COLUMN iframe_selector TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # compare_type：用于断言/匹配策略（例如 equals/contains 等）
+        # 旧库可能没有该列，部署后添加步骤会直接写入 compare_type，因此必须迁移补齐。
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN compare_type TEXT DEFAULT 'equals'")
         except sqlite3.OperationalError:
             pass
         
