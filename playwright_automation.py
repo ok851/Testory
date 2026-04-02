@@ -327,6 +327,15 @@ class PlaywrightAutomation:
     async def start_browser(self, headless=False):
         """启动浏览器"""
         try:
+            # 服务器/容器环境通常没有 XServer，强制使用无头模式，避免浏览器页面直接关闭
+            # 可通过 PLAYWRIGHT_HEADLESS=0/1 覆盖默认行为（默认：非 win32 强制 headless=True）
+            if sys.platform != 'win32':
+                env_val = os.environ.get("PLAYWRIGHT_HEADLESS")
+                if env_val is None:
+                    headless = True
+                else:
+                    headless = env_val.strip().lower() in ("1", "true", "yes", "on")
+
             # 检查现有浏览器状态（必须同时检查连接有效性）
             browser_valid = False
             try:
@@ -431,7 +440,10 @@ class PlaywrightAutomation:
                 args = [
                     '--start-maximized',  # 真正的浏览器最大化
                     '--no-default-browser-check',
-                    '--no-first-run'
+                    '--no-first-run',
+                    # 容器环境常见问题：沙箱权限不足/共享内存不足导致页面直接关闭
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
                 ]
                 
                 self.browser = await self.playwright.chromium.launch(

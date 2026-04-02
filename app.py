@@ -16,6 +16,7 @@ from logger import uat_logger
 from license_manager import license_manager, LicenseType
 import asyncio
 import threading
+import datetime
 # `flask_migrate` 只用于数据库迁移；某些部署环境可能未安装，需保证应用可正常启动。
 try:
     from flask_migrate import Migrate  # type: ignore
