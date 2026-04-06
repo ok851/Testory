@@ -145,42 +145,6 @@
             background: #138496;
         }
         
-        /* 录制状态动画 */
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-                transform: scale(1);
-            }
-            50% {
-                opacity: 0.5;
-                transform: scale(0.95);
-            }
-        }
-        
-        #recordingStatus {
-            animation: pulse 2s infinite;
-        }
-        
-        /* 步骤预览卡片悬停效果 */
-        #recordedStepsList > div:hover {
-            transform: translateX(5px);
-            transition: all 0.3s ease;
-        }
-        
-        /* 录制按钮闪烁效果 */
-        @keyframes blink {
-            0%, 100% {
-                box-shadow: 0 0 10px rgba(40, 167, 69, 0.5);
-            }
-            50% {
-                box-shadow: 0 0 20px rgba(40, 167, 69, 0.8), 0 0 30px rgba(40, 167, 69, 0.6);
-            }
-        }
-        
-        #startRecordBtn:not(:disabled):hover {
-            animation: blink 1.5s infinite;
-        }
-        
         /* 浮动控制条动画 */
         @keyframes slideInRight {
             from {
@@ -550,8 +514,12 @@
                 <button onclick="showCreateStepModal()" class="btn btn-primary">+ 添加步骤</button>
                 <button onclick="runTestCase()" class="btn btn-success" id="runCaseBtn">▶ 运行用例</button>
                 <button onclick="stopRunCase()" class="btn btn-danger" id="stopRunCaseBtn" disabled>⏹ 停止执行</button>
-                <button onclick="showRecordingModal()" class="btn btn-info" id="recordBtn">
-                    🎬 开始录制
+                <a href="/recording-tutorial" target="_blank" rel="noopener" class="btn btn-secondary" id="recordTutorialBtn">📖 录制教程</a>
+                <button onclick="showCodegenImportModal()" class="btn btn-info" id="codegenImportBtn" type="button">
+                    📋 从 Codegen 导入
+                </button>
+                <button onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" type="button">
+                    🧪 从 Selenium IDE 导入
                 </button>
             </div>
             <div class="toolbar-right">
@@ -881,54 +849,56 @@
         </div>
     </div>
     
-    <!-- 步骤录制模态框 -->
-    <div id="recordingModal" class="modal">
-        <div class="modal-content" style="max-width: 960px; border-radius: 14px;">
+    <!-- Playwright Codegen：粘贴导入 -->
+    <div id="codegenImportModal" class="modal">
+        <div class="modal-content" style="max-width: 720px; border-radius: 14px;">
             <div class="modal-header">
-                <h3>录制步骤</h3>
+                <h3>从 Playwright Codegen 导入</h3>
             </div>
-            <div class="modal-body">
-                <div style="padding: 20px;">
-                    <!-- 录制控制区 -->
-                    <div id="recordingControls" style="display: flex; gap: 10px; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 10px; border: 1px solid #e9ecef;">
-                        <input type="text" id="recordingUrl" placeholder="可选：输入录制URL（默认自动使用用例URL/步骤URL）" 
-                               style="flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
-                        <button onclick="startRecording()" class="btn btn-success" id="startRecordBtn">
-                            ▶ 开始录制
-                        </button>
-                        <button onclick="stopRecording()" class="btn btn-danger" id="stopRecordBtn" style="display: none;">
-                            ⏹ 停止录制
-                        </button>
-                        <button onclick="closeRecordingModal()" class="btn btn-secondary">
-                            关闭
-                        </button>
-                    </div>
-                    <div id="recordingNotice" style="display:none; margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; font-size: 13px;"></div>
-                    
-                    <!-- 录制状态 -->
-                    <div id="recordingStatus" style="display: none; padding: 15px; background: #e7f3ff; border-radius: 8px; margin-bottom: 20px;">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <div class="loading-spinner" style="width: 20px; height: 20px; border: 3px solid #667eea; border-top-color: transparent;"></div>
-                            <span style="color: #667eea; font-weight: 500;">正在录制中，请在浏览器中操作...</span>
-                            <span id="recordingStepCount" style="margin-left: auto; color: #28a745; font-weight: 600;">已录制 0 步</span>
-                        </div>
-                    </div>
-                    
-                    <!-- 实时步骤预览 -->
-                    <div id="recordingPreview" style="border: 1px solid #e9ecef; border-radius: 8px; overflow: hidden;">
-                        <div style="background: #f8f9fa; padding: 15px; border-bottom: 1px solid #e9ecef;">
-                            <h4 style="margin: 0; color: #495057;">📋 实时步骤预览</h4>
-                        </div>
-                        <div id="recordedStepsList" style="max-height: 400px; overflow-y: auto; padding: 15px;">
-                            <div style="text-align: center; color: #6c757d; padding: 40px;">
-                                暂无录制步骤，点击上方"开始录制"按钮并在浏览器中操作
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <div class="modal-body" style="padding: 20px;">
+                <p style="font-size: 14px; color: #495057; margin-bottom: 12px; line-height: 1.5;">
+                    在本机终端执行 <code style="background:#f4f4f6;padding:2px 6px;border-radius:4px;">playwright codegen</code>，
+                    在 Codegen 窗口中复制生成的代码，粘贴到下方。
+                    <a href="/recording-tutorial" target="_blank" rel="noopener">1 分钟教程（新窗口）</a>
+                </p>
+                <label for="codegenPasteArea" style="display:block;font-weight:600;margin-bottom:8px;">Codegen 代码</label>
+                <textarea id="codegenPasteArea" rows="16" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font-family:monospace;font-size:12px;resize:vertical;box-sizing:border-box;" placeholder="例如：&#10;await page.goto('https://...')&#10;await page.get_by_role('button', name='登录').click()&#10;..."></textarea>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;">
+                    <input type="checkbox" id="codegenReplaceExisting" />
+                    <span>导入前清空本用例已有步骤</span>
+                </label>
+                <div id="codegenImportNotice" style="display:none;margin-top:12px;padding:10px 12px;border-radius:8px;font-size:13px;"></div>
             </div>
-            <div class="modal-footer" style="justify-content: flex-end;">
-                <small style="color:#6c757d;">停止录制后自动保存到当前用例</small>
+            <div class="modal-footer">
+                <button type="button" onclick="closeCodegenImportModal()" class="btn btn-secondary">取消</button>
+                <button type="button" onclick="submitCodegenImport()" class="btn btn-primary">导入步骤</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Selenium IDE：粘贴 .side 项目 JSON -->
+    <div id="seleniumIdeImportModal" class="modal">
+        <div class="modal-content" style="max-width: 720px; border-radius: 14px;">
+            <div class="modal-header">
+                <h3>从 Selenium IDE 导入（.side JSON）</h3>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <p style="font-size: 14px; color: #495057; margin-bottom: 12px; line-height: 1.5;">
+                    在浏览器安装 <strong>Selenium IDE</strong> 扩展，录制后在 IDE 中 <strong>保存项目</strong>，
+                    用记事本打开 <code>.side</code> 文件，<strong>全选复制</strong> JSON，粘贴到下方。
+                    <a href="/recording-tutorial" target="_blank" rel="noopener">详细步骤（录制教程）</a>
+                </p>
+                <label for="seleniumIdePasteArea" style="display:block;font-weight:600;margin-bottom:8px;">.side 文件全文（JSON）</label>
+                <textarea id="seleniumIdePasteArea" rows="14" style="width:100%;padding:12px;border:1px solid #ddd;border-radius:8px;font-family:monospace;font-size:11px;resize:vertical;box-sizing:border-box;" placeholder='{"id":"...","version":"2.0","name":"...","url":"https://", "tests":[{"commands":[...]}]}'></textarea>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer;">
+                    <input type="checkbox" id="seleniumIdeReplaceExisting" />
+                    <span>导入前清空本用例已有步骤</span>
+                </label>
+                <div id="seleniumIdeImportNotice" style="display:none;margin-top:12px;padding:10px 12px;border-radius:8px;font-size:13px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="closeSeleniumIdeImportModal()" class="btn btn-secondary">取消</button>
+                <button type="button" onclick="submitSeleniumIdeImport()" class="btn btn-primary">导入步骤</button>
             </div>
         </div>
     </div>
@@ -2935,8 +2905,13 @@ function changePage(page) {
         }
         
         document.addEventListener('DOMContentLoaded', async function() {
-            await loadCaseInfo();
-            loadSteps();
+            currentCaseId = getCaseIdFromSession();
+            if (!currentCaseId) {
+                alert('未找到用例信息，请先选择测试用例');
+                window.location.href = '/list_projects';
+                return;
+            }
+            await Promise.all([loadCaseInfo(), loadSteps()]);
             await syncRunCaseButtonState();
             runCaseButtonSyncTimer = setInterval(syncRunCaseButtonState, 1000);
         });
@@ -2953,15 +2928,19 @@ function changePage(page) {
             }
         }
         
-        // ==================== 步骤录制功能（V2） ====================
-        const recorderState = {
-            sessionId: null,
-            pollingTimer: null,
-            isRecording: false,
-        };
+        // ==================== Playwright Codegen：粘贴导入 ====================
+        function showCodegenImportModal() {
+            document.getElementById('codegenImportModal').style.display = 'flex';
+            const n = document.getElementById('codegenImportNotice');
+            if (n) { n.style.display = 'none'; n.textContent = ''; }
+        }
 
-        function setRecordingNotice(type, text) {
-            const el = document.getElementById('recordingNotice');
+        function closeCodegenImportModal() {
+            document.getElementById('codegenImportModal').style.display = 'none';
+        }
+
+        function setCodegenImportNotice(type, text) {
+            const el = document.getElementById('codegenImportNotice');
             if (!el) return;
             if (!text) {
                 el.style.display = 'none';
@@ -2981,255 +2960,108 @@ function changePage(page) {
             el.style.border = `1px solid ${style.border}`;
             el.textContent = text;
         }
-        
-        // 显示录制模态框
-        async function showRecordingModal() {
-            document.getElementById('recordingModal').style.display = 'flex';
-            await syncRecordingStatus();
-        }
-        
-        function resetRecorderUi() {
-            document.getElementById('startRecordBtn').style.display = 'inline-block';
-            document.getElementById('stopRecordBtn').style.display = 'none';
-            document.getElementById('recordingStatus').style.display = 'none';
-        }
 
-        function clearPolling() {
-            if (recorderState.pollingTimer) {
-                clearInterval(recorderState.pollingTimer);
-                recorderState.pollingTimer = null;
-            }
-        }
-
-        function resetRecordingPreview() {
-            const container = document.getElementById('recordedStepsList');
-            if (container) {
-                container.innerHTML = `
-                    <div style="text-align: center; color: #6c757d; padding: 40px;">
-                        暂无录制步骤，点击上方"开始录制"按钮并在浏览器中操作
-                    </div>
-                `;
-            }
-            const cnt = document.getElementById('recordingStepCount');
-            if (cnt) {
-                cnt.textContent = '已录制 0 步';
-            }
-        }
-
-        async function syncRecordingStatus() {
-            try {
-                const resp = await fetch('/api/recordings/status');
-                const data = await resp.json();
-                if (data.success && data.active) {
-                    recorderState.isRecording = true;
-                    recorderState.sessionId = data.session_id;
-                    document.getElementById('startRecordBtn').style.display = 'none';
-                    document.getElementById('stopRecordBtn').style.display = 'inline-block';
-                    document.getElementById('recordingStatus').style.display = 'block';
-                    document.getElementById('recordingStepCount').textContent = `已录制 ${data.total_steps || 0} 步`;
-                    if (!recorderState.pollingTimer) {
-                        recorderState.pollingTimer = setInterval(pollRecordingSteps, 1500);
-                    }
-                } else {
-                    recorderState.isRecording = false;
-                    recorderState.sessionId = null;
-                    clearPolling();
-                    resetRecorderUi();
-                }
-            } catch (_) {
-                // ignore status sync errors
-            }
-        }
-
-        // 关闭录制模态框
-        async function closeRecordingModal() {
-            if (recorderState.isRecording) {
-                const shouldStop = confirm('当前正在录制，关闭窗口将先停止录制。是否继续？');
-                if (!shouldStop) return;
-                await stopRecording();
-                if (recorderState.isRecording) {
-                    recorderState.isRecording = false;
-                    recorderState.sessionId = null;
-                    clearPolling();
-                    resetRecorderUi();
-                }
-            }
-            document.getElementById('recordingModal').style.display = 'none';
-        }
-        
-        // 开始录制
-        async function startRecording() {
-            const url = document.getElementById('recordingUrl').value.trim();
-            if (recorderState.isRecording) {
-                setRecordingNotice('warning', '已有录制会话在运行，请先停止后再开始。');
+        async function submitCodegenImport() {
+            const code = (document.getElementById('codegenPasteArea').value || '').trim();
+            const replace = document.getElementById('codegenReplaceExisting').checked;
+            if (!code) {
+                setCodegenImportNotice('warning', '请先粘贴 Codegen 生成的代码。');
                 return;
             }
-            resetRecordingPreview();
-            
+            setCodegenImportNotice('info', '正在解析并导入…');
             try {
-                // 禁用开始按钮
-                document.getElementById('startRecordBtn').disabled = true;
-                setRecordingNotice('info', '正在启动录制浏览器，请稍候...');
-                
-                const response = await fetch('/api/recordings/start', {
+                const response = await fetch(`/api/cases/${currentCaseId}/import-playwright-codegen`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        url: url,
-                        case_id: currentCaseId,
-                        project_id: currentProjectId
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code, replace_existing: replace })
                 });
-                
-                const data = await response.json();
-                
+                const data = await response.json().catch(function () { return {}; });
                 if (data.success) {
-                    clearPolling();
-                    recorderState.sessionId = data.session_id;
-                    recorderState.isRecording = true;
-                    
-                    // 更新 UI 状态
-                    document.getElementById('startRecordBtn').style.display = 'none';
-                    document.getElementById('stopRecordBtn').style.display = 'inline-block';
-                    document.getElementById('recordingStatus').style.display = 'block';
-                    
-                    // 定时获取录制的步骤
-                    recorderState.pollingTimer = setInterval(pollRecordingSteps, 1500);
-                    const startMsg = data.navigated_url
-                        ? `录制已开始，已导航到：${data.navigated_url}`
-                        : '录制已开始，请在打开的浏览器中操作。';
-                    setRecordingNotice('success', startMsg);
-                } else {
-                    throw new Error(data.error || '启动录制失败');
-                }
-            } catch (error) {
-                console.error('启动录制失败:', error);
-                setRecordingNotice('error', error.message || '启动录制失败，请稍后重试');
-            } finally {
-                document.getElementById('startRecordBtn').disabled = false;
-            }
-        }
-        
-        // 停止录制
-        async function stopRecording() {
-            try {
-                const response = await fetch('/api/recordings/stop', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        session_id: recorderState.sessionId
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    recorderState.isRecording = false;
-                    recorderState.sessionId = null;
-                    clearPolling();
-                    
-                    resetRecorderUi();
-                    
-                    if (data.total_steps > 0) {
-                        setRecordingNotice('success', `录制结束，已自动保存 ${data.saved_steps || data.total_steps} 个步骤。`);
-                        loadSteps();
-                    } else {
-                        setRecordingNotice('warning', '录制结束，但未捕获到有效步骤。');
+                    let msg = '成功导入 ' + data.imported + ' 个步骤。';
+                    if (data.warnings && data.warnings.length) {
+                        msg += ' 提示：' + data.warnings.slice(0, 5).join('；');
+                        if (data.warnings.length > 5) msg += '…';
                     }
+                    setCodegenImportNotice('success', msg);
+                    loadSteps();
                 } else {
-                    throw new Error(data.error || '停止录制失败');
+                    setCodegenImportNotice('error', data.error || '导入失败');
                 }
-            } catch (error) {
-                console.error('停止录制失败:', error);
-                recorderState.isRecording = false;
-                recorderState.sessionId = null;
-                clearPolling();
-                resetRecorderUi();
-                setRecordingNotice('warning', '录制会话已强制结束，请重新开始录制。');
+            } catch (e) {
+                setCodegenImportNotice('error', '网络错误，请稍后重试');
             }
         }
-        
-        // 轮询获取录制步骤
-        async function pollRecordingSteps() {
-            if (!recorderState.sessionId || !recorderState.isRecording) {
-                return;
-            }
-            
-            try {
-                const response = await fetch(`/api/recordings/steps?session_id=${recorderState.sessionId}`);
-                const data = await response.json();
-                
-                if (data.success && data.active !== false) {
-                    updateRecordingPreview(data.steps);
-                    document.getElementById('recordingStepCount').textContent = `已录制 ${data.total_steps} 步`;
-                } else {
-                    recorderState.isRecording = false;
-                    recorderState.sessionId = null;
-                    clearPolling();
-                    resetRecorderUi();
-                    setRecordingNotice('info', '录制会话已结束。');
-                }
-            } catch (error) {
-                console.error('获取录制步骤失败:', error);
-            }
-        }
-        
-        // 更新录制预览
-        function updateRecordingPreview(steps) {
-            const container = document.getElementById('recordedStepsList');
-            
-            if (steps.length === 0) {
-                container.innerHTML = `
-                    <div style="text-align: center; color: #6c757d; padding: 40px;">
-                        暂无录制步骤，点击上方"开始录制"按钮并在浏览器中操作
-                    </div>
-                `;
-                return;
-            }
-            
-            let html = '';
-            steps.forEach((step, index) => {
-                // 兼容新旧两种录制格式
-                const stepType = step.operation_type || step.action || 'click';
-                const locatorValue = step.operation_locator || step.selector_value || '';
-                const inputVal = (step.operation_value !== undefined && step.operation_value !== null)
-                    ? step.operation_value
-                    : (step.input_value || '');
 
-                const icon = stepType === 'click' ? '👆' :
-                            stepType === 'input' ? '✍️' :
-                            stepType === 'hover' ? '👋' :
-                            stepType === 'keypress' ? '⌨️' :
-                            stepType === 'select' ? '🔽' :
-                            stepType === 'navigate' ? '🔗' :
-                            stepType === 'scroll' ? '📜' :
-                            stepType === 'double_click' ? '👆👆' :
-                            stepType === 'right_click' ? '🖱️' : '📋';
-                
-                html += `
-                    <div style="padding: 12px; margin: 8px 0; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #667eea;">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <span style="font-size: 18px;">${icon}</span>
-                            <strong style="color: #495057;">步骤 ${index + 1}:</strong>
-                            <span style="color: #6c757d; font-size: 12px;">${step.description}</span>
-                        </div>
-                        <div style="margin-top: 8px; font-size: 12px; color: #6c757d;">
-                            <strong>定位器:</strong> ${locatorValue}
-                            ${inputVal ? `<br><strong>${stepType === 'keypress' ? '按键' : '值'}:</strong> ${inputVal}` : ''}
-                        </div>
-                    </div>
-                `;
-            });
-            
-            container.innerHTML = html;
-            container.scrollTop = container.scrollHeight;
+        // ==================== Selenium IDE：粘贴 .side JSON ====================
+        function showSeleniumIdeImportModal() {
+            document.getElementById('seleniumIdeImportModal').style.display = 'flex';
+            var n = document.getElementById('seleniumIdeImportNotice');
+            if (n) { n.style.display = 'none'; n.textContent = ''; }
         }
-        
-        // V3：停止后自动保存，移除手动保存/放弃入口
+
+        function closeSeleniumIdeImportModal() {
+            document.getElementById('seleniumIdeImportModal').style.display = 'none';
+        }
+
+        function setSeleniumIdeImportNotice(type, text) {
+            var el = document.getElementById('seleniumIdeImportNotice');
+            if (!el) return;
+            if (!text) {
+                el.style.display = 'none';
+                el.textContent = '';
+                return;
+            }
+            var map = {
+                info: { bg: '#e7f3ff', color: '#155724', border: '#b8daff' },
+                success: { bg: '#e8f8ee', color: '#155724', border: '#c3e6cb' },
+                warning: { bg: '#fff3cd', color: '#856404', border: '#ffeeba' },
+                error: { bg: '#f8d7da', color: '#721c24', border: '#f5c6cb' }
+            };
+            var style = map[type] || map.info;
+            el.style.display = 'block';
+            el.style.background = style.bg;
+            el.style.color = style.color;
+            el.style.border = '1px solid ' + style.border;
+            el.textContent = text;
+        }
+
+        async function submitSeleniumIdeImport() {
+            var raw = (document.getElementById('seleniumIdePasteArea').value || '').trim();
+            var replace = document.getElementById('seleniumIdeReplaceExisting').checked;
+            if (!raw) {
+                setSeleniumIdeImportNotice('warning', '请粘贴 .side 文件的完整 JSON。');
+                return;
+            }
+            setSeleniumIdeImportNotice('info', '正在解析并导入…');
+            var payload;
+            try {
+                payload = JSON.parse(raw);
+            } catch (e) {
+                setSeleniumIdeImportNotice('error', 'JSON 格式无效，请确认复制的是 .side 全文。');
+                return;
+            }
+            try {
+                var response = await fetch('/api/cases/' + currentCaseId + '/import-selenium-ide', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ json: payload, replace_existing: replace })
+                });
+                var data = await response.json().catch(function () { return {}; });
+                if (data.success) {
+                    var msg = '成功导入 ' + data.imported + ' 个步骤。';
+                    if (data.warnings && data.warnings.length) {
+                        msg += ' 提示：' + data.warnings.slice(0, 6).join('；');
+                        if (data.warnings.length > 6) msg += '…';
+                    }
+                    setSeleniumIdeImportNotice('success', msg);
+                    loadSteps();
+                } else {
+                    setSeleniumIdeImportNotice('error', data.error || '导入失败');
+                }
+            } catch (e2) {
+                setSeleniumIdeImportNotice('error', '网络错误，请稍后重试');
+            }
+        }
     </script>
 </body>
 </html>

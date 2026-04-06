@@ -1620,8 +1620,13 @@
         }
         
         document.addEventListener('DOMContentLoaded', async function() {
-            await loadProjectInfo();
-            loadTestCases();
+            currentProjectId = getProjectIdFromUrl();
+            if (!currentProjectId) {
+                alert('未找到项目信息，请先选择项目');
+                window.location.href = '/list_projects';
+                return;
+            }
+            await Promise.all([loadProjectInfo(), loadTestCases()]);
             await syncCaseRunButtonState();
             caseRunStatusTimer = setInterval(syncCaseRunButtonState, 1000);
         });

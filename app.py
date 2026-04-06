@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for, Response
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,8 +8,9 @@ import secrets
 import json
 import functools
 from database import Database
-from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_start_recording, sync_stop_recording, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe, sync_wait_for_page_stable, force_reset_execution_state
-from step_recorder import create_recorder, get_recorder, remove_recorder
+from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe, sync_wait_for_page_stable, force_reset_execution_state
+from playwright_codegen_import import parse_playwright_codegen_to_steps
+from selenium_ide_import import parse_selenium_ide_to_steps
 from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 from logger import uat_logger
@@ -656,72 +657,6 @@ def api_delete_test_case(case_id):
         return jsonify({'success': True})
     else:
         return jsonify({'success': False, 'error': '删除测试用例失败'}), 400
-
-# API: 启动浏览器进行录制
-@app.route('/api/start_recording', methods=['POST'])
-@login_required
-@role_required('admin', 'tester')
-@api_error_handler
-@log_api_request
-def api_start_recording():
-    data = request.get_json(silent=True) or {}
-    url = data.get('url', '')
-    
-    try:
-        # 启动浏览器
-        uat_logger.info("启动浏览器用于录制")
-        sync_start_browser(headless=False)
-        
-        # 开始录制 - 使用同步函数确保浏览器完全初始化
-        sync_start_recording()
-        
-        # 如果提供了URL，导航到该URL并保存到会话中
-        if url:
-            uat_logger.log_automation_step("navigate", url, "录制开始时导航")
-            sync_navigate_to(url)
-            # 保存URL到会话中，以便后续使用
-            try:
-                session['current_url'] = url
-            except Exception:
-                # 如果session不可用，忽略错误
-                pass
-        
-        response_data = {'success': True, 'message': '浏览器已启动，开始录制'}
-        return jsonify(response_data)
-    except Exception as e:
-        uat_logger.error(f"启动录制失败: {str(e)}")
-        # 尝试关闭浏览器，清理资源
-        try:
-            sync_close_browser()
-        except Exception:
-            pass
-        return jsonify({'success': False, 'error': f'录制启动失败: {str(e)}'}), 500
-
-# API: 停止录制并保存步骤
-@app.route('/api/stop_recording', methods=['POST'])
-@login_required
-@role_required('admin', 'tester')
-@api_error_handler
-@log_api_request
-def api_stop_recording():
-    # 获取录制的步骤
-    steps = sync_stop_recording()
-    uat_logger.info(f"停止录制，获取到 {len(steps)} 个步骤")
-    
-    # 尝试关闭浏览器，但不影响结果返回
-    warning_msg = None
-    try:
-        sync_close_browser()
-        uat_logger.info("浏览器已关闭")
-    except Exception as close_error:
-        warning_msg = f'录制成功但关闭浏览器时出现问题: {str(close_error)}'
-        uat_logger.warning(warning_msg)
-    
-    response_data = {'success': True, 'steps': steps}
-    if warning_msg:
-        response_data['warning'] = warning_msg
-        
-    return jsonify(response_data)
 
 # API: 执行多个测试用例
 @app.route('/api/execute_multiple_cases', methods=['POST'])
@@ -1483,8 +1418,7 @@ def api_get_case_steps(case_id):
     page = max(1, page)
     page_size = max(1, min(page_size, 100))  # 限制最大页面大小为100
     
-    steps = db.get_case_steps(case_id, page, page_size)
-    total = db.get_case_steps_count(case_id)
+    steps, total = db.get_case_steps_paginated(case_id, page, page_size)
     
     return jsonify({
         'steps': steps,
@@ -1595,306 +1529,98 @@ def api_update_step_order(case_id):
     else:
         return jsonify({'success': False, 'error': '更新步骤顺序失败'}), 400
 
-# ==================== 步骤录制相关 API ====================
-_active_recording_sessions = {}
-_recording_loop = None
-_recording_loop_thread = None
+# ==================== Playwright Codegen 录制：粘贴导入 ====================
 
 
-def _recording_loop_worker(loop: asyncio.AbstractEventLoop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
+@app.route('/recording-tutorial')
+@login_required
+def recording_tutorial_page():
+    """Playwright Codegen 与 Selenium IDE（.side）粘贴导入说明。"""
+    return render_template('recording_tutorial.html')
 
 
-def _ensure_recording_loop() -> asyncio.AbstractEventLoop:
-    global _recording_loop, _recording_loop_thread
-    if _recording_loop and _recording_loop.is_running():
-        return _recording_loop
-
-    # Playwright 必须通过 asyncio 拉起浏览器子进程。Python 3.11+ 在 Windows 上若强制
-    # WindowsSelectorEventLoopPolicy，SelectorEventLoop 对 subprocess 支持不完整，会抛
-    # NotImplementedError，导致 /api/recordings/start 直接 500。此处使用进程默认策略
-    #（一般为 Proactor），仅在独立线程的 loop 上运行，不影响 Flask 主线程。
-    _recording_loop = asyncio.new_event_loop()
-    _recording_loop_thread = threading.Thread(
-        target=_recording_loop_worker,
-        args=(_recording_loop,),
-        name="step-recorder-loop",
-        daemon=True
-    )
-    _recording_loop_thread.start()
-    return _recording_loop
-
-
-def _run_in_recording_loop(coro, timeout: float = 10):
-    loop = _ensure_recording_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=timeout)
-
-# API: 开始录制步骤（智能录制器）
-@app.route('/api/steps/recording/start', methods=['POST'])
+@app.route('/api/cases/<int:case_id>/import-playwright-codegen', methods=['POST'])
 @login_required
 @api_error_handler
 @log_api_request
-def api_start_smart_recording():
-    """开始录制测试步骤（智能录制器）"""
+def api_import_playwright_codegen(case_id):
     data = request.get_json(silent=True) or {}
-    url = data.get('url')
-    case_id = data.get('case_id')
-    project_id = data.get('project_id')
+    code = (data.get('code') or '').strip()
+    replace_existing = bool(data.get('replace_existing'))
+    if not code:
+        return jsonify({'success': False, 'error': '请粘贴 Playwright Codegen 生成的代码'}), 400
 
-    nav_url, nav_source = _resolve_case_navigation_url(case_id=case_id, fallback_url=url)
-    if not nav_url:
+    case = db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+
+    _db = Database()
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+
+    steps, warnings = parse_playwright_codegen_to_steps(code)
+    if not steps:
         return jsonify({
             'success': False,
-            'error': '启动录制失败：未找到可用URL，请先配置用例URL或新增导航步骤(URL)'
+            'error': '未能解析出有效步骤，请确认粘贴的是 Codegen 窗口中的 Python 或 JS 片段（含 page.goto / click / fill 等）',
+            'warnings': warnings,
         }), 400
-    url = nav_url
-    
-    # 生成会话 ID
-    session_id = f"recording_{current_user.id}_{int(time.time())}"
 
-    def _stop_and_cleanup_session(session_to_stop: str):
-        if not session_to_stop:
-            return
-        recorder_to_stop = get_recorder(session_to_stop)
-        if recorder_to_stop:
-            try:
-                _run_in_recording_loop(recorder_to_stop.stop(), timeout=4)
-            except Exception as stop_e:
-                uat_logger.warning(f"清理录制会话失败(session={session_to_stop}): {stop_e}")
-        remove_recorder(session_to_stop)
+    if replace_existing:
+        db.delete_case_steps(case_id)
 
-    # 同一用户只允许一个活跃录制会话：启动新会话前先清理旧会话
-    old_session_id = _active_recording_sessions.get(current_user.id)
-    if old_session_id:
-        _stop_and_cleanup_session(old_session_id)
-        _active_recording_sessions.pop(current_user.id, None)
-    
-    # 创建录制器
-    recorder = create_recorder(session_id)
-    recorder.set_case_info(case_id, project_id)
-    
-    # 启动浏览器（后台常驻事件循环，保证前台事件持续被捕捉）
-    try:
-        _run_in_recording_loop(recorder.start(url, headless=False), timeout=30)
-    except Exception as e:
-        remove_recorder(session_id)
-        return jsonify({'success': False, 'error': f'启动录制失败：{str(e)}'}), 500
+    if not db.batch_insert_steps(case_id, steps):
+        return jsonify({'success': False, 'error': '写入步骤失败'}), 500
 
-    _active_recording_sessions[current_user.id] = session_id
-    
-    return jsonify({
-        'success': True,
-        'session_id': session_id,
-        'navigated_url': url,
-        'url_source': nav_source or 'unknown',
-        'message': '录制已开始，请在浏览器中操作'
-    })
+    return jsonify({'success': True, 'imported': len(steps), 'warnings': warnings})
 
-# API: 停止录制步骤（智能录制器）
-@app.route('/api/steps/recording/stop', methods=['POST'])
+
+@app.route('/api/cases/<int:case_id>/import-selenium-ide', methods=['POST'])
 @login_required
 @api_error_handler
 @log_api_request
-def api_stop_smart_recording():
-    """停止录制测试步骤（智能录制器）"""
+def api_import_selenium_ide(case_id):
+    """粘贴 Selenium IDE 保存的 .side 项目 JSON（或其它可解析结构）。"""
     data = request.get_json(silent=True) or {}
-    session_id = data.get('session_id')
+    raw = data.get('json') or data.get('side') or data.get('payload')
+    replace_existing = bool(data.get('replace_existing'))
 
-    # 兼容前端 session_id 丢失：回退到当前用户活跃会话
-    if not session_id:
-        session_id = _active_recording_sessions.get(current_user.id)
-    if not session_id:
-        return jsonify({'success': True, 'steps': [], 'total_steps': 0, 'message': '无活跃录制会话'})
-    
-    recorder = get_recorder(session_id)
-    if not recorder:
-        # 如果录制器不存在，可能是已经停止过了
-        return jsonify({
-            'success': True,
-            'steps': [],
-            'total_steps': 0,
-            'message': '录制已结束'
-        })
-    
-    # 停止录制（复用后台常驻事件循环，避免请求线程阻塞）
-    try:
-        recorded_steps = _run_in_recording_loop(recorder.stop(), timeout=6)
-        auto_saved = False
-        auto_saved_count = 0
-        # 自动闭环：停止录制后，如果已绑定 case_id，后台自动按当前步骤格式落库
-        if recorder.current_case_id and recorded_steps and not getattr(recorder, 'saved_to_case', False):
-            try:
-                auto_saved = db.batch_insert_steps(recorder.current_case_id, recorded_steps)
-                if auto_saved:
-                    auto_saved_count = len(recorded_steps)
-                    recorder.saved_to_case = True
-            except Exception as save_e:
-                uat_logger.error(f"录制自动保存失败(session={session_id}): {save_e}")
-        
-        remove_recorder(session_id)
-        if _active_recording_sessions.get(current_user.id) == session_id:
-            _active_recording_sessions.pop(current_user.id, None)
-
-        return jsonify({
-            'success': True,
-            'steps': recorded_steps,
-            'total_steps': len(recorded_steps),
-            'auto_saved': auto_saved,
-            'saved_steps': auto_saved_count,
-            'message': '录制已结束'
-        })
-    except Exception as e:
-        # 强制清理，避免前端出现“无法停止”的僵尸会话
-        remove_recorder(session_id)
-        if _active_recording_sessions.get(current_user.id) == session_id:
-            _active_recording_sessions.pop(current_user.id, None)
-        uat_logger.warning(f"停止录制出现异常，已强制清理会话(session={session_id}): {e}")
-        return jsonify({
-            'success': True,
-            'steps': [],
-            'total_steps': 0,
-            'auto_saved': False,
-            'saved_steps': 0,
-            'message': '录制会话已强制结束'
-        })
-
-# API: 获取录制的步骤（智能录制器）
-@app.route('/api/steps/recording/steps', methods=['GET'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_get_smart_recording_steps():
-    """获取当前录制的步骤（智能录制器）"""
-    session_id = request.args.get('session_id')
-    
-    if not session_id:
-        session_id = _active_recording_sessions.get(current_user.id)
-    if not session_id:
-        return jsonify({'success': True, 'steps': [], 'total_steps': 0, 'active': False})
-    
-    recorder = get_recorder(session_id)
-    if not recorder:
-        if _active_recording_sessions.get(current_user.id) == session_id:
-            _active_recording_sessions.pop(current_user.id, None)
-        return jsonify({'success': True, 'steps': [], 'total_steps': 0, 'active': False})
-    
-    steps = recorder.get_recorded_steps()
-    
-    return jsonify({
-        'success': True,
-        'steps': steps,
-        'total_steps': len(steps),
-        'active': True
-    })
-
-
-# ==================== 录制功能 V3 接口（新） ====================
-@app.route('/api/recordings/start', methods=['POST'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_recordings_start_v3():
-    return api_start_smart_recording()
-
-
-@app.route('/api/recordings/stop', methods=['POST'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_recordings_stop_v3():
-    return api_stop_smart_recording()
-
-
-@app.route('/api/recordings/steps', methods=['GET'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_recordings_steps_v3():
-    return api_get_smart_recording_steps()
-
-
-@app.route('/api/recordings/status', methods=['GET'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_recordings_status_v3():
-    session_id = _active_recording_sessions.get(current_user.id)
-    if not session_id:
-        return jsonify({'success': True, 'active': False, 'session_id': None, 'total_steps': 0})
-    recorder = get_recorder(session_id)
-    if not recorder:
-        _active_recording_sessions.pop(current_user.id, None)
-        return jsonify({'success': True, 'active': False, 'session_id': None, 'total_steps': 0})
-    return jsonify({
-        'success': True,
-        'active': True,
-        'session_id': session_id,
-        'total_steps': len(recorder.get_recorded_steps())
-    })
-
-# API: 保存录制的步骤到数据库（智能录制器）
-@app.route('/api/steps/recording/save', methods=['POST'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_save_smart_recording_steps():
-    """保存录制的步骤到数据库（智能录制器）"""
-    data = request.get_json(silent=True) or {}
-    session_id = data.get('session_id')
-    case_id = data.get('case_id')
-    
-    if not session_id:
-        session_id = _active_recording_sessions.get(current_user.id)
-    if not case_id:
-        return jsonify({'success': False, 'error': '缺少必要参数(case_id)'}), 400
-    if not session_id:
-        return jsonify({'success': False, 'error': '录制会话不存在'}), 404
-    
-    recorder = get_recorder(session_id)
-    if not recorder:
-        return jsonify({'success': False, 'error': '录制会话不存在'}), 404
-    
-    steps = recorder.get_recorded_steps()
-
-    # 已自动保存过时，幂等返回，避免重复插入
-    if getattr(recorder, 'saved_to_case', False):
-        try:
-            remove_recorder(session_id)
-            if _active_recording_sessions.get(current_user.id) == session_id:
-                _active_recording_sessions.pop(current_user.id, None)
-        except Exception:
-            pass
-        return jsonify({
-            'success': True,
-            'saved_steps': 0,
-            'already_saved': True,
-            'message': '步骤已自动保存，无需重复保存'
-        })
-    
-    # 批量插入步骤
-    success = db.batch_insert_steps(case_id, steps)
-    
-    if success:
-        # 停止录制并清理资源
-        try:
-            _run_in_recording_loop(recorder.stop(), timeout=6)
-        except:
-            pass
-        finally:
-            remove_recorder(session_id)
-            if _active_recording_sessions.get(current_user.id) == session_id:
-                _active_recording_sessions.pop(current_user.id, None)
-            recorder.saved_to_case = True
-        
-        return jsonify({
-            'success': True,
-            'saved_steps': len(steps),
-            'message': '步骤已保存到用例'
-        })
+    if raw is None:
+        return jsonify({'success': False, 'error': '请在请求体中提供 json 字段（.side 文件全文）'}), 400
+    if isinstance(raw, dict):
+        payload = raw
+    elif isinstance(raw, str):
+        payload = raw.strip()
+        if not payload:
+            return jsonify({'success': False, 'error': 'JSON 内容为空'}), 400
     else:
-        return jsonify({'success': False, 'error': '保存步骤失败'}), 500
+        return jsonify({'success': False, 'error': 'json 字段类型无效'}), 400
+
+    case = db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+
+    _db = Database()
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+
+    steps, warnings = parse_selenium_ide_to_steps(payload)
+    if not steps:
+        return jsonify({
+            'success': False,
+            'error': '未能解析出有效步骤。请粘贴完整的 .side 项目（含 tests[].commands），'
+                     '教程见「录制教程」页中的 Selenium IDE 一节。',
+            'warnings': warnings,
+        }), 400
+
+    if replace_existing:
+        db.delete_case_steps(case_id)
+
+    if not db.batch_insert_steps(case_id, steps):
+        return jsonify({'success': False, 'error': '写入步骤失败'}), 500
+
+    return jsonify({'success': True, 'imported': len(steps), 'warnings': warnings})
+
 
 # API: 运行测试用例
 @app.route('/api/cases/<int:case_id>/run', methods=['POST'])
@@ -2016,7 +1742,7 @@ def api_run_case(case_id):
             uat_logger.info("✅ [浏览器恢复] 状态已重置，将自动重新启动浏览器")
 
         # 启动浏览器（如果断连后已重置，这里会创建新实例）
-        sync_start_browser(headless=False)
+        sync_start_browser()
         
         # 执行测试步骤
         try:
@@ -2453,8 +2179,8 @@ def api_run_case(case_id):
                         elif assert_type == 'element_attr':
                             # 元素属性断言
                             attr_name = step.get('page_name', '')  # 复用page_name字段存储属性名
-                            # 使用JavaScript获取属性值
-                            from playwright_automation import automation, worker
+                            # 使用JavaScript获取属性值（automation/worker 已在文件顶部导入；此处再 import 会使
+                            # api_run_case 整函数内 automation 变为局部变量，导致前面浏览器检测处 UnboundLocalError）
                             async def get_attr():
                                 page = await automation.get_page()
                                 element = await page.query_selector(selector_value)
@@ -5293,4 +5019,6 @@ def api_download_file(filename):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
+    _debug = os.environ.get('FLASK_DEBUG', 'true').lower() in ('1', 'true', 'yes')
+    app.run(debug=_debug, host='0.0.0.0', port=_port)

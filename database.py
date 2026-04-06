@@ -429,6 +429,9 @@ class Database:
             # 多租户索引
             "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)",
             "CREATE INDEX IF NOT EXISTS idx_projects_tenant ON projects(tenant_id)",
+            # 步骤列表：按用例查询 / 排序极常见，缺少索引时大数据量会明显变慢
+            "CREATE INDEX IF NOT EXISTS idx_test_steps_case_id ON test_steps(case_id)",
+            "CREATE INDEX IF NOT EXISTS idx_test_steps_case_order ON test_steps(case_id, step_order)",
         ]
         
         for index_sql in indexes:
@@ -1160,47 +1163,66 @@ class Database:
         conn.close()
         return None
     
+    def _row_to_step_dict(self, row: tuple) -> Dict[str, Any]:
+        return {
+            'id': row[0],
+            'case_id': row[1],
+            'action': row[2],
+            'selector_type': row[3],
+            'selector_value': row[4],
+            'input_value': row[5],
+            'description': row[6],
+            'step_order': row[7],
+            'created_at': row[8],
+            'page_name': row[9] if len(row) > 9 else '',
+            'swipe_x': row[10] if len(row) > 10 else '',
+            'swipe_y': row[11] if len(row) > 11 else '',
+            'url': row[12] if len(row) > 12 else '',
+            'enter_iframe': row[13] if len(row) > 13 else False,
+            'iframe_selector': row[14] if len(row) > 14 else '',
+            'compare_type': row[15] if len(row) > 15 else 'equals'
+        }
+
     def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:
         """获取测试用例的步骤（支持分页）- 修改默认page_size为9999以获取所有步骤"""
+        steps, _total = self.get_case_steps_paginated(case_id, page, page_size)
+        return steps
+
+    def get_case_steps_paginated(self, case_id: int, page: int = 1, page_size: int = 10) -> tuple:
+        """分页查询步骤，同一连接内用窗口函数返回 total，避免两次往返数据库。"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        offset = (page - 1) * page_size
-        cursor.execute("SELECT * FROM test_steps WHERE case_id = ? ORDER BY step_order ASC LIMIT ? OFFSET ?", (case_id, page_size, offset))
+        offset = (max(1, page) - 1) * max(1, page_size)
+        limit = max(1, page_size)
+        cursor.execute(
+            """
+            SELECT id, case_id, action, selector_type, selector_value, input_value, description,
+                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
+                   COUNT(*) OVER() AS __total
+            FROM test_steps
+            WHERE case_id = ?
+            ORDER BY step_order ASC
+            LIMIT ? OFFSET ?
+            """,
+            (case_id, limit, offset),
+        )
         rows = cursor.fetchall()
-        
-        steps = []
-        for row in rows:
-            steps.append({
-                'id': row[0],
-                'case_id': row[1],
-                'action': row[2],
-                'selector_type': row[3],
-                'selector_value': row[4],
-                'input_value': row[5],
-                'description': row[6],
-                'step_order': row[7],
-                'created_at': row[8],
-                'page_name': row[9] if len(row) > 9 else '',
-                'swipe_x': row[10] if len(row) > 10 else '',
-                'swipe_y': row[11] if len(row) > 11 else '',
-                'url': row[12] if len(row) > 12 else '',
-                'enter_iframe': row[13] if len(row) > 13 else False,
-                'iframe_selector': row[14] if len(row) > 14 else '',
-                'compare_type': row[15] if len(row) > 15 else 'equals'
-            })
-        
+        if not rows:
+            cursor.execute("SELECT COUNT(*) FROM test_steps WHERE case_id = ?", (case_id,))
+            total = int(cursor.fetchone()[0])
+            conn.close()
+            return [], total
+        total = int(rows[0][-1])
+        steps = [self._row_to_step_dict(row[:-1]) for row in rows]
         conn.close()
-        return steps
+        return steps, total
     
     def get_case_steps_count(self, case_id: int) -> int:
         """获取测试用例步骤的总数"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
         cursor.execute("SELECT COUNT(*) FROM test_steps WHERE case_id = ?", (case_id,))
         count = cursor.fetchone()[0]
-        
         conn.close()
         return count
     

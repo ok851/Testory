@@ -93,6 +93,21 @@ _URL_RE = re.compile(
 )
 
 
+def _xpath_group_inner_and_index(selector: str):
+    """
+    Selenium IDE 常见 (//tag[@id='x'])[n]，n 为 1-based。
+    返回 (inner_xpath, n)；无法解析则 None。
+    """
+    s = (selector or "").strip()
+    m = re.match(r"^\((.+)\)\[(\d+)\]\s*$", s)
+    if not m:
+        return None
+    inner, k = m.group(1).strip(), int(m.group(2))
+    if k < 1 or not inner.startswith("//"):
+        return None
+    return inner, k
+
+
 def _pa_validate_url(url: str) -> tuple:
     """校验 URL。返回 (fixed_url, err)。
     - fixed_url=None, err=None → 跳过（占位符或空）
@@ -111,6 +126,22 @@ def _pa_validate_url(url: str) -> tuple:
     if not _URL_RE.match(url):
         return None, f"无效的URL地址: {url}"
     return url, None
+
+
+def resolve_playwright_headless(requested: bool = True) -> bool:
+    """是否使用无头浏览器。默认与 requested 一致（调用方一般传 True）。
+    环境变量 PLAYWRIGHT_HEADLESS：0/false/no/off 为有界面，1/true/yes/on 为无头。
+    未设置时沿用 requested。"""
+    env = os.environ.get("PLAYWRIGHT_HEADLESS")
+    if env is None:
+        return requested
+    v = env.strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return requested
+
 
 class PlaywrightAutomation:
     def __init__(self):
@@ -324,17 +355,10 @@ class PlaywrightAutomation:
         except Exception as e:
             uat_logger.error(f"❌ [CLEANUP] 清理浏览器资源时发生错误: {str(e)}")
     
-    async def start_browser(self, headless=False):
-        """启动浏览器"""
+    async def start_browser(self, headless: bool = True):
+        """启动浏览器。默认无头，便于服务器/容器部署；本地需要可见窗口时设置 PLAYWRIGHT_HEADLESS=0。"""
         try:
-            # 服务器/容器环境通常没有 XServer，强制使用无头模式，避免浏览器页面直接关闭
-            # 可通过 PLAYWRIGHT_HEADLESS=0/1 覆盖默认行为（默认：非 win32 强制 headless=True）
-            if sys.platform != 'win32':
-                env_val = os.environ.get("PLAYWRIGHT_HEADLESS")
-                if env_val is None:
-                    headless = True
-                else:
-                    headless = env_val.strip().lower() in ("1", "true", "yes", "on")
+            headless = resolve_playwright_headless(headless)
 
             # 检查现有浏览器状态（必须同时检查连接有效性）
             browser_valid = False
@@ -444,6 +468,7 @@ class PlaywrightAutomation:
                     # 容器环境常见问题：沙箱权限不足/共享内存不足导致页面直接关闭
                     '--no-sandbox',
                     '--disable-dev-shm-usage',
+                    '--disable-blink-features=AutomationControlled',
                 ]
                 if headless:
                     # 无头模式下 start-maximized/resizeTo 经常不生效，显式窗口尺寸更稳定
@@ -470,7 +495,26 @@ class PlaywrightAutomation:
                 
                 # 创建新页面
                 self.page = await self.context.new_page()
-                
+                try:
+                    action_ms = int(os.environ.get("PLAYWRIGHT_ACTION_TIMEOUT_MS", "0"))
+                except ValueError:
+                    action_ms = 0
+                try:
+                    nav_ms = int(os.environ.get("PLAYWRIGHT_NAV_TIMEOUT_MS", "0"))
+                except ValueError:
+                    nav_ms = 0
+                if action_ms <= 0:
+                    action_ms = 45000 if headless else 30000
+                if nav_ms <= 0:
+                    nav_ms = 90000 if headless else 60000
+                # Playwright Python：set_default_* 为同步 API，不能使用 await
+                self.page.set_default_timeout(action_ms)
+                self.page.set_default_navigation_timeout(nav_ms)
+                uat_logger.info(
+                    f"页面默认超时: action={action_ms}ms, navigation={nav_ms}ms "
+                    f"(可用 PLAYWRIGHT_ACTION_TIMEOUT_MS / PLAYWRIGHT_NAV_TIMEOUT_MS 覆盖)"
+                )
+
                 if sys.platform == 'win32' and not headless:
                     user32 = ctypes.windll.user32
                     screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
@@ -2634,324 +2678,358 @@ class PlaywrightAutomation:
         except Exception as e:
             uat_logger.warning(f"🔍 [CLICK_DEBUG] 获取当前URL失败: {str(e)}")
             current_url = ""
+
+        # 分组 XPath：(//node)[k] —— 使用 locator.nth，避免与 wait_for(enabled) 组合失败（仅 1 个节点时节点的 [2] 无效）
+        xg = _xpath_group_inner_and_index(selector) if selector_type == "xpath" else None
+        if xg:
+            inner, idx1 = xg
+            try:
+                loc_all = target_context.locator(f"xpath={inner}")
+                cnt = await loc_all.count()
+                if cnt == 0:
+                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 分组 XPath 内层零匹配: {inner[:120]}")
+                else:
+                    idx0 = idx1 - 1
+                    if idx0 >= cnt:
+                        uat_logger.warning(
+                            f"⚠️ [CLICK_DEBUG] XPath 仅 {cnt} 个匹配，录制序号为 [{idx1}]，改用索引 {cnt - 1}"
+                        )
+                        idx0 = cnt - 1
+                    elg = loc_all.nth(idx0)
+                    await elg.wait_for(state="visible", timeout=10000)
+                    try:
+                        await elg.click(timeout=8000)
+                    except Exception:
+                        await elg.click(timeout=8000, force=True)
+                    uat_logger.info(
+                        f"✅ [CLICK_DEBUG] 分组 XPath nth({idx0}) 点击成功: {inner[:80]}"
+                    )
+                    element_clicked = True
+            except Exception as e_g:
+                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 分组 XPath 专用点击失败: {e_g}，走常规流程")
         
         # 尝试多种点击方式,增加成功概率
         # 方式1: 使用Playwright的click方法,等待元素可点击
-        try:
-            uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式1: Playwright click方法")
-            # 根据上下文类型执行不同的操作
-            if hasattr(target_context, 'wait_for_selector'):
-                # 等待元素可见且可交互
-                await target_context.wait_for_selector(full_selector, state='visible', timeout=10000)
-                # 等待元素可点击
-                await target_context.wait_for_selector(full_selector, state='enabled', timeout=10000)
-                # 使用更健壮的点击方式
-                await target_context.click(full_selector, timeout=10000)
-                uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
-                element_clicked = True
-            else:
-                # 如果是frame_locator对象,需要使用其locator方法
-                element = target_context.locator(full_selector)
-                await element.wait_for(state='visible', timeout=10000)
-                await element.wait_for(state='enabled', timeout=10000)
-                await element.click(timeout=10000)
-                uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
-                element_clicked = True
-        except Exception as e:
-            uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式1失败: {str(e)}, 尝试方式2: force click")
-            
-            # 方式2: 使用force参数强制点击
+        if not element_clicked:
             try:
-                if hasattr(target_context, 'click'):
-                    await target_context.click(full_selector, force=True, timeout=10000)
-                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
+                uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式1: Playwright click方法")
+                if hasattr(target_context, 'wait_for_selector'):
+                    await target_context.wait_for_selector(full_selector, state='visible', timeout=10000)
+                    # 不少页面按钮长期 disabled（需先输入等），严格等 enabled 会导致整条用例失败
+                    try:
+                        await target_context.wait_for_selector(full_selector, state='enabled', timeout=3500)
+                    except Exception:
+                        uat_logger.info(
+                            "🔍 [CLICK_DEBUG] 元素未短时变为 enabled，仍尝试点击（可先输入再点或_force）"
+                        )
+                    await target_context.click(full_selector, timeout=10000)
+                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
                     element_clicked = True
                 else:
-                    # 如果是frame_locator对象,需要使用其locator方法
                     element = target_context.locator(full_selector)
-                    await element.click(timeout=10000, force=True)
-                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
+                    await element.wait_for(state='visible', timeout=10000)
+                    try:
+                        await element.wait_for(state='enabled', timeout=3500)
+                    except Exception:
+                        pass
+                    await element.click(timeout=10000)
+                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式1成功点击元素: {selector}, 选择器类型: {selector_type}")
                     element_clicked = True
-            except Exception as e2:
-                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式2失败: {str(e2)}, 尝试方式3: SVG子元素点击（处理图标按钮）")
+            except Exception as e:
+                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式1失败: {str(e)}, 尝试方式2: force click")
                 
-                # 方式3: 智能元素点击 - 处理SVG/IMG元素和父元素点击
+                # 方式2: 使用force参数强制点击
                 try:
-                    uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式3: 智能元素点击（支持SVG子元素和父元素点击）")
-                    
-                    clicked_result = False
-                    
-                    if selector_type == "css":
-                        clicked_result = await target_context.evaluate("""(selector) => {
-                            const element = document.querySelector(selector);
-                            if (!element) return { success: false, reason: 'not_found' };
-                            
-                            const tagName = element.tagName.toLowerCase();
-                            
-                            // 情况1: 如果当前元素本身就是SVG或IMG，直接点击该元素本身
-                            if (tagName === 'svg' || tagName === 'img') {
-                                const rect = element.getBoundingClientRect();
-                                const clickX = rect.left + rect.width / 2;
-                                const clickY = rect.top + rect.height / 2;
-                                
-                                const clickEvent = new MouseEvent('click', {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    view: window,
-                                    clientX: clickX,
-                                    clientY: clickY
-                                });
-                                element.dispatchEvent(clickEvent);
-                                
-                                return { 
-                                    success: true, 
-                                    method: 'self_svg_img_click', 
-                                    elementType: tagName,
-                                    x: clickX, 
-                                    y: clickY,
-                                    rect: { width: rect.width, height: rect.height }
-                                };
-                            }
-                            
-                            // 情况2: 查找子元素：优先SVG，其次IMG，然后任何可见子元素
-                            let targetElement = null;
-                            let targetType = '';
-                            
-                            // 1. 尝试查找直接子SVG
-                            const svgChild = element.querySelector(':scope > svg');
-                            if (svgChild) {
-                                targetElement = svgChild;
-                                targetType = 'direct_svg';
-                            }
-                            // 2. 尝试查找任何子SVG
-                            else if (element.querySelector('svg')) {
-                                targetElement = element.querySelector('svg');
-                                targetType = 'nested_svg';
-                            }
-                            // 3. 尝试查找IMG子元素
-                            else if (element.querySelector('img')) {
-                                targetElement = element.querySelector('img');
-                                targetType = 'img';
-                            }
-                            // 4. 尝试查找任何可见的子元素
-                            else {
-                                const children = element.children;
-                                for (let child of children) {
-                                    const style = window.getComputedStyle(child);
-                                    if (style.display !== 'none' && style.visibility !== 'hidden') {
-                                        targetElement = child;
-                                        targetType = 'visible_child';
-                                        break;
-                                    }
-                                }
-                            }
-                            
-                            // 如果找到子元素，点击子元素的中心
-                            if (targetElement) {
-                                const rect = targetElement.getBoundingClientRect();
-                                const clickX = rect.left + rect.width / 2;
-                                const clickY = rect.top + rect.height / 2;
-                                
-                                const clickEvent = new MouseEvent('click', {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    view: window,
-                                    clientX: clickX,
-                                    clientY: clickY
-                                });
-                                targetElement.dispatchEvent(clickEvent);
-                                
-                                return { 
-                                    success: true, 
-                                    method: 'child_element', 
-                                    childType: targetType,
-                                    x: clickX, 
-                                    y: clickY,
-                                    childRect: { width: rect.width, height: rect.height }
-                                };
-                            }
-                            
-                            // 没有子元素，点击原元素
-                            element.click();
-                            return { success: true, method: 'self_click' };
-                        }""", selector)
-                    else:  # xpath
-                        clicked_result = await target_context.evaluate("""(xpath) => {
-                            const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                            const element = result.singleNodeValue;
-                            if (!element) return { success: false, reason: 'not_found' };
-                            
-                            const tagName = element.tagName.toLowerCase();
-                            
-                            // 情况1: 如果当前元素本身就是SVG或IMG，直接点击该元素本身
-                            if (tagName === 'svg' || tagName === 'img') {
-                                const rect = element.getBoundingClientRect();
-                                const clickX = rect.left + rect.width / 2;
-                                const clickY = rect.top + rect.height / 2;
-                                
-                                const clickEvent = new MouseEvent('click', {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    view: window,
-                                    clientX: clickX,
-                                    clientY: clickY
-                                });
-                                element.dispatchEvent(clickEvent);
-                                
-                                return { 
-                                    success: true, 
-                                    method: 'self_svg_img_click', 
-                                    elementType: tagName,
-                                    x: clickX, 
-                                    y: clickY,
-                                    rect: { width: rect.width, height: rect.height }
-                                };
-                            }
-                            
-                            // 情况2: 查找子元素
-                            let targetElement = null;
-                            let targetType = '';
-                            
-                            const svgChild = element.querySelector(':scope > svg');
-                            if (svgChild) {
-                                targetElement = svgChild;
-                                targetType = 'direct_svg';
-                            }
-                            else if (element.querySelector('svg')) {
-                                targetElement = element.querySelector('svg');
-                                targetType = 'nested_svg';
-                            }
-                            else if (element.querySelector('img')) {
-                                targetElement = element.querySelector('img');
-                                targetType = 'img';
-                            }
-                            else {
-                                const children = element.children;
-                                for (let child of children) {
-                                    const style = window.getComputedStyle(child);
-                                    if (style.display !== 'none' && style.visibility !== 'hidden') {
-                                        targetElement = child;
-                                        targetType = 'visible_child';
-                                        break;
-                                    }
-                                }
-                            }
-                            
-                            if (targetElement) {
-                                const rect = targetElement.getBoundingClientRect();
-                                const clickX = rect.left + rect.width / 2;
-                                const clickY = rect.top + rect.height / 2;
-                                
-                                const clickEvent = new MouseEvent('click', {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    view: window,
-                                    clientX: clickX,
-                                    clientY: clickY
-                                });
-                                targetElement.dispatchEvent(clickEvent);
-                                
-                                return { 
-                                    success: true, 
-                                    method: 'child_element', 
-                                    childType: targetType,
-                                    x: clickX, 
-                                    y: clickY,
-                                    childRect: { width: rect.width, height: rect.height }
-                                };
-                            }
-                            
-                            element.click();
-                            return { success: true, method: 'self_click' };
-                        }""", selector)
-                    
-                    if clicked_result and clicked_result.get('success'):
-                        method = clicked_result.get('method')
-                        if method == 'child_element':
-                            uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击子元素: {selector}, 类型: {clicked_result.get('childType')}, 坐标: ({clicked_result.get('x'):.1f}, {clicked_result.get('y'):.1f})")
-                        elif method == 'self_svg_img_click':
-                            uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击SVG/IMG本身: {selector}, 元素类型: {clicked_result.get('elementType')}, 坐标: ({clicked_result.get('x'):.1f}, {clicked_result.get('y'):.1f}), 尺寸: {clicked_result.get('rect')}")
-                        else:
-                            uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}")
+                    if hasattr(target_context, 'click'):
+                        await target_context.click(full_selector, force=True, timeout=10000)
+                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
                         element_clicked = True
                     else:
-                        uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式3未成功: {clicked_result}")
-                        
-                except Exception as e3:
-                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式3失败: {str(e3)}, 尝试方式4: 中心点坐标点击")
+                        # 如果是frame_locator对象,需要使用其locator方法
+                        element = target_context.locator(full_selector)
+                        await element.click(timeout=10000, force=True)
+                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式2成功点击元素: {selector}, 选择器类型: {selector_type}")
+                        element_clicked = True
+                except Exception as e2:
+                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式2失败: {str(e2)}, 尝试方式3: SVG子元素点击（处理图标按钮）")
                     
-                    # 方式4: 标准JavaScript点击
+                    # 方式3: 智能元素点击 - 处理SVG/IMG元素和父元素点击
                     try:
-                        uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式4: 标准JavaScript点击")
+                        uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式3: 智能元素点击（支持SVG子元素和父元素点击）")
+                        
+                        clicked_result = False
+                        
                         if selector_type == "css":
-                            if hasattr(target_context, 'evaluate'):
-                                element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
-                                if element_exists:
-                                    await target_context.evaluate("""(selector) => {
-                                        const element = document.querySelector(selector);
-                                        if (element) element.click();
-                                    }""", selector)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
-                            else:
-                                element = target_context.locator(selector)
-                                count = await element.count()
-                                if count > 0:
-                                    await element.click(timeout=10000, force=True)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                            clicked_result = await target_context.evaluate("""(selector) => {
+                                const element = document.querySelector(selector);
+                                if (!element) return { success: false, reason: 'not_found' };
+                                
+                                const tagName = element.tagName.toLowerCase();
+                                
+                                // 情况1: 如果当前元素本身就是SVG或IMG，直接点击该元素本身
+                                if (tagName === 'svg' || tagName === 'img') {
+                                    const rect = element.getBoundingClientRect();
+                                    const clickX = rect.left + rect.width / 2;
+                                    const clickY = rect.top + rect.height / 2;
+                                    
+                                    const clickEvent = new MouseEvent('click', {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        view: window,
+                                        clientX: clickX,
+                                        clientY: clickY
+                                    });
+                                    element.dispatchEvent(clickEvent);
+                                    
+                                    return { 
+                                        success: true, 
+                                        method: 'self_svg_img_click', 
+                                        elementType: tagName,
+                                        x: clickX, 
+                                        y: clickY,
+                                        rect: { width: rect.width, height: rect.height }
+                                    };
+                                }
+                                
+                                // 情况2: 查找子元素：优先SVG，其次IMG，然后任何可见子元素
+                                let targetElement = null;
+                                let targetType = '';
+                                
+                                // 1. 尝试查找直接子SVG
+                                const svgChild = element.querySelector(':scope > svg');
+                                if (svgChild) {
+                                    targetElement = svgChild;
+                                    targetType = 'direct_svg';
+                                }
+                                // 2. 尝试查找任何子SVG
+                                else if (element.querySelector('svg')) {
+                                    targetElement = element.querySelector('svg');
+                                    targetType = 'nested_svg';
+                                }
+                                // 3. 尝试查找IMG子元素
+                                else if (element.querySelector('img')) {
+                                    targetElement = element.querySelector('img');
+                                    targetType = 'img';
+                                }
+                                // 4. 尝试查找任何可见的子元素
+                                else {
+                                    const children = element.children;
+                                    for (let child of children) {
+                                        const style = window.getComputedStyle(child);
+                                        if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                            targetElement = child;
+                                            targetType = 'visible_child';
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // 如果找到子元素，点击子元素的中心
+                                if (targetElement) {
+                                    const rect = targetElement.getBoundingClientRect();
+                                    const clickX = rect.left + rect.width / 2;
+                                    const clickY = rect.top + rect.height / 2;
+                                    
+                                    const clickEvent = new MouseEvent('click', {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        view: window,
+                                        clientX: clickX,
+                                        clientY: clickY
+                                    });
+                                    targetElement.dispatchEvent(clickEvent);
+                                    
+                                    return { 
+                                        success: true, 
+                                        method: 'child_element', 
+                                        childType: targetType,
+                                        x: clickX, 
+                                        y: clickY,
+                                        childRect: { width: rect.width, height: rect.height }
+                                    };
+                                }
+                                
+                                // 没有子元素，点击原元素
+                                element.click();
+                                return { success: true, method: 'self_click' };
+                            }""", selector)
                         else:  # xpath
-                            if hasattr(target_context, 'evaluate'):
-                                element_exists = await target_context.evaluate("""(xpath) => {
-                                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                    return result.singleNodeValue !== null;
-                                }""", selector)
-                                if element_exists:
-                                    await target_context.evaluate("""(xpath) => {
-                                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                        const element = result.singleNodeValue;
-                                        if (element) element.click();
-                                    }""", selector)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                            clicked_result = await target_context.evaluate("""(xpath) => {
+                                const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                const element = result.singleNodeValue;
+                                if (!element) return { success: false, reason: 'not_found' };
+                                
+                                const tagName = element.tagName.toLowerCase();
+                                
+                                // 情况1: 如果当前元素本身就是SVG或IMG，直接点击该元素本身
+                                if (tagName === 'svg' || tagName === 'img') {
+                                    const rect = element.getBoundingClientRect();
+                                    const clickX = rect.left + rect.width / 2;
+                                    const clickY = rect.top + rect.height / 2;
+                                    
+                                    const clickEvent = new MouseEvent('click', {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        view: window,
+                                        clientX: clickX,
+                                        clientY: clickY
+                                    });
+                                    element.dispatchEvent(clickEvent);
+                                    
+                                    return { 
+                                        success: true, 
+                                        method: 'self_svg_img_click', 
+                                        elementType: tagName,
+                                        x: clickX, 
+                                        y: clickY,
+                                        rect: { width: rect.width, height: rect.height }
+                                    };
+                                }
+                                
+                                // 情况2: 查找子元素
+                                let targetElement = null;
+                                let targetType = '';
+                                
+                                const svgChild = element.querySelector(':scope > svg');
+                                if (svgChild) {
+                                    targetElement = svgChild;
+                                    targetType = 'direct_svg';
+                                }
+                                else if (element.querySelector('svg')) {
+                                    targetElement = element.querySelector('svg');
+                                    targetType = 'nested_svg';
+                                }
+                                else if (element.querySelector('img')) {
+                                    targetElement = element.querySelector('img');
+                                    targetType = 'img';
+                                }
+                                else {
+                                    const children = element.children;
+                                    for (let child of children) {
+                                        const style = window.getComputedStyle(child);
+                                        if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                            targetElement = child;
+                                            targetType = 'visible_child';
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                if (targetElement) {
+                                    const rect = targetElement.getBoundingClientRect();
+                                    const clickX = rect.left + rect.width / 2;
+                                    const clickY = rect.top + rect.height / 2;
+                                    
+                                    const clickEvent = new MouseEvent('click', {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        view: window,
+                                        clientX: clickX,
+                                        clientY: clickY
+                                    });
+                                    targetElement.dispatchEvent(clickEvent);
+                                    
+                                    return { 
+                                        success: true, 
+                                        method: 'child_element', 
+                                        childType: targetType,
+                                        x: clickX, 
+                                        y: clickY,
+                                        childRect: { width: rect.width, height: rect.height }
+                                    };
+                                }
+                                
+                                element.click();
+                                return { success: true, method: 'self_click' };
+                            }""", selector)
+                        
+                        if clicked_result and clicked_result.get('success'):
+                            method = clicked_result.get('method')
+                            if method == 'child_element':
+                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击子元素: {selector}, 类型: {clicked_result.get('childType')}, 坐标: ({clicked_result.get('x'):.1f}, {clicked_result.get('y'):.1f})")
+                            elif method == 'self_svg_img_click':
+                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击SVG/IMG本身: {selector}, 元素类型: {clicked_result.get('elementType')}, 坐标: ({clicked_result.get('x'):.1f}, {clicked_result.get('y'):.1f}), 尺寸: {clicked_result.get('rect')}")
                             else:
-                                element = target_context.locator(f"xpath={selector}")
-                                count = await element.count()
-                                if count > 0:
-                                    await element.click(timeout=5000, force=True)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
-                                    element_clicked = True
-                                else:
-                                    uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
-                    except Exception as e4:
-                        uat_logger.error(f"❌ [CLICK_DEBUG] 方式4失败: {str(e4)}")
-                    
-                    # 🔥 方式5: 增强型智能定位器降级机制
-                    if not element_clicked and self.locator_manager:
-                        try:
-                            uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式5: 增强型智能定位器降级")
+                                uat_logger.info(f"✅ [CLICK_DEBUG] 方式3成功点击元素: {selector}")
+                            element_clicked = True
+                        else:
+                            uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式3未成功: {clicked_result}")
                             
-                            # 尝试提取元素信息并使用智能定位
-                            element_info = await self.locator_manager.extract_element_info(selector if selector_type == "css" else None)
-                            if element_info:
-                                uat_logger.info(f"🔍 [CLICK_DEBUG] 提取到元素信息: {element_info.tag_name}")
-                                locator = await self.locator_manager.find_element(element_info, max_attempts=3)
-                                if locator:
-                                    await locator.click(timeout=10000)
-                                    uat_logger.info(f"✅ [CLICK_DEBUG] 方式5成功点击元素: 使用智能定位器")
-                                    element_clicked = True
+                    except Exception as e3:
+                        uat_logger.warning(f"⚠️ [CLICK_DEBUG] 方式3失败: {str(e3)}, 尝试方式4: 中心点坐标点击")
+                        
+                        # 方式4: 标准JavaScript点击
+                        try:
+                            uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式4: 标准JavaScript点击")
+                            if selector_type == "css":
+                                if hasattr(target_context, 'evaluate'):
+                                    element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
+                                    if element_exists:
+                                        await target_context.evaluate("""(selector) => {
+                                            const element = document.querySelector(selector);
+                                            if (element) element.click();
+                                        }""", selector)
+                                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                        element_clicked = True
+                                    else:
+                                        uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
                                 else:
-                                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 智能定位器未找到元素")
-                            else:
-                                uat_logger.warning(f"⚠️ [CLICK_DEBUG] 无法提取元素信息")
-                        except Exception as e5:
-                            uat_logger.error(f"❌ [CLICK_DEBUG] 方式5失败: {str(e5)}")
+                                    element = target_context.locator(selector)
+                                    count = await element.count()
+                                    if count > 0:
+                                        await element.click(timeout=10000, force=True)
+                                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                        element_clicked = True
+                                    else:
+                                        uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                            else:  # xpath
+                                if hasattr(target_context, 'evaluate'):
+                                    element_exists = await target_context.evaluate("""(xpath) => {
+                                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                        return result.singleNodeValue !== null;
+                                    }""", selector)
+                                    if element_exists:
+                                        await target_context.evaluate("""(xpath) => {
+                                            const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                            const element = result.singleNodeValue;
+                                            if (element) element.click();
+                                        }""", selector)
+                                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                        element_clicked = True
+                                    else:
+                                        uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                                else:
+                                    element = target_context.locator(f"xpath={selector}")
+                                    count = await element.count()
+                                    if count > 0:
+                                        await element.click(timeout=5000, force=True)
+                                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式4成功点击元素: {selector}")
+                                        element_clicked = True
+                                    else:
+                                        uat_logger.error(f"❌ [CLICK_DEBUG] 元素不存在: {selector}")
+                        except Exception as e4:
+                            uat_logger.error(f"❌ [CLICK_DEBUG] 方式4失败: {str(e4)}")
+                        
+                        # 🔥 方式5: 增强型智能定位器降级机制
+                        if not element_clicked and self.locator_manager:
+                            try:
+                                uat_logger.info(f"🔍 [CLICK_DEBUG] 尝试方式5: 增强型智能定位器降级")
+                                
+                                # 尝试提取元素信息并使用智能定位
+                                element_info = await self.locator_manager.extract_element_info(selector if selector_type == "css" else None)
+                                if element_info:
+                                    uat_logger.info(f"🔍 [CLICK_DEBUG] 提取到元素信息: {element_info.tag_name}")
+                                    locator = await self.locator_manager.find_element(element_info, max_attempts=3)
+                                    if locator:
+                                        await locator.click(timeout=10000)
+                                        uat_logger.info(f"✅ [CLICK_DEBUG] 方式5成功点击元素: 使用智能定位器")
+                                        element_clicked = True
+                                    else:
+                                        uat_logger.warning(f"⚠️ [CLICK_DEBUG] 智能定位器未找到元素")
+                                else:
+                                    uat_logger.warning(f"⚠️ [CLICK_DEBUG] 无法提取元素信息")
+                            except Exception as e5:
+                                uat_logger.error(f"❌ [CLICK_DEBUG] 方式5失败: {str(e5)}")
                     
         if not element_clicked:
             # 如果所有点击方式都失败,抛出异常
@@ -3145,6 +3223,35 @@ class PlaywrightAutomation:
         
         # 尝试多种填充方式,增加成功概率
         fill_success = False
+        xpath_group_readback = None  # (inner_xpath, nth_index) 用于分组 XPath 输入值回读
+
+        xg_fill = _xpath_group_inner_and_index(selector) if selector_type == "xpath" else None
+        if xg_fill:
+            inner_f, idx1_f = xg_fill
+            try:
+                loc_f = target_context.locator(f"xpath={inner_f}")
+                cnt_f = await loc_f.count()
+                if cnt_f == 0:
+                    raise Exception(f"元素不存在: {selector}")
+                idx0_f = idx1_f - 1
+                if idx0_f >= cnt_f:
+                    uat_logger.warning(
+                        f"⚠️ [FILL] XPath 匹配 {cnt_f} 个节点，录制 [{idx1_f}] 降级为索引 {cnt_f - 1}"
+                    )
+                    idx0_f = cnt_f - 1
+                elf = loc_f.nth(idx0_f)
+                await elf.wait_for(state="visible", timeout=10000)
+                try:
+                    await elf.fill(text, timeout=10000)
+                except Exception:
+                    await elf.fill(text, timeout=10000, force=True)
+                fill_success = True
+                xpath_group_readback = (inner_f, idx0_f)
+                uat_logger.info(
+                    f"✅ [FILL] 分组 XPath nth({idx0_f}) 填充成功: {inner_f[:90]}"
+                )
+            except Exception as e_xgf:
+                uat_logger.warning(f"⚠️ [FILL] 分组 XPath 专用填充跳过: {e_xgf}")
         
         # 🔥 前置验证：确保目标元素是真正可见且可交互的输入框
         try:
@@ -3232,100 +3339,64 @@ class PlaywrightAutomation:
                 uat_logger.warning(f"⚠️ [EL_SELECT] 专用方法失败: {e}，尝试常规方法")
         
         # 方式1: 使用Playwright的fill方法
-        try:
-            # 等待元素可见
-            if hasattr(target_context, 'wait_for_selector'):
-                await target_context.wait_for_selector(full_selector, state='visible', timeout=5000)
-                # 填充输入框
-                await target_context.fill(full_selector, text, timeout=5000)
-                uat_logger.info(f"成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
-                fill_success = True
-            else:
-                # 如果是frame_locator对象,需要使用其locator方法
-                element = target_context.locator(full_selector)
-                await element.wait_for(state='visible', timeout=5000)
-                await element.fill(text, timeout=5000)
-                uat_logger.info(f"成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
-                fill_success = True
-        except Exception as e:
-            uat_logger.warning(f"常规填充失败: {str(e)}, 尝试使用force fill方法")
-            
-            # 方式2: 使用force fill方法
+        if not fill_success:
             try:
-                if hasattr(target_context, 'fill'):
-                    await target_context.fill(full_selector, text, timeout=5000, force=True)
-                    uat_logger.info(f"使用force fill方法成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                # 等待元素可见
+                if hasattr(target_context, 'wait_for_selector'):
+                    await target_context.wait_for_selector(full_selector, state='visible', timeout=5000)
+                    await target_context.fill(full_selector, text, timeout=5000)
+                    uat_logger.info(f"成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
                     fill_success = True
                 else:
-                    # 如果是frame_locator对象,需要使用其locator方法
                     element = target_context.locator(full_selector)
-                    await element.fill(text, timeout=5000, force=True)
-                    uat_logger.info(f"使用force fill方法成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                    await element.wait_for(state='visible', timeout=5000)
+                    await element.fill(text, timeout=5000)
+                    uat_logger.info(f"成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
                     fill_success = True
-            except Exception as e2:
-                uat_logger.warning(f"force fill方法失败: {str(e2)}, 尝试使用type方法")
+            except Exception as e:
+                uat_logger.warning(f"常规填充失败: {str(e)}, 尝试使用force fill方法")
                 
-                # 方式3: 使用type方法
-                type_success = False
+                # 方式2: 使用force fill方法
                 try:
-                    if hasattr(target_context, 'type'):
-                        await target_context.type(full_selector, text, timeout=5000)
-                        uat_logger.info(f"使用type方法执行完成: {selector}, 选择器类型: {selector_type}, 文本: {text}")
-                        type_success = True
+                    if hasattr(target_context, 'fill'):
+                        await target_context.fill(full_selector, text, timeout=5000, force=True)
+                        uat_logger.info(f"使用force fill方法成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                        fill_success = True
                     else:
                         # 如果是frame_locator对象,需要使用其locator方法
                         element = target_context.locator(full_selector)
-                        await element.type(text, timeout=5000)
-                        uat_logger.info(f"使用type方法(通过locator)执行完成: {selector}, 选择器类型: {selector_type}, 文本: {text}")
-                        type_success = True
-                except Exception as e3:
-                    uat_logger.warning(f"type方法失败: {str(e3)}, 尝试使用force type方法")
-                
-                # 🔥 修复：即使type方法没有报错，也要验证是否真的填充成功
-                if type_success:
-                    try:
-                        # 短暂等待让值生效
-                        await asyncio.sleep(0.2)
-                        # 验证填充是否成功
-                        verify_value = await target_context.evaluate("""(sel) => {
-                            const el = document.querySelector(sel);
-                            if (!el) return null;
-                            // 检查是否是包装层
-                            if (el.tagName.toLowerCase() === 'div' && el.className.includes('el-textarea')) {
-                                const inner = el.querySelector('textarea');
-                                return inner ? inner.value : el.value;
-                            }
-                            return el.value;
-                        }""", selector)
-                        
-                        if verify_value == text:
-                            uat_logger.info(f"✅ type方法验证成功，值已正确设置: {verify_value}")
-                            fill_success = True
-                        else:
-                            uat_logger.warning(f"⚠️ type方法验证失败: 期望值 '{text}', 实际值 '{verify_value}', 将继续尝试其他方法")
-                            type_success = False  # 标记为失败，继续后续方法
-                    except Exception as verify_err:
-                        uat_logger.warning(f"⚠️ type方法验证异常: {verify_err}, 将继续尝试其他方法")
-                        type_success = False
-                
-                if not type_success:
-                    # 方式4: 使用type方法 (通过locator实现)
-                    type4_success = False
-                    try:
-                        element = target_context.locator(full_selector)
-                        await element.type(text, timeout=5000)
-                        uat_logger.info(f"使用type方法(通过locator)执行完成: {selector}, 选择器类型: {selector_type}, 文本: {text}")
-                        type4_success = True
-                    except Exception as e4:
-                        uat_logger.warning(f"type方法(通过locator)失败: {str(e4)}, 尝试使用JavaScript")
+                        await element.fill(text, timeout=5000, force=True)
+                        uat_logger.info(f"使用force fill方法成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                        fill_success = True
+                except Exception as e2:
+                    uat_logger.warning(f"force fill方法失败: {str(e2)}, 尝试使用type方法")
                     
-                    # 🔥 修复：即使type方法(通过locator)没有报错，也要验证是否真的填充成功
-                    if type4_success:
+                    # 方式3: 使用type方法
+                    type_success = False
+                    try:
+                        if hasattr(target_context, 'type'):
+                            await target_context.type(full_selector, text, timeout=5000)
+                            uat_logger.info(f"使用type方法执行完成: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                            type_success = True
+                        else:
+                            # 如果是frame_locator对象,需要使用其locator方法
+                            element = target_context.locator(full_selector)
+                            await element.type(text, timeout=5000)
+                            uat_logger.info(f"使用type方法(通过locator)执行完成: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                            type_success = True
+                    except Exception as e3:
+                        uat_logger.warning(f"type方法失败: {str(e3)}, 尝试使用force type方法")
+                    
+                    # 🔥 修复：即使type方法没有报错，也要验证是否真的填充成功
+                    if type_success:
                         try:
+                            # 短暂等待让值生效
                             await asyncio.sleep(0.2)
+                            # 验证填充是否成功
                             verify_value = await target_context.evaluate("""(sel) => {
                                 const el = document.querySelector(sel);
                                 if (!el) return null;
+                                // 检查是否是包装层
                                 if (el.tagName.toLowerCase() === 'div' && el.className.includes('el-textarea')) {
                                     const inner = el.querySelector('textarea');
                                     return inner ? inner.value : el.value;
@@ -3334,286 +3405,321 @@ class PlaywrightAutomation:
                             }""", selector)
                             
                             if verify_value == text:
-                                uat_logger.info(f"✅ type方法(通过locator)验证成功，值已正确设置: {verify_value}")
+                                uat_logger.info(f"✅ type方法验证成功，值已正确设置: {verify_value}")
                                 fill_success = True
                             else:
-                                uat_logger.warning(f"⚠️ type方法(通过locator)验证失败: 期望值 '{text}', 实际值 '{verify_value}', 将继续尝试JavaScript方法")
-                                type4_success = False
+                                uat_logger.warning(f"⚠️ type方法验证失败: 期望值 '{text}', 实际值 '{verify_value}', 将继续尝试其他方法")
+                                type_success = False  # 标记为失败，继续后续方法
                         except Exception as verify_err:
-                            uat_logger.warning(f"⚠️ type方法(通过locator)验证异常: {verify_err}, 将继续尝试JavaScript方法")
-                            type4_success = False
+                            uat_logger.warning(f"⚠️ type方法验证异常: {verify_err}, 将继续尝试其他方法")
+                            type_success = False
                     
-                    if not type4_success:
-                        
-                        # 方式5: 使用JavaScript直接设置值
+                    if not type_success:
+                        # 方式4: 使用type方法 (通过locator实现)
+                        type4_success = False
                         try:
-                            # 检查元素是否存在并设置值
-                            if selector_type == "css":
-                                if hasattr(target_context, 'evaluate'):
-                                    element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
-                                    if element_exists:
-                                        # 🔥 修复：处理 el-textarea 等组件包装层的情况
-                                        js_result = await target_context.evaluate("""(params) => {
-                                            const { selector, text } = params;
-                                            let element = document.querySelector(selector);
-                                            if (!element) return { success: false, error: 'Element not found' };
+                            element = target_context.locator(full_selector)
+                            await element.type(text, timeout=5000)
+                            uat_logger.info(f"使用type方法(通过locator)执行完成: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                            type4_success = True
+                        except Exception as e4:
+                            uat_logger.warning(f"type方法(通过locator)失败: {str(e4)}, 尝试使用JavaScript")
+                        
+                        # 🔥 修复：即使type方法(通过locator)没有报错，也要验证是否真的填充成功
+                        if type4_success:
+                            try:
+                                await asyncio.sleep(0.2)
+                                verify_value = await target_context.evaluate("""(sel) => {
+                                    const el = document.querySelector(sel);
+                                    if (!el) return null;
+                                    if (el.tagName.toLowerCase() === 'div' && el.className.includes('el-textarea')) {
+                                        const inner = el.querySelector('textarea');
+                                        return inner ? inner.value : el.value;
+                                    }
+                                    return el.value;
+                                }""", selector)
+                                
+                                if verify_value == text:
+                                    uat_logger.info(f"✅ type方法(通过locator)验证成功，值已正确设置: {verify_value}")
+                                    fill_success = True
+                                else:
+                                    uat_logger.warning(f"⚠️ type方法(通过locator)验证失败: 期望值 '{text}', 实际值 '{verify_value}', 将继续尝试JavaScript方法")
+                                    type4_success = False
+                            except Exception as verify_err:
+                                uat_logger.warning(f"⚠️ type方法(通过locator)验证异常: {verify_err}, 将继续尝试JavaScript方法")
+                                type4_success = False
+                        
+                        if not type4_success:
+                            
+                            # 方式5: 使用JavaScript直接设置值
+                            try:
+                                # 检查元素是否存在并设置值
+                                if selector_type == "css":
+                                    if hasattr(target_context, 'evaluate'):
+                                        element_exists = await target_context.evaluate("(selector) => document.querySelector(selector) !== null", selector)
+                                        if element_exists:
+                                            # 🔥 修复：处理 el-textarea 等组件包装层的情况
+                                            js_result = await target_context.evaluate("""(params) => {
+                                                const { selector, text } = params;
+                                                let element = document.querySelector(selector);
+                                                if (!element) return { success: false, error: 'Element not found' };
+                                                
+                                                // 检查是否是包装层元素（如 el-textarea, el-input 等）
+                                                const tagName = element.tagName.toLowerCase();
+                                                const className = element.className || '';
+                                                const isWrapper = tagName === 'div' && (
+                                                    className.includes('el-textarea') ||
+                                                    className.includes('el-input') ||
+                                                    className.includes('el-input__wrapper')
+                                                );
+                                                
+                                                let targetElement = element;
+                                                if (isWrapper) {
+                                                    // 查找内部的 input 或 textarea
+                                                    const innerInput = element.querySelector('input, textarea');
+                                                    if (innerInput) {
+                                                        targetElement = innerInput;
+                                                    }
+                                                }
+                                                
+                                                // 设置值
+                                                targetElement.value = text;
+                                                
+                                                // 触发输入相关事件
+                                                targetElement.dispatchEvent(new Event('input', { bubbles: true }));
+                                                targetElement.dispatchEvent(new Event('change', { bubbles: true }));
+                                                targetElement.dispatchEvent(new Event('blur', { bubbles: true }));
+                                                
+                                                // 对于 Vue 组件，还需要触发 compositionend 事件
+                                                targetElement.dispatchEvent(new Event('compositionend', { bubbles: true }));
+                                                
+                                                return { 
+                                                    success: true, 
+                                                    isWrapper: isWrapper,
+                                                    targetTagName: targetElement.tagName.toLowerCase(),
+                                                    targetClassName: targetElement.className
+                                                };
+                                            }""", {'selector': selector, 'text': text})
                                             
-                                            // 检查是否是包装层元素（如 el-textarea, el-input 等）
-                                            const tagName = element.tagName.toLowerCase();
-                                            const className = element.className || '';
-                                            const isWrapper = tagName === 'div' && (
-                                                className.includes('el-textarea') ||
-                                                className.includes('el-input') ||
-                                                className.includes('el-input__wrapper')
-                                            );
+                                            if js_result and js_result.get('success'):
+                                                uat_logger.info(f"✅ [JS_FILL] JavaScript填充成功: selector={selector}, isWrapper={js_result.get('isWrapper')}, target={js_result.get('targetTagName')}.{js_result.get('targetClassName')}")
+                                            else:
+                                                uat_logger.warning(f"⚠️ [JS_FILL] JavaScript填充可能有问题: {js_result}")
+                                            uat_logger.info(f"使用JavaScript成功填充元素: {selector}, 文本: {text}")
+                                            fill_success = True
+                                        else:
+                                            uat_logger.error(f"元素不存在,无法使用JavaScript填充: {selector}")
+                                    else:
+                                        # 如果是frame_locator对象,使用其locator方法
+                                        element = target_context.locator(selector)
+                                        count = await element.count()
+                                        if count > 0:
+                                            await element.fill(text, timeout=5000, force=True)
+                                            uat_logger.info(f"使用frame_locator方法成功填充元素: {selector}, 文本: {text}")
+                                            fill_success = True
+                                        else:
+                                            uat_logger.error(f"元素不存在,无法使用frame_locator方法填充: {selector}")
+                                elif selector_type in ["link_text", "partial_link_text"]:
+                                    # 🔥 修复：处理 link_text 选择器类型
+                                    # 使用 placeholder 或 label 文本查找输入框
+                                    if hasattr(target_context, 'evaluate'):
+                                        uat_logger.info(f"🔍 [JS_FILL] 使用link_text策略查找输入框: placeholder/label='{selector}'")
+                                        
+                                        # 尝试通过placeholder或关联label查找input元素
+                                        element_info = await target_context.evaluate("""(text) => {
+                                            // 策略1: 通过placeholder查找input
+                                            let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
+                                            if (input) return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
                                             
-                                            let targetElement = element;
-                                            if (isWrapper) {
-                                                // 查找内部的 input 或 textarea
-                                                const innerInput = element.querySelector('input, textarea');
-                                                if (innerInput) {
-                                                    targetElement = innerInput;
+                                            // 策略2: 通过label的for属性查找关联input
+                                            const labels = document.querySelectorAll('label');
+                                            for (const label of labels) {
+                                                if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
+                                                    const forAttr = label.getAttribute('for');
+                                                    if (forAttr) {
+                                                        input = document.getElementById(forAttr);
+                                                        if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) {
+                                                            return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
+                                                        }
+                                                    }
+                                                    // 策略3: label内包含input
+                                                    input = label.querySelector('input, textarea');
+                                                    if (input) return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
                                                 }
                                             }
                                             
-                                            // 设置值
-                                            targetElement.value = text;
+                                            // 策略4: 通过包含文本的元素向上查找父级表单元素
+                                            const textElements = document.querySelectorAll('*');
+                                            for (const el of textElements) {
+                                                if (el.textContent && (el.textContent.trim() === text || el.textContent.trim().includes(text))) {
+                                                    // 向上查找最近的input父级或兄弟
+                                                    let parent = el.parentElement;
+                                                    for (let i = 0; i < 3 && parent; i++) {
+                                                        input = parent.querySelector('input, textarea');
+                                                        if (input) return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
+                                                        parent = parent.parentElement;
+                                                    }
+                                                }
+                                            }
                                             
-                                            // 触发输入相关事件
-                                            targetElement.dispatchEvent(new Event('input', { bubbles: true }));
-                                            targetElement.dispatchEvent(new Event('change', { bubbles: true }));
-                                            targetElement.dispatchEvent(new Event('blur', { bubbles: true }));
-                                            
-                                            // 对于 Vue 组件，还需要触发 compositionend 事件
-                                            targetElement.dispatchEvent(new Event('compositionend', { bubbles: true }));
-                                            
-                                            return { 
-                                                success: true, 
-                                                isWrapper: isWrapper,
-                                                targetTagName: targetElement.tagName.toLowerCase(),
-                                                targetClassName: targetElement.className
-                                            };
-                                        }""", {'selector': selector, 'text': text})
+                                            return { found: false };
+                                        }""", selector)
                                         
-                                        if js_result and js_result.get('success'):
-                                            uat_logger.info(f"✅ [JS_FILL] JavaScript填充成功: selector={selector}, isWrapper={js_result.get('isWrapper')}, target={js_result.get('targetTagName')}.{js_result.get('targetClassName')}")
+                                        if element_info and element_info.get('found'):
+                                            uat_logger.info(f"✅ [JS_FILL] 找到输入框元素: {element_info}")
+                                            # 使用找到的元素信息进行填充
+                                            await target_context.evaluate("""(text, inputText) => {
+                                                let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
+                                                if (!input) {
+                                                    const labels = document.querySelectorAll('label');
+                                                    for (const label of labels) {
+                                                        if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
+                                                            const forAttr = label.getAttribute('for');
+                                                            if (forAttr) {
+                                                                input = document.getElementById(forAttr);
+                                                                if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) break;
+                                                            }
+                                                            input = label.querySelector('input, textarea');
+                                                            if (input) break;
+                                                        }
+                                                    }
+                                                }
+                                                if (!input) {
+                                                    const textElements = document.querySelectorAll('*');
+                                                    for (const el of textElements) {
+                                                        if (el.textContent && (el.textContent.trim() === text || el.textContent.trim().includes(text))) {
+                                                            let parent = el.parentElement;
+                                                            for (let i = 0; i < 3 && parent; i++) {
+                                                                input = parent.querySelector('input, textarea');
+                                                                if (input) break;
+                                                                parent = parent.parentElement;
+                                                            }
+                                                            if (input) break;
+                                                        }
+                                                    }
+                                                }
+                                                if (input) {
+                                                    input.value = inputText;
+                                                    input.dispatchEvent(new Event('input', {bubbles: true}));
+                                                    input.dispatchEvent(new Event('change', {bubbles: true}));
+                                                    input.dispatchEvent(new Event('blur', {bubbles: true}));
+                                                    return true;
+                                                }
+                                                return false;
+                                            }""", selector, text)
+                                            uat_logger.info(f"✅ [JS_FILL] 使用JavaScript成功填充元素(link_text): {selector}, 文本: {text}")
+                                            fill_success = True
                                         else:
-                                            uat_logger.warning(f"⚠️ [JS_FILL] JavaScript填充可能有问题: {js_result}")
-                                        uat_logger.info(f"使用JavaScript成功填充元素: {selector}, 文本: {text}")
-                                        fill_success = True
+                                            uat_logger.error(f"❌ [JS_FILL] 无法通过link_text找到输入框元素: {selector}")
+                                    else:
+                                        uat_logger.error(f"❌ [JS_FILL] frame_locator不支持link_text的JavaScript填充: {selector}")
+                                else:  # xpath
+                                    # 使用XPath查找元素
+                                    if hasattr(target_context, 'evaluate'):
+                                        element_exists = await target_context.evaluate("""(xpath) => {
+                                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                        return result.singleNodeValue !== null;
+                                    }""", selector)
+                                    if element_exists:
+                                        # 使用JavaScript设置值并触发输入相关事件
+                                        await target_context.evaluate("""(xpath, text) => {
+                                            const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                            const element = result.singleNodeValue;
+                                            if (element) {
+                                                // 设置值
+                                                element.value = text;
+                                                
+                                                // 触发输入相关事件
+                                                element.dispatchEvent(new Event('input', {bubbles: true}));
+                                                element.dispatchEvent(new Event('change', {bubbles: true}));
+                                                element.dispatchEvent(new Event('blur', {bubbles: true}));
+                                            }
+                                        }""", selector, text)
+                                        # 验证JavaScript填充是否真正成功
+                                        try:
+                                            actual_value = await target_context.evaluate(
+                                                """(xpath) => {
+                                                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                                    const element = result.singleNodeValue;
+                                                    return element ? element.value : null;
+                                                }""",
+                                                selector
+                                            )
+                                            if actual_value == text:
+                                                uat_logger.info(f"使用JavaScript成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
+                                                fill_success = True
+                                            else:
+                                                uat_logger.error(f"JavaScript填充验证失败: 期望值 '{text}'，实际值 '{actual_value}'")
+                                        except Exception as verify_error:
+                                            uat_logger.error(f"JavaScript填充验证异常: {verify_error}，判定为失败")
+                                            fill_success = False
                                     else:
                                         uat_logger.error(f"元素不存在,无法使用JavaScript填充: {selector}")
-                                else:
-                                    # 如果是frame_locator对象,使用其locator方法
-                                    element = target_context.locator(selector)
-                                    count = await element.count()
-                                    if count > 0:
-                                        await element.fill(text, timeout=5000, force=True)
-                                        uat_logger.info(f"使用frame_locator方法成功填充元素: {selector}, 文本: {text}")
-                                        fill_success = True
-                                    else:
-                                        uat_logger.error(f"元素不存在,无法使用frame_locator方法填充: {selector}")
-                            elif selector_type in ["link_text", "partial_link_text"]:
-                                # 🔥 修复：处理 link_text 选择器类型
-                                # 使用 placeholder 或 label 文本查找输入框
-                                if hasattr(target_context, 'evaluate'):
-                                    uat_logger.info(f"🔍 [JS_FILL] 使用link_text策略查找输入框: placeholder/label='{selector}'")
-                                    
-                                    # 尝试通过placeholder或关联label查找input元素
-                                    element_info = await target_context.evaluate("""(text) => {
-                                        // 策略1: 通过placeholder查找input
-                                        let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
-                                        if (input) return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
-                                        
-                                        // 策略2: 通过label的for属性查找关联input
-                                        const labels = document.querySelectorAll('label');
-                                        for (const label of labels) {
-                                            if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
-                                                const forAttr = label.getAttribute('for');
-                                                if (forAttr) {
-                                                    input = document.getElementById(forAttr);
-                                                    if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) {
-                                                        return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
-                                                    }
-                                                }
-                                                // 策略3: label内包含input
-                                                input = label.querySelector('input, textarea');
-                                                if (input) return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
-                                            }
-                                        }
-                                        
-                                        // 策略4: 通过包含文本的元素向上查找父级表单元素
-                                        const textElements = document.querySelectorAll('*');
-                                        for (const el of textElements) {
-                                            if (el.textContent && (el.textContent.trim() === text || el.textContent.trim().includes(text))) {
-                                                // 向上查找最近的input父级或兄弟
-                                                let parent = el.parentElement;
-                                                for (let i = 0; i < 3 && parent; i++) {
-                                                    input = parent.querySelector('input, textarea');
-                                                    if (input) return { found: true, tagName: input.tagName.toLowerCase(), id: input.id, className: input.className };
-                                                    parent = parent.parentElement;
-                                                }
-                                            }
-                                        }
-                                        
-                                        return { found: false };
-                                    }""", selector)
-                                    
-                                    if element_info and element_info.get('found'):
-                                        uat_logger.info(f"✅ [JS_FILL] 找到输入框元素: {element_info}")
-                                        # 使用找到的元素信息进行填充
-                                        await target_context.evaluate("""(text, inputText) => {
-                                            let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
-                                            if (!input) {
-                                                const labels = document.querySelectorAll('label');
-                                                for (const label of labels) {
-                                                    if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
-                                                        const forAttr = label.getAttribute('for');
-                                                        if (forAttr) {
-                                                            input = document.getElementById(forAttr);
-                                                            if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) break;
-                                                        }
-                                                        input = label.querySelector('input, textarea');
-                                                        if (input) break;
-                                                    }
-                                                }
-                                            }
-                                            if (!input) {
-                                                const textElements = document.querySelectorAll('*');
-                                                for (const el of textElements) {
-                                                    if (el.textContent && (el.textContent.trim() === text || el.textContent.trim().includes(text))) {
-                                                        let parent = el.parentElement;
-                                                        for (let i = 0; i < 3 && parent; i++) {
-                                                            input = parent.querySelector('input, textarea');
-                                                            if (input) break;
-                                                            parent = parent.parentElement;
-                                                        }
-                                                        if (input) break;
-                                                    }
-                                                }
-                                            }
-                                            if (input) {
-                                                input.value = inputText;
-                                                input.dispatchEvent(new Event('input', {bubbles: true}));
-                                                input.dispatchEvent(new Event('change', {bubbles: true}));
-                                                input.dispatchEvent(new Event('blur', {bubbles: true}));
-                                                return true;
-                                            }
-                                            return false;
-                                        }""", selector, text)
-                                        uat_logger.info(f"✅ [JS_FILL] 使用JavaScript成功填充元素(link_text): {selector}, 文本: {text}")
-                                        fill_success = True
-                                    else:
-                                        uat_logger.error(f"❌ [JS_FILL] 无法通过link_text找到输入框元素: {selector}")
-                                else:
-                                    uat_logger.error(f"❌ [JS_FILL] frame_locator不支持link_text的JavaScript填充: {selector}")
-                            else:  # xpath
-                                # 使用XPath查找元素
-                                if hasattr(target_context, 'evaluate'):
-                                    element_exists = await target_context.evaluate("""(xpath) => {
-                                    const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                    return result.singleNodeValue !== null;
-                                }""", selector)
-                                if element_exists:
-                                    # 使用JavaScript设置值并触发输入相关事件
-                                    await target_context.evaluate("""(xpath, text) => {
-                                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                        const element = result.singleNodeValue;
-                                        if (element) {
-                                            // 设置值
-                                            element.value = text;
-                                            
-                                            // 触发输入相关事件
-                                            element.dispatchEvent(new Event('input', {bubbles: true}));
-                                            element.dispatchEvent(new Event('change', {bubbles: true}));
-                                            element.dispatchEvent(new Event('blur', {bubbles: true}));
-                                        }
-                                    }""", selector, text)
-                                    # 验证JavaScript填充是否真正成功
+                            except Exception as e5:
+                                uat_logger.error(f"JavaScript填充失败: {str(e5)}")
+                                
+                                # 🔥 方式6: Element UI 下拉框专用处理
+                                if not fill_success:
                                     try:
-                                        actual_value = await target_context.evaluate(
-                                            """(xpath) => {
-                                                const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                                const element = result.singleNodeValue;
-                                                return element ? element.value : null;
-                                            }""",
-                                            selector
-                                        )
-                                        if actual_value == text:
-                                            uat_logger.info(f"使用JavaScript成功填充元素: {selector}, 选择器类型: {selector_type}, 文本: {text}")
-                                            fill_success = True
-                                        else:
-                                            uat_logger.error(f"JavaScript填充验证失败: 期望值 '{text}'，实际值 '{actual_value}'")
-                                    except Exception as verify_error:
-                                        uat_logger.error(f"JavaScript填充验证异常: {verify_error}，判定为失败")
-                                        fill_success = False
-                                else:
-                                    uat_logger.error(f"元素不存在,无法使用JavaScript填充: {selector}")
-                        except Exception as e5:
-                            uat_logger.error(f"JavaScript填充失败: {str(e5)}")
-                            
-                            # 🔥 方式6: Element UI 下拉框专用处理
-                            if not fill_success:
-                                try:
-                                    uat_logger.info(f"🔍 [FILL_DEBUG] 尝试方式6: Element UI下拉框专用处理")
-                                    
-                                    # 检测是否是el-select组件
-                                    is_el_select = await target_context.evaluate("""(sel) => {
-                                        const el = document.querySelector(sel);
-                                        if (!el) return { isSelect: false };
-                                        const className = el.className || '';
-                                        const isSelect = className.includes('el-select');
-                                        const isFilterable = className.includes('is-filterable');
-                                        const placeholder = el.querySelector('.el-input__inner')?.placeholder || '';
-                                        return { isSelect, isFilterable, placeholder };
-                                    }""", selector)
-                                    
-                                    if is_el_select and is_el_select.get('isSelect'):
-                                        uat_logger.info(f"✅ [FILL_DEBUG] 检测到Element UI下拉框，使用专用填充方法")
+                                        uat_logger.info(f"🔍 [FILL_DEBUG] 尝试方式6: Element UI下拉框专用处理")
                                         
-                                        # 使用专用方法填充el-select
-                                        if self.locator_manager:
-                                            fill_success = await self.locator_manager.fill_el_select(
-                                                selector=selector,
-                                                value=text,
-                                                placeholder=is_el_select.get('placeholder')
-                                            )
-                                            if fill_success:
-                                                uat_logger.info(f"✅ [FILL_DEBUG] Element UI下拉框填充成功")
+                                        # 检测是否是el-select组件
+                                        is_el_select = await target_context.evaluate("""(sel) => {
+                                            const el = document.querySelector(sel);
+                                            if (!el) return { isSelect: false };
+                                            const className = el.className || '';
+                                            const isSelect = className.includes('el-select');
+                                            const isFilterable = className.includes('is-filterable');
+                                            const placeholder = el.querySelector('.el-input__inner')?.placeholder || '';
+                                            return { isSelect, isFilterable, placeholder };
+                                        }""", selector)
                                         
-                                        # 如果是可搜索下拉框，尝试搜索方式
-                                        if not fill_success and is_el_select.get('isFilterable'):
-                                            fill_success = await self.locator_manager.fill_el_select_searchable(
-                                                selector=selector,
-                                                value=text,
-                                                placeholder=is_el_select.get('placeholder')
-                                            )
-                                    else:
-                                        uat_logger.info(f"🔍 [FILL_DEBUG] 不是Element UI下拉框，继续尝试其他方式")
-                                except Exception as e6:
-                                    uat_logger.error(f"❌ [FILL_DEBUG] 方式6失败: {str(e6)}")
-                            
-                            # 🔥 方式7: 增强型智能定位器降级机制
-                            if not fill_success and self.locator_manager:
-                                try:
-                                    uat_logger.info(f"🔍 [FILL_DEBUG] 尝试方式7: 增强型智能定位器降级")
-                                    
-                                    # 尝试提取元素信息并使用智能定位
-                                    element_info = await self.locator_manager.extract_element_info(selector if selector_type == "css" else None)
-                                    if element_info:
-                                        uat_logger.info(f"🔍 [FILL_DEBUG] 提取到元素信息: {element_info.tag_name}")
-                                        locator = await self.locator_manager.find_element(element_info, max_attempts=3)
-                                        if locator:
-                                            await locator.fill(text, timeout=10000)
-                                            uat_logger.info(f"✅ [FILL_DEBUG] 方式7成功填充元素: 使用智能定位器")
-                                            fill_success = True
+                                        if is_el_select and is_el_select.get('isSelect'):
+                                            uat_logger.info(f"✅ [FILL_DEBUG] 检测到Element UI下拉框，使用专用填充方法")
+                                            
+                                            # 使用专用方法填充el-select
+                                            if self.locator_manager:
+                                                fill_success = await self.locator_manager.fill_el_select(
+                                                    selector=selector,
+                                                    value=text,
+                                                    placeholder=is_el_select.get('placeholder')
+                                                )
+                                                if fill_success:
+                                                    uat_logger.info(f"✅ [FILL_DEBUG] Element UI下拉框填充成功")
+                                            
+                                            # 如果是可搜索下拉框，尝试搜索方式
+                                            if not fill_success and is_el_select.get('isFilterable'):
+                                                fill_success = await self.locator_manager.fill_el_select_searchable(
+                                                    selector=selector,
+                                                    value=text,
+                                                    placeholder=is_el_select.get('placeholder')
+                                                )
                                         else:
-                                            uat_logger.warning(f"⚠️ [FILL_DEBUG] 智能定位器未找到元素")
-                                    else:
-                                        uat_logger.warning(f"⚠️ [FILL_DEBUG] 无法提取元素信息")
-                                except Exception as e7:
-                                    uat_logger.error(f"❌ [FILL_DEBUG] 方式7失败: {str(e7)}")
-        
+                                            uat_logger.info(f"🔍 [FILL_DEBUG] 不是Element UI下拉框，继续尝试其他方式")
+                                    except Exception as e6:
+                                        uat_logger.error(f"❌ [FILL_DEBUG] 方式6失败: {str(e6)}")
+                                
+                                # 🔥 方式7: 增强型智能定位器降级机制
+                                if not fill_success and self.locator_manager:
+                                    try:
+                                        uat_logger.info(f"🔍 [FILL_DEBUG] 尝试方式7: 增强型智能定位器降级")
+                                        
+                                        # 尝试提取元素信息并使用智能定位
+                                        element_info = await self.locator_manager.extract_element_info(selector if selector_type == "css" else None)
+                                        if element_info:
+                                            uat_logger.info(f"🔍 [FILL_DEBUG] 提取到元素信息: {element_info.tag_name}")
+                                            locator = await self.locator_manager.find_element(element_info, max_attempts=3)
+                                            if locator:
+                                                await locator.fill(text, timeout=10000)
+                                                uat_logger.info(f"✅ [FILL_DEBUG] 方式7成功填充元素: 使用智能定位器")
+                                                fill_success = True
+                                            else:
+                                                uat_logger.warning(f"⚠️ [FILL_DEBUG] 智能定位器未找到元素")
+                                        else:
+                                            uat_logger.warning(f"⚠️ [FILL_DEBUG] 无法提取元素信息")
+                                    except Exception as e7:
+                                        uat_logger.error(f"❌ [FILL_DEBUG] 方式7失败: {str(e7)}")
+            
         # 🔥 最终验证：确保输入真正成功
         if fill_success:
             try:
@@ -4302,6 +4408,48 @@ class PlaywrightAutomation:
         }
         
         try:
+            # 分组 XPath：(//node)[k] — wait_for_selector / document.evaluate(FIRST_ORDERED) 易误判为不存在
+            if selector_type == "xpath":
+                xb = full_selector[6:] if full_selector.startswith("xpath=") else full_selector
+                gx = _xpath_group_inner_and_index(xb)
+                if gx:
+                    inner, idx1 = gx
+                    try:
+                        loc = context.locator(f"xpath={inner}")
+                        cnt = await loc.count()
+                        if cnt == 0:
+                            return result
+                        idx0 = idx1 - 1
+                        if idx0 >= cnt:
+                            uat_logger.warning(
+                                f"⚠️ [ELEMENT_CHECK] XPath 命中 {cnt} 个，录制序 [{idx1}] 改为索引 {cnt - 1}"
+                            )
+                            idx0 = cnt - 1
+                        nth = loc.nth(idx0)
+                        await nth.wait_for(state="attached", timeout=5000)
+                        result["exists"] = True
+                        element_info = await nth.evaluate("""element => ({
+                            tagName: element.tagName.toLowerCase(),
+                            type: element.type || '',
+                            className: element.className,
+                            id: element.id,
+                            placeholder: element.placeholder || '',
+                            isContentEditable: element.isContentEditable,
+                            value: element.value || ''
+                        })""")
+                        if element_info:
+                            result["tag_name"] = element_info.get("tagName")
+                            tn = element_info.get("tagName", "")
+                            if tn in ("input", "textarea"):
+                                result["type"] = tn
+                            elif element_info.get("isContentEditable"):
+                                result["type"] = "contenteditable"
+                            else:
+                                result["type"] = tn
+                        return result
+                    except Exception as e_gx:
+                        uat_logger.debug(f"[ELEMENT_CHECK] 分组 XPath 检查失败，回退常规检查: {e_gx}")
+            
             if hasattr(context, 'wait_for_selector'):
                 # 检查元素是否存在
                 try:
@@ -7450,7 +7598,7 @@ class PlaywrightAutomation:
         # 强制使用主页面，禁用所有多标签页和并行执行逻辑
         target_page = self.page
         if target_page is None:
-            await self.start_browser(headless=False)
+            await self.start_browser()
             target_page = self.page
         
         # 确保使用主页面，禁用所有并行执行选项
@@ -8092,7 +8240,7 @@ class PlaywrightAutomation:
         
         if browser_need_start:
             try:
-                await self.start_browser(headless=False)
+                await self.start_browser()
                 uat_logger.info("✅ [SERIAL_MULTI_CASE] 浏览器启动成功")
             except Exception as browser_error:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器启动失败: {str(browser_error)}")
@@ -8227,7 +8375,7 @@ class PlaywrightAutomation:
                 if not browser_alive:
                     uat_logger.warning(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_id} 执行前浏览器已断连，重新启动...")
                     try:
-                        await self.start_browser(headless=False)
+                        await self.start_browser()
                     except Exception as restart_error:
                         uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器重启失败: {str(restart_error)}")
                         process_case_result({
@@ -9281,7 +9429,7 @@ if __name__ == "__main__":
     print("   - 工作线程异步函数执行添加了1分钟超时控制")
     print("   - 所有步骤执行都会严格限制在60秒内")
 
-def sync_start_browser(headless=False):
+def sync_start_browser(headless: bool = True):
     async def run():
         return await automation.start_browser(headless)
     return worker.execute(run)

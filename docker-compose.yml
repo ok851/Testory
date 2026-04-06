@@ -20,6 +20,8 @@ services:
       - FLASK_DEBUG=0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
       - DATABASE_PATH=/app/data/test_cases.db
+      # 无显示环境默认无头；本地调试可在 .env 中设 PLAYWRIGHT_HEADLESS=0
+      - PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-1}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]

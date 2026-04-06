@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>录制教程 - Playwright Codegen</title>
+    <style>
+        body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+        h1 { color: #667eea; font-size: 1.5rem; }
+        h2 { font-size: 1.1rem; margin-top: 28px; color: #444; }
+        code, pre { background: #f4f4f6; padding: 2px 8px; border-radius: 4px; font-size: 0.95em; }
+        pre { padding: 14px; overflow-x: auto; display: block; }
+        ol { padding-left: 1.2em; }
+        .tip { background: #e8f4fd; border-left: 4px solid #2196f3; padding: 12px 16px; margin: 20px 0; border-radius: 0 8px 8px 0; }
+        a.btn { display: inline-block; margin-top: 16px; padding: 10px 18px; background: #667eea; color: #fff; text-decoration: none; border-radius: 8px; }
+        a.btn:hover { background: #5568d3; }
+    </style>
+</head>
+<body>
+    <h1>约 1 分钟：用 Playwright 官方录制器录步骤</h1>
+    <p>无需安装本站点插件、无需远程调试、无需桥接脚本。在本机装好 Playwright CLI 即可。</p>
+
+    <h2>1. 本机一行启动录制</h2>
+    <p>打开终端（Windows：命令提示符或 PowerShell），任选其一：</p>
+    <pre>playwright codegen</pre>
+    <p>若未全局安装，可用 Node 自带的 npx（推荐，零全局依赖）：</p>
+    <pre>npx playwright codegen</pre>
+    <p>指定起始网址示例：</p>
+    <pre>npx playwright codegen https://你的系统地址</pre>
+    <p>首次使用需安装浏览器二进制：</p>
+    <pre>npx playwright install</pre>
+    <p class="tip">Codegen 会打开浏览器窗口和<strong>代码窗口</strong>。你在浏览器里点击、输入、跳转，代码会实时生成。</p>
+
+    <h2>关于「--target=xpath」录出来却是 getByRole？</h2>
+    <p>在官方 Playwright 里，<code>--target</code> 表示的是<strong>生成代码所用语言/框架</strong>，例如 <code>javascript</code>、<code>python</code>、<code>playwright-test</code>、<code>pytest</code> 等，<strong>并不是</strong>「全部改成 XPath」。写成 <code>--target=xpath</code> 通常<strong>无效</strong>，Codegen 仍会按官方策略优先生成 <code>getByRole</code>、<code>getByText</code>、<code>getByTestId</code> 等定位。</p>
+    <p class="tip">若你需要 XPath：① 在 <strong>Playwright Inspector</strong> 里用 <strong>Pick locator</strong> 点元素，在定位器区域查看/切换并复制含 <code>//</code> 或 <code>xpath=...</code> 的写法；② 或在浏览器开发者工具里对节点「复制 → XPath」，再自行写成 <code>page.locator('//...')</code> / <code>page.locator('xpath=//...')</code> 一并粘贴。<strong>本平台导入</strong>已支持上述 <code>locator(...)</code> 形式的 XPath（会识别为步骤里的 XPath 定位）。</p>
+
+    <h2>2. 复制代码</h2>
+    <p>在 Codegen 的<strong>代码预览</strong>里全选复制（Python 或 JavaScript 均可）。尽量包含 <code>page.goto</code>、<code>click</code>、<code>fill</code> 等行。</p>
+
+    <h2>3. 粘贴到平台</h2>
+    <p>打开「测试用例步骤」页 → 点击 <strong>从 Codegen 导入</strong> → 粘贴 → 选择是否清空原有步骤 → 导入。</p>
+    <p>平台会把常见 API 转成可执行步骤；复杂 API 可能需你在步骤列表里微调。</p>
+
+    <h2>4. 执行</h2>
+    <p>用例仍在<strong>服务器无头 Playwright</strong>上运行，与录制环境无关。</p>
+
+    <h2>5. 可选：Selenium IDE 录制（id / xpath / css 等）</h2>
+    <p>若你希望录制结果里<strong>直接带 id=、css=、xpath=、linkText=</strong> 等 Selenium 风格定位，可使用 Mozilla 的 <strong>Selenium IDE</strong> 浏览器扩展；本平台支持把保存的 <code>.side</code> 项目 JSON 粘贴导入为步骤（与 Playwright Codegen 二选一或混用导入）。</p>
+    <h3>使用方法（简要）</h3>
+    <ol>
+        <li>在 <strong>Chrome 网上应用店</strong> 或 <strong>Firefox 附加组件</strong> 搜索并安装 <strong>Selenium IDE</strong>。</li>
+        <li>打开扩展 → <strong>Record a new test in a new project</strong> → 输入项目名与起始 URL → 在浏览器中操作页面。</li>
+        <li>录制结束后在 IDE 中 <strong>File → Save project</strong>，得到 <code>xxx.side</code> 文件。</li>
+        <li>用系统自带记事本 / VS Code 打开该文件，<strong>Ctrl+A 全选 → 复制</strong>。</li>
+        <li>在本平台打开对应用例的 <strong>测试步骤</strong>页 → 点击 <strong>从 Selenium IDE 导入</strong> → 粘贴 JSON → 可选「导入前清空已有步骤」→ 导入。</li>
+    </ol>
+    <p class="tip">说明：一个 .side 里若有多条测试用例，当前<strong>只自动导入第一条</strong>；导入时会优先使用 Selenium IDE 在 <code>targets</code> 里给出的<strong>备选定位</strong>（例如带 <code>@id</code> 的 XPath），避免仅使用带随机后缀 class 的 CSS（如 <code>.foo_a8f3c</code>）导致再次运行找不到元素。断言、脚本、切换窗口等命令会跳过并提示。执行仍在本平台无头 Playwright 引擎上完成。</p>
+
+    <a href="javascript:history.back()" class="btn">← 返回上一页</a>
+    <a href="/list_projects" class="btn" style="background:#6c757d;margin-left:8px;">项目列表</a>
+</body>
+</html>
