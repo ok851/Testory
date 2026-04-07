@@ -22,6 +22,10 @@ from enhanced_locator import (
     create_locator_manager,
     ElementInfo
 )
+from playwright_codegen_import import (
+    runtime_xpath_button_link_fallback_items,
+    xpath_click_attempt_variants,
+)
 
 # 🔥 添加全局执行锁，防止并发执行多个测试用例集
 _execution_lock = threading.Lock()
@@ -89,6 +93,50 @@ _INVALID_URL_SKIP = frozenset([
 # 🔥 修复：IP 地址正则表达式增加 100-199 范围的匹配 (1[0-9]{2})
 # IP 第一段 (1-255): (25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[1-9])
 # IP 中间/最后段 (0-255): (25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])
+def _normalize_xpath_selector_value(selector: str) -> str:
+    """
+    Codegen / 从 TS 源码复制步骤时，XPath 里可能残留 JS 字符串转义（如 \\' 请输入 \\'）。
+    浏览器与 document.evaluate 需要真实的引号字符，此处按 JS 字符串规则做一次反转义。
+    """
+    if not selector or "\\" not in selector:
+        return selector
+    out: List[str] = []
+    i, n = 0, len(selector)
+    while i < n:
+        if selector[i] == "\\" and i + 1 < n:
+            c = selector[i + 1]
+            if c in "'\"\\":
+                out.append(c)
+                i += 2
+                continue
+            if c == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if c == "r":
+                out.append("\r")
+                i += 2
+                continue
+            if c == "t":
+                out.append("\t")
+                i += 2
+                continue
+            if (
+                c == "u"
+                and i + 6 <= n
+                and all(ch in "0123456789abcdefABCDEF" for ch in selector[i + 2 : i + 6])
+            ):
+                try:
+                    out.append(chr(int(selector[i + 2 : i + 6], 16)))
+                    i += 6
+                    continue
+                except ValueError:
+                    pass
+        out.append(selector[i])
+        i += 1
+    return "".join(out)
+
+
 _URL_RE = re.compile(
     r'^https?://'
     r'(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}'
@@ -351,7 +399,7 @@ class PlaywrightAutomation:
         uat_logger.info("🔌 [BROWSER] 已断开连接，录制已自动结束")
 
     async def is_browser_session_usable(self) -> bool:
-        """主标签页是否仍可用于自动化（用于 /api/recording/status 健康检查）"""
+        """主标签页是否仍可用于自动化（例如运行用例前的会话检查）。"""
         try:
             if self.browser is None or not self.browser.is_connected():
                 return False
@@ -756,12 +804,6 @@ class PlaywrightAutomation:
                 self.locator_manager = create_locator_manager(self.page)
                 await self.locator_manager.setup_tracking()
                 
-                # 设置事件监听器用于录制用户操作
-                await self._setup_event_listeners()
-                
-                # 监听页面跳转事件,确保在新页面上也设置事件监听器
-                self.page.on('framenavigated', self._on_page_navigated)
-                
                 uat_logger.info("浏览器启动完成，已准备就绪")
             
             try:
@@ -786,966 +828,21 @@ class PlaywrightAutomation:
             raise Exception(f"启动浏览器失败: {str(e)}")
     
     async def _setup_event_listeners(self, page=None):
-        """设置页面事件监听器用于录制操作"""
-        target_page = page if page is not None else self.page
-        if target_page:
-            # 定义事件监听器JavaScript代码
-            event_listeners_js = r"""
-                // 检查是否已经添加了事件监听器,避免重复添加
-                if (!window.eventListenersAdded) {
-                    // 初始化事件数组
-                    window.automationEvents = window.automationEvents || [];
-                    window.automationConfig = {
-                        scrollTimeout: null,
-                        lastScrollPosition: { x: 0, y: 0 },
-                        lastScrollByTarget: {},
-                        scrollThreshold: 24,
-                        inputDebounce: {},
-                        debounceDelay: 1000,
-                        recordingPaused: false,
-                        _scrollTimersByEl: null
-                    };
-                
-                // 生成更精确的CSS选择器
-                // 递归辅助函数:生成元素的完整路径选择器
-                function generateFullPath(element, maxDepth = 4, currentDepth = 0) {
-                    if (!element || element.tagName === 'HTML' || currentDepth >= maxDepth) {
-                        return [];
-                    }
-                    
-                    let elementSelector = '';
-                    const tagName = element.tagName.toLowerCase();
-                    
-                    // 优先使用ID
-                    if (element.id) {
-                        return [`#${element.id}`];
-                    }
-                    
-                    // 优先使用稳定属性 - 扩展更多自动化测试常用属性
-                    const stableAttrs = [
-                        'data-testid', 'data-cy', 'data-test', 'data-qa', 
-                        'data-automation', 'data-selector', 'data-key', 
-                        'data-id', 'data-name', 'data-component', 
-                        'data-module', 'data-section', 'data-field',
-                        'data-action', 'data-target', 'data-type',
-                        'name', 'title', 'role', 'aria-label', 
-                        'aria-labelledby', 'aria-describedby', 'aria-controls'
-                    ];
-                    let hasStableAttr = false;
-                        for (const attr of stableAttrs) {
-                            const value = element.getAttribute(attr);
-                            if (value && value.length > 0) {
-                                // 支持包含空格的值,使用转义双引号
-                                const safeValue = value.replace(/"/g, '&quot;');
-                                elementSelector = `${tagName}[${attr}="${safeValue}"]`;
-                                hasStableAttr = true;
-                                break;
-                            }
-                        }
-                    
-                    if (!hasStableAttr) {
-                        elementSelector = tagName;
-                        // 处理类名,过滤掉动态类名
-                        if (element.className) {
-                            const allClasses = element.className.split(' ').filter(c => c.length > 2); // 过滤掉太短的类名
-                            // 🔥 增强型动态类名过滤模式
-                            const dynamicClassPatterns = [
-                                // CSS-in-JS / Styled Components
-                                /^css-[a-zA-Z0-9]{5,}$/, /^styled__[a-zA-Z0-9]+$/, 
-                                /^sc-[a-zA-Z]+$/, /^emotion-\d+$/, /^jss\d+$/,
-                                /^makeStyles-[a-zA-Z0-9-]+$/,
-                                
-                                // 动画状态类
-                                /^is-\w+$/, /^has-\w+$/, /^\w+-\w+-(leave|enter|active|done|start|end)$/,
-                                /^anim-\w+-\d+$/, /^transition-\w+-\d+$/,
-                                
-                                // 框架特定
-                                /^el-\w+(-\w+)*$/, /^ant-\w+(-\w+)*$/, /^t-[a-zA-Z0-9]{8}$/, 
-                                /^weui-\w+(-\w+)*$/, /^layui-\w+(-\w+)*$/, 
-                                /^ivu-\w+(-\w+)*$/, /^van-\w+$/, /^uni-\w+$/,
-                                /^v-\w+$/, /^ng-\w+$/, /^vue-\w+$/, /^react-\w+$/, /^svelte-\w+$/,
-                                /^data-v-[a-f0-9]{8}$/, // Vue scoped
-                                
-                                // 时间戳和随机ID
-                                /^\d{10,}$/, /^\d{4}-\d{2}-\d{2}.*$/, /^time-\d+$/, /^timestamp-\d+$/,
-                                /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/, // UUID
-                                /^[a-f0-9]{32}$/, /^[a-zA-Z0-9]{20,}$/, // MD5/长随机
-                                
-                                // 工具类框架
-                                /^tw-[a-z]+(-\w+)*$/, /^tailwind-[a-z]+(-\w+)*$/,
-                                
-                                // 布局工具类
-                                /^flex$/, /^grid$/, /^block$/, /^inline$/, /^hidden$/, /^visible$/, 
-                                /^absolute$/, /^relative$/, /^fixed$/, /^sticky$/, 
-                                /^left-\d+$/, /^right-\d+$/, /^top-\d+$/, /^bottom-\d+$/, 
-                                /^w-\d+$/, /^h-\d+$/, /^max-w-\d+$/, /^max-h-\d+$/, 
-                                /^p-\d+$/, /^m-\d+$/, /^mt-\d+$/, /^mr-\d+$/, /^mb-\d+$/, /^ml-\d+$/, 
-                                /^pt-\d+$/, /^pr-\d+$/, /^pb-\d+$/, /^pl-\d+$/, 
-                                /^text-\w+$/, /^bg-\w+$/, /^border-\w+$/, /^rounded-\w+$/, 
-                                
-                                // 响应式类
-                                /^mobile-\w+$/, /^tablet-\w+$/, /^desktop-\w+$/, 
-                                /^xl-\w+$/, /^sm-\w+$/, /^md-\w+$/, /^lg-\w+$/,
-                                /^lang-\w+$/, /^i18n-\w+$/, /^ltr$/, /^rtl$/,
-                                
-                                // 版本号
-                                /^v?\d+\.\d+\.\d+(-[a-z]+\.?\d*)?$/,
-                                
-                                // 纯数字和短类名
-                                /^\d+$/, /^\d+-\w+$/, /^\w+-\d+$/, /^[a-f0-9]{6,}$/, 
-                                /^\w+-[a-f0-9]{6,16}$/, /^\w+-[0-9a-z]{8,}$/, 
-                                /^[a-z]{3,6}-[0-9a-z]{5,10}$/
-                            ];
-                            
-                            const stableClasses = allClasses.filter(c => {
-                                    // 过滤掉动态类名
-                                    const isDynamic = dynamicClassPatterns.some(p => p.test(c));
-                                    // 过滤掉只有数字或特殊字符的类名
-                                    const isInvalid = /^[0-9_\-\.\s]+$/.test(c);
-                                    // 过滤掉太短的类名(可能是动态生成的)
-                                    const isTooShort = c.length < 3;
-                                    return !isDynamic && !isInvalid && !isTooShort;
-                                });
-                            if (stableClasses.length) {
-                                elementSelector += '.' + stableClasses.slice(0, 3).join('.');
-                            }
-                        }
-                    }
-                    
-                    // 元素类型特定属性处理,增强对动态表单元素的支持
-                        if (tagName === 'input') {
-                            // 对于表单输入元素,添加更多识别属性
-                            const type = element.type;
-                            elementSelector += `[type="${type}"]`;
-                            
-                            // 优化表单元素识别顺序,优先使用更多稳定属性
-                            if (element.name && element.name.length > 0) {
-                                elementSelector += `[name="${element.name}"]`;
-                            } else if (element.placeholder && element.placeholder.length > 0) {
-                                elementSelector += `[placeholder="${element.placeholder}"]`;
-                            } else if (element.value && element.value.length > 0 && !element.value.match(/^[0-9]+$/)) {
-                                // 仅对非数字的静态值使用value属性
-                                elementSelector += `[value="${element.value}"]`;
-                            } else if (element.getAttribute('aria-label')) {
-                                elementSelector += `[aria-label="${element.getAttribute('aria-label')}"]`;
-                            }
-                        } else if (tagName === 'textarea' || tagName === 'select') {
-                            // 对于其他表单元素,增强识别能力
-                            if (element.name && element.name.length > 0) {
-                                elementSelector += `[name="${element.name}"]`;
-                            } else if (element.placeholder && element.placeholder.length > 0) {
-                                elementSelector += `[placeholder="${element.placeholder}"]`;
-                            } else if (element.title && element.title.length > 0) {
-                                elementSelector += `[title="${element.title}"]`;
-                            } else if (element.getAttribute('aria-label')) {
-                                elementSelector += `[aria-label="${element.getAttribute('aria-label')}"]`;
-                            }
-                        } else if (tagName === 'button') {
-                            // 增强按钮元素的识别,优化动态按钮处理
-                            if (element.textContent && element.textContent.trim().length > 0) {
-                                const text = element.textContent.trim().substring(0, 25).replace(/"/g, '&quot;');
-                                elementSelector += `:contains("${text}")`;
-                            } else if (element.getAttribute('aria-label')) {
-                                elementSelector += `[aria-label="${element.getAttribute('aria-label')}"]`;
-                            } else if (element.type) {
-                                elementSelector += `[type="${element.type}"]`;
-                            }
-                        } else if (tagName === 'img') {
-                            // 对于图片,使用更精确的定位
-                            if (element.alt && element.alt.length > 0) {
-                                elementSelector += `[alt="${element.alt}"]`;
-                            } else if (element.src && element.src.length > 0) {
-                            // 对于图片,使用部分src路径
-                            const srcParts = element.src.split('/');
-                            const filename = srcParts[srcParts.length - 1];
-                            elementSelector += `[src*="${filename}"]`;
-                        }
-                    } else if (tagName === 'a') {
-                        // 对于链接,使用href属性
-                        if (element.href && element.href.length > 0) {
-                            const url = element.href;
-                            // 只使用相对路径或域名后的路径
-                            const path = url.replace(/^https?:\/\//, '').split('/').slice(1).join('/');
-                            if (path.length > 0) {
-                                elementSelector += `[href*="${path}"]`;
-                            }
-                        }
-                    } else if (tagName === 'button') {
-                        // 对于按钮,添加更多识别属性
-                        if (element.textContent && element.textContent.trim().length > 0) {
-                            // 只在没有其他更好的属性时使用文本内容
-                            const text = element.textContent.trim();
-                            if (text.length < 20 && !elementSelector.includes(':has-text(')) {
-                                elementSelector += `:has-text("${text}")`;
-                            }
-                        } else if (element.title && element.title.length > 0 && !elementSelector.includes('[title=')) {
-                            elementSelector += `[title="${element.title}"]`;
-                        }
-                    }
-                    
-                    // 添加更多稳定属性作为补充
-                    const additionalAttrs = ['data-name', 'role', 'aria-label', 'aria-labelledby'];
-                    for (const attr of additionalAttrs) {
-                        const value = element.getAttribute(attr);
-                        if (value && value.length > 0 && !value.includes(' ') && !elementSelector.includes(`[${attr}=`)) {
-                            elementSelector += `[${attr}="${value}"]`;
-                        }
-                    }
-                    
-                    // 添加更多稳定属性
-                    if (element.title && element.title.length > 0 && !elementSelector.includes('[title=')) {
-                        elementSelector += `[title="${element.title}"]`;
-                    }
-                    
-                    const parentPath = generateFullPath(element.parentElement, maxDepth, currentDepth + 1);
-                    return [...parentPath, elementSelector];
-                }
-                
-                // 生成完整的CSS选择器
-                function generateSelector(element) {
-                    if (!element) return '';
-                    
-                    // 生成完整路径
-                    let path = generateFullPath(element);
-                    
-                    // 如果路径为空,直接返回标签名
-                    if (path.length === 0) {
-                        return element.tagName.toLowerCase();
-                    }
-                    
-                    // 将路径数组转换为完整的CSS选择器
-                    let fullSelector = path.join(' > ');
-                    
-                    // 检查选择器的唯一性
-                    try {
-                        const matches = document.querySelectorAll(fullSelector);
-                        if (matches.length > 1) {
-                            // 如果选择器不唯一,添加nth-of-type作为兜底
-                            let uniquePath = [...path];
-                            let index = 1;
-                            let parent = element.parentElement;
-                            
-                            // 查找当前元素在父元素中的位置
-                            if (parent) {
-                                const siblings = Array.from(parent.children).filter(child => child.tagName === element.tagName);
-                                index = siblings.indexOf(element) + 1;
-                                
-                                // 如果有多个同类型的兄弟元素,添加nth-of-type
-                                if (siblings.length > 1) {
-                                    const lastSelector = uniquePath.pop();
-                                    const tagName = element.tagName.toLowerCase();
-                                    // 确保我们只给基础标签添加nth-of-type
-                                    if (lastSelector.startsWith(tagName + '[') || lastSelector === tagName) {
-                                        uniquePath.push(`${lastSelector}:nth-of-type(${index})`);
-                                    } else {
-                                        uniquePath.push(lastSelector);
-                                    }
-                                    fullSelector = uniquePath.join(' > ');
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        // 如果查询失败,使用原始选择器
-                        console.error('选择器验证失败:', e);
-                    }
-                    
-                    return fullSelector;
-                }
-                
-                /** 自有录制器：为元素生成多定位器备选（按 score 排序，执行端按序降级重试） */
-                function buildLocatorPack(element) {
-                    if (!element || element.nodeType !== 1) return [];
-                    const pack = [];
-                    function add(type, value, score) {
-                        if (value === null || value === undefined) return;
-                        const v = String(value).trim();
-                        if (!v) return;
-                        for (let i = 0; i < pack.length; i++) {
-                            if (pack[i].type === type && pack[i].value === v) return;
-                        }
-                        pack.push({ type: type, value: v, score: score });
-                    }
-                    const tag = element.tagName.toLowerCase();
-                    if (element.id) {
-                        const id = element.id.replace(/"/g, '\\"');
-                        add('css', '[id="' + id + '"]', 100);
-                        add('xpath', '//*[@id="' + id + '"]', 99);
-                    }
-                    const dtAttrs = ['data-testid', 'data-cy', 'data-test', 'data-qa'];
-                    for (let k = 0; k < dtAttrs.length; k++) {
-                        const a = dtAttrs[k];
-                        const val = element.getAttribute(a);
-                        if (val) {
-                            const safe = val.replace(/"/g, '\\"');
-                            add('css', tag + '[' + a + '="' + safe + '"]', 96);
-                            add('xpath', '//' + tag + '[@' + a + '="' + safe + '"]', 94);
-                        }
-                    }
-                    const nm = element.getAttribute('name');
-                    if (nm) {
-                        const safe = nm.replace(/"/g, '\\"');
-                        add('css', tag + '[name="' + safe + '"]', 88);
-                    }
-                    const ph = element.getAttribute('placeholder');
-                    if (ph && (tag === 'input' || tag === 'textarea')) {
-                        const safe = ph.replace(/"/g, '\\"');
-                        add('css', tag + '[placeholder="' + safe + '"]', 72);
-                    }
-                    const aria = element.getAttribute('aria-label');
-                    if (aria) {
-                        const safe = aria.replace(/"/g, '\\"');
-                        add('css', tag + '[aria-label="' + safe + '"]', 70);
-                    }
-                    const innerText = (element.innerText || '').trim();
-                    if (innerText && innerText.length > 0 && innerText.length < 48 && innerText.indexOf('\n') < 0) {
-                        const safe = innerText.replace(/"/g, '\\"');
-                        add('css', tag + ' >> text="' + safe + '"', 58);
-                    }
-                    try {
-                        const primary = generateSelector(element);
-                        if (primary) add('css', primary, 50);
-                    } catch (eGen) {}
-                    pack.sort(function(a, b) { return b.score - a.score; });
-                    return pack;
-                }
-                
-                // 点击事件监听 - 使用冒泡阶段避免重复事件
-                if (document && document.addEventListener) {
-                    document.addEventListener('click', function(e) {
-                        if (e.target && e.target.closest && e.target.closest('#__ui_platform_recorder_dock_v2')) return;
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        const target = e.target;
-                        let actualTarget = target;
-                        
-                        // 处理复合组件(如复选框/单选框):统一使用最外层可交互元素作为目标
-                        function findCompositeComponentRoot(element, componentTypes) {
-                            let current = element;
-                            while (current && current.tagName !== 'BODY' && current.tagName !== 'HTML') {
-                                // 检查当前元素是否包含组件类型关键字
-                                const hasComponentType = componentTypes.some(type => 
-                                    current.className && current.className.includes(type)
-                                );
-                                
-                                // 检查当前元素是否是label标签
-                                const isLabel = current.tagName === 'LABEL';
-                                
-                                // 检查当前元素是否包含目标input类型
-                                const hasTargetInput = componentTypes.some(type => 
-                                    current.querySelector(`input[type="${type}"]`)
-                                );
-                                
-                                if (hasComponentType || isLabel || hasTargetInput) {
-                                    return current;
-                                }
-                                
-                                current = current.parentElement;
-                            }
-                            return null;
-                        }
-                        
-                        // 处理input类型的复合组件
-                        if (target.tagName === 'INPUT') {
-                            if (target.type === 'checkbox' || target.type === 'radio') {
-                                // 查找复合组件的根元素
-                                const rootElement = findCompositeComponentRoot(target, [target.type]);
-                                if (rootElement) {
-                                    actualTarget = rootElement;
-                                }
-                            }
-                        }
-                        // 处理非input类型的复合组件点击
-                        else {
-                            // 检查是否点击了复选框或单选框的关联元素
-                            const checkbox = target.querySelector('input[type="checkbox"]');
-                            const radio = target.querySelector('input[type="radio"]');
-                            
-                            if (checkbox || radio) {
-                                // 当前元素包含input,使用当前元素作为目标
-                                actualTarget = target;
-                            } else {
-                                // 检查父元素是否包含checkbox或radio
-                                const hasCheckbox = target.closest('[class*="checkbox"]');
-                                const hasRadio = target.closest('[class*="radio"]');
-                                
-                                if (hasCheckbox || hasRadio) {
-                                    // 使用closest方法找到最近的包含checkbox或radio类名的元素
-                                    actualTarget = hasCheckbox || hasRadio;
-                                } else {
-                                    // 查找包含checkbox或radio input的父元素
-                                    const parentCheckbox = target.closest(':has(input[type="checkbox"])');
-                                    const parentRadio = target.closest(':has(input[type="radio"])');
-                                    
-                                    if (parentCheckbox || parentRadio) {
-                                        actualTarget = parentCheckbox || parentRadio;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        const selector = generateSelector(actualTarget);
-                        
-                        // 记录详细的元素信息
-                        const elementInfo = {
-                            tagName: actualTarget.tagName,
-                            id: actualTarget.id || '',
-                            className: actualTarget.className || '',
-                            textContent: actualTarget.textContent ? actualTarget.textContent.substring(0, 50) : '',
-                            attributes: {}
-                        };
-                        
-                        // 收集重要属性
-                        ['name', 'type', 'placeholder', 'value', 'href', 'title', 'alt', 'role', 'data-testid', 'data-cy'].forEach(attr => {
-                            if (actualTarget[attr]) {
-                                elementInfo.attributes[attr] = actualTarget[attr];
-                            }
-                        });
-                        
-                        if (window && window.automationEvents) {
-                            window.automationEvents.push({
-                                action: 'click',
-                                selector: selector,
-                                timestamp: Date.now(),
-                                elementInfo: elementInfo,
-                                locatorPack: buildLocatorPack(actualTarget)
-                            });
-                            
-                            // 检查是否点击了提交按钮,如果是则记录submit事件
-                            const isSubmitButton = actualTarget.tagName === 'BUTTON' || 
-                                                  (actualTarget.tagName === 'INPUT' && (actualTarget.type === 'submit' || actualTarget.type === 'button'));
-                            const hasSubmitClass = actualTarget.className && 
-                                                  (actualTarget.className.includes('submit') || 
-                                                   actualTarget.className.includes('primary') || 
-                                                   actualTarget.className.includes('login'));
-                            
-                            if (isSubmitButton || hasSubmitClass) {
-                                // 查找关联的表单
-                                const form = actualTarget.closest('form');
-                                if (form) {
-                                    const formSelector = generateSelector(form);
-                                    // 记录submit事件,选择器是提交按钮的选择器,而不是表单的选择器
-                                    // 这样在回放时可以直接点击提交按钮来触发表单提交
-                                    window.automationEvents.push({
-                                        action: 'submit',
-                                        selector: selector,
-                                        timestamp: Date.now(),
-                                        elementInfo: {
-                                            tagName: actualTarget.tagName,
-                                            id: actualTarget.id || '',
-                                            className: actualTarget.className || '',
-                                            type: actualTarget.type || '',
-                                            formSelector: formSelector,
-                                            formAction: form.action || ''
-                                        },
-                                        locatorPack: buildLocatorPack(actualTarget)
-                                    });
-                                }
-                            }
-                        }
-                    }, false); // 使用冒泡阶段,避免重复捕获
-                }
-                
-                // 输入监听：防抖 + blur 立即落盘，同一字段只关心最终值（合并由服务端与队列折叠处理）
-                if (document && document.addEventListener && window && window.automationConfig) {
-                    function isRecordableTextTarget(target) {
-                        if (!target) return false;
-                        const isTextInput = (
-                            (target.tagName === 'INPUT' &&
-                             ['text', 'email', 'password', 'number', 'search', 'url', 'tel'].includes(target.type)) ||
-                            target.tagName === 'TEXTAREA' ||
-                            (target.tagName === 'INPUT' && !target.type) ||
-                            target.isContentEditable
-                        );
-                        const isExcludedType = (
-                            target.tagName === 'INPUT' &&
-                            ['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image', 'hidden'].includes(target.type)
-                        );
-                        return isTextInput && !isExcludedType;
-                    }
-                    function readTargetText(target) {
-                        if (target.isContentEditable) {
-                            const raw = (target.innerText != null ? target.innerText : target.textContent) || '';
-                            return String(raw);
-                        }
-                        return target.value != null ? String(target.value) : '';
-                    }
-                    function pushFillFromTarget(target) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        if (!window || !window.automationEvents) return;
-                        if (!isRecordableTextTarget(target)) return;
-                        const selector = generateSelector(target);
-                        const text = readTargetText(target);
-                        window.automationEvents.push({
-                            action: 'fill',
-                            selector: selector,
-                            text: text,
-                            timestamp: Date.now(),
-                            elementInfo: {
-                                tagName: target.tagName,
-                                id: target.id || '',
-                                className: target.className || '',
-                                name: target.name || '',
-                                type: target.type || ''
-                            },
-                            locatorPack: buildLocatorPack(target)
-                        });
-                    }
-                    function scheduleDebouncedFill(target) {
-                        const selector = generateSelector(target);
-                        const elementId = selector + '_' + target.tagName;
-                        if (window.automationConfig.inputDebounce[elementId]) {
-                            clearTimeout(window.automationConfig.inputDebounce[elementId]);
-                        }
-                        window.automationConfig.inputDebounce[elementId] = setTimeout(() => {
-                            if (!(window.automationConfig && window.automationConfig.recordingPaused) && window && window.automationEvents) {
-                                pushFillFromTarget(target);
-                            }
-                            delete window.automationConfig.inputDebounce[elementId];
-                        }, window.automationConfig.debounceDelay);
-                    }
-                    document.addEventListener('input', function(e) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        const target = e.target;
-                        if (!isRecordableTextTarget(target)) return;
-                        scheduleDebouncedFill(target);
-                    }, true);
-                    document.addEventListener('blur', function(e) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        const target = e.target;
-                        if (!isRecordableTextTarget(target)) return;
-                        const selector = generateSelector(target);
-                        const elementId = selector + '_' + target.tagName;
-                        if (window.automationConfig.inputDebounce[elementId]) {
-                            clearTimeout(window.automationConfig.inputDebounce[elementId]);
-                            delete window.automationConfig.inputDebounce[elementId];
-                        }
-                        pushFillFromTarget(target);
-                    }, true);
-                    document.addEventListener('change', function(e) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        const target = e.target;
-                        if (target.tagName === 'SELECT') {
-                            pushFillFromTarget(target);
-                        }
-                    }, true);
-                }
-                
-                // 表单提交事件
-                if (document && document.addEventListener) {
-                    document.addEventListener('submit', function(e) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        const target = e.target;
-                        if (target.tagName === 'FORM') {
-                            // 不要阻止默认的表单提交行为,让表单能够正常提交
-                            // e.preventDefault();  // 移除此行,避免阻止表单提交
-                            
-                            // 找到触发表单提交的提交按钮
-                            let submitButton = null;
-                            if (e.submitter) {
-                                // 如果浏览器支持e.submitter属性,直接使用
-                                submitButton = e.submitter;
-                            } else {
-                                // 否则,查找表单内的第一个提交按钮
-                                const buttons = target.querySelectorAll('button[type="submit"], input[type="submit"]');
-                                if (buttons.length > 0) {
-                                    submitButton = buttons[0];
-                                }
-                            }
-                            
-                            // 如果找到提交按钮,使用提交按钮的选择器;否则使用表单的选择器
-                            const selector = submitButton ? generateSelector(submitButton) : generateSelector(target);
-                            
-                            if (window && window.automationEvents) {
-                                const submitEl = submitButton || target;
-                                window.automationEvents.push({
-                                    action: 'submit',
-                                    selector: selector,
-                                    timestamp: Date.now(),
-                                    elementInfo: {
-                                        tagName: submitButton ? submitButton.tagName : target.tagName,
-                                        id: submitButton ? (submitButton.id || '') : (target.id || ''),
-                                        className: submitButton ? (submitButton.className || '') : (target.className || ''),
-                                        action: target.action || ''
-                                    },
-                                    locatorPack: buildLocatorPack(submitEl)
-                                });
-                            }
-                        }
-                    }, true);
-                }
-                
-                // 监听页面导航事件
-                const originalPushState = history.pushState;
-                const originalReplaceState = history.replaceState;
-                
-                history.pushState = function() {
-                    const result = originalPushState.apply(history, arguments);
-                    if (window.automationConfig && !window.automationConfig.recordingPaused && window.automationEvents) {
-                        window.automationEvents.push({
-                            action: 'navigate',
-                            url: location.href,
-                            timestamp: Date.now(),
-                            navigationType: 'pushState'
-                        });
-                    }
-                    return result;
-                };
-                
-                history.replaceState = function() {
-                    const result = originalReplaceState.apply(history, arguments);
-                    if (window.automationConfig && !window.automationConfig.recordingPaused && window.automationEvents) {
-                        window.automationEvents.push({
-                            action: 'navigate',
-                            url: location.href,
-                            timestamp: Date.now(),
-                            navigationType: 'replaceState'
-                        });
-                    }
-                    return result;
-                };
-                
-                // 监听hashchange事件
-                if (window && window.addEventListener) {
-                    window.addEventListener('hashchange', function(e) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        if (window && window.automationEvents) {
-                            window.automationEvents.push({
-                                action: 'navigate',
-                                url: location.href,
-                                timestamp: Date.now(),
-                                navigationType: 'hashchange',
-                                oldURL: e.oldURL,
-                                newURL: e.newURL
-                            });
-                        }
-                    });
-                }
-                
-                // 监听popstate事件(浏览器前进/后退)
-                if (window && window.addEventListener) {
-                    window.addEventListener('popstate', function(e) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        if (window && window.automationEvents) {
-                            window.automationEvents.push({
-                                action: 'navigate',
-                                url: location.href,
-                                timestamp: Date.now(),
-                                navigationType: 'popstate',
-                                state: e.state
-                            });
-                        }
-                    });
-                }
-                
-                // 滚动：在 document 上 capture 监听，能收到「窗口滚动」与「overflow 容器内滚动」（默认 scroll 不冒泡）
-                if (document && document.addEventListener && window.automationConfig) {
-                    function isViewportScrollRoot(el) {
-                        return el === document || el === document.documentElement || el === document.body;
-                    }
-                    function flushScrollForTarget(el) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        if (!window || !window.automationEvents) return;
-                        if (!el) return;
-                        const th = window.automationConfig.scrollThreshold;
-                        let curX, curY, sel = '', isWin = false;
-                        if (isViewportScrollRoot(el)) {
-                            isWin = true;
-                            curX = window.pageXOffset || document.documentElement.scrollLeft || 0;
-                            curY = window.pageYOffset || document.documentElement.scrollTop || 0;
-                        } else if (el.nodeType === 1) {
-                            curX = el.scrollLeft;
-                            curY = el.scrollTop;
-                            try { sel = generateSelector(el); } catch (e) { sel = ''; }
-                        } else {
-                            return;
-                        }
-                        window.automationConfig.lastScrollByTarget = window.automationConfig.lastScrollByTarget || {};
-                        const mapKey = isWin ? '__window' : (sel || '__el');
-                        const prev = window.automationConfig.lastScrollByTarget[mapKey] || { x: 0, y: 0 };
-                        const deltaX = Math.abs(curX - prev.x);
-                        const deltaY = Math.abs(curY - prev.y);
-                        if (deltaX < th && deltaY < th) return;
-                        const dirX = curX > prev.x ? 'right' : (curX < prev.x ? 'left' : 'none');
-                        const dirY = curY > prev.y ? 'down' : (curY < prev.y ? 'up' : 'none');
-                        const evt = {
-                            action: 'scroll',
-                            scrollScope: isWin ? 'window' : 'element',
-                            selector: isWin ? '' : sel,
-                            scrollPosition: { x: curX, y: curY },
-                            scrollDirection: { x: dirX, y: dirY },
-                            scrollDistance: { x: deltaX, y: deltaY },
-                            timestamp: Date.now()
-                        };
-                        if (!isWin && el.nodeType === 1) {
-                            try { evt.locatorPack = buildLocatorPack(el); } catch (e) {}
-                        }
-                        window.automationEvents.push(evt);
-                        window.automationConfig.lastScrollByTarget[mapKey] = { x: curX, y: curY };
-                        if (isWin) {
-                            window.automationConfig.lastScrollPosition = { x: curX, y: curY };
-                        }
-                    }
-                    document.addEventListener('scroll', function(ev) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        const el = ev.target;
-                        if (!window.automationConfig._scrollTimersByEl) {
-                            window.automationConfig._scrollTimersByEl = new Map();
-                        }
-                        const tm = window.automationConfig._scrollTimersByEl;
-                        const prevT = tm.get(el);
-                        if (prevT) clearTimeout(prevT);
-                        tm.set(el, setTimeout(function() {
-                            tm.delete(el);
-                            flushScrollForTarget(el);
-                        }, 120));
-                    }, true);
-                }
-                
-                // 监听键盘事件(可选,用于特殊交互)
-                if (document && document.addEventListener) {
-                    document.addEventListener('keydown', function(e) {
-                        if (window.automationConfig && window.automationConfig.recordingPaused) return;
-                        // 只记录特殊按键,如回车、ESC等
-                        if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab') {
-                            const target = e.target;
-                            const selector = generateSelector(target);
-                            
-                            if (window && window.automationEvents) {
-                                window.automationEvents.push({
-                                    action: 'keypress',
-                                    selector: selector,
-                                    key: e.key,
-                                    timestamp: Date.now(),
-                                    elementInfo: {
-                                        tagName: target.tagName,
-                                        id: target.id || '',
-                                        className: target.className || ''
-                                    },
-                                    locatorPack: buildLocatorPack(target)
-                                });
-                            }
-                        }
-                    }, true);
-                }
-                
-                // 默认不记录 mouseover/hover，避免划过链接即产生超长 href 等噪声步骤；需要时可在平台后续加「录制悬停」开关。
-                
-                console.log('自动化事件监听器已设置完成');
-                
-                // 设置标志,表示已添加事件监听器
-                window.eventListenersAdded = true;
-            }
-            """;
-            
-            # 1. 添加初始化脚本,确保新页面加载时自动设置监听器
-            await target_page.add_init_script(event_listeners_js);
-            
-            # 2. 直接在当前页面执行,确保已加载页面也能捕获事件
-            await target_page.evaluate(event_listeners_js);
-            
-            uat_logger.info("事件监听器已成功设置")
-        else:
-            uat_logger.warning("页面对象为None,无法设置事件监听器")
+        """内置浏览器录制已移除。"""
+        return
 
     async def _on_page_navigated(self, frame):
-        """页面导航事件处理函数"""
-        # 在页面导航后重新设置事件监听器,确保在新页面上也能记录用户操作
-        try:
-            # 多层检查确保页面对象有效且可用
-            if (self.page is not None and 
-                not (hasattr(self.page, 'is_closed') and self.page.is_closed()) and 
-                not (hasattr(self.page, 'closed') and self.page.closed)):
-                
-                try:
-                    # 调用统一的事件监听器设置方法
-                    # _setup_event_listeners 方法内部会检查 window.eventListenersAdded 标志
-                    # 避免重复添加事件监听器
-                    await self._setup_event_listeners()
-                    if self.recording:
-                        await self._inject_recorder_floating_bar(self._platform_origin)
-                    uat_logger.info("页面导航完成,已重新设置事件监听器")
-                except Exception as inner_e:
-                    # 捕获页面操作相关的异常
-                    uat_logger.error(f"页面操作失败,可能页面已关闭: {str(inner_e)}")
-            else:
-                uat_logger.warning("页面对象无效或已关闭,无法设置事件监听器")
-        except Exception as e:
-            uat_logger.error(f"重新设置页面事件监听器时出错: {str(e)}")
+        """内置录制已移除。"""
+        return
 
     async def get_recorded_events(self, page=None):
-        """从浏览器获取记录的事件"""
-        target_page = page if page is not None else self.page
-        if target_page is None:
-            uat_logger.warning("页面对象为None,无法获取事件")
-            return []
-        
-        try:
-            # 检查页面是否仍然可用
-            if hasattr(target_page, 'is_closed') and target_page.is_closed():
-                uat_logger.warning("页面已关闭,无法获取事件")
-                return []
-            
-            # 尝试使用更简单的方式检查页面状态
-            try:
-                # 检查事件数组是否存在
-                has_events = await target_page.evaluate("typeof window.automationEvents !== 'undefined'")
-                if not has_events:
-                    uat_logger.warning("window.automationEvents 未定义,尝试重新设置事件监听器")
-                    await self._setup_event_listeners(page=target_page)
-                    await target_page.evaluate(
-                        "window.automationEvents = window.automationEvents || []"
-                    )
-                    has_events = await target_page.evaluate(
-                        "typeof window.automationEvents !== 'undefined'"
-                    )
-                    if not has_events:
-                        return []
-                
-                # 调试:检查事件数组中是否有内容
-                events_count = await target_page.evaluate("window.automationEvents ? window.automationEvents.length : 0")
-                
-                if events_count == 0:
-                    uat_logger.debug("没有获取到浏览器事件")
-                    return []
-                
-                events = await target_page.evaluate("window.automationEvents || []")
-                uat_logger.info(f"获取到 {len(events)} 个浏览器事件")
-                
-                # 清空浏览器端的事件数组
-                await target_page.evaluate("window.automationEvents = []")
-                return events
-            except Exception as e:
-                # 页面可能正在导航中,这是正常情况
-                uat_logger.debug(f"获取事件时遇到临时错误: {str(e)}")
-                return []
-        except Exception as e:
-            uat_logger.error(f"获取浏览器事件时出错: {str(e)}")
-            # 尝试重新设置事件监听器
-            try:
-                await self._setup_event_listeners(page=target_page)
-            except:
-                pass
-            return []
+        """内置录制已移除。"""
+        return []
 
     async def sync_recorded_events(self):
-        """同步浏览器记录的事件到本地"""
-        if self.recording:
-            # 检查页面是否仍然可用
-            try:
-                pages = self._get_recording_target_pages()
-                if not pages:
-                    return 0
-                total_events = 0
-                for pg in pages:
-                    # 将最新活跃业务页作为当前主页（悬浮窗与状态跟随此页）
-                    self.page = pg
-                    try:
-                        await self._setup_event_listeners(page=pg)
-                    except Exception:
-                        pass
-                    events = await self.get_recorded_events(page=pg)
-                    events = _collapse_consecutive_fill_events(events)
-                    total_events += len(events)
-                    for event in events:
-                        # 将浏览器中的事件转换为录制步骤格式
-                        step = {
-                            "action": event.get('action'),
-                            "timestamp": event.get('timestamp')
-                        }
-                        
-                        if event.get('action') == 'click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'fill':
-                            step['selector'] = event.get('selector')
-                            step['text'] = event.get('text', '')
-                        elif event.get('action') == 'navigate':
-                            step['url'] = event.get('url')
-                        elif event.get('action') == 'scroll':
-                            step['scrollPosition'] = event.get('scrollPosition')
-                            step['scrollDirection'] = event.get('scrollDirection')
-                            step['scrollDistance'] = event.get('scrollDistance')
-                            if event.get('scrollScope'):
-                                step['scrollScope'] = event.get('scrollScope')
-                            if event.get('selector'):
-                                step['selector'] = event.get('selector')
-                        elif event.get('action') == 'hover':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'double_click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'right_click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'submit':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'keypress':
-                            step['selector'] = event.get('selector')
-                            step['key'] = event.get('key')
-
-                        lc = _locator_candidates_json_from_event(event)
-                        if lc:
-                            step["locator_candidates"] = lc
-
-                        # 同一选择器连续输入：合并为一条，只保留最后一次内容
-                        if step.get('action') == 'fill' and self.recorded_steps:
-                            ls = self.recorded_steps[-1]
-                            if ls.get('action') == 'fill' and ls.get('selector') == step.get('selector'):
-                                ls_ap = ls.get('locator_candidates')
-                                if not ls_ap and lc:
-                                    ls['locator_candidates'] = lc
-                                elif lc and ls_ap != lc:
-                                    ls['locator_candidates'] = lc
-                                ls['text'] = step.get('text', '')
-                                ls['timestamp'] = step.get('timestamp')
-                                continue
-                        
-                        # 去重逻辑:避免添加重复的步骤
-                        if self.recorded_steps:
-                            last_step = self.recorded_steps[-1]
-                            
-                            # 重新获取上一步骤
-                            if self.recorded_steps:
-                                last_step = self.recorded_steps[-1]
-                            
-                            # 特殊处理:如果当前是navigate事件,且上一步是submit事件,则跳过这个navigate事件
-                            # 因为submit操作可能导致页面导航,我们不需要重复记录导航
-                            if step['action'] == 'navigate' and last_step['action'] == 'submit':
-                                uat_logger.info(f"跳过submit后的navigate事件: {step.get('url')}")
-                                continue
-                            
-                            # 检查是否与上一步骤完全相同
-                            if last_step['action'] == step['action']:
-                                # 计算时间差(毫秒)
-                                time_diff = step.get('timestamp', 0) - last_step.get('timestamp', 0)
-                                
-                                # 对于导航步骤,检查URL是否相同且时间间隔小于2秒
-                                if step['action'] == 'navigate' and last_step.get('url') == step.get('url') and time_diff < 2000:
-                                    continue  # 跳过短时间内重复的导航步骤
-                                # 对于点击步骤,检查选择器是否相同且时间间隔小于1秒
-                                elif step['action'] == 'click' and last_step.get('selector') == step.get('selector') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的点击步骤
-                                # 对于悬停步骤,检查选择器是否相同且时间间隔小于1秒
-                                elif step['action'] == 'hover' and last_step.get('selector') == step.get('selector') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的悬停步骤
-                                # 对于填充步骤,检查选择器和文本是否相同且时间间隔小于2秒
-                                # 填充可能需要更长时间,但短时间内相同内容的填充应跳过
-                                elif step['action'] == 'fill' and last_step.get('selector') == step.get('selector') and last_step.get('text') == step.get('text') and time_diff < 2000:
-                                    continue  # 跳过短时间内重复的填充步骤
-                                # 对于按键步骤,检查选择器和按键是否相同且时间间隔小于1秒
-                                elif step['action'] == 'keypress' and last_step.get('selector') == step.get('selector') and last_step.get('key') == step.get('key') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的按键步骤
-                                # 对于提交步骤,检查选择器是否相同且时间间隔小于1秒
-                                elif step['action'] == 'submit' and last_step.get('selector') == step.get('selector') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的提交步骤
-                                # 对于滚动步骤,检查滚动位置是否基本相同且时间间隔小于1秒
-                                elif step['action'] == 'scroll' and last_step.get('scrollPosition') == step.get('scrollPosition') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的滚动步骤
-                        
-                        # 添加到录制步骤中
-                        self.recorded_steps.append(step)
-                return total_events
-            except Exception as e:
-                print(f"同步事件时出错: {e}")
-                return 0
+        """内置录制已移除。"""
         return 0
-    
+
     async def navigate_to(self, url: str, iframe_selector: str = None, page=None):
         """导航到指定URL,支持iframe导航。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
         # 统一校验URL
@@ -1766,11 +863,7 @@ class PlaywrightAutomation:
         if target_page is not None:
             # 导航到URL,对于录制时使用domcontentloaded以提高响应速度
             # 但在回放时,我们需要确保页面完全加载
-            if self.recording:
-                await target_page.goto(url, wait_until='domcontentloaded')
-            else:
                 # 🔥 性能优化：回放模式使用更快的等待策略
-                # 使用 domcontentloaded 而非 load，因为大多数页面在 DOM 就绪后即可交互
                 await target_page.goto(url, wait_until='domcontentloaded')
                 # 快速检查 networkidle（仅等待 3 秒，避免 WebSocket/SSE 长连接导致的长时间阻塞）
                 try:
@@ -1784,42 +877,7 @@ class PlaywrightAutomation:
             raise Exception("无法创建页面对象")
         self.current_url = url
         
-        # 如果正在录制,记录导航步骤,并应用去重逻辑
-        if self.recording:
-            step = {
-                "action": "navigate",
-                "url": url,
-                "iframe_selector": iframe_selector,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            
-            # 应用去重逻辑
-            if self.recorded_steps:
-                last_step = self.recorded_steps[-1]
-                if last_step['action'] == 'navigate' and last_step.get('url') == step.get('url'):
-                    # 计算时间差(毫秒)
-                    time_diff = step.get('timestamp', 0) - last_step.get('timestamp', 0)
-                    if time_diff < 2000:  # 使用与其他地方一致的2秒阈值
-                        pass
-                    else:
-                        self.recorded_steps.append(step)
-                        uat_logger.info(f"录制导航步骤: {url}")
-                else:
-                    self.recorded_steps.append(step)
-                    uat_logger.info(f"录制导航步骤: {url}")
-            else:
-                self.recorded_steps.append(step)
-                uat_logger.info(f"录制导航步骤: {url}")
-        else:
-            uat_logger.info(f"执行导航操作: {url}")
-        
-        if self.recording and page is None and self.page is not None and target_page == self.page:
-            try:
-                await self._ensure_recorder_floating_bar()
-                await self._sync_recorder_dock_ui()
-                await self._refresh_recorder_panel_ui()
-            except Exception:
-                pass
+        uat_logger.info(f"执行导航操作: {url}")
     
     async def select_option(self, selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None, page=None):
         """选择下拉框选项。支持原生select和自定义下拉框（如Element Plus）。page: 可选，指定在哪个标签页执行"""
@@ -3008,6 +2066,9 @@ class PlaywrightAutomation:
                 selector, selector_type = self.convert_selector(selector, selector_type)
             uat_logger.info(f"🔍 [SELECTOR_CONVERT] 选择器转换: {original_selector_type} -> {selector_type}, 值: {selector}")
         
+        if selector_type == "xpath" and selector:
+            selector = _normalize_xpath_selector_value(selector)
+        
         # 检查页面是否已经被关闭
         try:
             if hasattr(target_page, 'url'):
@@ -3073,6 +2134,36 @@ class PlaywrightAutomation:
                     element_clicked = True
             except Exception as e_g:
                 uat_logger.warning(f"⚠️ [CLICK_DEBUG] 分组 XPath 专用点击失败: {e_g}，走常规流程")
+        
+        # //button[normalize-space(.)='x'] 在「图标 + span 文案」DOM 下常匹配不到；优先短超时试 span/后代文案，避免主流程多次 10s 拖满步骤 60s 上限
+        if not element_clicked and selector_type == "xpath" and selector and not xg:
+            _xvars = xpath_click_attempt_variants(selector)
+            if len(_xvars) > 1:
+                for sel_alt in _xvars[:-1]:
+                    alt_full = f"xpath={sel_alt}"
+                    try:
+                        uat_logger.info(
+                            f"🔍 [CLICK_DEBUG] 尝试 XPath 文案变体(图标按钮): {sel_alt[:100]!s}"
+                        )
+                        if hasattr(target_context, "wait_for_selector"):
+                            await target_context.wait_for_selector(
+                                alt_full, state="visible", timeout=6000
+                            )
+                            await target_context.click(alt_full, timeout=8000)
+                        else:
+                            _elv = target_context.locator(alt_full)
+                            await _elv.wait_for(state="visible", timeout=6000)
+                            await _elv.click(timeout=8000)
+                        uat_logger.info(
+                            f"✅ [CLICK_DEBUG] XPath 文案变体点击成功: {sel_alt[:80]!s}"
+                        )
+                        element_clicked = True
+                        selector = sel_alt
+                        break
+                    except Exception as _xe:
+                        uat_logger.debug(
+                            f"🔍 [CLICK_DEBUG] XPath 变体未命中: {_xe} — {sel_alt[:70]!s}"
+                        )
         
         # 尝试多种点击方式,增加成功概率
         # 方式1: 使用Playwright的click方法,等待元素可点击
@@ -3398,8 +2489,20 @@ class PlaywrightAutomation:
                                 uat_logger.error(f"❌ [CLICK_DEBUG] 方式5失败: {str(e5)}")
                     
         if not element_clicked:
-            if locator_candidates:
-                for extra_sel, extra_type in _fallback_locator_tuples(selector, selector_type, locator_candidates):
+            merged_candidates: Any = locator_candidates
+            if selector_type == "xpath" and selector:
+                extra_fb = runtime_xpath_button_link_fallback_items(selector)
+                if extra_fb:
+                    if not merged_candidates:
+                        merged_candidates = extra_fb
+                    else:
+                        prev = _normalize_locator_candidate_list(merged_candidates)
+                        prev.extend(_normalize_locator_candidate_list(extra_fb))
+                        merged_candidates = prev
+            if merged_candidates:
+                for extra_sel, extra_type in _fallback_locator_tuples(
+                    selector, selector_type, merged_candidates
+                ):
                     try:
                         await self.click_element(
                             extra_sel, extra_type, iframe_selector, iframe_context, page, None
@@ -3488,14 +2591,6 @@ class PlaywrightAutomation:
         except Exception as e:
             uat_logger.warning(f"⚠️ [CLICK_DEBUG] 等待页面稳定时出错: {str(e)}")
         
-        # 如果正在录制,记录点击步骤
-        if self.recording:
-            step = {
-                "action": "click",
-                "selector": selector,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            self.recorded_steps.append(step)
     
     async def fill_input(self, selector: str, text: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None):
         # 🔥 添加输入操作总超时控制（30秒）
@@ -3526,6 +2621,9 @@ class PlaywrightAutomation:
             else:
                 selector, selector_type = self.convert_selector(selector, selector_type)
             uat_logger.info(f"🔍 [SELECTOR_CONVERT] 选择器转换: {original_selector_type} -> {selector_type}, 值: {selector}")
+        
+        if selector_type == "xpath" and selector:
+            selector = _normalize_xpath_selector_value(selector)
         
         # 构建完整的选择器
         full_selector = selector
@@ -4200,16 +3298,6 @@ class PlaywrightAutomation:
                         )
             raise Exception(f"无法填充元素: {selector}, 选择器类型: {selector_type}, 所有填充方式均失败")
         
-        # 如果正在录制,记录填充步骤
-        if self.recording:
-            step = {
-                "action": "fill",
-                "selector": selector,
-                "selector_type": selector_type,
-                "text": text,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            self.recorded_steps.append(step)
 
     async def _smart_locate_input(self, context, selector: str, selector_type: str) -> dict:
         """
@@ -4996,16 +4084,6 @@ class PlaywrightAutomation:
             except Exception as e:
                 uat_logger.warning(f"执行iframe滚动时出错: {str(e)}")
         
-        # 如果正在录制,记录滚动步骤
-        if self.recording:
-            step = {
-                "action": "scroll",
-                "direction": direction,
-                "pixels": pixels,
-                "iframe_selector": iframe_selector,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            self.recorded_steps.append(step)
     
     async def scroll_by_delta(self, dx: int = 0, dy: int = 0, iframe_selector: str = None, page=None):
         """按像素增量滚动主页面或 iframe（scrollBy），与平台步骤 input_value 四向格式对应。"""
@@ -6022,16 +5100,6 @@ class PlaywrightAutomation:
             uat_logger.warning(f"悬停失败,这通常不影响执行: {str(e)}")
             # 悬停失败不影响后续操作,不尝试JavaScript模拟
         
-        # 如果正在录制,记录悬停步骤
-        if self.recording:
-            step = {
-                "action": "hover",
-                "selector": selector,
-                "selector_type": selector_type,
-                "iframe_selector": iframe_selector,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            self.recorded_steps.append(step)
     
     async def double_click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
         """双击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
@@ -6044,6 +5112,7 @@ class PlaywrightAutomation:
         # 构建完整的选择器
         full_selector = selector
         if selector_type == "xpath":
+            selector = _normalize_xpath_selector_value(selector)
             full_selector = f"xpath={selector}"
         
         # 确定操作上下文
@@ -6065,16 +5134,6 @@ class PlaywrightAutomation:
             await element.wait_for(state='visible', timeout=10000)
             await element.dblclick(timeout=10000)
         
-        # 如果正在录制,记录双击步骤
-        if self.recording:
-            step = {
-                "action": "double_click",
-                "selector": selector,
-                "selector_type": selector_type,
-                "iframe_selector": iframe_selector,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            self.recorded_steps.append(step)
     
     async def right_click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
         """右键点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
@@ -6087,6 +5146,7 @@ class PlaywrightAutomation:
         # 构建完整的选择器
         full_selector = selector
         if selector_type == "xpath":
+            selector = _normalize_xpath_selector_value(selector)
             full_selector = f"xpath={selector}"
         
         # 确定操作上下文
@@ -6108,16 +5168,6 @@ class PlaywrightAutomation:
             await element.wait_for(state='visible', timeout=10000)
             await element.click(button="right", timeout=10000)
         
-        # 如果正在录制,记录右键步骤
-        if self.recording:
-            step = {
-                "action": "right_click",
-                "selector": selector,
-                "selector_type": selector_type,
-                "iframe_selector": iframe_selector,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            self.recorded_steps.append(step)
     
     async def swipe_element(self, selector: str, direction: str, distance: int = 100, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
         """滑动元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
@@ -6192,18 +5242,6 @@ class PlaywrightAutomation:
         
         uat_logger.info(f"✅ 滑动元素成功: {selector}, 方向: {direction}, 距离: {distance}px")
         
-        # 如果正在录制,记录滑动步骤
-        if self.recording:
-            step = {
-                "action": "swipe",
-                "selector": selector,
-                "selector_type": selector_type,
-                "direction": direction,
-                "distance": distance,
-                "iframe_selector": iframe_selector,
-                "timestamp": int(time.time() * 1000)  # 转换为毫秒,与浏览器事件保持一致
-            }
-            self.recorded_steps.append(step)
     
     async def verify_element(self, selector: str = None, verify_type: str = "visible", selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
         """验证元素。用于处理人机验证弹窗等场景。page: 可选，指定在哪个标签页执行（多标签并行时使用）
@@ -6340,14 +5378,6 @@ class PlaywrightAutomation:
                                         try:
                                             await element.wait_for(state='hidden', timeout=5000)
                                             uat_logger.info("✅ 滑动验证码处理成功")
-                                            # 记录步骤
-                                            step = {
-                                                "action": "verify",
-                                                "selector": selector,
-                                                "verify_type": "slider",
-                                                "timestamp": int(time.time() * 1000)
-                                            }
-                                            self.recorded_steps.append(step)
                                             return True
                                         except Exception as e:
                                             uat_logger.error(f"❌ 滑动验证码验证失败: {e}")
@@ -6478,16 +5508,6 @@ class PlaywrightAutomation:
         # 记录验证成功
         uat_logger.info(f"✅ 验证元素成功: {selector}, 验证类型: {verify_type}")
         
-        # 记录步骤
-        step = {
-            "action": "verify",
-            "selector": selector,
-            "selector_type": selector_type,
-            "verify_type": verify_type,
-            "iframe_selector": iframe_selector,
-            "timestamp": int(time.time() * 1000)
-        }
-        self.recorded_steps.append(step)
     
     async def _auto_handle_verification_popup(self, page, verify_type='auto'):
         """自动识别并处理验证弹窗
@@ -6564,15 +5584,6 @@ class PlaywrightAutomation:
             slider_handled = await self._handle_slider_captcha(page)
             if slider_handled:
                 uat_logger.info("✅ 滑动验证码处理成功")
-                # 记录步骤
-                step = {
-                    "action": "verify",
-                    "auto_detect": True,
-                    "found_verification": True,
-                    "verification_type": "slider",
-                    "timestamp": int(time.time() * 1000)
-                }
-                self.recorded_steps.append(step)
                 return True
         except Exception as slider_error:
             uat_logger.warning(f"⚠️ 处理滑动验证码时出错: {slider_error}")
@@ -6582,15 +5593,6 @@ class PlaywrightAutomation:
             image_handled = await self._handle_image_captcha(page)
             if image_handled:
                 uat_logger.info("✅ 图片验证码处理成功")
-                # 记录步骤
-                step = {
-                    "action": "verify",
-                    "auto_detect": True,
-                    "found_verification": True,
-                    "verification_type": "image",
-                    "timestamp": int(time.time() * 1000)
-                }
-                self.recorded_steps.append(step)
                 return True
         except Exception as image_error:
             uat_logger.warning(f"⚠️ 处理图片验证码时出错: {image_error}")
@@ -6670,25 +5672,8 @@ class PlaywrightAutomation:
         
         if not found_verification:
             uat_logger.error("❌ 未检测到验证弹窗，验证操作失败")
-            # 记录步骤
-            step = {
-                "action": "verify",
-                "auto_detect": True,
-                "found_verification": False,
-                "timestamp": int(time.time() * 1000)
-            }
-            self.recorded_steps.append(step)
             # 抛出异常，标记验证失败
             raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
-        
-        # 记录步骤
-        step = {
-            "action": "verify",
-            "auto_detect": True,
-            "found_verification": True,
-            "timestamp": int(time.time() * 1000)
-        }
-        self.recorded_steps.append(step)
         
         return True
     
@@ -7856,16 +6841,7 @@ class PlaywrightAutomation:
         
         if not found_verification:
             uat_logger.info("ℹ️ 未检测到验证弹窗，继续执行")
-        
-        # 记录步骤
-        step = {
-            "action": "verify",
-            "auto_detect": True,
-            "found_verification": found_verification,
-            "timestamp": int(time.time() * 1000)
-        }
-        self.recorded_steps.append(step)
-        
+
         return found_verification
     
     async def get_element_screenshot(self, selector: str, path: str = None):
@@ -8837,9 +7813,6 @@ class PlaywrightAutomation:
 
                 # 在复用的 context 中创建新页面
                 self.page = await self.context.new_page()
-                # 🔥 性能优化：回放模式下跳过录制事件监听器设置（节省约 200ms）
-                if self.recording:
-                    await self._setup_event_listeners()
                 uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_id} 新页面就绪")
             except Exception as e:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 环境准备失败: {str(e)}")
@@ -9292,300 +8265,6 @@ class PlaywrightAutomation:
             
         return results
 
-    _RECORDER_PANEL_HTML = """<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>录制步骤</title>
-<style>
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:12px;background:#0f0f23;color:#e8e8f0}
-h1{font-size:15px;margin:0 0 10px;font-weight:600;color:#a5b4fc}
-#meta{font-size:11px;color:#94a3b8;margin-bottom:10px}
-#list{font-size:12px;max-height:calc(100vh - 72px);overflow:auto}
-.row{border-bottom:1px solid #1e293b;padding:8px 0}
-.act{color:#7dd3fc;font-weight:500}
-code{opacity:.9;word-break:break-all;font-size:11px}
-</style></head><body>
-<h1>UI 测试平台 · 步骤录制面板</h1>
-<div id="meta">与左侧被测页同属一个浏览器窗口。操作被测页时此处会刷新；关闭任一窗口将结束录制会话。</div>
-<div id="list"></div>
-<script>
-function escapeHtml(t){var d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML;}
-window.renderSteps=function(steps){
-  var el=document.getElementById('list');
-  if(!el)return;
-  el.innerHTML='';
-  if(!steps||!steps.length){el.innerHTML='<div style="opacity:.6">等待操作…</div>';return;}
-  var slice=steps.slice(-100);
-  slice.forEach(function(s,i){
-    var d=document.createElement('div');d.className='row';
-    var a=(s.action||'').toLowerCase();var line=a;
-    if(a==='fill'||a==='input')line+=' ← '+(s.text||s.input_value||'').slice(0,50);
-    else if(a==='navigate')line+=' → '+((s.url||'').slice(0,80));
-    else if(a==='scroll'){
-      var ss=(s.scrollScope||'window');
-      line+=' · '+(ss==='element'&&s.selector?String(s.selector).slice(0,70):'window');
-      if(s.scrollDistance&&(s.scrollDistance.x||s.scrollDistance.y))line+=' Δ'+(s.scrollDistance.x||0)+'x'+(s.scrollDistance.y||0);
-    }
-    else if(s.selector)line+=' '+String(s.selector).slice(0,90);
-    d.innerHTML='<span class="act">#'+(steps.length-slice.length+i+1)+' '+escapeHtml(a)+'</span><br><code>'+escapeHtml(line)+'</code>';
-    el.appendChild(d);
-  });
-};
-window.renderSteps([]);
-</script></body></html>"""
-
-    async def _close_recorder_panel(self):
-        p = getattr(self, "recorder_panel_page", None)
-        if p:
-            try:
-                if not p.is_closed():
-                    await p.close()
-            except Exception:
-                pass
-            self.recorder_panel_page = None
-
-    async def _open_recorder_panel_window(self):
-        await self._close_recorder_panel()
-        if not self.context:
-            return
-        try:
-            self.recorder_panel_page = await self.context.new_page()
-            await self.recorder_panel_page.set_content(self._RECORDER_PANEL_HTML)
-            await self.recorder_panel_page.bring_to_front()
-        except Exception as e:
-            uat_logger.warning(f"打开录制步骤面板失败: {e}")
-            self.recorder_panel_page = None
-
-    async def _refresh_recorder_panel_ui(self):
-        p = getattr(self, "recorder_panel_page", None)
-        if not p or p.is_closed():
-            return
-        try:
-            await p.evaluate(
-                "(steps) => { if (typeof window.renderSteps === 'function') window.renderSteps(steps); }",
-                self.recorded_steps,
-            )
-        except Exception as e:
-            uat_logger.warning(f"录制面板刷新失败（步骤列表可能未更新）: {e}")
-
-    async def _ensure_recorder_floating_bar(self):
-        """录制中若悬浮窗被 SPA 重建 DOM 移除，则补注入。"""
-        if not self.recording or not self.page:
-            return
-        try:
-            if self.page.is_closed():
-                return
-        except Exception:
-            return
-        try:
-            missing = await self.page.evaluate(
-                "() => !document.getElementById('__ui_platform_recorder_dock_v2')"
-            )
-            if missing:
-                await self._inject_recorder_floating_bar(self._platform_origin)
-        except Exception:
-            pass
-
-    def _dock_step_preview_lines(self, max_items: int = 6, max_len: int = 44) -> List[str]:
-        steps = self.recorded_steps
-        if not steps:
-            return []
-        tail = steps[-max_items:]
-        base = len(steps) - len(tail)
-        lines: List[str] = []
-        for j, s in enumerate(tail):
-            idx = base + j + 1
-            act = (s.get("action") or "?").strip()
-            summary = ""
-            if act == "click":
-                summary = (s.get("selector") or "")[:max_len]
-            elif act == "fill":
-                sel = (s.get("selector") or "")[: max_len - 8]
-                tv = (s.get("text") or "").strip().replace("\n", " ")[:10]
-                summary = (f"{sel} → {tv}" if tv else sel)[:max_len]
-            elif act == "navigate":
-                summary = (s.get("url") or "")[:max_len]
-            elif act == "submit":
-                summary = (s.get("selector") or "")[:max_len]
-            elif act == "scroll":
-                summary = scroll_event_to_platform_input_value(s)[:max_len]
-            elif act == "keypress":
-                summary = (s.get("key") or "")[:max_len]
-            else:
-                summary = str(s.get("selector") or s.get("url") or "")[:max_len]
-            lines.append(f"{idx}. {act} {summary}".strip())
-        return lines
-
-    async def _sync_recorder_dock_ui(self):
-        """同步悬浮窗步数与最近步骤预览（依赖 __uiRecDockSync）。"""
-        if not self.page or self.page.is_closed():
-            return
-        payload = json.dumps(
-            {"n": len(self.recorded_steps), "lines": self._dock_step_preview_lines()},
-            ensure_ascii=False,
-        )
-        try:
-            await self.page.evaluate(
-                f"(function(p){{ if (window.__uiRecDockSync) window.__uiRecDockSync(p); }})({payload})"
-            )
-        except Exception:
-            pass
-
-    async def _inject_recorder_floating_bar(self, platform_origin: str):
-        """在被测页注入可拖动的录制控制悬浮窗；MutationObserver 在 SPA 换掉 DOM 时自动重新挂载。"""
-        if not self.page or self.page.is_closed():
-            return
-        po = json.dumps((platform_origin or "").rstrip("/"))
-        js = f"""
-        (function(po){{
-            window.__UI_PLATFORM_RECORDING__ = true;
-            var DOCK_ID='__ui_platform_recorder_dock_v2';
-            function __uiMountRecorderDock(po){{
-                if (window.__uiRecDockTeardown) {{
-                    try {{ window.__uiRecDockTeardown(); }} catch (e) {{}}
-                    window.__uiRecDockTeardown = null;
-                }}
-                var old=document.getElementById(DOCK_ID);
-                if(old) old.remove();
-                if(!document.body) return;
-                window.automationConfig = window.automationConfig || {{}};
-                if (typeof window.automationConfig.recordingPaused !== 'boolean') window.automationConfig.recordingPaused = false;
-
-                var root=document.createElement('div');
-                root.id=DOCK_ID;
-                root.setAttribute('data-ui-automation','recorder-dock');
-                root.style.cssText=['position:fixed','z-index:2147483647','width:280px','font:13px/1.5 system-ui,-apple-system,sans-serif',
-                    'border-radius:12px','overflow:hidden','box-shadow:0 10px 40px rgba(0,0,0,.28)','user-select:none','pointer-events:auto'].join(';');
-                root.style.right='18px'; root.style.bottom='72px'; root.style.left='auto'; root.style.top='auto';
-
-                var hdr=document.createElement('div');
-                hdr.style.cssText=['cursor:move','padding:10px 12px','background:linear-gradient(135deg,#4338ca,#7c3aed)',
-                    'color:#fff','font-weight:600','display:flex','flex-direction:column','gap:2px'].join(';');
-                hdr.innerHTML='<span>录制控制 · 拖动此条移动窗口</span><span style="font-size:11px;font-weight:400;opacity:.9">另开窗口可查看步骤面板</span>';
-
-                var body=document.createElement('div');
-                body.style.cssText='padding:12px 12px 14px;background:#fafafa;color:#1e293b;user-select:none';
-
-                var row=document.createElement('div');
-                row.style.cssText='display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px';
-
-                var btnPause=document.createElement('button');
-                btnPause.type='button';
-                btnPause.textContent=window.automationConfig.recordingPaused ? '继续录制' : '暂停录制';
-                btnPause.style.cssText=['flex:1','min-width:108px','cursor:pointer','padding:8px 10px','border:none','border-radius:8px',
-                    'background:#334155','color:#fff','font-weight:600','font-size:12px'].join(';');
-
-                var btnRestart=document.createElement('button');
-                btnRestart.type='button';
-                btnRestart.textContent='重新录制';
-                btnRestart.style.cssText=['flex:1','min-width:108px','cursor:pointer','padding:8px 10px','border:none','border-radius:8px',
-                    'background:#dc2626','color:#fff','font-weight:600','font-size:12px'].join(';');
-
-                row.appendChild(btnPause); row.appendChild(btnRestart);
-
-                var meta=document.createElement('div');
-                meta.style.cssText='font-size:12px;color:#64748b;display:flex;flex-wrap:wrap;gap:8px;align-items:center';
-                var steps=document.createElement('span');
-                steps.id='__ui_rec_dock_steps';
-                steps.textContent='已记录 0 步';
-                var plat=document.createElement('span');
-                plat.style.opacity='.85';
-                plat.textContent=po ? ('平台 ' + po) : '';
-                meta.appendChild(steps);
-                if (po) meta.appendChild(plat);
-
-                var list=document.createElement('div');
-                list.id='__ui_rec_dock_list';
-                list.style.cssText='max-height:110px;overflow-y:auto;margin-top:8px;border-top:1px solid #e2e8f0;padding-top:6px';
-
-                var hint=document.createElement('div');
-                hint.style.cssText='margin-top:8px;font-size:11px;color:#94a3b8';
-                hint.textContent='';
-
-                body.appendChild(row); body.appendChild(meta); body.appendChild(list); body.appendChild(hint);
-                root.appendChild(hdr); root.appendChild(body);
-                document.body.appendChild(root);
-
-                btnPause.onclick=function(ev){{
-                    ev.stopPropagation();
-                    window.automationConfig.recordingPaused=!window.automationConfig.recordingPaused;
-                    btnPause.textContent=window.automationConfig.recordingPaused ? '继续录制' : '暂停录制';
-                    hint.textContent=window.automationConfig.recordingPaused ? '已暂停，页面操作不会写入步骤' : '';
-                    hint.style.color='#64748b';
-                }};
-                btnRestart.onclick=function(ev){{
-                    ev.stopPropagation();
-                    window.automationEvents=window.automationEvents||[];
-                    window.automationEvents.length=0;
-                    window.__uiRecorderRestartOnce=true;
-                    window.automationConfig.recordingPaused=false;
-                    btnPause.textContent='暂停录制';
-                    hint.textContent='已清空本页队列并请求重置；步数将在下次同步后归零';
-                    hint.style.color='#16a34a';
-                }};
-
-                var drag=false,ox=0,oy=0;
-                var onMove=function(ev){{
-                    if(!drag) return;
-                    root.style.left=(ev.clientX-ox)+'px';
-                    root.style.top=(ev.clientY-oy)+'px';
-                }};
-                var onUp=function(){{ drag=false; }};
-                hdr.addEventListener('mousedown',function(ev){{
-                    if (ev.button!==0) return;
-                    drag=true;
-                    var r=root.getBoundingClientRect();
-                    root.style.left=r.left+'px'; root.style.top=r.top+'px';
-                    root.style.right='auto'; root.style.bottom='auto';
-                    ox=ev.clientX-r.left; oy=ev.clientY-r.top;
-                    ev.preventDefault();
-                }});
-                document.addEventListener('mousemove', onMove);
-                document.addEventListener('mouseup', onUp);
-                window.__uiRecDockTeardown=function(){{
-                    document.removeEventListener('mousemove', onMove);
-                    document.removeEventListener('mouseup', onUp);
-                }};
-
-                window.__uiRecDockSync=function(p){{
-                    p = p || {{}};
-                    var e=document.getElementById('__ui_rec_dock_steps');
-                    if(e) e.textContent='已记录 '+(p.n||0)+' 步';
-                    var listEl=document.getElementById('__ui_rec_dock_list');
-                    if(!listEl) return;
-                    while(listEl.firstChild) listEl.removeChild(listEl.firstChild);
-                    (p.lines||[]).forEach(function(line){{
-                        var d=document.createElement('div');
-                        d.style.cssText='font-size:11px;color:#334155;margin-top:3px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-                        d.textContent=line;
-                        listEl.appendChild(d);
-                    }});
-                }};
-                window.__uiRecDockSetCount=function(n){{ window.__uiRecDockSync({{n:n,lines:[]}}); }};
-                window.__uiRecBarSetCount=window.__uiRecDockSetCount;
-            }}
-            __uiMountRecorderDock(po);
-            window.__uiReinjectRecorderDock=function(){{ __uiMountRecorderDock(po); }};
-            if (!window.__uiRecorderDockMOInstalled) {{
-                window.__uiRecorderDockMOInstalled=true;
-                var deb;
-                var obs=new MutationObserver(function(){{
-                    if (!window.__UI_PLATFORM_RECORDING__) return;
-                    if (document.getElementById(DOCK_ID)) return;
-                    clearTimeout(deb);
-                    deb=setTimeout(function(){{
-                        if (!window.__UI_PLATFORM_RECORDING__) return;
-                        if (document.getElementById(DOCK_ID)) return;
-                        if (window.__uiReinjectRecorderDock) window.__uiReinjectRecorderDock();
-                    }}, 80);
-                }});
-                obs.observe(document.documentElement, {{ childList:true, subtree:true }});
-            }}
-        }})({po});
-        """
-        try:
-            await self.page.evaluate(js)
-        except Exception as e:
-            uat_logger.debug(f"注入录制悬浮窗失败: {e}")
-
     async def _stop_recording_poll_and_panel(self):
         t = getattr(self, "_recording_poll_task", None)
         if t and not t.done():
@@ -9595,340 +8274,26 @@ window.renderSteps([]);
             except asyncio.CancelledError:
                 pass
         self._recording_poll_task = None
-        await self._close_recorder_panel()
-
-    async def _recording_poll_loop(self):
-        """录制期间拉取浏览器队列事件并刷新面板；主标签被关时自动结束会话。"""
-        while self.recording:
+        p = getattr(self, "recorder_panel_page", None)
+        if p:
             try:
-                await asyncio.sleep(0.35)
-                if not self.recording:
-                    break
-                pages = self._get_recording_target_pages()
-                if not pages:
-                    raise RuntimeError("page_closed")
-                # 跟随最后一个业务页（通常是用户当前操作页）
-                self.page = pages[-1]
-                try:
-                    restarted = await self.page.evaluate(
-                        """() => {
-                            if (window.__uiRecorderRestartOnce) {
-                                window.__uiRecorderRestartOnce = false;
-                                if (window.automationEvents) window.automationEvents.length = 0;
-                                return true;
-                            }
-                            return false;
-                        }"""
-                    )
-                    if restarted:
-                        self.recorded_steps = []
-                        uat_logger.info("[RECORDING] 用户触发「重新录制」，已清空已合并步骤与浏览器事件队列")
-                except Exception:
-                    pass
-                try:
-                    await self.sync_recorded_events()
-                except Exception as se:
-                    uat_logger.debug(f"录制同步事件异常: {se}")
-                try:
-                    await self._refresh_recorder_panel_ui()
-                    await self._ensure_recorder_floating_bar()
-                    await self._sync_recorder_dock_ui()
-                except Exception as ui_e:
-                    uat_logger.debug(f"录制 UI 刷新: {ui_e}")
-            except RuntimeError:
-                uat_logger.info("录制 polling：检测到页面不可用，自动结束录制")
-                self.recording = False
-                self._notify_recording_session_cleared()
-                await self._close_recorder_panel()
-                break
-            except Exception as e:
-                err = str(e).lower()
-                if "closed" in err or "has been closed" in err:
-                    uat_logger.info("录制 polling：浏览器/页面已关闭，自动结束录制")
-                    self.recording = False
-                    self._notify_recording_session_cleared()
-                    await self._close_recorder_panel()
-                    break
-                uat_logger.debug(f"录制 polling: {e}")
-    
+                if not p.is_closed():
+                    await p.close()
+            except Exception:
+                pass
+            self.recorder_panel_page = None
+
     async def start_recording(self, platform_origin: str = ""):
-        """开始录制：轮询同步事件、打开步骤面板、在被测页注入可拖动悬浮控制窗。"""
-        self._platform_origin = (platform_origin or "").rstrip("/")
-        self.recording = True
+        """内置浏览器录制已移除，请使用 Playwright Codegen 与本页「从 Codegen 导入」。"""
+        self.recording = False
         self.recorded_steps = []
-        await self._stop_recording_poll_and_panel()
+        return
 
-        if self.page:
-            for pg in self._get_recording_target_pages():
-                try:
-                    await self._setup_event_listeners(page=pg)
-                except Exception:
-                    pass
-            # 每次「开始录制」都强制恢复为未暂停，避免上一次会话的暂停状态遗留。
-            try:
-                for pg in self._get_recording_target_pages():
-                    await pg.evaluate(
-                    """() => {
-                        window.automationConfig = window.automationConfig || {};
-                        window.automationConfig.recordingPaused = false;
-                        window.automationConfig.inputDebounce = window.automationConfig.inputDebounce || {};
-                        Object.keys(window.automationConfig.inputDebounce).forEach((k) => {
-                            try { clearTimeout(window.automationConfig.inputDebounce[k]); } catch (e) {}
-                            delete window.automationConfig.inputDebounce[k];
-                        });
-                        window.automationEvents = [];
-                    }"""
-                )
-            except Exception:
-                pass
-            await self._inject_recorder_floating_bar(self._platform_origin)
-            uat_logger.info("录制已开始,事件监听器已设置")
-        else:
-            uat_logger.warning("页面对象为None,无法设置事件监听器")
-
-        self._recording_poll_task = asyncio.create_task(self._recording_poll_loop())
-        if self.page and not self.page.is_closed():
-            try:
-                await self.sync_recorded_events()
-                await self._ensure_recorder_floating_bar()
-                await self._sync_recorder_dock_ui()
-            except Exception:
-                pass
-        await self._open_recorder_panel_window()
-        try:
-            await self._refresh_recorder_panel_ui()
-        except Exception:
-            pass
-        if self.page and not self.page.is_closed():
-            try:
-                await self.page.bring_to_front()
-            except Exception:
-                pass
-        uat_logger.info("录制面板已打开，Codegen 风格双窗口就绪")
-    
-    def _get_and_process_events(self):
-        """获取并处理浏览器中的事件"""
-        # 使用线程安全的方式来获取和处理事件
-        import asyncio
-        import threading
-        from queue import Queue
-        
-        result_queue = Queue()
-        
-        def get_events():
-            async def run_get_events():
-                return await self.get_recorded_events()
-            
-            try:
-                # 创建新的事件循环来运行异步操作
-                return asyncio.run(run_get_events())
-            except Exception as e:
-                print(f"获取事件时出错: {e}")
-                return []
-        
-        def run_in_thread():
-            try:
-                events = get_events()
-                result_queue.put(('success', events))
-            except Exception as e:
-                result_queue.put(('error', e))
-        
-        thread = threading.Thread(target=run_in_thread, daemon=True)
-        thread.start()
-        thread.join(timeout=2)  # 2秒超时
-        
-        if result_queue.empty():
-            print("获取事件超时")
-            return 0
-        
-        status, events = result_queue.get()
-        if status == 'error':
-            print(f"获取事件时出错: {events}")
-            return 0
-        else:
-            print(f"获取到 {len(events)} 个浏览器事件")
-            # 将浏览器中的事件转换为录制步骤格式
-            for event in events:
-                        step = {
-                            "action": event.get('action'),
-                            "timestamp": event.get('timestamp')
-                        }
-                        
-                        if event.get('action') == 'click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'fill':
-                            step['selector'] = event.get('selector')
-                            step['text'] = event.get('text', '')
-                        elif event.get('action') == 'navigate':
-                            step['url'] = event.get('url')
-                        elif event.get('action') == 'scroll':
-                            step['scrollPosition'] = event.get('scrollPosition')
-                        elif event.get('action') == 'hover':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'double_click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'right_click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'submit':
-                            step['selector'] = event.get('selector')
-                        
-                        # 添加到录制步骤中
-                        self.recorded_steps.append(step)
-            
-            return len(events)
-    
-    async def _sync_events_periodically(self):
-        """定期同步浏览器事件的后台任务"""
-        while self.recording:
-            try:
-                # 检查页面是否仍然可用
-                if not self.page or (hasattr(self.page, 'is_closed') and self.page.is_closed()):
-                    print("页面已关闭,停止同步事件")
-                    break
-                await self.sync_recorded_events()
-                # 每秒同步一次
-                await asyncio.sleep(1)
-            except Exception as e:
-                print(f"同步事件时出错: {e}")
-                # 出错时也等待一秒再继续
-                await asyncio.sleep(1)
-    
     async def stop_recording(self) -> List[Dict[str, Any]]:
-        """停止录制并返回录制的步骤"""
         self.recording = False
         await self._stop_recording_poll_and_panel()
-        if self.page and not self.page.is_closed():
-            try:
-                await self.page.evaluate(
-                    """() => {
-                        window.__UI_PLATFORM_RECORDING__ = false;
-                        if (window.__uiRecDockTeardown) {
-                            try { window.__uiRecDockTeardown(); } catch (e) {}
-                            window.__uiRecDockTeardown = null;
-                        }
-                        var d = document.getElementById('__ui_platform_recorder_dock_v2');
-                        if (d) d.remove();
-                    }"""
-                )
-            except Exception:
-                pass
-        
-        # 在关闭浏览器前,先获取浏览器中记录的所有事件
-        if self.page:
-            try:
-                # 检查页面是否仍然可用
-                if not hasattr(self.page, 'is_closed') or not self.page.is_closed():
-                    # 直接获取浏览器中剩余的所有事件
-                    events = await self.get_recorded_events()
-                    events = _collapse_consecutive_fill_events(events)
-                    uat_logger.info(f"停止录制时获取到 {len(events)} 个浏览器事件")
-                    
-                    # 将浏览器中的事件转换为录制步骤格式
-                    for event in events:
-                        step = {
-                            "action": event.get('action'),
-                            "timestamp": event.get('timestamp')
-                        }
-                        
-                        if event.get('action') == 'click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'fill':
-                            step['selector'] = event.get('selector')
-                            step['text'] = event.get('text', '')
-                        elif event.get('action') == 'navigate':
-                            step['url'] = event.get('url')
-                        elif event.get('action') == 'scroll':
-                            step['scrollPosition'] = event.get('scrollPosition')
-                            step['scrollDirection'] = event.get('scrollDirection')
-                            step['scrollDistance'] = event.get('scrollDistance')
-                            if event.get('scrollScope'):
-                                step['scrollScope'] = event.get('scrollScope')
-                            if event.get('selector'):
-                                step['selector'] = event.get('selector')
-                        elif event.get('action') == 'hover':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'double_click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'right_click':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'submit':
-                            step['selector'] = event.get('selector')
-                        elif event.get('action') == 'keypress':
-                            step['selector'] = event.get('selector')
-                            step['key'] = event.get('key')
+        return []
 
-                        lc = _locator_candidates_json_from_event(event)
-                        if lc:
-                            step["locator_candidates"] = lc
-
-                        if step.get('action') == 'fill' and self.recorded_steps:
-                            ls = self.recorded_steps[-1]
-                            if ls.get('action') == 'fill' and ls.get('selector') == step.get('selector'):
-                                ls_ap = ls.get('locator_candidates')
-                                if not ls_ap and lc:
-                                    ls['locator_candidates'] = lc
-                                elif lc and ls_ap != lc:
-                                    ls['locator_candidates'] = lc
-                                ls['text'] = step.get('text', '')
-                                ls['timestamp'] = step.get('timestamp')
-                                continue
-                        
-                        # 记录事件
-                        uat_logger.log_browser_event(event.get('action', 'unknown'), event)
-                        
-                        # 应用去重逻辑
-                        if self.recorded_steps:
-                            last_step = self.recorded_steps[-1]
-                            
-                            # 特殊处理:click和submit事件都需要保留,不要跳过
-                            # 因为回放时需要先点击按钮,再提交表单
-                            
-                            # 重新获取上一步骤
-                            if self.recorded_steps:
-                                last_step = self.recorded_steps[-1]
-                            
-                            # 关键修复:过滤掉submit事件后的navigate事件
-                            # 因为submit操作本身就会导致页面导航,不需要额外的navigate步骤
-                            if step['action'] == 'navigate' and last_step['action'] == 'submit':
-                                time_diff = step.get('timestamp', 0) - last_step.get('timestamp', 0)
-                                if time_diff < 3000:  # 3秒内的navigate事件都认为是submit导致的
-                                    uat_logger.info(f"🚫 [NAV_FILTER] 过滤掉submit后的navigate事件,时间差: {time_diff}ms")
-                                    continue
-                            
-                            # 检查是否与上一步骤完全相同
-                            if last_step['action'] == step['action']:
-                                # 计算时间差(毫秒)
-                                time_diff = step.get('timestamp', 0) - last_step.get('timestamp', 0)
-                                
-                                # 对于导航步骤,检查URL是否相同且时间间隔小于2秒
-                                if step['action'] == 'navigate' and last_step.get('url') == step.get('url') and time_diff < 2000:
-                                    continue  # 跳过短时间内重复的导航步骤
-                                # 对于点击步骤,检查选择器是否相同且时间间隔小于1秒
-                                elif step['action'] == 'click' and last_step.get('selector') == step.get('selector') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的点击步骤
-                                # 对于悬停步骤,检查选择器是否相同且时间间隔小于1秒
-                                elif step['action'] == 'hover' and last_step.get('selector') == step.get('selector') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的悬停步骤
-                                # 对于填充步骤,检查选择器和文本是否相同且时间间隔小于2秒
-                                elif step['action'] == 'fill' and last_step.get('selector') == step.get('selector') and last_step.get('text') == step.get('text') and time_diff < 2000:
-                                    continue  # 跳过短时间内重复的填充步骤
-                                # 对于按键步骤,检查选择器和按键是否相同且时间间隔小于1秒
-                                elif step['action'] == 'keypress' and last_step.get('selector') == step.get('selector') and last_step.get('key') == step.get('key') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的按键步骤
-                                # 对于提交步骤,检查选择器是否相同且时间间隔小于1秒
-                                elif step['action'] == 'submit' and last_step.get('selector') == step.get('selector') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的提交步骤
-                                # 对于滚动步骤,检查滚动位置是否基本相同且时间间隔小于1秒
-                                elif step['action'] == 'scroll' and last_step.get('scrollPosition') == step.get('scrollPosition') and time_diff < 1000:
-                                    continue  # 跳过短时间内重复的滚动步骤
-                        
-                        # 添加到录制步骤中
-                        self.recorded_steps.append(step)
-            except Exception as e:
-                uat_logger.log_exception("stop_recording", e)
-        
-        return self.recorded_steps
-    
     def _get_recorded_events_sync(self):
         """同步获取录制的事件"""
         # 为了避免事件循环冲突,直接返回空列表

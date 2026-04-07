@@ -17,11 +17,22 @@
     </style>
 </head>
 <body>
-    <h1>约 1 分钟：用 Playwright 官方录制器录步骤</h1>
-    <p>无需安装本站点插件、无需远程调试、无需桥接脚本。在本机装好 Playwright CLI 即可。</p>
+    <h1>约 1 分钟：用 Playwright 录制步骤（支持 XPath 优先）</h1>
+    <p>无需安装本站点插件。平台步骤页的 <strong>启动 Playwright Codegen</strong> 会优先调用本仓库内的 <strong>playwright-xpath-fork</strong>（若已构建）；未构建时回退为 pip 安装的官方 Playwright（此时仍优先生成 getByRole 等）。</p>
 
-    <h2>1. 本机一行启动录制</h2>
-    <p>打开终端（Windows：命令提示符或 PowerShell），任选其一：</p>
+    <h2>0. 一次性构建 XPath 优先版 Codegen（推荐）</h2>
+    <p>在本机克隆/拉取的本项目根目录下执行（需已安装 <a href="https://nodejs.org/" target="_blank" rel="noopener">Node.js 18+</a>）：</p>
+    <p>也可在仓库根目录用 PowerShell <strong>一键构建</strong>（内部会进入 <code>playwright-xpath-fork</code> 执行 <code>npm ci</code> 与 <code>npm run build</code>）：</p>
+    <pre>.\tools\install_playwright_xpath_codegen.ps1 -SkipElectronBinary</pre>
+    <p>或手动：</p>
+    <pre>cd playwright-xpath-fork
+npm ci
+npm run build</pre>
+    <p class="tip"><strong><code>npm ci</code> 卡在 electron、或误按了 Ctrl+C：</strong>退出码 <code>3221225786</code> 多为「安装被中断」。请重新执行 <code>npm ci</code> 并<strong>不要中断</strong>，Electron 会单独下载较大文件。若<strong>只做 Codegen、不跑 Electron 测试</strong>，可在 PowerShell 中先试：<code>$env:ELECTRON_SKIP_BINARY_DOWNLOAD='1'; npm ci</code>，再 <code>npm run build</code>；若仍失败可试 <code>npm ci --ignore-scripts</code> 后立刻 <code>npm run build</code>。</p>
+    <p class="tip"><strong>必须等 <code>npm run build</code> 整次跑完</strong>（可能要几分钟）。只跑一半或只执行 <code>npx playwright install</code> 只会下载浏览器，<strong>不会</strong>生成 Inspector 界面文件，直接 <code>node …/cli.js codegen</code> 会报 <code>ENOENT … lib\\vite\\recorder\\index.html</code>。成功构建后应同时存在 <code>lib/coreBundle.js</code> 与 <code>lib/vite/recorder/index.html</code>。平台也会在检测到缺文件时自动回退为 <code>python -m playwright codegen</code>。可设置 <code>PLAYWRIGHT_XPATH_CODEGEN_CLI</code> 自定义启动命令。</p>
+
+    <h2>1. 启动录制</h2>
+    <p>在平台「测试用例步骤」页可点击 <strong>启动 Playwright Codegen</strong>（会为本机打开与下面命令等效的 Codegen + Inspector）。也可手动打开终端（Windows：命令提示符或 PowerShell），任选其一：</p>
     <pre>playwright codegen</pre>
     <p>若未全局安装，可用 Node 自带的 npx（推荐，零全局依赖）：</p>
     <pre>npx playwright codegen</pre>
@@ -31,9 +42,9 @@
     <pre>npx playwright install</pre>
     <p class="tip">Codegen 会打开浏览器窗口和<strong>代码窗口</strong>。你在浏览器里点击、输入、跳转，代码会实时生成。</p>
 
-    <h2>关于「--target=xpath」录出来却是 getByRole？</h2>
-    <p>在官方 Playwright 里，<code>--target</code> 表示的是<strong>生成代码所用语言/框架</strong>，例如 <code>javascript</code>、<code>python</code>、<code>playwright-test</code>、<code>pytest</code> 等，<strong>并不是</strong>「全部改成 XPath」。写成 <code>--target=xpath</code> 通常<strong>无效</strong>，Codegen 仍会按官方策略优先生成 <code>getByRole</code>、<code>getByText</code>、<code>getByTestId</code> 等定位。</p>
-    <p class="tip">若你需要 XPath：① 在 <strong>Playwright Inspector</strong> 里用 <strong>Pick locator</strong> 点元素，在定位器区域查看/切换并复制含 <code>//</code> 或 <code>xpath=...</code> 的写法；② 或在浏览器开发者工具里对节点「复制 → XPath」，再自行写成 <code>page.locator('//...')</code> / <code>page.locator('xpath=//...')</code> 一并粘贴。<strong>本平台导入</strong>已支持上述 <code>locator(...)</code> 形式的 XPath（会识别为步骤里的 XPath 定位）。</p>
+    <h2>官方 Playwright 与 XPath：为何 --target 不能改成 XPath？</h2>
+    <p>在微软原版里，<code>--target</code> 只表示<strong>生成代码的语言</strong>（python / javascript 等），<strong>不是</strong>「全部改成 XPath」。</p>
+    <p class="tip">本仓库的 <strong>playwright-xpath-fork</strong> 在注入脚本里调整了定位器评分，使 Codegen/Inspector <strong>默认更倾向输出 XPath</strong>（在能唯一匹配到目标元素的前提下）。若仍看到少数步骤为 getByRole，多为多匹配需离散化等场景。</p>
 
     <h2>2. 复制代码</h2>
     <p>在 Codegen 的<strong>代码预览</strong>里全选复制（Python 或 JavaScript 均可）。尽量包含 <code>page.goto</code>、<code>click</code>、<code>fill</code> 等行。</p>

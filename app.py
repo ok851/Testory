@@ -3,10 +3,15 @@ from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
+import sys
 import time
+import shlex
+import shutil
 import secrets
 import json
 import functools
+import tempfile
+import subprocess
 from database import Database
 from playwright_automation import (
     automation,
@@ -14,7 +19,6 @@ from playwright_automation import (
     parse_platform_scroll_input_value,
     scroll_event_to_platform_input_value,
     sync_analyze_page_content,
-    sync_automation_session_usable,
     sync_click_element,
     sync_close_browser,
     sync_disable_element_selection,
@@ -44,8 +48,6 @@ from playwright_automation import (
     sync_select_date,
     sync_select_option,
     sync_start_browser,
-    sync_start_recording,
-    sync_stop_recording,
     sync_swipe_element,
     sync_take_screenshot,
     sync_verify_element,
@@ -55,7 +57,10 @@ from playwright_automation import (
     sync_wait_for_timeout,
     worker,
 )
-from playwright_codegen_import import parse_playwright_codegen_to_steps
+from playwright_codegen_import import (
+    enrich_steps_with_xpath_priority,
+    parse_playwright_codegen_to_steps,
+)
 from selenium_ide_import import parse_selenium_ide_to_steps
 from test_report import TestReportGenerator
 from report_exporter import ReportExporter
@@ -75,21 +80,6 @@ _dataset_run_jobs: dict = {}
 _dataset_run_lock = threading.Lock()
 _case_run_jobs: dict = {}
 _case_run_lock = threading.Lock()
-
-# 平台内「浏览器录制」会话（单 Worker 浏览器，同一时刻仅允许一名用户录制）
-_recording_session_user_id = None
-
-
-def _clear_recording_session_user():
-    global _recording_session_user_id
-    _recording_session_user_id = None
-
-
-try:
-    automation.set_recording_session_clear_callback(_clear_recording_session_user)
-except Exception:
-    pass
-
 
 def _case_job_update(user_id: int, **kwargs):
     with _case_run_lock:
@@ -1598,15 +1588,6 @@ def api_update_step_order(case_id):
         return jsonify({'success': False, 'error': '更新步骤顺序失败'}), 400
 
 
-def _infer_selector_type_for_recorded(selector_val: str) -> str:
-    s = (selector_val or "").strip()
-    if s.startswith("//") or s.startswith("(//"):
-        return "xpath"
-    if s.lower().startswith("xpath="):
-        return "xpath"
-    return "css"
-
-
 def _run_db_step_scroll(input_value: str, iframe_selector=None):
     """按平台存储的 up/down/left/right 像素执行滚动；无有效值时回退为向下 500px。"""
     v = parse_platform_scroll_input_value(input_value)
@@ -1618,234 +1599,139 @@ def _run_db_step_scroll(input_value: str, iframe_selector=None):
         sync_scroll_page("down", 500, iframe_selector=iframe_selector)
 
 
-def _convert_browser_recorded_steps_to_db_steps(recorded: list) -> tuple:
-    """将 Playwright 页面录制事件转为 batch_insert_steps 结构。返回 (steps, skipped_labels)。"""
-    out = []
-    skipped = []
-    if not recorded:
-        return out, skipped
-    for r in recorded:
-        if not isinstance(r, dict):
-            continue
-        action = (r.get("action") or "").strip().lower()
-        lc = r.get("locator_candidates")
-        sel = r.get("selector") or ""
-        st = _infer_selector_type_for_recorded(sel)
-
-        def pack_common(d: dict) -> dict:
-            if lc:
-                d["locator_candidates"] = lc
-            return d
-
-        if action == "click":
-            out.append(pack_common({
-                "action": "click",
-                "selector_type": st,
-                "selector_value": sel,
-                "input_value": "",
-                "description": "",
-            }))
-        elif action == "fill":
-            out.append(pack_common({
-                "action": "input",
-                "selector_type": st,
-                "selector_value": sel,
-                "input_value": r.get("text", "") or "",
-                "description": "",
-            }))
-        elif action == "navigate":
-            url = (r.get("url") or "").strip()
-            if not url:
-                skipped.append("navigate(空URL)")
-                continue
-            out.append(pack_common({
-                "action": "navigate",
-                "selector_type": "css",
-                "selector_value": "",
-                "input_value": url,
-                "description": "",
-            }))
-        elif action == "hover":
-            out.append(pack_common({
-                "action": "hover",
-                "selector_type": st,
-                "selector_value": sel,
-                "input_value": "",
-                "description": "",
-            }))
-        elif action == "submit":
-            out.append(pack_common({
-                "action": "click",
-                "selector_type": st,
-                "selector_value": sel,
-                "input_value": "",
-                "description": "录制: 提交按钮",
-            }))
-        elif action == "scroll":
-            scroll_iv = scroll_event_to_platform_input_value(r)
-            desc = "录制: 页面滚动"
-            if scroll_iv and scroll_iv != "up:0,down:0,left:0,right:0":
-                desc = f"录制: 滚动 {scroll_iv}"
-            out.append(pack_common({
-                "action": "scroll",
-                "selector_type": "css",
-                "selector_value": "",
-                "input_value": scroll_iv,
-                "description": desc,
-            }))
-        elif action == "keypress":
-            skipped.append(f"keypress:{r.get('key', '')}")
-        else:
-            if action:
-                skipped.append(action)
-    return out, skipped
+# ==================== Playwright Codegen 录制：粘贴导入 ====================
 
 
-@app.route('/api/recording/start', methods=['POST'])
+def _playwright_codegen_command(nav_url: str) -> tuple:
+    """
+    返回 (argv, engine_label)。
+    优先使用仓库内 playwright-xpath-fork 构建产物（XPath 优先录制定位），否则回退 pip playwright。
+    环境变量 PLAYWRIGHT_XPATH_CODEGEN_CLI：可执行或「node path/to/cli.js ...」前缀，后自动拼接 codegen 参数。
+    """
+    target_args = ["codegen", nav_url, "--target", "python"]
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    fork_cli = os.path.join(
+        app_dir,
+        "playwright-xpath-fork",
+        "packages",
+        "playwright-core",
+        "cli.js",
+    )
+    fork_bundle = os.path.join(
+        app_dir,
+        "playwright-xpath-fork",
+        "packages",
+        "playwright-core",
+        "lib",
+        "coreBundle.js",
+    )
+    # Codegen/Inspector 的静态界面，仅完整 `npm run build` 后才有；缺它会出现 ENOENT index.html
+    fork_recorder_index = os.path.join(
+        app_dir,
+        "playwright-xpath-fork",
+        "packages",
+        "playwright-core",
+        "lib",
+        "vite",
+        "recorder",
+        "index.html",
+    )
+
+    env_override = (os.environ.get("PLAYWRIGHT_XPATH_CODEGEN_CLI") or "").strip()
+    if env_override:
+        try:
+            base = shlex.split(env_override, posix=(os.name != "nt"))
+        except ValueError:
+            base = [env_override]
+        return base + target_args, "custom"
+
+    node = shutil.which("node")
+    if (
+        node
+        and os.path.isfile(fork_cli)
+        and os.path.isfile(fork_bundle)
+        and os.path.isfile(fork_recorder_index)
+    ):
+        return [node, fork_cli] + target_args, "xpath_fork"
+
+    return [sys.executable, "-m", "playwright"] + target_args, "pypi"
+
+
+@app.route("/api/cases/<int:case_id>/start-playwright-codegen", methods=["POST"])
 @login_required
 @api_error_handler
 @log_api_request
-def api_recording_start():
-    """启动本机 Playwright 浏览器并开始录制（需在服务器可见桌面或设置 PLAYWRIGHT_HEADLESS=0 以显示窗口）。"""
-    global _recording_session_user_id
+def api_case_start_playwright_codegen(case_id):
+    """在本机新开控制台启动官方 playwright codegen（不写入服务端文件；录制完成后请复制代码使用「从 Codegen 导入」）。"""
     data = request.get_json(silent=True) or {}
-    case_id = data.get('case_id')
-    if not case_id:
-        return jsonify({'success': False, 'error': '缺少 case_id'}), 400
-
-    case = db.get_test_case_v2(int(case_id))
+    case = db.get_test_case_v2(case_id)
     if not case:
-        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+        return jsonify({"success": False, "error": "测试用例不存在"}), 404
 
     _db = Database()
-    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
-        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+    if case.get("project_id") and not _db.check_project_access(
+        current_user.id, case["project_id"], "editor"
+    ):
+        return jsonify({"success": False, "error": "无权限修改此用例"}), 403
 
-    if _recording_session_user_id is not None and _recording_session_user_id != current_user.id:
-        return jsonify({'success': False, 'error': '其他用户正在使用浏览器录制，请稍后再试'}), 409
-
-    override_url = (data.get('url') or '').strip()
-    steps_preview = db.get_case_steps(int(case_id))
+    override_url = (data.get("url") or "").strip()
+    steps_preview = db.get_case_steps(case_id)
     nav_url, nav_src = _resolve_case_navigation_url(
-        case=case, case_id=int(case_id), steps=steps_preview,
+        case=case,
+        case_id=case_id,
+        steps=steps_preview,
         fallback_url=override_url or None,
     )
     if not nav_url:
-        return jsonify({
-            'success': False,
-            'error': '无法确定起始地址：请在本用例填写测试 URL，或在请求体中传入 url 字段',
-        }), 400
+        return jsonify(
+            {
+                "success": False,
+                "error": "无法确定起始地址：请在本用例填写测试 URL，或在请求体中传入 url 字段",
+            }
+        ), 400
 
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    cmd, engine = _playwright_codegen_command(nav_url)
     try:
-        sync_start_browser(headless=False)
-        platform_base = (request.url_root or "").rstrip("/")
-        # 先开始录制并注入悬浮窗，再导航到目标页：空白页即可看到控制台，避免「先黑屏/白屏很久才出现悬浮窗」
-        sync_start_recording(platform_base)
-        sync_navigate_to(nav_url)
-        _recording_session_user_id = current_user.id
-        uat_logger.info(f"录制已开始 case_id={case_id} user={current_user.id} url={nav_url}")
-        return jsonify({
-            'success': True,
-            'navigated_to': nav_url,
-            'nav_source': nav_src,
-            'hint': '被测窗口右下有可拖动「录制控制」悬浮窗（暂停/重新录制/最近步骤）；另开「步骤录制面板」可看完整列表；完成后回到本页点「停止录制」导入。无界面部署请设置 PLAYWRIGHT_HEADLESS=0。手动关闭浏览器将自动结束录制。',
-        })
+        if sys.platform == "win32":
+            cf = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            if not cf:
+                cf = 0x00000010
+            subprocess.Popen(cmd, creationflags=cf, cwd=app_dir if engine == "xpath_fork" else None)
+        else:
+            subprocess.Popen(cmd, start_new_session=True, cwd=app_dir if engine == "xpath_fork" else None)
     except Exception as e:
-        _recording_session_user_id = None
-        uat_logger.log_exception("api_recording_start", e)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        uat_logger.log_exception("api_case_start_playwright_codegen", e)
+        return jsonify(
+            {"success": False, "error": f"无法启动 playwright codegen：{e}"}
+        ), 500
+    uat_logger.info(
+        f"Playwright codegen 已启动 engine={engine} case_id={case_id} user={current_user.id} url={nav_url}"
+    )
+    if engine == "xpath_fork":
+        hint = (
+            "已使用本仓库 **XPath 优先** 的 Playwright 分叉启动 Codegen（生成代码会尽量用 page.locator('xpath=…') 等）。"
+            " 完成后请复制代码，用「从 Codegen 导入」写入用例。"
+        )
+    elif engine == "pypi":
+        hint = (
+            "当前使用 pip 安装的 **官方** Playwright，Codegen 仍优先 getByRole 等。"
+            " 若要 XPath 优先录制：在本机进入仓库目录 `playwright-xpath-fork` 执行 `npm ci` 与 `npm run build` 后，"
+            "再点「启动 Playwright Codegen」；详见「录制教程」。"
+            " 完成后复制代码，用「从 Codegen 导入」。"
+        )
+    else:
+        hint = "Codegen 已启动。完成后请复制代码，用「从 Codegen 导入」写入用例。"
 
-
-@app.route('/api/recording/stop', methods=['POST'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_recording_stop():
-    """结束录制并可选将步骤追加到用例（含 locator_candidates 多定位器包）。"""
-    global _recording_session_user_id
-    data = request.get_json(silent=True) or {}
-    case_id = data.get('case_id')
-    do_save = bool(data.get('save', True))
-    append = data.get('append')
-    if append is None:
-        append = True
-    append = bool(append)
-
-    try:
-        recorded = sync_stop_recording() or []
-    except Exception as e:
-        if _recording_session_user_id == current_user.id:
-            _recording_session_user_id = None
-        uat_logger.log_exception("api_recording_stop", e)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-    if _recording_session_user_id == current_user.id:
-        _recording_session_user_id = None
-
-    platform_steps, skipped = _convert_browser_recorded_steps_to_db_steps(recorded)
-    imported = 0
-
-    if case_id is not None and do_save:
-        case = db.get_test_case_v2(int(case_id))
-        if not case:
-            return jsonify({
-                'success': False,
-                'error': '测试用例不存在',
-                'recorded_count': len(recorded),
-                'converted': platform_steps,
-                'skipped': skipped,
-            }), 404
-        _db = Database()
-        if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
-            return jsonify({'success': False, 'error': '无权限写入此用例'}), 403
-
-        if platform_steps:
-            if not append:
-                db.delete_case_steps(int(case_id))
-            if not db.batch_insert_steps(int(case_id), platform_steps):
-                return jsonify({'success': False, 'error': '写入步骤失败'}), 500
-            imported = len(platform_steps)
-
-    return jsonify({
-        'success': True,
-        'imported': imported,
-        'recorded_count': len(recorded),
-        'skipped': skipped,
-        'steps_preview': platform_steps[:30],
-    })
-
-
-@app.route('/api/recording/status', methods=['GET'])
-@login_required
-def api_recording_status():
-    """当前用户是否处于有效录制会话（浏览器被手动关闭后会自动置为未激活）。"""
-    global _recording_session_user_id
-    browser_ok = True
-    try:
-        browser_ok = sync_automation_session_usable()
-    except Exception:
-        browser_ok = False
-    uid_match = _recording_session_user_id == current_user.id
-    if uid_match and not browser_ok:
-        _recording_session_user_id = None
-    active = _recording_session_user_id == current_user.id and browser_ok
-    return jsonify({'success': True, 'active': active, 'browser_ok': browser_ok})
-
-
-@app.route('/api/recording/live-preview', methods=['GET'])
-@login_required
-def api_recording_live_preview():
-    """录制中的步骤快照（与 Playwright 内「步骤录制面板」同源）。"""
-    if _recording_session_user_id != current_user.id:
-        return jsonify({'success': True, 'steps': [], 'count': 0, 'active': False})
-    try:
-        snap = list(automation.recorded_steps[-120:])
-    except Exception:
-        snap = []
-    return jsonify({'success': True, 'steps': snap, 'count': len(snap), 'active': True})
-
-
-# ==================== Playwright Codegen 录制：粘贴导入 ====================
+    return jsonify(
+        {
+            "success": True,
+            "navigated_to": nav_url,
+            "nav_source": nav_src,
+            "codegen_engine": engine,
+            "hint": hint,
+        }
+    )
 
 
 @app.route('/recording-tutorial')
@@ -1875,6 +1761,7 @@ def api_import_playwright_codegen(case_id):
         return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
 
     steps, warnings = parse_playwright_codegen_to_steps(code)
+    steps = enrich_steps_with_xpath_priority(steps)
     if not steps:
         return jsonify({
             'success': False,
