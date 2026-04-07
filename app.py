@@ -8,7 +8,53 @@ import secrets
 import json
 import functools
 from database import Database
-from playwright_automation import automation, sync_start_browser, sync_navigate_to, sync_scroll_page, sync_get_page_text, sync_extract_element_text, sync_extract_element_json, sync_get_page_title, sync_get_current_url, sync_get_all_links, sync_hover_element, sync_double_click_element, sync_right_click_element, sync_click_element, sync_fill_input, sync_get_page_elements, sync_extract_element_data, sync_get_page_data, sync_analyze_page_content, sync_close_browser, sync_wait_for_selector, sync_wait_for_element_visible, sync_take_screenshot, worker, sync_wait_for_timeout, sync_swipe_element, sync_verify_element, sync_select_option, sync_get_element_count, sync_select_date, sync_enable_element_selection, sync_disable_element_selection, sync_get_selected_element, sync_extract_json_from_selected_element, sync_execute_multiple_test_cases, sync_enter_iframe, sync_exit_iframe, sync_wait_for_page_stable, force_reset_execution_state
+from playwright_automation import (
+    automation,
+    force_reset_execution_state,
+    parse_platform_scroll_input_value,
+    scroll_event_to_platform_input_value,
+    sync_analyze_page_content,
+    sync_automation_session_usable,
+    sync_click_element,
+    sync_close_browser,
+    sync_disable_element_selection,
+    sync_double_click_element,
+    sync_enable_element_selection,
+    sync_enter_iframe,
+    sync_execute_multiple_test_cases,
+    sync_exit_iframe,
+    sync_extract_element_data,
+    sync_extract_element_json,
+    sync_extract_element_text,
+    sync_extract_json_from_selected_element,
+    sync_fill_input,
+    sync_get_all_links,
+    sync_get_current_url,
+    sync_get_element_count,
+    sync_get_page_data,
+    sync_get_page_elements,
+    sync_get_page_text,
+    sync_get_page_title,
+    sync_get_selected_element,
+    sync_hover_element,
+    sync_navigate_to,
+    sync_right_click_element,
+    sync_scroll_by_delta,
+    sync_scroll_page,
+    sync_select_date,
+    sync_select_option,
+    sync_start_browser,
+    sync_start_recording,
+    sync_stop_recording,
+    sync_swipe_element,
+    sync_take_screenshot,
+    sync_verify_element,
+    sync_wait_for_element_visible,
+    sync_wait_for_page_stable,
+    sync_wait_for_selector,
+    sync_wait_for_timeout,
+    worker,
+)
 from playwright_codegen_import import parse_playwright_codegen_to_steps
 from selenium_ide_import import parse_selenium_ide_to_steps
 from test_report import TestReportGenerator
@@ -29,6 +75,20 @@ _dataset_run_jobs: dict = {}
 _dataset_run_lock = threading.Lock()
 _case_run_jobs: dict = {}
 _case_run_lock = threading.Lock()
+
+# 平台内「浏览器录制」会话（单 Worker 浏览器，同一时刻仅允许一名用户录制）
+_recording_session_user_id = None
+
+
+def _clear_recording_session_user():
+    global _recording_session_user_id
+    _recording_session_user_id = None
+
+
+try:
+    automation.set_recording_session_clear_callback(_clear_recording_session_user)
+except Exception:
+    pass
 
 
 def _case_job_update(user_id: int, **kwargs):
@@ -1457,6 +1517,9 @@ def api_create_step():
     enter_iframe = data.get('enter_iframe', False)
     iframe_selector = data.get('iframe_selector', '')
     compare_type = data.get('compare_type', 'equals')
+    locator_candidates = data.get('locator_candidates', '')
+    if locator_candidates is not None and not isinstance(locator_candidates, str):
+        locator_candidates = json.dumps(locator_candidates, ensure_ascii=False)
     
     if not case_id:
         return jsonify({'error': '用例ID不能为空'}), 400
@@ -1465,7 +1528,8 @@ def api_create_step():
     
     step_id = db.create_test_step(case_id, action, selector_type, selector_value, 
                                   input_value, description, step_order, page_name,
-                                  swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type)
+                                  swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
+                                  locator_candidates or '')
     return jsonify({'success': True, 'step_id': step_id})
 
 # API: 更新测试步骤
@@ -1483,9 +1547,13 @@ def api_update_step(step_id):
     enter_iframe = data.get('enter_iframe')
     iframe_selector = data.get('iframe_selector')
     compare_type = data.get('compare_type')
+    locator_candidates = data.get('locator_candidates')
+    if locator_candidates is not None and not isinstance(locator_candidates, str):
+        locator_candidates = json.dumps(locator_candidates, ensure_ascii=False)
     
     success = db.update_test_step(step_id, action, selector_type, selector_value,
-                                   input_value, description, step_order, enter_iframe, iframe_selector, compare_type)
+                                   input_value, description, step_order, enter_iframe, iframe_selector, compare_type,
+                                   locator_candidates)
     
     if success:
         return jsonify({'success': True})
@@ -1528,6 +1596,254 @@ def api_update_step_order(case_id):
         return jsonify({'success': True})
     else:
         return jsonify({'success': False, 'error': '更新步骤顺序失败'}), 400
+
+
+def _infer_selector_type_for_recorded(selector_val: str) -> str:
+    s = (selector_val or "").strip()
+    if s.startswith("//") or s.startswith("(//"):
+        return "xpath"
+    if s.lower().startswith("xpath="):
+        return "xpath"
+    return "css"
+
+
+def _run_db_step_scroll(input_value: str, iframe_selector=None):
+    """按平台存储的 up/down/left/right 像素执行滚动；无有效值时回退为向下 500px。"""
+    v = parse_platform_scroll_input_value(input_value)
+    dx = v["right"] - v["left"]
+    dy = v["down"] - v["up"]
+    if dx != 0 or dy != 0:
+        sync_scroll_by_delta(dx, dy, iframe_selector=iframe_selector)
+    else:
+        sync_scroll_page("down", 500, iframe_selector=iframe_selector)
+
+
+def _convert_browser_recorded_steps_to_db_steps(recorded: list) -> tuple:
+    """将 Playwright 页面录制事件转为 batch_insert_steps 结构。返回 (steps, skipped_labels)。"""
+    out = []
+    skipped = []
+    if not recorded:
+        return out, skipped
+    for r in recorded:
+        if not isinstance(r, dict):
+            continue
+        action = (r.get("action") or "").strip().lower()
+        lc = r.get("locator_candidates")
+        sel = r.get("selector") or ""
+        st = _infer_selector_type_for_recorded(sel)
+
+        def pack_common(d: dict) -> dict:
+            if lc:
+                d["locator_candidates"] = lc
+            return d
+
+        if action == "click":
+            out.append(pack_common({
+                "action": "click",
+                "selector_type": st,
+                "selector_value": sel,
+                "input_value": "",
+                "description": "",
+            }))
+        elif action == "fill":
+            out.append(pack_common({
+                "action": "input",
+                "selector_type": st,
+                "selector_value": sel,
+                "input_value": r.get("text", "") or "",
+                "description": "",
+            }))
+        elif action == "navigate":
+            url = (r.get("url") or "").strip()
+            if not url:
+                skipped.append("navigate(空URL)")
+                continue
+            out.append(pack_common({
+                "action": "navigate",
+                "selector_type": "css",
+                "selector_value": "",
+                "input_value": url,
+                "description": "",
+            }))
+        elif action == "hover":
+            out.append(pack_common({
+                "action": "hover",
+                "selector_type": st,
+                "selector_value": sel,
+                "input_value": "",
+                "description": "",
+            }))
+        elif action == "submit":
+            out.append(pack_common({
+                "action": "click",
+                "selector_type": st,
+                "selector_value": sel,
+                "input_value": "",
+                "description": "录制: 提交按钮",
+            }))
+        elif action == "scroll":
+            scroll_iv = scroll_event_to_platform_input_value(r)
+            desc = "录制: 页面滚动"
+            if scroll_iv and scroll_iv != "up:0,down:0,left:0,right:0":
+                desc = f"录制: 滚动 {scroll_iv}"
+            out.append(pack_common({
+                "action": "scroll",
+                "selector_type": "css",
+                "selector_value": "",
+                "input_value": scroll_iv,
+                "description": desc,
+            }))
+        elif action == "keypress":
+            skipped.append(f"keypress:{r.get('key', '')}")
+        else:
+            if action:
+                skipped.append(action)
+    return out, skipped
+
+
+@app.route('/api/recording/start', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_recording_start():
+    """启动本机 Playwright 浏览器并开始录制（需在服务器可见桌面或设置 PLAYWRIGHT_HEADLESS=0 以显示窗口）。"""
+    global _recording_session_user_id
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id')
+    if not case_id:
+        return jsonify({'success': False, 'error': '缺少 case_id'}), 400
+
+    case = db.get_test_case_v2(int(case_id))
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+
+    _db = Database()
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+
+    if _recording_session_user_id is not None and _recording_session_user_id != current_user.id:
+        return jsonify({'success': False, 'error': '其他用户正在使用浏览器录制，请稍后再试'}), 409
+
+    override_url = (data.get('url') or '').strip()
+    steps_preview = db.get_case_steps(int(case_id))
+    nav_url, nav_src = _resolve_case_navigation_url(
+        case=case, case_id=int(case_id), steps=steps_preview,
+        fallback_url=override_url or None,
+    )
+    if not nav_url:
+        return jsonify({
+            'success': False,
+            'error': '无法确定起始地址：请在本用例填写测试 URL，或在请求体中传入 url 字段',
+        }), 400
+
+    try:
+        sync_start_browser(headless=False)
+        platform_base = (request.url_root or "").rstrip("/")
+        # 先开始录制并注入悬浮窗，再导航到目标页：空白页即可看到控制台，避免「先黑屏/白屏很久才出现悬浮窗」
+        sync_start_recording(platform_base)
+        sync_navigate_to(nav_url)
+        _recording_session_user_id = current_user.id
+        uat_logger.info(f"录制已开始 case_id={case_id} user={current_user.id} url={nav_url}")
+        return jsonify({
+            'success': True,
+            'navigated_to': nav_url,
+            'nav_source': nav_src,
+            'hint': '被测窗口右下有可拖动「录制控制」悬浮窗（暂停/重新录制/最近步骤）；另开「步骤录制面板」可看完整列表；完成后回到本页点「停止录制」导入。无界面部署请设置 PLAYWRIGHT_HEADLESS=0。手动关闭浏览器将自动结束录制。',
+        })
+    except Exception as e:
+        _recording_session_user_id = None
+        uat_logger.log_exception("api_recording_start", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/recording/stop', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_recording_stop():
+    """结束录制并可选将步骤追加到用例（含 locator_candidates 多定位器包）。"""
+    global _recording_session_user_id
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id')
+    do_save = bool(data.get('save', True))
+    append = data.get('append')
+    if append is None:
+        append = True
+    append = bool(append)
+
+    try:
+        recorded = sync_stop_recording() or []
+    except Exception as e:
+        if _recording_session_user_id == current_user.id:
+            _recording_session_user_id = None
+        uat_logger.log_exception("api_recording_stop", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    if _recording_session_user_id == current_user.id:
+        _recording_session_user_id = None
+
+    platform_steps, skipped = _convert_browser_recorded_steps_to_db_steps(recorded)
+    imported = 0
+
+    if case_id is not None and do_save:
+        case = db.get_test_case_v2(int(case_id))
+        if not case:
+            return jsonify({
+                'success': False,
+                'error': '测试用例不存在',
+                'recorded_count': len(recorded),
+                'converted': platform_steps,
+                'skipped': skipped,
+            }), 404
+        _db = Database()
+        if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+            return jsonify({'success': False, 'error': '无权限写入此用例'}), 403
+
+        if platform_steps:
+            if not append:
+                db.delete_case_steps(int(case_id))
+            if not db.batch_insert_steps(int(case_id), platform_steps):
+                return jsonify({'success': False, 'error': '写入步骤失败'}), 500
+            imported = len(platform_steps)
+
+    return jsonify({
+        'success': True,
+        'imported': imported,
+        'recorded_count': len(recorded),
+        'skipped': skipped,
+        'steps_preview': platform_steps[:30],
+    })
+
+
+@app.route('/api/recording/status', methods=['GET'])
+@login_required
+def api_recording_status():
+    """当前用户是否处于有效录制会话（浏览器被手动关闭后会自动置为未激活）。"""
+    global _recording_session_user_id
+    browser_ok = True
+    try:
+        browser_ok = sync_automation_session_usable()
+    except Exception:
+        browser_ok = False
+    uid_match = _recording_session_user_id == current_user.id
+    if uid_match and not browser_ok:
+        _recording_session_user_id = None
+    active = _recording_session_user_id == current_user.id and browser_ok
+    return jsonify({'success': True, 'active': active, 'browser_ok': browser_ok})
+
+
+@app.route('/api/recording/live-preview', methods=['GET'])
+@login_required
+def api_recording_live_preview():
+    """录制中的步骤快照（与 Playwright 内「步骤录制面板」同源）。"""
+    if _recording_session_user_id != current_user.id:
+        return jsonify({'success': True, 'steps': [], 'count': 0, 'active': False})
+    try:
+        snap = list(automation.recorded_steps[-120:])
+    except Exception:
+        snap = []
+    return jsonify({'success': True, 'steps': snap, 'count': len(snap), 'active': True})
+
 
 # ==================== Playwright Codegen 录制：粘贴导入 ====================
 
@@ -1770,7 +2086,8 @@ def api_run_case(case_id):
                 # 添加iframe相关字段
                 enter_iframe = step.get('enter_iframe', False)
                 iframe_selector = step.get('iframe_selector', '')
-                
+                locator_candidates = step.get('locator_candidates') or None
+
                 step_start_time = time.time()
                 # 🔥 修复：初始化为 error，只有执行成功才改为 success
                 step_status = 'error'
@@ -1803,7 +2120,12 @@ def api_run_case(case_id):
                 elif action == 'click':
                             if selector_value:
                                 try:
-                                    sync_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                                    sync_click_element(
+                                        selector_value,
+                                        selector_type,
+                                        iframe_selector=iframe_selector if enter_iframe else None,
+                                        locator_candidates=locator_candidates,
+                                    )
                                 except Exception as click_error:
                                     uat_logger.error(f"执行点击操作时出错: {click_error}")
                                     # 直接抛出错误，视为测试用例执行失败
@@ -1826,7 +2148,13 @@ def api_run_case(case_id):
                             if selector_type == "css" and "nth-child" in selector_value:
                                 uat_logger.warning(f"⚠️ 检测到使用nth-child定位，可能不够稳定，建议改用ID或类名")
                             
-                            sync_fill_input(selector_value, safe_input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            sync_fill_input(
+                                    selector_value,
+                                    safe_input_value,
+                                    selector_type,
+                                    iframe_selector=iframe_selector if enter_iframe else None,
+                                    locator_candidates=locator_candidates,
+                                )
                             uat_logger.info(f"✅ 输入操作执行完成: 步骤ID={step.get('id', 'unknown')}")
                             
                         except Exception as input_error:
@@ -1928,10 +2256,11 @@ def api_run_case(case_id):
                             # 直接抛出错误，视为测试用例执行失败
                             raise
                 elif action == 'scroll':
-                    direction = 'down'
-                    pixels = 500
                     try:
-                        sync_scroll_page(direction, pixels, iframe_selector=iframe_selector if enter_iframe else None)
+                        _run_db_step_scroll(
+                            input_value or "",
+                            iframe_selector=iframe_selector if enter_iframe else None,
+                        )
                         # 滚动后等待页面响应
                         sync_wait_for_timeout(1500)
                     except Exception as scroll_error:
@@ -3116,7 +3445,10 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                 if _dataset_run_jobs.get(run_id, {}).get('cancel_requested'):
                     cancelled = True
                     break
-            row_data = row_info['data']
+            row_data = {
+                k: _normalize_dataset_cell_value(v)
+                for k, v in (row_info.get('data') or {}).items()
+            }
             row_index = row_info['row_index']
             _dataset_job_update(run_id, current_row_index=row_index)
 
@@ -3166,13 +3498,24 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 sync_navigate_to(nav_url)
                         elif action == 'click':
                             if selector_value:
-                                sync_click_element(selector_value, selector_type, iframe_selector=iframe_sel)
+                                sync_click_element(
+                                    selector_value,
+                                    selector_type,
+                                    iframe_selector=iframe_sel,
+                                    locator_candidates=step.get('locator_candidates') or None,
+                                )
                         elif action == 'input':
                             if selector_value:
                                 if input_value is None or str(input_value) == '':
                                     raise Exception("输入步骤缺少有效输入值")
                                 safe_input_value = input_value
-                                sync_fill_input(selector_value, safe_input_value, selector_type, iframe_selector=iframe_sel)
+                                sync_fill_input(
+                                    selector_value,
+                                    safe_input_value,
+                                    selector_type,
+                                    iframe_selector=iframe_sel,
+                                    locator_candidates=step.get('locator_candidates') or None,
+                                )
                             else:
                                 raise Exception("输入操作缺少选择器")
                         elif action == 'wait':
@@ -3182,7 +3525,7 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                             if selector_value and input_value:
                                 sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_sel)
                         elif action == 'scroll':
-                            sync_scroll_page('down', 500, iframe_selector=iframe_sel)
+                            _run_db_step_scroll(input_value or "", iframe_selector=iframe_sel)
                     except Exception as e:
                         step_status = 'failed'
                         step_error = str(e)
@@ -3326,6 +3669,41 @@ def api_delete_dataset(dataset_id):
     success = _db.delete_dataset(dataset_id)
     return jsonify({'success': success})
 
+
+def _normalize_dataset_cell_value(v):
+    """
+    将上传文件中的单元格转为写入数据集的字符串。
+    - Excel 日期单元格在 openpyxl data_only 下常为 datetime，str() 会变成 \"YYYY-MM-DD 00:00:00\"，
+      与页面控件回读不一致；午夜时间统一压成纯日期 YYYY-MM-DD。
+    - 所有结果 strip，去掉 CSV/粘贴带来的首尾空格。
+    - 字符串若已是 \"日期 + 00:00:00\"（及 .0 小数秒）也压成纯日期。
+    """
+    import re
+    from datetime import date, datetime, time as dtime
+
+    if v is None:
+        return ''
+    if isinstance(v, bool):
+        return 'true' if v else 'false'
+    if isinstance(v, datetime):
+        vv = v.replace(microsecond=0) if v.microsecond else v
+        if vv.time() == dtime(0, 0, 0):
+            return vv.strftime('%Y-%m-%d')
+        return vv.strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(v, date):
+        return v.strftime('%Y-%m-%d')
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        if v == int(v) and abs(v) < 1e15:
+            return str(int(v))
+        return str(v).strip()
+    s = str(v).strip()
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}\s+00:00:00(?:\.0+)?', s):
+        return s[:10]
+    return s
+
+
 @app.route('/api/datasets/upload', methods=['POST'])
 @login_required
 def api_upload_dataset():
@@ -3349,7 +3727,10 @@ def api_upload_dataset():
             content = file.read().decode('utf-8-sig')
             reader = csv.DictReader(io.StringIO(content))
             for row in reader:
-                rows_data.append(dict(row))
+                rows_data.append({
+                    (k.strip() if k else k): _normalize_dataset_cell_value(val)
+                    for k, val in row.items()
+                })
         elif filename.endswith(('.xlsx', '.xls')):
             try:
                 import openpyxl
@@ -3358,9 +3739,16 @@ def api_upload_dataset():
                 headers = None
                 for row in ws.iter_rows(values_only=True):
                     if headers is None:
-                        headers = [str(c) if c is not None else f'col{i}' for i, c in enumerate(row)]
+                        headers = [
+                            (str(c).strip() if c is not None else f'col{i}')
+                            for i, c in enumerate(row)
+                        ]
                     else:
-                        row_dict = {headers[i]: (str(v) if v is not None else '') for i, v in enumerate(row)}
+                        row_dict = {
+                            headers[i]: _normalize_dataset_cell_value(v)
+                            for i, v in enumerate(row)
+                            if i < len(headers)
+                        }
                         rows_data.append(row_dict)
                 wb.close()
             except ImportError:
@@ -3500,6 +3888,56 @@ def api_dataset_run_stop(run_id):
         job['current_row_index'] = None
     threading.Thread(target=_force_stop_browser_async, daemon=True, name='stop-dataset-run').start()
     return jsonify({'success': True, 'message': '已发送停止请求'})
+
+
+def _get_current_user_dataset_job(user_id: int):
+    """获取当前用户最近的一个数据驱动任务（优先 active）。"""
+    with _dataset_run_lock:
+        items = list(_dataset_run_jobs.items())
+    for run_id, job in reversed(items):
+        if job.get('user_id') != user_id:
+            continue
+        return run_id, job
+    return None, None
+
+
+@app.route('/api/datasets/current-run/status', methods=['GET'])
+@login_required
+def api_dataset_current_run_status():
+    """查询当前用户的数据驱动任务状态（用于跨页面恢复显示/停止）。"""
+    run_id, job = _get_current_user_dataset_job(current_user.id)
+    if not job:
+        return jsonify({'success': True, 'active': False, 'message': '暂无运行任务'})
+
+    finished = bool(job.get('finished'))
+    total = int(job.get('total', 0) or 0)
+    completed = int(job.get('completed', 0) or 0)
+    return jsonify({
+        'success': True,
+        'active': not finished,
+        'finished': finished,
+        'run_id': run_id,
+        'dataset_id': job.get('dataset_id'),
+        'case_id': job.get('case_id'),
+        'total': total,
+        'completed': completed,
+        'successful_rows': int(job.get('successful_rows', 0) or 0),
+        'failed_rows': int(job.get('failed_rows', 0) or 0),
+        'current_row_index': job.get('current_row_index'),
+        'error': job.get('error'),
+    })
+
+
+@app.route('/api/datasets/current-run/stop', methods=['POST'])
+@login_required
+def api_dataset_current_run_stop():
+    """停止当前用户最近的数据驱动任务（幂等）。"""
+    run_id, job = _get_current_user_dataset_job(current_user.id)
+    if not job:
+        return jsonify({'success': True, 'message': '当前没有运行任务'})
+    if job.get('finished'):
+        return jsonify({'success': True, 'message': '任务已结束'})
+    return api_dataset_run_stop(run_id)
 
 
 # ==================== 调度器初始化 ====================

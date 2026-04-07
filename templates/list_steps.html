@@ -145,6 +145,19 @@
             background: #138496;
         }
         
+        .btn-warning {
+            background: #fd7e14;
+            color: white;
+        }
+        .btn-warning:hover {
+            background: #e96b02;
+            color: white;
+        }
+        .btn-warning:disabled {
+            background: #fde5d4 !important;
+            color: #b0896a !important;
+        }
+        
         /* 浮动控制条动画 */
         @keyframes slideInRight {
             from {
@@ -511,9 +524,11 @@
         
         <div class="toolbar">
             <div class="toolbar-left">
-                <button onclick="showCreateStepModal()" class="btn btn-primary">+ 添加步骤</button>
+                <button onclick="showCreateStepModal()" class="btn btn-primary" id="addStepBtn">+ 添加步骤</button>
                 <button onclick="runTestCase()" class="btn btn-success" id="runCaseBtn">▶ 运行用例</button>
                 <button onclick="stopRunCase()" class="btn btn-danger" id="stopRunCaseBtn" disabled>⏹ 停止执行</button>
+                <button type="button" onclick="startBrowserRecording()" class="btn btn-warning" id="startRecordingBtn" title="在本机打开 Chrome 并录制操作，自动写入多定位器备选">● 浏览器录制</button>
+                <button type="button" onclick="stopBrowserRecording()" class="btn btn-danger" id="stopRecordingBtn" disabled title="结束录制并导入步骤">⏹ 停止录制</button>
                 <a href="/recording-tutorial" target="_blank" rel="noopener" class="btn btn-secondary" id="recordTutorialBtn">📖 录制教程</a>
                 <button onclick="showCodegenImportModal()" class="btn btn-info" id="codegenImportBtn" type="button">
                     📋 从 Codegen 导入
@@ -535,6 +550,15 @@
             <div style="width:100%; height:8px; background:#dee2e6; border-radius:999px; overflow:hidden;">
                 <div id="runCaseProgressBar" style="width:0%; height:100%; background:#28a745; transition:width .25s ease;"></div>
             </div>
+        </div>
+
+        <div id="recordingLivePanel" style="display:none; margin: 0 30px 12px; padding: 12px; background: #1e1b4b; color: #e0e7ff; border-radius: 8px; font-size: 13px;">
+            <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <strong>录制实时预览</strong>（与 Playwright 内「步骤录制面板」数据同步）
+                <span id="recordingLiveCount" style="opacity:.9">0 步</span>
+            </div>
+            <div id="recordingLiveList" style="max-height: 160px; overflow-y: auto; font-size: 12px; line-height: 1.45; opacity: .95;"></div>
+            <div style="margin-top:8px; font-size:11px; opacity:.75;">若关闭自动化浏览器窗口，录制会自动结束，此处将停止刷新。</div>
         </div>
         
         <div class="content">
@@ -2904,6 +2928,189 @@ function changePage(page) {
             }
         }
         
+        let browserRecordingActive = false;
+        let recordingLivePollTimer = null;
+
+        function stopRecordingLivePoll() {
+            if (recordingLivePollTimer) {
+                clearInterval(recordingLivePollTimer);
+                recordingLivePollTimer = null;
+            }
+            var panel = document.getElementById('recordingLivePanel');
+            if (panel) panel.style.display = 'none';
+        }
+
+        function startRecordingLivePoll() {
+            stopRecordingLivePoll();
+            var panel = document.getElementById('recordingLivePanel');
+            if (panel) panel.style.display = 'block';
+            function tick() {
+                fetch('/api/recording/live-preview')
+                    .then(function (r) { return r.json().catch(function () { return {}; }); })
+                    .then(function (data) {
+                        if (!data.active) {
+                            stopRecordingLivePoll();
+                            setBrowserRecordingUi(false);
+                            return;
+                        }
+                        var n = data.count != null ? data.count : ((data.steps || []).length);
+                        var cn = document.getElementById('recordingLiveCount');
+                        if (cn) cn.textContent = n + ' 步';
+                        var list = document.getElementById('recordingLiveList');
+                        if (!list || !data.steps) return;
+                        var html = '';
+                        data.steps.slice(-25).forEach(function (s, i) {
+                            var a = (s.action || '').toLowerCase();
+                            var line = a;
+                            if (a === 'fill' || a === 'input') line += ' · ' + String(s.text || s.input_value || '').slice(0, 40);
+                            else if (a === 'navigate') line += ' · ' + String(s.url || '').slice(0, 60);
+                            else if (s.selector) line += ' · ' + String(s.selector).slice(0, 70);
+                            html += '<div style="border-bottom:1px solid rgba(255,255,255,.12);padding:4px 0">' + (i + 1) + '. ' + line.replace(/</g, '&lt;') + '</div>';
+                        });
+                        list.innerHTML = html || '<span style="opacity:.7">等待操作…</span>';
+                    })
+                    .catch(function () {});
+            }
+            tick();
+            recordingLivePollTimer = setInterval(tick, 1200);
+        }
+
+        function setBrowserRecordingUi(active) {
+            browserRecordingActive = !!active;
+            const startBtn = document.getElementById('startRecordingBtn');
+            const stopBtn = document.getElementById('stopRecordingBtn');
+            const runBtn = document.getElementById('runCaseBtn');
+            const codegenBtn = document.getElementById('codegenImportBtn');
+            const sideBtn = document.getElementById('seleniumIdeImportBtn');
+            if (startBtn) startBtn.disabled = browserRecordingActive;
+            if (stopBtn) stopBtn.disabled = !browserRecordingActive;
+            if (runBtn) runBtn.disabled = browserRecordingActive;
+            if (codegenBtn) codegenBtn.disabled = browserRecordingActive;
+            if (sideBtn) sideBtn.disabled = browserRecordingActive;
+            const addBtn = document.getElementById('addStepBtn');
+            if (addBtn) addBtn.disabled = browserRecordingActive;
+            if (browserRecordingActive) {
+                startRecordingLivePoll();
+            } else {
+                stopRecordingLivePoll();
+            }
+        }
+
+        async function refreshRecordingSessionState() {
+            try {
+                const resp = await fetch('/api/recording/status');
+                const data = await resp.json().catch(function () { return {}; });
+                if (resp.ok && data.success && data.active) {
+                    setBrowserRecordingUi(true);
+                } else {
+                    setBrowserRecordingUi(false);
+                }
+            } catch (_) {
+                setBrowserRecordingUi(false);
+            }
+        }
+
+        async function startBrowserRecording() {
+            if (!currentCaseId) return;
+            const extraUrl = await Swal.fire({
+                title: '浏览器录制',
+                html: '<p style="text-align:left;font-size:14px;color:#495057;">将启动本机 Playwright 浏览器并开始录制。<br>起始地址默认：用例「测试 URL」或首个导航步骤；也可在下面覆盖。</p>'
+                    + '<input id="swal-rec-url" class="swal2-input" placeholder="可选：覆盖起始 URL（留空则自动）" style="margin-top:8px">',
+                showCancelButton: true,
+                confirmButtonText: '开始录制',
+                cancelButtonText: '取消',
+                focusConfirm: false,
+                preConfirm: () => document.getElementById('swal-rec-url').value.trim()
+            });
+            if (!extraUrl.isConfirmed) return;
+            const payload = { case_id: currentCaseId };
+            if (extraUrl.value) payload.url = extraUrl.value;
+            Swal.fire({ title: '正在启动…', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            try {
+                const response = await fetch('/api/recording/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json().catch(function () { return {}; });
+                Swal.close();
+                if (data.success) {
+                    setBrowserRecordingUi(true);
+                    await Swal.fire({
+                        icon: 'success',
+                        title: '录制已开始',
+                        html: '<p style="text-align:left">' + (data.hint || '') + '</p>'
+                            + '<p style="text-align:left;margin-top:8px">已打开<strong>两个</strong>窗口：<b>被测页</b>（顶部紫条为平台录制提示）与 <b>步骤录制面板</b>。关闭浏览器即自动结束录制。</p>'
+                            + '<p style="text-align:left;margin-top:8px"><strong>起始 URL：</strong><br><code style="word-break:break-all">' + (data.navigated_to || '') + '</code></p>'
+                            + '<p style="text-align:left;margin-top:8px;opacity:.85">本页下方「录制实时预览」可与面板对照。</p>'
+                    });
+                } else {
+                    await Swal.fire({ icon: 'error', title: '无法开始录制', text: data.error || '未知错误' });
+                }
+            } catch (e) {
+                Swal.close();
+                await Swal.fire({ icon: 'error', title: '请求失败', text: '网络或服务异常，请稍后重试' });
+            }
+        }
+
+        async function stopBrowserRecording() {
+            if (!currentCaseId) return;
+            const choice = await Swal.fire({
+                title: '停止录制',
+                text: '是否将录到的步骤写入当前用例？',
+                icon: 'question',
+                showCancelButton: true,
+                showDenyButton: true,
+                confirmButtonText: '追加到末尾',
+                denyButtonText: '替换全部步骤',
+                cancelButtonText: '放弃保存'
+            });
+            let append = true;
+            if (choice.isDenied) {
+                append = false;
+            } else if (choice.isConfirmed) {
+                append = true;
+            } else {
+                Swal.fire({ title: '正在结束…', allowOutsideClick: false, didOpen: function () { Swal.showLoading(); } });
+                try {
+                    await fetch('/api/recording/stop', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ save: false })
+                    });
+                } catch (_) {}
+                Swal.close();
+                setBrowserRecordingUi(false);
+                return;
+            }
+            Swal.fire({ title: '正在导入…', allowOutsideClick: false, didOpen: function () { Swal.showLoading(); } });
+            try {
+                const response = await fetch('/api/recording/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ case_id: currentCaseId, append: append, save: true })
+                });
+                const data = await response.json().catch(function () { return {}; });
+                Swal.close();
+                setBrowserRecordingUi(false);
+                if (data.success) {
+                    let msg = '已导入 ' + (data.imported || 0) + ' 条步骤（原始事件 ' + (data.recorded_count || 0) + ' 条）';
+                    if (data.skipped && data.skipped.length) {
+                        msg += '。已跳过：' + data.skipped.slice(0, 8).join('、');
+                        if (data.skipped.length > 8) msg += '…';
+                    }
+                    await Swal.fire({ icon: 'success', title: '完成', text: msg });
+                    loadSteps();
+                } else {
+                    await Swal.fire({ icon: 'error', title: '导入失败', text: data.error || '未知错误' });
+                }
+            } catch (e) {
+                Swal.close();
+                setBrowserRecordingUi(false);
+                await Swal.fire({ icon: 'error', title: '请求失败', text: '网络或服务异常' });
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', async function() {
             currentCaseId = getCaseIdFromSession();
             if (!currentCaseId) {
@@ -2913,6 +3120,7 @@ function changePage(page) {
             }
             await Promise.all([loadCaseInfo(), loadSteps()]);
             await syncRunCaseButtonState();
+            await refreshRecordingSessionState();
             runCaseButtonSyncTimer = setInterval(syncRunCaseButtonState, 1000);
         });
 

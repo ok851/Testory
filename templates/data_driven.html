@@ -10,6 +10,15 @@
     .row-success { background-color: #f0fdf4; border-left: 3px solid #10b981; }
     .row-fail    { background-color: #fef2f2; border-left: 3px solid #ef4444; }
     .progress-bar { transition: width 0.3s ease; }
+    /* 数据驱动结果：防止长 XPath / 错误信息撑破布局，单行省略，title 悬浮看全文 */
+    #runDetails .run-detail-card { max-width: 100%; min-width: 0; overflow: hidden; }
+    #runDetails .run-detail-ellipsis {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 </style>
 {% endblock %}
 
@@ -165,12 +174,14 @@
     let currentDatasetId = null;
     let allCases = [];
     let activeDatasetRunId = null;
+    const DATASET_RUN_STORAGE_KEY = 'activeDatasetRun';
 
     // 初始化
     document.addEventListener('DOMContentLoaded', () => {
         loadCases();
         loadDatasets();
         initDropZone();
+        restoreDatasetRunState();
     });
 
     async function loadCases() {
@@ -397,15 +408,90 @@
             const runId = startData.run_id;
             activeDatasetRunId = runId;
             const total = Math.max(1, parseInt(startData.total, 10) || 1);
+            saveDatasetRunState({ runId, total, datasetId: currentDatasetId, caseId });
+            await monitorDatasetRun(runId, total, { showFailureAlert: true });
+        } catch (e) {
+            alert('执行请求失败：' + e.message);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play mr-1"></i>开始执行';
+            stopBtn.disabled = true;
+        }
+    }
 
-            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    async function stopDatasetRun() {
+        if (!activeDatasetRunId) {
+            const cached = readDatasetRunState();
+            if (cached && cached.runId) activeDatasetRunId = cached.runId;
+        }
+        if (!activeDatasetRunId) return;
+        try {
+            const res = await fetch(`/api/datasets/run-stop/${encodeURIComponent(activeDatasetRunId)}`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || `HTTP ${res.status}`);
+            }
+            document.getElementById('progressBar').style.width = '100%';
+            document.getElementById('progressPct').textContent = '100%';
+            document.getElementById('progressText').textContent = '已发送停止请求，正在终止...';
+        } catch (e) {
+            alert('停止执行失败：' + e.message);
+        }
+    }
 
+    function saveDatasetRunState(state) {
+        try {
+            localStorage.setItem(DATASET_RUN_STORAGE_KEY, JSON.stringify(state));
+        } catch (e) {
+            console.warn('保存数据驱动运行状态失败', e);
+        }
+    }
+
+    function clearDatasetRunState() {
+        try {
+            localStorage.removeItem(DATASET_RUN_STORAGE_KEY);
+        } catch (_) {}
+    }
+
+    function readDatasetRunState() {
+        try {
+            const raw = localStorage.getItem(DATASET_RUN_STORAGE_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+            console.warn('读取数据驱动运行状态失败', e);
+            return null;
+        }
+    }
+
+    async function restoreDatasetRunState() {
+        const cached = readDatasetRunState();
+        if (!cached || !cached.runId) return;
+        activeDatasetRunId = cached.runId;
+        if (cached.datasetId) {
+            await selectDataset(cached.datasetId);
+        }
+        if (cached.caseId) {
+            const runCaseSelect = document.getElementById('runCaseId');
+            if (runCaseSelect) runCaseSelect.value = String(cached.caseId);
+        }
+        document.getElementById('runProgress').classList.remove('hidden');
+        document.getElementById('runResultSummary').classList.add('hidden');
+        document.getElementById('progressText').textContent = '已恢复运行状态，正在同步进度...';
+        document.getElementById('stopDatasetBtn').disabled = false;
+        await monitorDatasetRun(cached.runId, Math.max(1, parseInt(cached.total, 10) || 1), { showFailureAlert: false });
+    }
+
+    async function monitorDatasetRun(runId, total, options = {}) {
+        const showFailureAlert = options.showFailureAlert !== false;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        try {
             for (;;) {
                 await sleep(500);
                 const stRes = await fetch(`/api/datasets/run-status/${encodeURIComponent(runId)}`);
                 const j = await stRes.json();
                 if (!stRes.ok || !j.success) {
-                    alert('获取执行进度失败：' + (j.error || `HTTP ${stRes.status}`));
+                    if (showFailureAlert) alert('获取执行进度失败：' + (j.error || `HTTP ${stRes.status}`));
+                    clearDatasetRunState();
                     break;
                 }
 
@@ -423,6 +509,9 @@
                 document.getElementById('progressBar').style.width = '100%';
                 document.getElementById('progressPct').textContent = '100%';
                 document.getElementById('progressText').textContent = '执行完成';
+                document.getElementById('stopDatasetBtn').disabled = true;
+                clearDatasetRunState();
+                activeDatasetRunId = null;
 
                 if (j.run_success && Array.isArray(j.results)) {
                     document.getElementById('runResultSummary').classList.remove('hidden');
@@ -431,49 +520,30 @@
                     document.getElementById('failRows').textContent = j.failed_rows;
 
                     document.getElementById('runDetails').innerHTML = j.results.map(r => `
-                    <div class="border rounded-lg p-3 ${r.status === 'success' ? 'row-success' : 'row-fail'}">
-                        <div class="flex justify-between items-center">
-                            <div class="flex items-center gap-2">
-                                <i class="fas ${r.status === 'success' ? 'fa-check-circle status-success' : 'fa-times-circle status-fail'}"></i>
-                                <span class="text-sm font-medium">行 ${r.row_index + 1}</span>
-                                <span class="text-xs text-gray-500">${formatRowData(r.row_data)}</span>
+                    <div class="run-detail-card border rounded-lg p-3 ${r.status === 'success' ? 'row-success' : 'row-fail'}">
+                        <div class="flex justify-between items-center gap-2 min-w-0">
+                            <div class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
+                                <i class="fas shrink-0 ${r.status === 'success' ? 'fa-check-circle status-success' : 'fa-times-circle status-fail'}"></i>
+                                <span class="text-sm font-medium shrink-0">行 ${r.row_index + 1}</span>
+                                <span class="run-detail-ellipsis text-xs text-gray-500 flex-1" title="${escAttr(formatRowDataFull(r.row_data))}">${escHtml(formatRowData(r.row_data))}</span>
                             </div>
-                            <span class="text-xs text-gray-400">${r.duration}s</span>
+                            <span class="text-xs text-gray-400 shrink-0">${r.duration}s</span>
                         </div>
-                        ${r.error ? `<p class="text-xs text-red-600 mt-1 ml-6"><i class="fas fa-exclamation-triangle mr-1"></i>${escHtml(r.error)}</p>` : ''}
+                        ${r.error ? `<p class="text-xs text-red-600 mt-1 ml-6 min-w-0 flex items-start gap-1"><i class="fas fa-exclamation-triangle mr-1 shrink-0 mt-0.5"></i><span class="run-detail-ellipsis flex-1" title="${escAttr(r.error)}">${escHtml(r.error)}</span></p>` : ''}
                     </div>
                 `).join('');
                 } else {
                     const stopped = (j.error || '').includes('用户已停止执行');
-                    if (!stopped) {
-                        alert('执行失败：' + (j.error || '未知错误'));
-                    }
+                    if (!stopped && showFailureAlert) alert('执行失败：' + (j.error || '未知错误'));
                 }
                 break;
             }
-        } catch (e) {
-            alert('执行请求失败：' + e.message);
         } finally {
-            activeDatasetRunId = null;
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play mr-1"></i>开始执行';
-            stopBtn.disabled = true;
-        }
-    }
-
-    async function stopDatasetRun() {
-        if (!activeDatasetRunId) return;
-        try {
-            const res = await fetch(`/api/datasets/run-stop/${encodeURIComponent(activeDatasetRunId)}`, { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok || !data.success) {
-                throw new Error(data.error || `HTTP ${res.status}`);
+            const btn = document.getElementById('runDatasetBtn');
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-play mr-1"></i>开始执行';
             }
-            document.getElementById('progressBar').style.width = '100%';
-            document.getElementById('progressPct').textContent = '100%';
-            document.getElementById('progressText').textContent = '已发送停止请求，正在终止...';
-        } catch (e) {
-            alert('停止执行失败：' + e.message);
         }
     }
 
@@ -482,8 +552,23 @@
         return entries.map(([k, v]) => `${k}=${v}`).join(', ') + (Object.keys(obj).length > 3 ? '...' : '');
     }
 
+    function formatRowDataFull(obj) {
+        if (!obj || typeof obj !== 'object') return '';
+        return Object.entries(obj).map(([k, v]) => `${k}=${v}`).join(', ');
+    }
+
     function escHtml(str) {
         return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    /** 用于 HTML 属性 title=""，避免破坏引号与换行 */
+    function escAttr(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/\r?\n/g, ' ');
     }
 </script>
 {% endblock %}

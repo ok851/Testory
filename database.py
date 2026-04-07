@@ -152,6 +152,12 @@ class Database:
             cursor.execute("ALTER TABLE test_steps ADD COLUMN compare_type TEXT DEFAULT 'equals'")
         except sqlite3.OperationalError:
             pass
+
+        # 录制器多定位器备选（JSON 数组：[{type,value,score}, ...]）
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN locator_candidates TEXT")
+        except sqlite3.OperationalError:
+            pass
         
         # 创建运行历史记录表
         cursor.execute('''
@@ -1043,7 +1049,8 @@ class Database:
                          selector_value: str = "", input_value: str = "", 
                          description: str = "", step_order: int = None, page_name: str = "",
                          swipe_x: str = "", swipe_y: str = "", url: str = "",
-                         enter_iframe: bool = False, iframe_selector: str = "", compare_type: str = "equals") -> int:
+                         enter_iframe: bool = False, iframe_selector: str = "", compare_type: str = "equals",
+                         locator_candidates: str = "") -> int:
         """创建测试步骤"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1056,9 +1063,9 @@ class Database:
             
         cursor.execute(
             """INSERT INTO test_steps 
-               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type)
+               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '')
         )
         step_id = cursor.lastrowid
             
@@ -1091,6 +1098,14 @@ class Database:
                 input_value = step.get('input_value')
                 desc = step.get('description', '')
                 sort_order = step.get('step_order', step.get('sort_order', max_order + i + 1))
+                locator_candidates = step.get('locator_candidates')
+                if locator_candidates is not None and not isinstance(locator_candidates, str):
+                    try:
+                        locator_candidates = json.dumps(locator_candidates, ensure_ascii=False)
+                    except Exception:
+                        locator_candidates = ''
+                if locator_candidates is None:
+                    locator_candidates = ''
 
                 if not action:
                     operation_type = step.get('operation_type', 'click')
@@ -1118,9 +1133,9 @@ class Database:
                     
                 cursor.execute(
                     """INSERT INTO test_steps 
-                       (case_id, action, selector_type, selector_value, input_value, description, step_order) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order)
+                       (case_id, action, selector_type, selector_value, input_value, description, step_order, locator_candidates) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order, locator_candidates)
                 )
                 
             conn.commit()
@@ -1157,7 +1172,8 @@ class Database:
                 'url': row[12] if len(row) > 12 else '',
                 'enter_iframe': row[13] if len(row) > 13 else False,
                 'iframe_selector': row[14] if len(row) > 14 else '',
-                'compare_type': row[15] if len(row) > 15 else 'equals'
+                'compare_type': row[15] if len(row) > 15 else 'equals',
+                'locator_candidates': row[16] if len(row) > 16 else ''
             }
         
         conn.close()
@@ -1180,7 +1196,8 @@ class Database:
             'url': row[12] if len(row) > 12 else '',
             'enter_iframe': row[13] if len(row) > 13 else False,
             'iframe_selector': row[14] if len(row) > 14 else '',
-            'compare_type': row[15] if len(row) > 15 else 'equals'
+            'compare_type': row[15] if len(row) > 15 else 'equals',
+            'locator_candidates': row[16] if len(row) > 16 else ''
         }
 
     def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:
@@ -1197,7 +1214,7 @@ class Database:
         cursor.execute(
             """
             SELECT id, case_id, action, selector_type, selector_value, input_value, description,
-                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
+                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates,
                    COUNT(*) OVER() AS __total
             FROM test_steps
             WHERE case_id = ?
@@ -1229,7 +1246,8 @@ class Database:
     def update_test_step(self, step_id: int, action: str = None, selector_type: str = None,
                         selector_value: str = None, input_value: str = None,
                         description: str = None, step_order: int = None,
-                        enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None) -> bool:
+                        enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None,
+                        locator_candidates: str = None) -> bool:
         """更新测试步骤"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -1272,6 +1290,10 @@ class Database:
         if compare_type is not None:
             updates.append("compare_type = ?")
             params.append(compare_type)
+
+        if locator_candidates is not None:
+            updates.append("locator_candidates = ?")
+            params.append(locator_candidates)
         
         if not updates:
             conn.close()

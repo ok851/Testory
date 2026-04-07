@@ -90,6 +90,19 @@
         </div>
     </nav>
 
+    <div id="globalRunBanner" class="hidden fixed bottom-4 right-4 z-[9999] max-w-md w-[calc(100%-2rem)] bg-white border border-blue-200 rounded-lg shadow-lg p-3">
+        <div class="flex items-start gap-2">
+            <i class="fas fa-play-circle text-blue-500 mt-1"></i>
+            <div class="min-w-0 flex-1">
+                <p class="text-sm font-semibold text-gray-800">任务执行中</p>
+                <p id="globalRunBannerText" class="text-xs text-gray-600 truncate" title=""></p>
+            </div>
+            <button id="globalRunBannerStopBtn" class="px-2 py-1 text-xs rounded bg-red-500 text-white hover:bg-red-600">
+                停止
+            </button>
+        </div>
+    </div>
+
     {% block content %}{% endblock %}
 
     <script>
@@ -200,6 +213,79 @@
 
         // 页面加载时获取用户信息
         document.addEventListener('DOMContentLoaded', loadUserInfo);
+
+        let _globalRunBannerTimer = null;
+        let _globalRunBannerTaskType = null; // case | dataset
+
+        function _setGlobalRunBanner(visible, text = '', taskType = null) {
+            const banner = document.getElementById('globalRunBanner');
+            const textEl = document.getElementById('globalRunBannerText');
+            const stopBtn = document.getElementById('globalRunBannerStopBtn');
+            if (!banner || !textEl || !stopBtn) return;
+            if (!visible) {
+                banner.classList.add('hidden');
+                _globalRunBannerTaskType = null;
+                return;
+            }
+            textEl.textContent = text;
+            textEl.title = text;
+            _globalRunBannerTaskType = taskType;
+            banner.classList.remove('hidden');
+        }
+
+        async function _pollGlobalRunBanner() {
+            try {
+                const [caseResp, dsResp] = await Promise.all([
+                    fetch('/api/cases/current-run/status'),
+                    fetch('/api/datasets/current-run/status'),
+                ]);
+                const caseData = await caseResp.json();
+                const dsData = await dsResp.json();
+
+                if (caseResp.ok && caseData.success && caseData.active) {
+                    const total = caseData.total_steps || 0;
+                    const done = caseData.completed_steps || 0;
+                    const msg = caseData.message || `单用例执行中：${done}/${total}`;
+                    _setGlobalRunBanner(true, msg, 'case');
+                    return;
+                }
+
+                if (dsResp.ok && dsData.success && dsData.active) {
+                    const total = dsData.total || 0;
+                    const done = dsData.completed || 0;
+                    const cur = dsData.current_row_index != null ? (dsData.current_row_index + 1) : Math.min(done + 1, total);
+                    const msg = `数据驱动执行中：第 ${cur}/${Math.max(total, 1)} 行，已完成 ${done} 行`;
+                    _setGlobalRunBanner(true, msg, 'dataset');
+                    return;
+                }
+
+                _setGlobalRunBanner(false);
+            } catch (e) {
+                // 静默失败，避免影响页面主功能
+                _setGlobalRunBanner(false);
+            }
+        }
+
+        async function _stopGlobalRunTask() {
+            try {
+                let endpoint = null;
+                if (_globalRunBannerTaskType === 'case') endpoint = '/api/cases/current-run/stop';
+                if (_globalRunBannerTaskType === 'dataset') endpoint = '/api/datasets/current-run/stop';
+                if (!endpoint) return;
+                await fetch(endpoint, { method: 'POST' });
+                _setGlobalRunBanner(false);
+            } catch (e) {
+                console.error('停止全局任务失败', e);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const stopBtn = document.getElementById('globalRunBannerStopBtn');
+            if (stopBtn) stopBtn.addEventListener('click', _stopGlobalRunTask);
+            _pollGlobalRunBanner();
+            if (_globalRunBannerTimer) clearInterval(_globalRunBannerTimer);
+            _globalRunBannerTimer = setInterval(_pollGlobalRunBanner, 2000);
+        });
     </script>
     {% block scripts %}{% endblock %}
 </body>
