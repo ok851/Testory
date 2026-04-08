@@ -2,7 +2,42 @@ import sqlite3
 import os
 import json
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
+
+# projects 表列（勿用 SELECT * + 固定下标：迁移后 tenant_id 与 created_at 顺序因建表/ALTER 而异）
+_PROJECTS_SELECT = "id, name, description, tenant_id, created_at"
+
+# test_cases 当前列（与 CREATE + ALTER 一致）
+_TEST_CASES_SELECT = "id, project_id, name, url, description, created_at, precondition, expected_result"
+
+
+def _project_row_to_dict(row: Tuple) -> Dict[str, Any]:
+    return {
+        "id": row[0],
+        "name": row[1],
+        "description": row[2] or "",
+        "tenant_id": row[3],
+        "created_at": row[4],
+    }
+
+
+def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict[str, Any]:
+    u = row[3] or ""
+    out: Dict[str, Any] = {
+        "id": row[0],
+        "project_id": row[1],
+        "name": row[2],
+        "url": u,
+        "target_url": u,
+        "description": row[4] or "",
+        "created_at": row[5],
+        "precondition": (row[6] or "") if len(row) > 6 else "",
+        "expected_result": (row[7] or "") if len(row) > 7 else "",
+    }
+    if step_count is not None:
+        out["step_count"] = step_count
+    return out
+
 
 class Database:
     def __init__(self, db_path: str = "test_cases.db"):
@@ -13,10 +48,30 @@ class Database:
             db_path = env_db_path
         self.db_path = db_path
         self.init_db()
+
+    def _sqlite_connect(self, timeout: Optional[float] = None) -> sqlite3.Connection:
+        """统一连接参数：WAL 提升读并发；busy_timeout 缓解锁竞争（数据库在网络盘时仍可能较慢）。"""
+        if timeout is not None:
+            conn = sqlite3.connect(self.db_path, timeout=timeout)
+        else:
+            conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+        except sqlite3.OperationalError:
+            pass
+        return conn
     
     def init_db(self):
         """初始化数据库表"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         # 创建用户表
@@ -670,7 +725,7 @@ class Database:
     
     def create_test_case(self, name: str, description: str = "", url: str = "") -> int:
         """创建测试用例"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute(
@@ -686,57 +741,39 @@ class Database:
     
     def get_test_case(self, case_id: int) -> Dict[str, Any]:
         """获取测试用例"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM test_cases WHERE id = ?", (case_id,))
+        cursor.execute(
+            f"SELECT {_TEST_CASES_SELECT} FROM test_cases WHERE id = ?",
+            (case_id,),
+        )
         row = cursor.fetchone()
         
         if row:
-            return {
-                'id': row[0],
-                'name': row[1],
-                'description': row[2],
-                'target_url': row[3],
-                'created_at': row[4],
-                'project_id': row[5] if len(row) > 5 else None,
-                'url': row[6] if len(row) > 6 else '',
-                'precondition': row[7] if len(row) > 7 else '',
-                'expected_result': row[8] if len(row) > 8 else ''
-            }
+            return _test_case_row_to_dict(row)
         
         conn.close()
         return None
     
     def get_all_test_cases(self) -> List[Dict[str, Any]]:
         """获取所有测试用例"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM test_cases ORDER BY created_at DESC")
+        cursor.execute(
+            f"SELECT {_TEST_CASES_SELECT} FROM test_cases ORDER BY created_at DESC"
+        )
         rows = cursor.fetchall()
         
-        cases = []
-        for row in rows:
-            case = {
-                'id': row[0],
-                'name': row[1],
-                'description': row[2],
-                'target_url': row[3],
-                'created_at': row[4],
-                'project_id': row[5] if len(row) > 5 else None,
-                'url': row[6] if len(row) > 6 else '',
-                'precondition': row[7] if len(row) > 7 else '',
-                'expected_result': row[8] if len(row) > 8 else ''
-            }
-            cases.append(case)
+        cases = [_test_case_row_to_dict(row) for row in rows]
         
         conn.close()
         return cases
     
     def update_test_case(self, case_id: int, name: str = None, description: str = None, url: str = None) -> bool:
         """更新测试用例"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         # 构建更新语句和参数
@@ -772,7 +809,7 @@ class Database:
     
     def delete_test_case(self, case_id: int) -> bool:
         """删除测试用例"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         # 删除测试用例
@@ -789,7 +826,7 @@ class Database:
     
     def create_project(self, name: str, description: str = "") -> int:
         """创建项目"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute(
@@ -805,46 +842,41 @@ class Database:
     
     def get_project(self, project_id: int) -> Dict[str, Any]:
         """获取项目"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        cursor.execute(
+            f"SELECT {_PROJECTS_SELECT} FROM projects WHERE id = ?",
+            (project_id,),
+        )
         row = cursor.fetchone()
         
         if row:
-            return {
-                'id': row[0],
-                'name': row[1],
-                'description': row[2],
-                'created_at': row[3]
-            }
+            d = _project_row_to_dict(row)
+            conn.close()
+            return d
         
         conn.close()
         return None
     
     def get_all_projects(self) -> List[Dict[str, Any]]:
         """获取所有项目"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM projects ORDER BY created_at DESC")
+        cursor.execute(
+            f"SELECT {_PROJECTS_SELECT} FROM projects ORDER BY created_at DESC"
+        )
         rows = cursor.fetchall()
         
-        projects = []
-        for row in rows:
-            projects.append({
-                'id': row[0],
-                'name': row[1],
-                'description': row[2],
-                'created_at': row[3]
-            })
+        projects = [_project_row_to_dict(row) for row in rows]
         
         conn.close()
         return projects
     
     def update_project(self, project_id: int, name: str = None, description: str = None) -> bool:
         """更新项目"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         updates = []
@@ -875,7 +907,7 @@ class Database:
     
     def delete_project(self, project_id: int) -> bool:
         """删除项目及其相关测试用例和步骤"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         # 获取该项目下的所有测试用例
@@ -899,35 +931,44 @@ class Database:
         
         return success
     
+    def get_project_case_count(self, project_id: int) -> int:
+        """项目下用例数量（仅 COUNT，避免拉全量用例 + JOIN 步骤）。"""
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM test_cases WHERE project_id = ?",
+            (project_id,),
+        )
+        n = int(cursor.fetchone()[0])
+        conn.close()
+        return n
+    
     def get_project_cases(self, project_id: int) -> List[Dict[str, Any]]:
         """获取项目下的所有测试用例"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT tc.*, COUNT(ts.id) as step_count
+        cursor.execute(
+            """
+            SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                   tc.precondition, tc.expected_result,
+                   COUNT(ts.id) AS step_count
             FROM test_cases tc
             LEFT JOIN test_steps ts ON tc.id = ts.case_id
             WHERE tc.project_id = ?
-            GROUP BY tc.id
+            GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                     tc.precondition, tc.expected_result
             ORDER BY tc.created_at DESC
-        """, (project_id,))
+            """,
+            (project_id,),
+        )
         rows = cursor.fetchall()
         
         cases = []
         for row in rows:
-            cases.append({
-                'id': row[0],
-                'name': row[1],
-                'description': row[2],
-                'target_url': row[3],
-                'created_at': row[4],
-                'project_id': row[5] if len(row) > 5 else None,
-                'url': row[6] if len(row) > 6 else '',
-                'precondition': row[7] if len(row) > 7 else '',
-                'expected_result': row[8] if len(row) > 8 else '',
-                'step_count': row[9] if len(row) > 9 else 0
-            })
+            base = row[:8]
+            sc = int(row[8] or 0)
+            cases.append(_test_case_row_to_dict(base, step_count=sc))
         
         conn.close()
         return cases
@@ -936,7 +977,7 @@ class Database:
     
     def create_test_case_v2(self, project_id: int, name: str, url: str = "", description: str = "", precondition: str = "", expected_result: str = "") -> int:
         """创建测试用例（新版本，关联到项目）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute(
@@ -952,7 +993,7 @@ class Database:
     
     def get_test_case_v2(self, case_id: int) -> Dict[str, Any]:
         """获取测试用例（新版本）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("SELECT id, project_id, name, url, description, created_at, precondition, expected_result FROM test_cases WHERE id = ?", (case_id,))
@@ -975,7 +1016,7 @@ class Database:
     
     def update_test_case_v2(self, case_id: int, name: str = None, url: str = None, description: str = None, precondition: str = None, expected_result: str = None) -> bool:
         """更新测试用例（新版本）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         updates = []
@@ -1018,7 +1059,7 @@ class Database:
     
     def delete_test_case_v2(self, case_id: int) -> bool:
         """删除测试用例及其相关步骤（新版本）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         try:
@@ -1052,7 +1093,7 @@ class Database:
                          enter_iframe: bool = False, iframe_selector: str = "", compare_type: str = "equals",
                          locator_candidates: str = "") -> int:
         """创建测试步骤"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
             
         # 如果没有指定 step_order，自动计算最大顺序值
@@ -1079,7 +1120,7 @@ class Database:
         if not steps:
             return True
                 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
             
         try:
@@ -1149,7 +1190,7 @@ class Database:
     
     def get_test_step(self, step_id: int) -> Dict[str, Any]:
         """获取测试步骤"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("SELECT * FROM test_steps WHERE id = ?", (step_id,))
@@ -1207,7 +1248,7 @@ class Database:
 
     def get_case_steps_paginated(self, case_id: int, page: int = 1, page_size: int = 10) -> tuple:
         """分页查询步骤，同一连接内用窗口函数返回 total，避免两次往返数据库。"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         offset = (max(1, page) - 1) * max(1, page_size)
         limit = max(1, page_size)
@@ -1236,7 +1277,7 @@ class Database:
     
     def get_case_steps_count(self, case_id: int) -> int:
         """获取测试用例步骤的总数"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM test_steps WHERE case_id = ?", (case_id,))
         count = cursor.fetchone()[0]
@@ -1249,7 +1290,7 @@ class Database:
                         enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None,
                         locator_candidates: str = None) -> bool:
         """更新测试步骤"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         updates = []
@@ -1312,7 +1353,7 @@ class Database:
     
     def delete_test_step(self, step_id: int) -> bool:
         """删除测试步骤"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM test_steps WHERE id = ?", (step_id,))
@@ -1328,7 +1369,7 @@ class Database:
     
     def create_run_history(self, case_id: int, status: str, duration: float, error: str = "", extracted_text: str = "", expected_text: str = "") -> int:
         """创建运行历史记录"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         # 获取本地时间，而不是使用 UTC 时间
@@ -1348,7 +1389,7 @@ class Database:
     
     def get_all_run_history(self, page: int = 1, page_size: int = 20, case_id: int = None, search_text: str = None, project_id: int = None, status_filter: str = None) -> List[Dict[str, Any]]:
         """获取所有运行历史记录（支持分页、按测试用例ID过滤、按项目ID过滤、搜索、执行状态过滤：passed/failed）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         offset = (page - 1) * page_size
@@ -1440,7 +1481,7 @@ class Database:
 
     def get_run_history_count(self, case_id: int = None, search_text: str = None, project_id: int = None, status_filter: str = None) -> int:
         """获取运行历史记录总数（支持按测试用例ID过滤、按项目ID过滤、搜索和执行状态过滤）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         st_rh = ""
@@ -1498,7 +1539,7 @@ class Database:
     
     def get_case_run_history(self, case_id: int) -> List[Dict[str, Any]]:
         """获取指定测试用例的运行历史记录"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -1526,7 +1567,7 @@ class Database:
     
     def delete_run_history(self, history_id: int) -> bool:
         """删除运行历史记录"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM run_history WHERE id = ?", (history_id,))
@@ -1540,7 +1581,7 @@ class Database:
     
     def delete_case_run_history(self, case_id: int) -> bool:
         """删除指定测试用例的所有运行历史记录"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM run_history WHERE case_id = ?", (case_id,))
@@ -1554,7 +1595,7 @@ class Database:
     
     def delete_all_run_history(self) -> bool:
         """删除所有运行历史记录"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM run_history")
@@ -1568,7 +1609,7 @@ class Database:
     
     def get_run_history_detail(self, record_id: int) -> Dict[str, Any]:
         """获取运行历史记录详情"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -1602,7 +1643,7 @@ class Database:
     
     def delete_case_steps(self, case_id: int) -> bool:
         """删除测试用例的所有步骤"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM test_steps WHERE case_id = ?", (case_id,))
@@ -1616,7 +1657,7 @@ class Database:
     
     def update_step_order(self, case_id: int, steps: List[Dict[str, Any]]) -> bool:
         """更新测试步骤的顺序"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         try:
@@ -1648,7 +1689,7 @@ class Database:
 
     def create_user(self, username: str, password_hash: str, email: str = None, role: str = 'tester') -> int:
         """创建用户"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         try:
             cursor.execute(
@@ -1665,7 +1706,7 @@ class Database:
 
     def get_user_by_username(self, username: str) -> Dict[str, Any]:
         """根据用户名获取用户"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT id, username, password_hash, email, role, is_active, created_at, last_login FROM users WHERE username = ?", (username,))
         row = cursor.fetchone()
@@ -1678,7 +1719,7 @@ class Database:
 
     def get_user_by_id(self, user_id: int) -> Dict[str, Any]:
         """根据ID获取用户"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT id, username, password_hash, email, role, is_active, created_at, last_login FROM users WHERE id = ?", (user_id,))
         row = cursor.fetchone()
@@ -1691,7 +1732,7 @@ class Database:
 
     def get_all_users(self) -> List[Dict[str, Any]]:
         """获取所有用户"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT id, username, email, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC")
         rows = cursor.fetchall()
@@ -1702,7 +1743,7 @@ class Database:
     def update_user_last_login(self, user_id: int):
         """更新用户最后登录时间"""
         import datetime
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET last_login = ? WHERE id = ?",
                        (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id))
@@ -1711,7 +1752,7 @@ class Database:
 
     def update_user(self, user_id: int, email: str = None, role: str = None, is_active: int = None, password_hash: str = None) -> bool:
         """更新用户信息"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         updates, params = [], []
         if email is not None:
@@ -1734,7 +1775,7 @@ class Database:
 
     def delete_user(self, user_id: int) -> bool:
         """删除用户"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
         success = cursor.rowcount > 0
@@ -1744,7 +1785,7 @@ class Database:
 
     def count_users(self) -> int:
         """获取用户总数（用于判断是否需要初始化管理员）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM users")
         count = cursor.fetchone()[0]
@@ -1759,7 +1800,7 @@ class Database:
                            screenshot: str = "", duration: float = 0) -> int:
         """记录单步骤执行结果"""
         import datetime
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         local_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cursor.execute(
@@ -1777,7 +1818,7 @@ class Database:
 
     def get_step_results(self, run_history_id: int) -> List[Dict[str, Any]]:
         """获取某次运行的所有步骤结果"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT * FROM step_results WHERE run_history_id = ? ORDER BY step_order ASC",
@@ -1795,7 +1836,7 @@ class Database:
     def create_variable(self, name: str, value: str, scope: str = 'global',
                         project_id: int = None, case_id: int = None, description: str = '') -> int:
         """创建变量"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO variables (name, value, scope, project_id, case_id, description) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1808,7 +1849,7 @@ class Database:
 
     def get_variables(self, scope: str = None, project_id: int = None, case_id: int = None) -> List[Dict[str, Any]]:
         """获取变量列表"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         if scope == 'global':
             cursor.execute("SELECT * FROM variables WHERE scope = 'global' ORDER BY name")
@@ -1825,7 +1866,7 @@ class Database:
 
     def update_variable(self, var_id: int, name: str = None, value: str = None, description: str = None) -> bool:
         """更新变量"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         updates, params = [], []
         if name is not None:
@@ -1846,7 +1887,7 @@ class Database:
 
     def delete_variable(self, var_id: int) -> bool:
         """删除变量"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM variables WHERE id = ?", (var_id,))
         success = cursor.rowcount > 0
@@ -1873,7 +1914,7 @@ class Database:
                         retry_count: int = 3, retry_interval: int = 5, is_active: int = 1,
                         execution_count: int = -1) -> int:
         """创建定时调度"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO schedules (name, project_id, case_ids, cron_expr, is_active, retry_count, retry_interval, execution_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1900,7 +1941,7 @@ class Database:
               'exhausted': bool
             }
         """
-        conn = sqlite3.connect(self.db_path, timeout=10)
+        conn = self._sqlite_connect(timeout=10)
         conn.isolation_level = None  # 手动事务控制
         cursor = conn.cursor()
         try:
@@ -1962,7 +2003,7 @@ class Database:
 
     def get_all_schedules(self) -> List[Dict[str, Any]]:
         """获取所有调度任务"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM schedules ORDER BY created_at DESC")
         rows = cursor.fetchall()
@@ -1976,7 +2017,7 @@ class Database:
 
     def get_active_schedules(self) -> List[Dict[str, Any]]:
         """获取所有激活的调度任务"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM schedules WHERE is_active = 1")
         rows = cursor.fetchall()
@@ -1992,7 +2033,7 @@ class Database:
                         is_active: int = None, case_ids: list = None, last_run: str = None,
                         project_id: int = None, execution_count: int = None) -> bool:
         """更新调度任务"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         updates, params = [], []
         if name is not None:
@@ -2021,7 +2062,7 @@ class Database:
 
     def delete_schedule(self, schedule_id: int) -> bool:
         """删除调度任务"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
         success = cursor.rowcount > 0
@@ -2032,7 +2073,7 @@ class Database:
     def create_schedule_history(self, schedule_id: int, case_ids: list, status: str,
                                 retry_count: int = 0, max_retries: int = 3, error_message: str = None) -> int:
         """创建调度执行历史记录"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO schedule_history (schedule_id, case_ids, status, retry_count, max_retries, error_message) VALUES (?, ?, ?, ?, ?, ?)",
@@ -2045,7 +2086,7 @@ class Database:
 
     def update_schedule_history(self, history_id: int, status: str = None, error_message: str = None):
         """更新调度执行历史记录"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         updates, params = [], []
         if status is not None:
@@ -2064,7 +2105,7 @@ class Database:
 
     def get_schedule_history(self, schedule_id: int = None, limit: int = 50) -> List[Dict[str, Any]]:
         """获取调度执行历史"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         if schedule_id:
             cursor.execute("SELECT * FROM schedule_history WHERE schedule_id = ? ORDER BY started_at DESC LIMIT ?",
@@ -2082,7 +2123,7 @@ class Database:
 
     def create_notification_config(self, name: str, type: str, config: dict, events: list, is_active: int = 1) -> int:
         """创建通知配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO notification_configs (name, type, config, events, is_active) VALUES (?, ?, ?, ?, ?)",
@@ -2095,7 +2136,7 @@ class Database:
 
     def get_all_notification_configs(self) -> List[Dict[str, Any]]:
         """获取所有通知配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM notification_configs ORDER BY created_at DESC")
         rows = cursor.fetchall()
@@ -2107,7 +2148,7 @@ class Database:
 
     def get_active_notification_configs(self, event_type: str = None) -> List[Dict[str, Any]]:
         """获取激活的通知配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         if event_type:
             cursor.execute("SELECT * FROM notification_configs WHERE is_active = 1")
@@ -2131,7 +2172,7 @@ class Database:
     def update_notification_config(self, config_id: int, name: str = None, type: str = None,
                                    config: dict = None, events: list = None, is_active: int = None) -> bool:
         """更新通知配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         updates, params = [], []
         if name is not None:
@@ -2161,7 +2202,7 @@ class Database:
 
     def delete_notification_config(self, config_id: int) -> bool:
         """删除通知配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM notification_configs WHERE id = ?", (config_id,))
         success = cursor.rowcount > 0
@@ -2173,7 +2214,7 @@ class Database:
 
     def create_api_token(self, name: str, token: str, project_id: int = None, expires_at: str = None) -> int:
         """创建 API 令牌"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO api_tokens (name, token, project_id, expires_at) VALUES (?, ?, ?, ?)",
@@ -2186,7 +2227,7 @@ class Database:
 
     def get_token_by_value(self, token: str) -> Dict[str, Any]:
         """根据 token 值获取令牌信息"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM api_tokens WHERE token = ? AND is_active = 1", (token,))
         row = cursor.fetchone()
@@ -2198,7 +2239,7 @@ class Database:
 
     def get_all_tokens(self) -> List[Dict[str, Any]]:
         """获取所有令牌（不含 token 明文）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT id, name, project_id, is_active, expires_at, created_at FROM api_tokens ORDER BY created_at DESC")
         rows = cursor.fetchall()
@@ -2208,7 +2249,7 @@ class Database:
 
     def revoke_token(self, token_id: int) -> bool:
         """撤销令牌"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE api_tokens SET is_active = 0 WHERE id = ?", (token_id,))
         success = cursor.rowcount > 0
@@ -2220,7 +2261,7 @@ class Database:
 
     def create_dataset(self, name: str, case_id: int = None, project_id: int = None, description: str = '') -> int:
         """创建数据集"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO test_data_sets (name, case_id, project_id, description) VALUES (?, ?, ?, ?)",
@@ -2233,7 +2274,7 @@ class Database:
 
     def get_all_datasets(self, case_id: int = None, project_id: int = None) -> List[Dict[str, Any]]:
         """获取数据集列表"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         if case_id:
             cursor.execute(
@@ -2256,7 +2297,7 @@ class Database:
 
     def get_dataset(self, dataset_id: int) -> Dict[str, Any]:
         """获取单个数据集"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM test_data_sets WHERE id = ?", (dataset_id,))
         row = cursor.fetchone()
@@ -2268,7 +2309,7 @@ class Database:
 
     def delete_dataset(self, dataset_id: int) -> bool:
         """删除数据集及其所有数据行"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM test_data_rows WHERE dataset_id = ?", (dataset_id,))
         cursor.execute("DELETE FROM test_data_sets WHERE id = ?", (dataset_id,))
@@ -2279,7 +2320,7 @@ class Database:
 
     def add_data_rows(self, dataset_id: int, rows: List[Dict[str, Any]]) -> int:
         """批量添加数据行（rows 为字典列表）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         # 先清除已有数据行
         cursor.execute("DELETE FROM test_data_rows WHERE dataset_id = ?", (dataset_id,))
@@ -2295,7 +2336,7 @@ class Database:
 
     def get_data_rows(self, dataset_id: int) -> List[Dict[str, Any]]:
         """获取数据集的所有数据行"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, row_index, data FROM test_data_rows WHERE dataset_id = ? ORDER BY row_index ASC",
@@ -2316,7 +2357,7 @@ class Database:
 
     def add_project_member(self, project_id: int, user_id: int, role: str = 'editor') -> bool:
         """添加项目成员"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         try:
             cursor.execute(
@@ -2332,7 +2373,7 @@ class Database:
 
     def remove_project_member(self, project_id: int, user_id: int) -> bool:
         """移除项目成员"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "DELETE FROM project_members WHERE project_id = ? AND user_id = ?",
@@ -2345,7 +2386,7 @@ class Database:
 
     def update_project_member_role(self, project_id: int, user_id: int, role: str) -> bool:
         """更新项目成员角色"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?",
@@ -2358,7 +2399,7 @@ class Database:
 
     def get_project_members(self, project_id: int) -> List[Dict[str, Any]]:
         """获取项目所有成员"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("""
             SELECT pm.id, pm.user_id, pm.role, pm.created_at, u.username, u.email
@@ -2378,7 +2419,7 @@ class Database:
         min_role: viewer/editor/owner
         权限级别: owner > editor > viewer
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         # 管理员拥有所有权限
@@ -2408,12 +2449,13 @@ class Database:
 
     def get_user_projects(self, user_id: int) -> List[Dict[str, Any]]:
         """获取用户有权限访问的所有项目"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         # 获取用户是成员的项目 + 管理员可查看所有项目
         cursor.execute("""
-            SELECT DISTINCT p.* FROM projects p
+            SELECT DISTINCT p.id, p.name, p.description, p.tenant_id, p.created_at
+            FROM projects p
             LEFT JOIN project_members pm ON p.id = pm.project_id
             LEFT JOIN users u ON u.id = ?
             WHERE pm.user_id = ? OR u.role = 'admin'
@@ -2423,19 +2465,11 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
 
-        projects = []
-        for row in rows:
-            projects.append({
-                'id': row[0],
-                'name': row[1],
-                'description': row[2],
-                'created_at': row[3]
-            })
-        return projects
+        return [_project_row_to_dict(row) for row in rows]
 
     def is_project_owner(self, user_id: int, project_id: int) -> bool:
         """检查用户是否是项目所有者"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? AND role = 'owner'",
@@ -2450,7 +2484,7 @@ class Database:
     def add_audit_log(self, user_id: int, username: str, action: str, target_type: str,
                       target_id: int = None, details: str = None, ip_address: str = None) -> int:
         """添加审计日志"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
             """INSERT INTO audit_logs (user_id, username, action, target_type, target_id, details, ip_address)
@@ -2465,7 +2499,7 @@ class Database:
     def get_audit_logs(self, user_id: int = None, target_type: str = None,
                        page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
         """获取审计日志"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         offset = (page - 1) * page_size
@@ -2496,7 +2530,7 @@ class Database:
 
     def get_audit_logs_count(self, user_id: int = None, target_type: str = None) -> int:
         """获取审计日志总数"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         params = []
@@ -2522,7 +2556,7 @@ class Database:
         if stat_date is None:
             stat_date = datetime.date.today().isoformat()
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         cursor.execute(
@@ -2550,7 +2584,7 @@ class Database:
         import datetime
         stat_date = datetime.date.today().isoformat()
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -2575,7 +2609,7 @@ class Database:
         import datetime
         stat_date = datetime.date.today().isoformat()
 
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -2598,7 +2632,7 @@ class Database:
     def get_usage_stats(self, user_id: int, days: int = 30) -> List[Dict[str, Any]]:
         """获取用户使用统计（最近N天）"""
         import datetime
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
 
         start_date = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
@@ -2640,7 +2674,7 @@ class Database:
         if status not in valid_statuses:
             status = 'open'
         
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -2666,7 +2700,7 @@ class Database:
                                             assignee_id: int = None, environment: str = '',
                                             expected_result: str = '', actual_result: str = '') -> list:
         """从多个测试用例批量创建缺陷，自动提取用例步骤信息作为复现步骤"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         created_defect_ids = []
@@ -2752,7 +2786,7 @@ class Database:
 
     def get_defect(self, defect_id: int) -> Dict[str, Any]:
         """获取缺陷详情"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -2781,7 +2815,7 @@ class Database:
                     assignee_id: int = None, severity: str = None,
                     case_id: int = None, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
         """获取缺陷列表（支持筛选和分页）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -2846,7 +2880,7 @@ class Database:
                           'assignee_id', 'resolution', 'environment', 'browser_info',
                           'reproduce_steps', 'expected_result', 'actual_result']
         
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -2911,7 +2945,7 @@ class Database:
 
     def add_defect_comment(self, defect_id: int, user_id: int, content: str) -> int:
         """添加缺陷评论"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -2926,7 +2960,7 @@ class Database:
 
     def get_defect_comments(self, defect_id: int) -> List[Dict[str, Any]]:
         """获取缺陷评论列表"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -2944,7 +2978,7 @@ class Database:
 
     def get_defect_history(self, defect_id: int) -> List[Dict[str, Any]]:
         """获取缺陷状态变更历史"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -2962,7 +2996,7 @@ class Database:
 
     def get_defect_statistics(self, project_id: int = None) -> Dict[str, Any]:
         """获取缺陷统计数据"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         where_clause = "WHERE project_id = ?" if project_id else ""
@@ -3000,7 +3034,7 @@ class Database:
 
     def delete_defect(self, defect_id: int) -> bool:
         """删除缺陷（同时删除评论和历史）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._sqlite_connect()
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM defect_comments WHERE defect_id = ?", (defect_id,))

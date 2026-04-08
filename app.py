@@ -1360,9 +1360,8 @@ def api_create_case_v2():
     license_info = license_manager.get_current_license()
     limits = license_manager.get_limits()
     
-    # 获取项目当前用例数量
-    project_cases = db.get_project_cases(project_id)
-    current_case_count = len(project_cases) if project_cases else 0
+    # 获取项目当前用例数量（仅 COUNT，避免全量拉取用例与步骤 JOIN）
+    current_case_count = _db.get_project_case_count(project_id)
     
     if limits['max_cases_per_project'] != -1 and current_case_count >= limits['max_cases_per_project']:
         return jsonify({
