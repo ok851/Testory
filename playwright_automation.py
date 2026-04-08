@@ -162,6 +162,25 @@ def _xpath_group_inner_and_index(selector: str):
     return inner, k
 
 
+def _xpath_string_literal(s: str) -> str:
+    """
+    XPath 1.0 字符串字面量，用于 contains(normalize-space(.), lit) 等。
+    同时含单双引号时用 concat 拼接。
+    """
+    s = s or ""
+    if '"' not in s:
+        return f'"{s}"'
+    if "'" not in s:
+        return f"'{s}'"
+    parts: List[str] = []
+    for i, segment in enumerate(s.split('"')):
+        if i:
+            parts.append("'\"'")
+        if segment:
+            parts.append(f'"{segment}"')
+    return "concat(" + ", ".join(parts) + ")" if parts else "'\"'"
+
+
 def _pa_validate_url(url: str) -> tuple:
     """校验 URL。返回 (fixed_url, err)。
     - fixed_url=None, err=None → 跳过（占位符或空）
@@ -437,8 +456,10 @@ class PlaywrightAutomation:
             return f"//*[text()='{selector_value}']", 'xpath'
         
         elif selector_type == 'partial_text':
-            # 部分文本定位: 提交 -> xpath=//*[contains(text(),'提交')]
-            return f"//*[contains(text(),'{selector_value}')]", 'xpath'
+            # 与 Playwright getByText 更接近：用 string-value（normalize-space(.)）含子节点文案；
+            # contains(text(),'…') 仅匹配直接子文本节点，菜单/图标+span 等场景常点不到。
+            lit = _xpath_string_literal(selector_value)
+            return f"//*[contains(normalize-space(.),{lit})]", 'xpath'
         
         elif selector_type == 'placeholder':
             # Placeholder定位: 请输入用户名 -> [placeholder="请输入用户名"]
@@ -2055,6 +2076,7 @@ class PlaywrightAutomation:
         
         # 🔥 转换简化的选择器类型
         original_selector_type = selector_type
+        raw_partial_text_for_click: Optional[str] = None
         if selector_type in ['id', 'class', 'name', 'text', 'partial_text', 'placeholder', 
                              'label', 'title', 'alt', 'data', 'aria']:
             if selector_type == 'label':
@@ -2063,6 +2085,8 @@ class PlaywrightAutomation:
                 if selector is None:
                     raise Exception(f"未找到与label关联的元素: {original_selector_type}={selector}")
             else:
+                if selector_type == 'partial_text':
+                    raw_partial_text_for_click = (selector or "").strip() or None
                 selector, selector_type = self.convert_selector(selector, selector_type)
             uat_logger.info(f"🔍 [SELECTOR_CONVERT] 选择器转换: {original_selector_type} -> {selector_type}, 值: {selector}")
         
@@ -2097,6 +2121,43 @@ class PlaywrightAutomation:
             raise Exception(f"操作上下文为None,无法执行点击操作")
         
         element_clicked = False
+
+        # partial_text：与 Codegen getByText 一致，优先用 Playwright 文本定位（可命中子 span，
+        # 并在 Element Plus 等场景下由引擎选择可点击目标）；避免 //*[contains(...)] 点到不可交互节点。
+        if raw_partial_text_for_click and hasattr(target_context, "get_by_text"):
+            try:
+                pw_loc = target_context.get_by_text(
+                    raw_partial_text_for_click, exact=False
+                )
+                cnt = await pw_loc.count()
+                if cnt == 0:
+                    uat_logger.info(
+                        "🔍 [CLICK_DEBUG] partial_text: get_by_text 零匹配，回退 XPath"
+                    )
+                else:
+                    uat_logger.info(
+                        f"🔍 [CLICK_DEBUG] partial_text: get_by_text 命中 {cnt} 个，点击首个（等同 .first）"
+                    )
+                    tgt = pw_loc.first
+                    try:
+                        await tgt.wait_for(state="visible", timeout=10000)
+                    except Exception:
+                        uat_logger.info(
+                            "🔍 [CLICK_DEBUG] partial_text: visible 超时，改 attached（侧栏收起/overflow 等）"
+                        )
+                        await tgt.wait_for(state="attached", timeout=5000)
+                    try:
+                        await tgt.click(timeout=8000)
+                    except Exception:
+                        await tgt.click(timeout=8000, force=True)
+                    uat_logger.info(
+                        "✅ [CLICK_DEBUG] partial_text 已通过 Playwright get_by_text 点击成功"
+                    )
+                    element_clicked = True
+            except Exception as _pwte:
+                uat_logger.warning(
+                    f"⚠️ [CLICK_DEBUG] partial_text get_by_text 点击失败，回退 XPath: {_pwte}"
+                )
         
         # 获取当前页面URL和状态
         try:

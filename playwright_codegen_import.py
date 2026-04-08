@@ -173,6 +173,74 @@ def _xpath_quote_attr(val: str) -> str:
     return f'"{s}"'
 
 
+def _step_click_text_partial(t: str, desc: str) -> Dict[str, Any]:
+    """Codegen 文本点击：平台执行层用 partial_text → XPath contains。"""
+    return _base_step("click", "partial_text", t, "", desc)
+
+
+def _step_click_in_role_then_text(role: str, text: str) -> Dict[str, Any]:
+    """
+    getByRole(role).getByText(text) 链式调用：优先用限定在 role 容器内的 XPath，
+    避免页面上同名文案多处命中。
+    """
+    r = (role or "").strip().strip("\"'")
+    t = (text or "").strip()
+    if (
+        len(t) <= 48
+        and "\n" not in t
+        and '"' not in t
+        and "'" not in t
+        and re.match(r"^[a-zA-Z][\w\-]*$", r)
+    ):
+        xp = f'//*[@role="{r}"]//*[contains(normalize-space(.),"{t}")]'
+        return _base_step(
+            "click",
+            "xpath",
+            xp,
+            "",
+            f"在 role={r} 内点击文本「{t[:40]}」",
+        )
+    return _step_click_text_partial(
+        t, f"在 getByRole({r}) 内点击文本「{t[:40]}」"
+    )
+
+
+def _step_click_role_name_then_text(role: str, named: str, text: str) -> Dict[str, Any]:
+    """
+    getByRole(role, { name / name= }).getByText(text)：
+    用「同节点 role + 文案含无障碍名称」近似限定父级，再在其下匹配目标文本。
+    """
+    r = (role or "").strip().strip("\"'")
+    n = (named or "").strip()
+    t = (text or "").strip()
+    if (
+        len(n) <= 48
+        and len(t) <= 48
+        and "\n" not in n
+        and "\n" not in t
+        and '"' not in n
+        and '"' not in t
+        and "'" not in n
+        and "'" not in t
+        and re.match(r"^[a-zA-Z][\w\-]*$", r)
+    ):
+        xp = (
+            f'//*[@role="{r}"][contains(normalize-space(.),"{n}")]'
+            f'//*[contains(normalize-space(.),"{t}")]'
+        )
+        return _base_step(
+            "click",
+            "xpath",
+            xp,
+            "",
+            f"在 role={r}、名称含「{n[:30]}」内点击文本「{t[:40]}」",
+        )
+    return _step_click_text_partial(
+        t,
+        f"getByRole({r}, name「{n[:30]}」).getByText「{t[:40]}」",
+    )
+
+
 def _pack_append(
     pack: MutableSequence[Dict[str, Any]], sel_type: str, value: str, score: int
 ) -> None:
@@ -613,6 +681,14 @@ def parse_playwright_codegen_to_steps(code: str) -> Tuple[List[Dict[str, Any]], 
             steps.append(_base_step("click", st, val, "", f"点击 {val[:60]}"))
             continue
         m = re.search(
+            r"page\.get_by_role\(\s*(['\"])(?P<role>.*?)\1\s*,\s*name\s*=\s*(['\"])(?P<name>.*?)\3\)\s*\.get_by_text\(\s*(['\"])(?P<t>.*?)\5\)\.click\(\s*\)",
+            ln,
+        )
+        if m:
+            role, name, t = m.group("role"), m.group("name"), m.group("t")
+            steps.append(_step_click_role_name_then_text(role, name, t))
+            continue
+        m = re.search(
             r"page\.get_by_role\(\s*(['\"])(?P<role>.*?)\1\s*,\s*name\s*=\s*(['\"])(?P<name>.*?)\3\)\.click\(\s*\)",
             ln,
         )
@@ -629,14 +705,44 @@ def parse_playwright_codegen_to_steps(code: str) -> Tuple[List[Dict[str, Any]], 
             )
             continue
         m = re.search(
+            r"page\.get_by_role\(\s*(['\"])(?P<role>.*?)\1\s*\)\s*\.get_by_text\(\s*(['\"])(?P<t>.*?)\3\)\.click\(\s*\)",
+            ln,
+        )
+        if m:
+            role, t = m.group("role"), m.group("t")
+            steps.append(_step_click_in_role_then_text(role, t))
+            continue
+        m = re.search(
+            r"page\.get_by_text\(\s*(['\"])(?P<t>.*?)\1\)\s*(?:\.first\(\)|\.last\(\)|\.nth\s*\(\s*\d+\s*\))\s*\.click\(\s*\)",
+            ln,
+        )
+        if m:
+            t = m.group("t")
+            steps.append(_step_click_text_partial(t, f"点击文本「{t[:40]}」"))
+            continue
+        m = re.search(
             r"page\.get_by_text\(\s*(['\"])(?P<t>.*?)\1\)\.click\(\s*\)",
             ln,
         )
         if m:
             t = m.group("t")
-            steps.append(
-                _base_step("click", "partial_text", t, "", f"点击文本「{t[:40]}」")
-            )
+            steps.append(_step_click_text_partial(t, f"点击文本「{t[:40]}」"))
+            continue
+        m = re.search(
+            r"page\.getByRole\(\s*(?P<q1>['\"])(?P<role>.*?)(?P=q1)\s*,\s*\{\s*name\s*:\s*(?P<q2>['\"])(?P<name>.*?)(?P=q2)\s*[^}]*\}\s*\)\s*\.getByText\(\s*(?P<q3>['\"])(?P<t>.*?)(?P=q3)\s*\)\.click\(\s*\)",
+            ln,
+        )
+        if m:
+            role, name, t = m.group("role"), m.group("name"), m.group("t")
+            steps.append(_step_click_role_name_then_text(role, name, t))
+            continue
+        m = re.search(
+            r"page\.getByRole\(\s*(?P<q1>['\"])(?P<role>.*?)(?P=q1)\s*\)\s*\.getByText\(\s*(?P<q2>['\"])(?P<t>.*?)(?P=q2)\s*\)\.click\(\s*\)",
+            ln,
+        )
+        if m:
+            role, t = m.group("role"), m.group("t")
+            steps.append(_step_click_in_role_then_text(role, t))
             continue
         m = re.search(
             r"page\.getByRole\(\s*(?P<q1>['\"])(?P<role>.*?)(?P=q1)\s*,\s*\{\s*name\s*:\s*(?P<q2>['\"])(?P<name>.*?)(?P=q2)\s*[^}]*\}\s*\)\.click\(\s*\)",
@@ -655,14 +761,20 @@ def parse_playwright_codegen_to_steps(code: str) -> Tuple[List[Dict[str, Any]], 
             )
             continue
         m = re.search(
+            r"page\.getByText\(\s*(?P<q>['\"])(?P<t>.*?)(?P=q)\s*\)\s*(?:\.first\(\)|\.last\(\)|\.nth\s*\(\s*\d+\s*\))\s*\.click\(\s*\)",
+            ln,
+        )
+        if m:
+            t = m.group("t")
+            steps.append(_step_click_text_partial(t, f"点击文本「{t[:40]}」"))
+            continue
+        m = re.search(
             r"page\.getByText\(\s*(?P<q>['\"])(?P<t>.*?)(?P=q)\s*\)\.click\(\s*\)",
             ln,
         )
         if m:
             t = m.group("t")
-            steps.append(
-                _base_step("click", "partial_text", t, "", f"点击文本「{t[:40]}」")
-            )
+            steps.append(_step_click_text_partial(t, f"点击文本「{t[:40]}」"))
             continue
 
         # select_option
