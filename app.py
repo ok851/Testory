@@ -1008,6 +1008,8 @@ def api_check_selected_element():
     try:
         # 获取选择的元素
         selected_element = sync_get_selected_element()
+        if isinstance(selected_element, dict) and selected_element.get('_picker_closed'):
+            return jsonify({'success': True, 'selected_element': None, 'picker_closed': True})
         if selected_element:
             return jsonify({'success': True, 'selected_element': selected_element})
         else:
@@ -1921,6 +1923,22 @@ def api_run_case(case_id):
     browser_closed_manually = False
     
     try:
+        # 若用户仍处于“拾取元素”会话，执行前强制隔离浏览器，避免复用拾取窗口导致运行失败
+        if bool(getattr(automation, '_selection_mode_active', False)):
+            uat_logger.info("检测到拾取器会话仍在，执行前自动关闭拾取器并重建执行浏览器")
+            try:
+                sync_disable_element_selection()
+            except Exception:
+                pass
+            try:
+                sync_close_browser()
+            except Exception:
+                pass
+            try:
+                automation._selection_mode_active = False
+            except Exception:
+                pass
+
         # 🔥 增强浏览器断连检测和自动恢复逻辑
         # 启动浏览器前先检查状态：如果浏览器已断连，先强制重置所有状态
         browser_disconnected = False

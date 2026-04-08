@@ -590,25 +590,37 @@
             </div>
             <div class="form-group">
                 <label for="stepSelectorType">定位方式</label>
-                <select id="stepSelectorType">
-                    <option value="css">CSS选择器</option>
-                    <option value="xpath">XPath</option>
-                    <option value="id">ID</option>
-                    <option value="class">Class</option>
-                    <option value="name">Name</option>
-                    <option value="text">文本内容</option>
-                    <option value="partial_text">部分文本</option>
-                    <option value="placeholder">Placeholder</option>
-                    <option value="label">关联Label</option>
-                    <option value="title">Title属性</option>
-                    <option value="alt">Alt属性</option>
-                    <option value="data">Data属性</option>
-                    <option value="aria">ARIA标签</option>
-                </select>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <select id="stepSelectorType" style="max-width:220px;">
+                        <option value="css">CSS选择器</option>
+                        <option value="xpath">XPath</option>
+                        <option value="id">ID</option>
+                        <option value="class">Class</option>
+                        <option value="name">Name</option>
+                        <option value="text">文本内容</option>
+                        <option value="partial_text">部分文本</option>
+                        <option value="placeholder">Placeholder</option>
+                        <option value="label">关联Label</option>
+                        <option value="title">Title属性</option>
+                        <option value="alt">Alt属性</option>
+                        <option value="data">Data属性</option>
+                        <option value="aria">ARIA标签</option>
+                    </select>
+                    <button type="button" class="btn btn-primary" id="pickCreateBtn" onclick="startVisualSelection('create')">🧲 拾取元素</button>
+                </div>
             </div>
             <div class="form-group">
                 <label for="stepSelectorValue">选择器值</label>
                 <input type="text" id="stepSelectorValue" placeholder="输入选择器值，根据定位方式自动转换">
+                <input type="hidden" id="stepLocatorCandidates" value="">
+                <input type="hidden" id="stepPickedCardBaseXpath" value="">
+                <div id="stepCardNthWrap" style="display:none;margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-size:12px;color:#374151;">已拾取卡片列表容器，目标卡片序号：</span>
+                        <input type="number" id="stepCardNth" min="1" value="1" style="width:92px;">
+                        <button type="button" class="btn btn-sm btn-info" onclick="applyCardNthFromPicker('create')">应用序号</button>
+                    </div>
+                </div>
                 <small id="selectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
                     选择定位方式后，只需输入简单的值即可，如：ID输入"username"，文本输入"提交"
                 </small>
@@ -741,25 +753,37 @@
             </div>
             <div class="form-group">
                 <label for="editStepSelectorType">定位方式</label>
-                <select id="editStepSelectorType">
-                    <option value="css">CSS选择器</option>
-                    <option value="xpath">XPath</option>
-                    <option value="id">ID</option>
-                    <option value="class">Class</option>
-                    <option value="name">Name</option>
-                    <option value="text">文本内容</option>
-                    <option value="partial_text">部分文本</option>
-                    <option value="placeholder">Placeholder</option>
-                    <option value="label">关联Label</option>
-                    <option value="title">Title属性</option>
-                    <option value="alt">Alt属性</option>
-                    <option value="data">Data属性</option>
-                    <option value="aria">ARIA标签</option>
-                </select>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <select id="editStepSelectorType" style="max-width:220px;">
+                        <option value="css">CSS选择器</option>
+                        <option value="xpath">XPath</option>
+                        <option value="id">ID</option>
+                        <option value="class">Class</option>
+                        <option value="name">Name</option>
+                        <option value="text">文本内容</option>
+                        <option value="partial_text">部分文本</option>
+                        <option value="placeholder">Placeholder</option>
+                        <option value="label">关联Label</option>
+                        <option value="title">Title属性</option>
+                        <option value="alt">Alt属性</option>
+                        <option value="data">Data属性</option>
+                        <option value="aria">ARIA标签</option>
+                    </select>
+                    <button type="button" class="btn btn-secondary" id="pickEditBtn" onclick="startVisualSelection('edit')">🧲 拾取元素</button>
+                </div>
             </div>
             <div class="form-group">
                 <label for="editStepSelectorValue">选择器值</label>
                 <input type="text" id="editStepSelectorValue" placeholder="输入选择器值，根据定位方式自动转换">
+                <input type="hidden" id="editStepLocatorCandidates" value="">
+                <input type="hidden" id="editPickedCardBaseXpath" value="">
+                <div id="editCardNthWrap" style="display:none;margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <span style="font-size:12px;color:#374151;">已拾取卡片列表容器，目标卡片序号：</span>
+                        <input type="number" id="editCardNth" min="1" value="1" style="width:92px;">
+                        <button type="button" class="btn btn-sm btn-info" onclick="applyCardNthFromPicker('edit')">应用序号</button>
+                    </div>
+                </div>
                 <small id="editSelectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
                     选择定位方式后，只需输入简单的值即可
                 </small>
@@ -924,6 +948,7 @@
     <script>
         let currentCaseId = null;
         let currentCaseName = '';
+        let currentCaseUrl = '';
         let currentEditingStepId = null;
         let currentProjectId = null;
         let currentPage = 1;
@@ -977,6 +1002,7 @@
                 if (data.test_case) {
                     currentCaseName = data.test_case.name;
                     currentProjectId = data.test_case.project_id;
+                    currentCaseUrl = (data.test_case.url || '').trim();
                     document.getElementById('caseInfo').textContent = `用例: ${escapeHtml(currentCaseName)}`;
                 } else {
                     document.getElementById('caseInfo').textContent = `用例: 未知用例`;
@@ -1428,6 +1454,10 @@ function changePage(page) {
             document.getElementById('stepSelectorValue').value = '';
             document.getElementById('stepInputValue').value = '';
             document.getElementById('stepDescription').value = '';
+            document.getElementById('stepLocatorCandidates').value = '';
+            document.getElementById('stepPickedCardBaseXpath').value = '';
+            document.getElementById('stepCardNth').value = '1';
+            document.getElementById('stepCardNthWrap').style.display = 'none';
             
             // 重置滚动操作的四个输入框
             document.getElementById('scrollUp').value = '';
@@ -1453,6 +1483,10 @@ function changePage(page) {
             document.getElementById('editStepSelectorValue').value = step.selector_value || '';
             document.getElementById('editStepInputValue').value = step.input_value || '';
             document.getElementById('editStepDescription').value = step.description || '';
+            document.getElementById('editStepLocatorCandidates').value = step.locator_candidates || '';
+            document.getElementById('editPickedCardBaseXpath').value = '';
+            document.getElementById('editCardNth').value = '1';
+            document.getElementById('editCardNthWrap').style.display = 'none';
             
             // 更新选择器帮助文本
             updateEditSelectorHelp();
@@ -1858,9 +1892,46 @@ function changePage(page) {
         
         // 可视化选择功能
         let isSelecting = false;
+        let selectionTarget = 'create'; // create | edit
         
-        function startVisualSelection() {
+        function setPickButtonsLoading(loading) {
+            const ids = ['pickCreateBtn', 'pickEditBtn'];
+            ids.forEach(id => {
+                const btn = document.getElementById(id);
+                if (!btn) return;
+                btn.disabled = false;
+                btn.textContent = loading ? '停止拾取' : '🧲 拾取元素';
+            });
+        }
+        
+        function _selCfg(target) {
+            const t = target === 'edit' ? 'edit' : 'create';
+            return {
+                target: t,
+                selectorTypeId: t === 'edit' ? 'editStepSelectorType' : 'stepSelectorType',
+                selectorValueId: t === 'edit' ? 'editStepSelectorValue' : 'stepSelectorValue',
+                inputValueId: t === 'edit' ? 'editStepInputValue' : 'stepInputValue',
+                locatorCandidatesId: t === 'edit' ? 'editStepLocatorCandidates' : 'stepLocatorCandidates',
+                cardBaseXpathId: t === 'edit' ? 'editPickedCardBaseXpath' : 'stepPickedCardBaseXpath',
+                cardNthId: t === 'edit' ? 'editCardNth' : 'stepCardNth',
+                cardNthWrapId: t === 'edit' ? 'editCardNthWrap' : 'stepCardNthWrap'
+            };
+        }
+        
+        function startVisualSelection(target = 'create') {
+            if (isSelecting) {
+                showToast('已停止拾取', 'info');
+                stopVisualSelection();
+                return;
+            }
+            if (!currentCaseId) {
+                showToast('未找到当前用例，无法启动拾取', 'error');
+                return;
+            }
             isSelecting = true;
+            selectionTarget = target === 'edit' ? 'edit' : 'create';
+            setPickButtonsLoading(true);
+            showToast('正在启动拾取器，请在弹出的浏览器中操作并点击目标元素', 'info');
             
             // 1. 获取当前用例ID
             const caseId = currentCaseId;
@@ -1876,16 +1947,47 @@ function changePage(page) {
                 return response.json();
             })
             .then(stepsData => {
-                // 3. 查找导航步骤并提取URL
+                // 3. 查找导航步骤并提取URL；无导航步骤则回退到用例URL
                 let targetUrl = '';
                 if (stepsData.steps && stepsData.steps.length > 0) {
-                    const navigateStep = stepsData.steps.find(step => step.action === 'navigate');
+                    const navigateStep = stepsData.steps.find(step => {
+                        if (step.action !== 'navigate') return false;
+                        const u = (step.url || step.input_value || '').trim();
+                        if (!u) return false;
+                        const low = u.toLowerCase();
+                        return !(low === 'about:blank' || low === 'about:newtab');
+                    });
                     if (navigateStep) {
                         targetUrl = navigateStep.url || navigateStep.input_value || '';
                     }
                 }
+                if (!targetUrl) {
+                    targetUrl = (currentCaseUrl || '').trim();
+                }
+                if (!targetUrl) {
+                    // loadCaseInfo 还未完成时兜底再取一次用例详情
+                    return fetch(`/api/cases/${caseId}`)
+                        .then(r => (r.ok ? r.json() : {}))
+                        .then(cd => {
+                            const fallbackUrl = ((cd && cd.test_case && cd.test_case.url) || '').trim();
+                            if (fallbackUrl) currentCaseUrl = fallbackUrl;
+                            return fallbackUrl;
+                        })
+                        .then(url2 => {
+                            if (!url2) {
+                                throw new Error('未找到可用 URL。请先在用例里填写 URL 或添加导航步骤');
+                            }
+                            console.log('提取到的导航URL(用例兜底):', url2);
+                            return fetch('/api/start_visual_selection', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ url: url2 })
+                            });
+                        });
+                }
                 console.log('提取到的导航URL:', targetUrl);
-                
                 // 4. 调用后端API启动可视化选择，并传递导航URL
                 console.log('正在启动可视化选择，目标URL:', targetUrl);
                 return fetch('/api/start_visual_selection', {
@@ -1916,13 +2018,14 @@ function changePage(page) {
             })
             .catch(error => {
                 console.error('启动可视化选择时出错:', error);
-                alert('启动可视化选择时发生错误: ' + error.message);
+                showToast('启动可视化选择失败：' + error.message, 'error');
                 stopVisualSelection();
             });
         }
         
         function stopVisualSelection() {
             isSelecting = false;
+            setPickButtonsLoading(false);
             
             // 调用后端API停止可视化选择
             fetch('/api/stop_visual_selection', {
@@ -1941,13 +2044,22 @@ function changePage(page) {
             })
             .catch(error => {
                 console.error('停止可视化选择时出错:', error);
+                setPickButtonsLoading(false);
             });
         }
         
         function startListeningForSelection() {
+            const startedAt = Date.now();
+            const maxPickMs = 180000; // 3 分钟兜底，防止前端一直“拾取中”
             // 启动轮询，检查是否有元素被选择
             const pollInterval = setInterval(() => {
                 if (!isSelecting) {
+                    clearInterval(pollInterval);
+                    return;
+                }
+                if (Date.now() - startedAt > maxPickMs) {
+                    showToast('拾取超时，已自动停止。请重新点击“拾取元素”', 'warning');
+                    stopVisualSelection();
                     clearInterval(pollInterval);
                     return;
                 }
@@ -1955,15 +2067,30 @@ function changePage(page) {
                 fetch('/api/check_selected_element')
                 .then(response => response.json())
                 .then(data => {
-                    if (data.success && data.selected_element) {
-                        // 元素已被选择，填充到表单
-                        fillElementToForm(data.selected_element);
+                    if (!data || data.success === false) {
+                        showToast('拾取状态异常，已自动停止', 'error');
                         stopVisualSelection();
                         clearInterval(pollInterval);
+                        return;
+                    }
+                    if (data && data.picker_closed) {
+                        showToast('拾取器窗口已关闭，已自动停止拾取', 'warning');
+                        stopVisualSelection();
+                        clearInterval(pollInterval);
+                        return;
+                    }
+                    if (data.success && data.selected_element) {
+                        // 元素已被选择，填充到表单
+                        fillElementToForm(data.selected_element, selectionTarget);
+                        // 保持拾取会话，不自动停止；允许连续拾取覆盖
+                        showToast('已更新为最新拾取结果（可继续拾取）', 'success');
                     }
                 })
                 .catch(error => {
                     console.error('检查选择元素时出错:', error);
+                    showToast('拾取状态检查失败，已自动停止', 'error');
+                    stopVisualSelection();
+                    clearInterval(pollInterval);
                 });
             }, 1000); // 每秒轮询一次
         }
@@ -1972,31 +2099,46 @@ function changePage(page) {
             // 停止轮询
         }
         
-        function fillElementToForm(elementInfo) {
-            // 填充元素信息到表单
-            document.getElementById('stepSelectorType').value = elementInfo.selector_type || 'css';
-            document.getElementById('stepSelectorValue').value = elementInfo.selector_value || '';
-            
-            // 优先使用元素的value属性，然后是text_content
-            let elementValue = '';
-            if (elementInfo.attributes && elementInfo.attributes.value) {
-                elementValue = elementInfo.attributes.value;
-            } else if (elementInfo.text_content) {
-                elementValue = elementInfo.text_content;
-            }
-            
-            if (elementValue) {
-                document.getElementById('stepInputValue').value = elementValue;
+        function fillElementToForm(elementInfo, target = 'create') {
+            const cfg = _selCfg(target);
+            document.getElementById(cfg.selectorTypeId).value = elementInfo.selector_type || 'css';
+            document.getElementById(cfg.selectorValueId).value = elementInfo.selector_value || '';
+            document.getElementById(cfg.locatorCandidatesId).value = elementInfo.locator_candidates || '';
+            document.getElementById(cfg.cardBaseXpathId).value = elementInfo.card_item_xpath || '';
+            document.getElementById(cfg.cardNthWrapId).style.display = elementInfo.card_item_xpath ? 'block' : 'none';
+            if (elementInfo.card_item_xpath) {
+                document.getElementById(cfg.cardNthId).value = '1';
             }
             
             console.log('元素信息已填充到表单:', elementInfo);
-            alert('元素选择成功，已自动填充到表单！');
+            if (elementInfo.card_item_xpath) {
+                showToast('✅ 已拾取：卡片列表容器，可设置第 n 个卡片', 'success');
+            } else {
+                showToast('✅ 元素选择成功，已自动填充到表单', 'success');
+            }
+        }
+
+        function applyCardNthFromPicker(target = 'create') {
+            const cfg = _selCfg(target);
+            const base = (document.getElementById(cfg.cardBaseXpathId).value || '').trim();
+            if (!base) {
+                showToast('请先使用拾取元素获取卡片容器', 'warning');
+                return;
+            }
+            const nthRaw = parseInt(document.getElementById(cfg.cardNthId).value || '1', 10);
+            const nth = Number.isFinite(nthRaw) && nthRaw > 0 ? nthRaw : 1;
+            document.getElementById(cfg.selectorTypeId).value = 'xpath';
+            document.getElementById(cfg.selectorValueId).value = `(${base})[${nth}]`;
+            updateSelectorHelp();
+            updateEditSelectorHelp();
+            showToast(`已应用第 ${nth} 个卡片定位`, 'success');
         }
         
         async function createStep() {
             const action = document.getElementById('stepAction').value;
             const selectorType = document.getElementById('stepSelectorType').value;
             const selectorValue = document.getElementById('stepSelectorValue').value.trim();
+            const locatorCandidates = document.getElementById('stepLocatorCandidates').value || '';
             let inputValue = document.getElementById('stepInputValue').value.trim();
             const description = document.getElementById('stepDescription').value.trim();
             // 获取对比方式选择
@@ -2043,6 +2185,7 @@ function changePage(page) {
                         action: action,
                         selector_type: selectorType,
                         selector_value: selectorValue,
+                        locator_candidates: locatorCandidates,
                         input_value: inputValue,
                         description: description,
                         compare_type: compareType
@@ -2086,6 +2229,7 @@ function changePage(page) {
             const action = document.getElementById('editStepAction').value;
             const selectorType = document.getElementById('editStepSelectorType').value;
             const selectorValue = document.getElementById('editStepSelectorValue').value.trim();
+            const locatorCandidates = document.getElementById('editStepLocatorCandidates').value || '';
             let inputValue = document.getElementById('editStepInputValue').value.trim();
             const description = document.getElementById('editStepDescription').value.trim();
             // 获取对比方式选择
@@ -2131,6 +2275,7 @@ function changePage(page) {
                         action: action,
                         selector_type: selectorType,
                         selector_value: selectorValue,
+                        locator_candidates: locatorCandidates,
                         input_value: inputValue,
                         description: description,
                         compare_type: compareType

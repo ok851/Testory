@@ -8,6 +8,7 @@ import json
 import time
 import sys
 import os
+import importlib
 from logger import uat_logger
 import threading
 if sys.platform == 'win32':
@@ -181,6 +182,70 @@ def _xpath_string_literal(s: str) -> str:
     return "concat(" + ", ".join(parts) + ")" if parts else "'\"'"
 
 
+def _looks_dynamic_dom_id(v: str) -> bool:
+    s = str(v or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if len(s) >= 16 and re.search(r"\d{8,}", s):
+        return True
+    if re.search(r"[a-f0-9]{10,}", low) and re.search(r"\d{4,}", s):
+        return True
+    if re.search(r"(?:^|[_-])(id|card|row|item)?\d{10,}$", low):
+        return True
+    if re.search(r"\d{6,}", s):
+        return True
+    return False
+
+
+def _stable_class_tokens(class_name: str) -> List[str]:
+    out: List[str] = []
+    for token in str(class_name or "").split():
+        t = token.strip()
+        if not t:
+            continue
+        if len(t) <= 2:
+            continue
+        if re.search(r"\d{4,}", t):
+            continue
+        if re.search(r"[a-f0-9]{8,}", t.lower()):
+            continue
+        out.append(t)
+    return out[:3]
+
+
+def _picker_locator_candidates(
+    css_selector: str, text_content: str, class_name: str, element_id: str
+) -> str:
+    pack: List[Dict[str, Any]] = []
+    if css_selector:
+        pack.append({"type": "css", "value": css_selector, "score": 96})
+    if element_id and not _looks_dynamic_dom_id(element_id):
+        pack.append({"type": "id", "value": element_id, "score": 100})
+    for cls in _stable_class_tokens(class_name):
+        pack.append({"type": "css", "value": f".{cls}", "score": 88})
+    txt = (text_content or "").strip()
+    if txt and len(txt) <= 48 and "\n" not in txt and '"' not in txt and "'" not in txt:
+        pack.append({"type": "partial_text", "value": txt, "score": 76})
+        pack.append(
+            {
+                "type": "xpath",
+                "value": f'//*[contains(normalize-space(.),"{txt}")]',
+                "score": 72,
+            }
+        )
+    dedup: List[Dict[str, Any]] = []
+    seen = set()
+    for p in pack:
+        k = (str(p.get("type") or "").lower(), str(p.get("value") or ""))
+        if not k[1] or k in seen:
+            continue
+        seen.add(k)
+        dedup.append(p)
+    dedup.sort(key=lambda x: -int(x.get("score") or 0))
+    return json.dumps(dedup, ensure_ascii=False)
+
+
 def _pa_validate_url(url: str) -> tuple:
     """校验 URL。返回 (fixed_url, err)。
     - fixed_url=None, err=None → 跳过（占位符或空）
@@ -350,6 +415,7 @@ class PlaywrightAutomation:
         self.browser = None
         self.page = None
         self.context = None
+        self._last_headless = None  # 记录最近一次启动模式，拾取器需要有头模式
         self.recording = False
         self.recorded_steps = []
         self.current_url = ""
@@ -361,6 +427,7 @@ class PlaywrightAutomation:
         self._recording_poll_task = None
         self._platform_origin = ""
         self._recording_session_clear_cb = None
+        self._selection_mode_active = False
 
     def _is_recorder_panel_page(self, p) -> bool:
         rp = getattr(self, "recorder_panel_page", None)
@@ -757,6 +824,7 @@ class PlaywrightAutomation:
                     headless=headless,
                     args=args
                 )
+                self._last_headless = bool(headless)
                 try:
                     self.browser.on("disconnected", lambda _: self._handle_browser_disconnect_sync())
                 except Exception as e:
@@ -1527,11 +1595,36 @@ class PlaywrightAutomation:
             except Exception as e:
                 uat_logger.debug(f"原生date输入框处理失败: {e}")
             
-            # 尝试直接fill方法
+            # 主路径：标准化日期 + 触发 input/change/blur 事件（比单纯 fill 稳定）
             try:
-                await element.fill(date)
+                date_candidates = self._build_date_input_candidates(date, date_format)
+                if not date_candidates:
+                    date_candidates = [date]
+                for dv in date_candidates:
+                    try:
+                        commit_ok = await target_page.evaluate(
+                            """({sel, value}) => {
+                                const el = document.querySelector(sel);
+                                if (!el) return { ok: false, reason: 'not_found' };
+                                el.focus();
+                                el.value = value;
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                                el.dispatchEvent(new Event('blur', { bubbles: true }));
+                                return { ok: true, current: (el.value || '').trim() };
+                            }""",
+                            {"sel": selector, "value": dv},
+                        )
+                        cur = (commit_ok or {}).get("current", "")
+                        if commit_ok and commit_ok.get("ok") and cur:
+                            uat_logger.info(f"日期事件填充成功: {dv} (当前值: {cur})")
+                            return
+                    except Exception:
+                        pass
+                # 退回常规 fill
+                await element.fill(date_candidates[0])
                 await element.press("Enter")
-                uat_logger.info(f"直接fill日期成功: {date}")
+                uat_logger.info(f"直接fill日期成功: {date_candidates[0]}")
                 return
             except Exception as e:
                 uat_logger.debug(f"直接fill方法失败: {e}")
@@ -1548,6 +1641,39 @@ class PlaywrightAutomation:
                 raise
         except Exception as e:
             raise Exception(f"日期选择操作失败: {e}")
+
+    def _build_date_input_candidates(self, date: str, date_format: str = "YYYY-MM-DD") -> List[str]:
+        """构建常见日期输入候选格式，提升不同组件兼容性。"""
+        import datetime as _dt
+        s = (date or "").strip()
+        if not s:
+            return []
+        fmts = [date_format, "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y"]
+        parsed = None
+        for f in fmts:
+            try:
+                ff = f.replace("YYYY", "%Y").replace("MM", "%m").replace("DD", "%d")
+                parsed = _dt.datetime.strptime(s, ff)
+                break
+            except Exception:
+                continue
+        if parsed is None:
+            return [s]
+        out = [
+            parsed.strftime("%Y-%m-%d"),
+            parsed.strftime("%Y/%m/%d"),
+            parsed.strftime("%m/%d/%Y"),
+            parsed.strftime("%d/%m/%Y"),
+            parsed.strftime("%Y-%-m-%-d") if sys.platform != "win32" else parsed.strftime("%Y-%m-%d"),
+        ]
+        # 去重保序
+        seen = set()
+        ordered = []
+        for x in out:
+            if x and x not in seen:
+                seen.add(x)
+                ordered.append(x)
+        return ordered
     
     async def _handle_custom_date_picker(self, page, selector: str, date: str, date_format: str):
         """处理自定义日期选择器（Element Plus, Ant Design等）"""
@@ -5435,14 +5561,16 @@ class PlaywrightAutomation:
                                         except Exception:
                                             # 如果智能检测失败，使用短等待
                                             await asyncio.sleep(1)
-                                        # 检查验证是否成功（通过检查验证码元素是否仍然可见）
-                                        try:
-                                            await element.wait_for(state='hidden', timeout=5000)
+                                        # 检查验证是否成功（优先看验证码组件是否消失）
+                                        if await self._captcha_appears_gone(target_page):
                                             uat_logger.info("✅ 滑动验证码处理成功")
                                             return True
-                                        except Exception as e:
-                                            uat_logger.error(f"❌ 滑动验证码验证失败: {e}")
-                                            raise Exception("验证码处理失败: 滑动操作已执行，但验证未完成")
+                                        # 某些场景组件不消失但已通过，给一次短暂缓冲再判定
+                                        await asyncio.sleep(1.0)
+                                        if await self._captcha_appears_gone(target_page):
+                                            uat_logger.info("✅ 滑动验证码处理成功(延迟判定)")
+                                            return True
+                                        raise Exception("验证码处理失败: 滑动操作已执行，但验证未完成")
                             except Exception as e:
                                 uat_logger.debug(f"选择器 {slider_selector} 未找到滑块: {e}")
                                 continue
@@ -5747,6 +5875,24 @@ class PlaywrightAutomation:
         """
         uat_logger.info("🔍 处理滑动方块验证码")
         
+        # 先走图像识别增强路径（更智能），失败再回退传统选择器逻辑
+        try:
+            optimizer = SliderCaptchaOptimizer()
+            det = await optimizer.optimize_slider_detection(page)
+            if det and det.get("slider") is not None:
+                slider = det["slider"]
+                platform = det.get("platform", "default")
+                uat_logger.info(f"🤖 [SLIDER_AI] 使用优化器处理平台: {platform}")
+                distance = await optimizer.calculate_smart_distance(page, slider, platform)
+                if distance and distance > 0:
+                    await optimizer.perform_optimized_swipe(page, slider, distance, platform)
+                    if await optimizer.verify_slider_success(page, platform):
+                        uat_logger.info("✅ [SLIDER_AI] 图像识别滑块验证成功")
+                        return True
+                    uat_logger.warning("⚠️ [SLIDER_AI] 验证未确认通过，回退传统策略")
+        except Exception as _opt_e:
+            uat_logger.warning(f"⚠️ [SLIDER_AI] 优化器路径失败，回退传统策略: {_opt_e}")
+
         # 常见的滑块验证码选择器
         slider_selectors = [
             # 滑块容器
@@ -6106,20 +6252,47 @@ class PlaywrightAutomation:
             
             uat_logger.info(f"🎯 最终滑动距离: {distance}px")
             
-            # 执行一致的滑动操作
-            success = await self._slide_with_consistent_speed(page, start_x, start_y, distance)
-            if success:
-                # 等待验证完成
-                uat_logger.info("⏳ 等待验证完成")
-                await asyncio.sleep(1.5)  # 固定等待时间
-                return True
-            else:
-                error_msg = "滑块滑动操作执行失败，可能的原因：1. 鼠标移动路径不正确 2. 滑动速度不符合要求 3. 验证系统检测到自动化操作"
-                uat_logger.error(f"❌ {error_msg}")
-                raise Exception(error_msg)
+            # 多次尝试（带微调），提升不同验证码厂商成功率
+            for idx, offset in enumerate((0, -6, 8, -10), 1):
+                trial_distance = max(20, int(distance + offset))
+                uat_logger.info(f"🔁 [SLIDER] 第{idx}次尝试，距离={trial_distance}")
+                success = await self._slide_with_consistent_speed(page, start_x, start_y, trial_distance)
+                if not success:
+                    continue
+                await asyncio.sleep(1.2)
+                if await self._captcha_appears_gone(page):
+                    uat_logger.info("✅ [SLIDER] 验证组件已消失，判定成功")
+                    return True
+            error_msg = "滑块滑动多次尝试后仍未通过验证"
+            uat_logger.error(f"❌ {error_msg}")
+            raise Exception(error_msg)
         except Exception as e:
             uat_logger.error(f"❌ 滑动操作执行失败: {e}")
             raise
+
+    async def _captcha_appears_gone(self, page) -> bool:
+        """验证码是否已消失（用于滑块/点选后的成功判定）。"""
+        selectors = [
+            '[class*="captcha"]',
+            '[class*="verify"]',
+            '[class*="slider"]',
+            '.geetest_panel',
+            '.yidun',
+            '.tcaptcha',
+        ]
+        try:
+            for sel in selectors:
+                loc = page.locator(sel)
+                if await loc.count() <= 0:
+                    continue
+                try:
+                    if await loc.first.is_visible():
+                        return False
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
     
     # 临时方法，稍后删除
     async def _old_perform_slider_action(self, page, slider):
@@ -6772,9 +6945,15 @@ class PlaywrightAutomation:
                     if is_visible:
                         uat_logger.info(f"✅ 找到图片验证码: {selector}")
                         
-                        # 尝试点击图片中的随机位置
+                        # 先尝试 OCR 指令驱动点选，再尝试图像识别点选，最后回退随机点选
                         try:
-                            await self._click_image_randomly(page, image)
+                            ocr_ok = await self._click_image_by_ocr_instruction(page, image)
+                            if ocr_ok:
+                                uat_logger.info("✅ [IMAGE_OCR] OCR指令驱动点选成功")
+                                return True
+                            ai_ok = await self._click_image_by_vision(page, image)
+                            if not ai_ok:
+                                await self._click_image_randomly(page, image)
                             uat_logger.info("✅ 图片验证操作完成")
                             return True
                         except Exception as click_error:
@@ -6786,6 +6965,176 @@ class PlaywrightAutomation:
         
         uat_logger.warning("⚠️ 未找到图片验证码元素")
         return False
+
+    async def _extract_captcha_instruction_text(self, page) -> str:
+        """提取页面上验证码点击指令文本（如：请依次点击“苹果、香蕉”）。"""
+        try:
+            txt = await page.evaluate("""() => {
+                const sels = [
+                    '[class*="captcha"]',
+                    '[class*="verify"]',
+                    '[class*="yidun"]',
+                    '[class*="geetest"]',
+                    '[class*="tcaptcha"]',
+                    '[class*="question"]',
+                    '[class*="prompt"]',
+                ];
+                let best = '';
+                for (const s of sels) {
+                    const nodes = Array.from(document.querySelectorAll(s)).slice(0, 20);
+                    for (const n of nodes) {
+                        const t = (n.innerText || n.textContent || '').trim();
+                        if (!t) continue;
+                        if (t.includes('点击') || t.includes('依次') || t.includes('选择')) {
+                            if (t.length > best.length) best = t;
+                        }
+                    }
+                }
+                return best;
+            }""")
+            return (txt or "").strip()
+        except Exception:
+            return ""
+
+    def _parse_instruction_targets(self, instruction: str) -> List[str]:
+        s = (instruction or "").strip()
+        if not s:
+            return []
+        m = re.search(r"(?:点击|选择|依次点击|请点击|请依次点击)\s*[：: ]?\s*[“\"'「]?(.*?)[”\"'」]?(?:$|。|，|,)", s)
+        body = m.group(1).strip() if m else s
+        body = body.replace("依次", "").replace("点击", "").replace("选择", "").strip()
+        if not body:
+            return []
+        parts = re.split(r"[、，,;\s]+", body)
+        out = []
+        for p in parts:
+            t = p.strip().strip("“”\"'「」")
+            if len(t) >= 1:
+                out.append(t)
+        return out[:5]
+
+    async def _click_image_by_ocr_instruction(self, page, image) -> bool:
+        """OCR 指令驱动点选：先识别提示词，再在图中匹配文字框并点击。"""
+        try:
+            pyt = importlib.import_module("pytesseract")
+        except Exception:
+            uat_logger.info("ℹ️ [IMAGE_OCR] 未安装 pytesseract，跳过 OCR 路径")
+            return False
+
+        try:
+            instruction = await self._extract_captcha_instruction_text(page)
+            targets = self._parse_instruction_targets(instruction)
+            if not targets:
+                uat_logger.info("ℹ️ [IMAGE_OCR] 未提取到点击指令词，跳过 OCR 路径")
+                return False
+            uat_logger.info(f"🔍 [IMAGE_OCR] 指令词: {targets}")
+
+            image_box = await image.bounding_box()
+            if not image_box:
+                return False
+            png = await image.screenshot()
+            arr = np.frombuffer(png, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None:
+                return False
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            data = pyt.image_to_data(gray, lang="chi_sim+eng", output_type=pyt.Output.DICT)
+            n = len(data.get("text", []))
+            ocr_boxes = []
+            for i in range(n):
+                txt = (data["text"][i] or "").strip()
+                if not txt:
+                    continue
+                try:
+                    conf = float(data["conf"][i])
+                except Exception:
+                    conf = 0.0
+                if conf < 20:
+                    continue
+                x, y, w, h = int(data["left"][i]), int(data["top"][i]), int(data["width"][i]), int(data["height"][i])
+                if w < 6 or h < 6:
+                    continue
+                ocr_boxes.append({"text": txt, "conf": conf, "x": x, "y": y, "w": w, "h": h})
+
+            if not ocr_boxes:
+                return False
+
+            clicked_any = False
+            for target in targets:
+                # 找包含目标词的最佳框
+                candidates = [b for b in ocr_boxes if target in b["text"] or b["text"] in target]
+                if not candidates:
+                    continue
+                candidates.sort(key=lambda b: (b["conf"], b["w"] * b["h"]), reverse=True)
+                b = candidates[0]
+                click_x = image_box["x"] + b["x"] + b["w"] / 2
+                click_y = image_box["y"] + b["y"] + b["h"] / 2
+                await page.mouse.click(click_x, click_y)
+                clicked_any = True
+                uat_logger.info(f"🎯 [IMAGE_OCR] 点击目标词「{target}」位置")
+                await asyncio.sleep(0.8)
+                if await self._captcha_appears_gone(page):
+                    return True
+
+            return clicked_any and await self._captcha_appears_gone(page)
+        except Exception as e:
+            uat_logger.warning(f"⚠️ [IMAGE_OCR] OCR 指令点选失败: {e}")
+            return False
+
+    async def _click_image_by_vision(self, page, image) -> bool:
+        """使用 OpenCV 在验证码图中找可疑文字块并点击。"""
+        try:
+            image_box = await image.bounding_box()
+            if not image_box:
+                return False
+            png = await image.screenshot()
+            arr = np.frombuffer(png, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None:
+                return False
+
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            blur = cv2.GaussianBlur(gray, (3, 3), 0)
+            bin_img = cv2.adaptiveThreshold(
+                blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 8
+            )
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+            bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel, iterations=1)
+            contours, _ = cv2.findContours(bin_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                return False
+
+            h_img, w_img = gray.shape[:2]
+            candidates = []
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                area = w * h
+                if area < 80 or area > (w_img * h_img * 0.12):
+                    continue
+                ratio = w / max(h, 1)
+                if ratio < 0.2 or ratio > 12:
+                    continue
+                # 偏好靠上的文字区域（常见“请依次点击”目标字在上半部分）
+                score = area - (y * 0.8)
+                candidates.append((score, x, y, w, h))
+            if not candidates:
+                return False
+            candidates.sort(key=lambda t: t[0], reverse=True)
+
+            # 点击前3个最可能文本块中心，逐次判定是否通过
+            for _, x, y, w, h in candidates[:3]:
+                click_x = image_box["x"] + x + w / 2
+                click_y = image_box["y"] + y + h / 2
+                await page.mouse.click(click_x, click_y)
+                await asyncio.sleep(0.7)
+                if await self._captcha_appears_gone(page):
+                    uat_logger.info("✅ [IMAGE_AI] 图像识别点选后验证码已消失")
+                    return True
+            return False
+        except Exception as e:
+            uat_logger.debug(f"[IMAGE_AI] 视觉点选失败: {e}")
+            return False
     
     async def _click_image_randomly(self, page, image):
         """在图片上随机点击"""
@@ -6800,26 +7149,31 @@ class PlaywrightAutomation:
         center_x = image_box['x'] + image_box['width'] // 2
         center_y = image_box['y'] + image_box['height'] // 2
         
-        # 在中心区域周围随机点击几个位置
+        w = max(20, int(image_box['width']))
+        h = max(20, int(image_box['height']))
+        # 更像人工点选：逐点尝试并检查是否通过，不盲点全部位置
         click_positions = [
-            (center_x, center_y),  # 中心
-            (center_x - 30, center_y - 30),  # 左上
-            (center_x + 30, center_y - 30),  # 右上
-            (center_x - 30, center_y + 30),  # 左下
-            (center_x + 30, center_y + 30),  # 右下
+            (center_x, center_y),
+            (image_box['x'] + w * 0.25, image_box['y'] + h * 0.25),
+            (image_box['x'] + w * 0.75, image_box['y'] + h * 0.25),
+            (image_box['x'] + w * 0.25, image_box['y'] + h * 0.75),
+            (image_box['x'] + w * 0.75, image_box['y'] + h * 0.75),
         ]
-        
+
         for x, y in click_positions:
             try:
                 await page.mouse.click(x, y)
                 uat_logger.info(f"🎯 点击位置: ({x}, {y})")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.7)
+                if await self._captcha_appears_gone(page):
+                    uat_logger.info("✅ 图片验证码组件已消失，判定成功")
+                    return
             except Exception as e:
                 uat_logger.debug(f"点击位置 ({x}, {y}) 失败: {e}")
                 continue
         
         # 等待验证完成
-        await asyncio.sleep(2)
+        await asyncio.sleep(1.5)
     
     async def _auto_handle_verification_popup_old(self, page):
         """自动识别并处理验证弹窗"""
@@ -8386,6 +8740,7 @@ class PlaywrightAutomation:
             self.browser = None
             self.page = None
             self.context = None
+            self._last_headless = None
         
         if hasattr(self, 'playwright') and self.playwright:
             try:
@@ -8393,6 +8748,7 @@ class PlaywrightAutomation:
             except Exception:
                 pass  # 忽略错误
             self.playwright = None
+        self._last_headless = None
     
     async def enable_element_selection(self, url=''):
         """启用元素选择模式,显示悬浮窗让用户选择页面元素"""
@@ -8439,10 +8795,15 @@ class PlaywrightAutomation:
             if not browser_valid:
                 # 如果浏览器实例不存在或已失效,则启动新实例
                 uat_logger.info("启动新的浏览器实例")
-                await self.start_browser()
+                await self.start_browser(headless=False)
             else:
                 # 复用已存在的浏览器实例,切换到当前页面
-                uat_logger.info("复用已存在的浏览器实例")
+                if bool(getattr(self, "_last_headless", False)):
+                    uat_logger.info("当前浏览器为无头模式，重启为有头模式用于拾取")
+                    await self.close_browser()
+                    await self.start_browser(headless=False)
+                else:
+                    uat_logger.info("复用已存在的浏览器实例")
                 # 确保页面已加载
                 await self.page.wait_for_load_state('networkidle')
             
@@ -8450,6 +8811,171 @@ class PlaywrightAutomation:
             if url:
                 await self.page.goto(url)
                 await self.page.wait_for_load_state('networkidle')
+
+            # 注入拾取器浮动条与选择逻辑
+            await self.page.evaluate("""
+                (() => {
+                    try {
+                        if (window.automationSelection && window.automationSelection._inited) {
+                            if (typeof window.enableElementSelection === 'function') {
+                                window.enableElementSelection();
+                            }
+                            return true;
+                        }
+
+                        const state = {
+                            _inited: true,
+                            enabled: false,
+                            selectedElement: null,
+                            overlay: null,
+                            toolbar: null,
+                            btn: null,
+                            tip: null
+                        };
+                        window.automationSelection = state;
+
+                        function stableClassSelector(el) {
+                            if (!el || !el.classList || !el.classList.length) return '';
+                            const keep = [];
+                            for (const c of Array.from(el.classList)) {
+                                if (!c || c.length <= 2) continue;
+                                if (/\\d{4,}/.test(c)) continue;
+                                if (/[a-f0-9]{8,}/i.test(c)) continue;
+                                keep.push(c);
+                                if (keep.length >= 3) break;
+                            }
+                            return keep.length ? ('.' + keep.join('.')) : '';
+                        }
+
+                        function generateSelector(element) {
+                            if (!element || !element.tagName) return '';
+                            const tag = element.tagName.toLowerCase();
+                            const id = element.id || '';
+                            if (id && !/(\\d{6,}|[a-f0-9]{10,})/i.test(id)) return '#' + id;
+                            const cls = stableClassSelector(element);
+                            if (cls) return `${tag}${cls}`;
+                            return tag;
+                        }
+                        window.generateSelector = generateSelector;
+
+                        function ensureOverlay() {
+                            if (state.overlay) return state.overlay;
+                            const ov = document.createElement('div');
+                            ov.id = 'automation-picker-overlay';
+                            ov.style.cssText = 'position:fixed;pointer-events:none;border:2px solid #2f80ff;background:rgba(47,128,255,0.10);z-index:2147483646;display:none;';
+                            document.body.appendChild(ov);
+                            state.overlay = ov;
+                            return ov;
+                        }
+
+                        function ensureToolbar() {
+                            if (state.toolbar && state.toolbar.isConnected) return state.toolbar;
+                            const bar = document.createElement('div');
+                            bar.id = 'automation-picker-toolbar';
+                            bar.style.cssText = 'position:fixed;top:16px;right:16px;z-index:2147483647;background:#1f2937;color:#fff;border-radius:10px;padding:8px 10px;display:flex;gap:8px;align-items:center;box-shadow:0 6px 16px rgba(0,0,0,.25);font:13px/1.2 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial;';
+                            const btn = document.createElement('button');
+                            btn.id = 'automation-picker-btn';
+                            btn.textContent = '拾取元素';
+                            btn.style.cssText = 'border:none;border-radius:8px;padding:6px 10px;background:#3b82f6;color:#fff;cursor:pointer;';
+                            const tip = document.createElement('span');
+                            tip.id = 'automation-picker-tip';
+                            tip.textContent = '点击后在页面选择目标';
+                            bar.appendChild(btn);
+                            bar.appendChild(tip);
+                            document.body.appendChild(bar);
+                            state.toolbar = bar;
+                            state.btn = btn;
+                            state.tip = tip;
+                            btn.onclick = () => {
+                                state.enabled = !state.enabled;
+                                btn.textContent = state.enabled ? '退出拾取' : '拾取元素';
+                                btn.style.background = state.enabled ? '#ef4444' : '#3b82f6';
+                                tip.textContent = state.enabled ? '请点击目标元素' : '点击后在页面选择目标';
+                                if (!state.enabled && state.overlay) state.overlay.style.display = 'none';
+                            };
+                            return bar;
+                        }
+
+                        function onMove(e) {
+                            if (!state.enabled) return;
+                            const target = e.target;
+                            if (!target || target === state.toolbar || state.toolbar.contains(target)) return;
+                            const rect = target.getBoundingClientRect();
+                            const ov = ensureOverlay();
+                            ov.style.display = 'block';
+                            ov.style.left = rect.left + 'px';
+                            ov.style.top = rect.top + 'px';
+                            ov.style.width = rect.width + 'px';
+                            ov.style.height = rect.height + 'px';
+                        }
+
+                        function onClick(e) {
+                            if (!state.enabled) return;
+                            const target = e.target;
+                            if (!target || target === state.toolbar || state.toolbar.contains(target)) return;
+                            e.preventDefault();
+                            e.stopPropagation();
+                            state.selectedElement = target;
+                            state.enabled = false;
+                            if (state.btn) {
+                                state.btn.textContent = '拾取元素';
+                                state.btn.style.background = '#3b82f6';
+                            }
+                            if (state.tip) {
+                                state.tip.textContent = '已成功拾取元素';
+                                window.setTimeout(() => {
+                                    if (state.tip && !state.enabled) state.tip.textContent = '请点击目标元素';
+                                }, 3000);
+                            }
+                            if (state.overlay) state.overlay.style.display = 'none';
+                            const detail = {
+                                selector: generateSelector(target),
+                                elementInfo: {
+                                    tagName: target.tagName,
+                                    id: target.id || '',
+                                    className: target.className || '',
+                                    textContent: target.textContent ? target.textContent.substring(0, 100) : '',
+                                    attributes: {
+                                        type: target.type || '',
+                                        name: target.name || '',
+                                        value: target.value || '',
+                                        href: target.href || '',
+                                        src: target.src || '',
+                                        alt: target.alt || '',
+                                        title: target.title || '',
+                                        'data-testid': target.getAttribute('data-testid') || '',
+                                        'data-test': target.getAttribute('data-test') || '',
+                                        'data-id': target.getAttribute('data-id') || '',
+                                        role: target.getAttribute('role') || ''
+                                    }
+                                }
+                            };
+                            window.dispatchEvent(new CustomEvent('elementSelected', { detail }));
+                        }
+
+                        if (!window.__automationPickerBound) {
+                            window.__automationPickerBound = true;
+                            document.addEventListener('mousemove', onMove, true);
+                            document.addEventListener('click', onClick, true);
+                        }
+
+                        window.enableElementSelection = function () {
+                            ensureToolbar();
+                            state.enabled = false;
+                        };
+                        window.disableElementSelection = function () {
+                            state.enabled = false;
+                            if (state.overlay) state.overlay.style.display = 'none';
+                        };
+
+                        window.enableElementSelection();
+                        return true;
+                    } catch (e) {
+                        return false;
+                    }
+                })()
+            """)
+            self._selection_mode_active = True
             
             uat_logger.info("元素选择模式已启用")
             return True
@@ -8460,6 +8986,7 @@ class PlaywrightAutomation:
     async def disable_element_selection(self):
         """禁用元素选择模式"""
         if self.page is None:
+            self._selection_mode_active = False
             return False
         
         try:
@@ -8472,54 +8999,60 @@ class PlaywrightAutomation:
             """)
             
             uat_logger.info("元素选择模式已禁用")
+            self._selection_mode_active = False
             return True
         except Exception as e:
             uat_logger.error(f"禁用元素选择模式时出错: {str(e)}")
+            self._selection_mode_active = False
             return False
 
     async def get_selected_element(self):
         """获取用户选择的元素信息"""
         if self.page is None:
             return None
+        try:
+            if self.page.is_closed():
+                return {"_picker_closed": True}
+        except Exception:
+            return {"_picker_closed": True}
         
         try:
             # 获取页面标题,用于填充页面名称
             page_name = await self.page.title()
             
-            # 等待元素选择事件
+            # 非阻塞检查：由前端轮询触发，不在这里等待事件
             raw_element_info = await self.page.evaluate("""
                 (() => {
-                    return new Promise((resolve) => {
-                        // 检查是否已经有选中的元素
-                        if (window.automationSelection && window.automationSelection.selectedElement) {
-                            const element = window.automationSelection.selectedElement;
-                            const selector = generateSelector(element);
-                            resolve({
-                                selector: selector,
-                                elementInfo: {
-                                    tagName: element.tagName,
-                                    id: element.id || '',
-                                    className: element.className || '',
-                                    textContent: element.textContent ? element.textContent.substring(0, 100) : '',
-                                    attributes: {
-                                        type: element.type || '',
-                                        name: element.name || '',
-                                        value: element.value || '',
-                                        href: element.href || '',
-                                        src: element.src || '',
-                                        alt: element.alt || '',
-                                        title: element.title || ''
-                                    }
-                                }
-                            });
-                        } else {
-                            // 监听元素选择事件
-                            window.addEventListener('elementSelected', function handler(e) {
-                                window.removeEventListener('elementSelected', handler);
-                                resolve(e.detail);
-                            });
+                    if (!(window.automationSelection && window.automationSelection.selectedElement)) {
+                        return null;
+                    }
+                    const element = window.automationSelection.selectedElement;
+                    const selector = (typeof generateSelector === 'function') ? generateSelector(element) : '';
+                    const out = {
+                        selector: selector,
+                        elementInfo: {
+                            tagName: element.tagName,
+                            id: element.id || '',
+                            className: element.className || '',
+                            textContent: element.textContent ? element.textContent.substring(0, 100) : '',
+                            attributes: {
+                                type: element.type || '',
+                                name: element.name || '',
+                                value: element.value || '',
+                                href: element.href || '',
+                                src: element.src || '',
+                                alt: element.alt || '',
+                                title: element.title || '',
+                                'data-testid': element.getAttribute('data-testid') || '',
+                                'data-test': element.getAttribute('data-test') || '',
+                                'data-id': element.getAttribute('data-id') || '',
+                                role: element.getAttribute('role') || ''
+                            }
                         }
-                    });
+                    };
+                    // 消费后清空，避免轮询每秒重复返回同一个元素
+                    window.automationSelection.selectedElement = null;
+                    return out;
                 })
             """)
             
@@ -8528,25 +9061,65 @@ class PlaywrightAutomation:
                 element = raw_element_info.get('elementInfo', {})
                 css_selector = raw_element_info.get('selector', '')
                 text_content = element.get('textContent', '').strip()
+                attrs = element.get('attributes', {}) or {}
                 
                 # 选择最合适的定位方式
                 selector_type = 'css'
                 selector_value = css_selector
                 
-                # 如果有ID,优先使用ID选择器
                 element_id = element.get('id', '')
-                if element_id:
+                data_testid = (
+                    attrs.get('data-testid')
+                    or attrs.get('data-test')
+                    or attrs.get('data-id')
+                    or ''
+                )
+
+                # data-testid 等语义属性优先
+                if data_testid:
+                    selector_type = 'data'
+                    selector_value = f'testid={data_testid}'
+                # ID 仅在看起来稳定时才提升，动态 ID 自动降权
+                elif element_id and not _looks_dynamic_dom_id(element_id):
                     selector_type = 'id'
                     selector_value = element_id
-                # 如果有data-testid属性,优先使用testid
-                elif element.get('attributes', {}).get('data-testid'):
-                    selector_type = 'testid'
-                    selector_value = element.get('attributes', {}).get('data-testid')
+                # 稳定 class 作为候选主定位
+                elif _stable_class_tokens(element.get('className', '')):
+                    selector_type = 'css'
+                    selector_value = "." + ".".join(_stable_class_tokens(element.get('className', '')))
                 # 如果是文本内容比较独特,使用文本选择器
                 elif text_content and len(text_content) > 5:
-                    selector_type = 'text'
+                    selector_type = 'partial_text'
                     selector_value = text_content
                 
+                class_name = element.get('className', '')
+                class_tokens_raw = [c.strip() for c in str(class_name or "").split() if c.strip()]
+                class_set = {c.lower() for c in class_tokens_raw}
+                is_card_list_container = (
+                    "card-list" in class_set
+                    or any(("list" in c.lower() or "container" in c.lower()) for c in class_tokens_raw)
+                )
+                card_item_xpath = ""
+                if is_card_list_container:
+                    stable_root_classes = _stable_class_tokens(class_name)
+                    if stable_root_classes:
+                        root_pred = " and ".join(
+                            [f"contains(@class,'{c}')" for c in stable_root_classes[:2]]
+                        )
+                        root_xpath = f"//*[{root_pred}]"
+                    else:
+                        root_xpath = "//*[contains(@class,'card-list') or contains(@class,'list-container')]"
+                    card_item_xpath = (
+                        f"{root_xpath}"
+                        "//*[contains(@class,'outer-card') or contains(@class,'card') or contains(@class,'item') or @role='listitem']"
+                    )
+                    selector_type = "xpath"
+                    selector_value = card_item_xpath
+
+                locator_candidates = _picker_locator_candidates(
+                    css_selector, text_content, class_name, element_id
+                )
+
                 # 构造前端期望的返回格式
                 formatted_element_info = {
                     'selector_type': selector_type,
@@ -8556,7 +9129,11 @@ class PlaywrightAutomation:
                     'tag_name': element.get('tagName', '').lower(),
                     'css_selector': css_selector,
                     'id': element_id,
-                    'class_name': element.get('className', '')
+                    'class_name': class_name,
+                    'locator_candidates': locator_candidates,
+                    'is_card_list_container': is_card_list_container,
+                    'card_item_xpath': card_item_xpath,
+                    'dynamic_id_ignored': bool(element_id and _looks_dynamic_dom_id(element_id))
                 }
                 
                 uat_logger.info(f"获取到格式化的选中元素: {formatted_element_info}")

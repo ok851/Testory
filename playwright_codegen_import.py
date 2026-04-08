@@ -173,6 +173,22 @@ def _xpath_quote_attr(val: str) -> str:
     return f'"{s}"'
 
 
+def _looks_dynamic_dom_id(v: str) -> bool:
+    s = str(v or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if len(s) >= 16 and re.search(r"\d{8,}", s):
+        return True
+    if re.search(r"[a-f0-9]{10,}", low) and re.search(r"\d{4,}", s):
+        return True
+    if re.search(r"(?:^|[_-])(id|card|row|item)?\d{10,}$", low):
+        return True
+    if re.search(r"\d{6,}", s):
+        return True
+    return False
+
+
 def _step_click_text_partial(t: str, desc: str) -> Dict[str, Any]:
     """Codegen 文本点击：平台执行层用 partial_text → XPath contains。"""
     return _base_step("click", "partial_text", t, "", desc)
@@ -379,9 +395,10 @@ def _enrich_single_step_locator_candidates(step: Dict[str, Any]) -> Dict[str, An
         id_match = re.search(r"@id\s*=\s*(['\"])(?P<id>[^'\"]+)\1", sv)
         if id_match:
             idv = id_match.group("id")
-            _pack_append(pack, "css", f'[id="{idv}"]', 100)
-            if re.match(r"^[A-Za-z][\w\-]*$", idv):
-                _pack_append(pack, "css", f"#{idv}", 99)
+            if not _looks_dynamic_dom_id(idv):
+                _pack_append(pack, "css", f'[id="{idv}"]', 100)
+                if re.match(r"^[A-Za-z][\w\-]*$", idv):
+                    _pack_append(pack, "css", f"#{idv}", 99)
         for attr in ("data-testid", "data-cy", "data-test", "data-qa"):
             am = re.search(rf"@{re.escape(attr)}\s*=\s*(['\"])(?P<v>[^'\"]+)\1", sv)
             if am:
@@ -392,14 +409,20 @@ def _enrich_single_step_locator_candidates(step: Dict[str, Any]) -> Dict[str, An
         m = re.match(r"^#([A-Za-z_][\w\-]*)$", sv)
         if m:
             idv = m.group(1)
-            _pack_append(pack, "xpath", f'//*[@id="{idv}"]', 102)
-            _pack_append(pack, "css", f"#{idv}", 100)
+            if _looks_dynamic_dom_id(idv):
+                _pack_append(pack, "css", f"#{idv}", 66)
+            else:
+                _pack_append(pack, "xpath", f'//*[@id="{idv}"]', 102)
+                _pack_append(pack, "css", f"#{idv}", 100)
         else:
             mid = re.match(r"^\[id\s*=\s*(['\"])([^'\"]+)\1\]$", sv)
             if mid:
                 idv = mid.group(2)
-                _pack_append(pack, "xpath", f'//*[@id="{idv}"]', 102)
-                _pack_append(pack, "css", f'[id="{idv}"]', 100)
+                if _looks_dynamic_dom_id(idv):
+                    _pack_append(pack, "css", f'[id="{idv}"]', 66)
+                else:
+                    _pack_append(pack, "xpath", f'//*[@id="{idv}"]', 102)
+                    _pack_append(pack, "css", f'[id="{idv}"]', 100)
             else:
                 for attr in ("data-testid", "data-cy", "data-test", "data-qa"):
                     pat = rf"^\[[\s]*{re.escape(attr)}\s*=\s*(['\"])([^'\"]+)\1[\s]*\]$"
@@ -472,7 +495,17 @@ def _enrich_single_step_locator_candidates(step: Dict[str, Any]) -> Dict[str, An
     xpath_first = (
         filtered and str(filtered[0].get("type") or "").lower() == "xpath"
     )
-    swappable_css = st == "css" and bool(sv) and (
+    css_id_m = re.match(r"^#([A-Za-z_][\w\-]*)$", sv) if st == "css" else None
+    css_idv = css_id_m.group(1) if css_id_m else ""
+    css_attr_id_m = (
+        re.match(r"^\[id\s*=\s*(['\"])([^'\"]+)\1\]$", sv) if st == "css" else None
+    )
+    css_attr_idv = css_attr_id_m.group(2) if css_attr_id_m else ""
+    dynamic_css_id = bool(
+        (css_idv and _looks_dynamic_dom_id(css_idv))
+        or (css_attr_idv and _looks_dynamic_dom_id(css_attr_idv))
+    )
+    swappable_css = st == "css" and bool(sv) and (not dynamic_css_id) and (
         re.match(r"^#([A-Za-z_][\w\-]*)$", sv)
         or re.match(r"^\[id\s*=", sv)
         or any(
@@ -863,5 +896,30 @@ def parse_playwright_codegen_to_steps(code: str) -> Tuple[List[Dict[str, Any]], 
                 warnings.append(f"已跳过：{ln[:100]}")
             elif re.match(r"page\.\w+", ln):
                 warnings.append(f"未识别的 page 调用（可手改）：{ln[:120]}")
+
+    dynamic_id_hit = False
+    for s in steps:
+        st = str(s.get("selector_type") or "").lower()
+        sv = str(s.get("selector_value") or "")
+        if st == "id" and _looks_dynamic_dom_id(sv):
+            dynamic_id_hit = True
+            break
+        if st == "css":
+            m = re.match(r"^#([A-Za-z_][\w\-]*)$", sv.strip())
+            m2 = re.match(r"^\[id\s*=\s*(['\"])([^'\"]+)\1\]$", sv.strip())
+            if (m and _looks_dynamic_dom_id(m.group(1))) or (
+                m2 and _looks_dynamic_dom_id(m2.group(2))
+            ):
+                dynamic_id_hit = True
+                break
+        if st == "xpath":
+            mid = re.search(r"@id\s*=\s*(['\"])(?P<id>[^'\"]+)\1", sv)
+            if mid and _looks_dynamic_dom_id(mid.group("id")):
+                dynamic_id_hit = True
+                break
+    if dynamic_id_hit:
+        warnings.append(
+            "检测到疑似动态 id：导入时已降权处理（不优先用 id 作为主定位），建议优先使用 class/文本/序号。"
+        )
 
     return steps, warnings
