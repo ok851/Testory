@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>测试用例步骤管理 - UI 自动化测试平台</title>
-    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+{% extends "base.html" %}
+{% block title %}测试用例步骤管理 - UI 自动化测试平台{% endblock %}
+{% block head %}
     <style>
         * {
             margin: 0;
@@ -12,14 +8,14 @@
             box-sizing: border-box;
         }
         
-        body {
+        .steps-page-root {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+            min-height: calc(100vh - 72px);
             padding: 20px;
         }
         
-        .container {
+        .steps-page-root .container {
             max-width: 1000px;
             margin: 0 auto;
             background: white;
@@ -512,38 +508,69 @@
             text-shadow: 0 1px 2px rgba(0,0,0,0.1);
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
         }
-        
+
+        html.dark .steps-page-root { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
+        html.dark .steps-page-root .container { background: #111827; color: #e5e7eb; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        html.dark .steps-page-root .header { background: linear-gradient(135deg, #3730a3 0%, #5b21b6 100%); }
+        html.dark .steps-page-root .toolbar { background: #1f2937; border-bottom-color: #374151; }
+        html.dark .steps-page-root .step-item { background: #111827; border-color: #4b5563; }
+        html.dark .steps-page-root .step-content h4 { color: #f3f4f6; }
+        html.dark .steps-page-root .step-details { color: #d1d5db; }
+        html.dark .steps-page-root .modal {
+            background: rgba(0, 0, 0, 0.62);
+            backdrop-filter: blur(4px);
+        }
+        html.dark .steps-page-root .modal-content { background: #1f2937; color: #e5e7eb; border: 1px solid #374151; }
+        html.dark .steps-page-root .modal-header h3 { color: #f9fafb; }
+        html.dark .steps-page-root .form-group label { color: #d1d5db; }
+        html.dark .steps-page-root .form-group input,
+        html.dark .steps-page-root .form-group select,
+        html.dark .steps-page-root select,
+        html.dark .steps-page-root .form-group textarea,
+        html.dark .steps-page-root input,
+        html.dark .steps-page-root textarea { background: #111827 !important; border-color: #4b5563 !important; color: #e5e7eb !important; }
+        html.dark .steps-page-root .form-group select { color-scheme: dark; }
+        html.dark .steps-page-root .modal-footer { border-top-color: #374151; }
+        html.dark .steps-page-root .empty-state { color: #9ca3af; }
+        html.dark .steps-page-root .loading { color: #9ca3af; }
+        html.dark #runCaseProgressPanel { background: #1f2937 !important; border-color: #374151 !important; }
+        html.dark .steps-page-root .steps-pagination-bar span { color: #9ca3af !important; }
+        html.dark .steps-page-root .steps-card-nth-hint { color: #d1d5db !important; }
+        html.dark .steps-page-root #selectorHelp,
+        html.dark .steps-page-root #editSelectorHelp { color: #9ca3af !important; }
+
         </style>
-</head>
-<body>
+{% endblock %}
+{% block content %}
+<div class="steps-page-root">
     <div class="container">
         <div class="header">
-            <h1>测试用例步骤管理</h1>
-            <div class="case-info" id="caseInfo">正在加载用例信息...</div>
+            <h1 data-i18n="steps_title">测试用例步骤管理</h1>
+            <div class="case-info" id="caseInfo" data-i18n="steps_case_loading">正在加载用例信息...</div>
         </div>
         
         <div class="toolbar">
             <div class="toolbar-left">
-                <button onclick="showCreateStepModal()" class="btn btn-primary" id="addStepBtn">+ 添加步骤</button>
-                <button onclick="runTestCase()" class="btn btn-success" id="runCaseBtn">▶ 运行用例</button>
-                <button onclick="stopRunCase()" class="btn btn-danger" id="stopRunCaseBtn" disabled>⏹ 停止执行</button>
-                <a href="/recording-tutorial" target="_blank" rel="noopener" class="btn btn-secondary" id="recordTutorialBtn">📖 录制教程</a>
-                <button type="button" onclick="startPlaywrightCodegenFromCase()" class="btn btn-dark" id="startCodegenCliBtn" title="在本机打开官方 Playwright Codegen + Inspector，录制后请复制代码再点「从 Codegen 导入」">🎬 启动 Playwright Codegen</button>
-                <button onclick="showCodegenImportModal()" class="btn btn-info" id="codegenImportBtn" type="button">
+                <button type="button" onclick="showCreateStepModal()" class="btn btn-primary" id="addStepBtn" data-i18n="steps_add">+ 添加步骤</button>
+                <button type="button" onclick="runTestCase()" class="btn btn-success" id="runCaseBtn" data-i18n="steps_run">▶ 运行用例</button>
+                <button type="button" onclick="stopRunCase()" class="btn btn-danger" id="stopRunCaseBtn" disabled data-i18n="steps_stop">⏹ 停止执行</button>
+                <a href="/recording-tutorial" target="_blank" rel="noopener" class="btn btn-secondary" id="recordTutorialBtn" data-i18n="steps_tutorial">📖 录制教程</a>
+                <button type="button" onclick="startPlaywrightCodegenFromCase()" class="btn btn-dark" id="startCodegenCliBtn" title="在本机打开官方 Playwright Codegen + Inspector，录制后请复制代码再点「从 Codegen 导入」" data-i18n="steps_codegen_start">🎬 启动 Playwright Codegen</button>
+                <button type="button" onclick="showCodegenImportModal()" class="btn btn-info" id="codegenImportBtn" data-i18n="steps_import_codegen">
                     📋 从 Codegen 导入
                 </button>
-                <button onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" type="button">
+                <button type="button" onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" data-i18n="steps_import_side">
                     🧪 从 Selenium IDE 导入
                 </button>
             </div>
             <div class="toolbar-right">
-                <button onclick="backToCases()" class="btn btn-secondary">← 返回用例列表</button>
+                <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
             </div>
         </div>
 
         <div id="runCaseProgressPanel" style="display:none; margin: 12px 30px 0; padding: 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:8px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:13px; color:#495057;">
-                <span id="runCaseProgressText">执行中...</span>
+                <span id="runCaseProgressText" data-i18n="steps_run_progress">执行中...</span>
                 <span id="runCaseProgressPct">0%</span>
             </div>
             <div style="width:100%; height:8px; background:#dee2e6; border-radius:999px; overflow:hidden;">
@@ -555,7 +582,7 @@
             <div id="stepsList">
                 <div class="loading">
                     <div class="loading-spinner"></div>
-                    <p>正在加载测试步骤...</p>
+                    <p data-i18n="steps_loading">正在加载测试步骤...</p>
                 </div>
             </div>
         </div>
@@ -565,161 +592,159 @@
     <div id="createStepModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>添加测试步骤</h3>
+                <h3 data-i18n="steps_modal_add">添加测试步骤</h3>
             </div>
             <div class="form-group">
-                <label for="stepAction">操作类型 *</label>
+                <label for="stepAction" data-i18n="steps_label_action">操作类型 *</label>
                 <select id="stepAction" onchange="toggleActionFields()">
-                    <option value="navigate">导航</option>
-                    <option value="click">点击</option>
-                    <option value="input">输入</option>
-                    <option value="hover">悬停</option>
-                    <option value="double_click">双击</option>
-                    <option value="right_click">右键点击</option>
-                    <option value="wait">等待</option>
-                    <option value="scroll">滚动</option>
-                    <option value="extract_text">提取文本</option>
-                    <option value="swipe">滑动</option>
-                    <option value="verify">验证操作</option>
-                    <option value="enter_iframe">进入iframe</option>
-                    <option value="exit_iframe">跳出iframe</option>
-                    <option value="select">下拉框选择</option>
-                    <option value="date">日期选择</option>
-                    <option value="assert">断言操作</option>
+                    <option value="navigate" data-i18n-opt="steps_act_navigate">导航</option>
+                    <option value="click" data-i18n-opt="steps_act_click">点击</option>
+                    <option value="input" data-i18n-opt="steps_act_input">输入</option>
+                    <option value="hover" data-i18n-opt="steps_act_hover">悬停</option>
+                    <option value="double_click" data-i18n-opt="steps_act_double_click">双击</option>
+                    <option value="right_click" data-i18n-opt="steps_act_right_click">右键点击</option>
+                    <option value="wait" data-i18n-opt="steps_act_wait">等待</option>
+                    <option value="scroll" data-i18n-opt="steps_act_scroll">滚动</option>
+                    <option value="extract_text" data-i18n-opt="steps_act_extract_text">提取文本</option>
+                    <option value="swipe" data-i18n-opt="steps_act_swipe">滑动</option>
+                    <option value="verify" data-i18n-opt="steps_act_verify">验证操作</option>
+                    <option value="enter_iframe" data-i18n-opt="steps_act_enter_iframe">进入iframe</option>
+                    <option value="exit_iframe" data-i18n-opt="steps_act_exit_iframe">跳出iframe</option>
+                    <option value="select" data-i18n-opt="steps_act_select">下拉框选择</option>
+                    <option value="date" data-i18n-opt="steps_act_date">日期选择</option>
+                    <option value="assert" data-i18n-opt="steps_act_assert">断言操作</option>
                 </select>
             </div>
             <div class="form-group">
-                <label for="stepSelectorType">定位方式</label>
+                <label for="stepSelectorType" data-i18n="steps_label_locator">定位方式</label>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <select id="stepSelectorType" style="max-width:220px;">
-                        <option value="css">CSS选择器</option>
-                        <option value="xpath">XPath</option>
-                        <option value="id">ID</option>
-                        <option value="class">Class</option>
-                        <option value="name">Name</option>
-                        <option value="text">文本内容</option>
-                        <option value="partial_text">部分文本</option>
-                        <option value="placeholder">Placeholder</option>
-                        <option value="label">关联Label</option>
-                        <option value="title">Title属性</option>
-                        <option value="alt">Alt属性</option>
-                        <option value="data">Data属性</option>
-                        <option value="aria">ARIA标签</option>
+                        <option value="css" data-i18n-opt="steps_loc_css">CSS选择器</option>
+                        <option value="xpath" data-i18n-opt="steps_loc_xpath">XPath</option>
+                        <option value="id" data-i18n-opt="steps_loc_id">ID</option>
+                        <option value="class" data-i18n-opt="steps_loc_class">Class</option>
+                        <option value="name" data-i18n-opt="steps_loc_name">Name</option>
+                        <option value="text" data-i18n-opt="steps_loc_text">文本内容</option>
+                        <option value="partial_text" data-i18n-opt="steps_loc_partial_text">部分文本</option>
+                        <option value="placeholder" data-i18n-opt="steps_loc_placeholder">Placeholder</option>
+                        <option value="label" data-i18n-opt="steps_loc_label">关联Label</option>
+                        <option value="title" data-i18n-opt="steps_loc_title">Title属性</option>
+                        <option value="alt" data-i18n-opt="steps_loc_alt">Alt属性</option>
+                        <option value="data" data-i18n-opt="steps_loc_data">Data属性</option>
+                        <option value="aria" data-i18n-opt="steps_loc_aria">ARIA标签</option>
                     </select>
-                    <button type="button" class="btn btn-primary" id="pickCreateBtn" onclick="startVisualSelection('create')">🧲 拾取元素</button>
+                    <button type="button" class="btn btn-primary" id="pickCreateBtn" onclick="startVisualSelection('create')" data-i18n="steps_pick">🧲 拾取元素</button>
                 </div>
             </div>
             <div class="form-group">
-                <label for="stepSelectorValue">选择器值</label>
-                <input type="text" id="stepSelectorValue" placeholder="输入选择器值，根据定位方式自动转换">
+                <label for="stepSelectorValue" data-i18n="steps_label_sel_val">选择器值</label>
+                <input type="text" id="stepSelectorValue" data-i18n-placeholder="steps_ph_selector" placeholder="">
                 <input type="hidden" id="stepLocatorCandidates" value="">
                 <input type="hidden" id="stepPickedCardBaseXpath" value="">
                 <div id="stepCardNthWrap" style="display:none;margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span style="font-size:12px;color:#374151;">已拾取卡片列表容器，目标卡片序号：</span>
+                        <span class="steps-card-nth-hint" style="font-size:12px;color:#374151;" data-i18n="steps_card_nth_hint">已拾取卡片列表容器，目标卡片序号：</span>
                         <input type="number" id="stepCardNth" min="1" value="1" style="width:92px;">
-                        <button type="button" class="btn btn-sm btn-info" onclick="applyCardNthFromPicker('create')">应用序号</button>
+                        <button type="button" class="btn btn-sm btn-info" onclick="applyCardNthFromPicker('create')" data-i18n="steps_btn_apply_nth">应用序号</button>
                     </div>
                 </div>
-                <small id="selectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
-                    选择定位方式后，只需输入简单的值即可，如：ID输入"username"，文本输入"提交"
-                </small>
+                <small id="selectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;"></small>
             </div>
             <div class="form-group">
-                <label for="stepInputValue">输入值/预期文本</label>
-                <input type="text" id="stepInputValue" placeholder="输入内容或预期验证的文本">
+                <label for="stepInputValue" data-i18n="steps_label_in_val">输入值/预期文本</label>
+                <input type="text" id="stepInputValue" data-i18n-placeholder="steps_ph_input" placeholder="">
             </div>
             <div class="form-group" id="stepCompareType" style="display: none;">
-                <label for="stepCompareTypeSelect">对比方式</label>
+                <label for="stepCompareTypeSelect" data-i18n="steps_label_compare">对比方式</label>
                 <select id="stepCompareTypeSelect">
-                    <option value="equals">等于</option>
-                    <option value="not_equals">不等于</option>
-                    <option value="contains">包含</option>
+                    <option value="equals" data-i18n-opt="steps_cmp_eq">等于</option>
+                    <option value="not_equals" data-i18n-opt="steps_cmp_ne">不等于</option>
+                    <option value="contains" data-i18n-opt="steps_cmp_contains">包含</option>
                 </select>
             </div>
             <div class="form-group" id="stepVerifyType" style="display: none;">
-                <label for="stepVerifyTypeSelect">验证类型</label>
+                <label for="stepVerifyTypeSelect" data-i18n="steps_label_vrf">验证类型</label>
                 <select id="stepVerifyTypeSelect">
-                    <option value="auto">自动识别</option>
-                    <option value="slider">滑动方块</option>
-                    <option value="image">点击图片文字</option>
+                    <option value="auto" data-i18n-opt="steps_vrf_auto">自动识别</option>
+                    <option value="slider" data-i18n-opt="steps_vrf_slider">滑动方块</option>
+                    <option value="image" data-i18n-opt="steps_vrf_image">点击图片文字</option>
                 </select>
             </div>
             <!-- 断言类型配置 -->
             <div class="form-group" id="stepAssertType" style="display: none;">
-                <label for="stepAssertTypeSelect">断言类型</label>
+                <label for="stepAssertTypeSelect" data-i18n="steps_label_assert">断言类型</label>
                 <select id="stepAssertTypeSelect" onchange="toggleAssertOptions()">
-                    <option value="text_equals">文本相等</option>
-                    <option value="text_contains">文本包含</option>
-                    <option value="text_regex">文本正则匹配</option>
-                    <option value="element_exists">元素存在</option>
-                    <option value="element_visible">元素可见</option>
-                    <option value="element_attr">元素属性</option>
-                    <option value="element_count">元素数量</option>
-                    <option value="url_equals">URL相等</option>
-                    <option value="url_contains">URL包含</option>
+                    <option value="text_equals" data-i18n-opt="steps_asst_text_eq">文本相等</option>
+                    <option value="text_contains" data-i18n-opt="steps_asst_text_cont">文本包含</option>
+                    <option value="text_regex" data-i18n-opt="steps_asst_text_regex">文本正则匹配</option>
+                    <option value="element_exists" data-i18n-opt="steps_asst_el_exists">元素存在</option>
+                    <option value="element_visible" data-i18n-opt="steps_asst_el_vis">元素可见</option>
+                    <option value="element_attr" data-i18n-opt="steps_asst_el_attr">元素属性</option>
+                    <option value="element_count" data-i18n-opt="steps_asst_el_count">元素数量</option>
+                    <option value="url_equals" data-i18n-opt="steps_asst_url_eq">URL相等</option>
+                    <option value="url_contains" data-i18n-opt="steps_asst_url_cont">URL包含</option>
                 </select>
             </div>
             <!-- 断言属性名称 -->
             <div class="form-group" id="stepAssertAttr" style="display: none;">
-                <label for="stepAssertAttrInput">属性名称</label>
-                <input type="text" id="stepAssertAttrInput" placeholder="例如: class, href, value">
+                <label for="stepAssertAttrInput" data-i18n="steps_label_attr">属性名称</label>
+                <input type="text" id="stepAssertAttrInput" data-i18n-placeholder="steps_ph_assert_attr" placeholder="">
             </div>
             <!-- 断言数量运算符 -->
             <div class="form-group" id="stepAssertOperator" style="display: none;">
-                <label for="stepAssertOperatorSelect">比较方式</label>
+                <label for="stepAssertOperatorSelect" data-i18n="steps_label_cmp_op">比较方式</label>
                 <select id="stepAssertOperatorSelect">
-                    <option value="equals">等于</option>
-                    <option value="gt">大于</option>
-                    <option value="lt">小于</option>
-                    <option value="gte">大于等于</option>
-                    <option value="lte">小于等于</option>
+                    <option value="equals" data-i18n-opt="steps_cmp_eq">等于</option>
+                    <option value="gt" data-i18n-opt="steps_op_gt">大于</option>
+                    <option value="lt" data-i18n-opt="steps_op_lt">小于</option>
+                    <option value="gte" data-i18n-opt="steps_op_gte">大于等于</option>
+                    <option value="lte" data-i18n-opt="steps_op_lte">小于等于</option>
                 </select>
             </div>
             <!-- 滚动操作的上下左右输入框 -->
             <div class="form-group" id="scrollFields" style="display: none;">
-                <label>滚动距离 (px)</label>
+                <label data-i18n="steps_scroll_dist">滚动距离 (px)</label>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div>
-                        <label for="scrollUp">向上</label>
+                        <label for="scrollUp" data-i18n="steps_scroll_up">向上</label>
                         <input type="number" id="scrollUp" placeholder="0" min="0">
                     </div>
                     <div>
-                        <label for="scrollDown">向下</label>
+                        <label for="scrollDown" data-i18n="steps_scroll_down">向下</label>
                         <input type="number" id="scrollDown" placeholder="0" min="0">
                     </div>
                     <div>
-                        <label for="scrollLeft">向左</label>
+                        <label for="scrollLeft" data-i18n="steps_scroll_left">向左</label>
                         <input type="number" id="scrollLeft" placeholder="0" min="0">
                     </div>
                     <div>
-                        <label for="scrollRight">向右</label>
+                        <label for="scrollRight" data-i18n="steps_scroll_right">向右</label>
                         <input type="number" id="scrollRight" placeholder="0" min="0">
                     </div>
                 </div>
             </div>
             <!-- 滑动操作的方向选择 -->
             <div class="form-group" id="swipeDirection" style="display: none;">
-                <label for="stepSwipeDirection">滑动方向</label>
+                <label for="stepSwipeDirection" data-i18n="steps_swipe_dir">滑动方向</label>
                 <select id="stepSwipeDirection">
-                    <option value="up">向上</option>
-                    <option value="down">向下</option>
-                    <option value="left">向左</option>
-                    <option value="right">向右</option>
+                    <option value="up" data-i18n-opt="steps_dir_up">向上</option>
+                    <option value="down" data-i18n-opt="steps_dir_down">向下</option>
+                    <option value="left" data-i18n-opt="steps_dir_left">向左</option>
+                    <option value="right" data-i18n-opt="steps_dir_right">向右</option>
                 </select>
             </div>
             <!-- 滑动操作的距离输入 -->
             <div class="form-group" id="swipeDistance" style="display: none;">
-                <label for="stepSwipeDistance">滑动距离 (px)</label>
+                <label for="stepSwipeDistance" data-i18n="steps_swipe_dist">滑动距离 (px)</label>
                 <input type="number" id="stepSwipeDistance" placeholder="100" min="1" value="100">
             </div>
             <div class="form-group">
-                <label for="stepDescription">步骤描述</label>
-                <textarea id="stepDescription" placeholder="描述此步骤的目的"></textarea>
+                <label for="stepDescription" data-i18n="steps_label_desc">步骤描述</label>
+                <textarea id="stepDescription" data-i18n-placeholder="steps_ph_desc" placeholder=""></textarea>
             </div>
             <div class="modal-footer">
-                <button onclick="closeCreateStepModal()" class="btn btn-secondary">取消</button>
-                <button onclick="createStep()" class="btn btn-primary">保存</button>
+                <button type="button" onclick="closeCreateStepModal()" class="btn btn-secondary" data-i18n="steps_btn_cancel">取消</button>
+                <button type="button" onclick="createStep()" class="btn btn-primary" data-i18n="steps_btn_save">保存</button>
             </div>
         </div>
     </div>
@@ -728,161 +753,159 @@
     <div id="editStepModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>编辑测试步骤</h3>
+                <h3 data-i18n="steps_modal_edit">编辑测试步骤</h3>
             </div>
             <div class="form-group">
-                <label for="editStepAction">操作类型 *</label>
+                <label for="editStepAction" data-i18n="steps_label_action">操作类型 *</label>
                 <select id="editStepAction" onchange="toggleEditActionFields()">
-                    <option value="navigate">导航</option>
-                    <option value="click">点击</option>
-                    <option value="input">输入</option>
-                    <option value="hover">悬停</option>
-                    <option value="double_click">双击</option>
-                    <option value="right_click">右键点击</option>
-                    <option value="wait">等待</option>
-                    <option value="scroll">滚动</option>
-                    <option value="extract_text">提取文本</option>
-                    <option value="swipe">滑动</option>
-                    <option value="verify">验证操作</option>
-                    <option value="enter_iframe">进入iframe</option>
-                    <option value="exit_iframe">跳出iframe</option>
-                    <option value="select">下拉框选择</option>
-                    <option value="date">日期选择</option>
-                    <option value="assert">断言操作</option>
+                    <option value="navigate" data-i18n-opt="steps_act_navigate">导航</option>
+                    <option value="click" data-i18n-opt="steps_act_click">点击</option>
+                    <option value="input" data-i18n-opt="steps_act_input">输入</option>
+                    <option value="hover" data-i18n-opt="steps_act_hover">悬停</option>
+                    <option value="double_click" data-i18n-opt="steps_act_double_click">双击</option>
+                    <option value="right_click" data-i18n-opt="steps_act_right_click">右键点击</option>
+                    <option value="wait" data-i18n-opt="steps_act_wait">等待</option>
+                    <option value="scroll" data-i18n-opt="steps_act_scroll">滚动</option>
+                    <option value="extract_text" data-i18n-opt="steps_act_extract_text">提取文本</option>
+                    <option value="swipe" data-i18n-opt="steps_act_swipe">滑动</option>
+                    <option value="verify" data-i18n-opt="steps_act_verify">验证操作</option>
+                    <option value="enter_iframe" data-i18n-opt="steps_act_enter_iframe">进入iframe</option>
+                    <option value="exit_iframe" data-i18n-opt="steps_act_exit_iframe">跳出iframe</option>
+                    <option value="select" data-i18n-opt="steps_act_select">下拉框选择</option>
+                    <option value="date" data-i18n-opt="steps_act_date">日期选择</option>
+                    <option value="assert" data-i18n-opt="steps_act_assert">断言操作</option>
                 </select>
             </div>
             <div class="form-group">
-                <label for="editStepSelectorType">定位方式</label>
+                <label for="editStepSelectorType" data-i18n="steps_label_locator">定位方式</label>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <select id="editStepSelectorType" style="max-width:220px;">
-                        <option value="css">CSS选择器</option>
-                        <option value="xpath">XPath</option>
-                        <option value="id">ID</option>
-                        <option value="class">Class</option>
-                        <option value="name">Name</option>
-                        <option value="text">文本内容</option>
-                        <option value="partial_text">部分文本</option>
-                        <option value="placeholder">Placeholder</option>
-                        <option value="label">关联Label</option>
-                        <option value="title">Title属性</option>
-                        <option value="alt">Alt属性</option>
-                        <option value="data">Data属性</option>
-                        <option value="aria">ARIA标签</option>
+                        <option value="css" data-i18n-opt="steps_loc_css">CSS选择器</option>
+                        <option value="xpath" data-i18n-opt="steps_loc_xpath">XPath</option>
+                        <option value="id" data-i18n-opt="steps_loc_id">ID</option>
+                        <option value="class" data-i18n-opt="steps_loc_class">Class</option>
+                        <option value="name" data-i18n-opt="steps_loc_name">Name</option>
+                        <option value="text" data-i18n-opt="steps_loc_text">文本内容</option>
+                        <option value="partial_text" data-i18n-opt="steps_loc_partial_text">部分文本</option>
+                        <option value="placeholder" data-i18n-opt="steps_loc_placeholder">Placeholder</option>
+                        <option value="label" data-i18n-opt="steps_loc_label">关联Label</option>
+                        <option value="title" data-i18n-opt="steps_loc_title">Title属性</option>
+                        <option value="alt" data-i18n-opt="steps_loc_alt">Alt属性</option>
+                        <option value="data" data-i18n-opt="steps_loc_data">Data属性</option>
+                        <option value="aria" data-i18n-opt="steps_loc_aria">ARIA标签</option>
                     </select>
-                    <button type="button" class="btn btn-secondary" id="pickEditBtn" onclick="startVisualSelection('edit')">🧲 拾取元素</button>
+                    <button type="button" class="btn btn-secondary" id="pickEditBtn" onclick="startVisualSelection('edit')" data-i18n="steps_pick">🧲 拾取元素</button>
                 </div>
             </div>
             <div class="form-group">
-                <label for="editStepSelectorValue">选择器值</label>
-                <input type="text" id="editStepSelectorValue" placeholder="输入选择器值，根据定位方式自动转换">
+                <label for="editStepSelectorValue" data-i18n="steps_label_sel_val">选择器值</label>
+                <input type="text" id="editStepSelectorValue" data-i18n-placeholder="steps_ph_selector" placeholder="">
                 <input type="hidden" id="editStepLocatorCandidates" value="">
                 <input type="hidden" id="editPickedCardBaseXpath" value="">
                 <div id="editCardNthWrap" style="display:none;margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span style="font-size:12px;color:#374151;">已拾取卡片列表容器，目标卡片序号：</span>
+                        <span class="steps-card-nth-hint" style="font-size:12px;color:#374151;" data-i18n="steps_card_nth_hint">已拾取卡片列表容器，目标卡片序号：</span>
                         <input type="number" id="editCardNth" min="1" value="1" style="width:92px;">
-                        <button type="button" class="btn btn-sm btn-info" onclick="applyCardNthFromPicker('edit')">应用序号</button>
+                        <button type="button" class="btn btn-sm btn-info" onclick="applyCardNthFromPicker('edit')" data-i18n="steps_btn_apply_nth">应用序号</button>
                     </div>
                 </div>
-                <small id="editSelectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
-                    选择定位方式后，只需输入简单的值即可
-                </small>
+                <small id="editSelectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;"></small>
             </div>
             <div class="form-group">
-                <label for="editStepInputValue">输入值/预期文本</label>
-                <input type="text" id="editStepInputValue" placeholder="输入内容或预期验证的文本">
+                <label for="editStepInputValue" data-i18n="steps_label_in_val">输入值/预期文本</label>
+                <input type="text" id="editStepInputValue" data-i18n-placeholder="steps_ph_input" placeholder="">
             </div>
             <div class="form-group" id="editStepCompareType" style="display: none;">
-                <label for="editStepCompareTypeSelect">对比方式</label>
+                <label for="editStepCompareTypeSelect" data-i18n="steps_label_compare">对比方式</label>
                 <select id="editStepCompareTypeSelect">
-                    <option value="equals">等于</option>
-                    <option value="not_equals">不等于</option>
-                    <option value="contains">包含</option>
+                    <option value="equals" data-i18n-opt="steps_cmp_eq">等于</option>
+                    <option value="not_equals" data-i18n-opt="steps_cmp_ne">不等于</option>
+                    <option value="contains" data-i18n-opt="steps_cmp_contains">包含</option>
                 </select>
             </div>
             <div class="form-group" id="editStepVerifyType" style="display: none;">
-                <label for="editStepVerifyTypeSelect">验证类型</label>
+                <label for="editStepVerifyTypeSelect" data-i18n="steps_label_vrf">验证类型</label>
                 <select id="editStepVerifyTypeSelect">
-                    <option value="auto">自动识别</option>
-                    <option value="slider">滑动方块</option>
-                    <option value="image">点击图片文字</option>
+                    <option value="auto" data-i18n-opt="steps_vrf_auto">自动识别</option>
+                    <option value="slider" data-i18n-opt="steps_vrf_slider">滑动方块</option>
+                    <option value="image" data-i18n-opt="steps_vrf_image">点击图片文字</option>
                 </select>
             </div>
             <!-- 断言类型配置 -->
             <div class="form-group" id="editStepAssertType" style="display: none;">
-                <label for="editStepAssertTypeSelect">断言类型</label>
+                <label for="editStepAssertTypeSelect" data-i18n="steps_label_assert">断言类型</label>
                 <select id="editStepAssertTypeSelect" onchange="toggleEditAssertOptions()">
-                    <option value="text_equals">文本相等</option>
-                    <option value="text_contains">文本包含</option>
-                    <option value="text_regex">文本正则匹配</option>
-                    <option value="element_exists">元素存在</option>
-                    <option value="element_visible">元素可见</option>
-                    <option value="element_attr">元素属性</option>
-                    <option value="element_count">元素数量</option>
-                    <option value="url_equals">URL相等</option>
-                    <option value="url_contains">URL包含</option>
+                    <option value="text_equals" data-i18n-opt="steps_asst_text_eq">文本相等</option>
+                    <option value="text_contains" data-i18n-opt="steps_asst_text_cont">文本包含</option>
+                    <option value="text_regex" data-i18n-opt="steps_asst_text_regex">文本正则匹配</option>
+                    <option value="element_exists" data-i18n-opt="steps_asst_el_exists">元素存在</option>
+                    <option value="element_visible" data-i18n-opt="steps_asst_el_vis">元素可见</option>
+                    <option value="element_attr" data-i18n-opt="steps_asst_el_attr">元素属性</option>
+                    <option value="element_count" data-i18n-opt="steps_asst_el_count">元素数量</option>
+                    <option value="url_equals" data-i18n-opt="steps_asst_url_eq">URL相等</option>
+                    <option value="url_contains" data-i18n-opt="steps_asst_url_cont">URL包含</option>
                 </select>
             </div>
             <!-- 断言属性名称 -->
             <div class="form-group" id="editStepAssertAttr" style="display: none;">
-                <label for="editStepAssertAttrInput">属性名称</label>
-                <input type="text" id="editStepAssertAttrInput" placeholder="例如: class, href, value">
+                <label for="editStepAssertAttrInput" data-i18n="steps_label_attr">属性名称</label>
+                <input type="text" id="editStepAssertAttrInput" data-i18n-placeholder="steps_ph_assert_attr" placeholder="">
             </div>
             <!-- 断言数量运算符 -->
             <div class="form-group" id="editStepAssertOperator" style="display: none;">
-                <label for="editStepAssertOperatorSelect">比较方式</label>
+                <label for="editStepAssertOperatorSelect" data-i18n="steps_label_cmp_op">比较方式</label>
                 <select id="editStepAssertOperatorSelect">
-                    <option value="equals">等于</option>
-                    <option value="gt">大于</option>
-                    <option value="lt">小于</option>
-                    <option value="gte">大于等于</option>
-                    <option value="lte">小于等于</option>
+                    <option value="equals" data-i18n-opt="steps_cmp_eq">等于</option>
+                    <option value="gt" data-i18n-opt="steps_op_gt">大于</option>
+                    <option value="lt" data-i18n-opt="steps_op_lt">小于</option>
+                    <option value="gte" data-i18n-opt="steps_op_gte">大于等于</option>
+                    <option value="lte" data-i18n-opt="steps_op_lte">小于等于</option>
                 </select>
             </div>
             <!-- 滚动操作的上下左右输入框 -->
             <div class="form-group" id="editScrollFields" style="display: none;">
-                <label>滚动距离 (px)</label>
+                <label data-i18n="steps_scroll_dist">滚动距离 (px)</label>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                     <div>
-                        <label for="editScrollUp">向上</label>
+                        <label for="editScrollUp" data-i18n="steps_scroll_up">向上</label>
                         <input type="number" id="editScrollUp" placeholder="0" min="0">
                     </div>
                     <div>
-                        <label for="editScrollDown">向下</label>
+                        <label for="editScrollDown" data-i18n="steps_scroll_down">向下</label>
                         <input type="number" id="editScrollDown" placeholder="0" min="0">
                     </div>
                     <div>
-                        <label for="editScrollLeft">向左</label>
+                        <label for="editScrollLeft" data-i18n="steps_scroll_left">向左</label>
                         <input type="number" id="editScrollLeft" placeholder="0" min="0">
                     </div>
                     <div>
-                        <label for="editScrollRight">向右</label>
+                        <label for="editScrollRight" data-i18n="steps_scroll_right">向右</label>
                         <input type="number" id="editScrollRight" placeholder="0" min="0">
                     </div>
                 </div>
             </div>
             <!-- 滑动操作的方向选择 -->
             <div class="form-group" id="editSwipeDirection" style="display: none;">
-                <label for="editStepSwipeDirection">滑动方向</label>
+                <label for="editStepSwipeDirection" data-i18n="steps_swipe_dir">滑动方向</label>
                 <select id="editStepSwipeDirection">
-                    <option value="up">向上</option>
-                    <option value="down">向下</option>
-                    <option value="left">向左</option>
-                    <option value="right">向右</option>
+                    <option value="up" data-i18n-opt="steps_dir_up">向上</option>
+                    <option value="down" data-i18n-opt="steps_dir_down">向下</option>
+                    <option value="left" data-i18n-opt="steps_dir_left">向左</option>
+                    <option value="right" data-i18n-opt="steps_dir_right">向右</option>
                 </select>
             </div>
             <!-- 滑动操作的距离输入 -->
             <div class="form-group" id="editSwipeDistance" style="display: none;">
-                <label for="editStepSwipeDistance">滑动距离 (px)</label>
+                <label for="editStepSwipeDistance" data-i18n="steps_swipe_dist">滑动距离 (px)</label>
                 <input type="number" id="editStepSwipeDistance" placeholder="100" min="1" value="100">
             </div>
             <div class="form-group">
-                <label for="editStepDescription">步骤描述</label>
-                <textarea id="editStepDescription" placeholder="描述此步骤的目的"></textarea>
+                <label for="editStepDescription" data-i18n="steps_label_desc">步骤描述</label>
+                <textarea id="editStepDescription" data-i18n-placeholder="steps_ph_desc" placeholder=""></textarea>
             </div>
             <div class="modal-footer">
-                <button onclick="closeEditStepModal()" class="btn btn-secondary">取消</button>
-                <button onclick="updateStep()" class="btn btn-primary">保存</button>
+                <button type="button" onclick="closeEditStepModal()" class="btn btn-secondary" data-i18n="steps_btn_cancel">取消</button>
+                <button type="button" onclick="updateStep()" class="btn btn-primary" data-i18n="steps_btn_save">保存</button>
             </div>
         </div>
     </div>
@@ -944,7 +967,9 @@
             </div>
         </div>
     </div>
-    
+</div>
+{% endblock %}
+{% block scripts %}
     <script>
         let currentCaseId = null;
         let currentCaseName = '';
@@ -990,7 +1015,7 @@
             currentCaseId = getCaseIdFromSession();
             
             if (!currentCaseId) {
-                alert('未找到用例信息，请先选择测试用例');
+                alert(t('steps_alert_no_case'));
                 window.location.href = '/list_projects';
                 return;
             }
@@ -1003,13 +1028,13 @@
                     currentCaseName = data.test_case.name;
                     currentProjectId = data.test_case.project_id;
                     currentCaseUrl = (data.test_case.url || '').trim();
-                    document.getElementById('caseInfo').textContent = `用例: ${escapeHtml(currentCaseName)}`;
+                    document.getElementById('caseInfo').textContent = t('steps_case_prefix') + currentCaseName;
                 } else {
-                    document.getElementById('caseInfo').textContent = `用例: 未知用例`;
+                    document.getElementById('caseInfo').textContent = t('steps_case_prefix') + t('steps_case_unknown');
                 }
             } catch (error) {
                 console.error('加载用例信息失败:', error);
-                document.getElementById('caseInfo').textContent = `用例: 未知用例`;
+                document.getElementById('caseInfo').textContent = t('steps_case_prefix') + t('steps_case_unknown');
             }
         }
         
@@ -1111,6 +1136,38 @@
             document.head.appendChild(style);
         }
         
+        function translateStepAction(action) {
+            var map = {
+                navigate: 'steps_act_navigate',
+                click: 'steps_act_click',
+                input: 'steps_act_input',
+                fill: 'steps_act_fill',
+                hover: 'steps_act_hover',
+                double_click: 'steps_act_double_click',
+                right_click: 'steps_act_right_click',
+                wait: 'steps_act_wait',
+                scroll: 'steps_act_scroll',
+                extract_text: 'steps_act_extract_text',
+                verify: 'steps_act_verify',
+                swipe: 'steps_act_swipe',
+                enter_iframe: 'steps_act_enter_iframe',
+                exit_iframe: 'steps_act_exit_iframe',
+                select: 'steps_act_select',
+                date: 'steps_act_date',
+                assert: 'steps_act_assert'
+            };
+            var key = map[action];
+            return key ? t(key) : (action || '');
+        }
+
+        /** 刷新步骤弹窗内带 data-i18n-opt 的下拉选项（Action 等） */
+        function refreshStepsFormSelectOptions() {
+            document.querySelectorAll('.steps-page-root select option[data-i18n-opt]').forEach(function (opt) {
+                var k = opt.getAttribute('data-i18n-opt');
+                if (k && typeof t === 'function') opt.textContent = t(k);
+            });
+        }
+
         async function loadSteps(forceRefresh = false) {
             if (!currentCaseId) {
                 console.warn('loadSteps: 当前用例 ID 为空');
@@ -1161,25 +1218,7 @@
                         stepItem.className = 'step-item';
                         stepItem.id = `step-${step.id}`;
                         
-                        let actionText = '';
-                        switch (step.action) {
-                            case 'navigate': actionText = '导航'; break;
-                            case 'click': actionText = '点击'; break;
-                            case 'input': actionText = '输入'; break;
-                            case 'fill': actionText = '填充'; break;
-                            case 'hover': actionText = '悬停'; break;
-                            case 'double_click': actionText = '双击'; break;
-                            case 'right_click': actionText = '右键点击'; break;
-                            case 'wait': actionText = '等待'; break;
-                            case 'scroll': actionText = '滚动'; break;
-                            case 'extract_text': actionText = '提取文本'; break;
-                            case 'verify': actionText = '验证操作'; break;
-                            case 'swipe': actionText = '滑动'; break;
-                            case 'enter_iframe': actionText = '进入iframe'; break;
-                            case 'exit_iframe': actionText = '跳出iframe'; break;
-                            case 'select': actionText = '下拉框选择'; break;
-                            default: actionText = step.action;
-                        }
+                        const actionText = translateStepAction(step.action);
                         
                         const isNavigate = step.action === 'navigate';
                         const showInputRow = step.input_value && step.input_value.trim() && (
@@ -1188,22 +1227,27 @@
                             step.action === 'verify' || step.action === 'text_compare' || step.action === 'select'
                         );
                         const navigateUrlRow = isNavigate && step.input_value && step.input_value.trim()
-                            ? `<div class="step-nav-url"><strong>完整地址:</strong> <span title="${escapeHtml(step.input_value)}">${escapeHtml(truncateMiddle(step.input_value, 72))}</span></div>`
+                            ? `<div class="step-nav-url"><strong>${escapeHtml(t('steps_card_full_url'))}</strong> <span title="${escapeHtml(step.input_value)}">${escapeHtml(truncateMiddle(step.input_value, 72))}</span></div>`
                             : '';
+                        const lblLoc = escapeHtml(t('steps_card_locator'));
+                        const lblSel = escapeHtml(t('steps_card_selector'));
+                        const lblInp = escapeHtml(t('steps_card_input_value'));
+                        const btnEd = escapeHtml(t('steps_btn_edit'));
+                        const btnDel = escapeHtml(t('steps_btn_del'));
                         stepItem.innerHTML = `
                             <div class="step-number">${actualStepNumber}</div>
                             <div class="step-content">
                                 <h4>${escapeHtml(step.description || actionText)}</h4>
                                 <div class="step-details">
-                                    ${step.selector_value ? `<div><strong>定位方式:</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
-                                    ${step.selector_value ? `<div><strong>选择器:</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
+                                    ${step.selector_value ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
+                                    ${step.selector_value ? `<div><strong>${lblSel}</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
                                     ${navigateUrlRow}
-                                    ${showInputRow ? `<div><strong>输入值:</strong> ${escapeHtml(step.input_value)}</div>` : ''}
+                                    ${showInputRow ? `<div><strong>${lblInp}</strong> ${escapeHtml(step.input_value)}</div>` : ''}
                                 </div>
                             </div>
                             <div class="step-actions">
-                                <button onclick="editStep(${step.id})" class="btn btn-sm btn-secondary">编辑</button>
-                                <button onclick="deleteStep(${step.id})" class="btn btn-sm btn-danger">删除</button>
+                                <button type="button" onclick="editStep(${step.id})" class="btn btn-sm btn-secondary">${btnEd}</button>
+                                <button type="button" onclick="deleteStep(${step.id})" class="btn btn-sm btn-danger">${btnDel}</button>
                             </div>
                         `;
                         
@@ -1227,8 +1271,8 @@
                     stepsList.innerHTML = `
                         <div class="empty-state">
                             <div class="empty-state-icon">📝</div>
-                            <div class="empty-state-text">该测试用例暂无步骤</div>
-                            <button onclick="showCreateStepModal()" class="btn btn-primary">添加第一个步骤</button>
+                            <div class="empty-state-text">${escapeHtml(t('steps_empty_none'))}</div>
+                            <button type="button" onclick="showCreateStepModal()" class="btn btn-primary">${escapeHtml(t('steps_empty_add_first'))}</button>
                         </div>
                     `;
                 }
@@ -1240,9 +1284,9 @@
                     stepsList.innerHTML = `
                         <div class="empty-state">
                             <div class="empty-state-icon">❌</div>
-                            <div class="empty-state-text">加载测试步骤失败</div>
-                            <div class="error-message" style="margin-top: 10px; font-size: 12px; color: #999;">${error.message}</div>
-                            <button onclick="loadSteps()" class="btn btn-primary">重新加载</button>
+                            <div class="empty-state-text">${escapeHtml(t('steps_load_fail'))}</div>
+                            <div class="error-message" style="margin-top: 10px; font-size: 12px; color: #999;">${escapeHtml(error.message)}</div>
+                            <button type="button" onclick="loadSteps()" class="btn btn-primary">${escapeHtml(t('steps_reload'))}</button>
                         </div>
                     `;
                 }
@@ -1254,13 +1298,14 @@
             if (totalPages <= 1) return;
             
             const stepsList = document.getElementById('stepsList');
+            const pgInfo = t('steps_pg_info_tpl').replace('{cur}', String(currentPage)).replace('{total}', String(totalPages));
             const paginationHtml = `
-                <div style="margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 8px;">
-                    <button onclick="changePage(1)" ${currentPage === 1 ? 'disabled' : ''} class="btn btn-sm btn-secondary">首页</button>
-                    <button onclick="changePage(currentPage - 1)" ${currentPage === 1 ? 'disabled' : ''} class="btn btn-sm btn-secondary">上一页</button>
-                    <span style="font-size: 14px; color: #666;">第 ${currentPage} / ${totalPages} 页</span>
-                    <button onclick="changePage(currentPage + 1)" ${currentPage === totalPages ? 'disabled' : ''} class="btn btn-sm btn-secondary">下一页</button>
-                    <button onclick="changePage(totalPages)" ${currentPage === totalPages ? 'disabled' : ''} class="btn btn-sm btn-secondary">末页</button>
+                <div class="steps-pagination-bar" style="margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 8px;">
+                    <button type="button" onclick="changePage(1)" ${currentPage === 1 ? 'disabled' : ''} class="btn btn-sm btn-secondary">${escapeHtml(t('steps_pg_first'))}</button>
+                    <button type="button" onclick="changePage(currentPage - 1)" ${currentPage === 1 ? 'disabled' : ''} class="btn btn-sm btn-secondary">${escapeHtml(t('steps_pg_prev'))}</button>
+                    <span style="font-size: 14px; color: #666;">${escapeHtml(pgInfo)}</span>
+                    <button type="button" onclick="changePage(currentPage + 1)" ${currentPage === totalPages ? 'disabled' : ''} class="btn btn-sm btn-secondary">${escapeHtml(t('steps_pg_next'))}</button>
+                    <button type="button" onclick="changePage(totalPages)" ${currentPage === totalPages ? 'disabled' : ''} class="btn btn-sm btn-secondary">${escapeHtml(t('steps_pg_last'))}</button>
                 </div>
             `;
             
@@ -1469,6 +1514,7 @@ function changePage(page) {
             updateSelectorHelp();
             
             toggleActionFields();
+            refreshStepsFormSelectOptions();
         }
         
         function closeCreateStepModal() {
@@ -1539,6 +1585,7 @@ function changePage(page) {
             }
             
             toggleEditActionFields();
+            refreshStepsFormSelectOptions();
         }
         
         function closeEditStepModal() {
@@ -1546,28 +1593,16 @@ function changePage(page) {
             currentEditingStepId = null;
         }
         
-        // 选择器类型帮助文本
-        const selectorTypeHelp = {
-            'css': 'CSS选择器: 输入完整CSS选择器，如 #username 或 .btn-primary',
-            'xpath': 'XPath: 输入完整XPath路径，如 //input[@id="username"]',
-            'id': 'ID: 只需输入ID值，如 username（自动转换为 #username）',
-            'class': 'Class: 只需输入类名，如 btn-primary（自动转换为 .btn-primary）',
-            'name': 'Name: 只需输入name属性值，如 username（自动转换为 [name="username"]）',
-            'text': '文本内容: 输入元素完整文本，如"提交"、"登录"（自动转换为XPath）',
-            'partial_text': '部分文本: 输入部分文本内容，如"用户"（自动模糊匹配）',
-            'placeholder': 'Placeholder: 输入placeholder值，如"请输入用户名"',
-            'label': '关联Label: 输入label文本，如"用户名"（自动查找关联input）',
-            'title': 'Title属性: 输入title属性值，如"帮助"',
-            'alt': 'Alt属性: 输入alt属性值，如"图片说明"',
-            'data': 'Data属性: 输入 data-属性名=值，如 test-id=123 或只输入值',
-            'aria': 'ARIA标签: 输入aria-label值，如"搜索"'
-        };
+        function selectorTypeHelpText(selectorType) {
+            const key = 'steps_help_' + selectorType;
+            const msg = typeof t === 'function' ? t(key) : '';
+            return (msg && msg !== key) ? msg : (typeof t === 'function' ? t('steps_help_default') : '');
+        }
         
         // 更新选择器帮助文本
         function updateSelectorHelp() {
             const selectorType = document.getElementById('stepSelectorType').value;
-            const helpText = selectorTypeHelp[selectorType] || '输入选择器值';
-            document.getElementById('selectorHelp').textContent = helpText;
+            document.getElementById('selectorHelp').textContent = selectorTypeHelpText(selectorType);
         }
         
         // 绑定选择器类型变化事件
@@ -1576,8 +1611,7 @@ function changePage(page) {
         // 更新编辑模态框的选择器帮助文本
         function updateEditSelectorHelp() {
             const selectorType = document.getElementById('editStepSelectorType').value;
-            const helpText = selectorTypeHelp[selectorType] || '输入选择器值';
-            document.getElementById('editSelectorHelp').textContent = helpText;
+            document.getElementById('editSelectorHelp').textContent = selectorTypeHelpText(selectorType);
         }
         
         // 绑定编辑模态框的选择器类型变化事件
@@ -1617,7 +1651,7 @@ function changePage(page) {
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = 'URL';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_url');
             } else if (action === 'scroll') {
                 // 滚动操作需要上下左右四个输入框
                 selectorTypeField.style.display = 'none';
@@ -1634,12 +1668,12 @@ function changePage(page) {
                 // 输入操作需要选择器和输入值
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '输入值';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_input_val');
             } else if (action === 'extract_text') {
                 // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '预期文本 (可选)';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_opt');
                 // 显示对比方式选择
                 const compareTypeField = document.getElementById('stepCompareType');
                 compareTypeField.style.display = 'block';
@@ -1649,7 +1683,7 @@ function changePage(page) {
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '等待时间 (秒)';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_wait_sec');
             } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
                 // 点击相关操作只需要选择器，不需要输入值
                 inputValueField.style.display = 'none';
@@ -1658,7 +1692,7 @@ function changePage(page) {
                 // 悬停操作需要选择器和悬停时间
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '悬停时间 (秒)';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_hover_sec');
             } else if (action === 'verify') {
                 // 验证操作需要选择器和验证类型
                 inputValueField.style.display = 'none';
@@ -1674,7 +1708,7 @@ function changePage(page) {
                 selectorValueField.style.display = 'block';
                 inputValueField.style.display = 'none';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepSelectorValue"]').textContent = 'iframe选择器值';
+                document.querySelector('label[for="stepSelectorValue"]').textContent = t('steps_dyn_iframe_sel');
             } else if (action === 'exit_iframe') {
                 // 跳出iframe操作不需要任何字段
                 selectorTypeField.style.display = 'none';
@@ -1685,19 +1719,19 @@ function changePage(page) {
                 // 下拉框选择操作需要选择器和选择值
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '选择值';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_select_val');
             } else if (action === 'date') {
                 // 日期选择操作需要选择器和日期值
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '日期值 (YYYY-MM-DD)';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_date_val');
             } else if (action === 'assert') {
                 // 断言操作需要选择器、断言类型和预期值
                 selectorTypeField.style.display = 'block';
                 selectorValueField.style.display = 'block';
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '预期值';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_val');
                 // 显示断言类型选择
                 assertTypeField.style.display = 'block';
                 toggleAssertOptions();
@@ -1705,7 +1739,7 @@ function changePage(page) {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '附加信息 (可选)';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_extra_opt');
             }
         }
         
@@ -1728,11 +1762,11 @@ function changePage(page) {
             if (assertType === 'element_attr') {
                 // 元素属性断言需要属性名称
                 assertAttrField.style.display = 'block';
-                document.querySelector('label[for="stepInputValue"]').textContent = '预期属性值';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_attr');
             } else if (assertType === 'element_count') {
                 // 元素数量断言需要运算符
                 assertOperatorField.style.display = 'block';
-                document.querySelector('label[for="stepInputValue"]').textContent = '预期数量';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_count');
             } else if (assertType === 'element_exists' || assertType === 'element_visible') {
                 // 元素存在/可见不需要预期值
                 inputValueField.style.display = 'none';
@@ -1740,9 +1774,9 @@ function changePage(page) {
                 // URL断言不需要选择器
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = '预期URL';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_url');
             } else {
-                document.querySelector('label[for="stepInputValue"]').textContent = '预期文本';
+                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_text');
             }
         }
         
@@ -1764,18 +1798,18 @@ function changePage(page) {
             
             if (assertType === 'element_attr') {
                 assertAttrField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '预期属性值';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_attr');
             } else if (assertType === 'element_count') {
                 assertOperatorField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '预期数量';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_count');
             } else if (assertType === 'element_exists' || assertType === 'element_visible') {
                 inputValueField.style.display = 'none';
             } else if (assertType === 'url_equals' || assertType === 'url_contains') {
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '预期URL';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_url');
             } else {
-                document.querySelector('label[for="editStepInputValue"]').textContent = '预期文本';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_text');
             }
         }
         
@@ -1811,7 +1845,7 @@ function changePage(page) {
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = 'URL';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_url');
             } else if (action === 'scroll') {
                 // 滚动操作需要上下左右四个输入框
                 selectorTypeField.style.display = 'none';
@@ -1826,11 +1860,11 @@ function changePage(page) {
             } else if (action === 'input') {
                 // 输入操作需要选择器和输入值
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '输入值';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_input_val');
             } else if (action === 'extract_text') {
                 // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '预期文本 (可选)';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_opt');
                 // 显示对比方式选择
                 const editCompareTypeField = document.getElementById('editStepCompareType');
                 editCompareTypeField.style.display = 'block';
@@ -1839,14 +1873,14 @@ function changePage(page) {
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '等待时间 (秒)';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_wait_sec');
             } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
                 // 点击相关操作只需要选择器，不需要输入值
                 inputValueField.style.display = 'none';
             } else if (action === 'hover') {
                 // 悬停操作需要选择器和悬停时间
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '悬停时间 (秒)';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_hover_sec');
             } else if (action === 'verify') {
                 // 验证操作需要选择器和验证类型
                 inputValueField.style.display = 'none';
@@ -1860,7 +1894,7 @@ function changePage(page) {
                 selectorTypeField.style.display = 'block';
                 selectorValueField.style.display = 'block';
                 inputValueField.style.display = 'none';
-                document.querySelector('label[for="editStepSelectorValue"]').textContent = 'iframe选择器值';
+                document.querySelector('label[for="editStepSelectorValue"]').textContent = t('steps_dyn_iframe_sel');
             } else if (action === 'exit_iframe') {
                 // 跳出iframe操作不需要任何字段
                 selectorTypeField.style.display = 'none';
@@ -1869,24 +1903,24 @@ function changePage(page) {
             } else if (action === 'select') {
                 // 下拉框选择操作需要选择器和选择值
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '选择值';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_select_val');
             } else if (action === 'date') {
                 // 日期选择操作需要选择器和日期值
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '日期值 (YYYY-MM-DD)';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_date_val');
             } else if (action === 'assert') {
                 // 断言操作需要选择器、断言类型和预期值
                 selectorTypeField.style.display = 'block';
                 selectorValueField.style.display = 'block';
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '预期值';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_val');
                 // 显示断言类型选择
                 editAssertTypeField.style.display = 'block';
                 toggleEditAssertOptions();
             } else {
                 // 其他操作只需要选择器
                 inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = '附加信息 (可选)';
+                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_extra_opt');
             }
         }
         
@@ -1900,7 +1934,7 @@ function changePage(page) {
                 const btn = document.getElementById(id);
                 if (!btn) return;
                 btn.disabled = false;
-                btn.textContent = loading ? '停止拾取' : '🧲 拾取元素';
+                btn.textContent = loading ? t('steps_pick_stop') : t('steps_pick');
             });
         }
         
@@ -1920,18 +1954,18 @@ function changePage(page) {
         
         function startVisualSelection(target = 'create') {
             if (isSelecting) {
-                showToast('已停止拾取', 'info');
+                showToast(t('steps_toast_stop_pick'), 'info');
                 stopVisualSelection();
                 return;
             }
             if (!currentCaseId) {
-                showToast('未找到当前用例，无法启动拾取', 'error');
+                showToast(t('steps_toast_no_case_pick'), 'error');
                 return;
             }
             isSelecting = true;
             selectionTarget = target === 'edit' ? 'edit' : 'create';
             setPickButtonsLoading(true);
-            showToast('正在启动拾取器，请在弹出的浏览器中操作并点击目标元素', 'info');
+            showToast(t('steps_toast_pick_starting'), 'info');
             
             // 1. 获取当前用例ID
             const caseId = currentCaseId;
@@ -1942,7 +1976,7 @@ function changePage(page) {
             .then(response => {
                 console.log('获取步骤响应状态:', response.status);
                 if (!response.ok) {
-                    throw new Error('获取步骤失败，状态码: ' + response.status);
+                    throw new Error(t('steps_fetch_steps_fail').replace('{code}', String(response.status)));
                 }
                 return response.json();
             })
@@ -1975,7 +2009,7 @@ function changePage(page) {
                         })
                         .then(url2 => {
                             if (!url2) {
-                                throw new Error('未找到可用 URL。请先在用例里填写 URL 或添加导航步骤');
+                                throw new Error(t('steps_no_url_err'));
                             }
                             console.log('提取到的导航URL(用例兜底):', url2);
                             return fetch('/api/start_visual_selection', {
@@ -2002,7 +2036,7 @@ function changePage(page) {
                 console.log('启动选择响应状态:', response.status);
                 console.log('响应类型:', response.headers.get('content-type'));
                 if (!response.ok) {
-                    throw new Error('启动选择失败，状态码: ' + response.status);
+                    throw new Error(t('steps_start_pick_fail').replace('{code}', String(response.status)));
                 }
                 return response.json();
             })
@@ -2012,13 +2046,13 @@ function changePage(page) {
                     // 开始监听元素选择事件
                     startListeningForSelection();
                 } else {
-                    alert('启动可视化选择失败: ' + data.error);
+                    alert(t('steps_pick_fail_alert').replace('{err}', data.error || ''));
                     stopVisualSelection();
                 }
             })
             .catch(error => {
                 console.error('启动可视化选择时出错:', error);
-                showToast('启动可视化选择失败：' + error.message, 'error');
+                showToast(t('steps_pick_fail_toast').replace('{msg}', error.message), 'error');
                 stopVisualSelection();
             });
         }
@@ -2058,7 +2092,7 @@ function changePage(page) {
                     return;
                 }
                 if (Date.now() - startedAt > maxPickMs) {
-                    showToast('拾取超时，已自动停止。请重新点击“拾取元素”', 'warning');
+                    showToast(t('steps_pick_timeout'), 'warning');
                     stopVisualSelection();
                     clearInterval(pollInterval);
                     return;
@@ -2068,13 +2102,13 @@ function changePage(page) {
                 .then(response => response.json())
                 .then(data => {
                     if (!data || data.success === false) {
-                        showToast('拾取状态异常，已自动停止', 'error');
+                        showToast(t('steps_pick_abnormal'), 'error');
                         stopVisualSelection();
                         clearInterval(pollInterval);
                         return;
                     }
                     if (data && data.picker_closed) {
-                        showToast('拾取器窗口已关闭，已自动停止拾取', 'warning');
+                        showToast(t('steps_pick_closed'), 'warning');
                         stopVisualSelection();
                         clearInterval(pollInterval);
                         return;
@@ -2083,12 +2117,12 @@ function changePage(page) {
                         // 元素已被选择，填充到表单
                         fillElementToForm(data.selected_element, selectionTarget);
                         // 保持拾取会话，不自动停止；允许连续拾取覆盖
-                        showToast('已更新为最新拾取结果（可继续拾取）', 'success');
+                        showToast(t('steps_pick_updated'), 'success');
                     }
                 })
                 .catch(error => {
                     console.error('检查选择元素时出错:', error);
-                    showToast('拾取状态检查失败，已自动停止', 'error');
+                    showToast(t('steps_pick_check_fail'), 'error');
                     stopVisualSelection();
                     clearInterval(pollInterval);
                 });
@@ -2112,9 +2146,9 @@ function changePage(page) {
             
             console.log('元素信息已填充到表单:', elementInfo);
             if (elementInfo.card_item_xpath) {
-                showToast('✅ 已拾取：卡片列表容器，可设置第 n 个卡片', 'success');
+                showToast(t('steps_pick_card_container'), 'success');
             } else {
-                showToast('✅ 元素选择成功，已自动填充到表单', 'success');
+                showToast(t('steps_pick_success_fill'), 'success');
             }
         }
 
@@ -2122,7 +2156,7 @@ function changePage(page) {
             const cfg = _selCfg(target);
             const base = (document.getElementById(cfg.cardBaseXpathId).value || '').trim();
             if (!base) {
-                showToast('请先使用拾取元素获取卡片容器', 'warning');
+                showToast(t('steps_pick_need_card_first'), 'warning');
                 return;
             }
             const nthRaw = parseInt(document.getElementById(cfg.cardNthId).value || '1', 10);
@@ -2131,7 +2165,7 @@ function changePage(page) {
             document.getElementById(cfg.selectorValueId).value = `(${base})[${nth}]`;
             updateSelectorHelp();
             updateEditSelectorHelp();
-            showToast(`已应用第 ${nth} 个卡片定位`, 'success');
+            showToast(t('steps_pick_applied_nth').replace('{n}', String(nth)), 'success');
         }
         
         async function createStep() {
@@ -2148,7 +2182,7 @@ function changePage(page) {
             }
             
             if (!action) {
-                alert('请选择操作类型');
+                alert(t('steps_alert_select_action'));
                 return;
             }
             
@@ -2172,7 +2206,7 @@ function changePage(page) {
             
             try {
                 // 显示加载状态
-                showLoading('正在添加测试步骤...');
+                showLoading(t('steps_add_loading'));
                         
                 const response = await fetch('/api/steps', {
                     method: 'POST',
@@ -2196,16 +2230,16 @@ function changePage(page) {
                 hideLoading();
                         
                 if (data.success) {
-                    showToast('✅ 测试步骤添加成功', 'success');
+                    showToast(t('steps_toast_add_ok'), 'success');
                     closeCreateStepModal();
                     // ✅ 强制刷新，获取最新数据
                     await loadSteps(true);
                 } else {
-                    showToast('❌ 添加失败：' + (data.error || '未知错误'), 'error');
+                    showToast(t('steps_toast_add_fail').replace('{err}', data.error || t('index_err_unknown')), 'error');
                 }
             } catch (error) {
                 hideLoading();
-                showToast('❌ 添加测试步骤时发生错误：' + error.message, 'error');
+                showToast(t('steps_toast_add_err').replace('{msg}', error.message), 'error');
                 console.error('添加步骤失败:', error);
             }
         }
@@ -2218,10 +2252,10 @@ function changePage(page) {
                 if (data.step) {
                     showEditStepModal(data.step);
                 } else {
-                    alert('获取步骤信息失败');
+                    alert(t('steps_fail_get_step'));
                 }
             } catch (error) {
-                alert('获取步骤信息时发生错误: ' + error.message);
+                alert(t('steps_fail_get_step_err').replace('{msg}', error.message));
             }
         }
         
@@ -2239,7 +2273,7 @@ function changePage(page) {
             }
             
             if (!action) {
-                alert('请选择操作类型');
+                alert(t('steps_alert_select_action'));
                 return;
             }
             
@@ -2263,7 +2297,7 @@ function changePage(page) {
             
             try {
                 // 显示加载状态
-                showLoading('正在更新测试步骤...');
+                showLoading(t('steps_upd_loading'));
                         
                 const response = await fetch(`/api/steps/${currentEditingStepId}`, {
                     method: 'PUT',
@@ -2286,25 +2320,25 @@ function changePage(page) {
                 hideLoading();
                         
                 if (data.success) {
-                    showToast('✅ 测试步骤更新成功', 'success');
+                    showToast(t('steps_toast_upd_ok'), 'success');
                     closeEditStepModal();
                     // ✅ 强制刷新，获取最新数据
                     await loadSteps(true);
                 } else {
-                    showToast('❌ 更新失败：' + (data.error || '未知错误'), 'error');
+                    showToast(t('steps_toast_upd_fail').replace('{err}', data.error || t('index_err_unknown')), 'error');
                 }
             } catch (error) {
                 hideLoading();
-                showToast('❌ 更新测试步骤时发生错误：' + error.message, 'error');
+                showToast(t('steps_toast_upd_err').replace('{msg}', error.message), 'error');
                 console.error('更新步骤失败:', error);
             }
         }
         
         async function deleteStep(stepId) {
-            if (confirm('确定要删除这个测试步骤吗？')) {
+            if (confirm(t('steps_del_confirm'))) {
                 try {
                     // 显示加载中状态
-                    showLoading('正在删除测试步骤...');
+                    showLoading(t('steps_del_loading'));
                             
                     const response = await fetch(`/api/steps/${stepId}`, {
                         method: 'DELETE',
@@ -2319,14 +2353,14 @@ function changePage(page) {
                         // ✅ 关键优化：强制刷新页面数据，不使用缓存
                         await loadSteps(true); // true 表示强制刷新
                         hideLoading();
-                        showToast('✅ 测试步骤删除成功', 'success');
+                        showToast(t('steps_toast_del_ok'), 'success');
                     } else {
                         hideLoading();
-                        showToast('❌ 删除失败：' + (data.error || '未知错误'), 'error');
+                        showToast(t('steps_toast_del_fail').replace('{err}', data.error || t('index_err_unknown')), 'error');
                     }
                 } catch (error) {
                     hideLoading();
-                    showToast('❌ 删除测试步骤时发生错误：' + error.message, 'error');
+                    showToast(t('steps_toast_del_err').replace('{msg}', error.message), 'error');
                     console.error('删除步骤失败:', error);
                 }
             }
@@ -2342,16 +2376,16 @@ function changePage(page) {
 
             if (runButton) {
                 runButton.disabled = true;
-                runButton.textContent = '执行中...';
+                runButton.textContent = t('steps_run_btn_running');
             }
             if (stopButton) stopButton.disabled = false;
             panel.style.display = 'block';
             bar.style.width = '0%';
             pct.textContent = '0%';
-            txt.textContent = '正在启动执行...';
+            txt.textContent = t('steps_run_starting');
 
             try {
-                if (!currentCaseId) throw new Error('未找到用例信息');
+                if (!currentCaseId) throw new Error(t('steps_run_case_missing'));
 
                 if (runCaseStatusTimer) clearInterval(runCaseStatusTimer);
                 runCaseStatusTimer = setInterval(async () => {
@@ -2362,30 +2396,31 @@ function changePage(page) {
                         const progress = Math.max(0, Math.min(100, st.progress || 0));
                         bar.style.width = `${progress}%`;
                         pct.textContent = `${progress}%`;
-                        txt.textContent = st.message || `执行中：${st.completed_steps || 0}/${st.total_steps || 0}`;
+                        txt.textContent = st.message || t('steps_run_progress_tpl').replace('{done}', String(st.completed_steps || 0)).replace('{total}', String(st.total_steps || 0));
                     } catch (_) {}
                 }, 800);
 
                 const response = await fetch(`/api/cases/${currentCaseId}/run`, { method: 'POST' });
                 if (!response.ok) {
-                    throw new Error(`服务器返回错误: ${response.status} ${response.statusText}`);
+                    throw new Error(t('steps_run_server_err').replace('{status}', String(response.status)).replace('{text}', response.statusText || ''));
                 }
                 const data = await response.json();
 
                 bar.style.width = '100%';
                 pct.textContent = '100%';
-                txt.textContent = data.success ? '执行完成' : '执行已结束';
+                txt.textContent = data.success ? t('steps_run_done_ok') : t('steps_run_done_end');
 
                 if (data.success) {
-                    alert('测试用例运行成功！\n状态: ' + data.status + '\n耗时: ' + data.duration + '秒');
+                    alert(t('steps_run_ok_alert').replace('{status}', String(data.status != null ? data.status : '')).replace('{dur}', String(data.duration != null ? data.duration : '')));
                 } else {
-                    const stopped = data.stopped || ((data.error || '').includes('用户已停止执行'));
+                    const errMsg = (data.error || '');
+                    const stopped = data.stopped || errMsg.includes('用户已停止执行') || /stopped|cancel/i.test(errMsg);
                     if (!stopped) {
-                        alert('运行失败: ' + (data.error || '未知错误'));
+                        alert(t('steps_run_fail_alert').replace('{err}', data.error || t('index_err_unknown')));
                     }
                 }
             } catch (error) {
-                alert('运行测试用例时发生错误: ' + error.message);
+                alert(t('steps_run_err_alert').replace('{msg}', error.message));
             } finally {
                 if (runCaseStatusTimer) {
                     clearInterval(runCaseStatusTimer);
@@ -2393,7 +2428,7 @@ function changePage(page) {
                 }
                 if (runButton) {
                     runButton.disabled = false;
-                    runButton.textContent = '▶ 运行用例';
+                    runButton.textContent = t('steps_run');
                 }
                 if (stopButton) stopButton.disabled = true;
             }
@@ -2413,10 +2448,10 @@ function changePage(page) {
                 const txt = document.getElementById('runCaseProgressText');
                 if (bar) bar.style.width = '100%';
                 if (pct) pct.textContent = '100%';
-                if (txt) txt.textContent = '已发送停止请求，正在终止...';
-                showToast('已停止执行', 'warning');
+                if (txt) txt.textContent = t('steps_run_stop_pending');
+                showToast(t('steps_toast_stopped'), 'warning');
             } catch (e) {
-                showToast('停止执行失败：' + e.message, 'error');
+                showToast(t('steps_toast_stop_fail').replace('{msg}', e.message), 'error');
             }
         }
         
@@ -2620,10 +2655,10 @@ function changePage(page) {
                 
                 if (direction === 'up') {
                     indicator.style.top = '0px';
-                    indicator.textContent = '▲ 松开可切换到上一页';
+                    indicator.textContent = t('steps_drag_prev');
                 } else {
                     indicator.style.bottom = '0px';
-                    indicator.textContent = '▼ 松开可切换到下一页';
+                    indicator.textContent = t('steps_drag_next');
                 }
                 
                 container.style.position = 'relative';
@@ -2868,7 +2903,7 @@ function changePage(page) {
                 console.error('===== 保存失败 =====');
                 console.error('错误:', error.message);
                 console.error('堆栈:', error.stack);
-                alert(`保存失败：${error.message}`);
+                alert(t('steps_save_order_fail').replace('{msg}', error.message));
             }
         }
                 
@@ -3068,15 +3103,40 @@ function changePage(page) {
         }
 
         document.addEventListener('DOMContentLoaded', async function() {
+            try { document.title = t('steps_doc_title'); } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
+            refreshStepsFormSelectOptions();
             currentCaseId = getCaseIdFromSession();
             if (!currentCaseId) {
-                alert('未找到用例信息，请先选择测试用例');
+                alert(t('steps_alert_no_case'));
                 window.location.href = '/list_projects';
                 return;
             }
             await Promise.all([loadCaseInfo(), loadSteps()]);
             await syncRunCaseButtonState();
             runCaseButtonSyncTimer = setInterval(syncRunCaseButtonState, 1000);
+        });
+
+        window.addEventListener('ui-preferences-updated', function (ev) {
+            if (ev.detail && ev.detail.source === 'load') return;
+            try { document.title = t('steps_doc_title'); } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
+            refreshStepsFormSelectOptions();
+            try { updateSelectorHelp(); } catch (e) {}
+            try { updateEditSelectorHelp(); } catch (e) {}
+            try {
+                const sa = document.getElementById('stepAction');
+                if (sa) toggleActionFields(sa.value);
+            } catch (e) {}
+            try {
+                const ea = document.getElementById('editStepAction');
+                if (ea) {
+                    toggleEditActionFields(ea.value);
+                    toggleEditAssertOptions();
+                }
+            } catch (e) {}
+            loadCaseInfo();
+            loadSteps(true);
         });
 
         async function syncRunCaseButtonState() {
@@ -3108,7 +3168,7 @@ function changePage(page) {
             if (!extraUrl.isConfirmed) return;
             var payload = {};
             if (extraUrl.value) payload.url = extraUrl.value;
-            Swal.fire({ title: '正在启动…', allowOutsideClick: false, didOpen: function () { Swal.showLoading(); } });
+            Swal.fire({ title: t('steps_swal_starting'), allowOutsideClick: false, didOpen: function () { Swal.showLoading(); } });
             try {
                 var response = await fetch('/api/cases/' + currentCaseId + '/start-playwright-codegen', {
                     method: 'POST',
@@ -3267,5 +3327,4 @@ function changePage(page) {
             }
         }
     </script>
-</body>
-</html>
+{% endblock %}

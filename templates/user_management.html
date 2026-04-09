@@ -1,140 +1,140 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>用户管理 - UI自动化测试平台</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .card { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
-        .btn { padding: 8px 16px; border-radius: 4px; font-size: 14px; cursor: pointer; border: none; transition: all 0.3s; }
-        .btn-primary { background: #1890ff; color: white; }
-        .btn-primary:hover { background: #40a9ff; }
-        .btn-danger { background: #ff4d4f; color: white; }
-        .btn-danger:hover { background: #ff7875; }
-        .btn-success { background: #52c41a; color: white; }
-        .btn-success:hover { background: #73d13d; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #f0f0f0; }
-        th { background: #fafafa; font-weight: 600; }
-        tr:hover { background: #fafafa; }
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
-        .modal-content { background: white; border-radius: 8px; padding: 24px; width: 90%; max-width: 500px; }
-        .form-group { margin-bottom: 16px; }
-        .form-group label { display: block; margin-bottom: 8px; font-weight: 500; }
-        .form-group input, .form-group select { width: 100%; padding: 8px 12px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 14px; }
-        .badge { padding: 2px 8px; border-radius: 4px; font-size: 12px; }
-        .badge-admin { background: #fff1f0; color: #cf1322; }
-        .badge-tester { background: #e6f7ff; color: #096dd9; }
-        .badge-viewer { background: #f6ffed; color: #389e0d; }
-        .nav-bar { background: white; padding: 12px 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+{% extends "base.html" %}
+{% block title %}用户管理 - UI自动化测试平台{% endblock %}
+{% block head %}
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .btn { @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 inline-flex items-center justify-center dark:focus:ring-offset-gray-900; }
+            .btn-sm { @apply px-3 py-1.5 text-sm rounded-md; }
+            .btn-primary { @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500 shadow-sm; }
+            .btn-danger { @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500 shadow-sm; }
+            .btn-ghost { @apply bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 focus:ring-gray-500; }
+            .card { @apply bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6; }
+            .form-input { @apply w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent; }
+            .form-label { @apply block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1; }
+            .data-table { @apply min-w-full text-sm; }
+            .data-table th { @apply px-4 py-3 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700; }
+            .data-table td { @apply px-4 py-3 border-b border-gray-100 dark:border-gray-800 text-gray-800 dark:text-gray-200; }
+            .badge { @apply px-2 py-0.5 rounded text-xs font-medium; }
+            .badge-admin { @apply bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200; }
+            .badge-tester { @apply bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-200; }
+            .badge-viewer { @apply bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200; }
+            .um-modal { @apply hidden fixed inset-0 z-50 items-center justify-center bg-black/50 dark:bg-black/60 backdrop-blur-sm p-4; }
+            .um-modal.flex { display: flex; }
+            .um-modal-panel { @apply bg-white dark:bg-gray-900 rounded-xl shadow-xl border border-gray-200 dark:border-gray-800 w-full max-w-md max-h-[90vh] overflow-y-auto; }
+        }
     </style>
-</head>
-<body>
-    <div class="nav-bar">
-        <div style="display: flex; align-items: center; gap: 12px;">
-            <i class="fas fa-robot" style="font-size: 24px; color: #1890ff;"></i>
-            <h1 style="font-size: 18px; font-weight: 600;">UI 自动化测试平台</h1>
-        </div>
-        <div style="display: flex; gap: 12px; align-items: center;">
-            <a href="/" style="color: #666; text-decoration: none;"><i class="fas fa-home"></i> 首页</a>
-            <span style="color: #999;">|</span>
-            <span id="currentUser" style="color: #666;"></span>
-        </div>
-    </div>
-
-    <div class="container">
+{% endblock %}
+{% block body_class %}bg-gray-50 dark:bg-gray-950 min-h-screen font-sans{% endblock %}
+{% block content %}
+    <div class="max-w-6xl mx-auto px-4 py-8">
         <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h2 style="font-size: 20px; font-weight: 600;"><i class="fas fa-users" style="margin-right: 8px; color: #1890ff;"></i>用户管理</h2>
-                <button class="btn btn-primary" onclick="showCreateModal()">
-                    <i class="fas fa-plus"></i> 创建用户
+            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
+                <h2 class="text-xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                    <i class="fas fa-users text-blue-600 dark:text-blue-400"></i>
+                    <span data-i18n="um_h1">用户管理</span>
+                </h2>
+                <button type="button" class="btn btn-primary" onclick="showCreateModal()">
+                    <i class="fas fa-plus mr-2"></i><span data-i18n="um_create">创建用户</span>
                 </button>
             </div>
-
-            <table id="userTable">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>用户名</th>
-                        <th>邮箱</th>
-                        <th>角色</th>
-                        <th>状态</th>
-                        <th>创建时间</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="userTableBody">
-                    <!-- 动态加载 -->
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <!-- 创建用户模态框 -->
-    <div id="createModal" class="modal">
-        <div class="modal-content">
-            <h3 style="margin-bottom: 20px;">创建新用户</h3>
-            <div class="form-group">
-                <label>用户名</label>
-                <input type="text" id="newUsername" placeholder="请输入用户名">
-            </div>
-            <div class="form-group">
-                <label>密码</label>
-                <input type="password" id="newPassword" placeholder="请输入密码">
-            </div>
-            <div class="form-group">
-                <label>邮箱</label>
-                <input type="email" id="newEmail" placeholder="可选">
-            </div>
-            <div class="form-group">
-                <label>角色</label>
-                <select id="newRole">
-                    <option value="tester">测试人员</option>
-                    <option value="admin">管理员</option>
-                    <option value="viewer">只读用户</option>
-                </select>
-            </div>
-            <div style="display: flex; gap: 12px; justify-content: flex-end;">
-                <button class="btn" style="background: #f0f0f0;" onclick="closeModal('createModal')">取消</button>
-                <button class="btn btn-primary" onclick="createUser()">创建</button>
+            <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-800">
+                <table id="userTable" class="data-table">
+                    <thead>
+                        <tr>
+                            <th data-i18n="um_th_id">ID</th>
+                            <th data-i18n="um_th_user">用户名</th>
+                            <th data-i18n="um_th_email">邮箱</th>
+                            <th data-i18n="um_th_role">角色</th>
+                            <th data-i18n="um_th_stat">状态</th>
+                            <th data-i18n="um_th_created">创建时间</th>
+                            <th data-i18n="um_th_act">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="userTableBody"></tbody>
+                </table>
             </div>
         </div>
     </div>
 
-    <!-- 编辑用户模态框 -->
-    <div id="editModal" class="modal">
-        <div class="modal-content">
-            <h3 style="margin-bottom: 20px;">编辑用户</h3>
+    <div id="createModal" class="um-modal">
+        <div class="um-modal-panel p-6">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4" data-i18n="um_modal_new">创建新用户</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label" data-i18n="um_lbl_user">用户名</label>
+                    <input type="text" id="newUsername" class="form-input" data-i18n-placeholder="um_ph_user" placeholder="">
+                </div>
+                <div>
+                    <label class="form-label" data-i18n="um_lbl_pass">密码</label>
+                    <input type="password" id="newPassword" class="form-input" data-i18n-placeholder="um_ph_pass" placeholder="">
+                </div>
+                <div>
+                    <label class="form-label" data-i18n="um_lbl_email">邮箱</label>
+                    <input type="email" id="newEmail" class="form-input" data-i18n-placeholder="um_ph_email" placeholder="">
+                </div>
+                <div>
+                    <label class="form-label" data-i18n="um_lbl_role">角色</label>
+                    <select id="newRole" class="form-input">
+                        <option value="tester" data-i18n-opt="um_role_tester">测试人员</option>
+                        <option value="admin" data-i18n-opt="um_role_admin">管理员</option>
+                        <option value="viewer" data-i18n-opt="um_role_viewer">只读用户</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 mt-6">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('createModal')"><span data-i18n="index_btn_cancel">取消</span></button>
+                <button type="button" class="btn btn-primary" onclick="createUser()"><span data-i18n="um_btn_create">创建</span></button>
+            </div>
+        </div>
+    </div>
+
+    <div id="editModal" class="um-modal">
+        <div class="um-modal-panel p-6">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4" data-i18n="um_modal_edit">编辑用户</h3>
             <input type="hidden" id="editUserId">
-            <div class="form-group">
-                <label>邮箱</label>
-                <input type="email" id="editEmail" placeholder="可选">
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label" data-i18n="um_lbl_email">邮箱</label>
+                    <input type="email" id="editEmail" class="form-input" data-i18n-placeholder="um_ph_email" placeholder="">
+                </div>
+                <div>
+                    <label class="form-label" data-i18n="um_lbl_role">角色</label>
+                    <select id="editRole" class="form-input">
+                        <option value="tester" data-i18n-opt="um_role_tester">测试人员</option>
+                        <option value="admin" data-i18n-opt="um_role_admin">管理员</option>
+                        <option value="viewer" data-i18n-opt="um_role_viewer">只读用户</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label" data-i18n="um_lbl_newpass">新密码（留空则不修改）</label>
+                    <input type="password" id="editPassword" class="form-input" data-i18n-placeholder="um_ph_pass_keep" placeholder="">
+                </div>
             </div>
-            <div class="form-group">
-                <label>角色</label>
-                <select id="editRole">
-                    <option value="tester">测试人员</option>
-                    <option value="admin">管理员</option>
-                    <option value="viewer">只读用户</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>新密码（留空则不修改）</label>
-                <input type="password" id="editPassword" placeholder="不修改请留空">
-            </div>
-            <div style="display: flex; gap: 12px; justify-content: flex-end;">
-                <button class="btn" style="background: #f0f0f0;" onclick="closeModal('editModal')">取消</button>
-                <button class="btn btn-primary" onclick="updateUser()">保存</button>
+            <div class="flex justify-end gap-2 mt-6">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('editModal')"><span data-i18n="index_btn_cancel">取消</span></button>
+                <button type="button" class="btn btn-primary" onclick="updateUser()"><span data-i18n="um_btn_save">保存</span></button>
             </div>
         </div>
     </div>
-
+{% endblock %}
+{% block scripts %}
     <script>
-        // 加载用户列表
+        function umLocale() {
+            try { return (localStorage.getItem('ui_lang') || 'zh') === 'en' ? 'en-US' : 'zh-CN'; } catch (e) { return 'zh-CN'; }
+        }
+        function umSub(str, map) {
+            if (!str) return '';
+            var s = str;
+            if (map) for (var k in map) if (Object.prototype.hasOwnProperty.call(map, k)) s = s.split('{' + k + '}').join(map[k] == null ? '' : String(map[k]));
+            return s;
+        }
+        function refreshUmSelectOptions() {
+            document.querySelectorAll('[data-i18n-opt]').forEach(function (opt) {
+                var k = opt.getAttribute('data-i18n-opt');
+                if (k && typeof t === 'function') opt.textContent = t(k);
+            });
+        }
+
         async function loadUsers() {
             try {
                 const res = await fetch('/api/users');
@@ -142,62 +142,60 @@
                 if (data.success) {
                     renderUsers(data.users);
                 } else {
-                    alert('加载用户列表失败: ' + (data.error || '未知错误'));
+                    alert((typeof t === 'function' ? t('um_load_fail') : '') + ': ' + (data.error || (typeof t === 'function' ? t('um_err_unknown') : '')));
                 }
             } catch (e) {
                 console.error('加载用户失败:', e);
-                alert('加载用户列表失败');
+                alert(typeof t === 'function' ? t('um_load_fail') : '');
             }
         }
 
-        // 渲染用户列表
+        function roleName(role) {
+            var k = role === 'admin' ? 'um_role_admin' : (role === 'viewer' ? 'um_role_viewer' : 'um_role_tester');
+            return typeof t === 'function' ? t(k) : role;
+        }
+
         function renderUsers(users) {
             const tbody = document.getElementById('userTableBody');
-            tbody.innerHTML = users.map(u => `
-                <tr>
-                    <td>${u.id}</td>
-                    <td>${u.username}</td>
-                    <td>${u.email || '-'}</td>
-                    <td><span class="badge badge-${u.role}">${roleName(u.role)}</span></td>
-                    <td>${u.is_active ? '<span style="color: #52c41a;">启用</span>' : '<span style="color: #999;">禁用</span>'}</td>
-                    <td>${new Date(u.created_at).toLocaleString('zh-CN')}</td>
-                    <td>
-                        <button class="btn btn-primary" style="padding: 4px 12px; font-size: 12px;" onclick="showEditModal(${u.id}, '${u.email || ''}', '${u.role}')">
-                            <i class="fas fa-edit"></i> 编辑
-                        </button>
-                        <button class="btn btn-danger" style="padding: 4px 12px; font-size: 12px; margin-left: 8px;" onclick="deleteUser(${u.id}, '${u.username}')">
-                            <i class="fas fa-trash"></i> 删除
-                        </button>
-                    </td>
-                </tr>
-            `).join('');
+            const on = typeof t === 'function' ? t('um_st_on') : '';
+            const off = typeof t === 'function' ? t('um_st_off') : '';
+            const bEdit = typeof t === 'function' ? t('um_btn_edit') : '';
+            const bDel = typeof t === 'function' ? t('um_btn_del') : '';
+            tbody.innerHTML = users.map(u => {
+                const esc = (s) => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+                return (
+                    '<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">' +
+                    '<td>' + u.id + '</td>' +
+                    '<td class="font-medium">' + esc(u.username) + '</td>' +
+                    '<td>' + esc(u.email || '-') + '</td>' +
+                    '<td><span class="badge badge-' + esc(u.role) + '">' + roleName(u.role) + '</span></td>' +
+                    '<td>' + (u.is_active ? '<span class="text-green-600 dark:text-green-400">' + on + '</span>' : '<span class="text-gray-500 dark:text-gray-400">' + off + '</span>') + '</td>' +
+                    '<td class="text-gray-600 dark:text-gray-400">' + new Date(u.created_at).toLocaleString(umLocale()) + '</td>' +
+                    '<td><button type="button" class="btn btn-sm btn-primary" onclick="showEditModal(' + u.id + ', \'' + esc(u.email || '').replace(/'/g, "\\'") + '\', \'' + esc(u.role) + '\')"><i class="fas fa-edit mr-1"></i>' + bEdit + '</button> ' +
+                    '<button type="button" class="btn btn-sm btn-danger" onclick="deleteUser(' + u.id + ', \'' + esc(u.username).replace(/'/g, "\\'") + '\')"><i class="fas fa-trash mr-1"></i>' + bDel + '</button></td>' +
+                    '</tr>'
+                );
+            }).join('');
         }
 
-        function roleName(role) {
-            const map = { admin: '管理员', tester: '测试人员', viewer: '只读用户' };
-            return map[role] || role;
-        }
-
-        // 显示创建模态框
         function showCreateModal() {
-            document.getElementById('createModal').style.display = 'flex';
+            refreshUmSelectOptions();
+            document.getElementById('createModal').classList.add('flex');
         }
 
-        // 显示编辑模态框
         function showEditModal(id, email, role) {
+            refreshUmSelectOptions();
             document.getElementById('editUserId').value = id;
-            document.getElementById('editEmail').value = email;
+            document.getElementById('editEmail').value = email || '';
             document.getElementById('editRole').value = role;
             document.getElementById('editPassword').value = '';
-            document.getElementById('editModal').style.display = 'flex';
+            document.getElementById('editModal').classList.add('flex');
         }
 
-        // 关闭模态框
         function closeModal(id) {
-            document.getElementById(id).style.display = 'none';
+            document.getElementById(id).classList.remove('flex');
         }
 
-        // 创建用户
         async function createUser() {
             const username = document.getElementById('newUsername').value.trim();
             const password = document.getElementById('newPassword').value;
@@ -205,7 +203,7 @@
             const role = document.getElementById('newRole').value;
 
             if (!username || !password) {
-                alert('用户名和密码不能为空');
+                alert(typeof t === 'function' ? t('um_need_auth') : '');
                 return;
             }
 
@@ -217,23 +215,21 @@
                 });
                 const data = await res.json();
                 if (data.success) {
-                    alert('用户创建成功');
+                    alert(typeof t === 'function' ? t('um_create_ok') : '');
                     closeModal('createModal');
                     loadUsers();
-                    // 清空表单
                     document.getElementById('newUsername').value = '';
                     document.getElementById('newPassword').value = '';
                     document.getElementById('newEmail').value = '';
                 } else {
-                    alert('创建失败: ' + (data.error || '未知错误'));
+                    alert((typeof t === 'function' ? t('um_create_fail') : '') + ': ' + (data.error || (typeof t === 'function' ? t('um_err_unknown') : '')));
                 }
             } catch (e) {
                 console.error('创建用户失败:', e);
-                alert('创建用户失败');
+                alert(typeof t === 'function' ? t('um_net_create') : '');
             }
         }
 
-        // 更新用户
         async function updateUser() {
             const id = document.getElementById('editUserId').value;
             const email = document.getElementById('editEmail').value.trim();
@@ -244,69 +240,60 @@
             if (password) body.password = password;
 
             try {
-                const res = await fetch(`/api/users/${id}`, {
+                const res = await fetch('/api/users/' + id, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
                 });
                 const data = await res.json();
                 if (data.success) {
-                    alert('用户更新成功');
+                    alert(typeof t === 'function' ? t('um_update_ok') : '');
                     closeModal('editModal');
                     loadUsers();
                 } else {
-                    alert('更新失败: ' + (data.error || '未知错误'));
+                    alert((typeof t === 'function' ? t('um_update_fail') : '') + ': ' + (data.error || (typeof t === 'function' ? t('um_err_unknown') : '')));
                 }
             } catch (e) {
                 console.error('更新用户失败:', e);
-                alert('更新用户失败');
+                alert(typeof t === 'function' ? t('um_net_update') : '');
             }
         }
 
-        // 删除用户
         async function deleteUser(id, username) {
-            if (!confirm(`确定要删除用户 "${username}" 吗？`)) return;
+            if (!confirm(typeof t === 'function' ? umSub(t('um_del_confirm'), { name: username }) : '')) return;
 
             try {
-                const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+                const res = await fetch('/api/users/' + id, { method: 'DELETE' });
                 const data = await res.json();
                 if (data.success) {
-                    alert('用户删除成功');
+                    alert(typeof t === 'function' ? t('um_del_ok') : '');
                     loadUsers();
                 } else {
-                    alert('删除失败: ' + (data.error || '未知错误'));
+                    alert((typeof t === 'function' ? t('um_del_fail') : '') + ': ' + (data.error || (typeof t === 'function' ? t('um_err_unknown') : '')));
                 }
             } catch (e) {
                 console.error('删除用户失败:', e);
-                alert('删除用户失败');
+                alert(typeof t === 'function' ? t('um_net_del') : '');
             }
         }
 
-        // 点击模态框外部关闭
-        window.onclick = function(e) {
-            if (e.target.classList.contains('modal')) {
-                e.target.style.display = 'none';
+        window.addEventListener('click', function (e) {
+            if (e.target.classList && e.target.classList.contains('um-modal')) {
+                e.target.classList.remove('flex');
             }
-        }
+        });
 
-        // 页面加载时获取当前用户信息
-        async function loadCurrentUser() {
-            try {
-                const res = await fetch('/api/auth/me');
-                const data = await res.json();
-                if (data.success) {
-                    document.getElementById('currentUser').innerHTML = `<i class="fas fa-user"></i> ${data.user.username}`;
-                }
-            } catch (e) {
-                console.error('获取当前用户失败:', e);
-            }
-        }
-
-        // 初始化
-        document.addEventListener('DOMContentLoaded', () => {
+        function initUmPage() {
+            try { document.title = typeof t === 'function' ? t('um_doc_title') : ''; } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
+            refreshUmSelectOptions();
             loadUsers();
-            loadCurrentUser();
+        }
+
+        document.addEventListener('DOMContentLoaded', initUmPage);
+        window.addEventListener('ui-preferences-updated', function (ev) {
+            if (ev.detail && ev.detail.source === 'load') return;
+            initUmPage();
         });
     </script>
-</body>
-</html>
+{% endblock %}

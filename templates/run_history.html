@@ -4,11 +4,12 @@
 
 {% block head %}
 <style>
-    body {
+    .run-history-page {
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         background-color: #f5f5f5;
         margin: 0;
         padding: 0;
+        min-height: calc(100vh - 72px);
     }
     
     .container {
@@ -399,30 +400,54 @@
         font-size: 14px;
         color: #666;
     }
+
+    html.dark .run-history-page { background-color: #030712; color: #e5e7eb; }
+    html.dark .run-history-page .card { background: #111827; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+    html.dark .run-history-page .card h2 { color: #f9fafb; }
+    html.dark .run-history-page .filter-bar input,
+    html.dark .run-history-page .filter-bar select { background: #1f2937; border-color: #4b5563; color: #e5e7eb; }
+    html.dark .run-history-page .history-table th { background: #1f2937; color: #e5e7eb; border-bottom-color: #374151; }
+    html.dark .run-history-page .history-table td { color: #d1d5db; border-bottom-color: #374151; }
+    html.dark .run-history-page .status-passed { background: rgba(22,163,74,0.2); color: #86efac; border-color: #166534; }
+    html.dark .run-history-page .status-failed { background: rgba(220,38,38,0.2); color: #fca5a5; border-color: #991b1b; }
+    html.dark .run-history-page .preview-line--error { color: #fca5a5; }
+    html.dark .run-history-page .preview-popover { background: #1f2937; color: #e5e7eb; border-color: #4b5563; }
+    html.dark .run-history-page .preview-popover--error { color: #fca5a5; }
+    html.dark .run-history-page .action-buttons button { background: #374151; border-color: #4b5563; color: #e5e7eb; }
+    html.dark .run-history-page .modal-content { background: #1f2937; border-color: #4b5563; color: #e5e7eb; }
+    html.dark .run-history-page .modal-header h3 { color: #f9fafb; }
+    html.dark .run-history-page .detail-label { color: #e5e7eb; }
+    html.dark .run-history-page .detail-value { color: #d1d5db; }
+    html.dark .run-history-page .detail-value pre { background: #111827; border-color: #374151; color: #e5e7eb; }
+    html.dark .run-history-page .empty-state { color: #9ca3af; }
+    html.dark .run-history-page .loading { color: #9ca3af; }
+    html.dark .run-history-page .pagination button { background: #374151; border-color: #4b5563; color: #e5e7eb; }
+    html.dark .run-history-page .pagination .page-info { color: #9ca3af; }
 </style>
 {% endblock %}
 
 {% block content %}
+<div class="run-history-page">
 <div class="container">
     <div class="card">
-        <h2>运行历史记录</h2>
+        <h2 data-i18n="history_title">运行历史记录</h2>
         
         <div class="filter-bar">
             <select id="projectFilter">
-                <option value="">所有项目</option>
+                <option value="" data-i18n="history_filter_all_projects">所有项目</option>
             </select>
-            <input type="text" id="searchInput" placeholder="搜索测试用例名称...">
+            <input type="text" id="searchInput" data-i18n-placeholder="history_search_ph" placeholder="搜索测试用例名称...">
             <select id="statusFilter">
-                <option value="">所有状态</option>
-                <option value="passed">通过</option>
-                <option value="failed">失败</option>
+                <option value="" data-i18n="history_filter_all_status">所有状态</option>
+                <option value="passed" data-i18n="history_st_passed_opt">通过</option>
+                <option value="failed" data-i18n="history_st_failed_opt">失败</option>
             </select>
-            <button onclick="searchHistory()">查询</button>
-            <button onclick="deleteAllHistory()" class="delete-all-btn">全部删除</button>
+            <button type="button" onclick="searchHistory()" data-i18n="history_btn_search">查询</button>
+            <button type="button" onclick="deleteAllHistory()" class="delete-all-btn" data-i18n="history_btn_delete_all">全部删除</button>
         </div>
         
         <div id="historyContainer">
-            <div class="loading">加载中...</div>
+            <div class="loading" data-i18n="history_loading">加载中...</div>
         </div>
     </div>
 </div>
@@ -431,13 +456,14 @@
 <div id="detailModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>运行记录详情</h3>
+            <h3 data-i18n="history_modal_title">运行记录详情</h3>
             <span class="close">&times;</span>
         </div>
         <div id="detailContent">
-            <div class="loading">加载中...</div>
+            <div class="loading" data-i18n="history_loading">加载中...</div>
         </div>
     </div>
+</div>
 </div>
 {% endblock %}
 
@@ -447,12 +473,23 @@
     let totalPages = 1;
     const pageSize = 20;
     
+    function historyPageInfo(cur, tot, n) {
+        var tpl = t('history_page_info_tpl');
+        return tpl.replace('{cur}', String(cur)).replace('{total}', String(tot)).replace('{n}', String(n));
+    }
+
     // 页面加载时获取运行历史记录和项目列表
     document.addEventListener('DOMContentLoaded', function() {
-        // 延迟加载项目列表，确保页面已经完全加载
+        try { document.title = t('history_doc_title'); } catch (e) {}
         setTimeout(loadProjects, 100);
-        // 延迟加载运行历史记录，确保项目列表已经加载完成
         setTimeout(loadRunHistory, 200);
+    });
+
+    window.addEventListener('ui-preferences-updated', function (ev) {
+        if (ev.detail && ev.detail.source === 'load') return;
+        try { document.title = t('history_doc_title'); } catch (e) {}
+        loadProjects();
+        loadRunHistory(true);
     });
     
     // 加载项目列表
@@ -472,8 +509,7 @@
                     try {
                         const data = JSON.parse(xhr.responseText);
                         if (data && data.projects && Array.isArray(data.projects)) {
-                            // 清空现有选项，保留"所有项目"
-                            projectFilter.innerHTML = '<option value="">所有项目</option>';
+                            projectFilter.innerHTML = '<option value="">' + escapeHtml(t('history_filter_all_projects')) + '</option>';
                             // 添加项目选项
                             for (let i = 0; i < data.projects.length; i++) {
                                 const project = data.projects[i];
@@ -486,21 +522,21 @@
                             }
                         } else {
                             console.warn('项目列表数据格式不正确或为空');
-                            projectFilter.innerHTML = '<option value="">所有项目</option>';
+                            projectFilter.innerHTML = '<option value="">' + escapeHtml(t('history_filter_all_projects')) + '</option>';
                         }
                     } catch (error) {
                         console.error('解析项目列表数据失败:', error);
-                        projectFilter.innerHTML = '<option value="">所有项目</option>';
+                        projectFilter.innerHTML = '<option value="">' + escapeHtml(t('history_filter_all_projects')) + '</option>';
                     }
                 } else {
                     console.error('加载项目列表失败:', xhr.status, xhr.statusText);
-                    projectFilter.innerHTML = '<option value="">所有项目</option>';
+                    projectFilter.innerHTML = '<option value="">' + escapeHtml(t('history_filter_all_projects')) + '</option>';
                 }
             }
         };
         xhr.onerror = function() {
             console.error('加载项目列表网络错误');
-            projectFilter.innerHTML = '<option value="">所有项目</option>';
+            projectFilter.innerHTML = '<option value="">' + escapeHtml(t('history_filter_all_projects')) + '</option>';
         };
         xhr.send();
     }
@@ -526,7 +562,7 @@
         const urlParams = new URLSearchParams(window.location.search);
         const caseId = ignoreCaseId ? null : urlParams.get('case_id');
         
-        container.innerHTML = '<div class="loading">加载中...</div>';
+        container.innerHTML = '<div class="loading">' + escapeHtml(t('history_loading')) + '</div>';
         
         // 构建API请求URL
         let apiUrl = `/api/run-history?page=${currentPage}&page_size=${pageSize}`;
@@ -560,32 +596,25 @@
                     totalPages = Math.ceil(total / pageSize) || 1;
                     
                     if (history.length === 0) {
-                        container.innerHTML = `
-                            <div class="empty-state">
-                                <i class="fas fa-inbox"></i>
-                                <p>暂无运行历史记录</p>
-                            </div>
-                        `;
+                        container.innerHTML =
+                            '<div class="empty-state"><i class="fas fa-inbox"></i><p>' +
+                            escapeHtml(t('history_empty')) + '</p></div>';
                     } else {
                         renderHistoryTable(history, total);
                     }
                 } else {
-                    container.innerHTML = `
-                        <div class="empty-state">
-                            <i class="fas fa-exclamation-circle"></i>
-                            <p>加载失败: ${data.message || '未知错误'}</p>
-                        </div>
-                    `;
+                    container.innerHTML =
+                        '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>' +
+                        escapeHtml(t('history_load_fail')) +
+                        escapeHtml(data.message || t('index_err_unknown')) +
+                        '</p></div>';
                 }
             })
             .catch(error => {
                 console.error('加载运行历史记录失败:', error);
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <i class="fas fa-exclamation-circle"></i>
-                        <p>加载失败，请稍后重试</p>
-                    </div>
-                `;
+                container.innerHTML =
+                    '<div class="empty-state"><i class="fas fa-exclamation-circle"></i><p>' +
+                    escapeHtml(t('history_load_fail_network')) + '</p></div>';
             });
     }
     
@@ -607,14 +636,14 @@
             <table class="history-table">
                 <thead>
                     <tr>
-                        <th>ID</th>
-                        <th>用例名称</th>
-                        <th>用例ID</th>
-                        <th>状态</th>
-                        <th>执行时间</th>
-                        <th>输出预览</th>
-                        <th>错误信息</th>
-                        <th>操作</th>
+                        <th>` + escapeHtml(t('history_col_id')) + `</th>
+                        <th>` + escapeHtml(t('history_col_case_name')) + `</th>
+                        <th>` + escapeHtml(t('history_col_case_id')) + `</th>
+                        <th>` + escapeHtml(t('history_col_status')) + `</th>
+                        <th>` + escapeHtml(t('history_col_exec_time')) + `</th>
+                        <th>` + escapeHtml(t('history_col_output_prev')) + `</th>
+                        <th>` + escapeHtml(t('history_col_error_msg')) + `</th>
+                        <th>` + escapeHtml(t('history_col_actions')) + `</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -623,7 +652,7 @@
         history.forEach(item => {
             const st = item.status || '';
             const statusClass = (st === 'passed' || st === 'success') ? 'status-passed' : 'status-failed';
-            const statusText = (st === 'passed' || st === 'success') ? '通过' : '失败';
+            const statusText = (st === 'passed' || st === 'success') ? t('history_status_done_pass') : t('history_status_done_fail');
             const rawOut = item.extracted_text != null && item.extracted_text !== '' ? String(item.extracted_text) : '';
             const rawErr = item.error != null && item.error !== '' ? String(item.error) : '';
             const outputPreview = rawOut ? (rawOut.length > 100 ? rawOut.substring(0, 100) + '...' : rawOut) : '-';
@@ -637,7 +666,7 @@
                     <td>${item.id}</td>
                     <td>${escapeHtml(item.case_name || '-')}</td>
                     <td>${escapeHtml(item.case_id != null ? String(item.case_id) : '-')}</td>
-                    <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                    <td><span class="status-badge ${statusClass}">${escapeHtml(statusText)}</span></td>
                     <td>${escapeHtml(executedAt)}</td>
                     <td class="preview-cell">
                         <span class="preview-line">${escapeHtml(outputPreview)}</span>
@@ -649,8 +678,8 @@
                     </td>
                     <td>
                         <div class="action-buttons">
-                            <button class="detail-btn" onclick="showDetail(${item.id})">详情</button>
-                            <button class="delete-btn" onclick="deleteHistory(${item.id})">删除</button>
+                            <button class="detail-btn" onclick="showDetail(${item.id})">` + escapeHtml(t('history_btn_detail')) + `</button>
+                            <button class="delete-btn" onclick="deleteHistory(${item.id})">` + escapeHtml(t('history_btn_delete')) + `</button>
                         </div>
                     </td>
                 </tr>
@@ -671,9 +700,9 @@
         
         return `
             <div class="pagination">
-                <button onclick="changePage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>上一页</button>
-                <span class="page-info">第 ${currentPage} / ${totalPages} 页 (共 ${total} 条)</span>
-                <button onclick="changePage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>下一页</button>
+                <button onclick="changePage(${currentPage - 1})" ${currentPage <= 1 ? 'disabled' : ''}>` + escapeHtml(t('history_page_prev')) + `</button>
+                <span class="page-info">` + escapeHtml(historyPageInfo(currentPage, totalPages, total)) + `</span>
+                <button onclick="changePage(${currentPage + 1})" ${currentPage >= totalPages ? 'disabled' : ''}>` + escapeHtml(t('history_page_next')) + `</button>
             </div>
         `;
     }
@@ -696,7 +725,7 @@
         const modal = document.getElementById('detailModal');
         const content = document.getElementById('detailContent');
         
-        content.innerHTML = '<div class="loading">加载中...</div>';
+        content.innerHTML = '<div class="loading">' + escapeHtml(t('history_loading')) + '</div>';
         modal.style.display = 'block';
         
         fetch(`/api/run-history/${id}`)
@@ -704,48 +733,50 @@
             .then(data => {
                 if (data.success) {
                     const item = data.record;
+                    const outTxt = item.extracted_text != null && item.extracted_text !== '' ? item.extracted_text : t('history_no_output');
+                    const errTxt = item.error != null && item.error !== '' ? item.error : t('history_no_error');
                     content.innerHTML = `
                         <div class="detail-section">
-                            <span class="detail-label">ID:</span>
+                            <span class="detail-label">` + escapeHtml(t('history_detail_id')) + `</span>
                             <span class="detail-value">${item.id}</span>
                         </div>
                         <div class="detail-section">
-                            <span class="detail-label">用例名称:</span>
-                            <span class="detail-value">${item.case_name || '-'}</span>
+                            <span class="detail-label">` + escapeHtml(t('history_detail_case_name')) + `</span>
+                            <span class="detail-value">${escapeHtml(item.case_name || '-')}</span>
                         </div>
                         <div class="detail-section">
-                            <span class="detail-label">用例ID:</span>
-                            <span class="detail-value">${item.case_id || '-'}</span>
+                            <span class="detail-label">` + escapeHtml(t('history_detail_case_id')) + `</span>
+                            <span class="detail-value">${escapeHtml(item.case_id != null ? String(item.case_id) : '-')}</span>
                         </div>
                         <div class="detail-section">
-                            <span class="detail-label">状态:</span>
-                            <span class="detail-value">${item.status}</span>
+                            <span class="detail-label">` + escapeHtml(t('history_detail_status')) + `</span>
+                            <span class="detail-value">${escapeHtml(item.status || '')}</span>
                         </div>
                         <div class="detail-section">
-                            <span class="detail-label">执行时间:</span>
-                            <span class="detail-value">${item.created_at || '-'}</span>
+                            <span class="detail-label">` + escapeHtml(t('history_detail_time')) + `</span>
+                            <span class="detail-value">${escapeHtml(item.created_at || '-')}</span>
                         </div>
                         <div class="detail-section">
-                            <span class="detail-label">输出:</span>
-                            <div class="detail-value"><pre>${item.extracted_text || '无输出'}</pre></div>
+                            <span class="detail-label">` + escapeHtml(t('history_detail_output')) + `</span>
+                            <div class="detail-value"><pre>${escapeHtml(outTxt)}</pre></div>
                         </div>
                         <div class="detail-section">
-                            <span class="detail-label">错误信息:</span>
-                            <span class="detail-value">${item.error || '无错误'}</span>
+                            <span class="detail-label">` + escapeHtml(t('history_detail_error')) + `</span>
+                            <span class="detail-value">${escapeHtml(errTxt)}</span>
                         </div>
                     `;
                 } else {
-                    content.innerHTML = '<p>加载详情失败</p>';
+                    content.innerHTML = '<p>' + escapeHtml(t('history_detail_fail')) + '</p>';
                 }
             })
             .catch(() => {
-                content.innerHTML = '<p>加载详情失败</p>';
+                content.innerHTML = '<p>' + escapeHtml(t('history_detail_fail')) + '</p>';
             });
     }
     
     // 删除历史记录
     function deleteHistory(id) {
-        if (!confirm('确定要删除这条记录吗？')) return;
+        if (!confirm(t('history_confirm_delete'))) return;
         
         fetch(`/api/run-history/${id}`, { method: 'DELETE' })
             .then(response => response.json())
@@ -753,17 +784,17 @@
                 if (data.success) {
                     loadRunHistory(true);
                 } else {
-                    alert('删除失败: ' + data.message);
+                    alert(t('history_delete_fail') + ': ' + (data.message || ''));
                 }
             })
             .catch(() => {
-                alert('删除失败');
+                alert(t('history_delete_fail'));
             });
     }
     
     // 删除所有历史记录
     function deleteAllHistory() {
-        if (!confirm('确定要删除所有历史记录吗？此操作不可恢复！')) return;
+        if (!confirm(t('history_confirm_delete_all'))) return;
         
         fetch('/api/run-history', { method: 'DELETE' })
             .then(response => response.json())
@@ -772,11 +803,11 @@
                     currentPage = 1;
                     loadRunHistory(true);
                 } else {
-                    alert('删除失败: ' + data.message);
+                    alert(t('history_delete_fail') + ': ' + (data.message || ''));
                 }
             })
             .catch(() => {
-                alert('删除失败');
+                alert(t('history_delete_fail'));
             });
     }
     

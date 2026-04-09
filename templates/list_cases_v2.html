@@ -1,9 +1,6 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>测试用例管理 - UI自动化测试平台</title>
+{% extends "base.html" %}
+{% block title %}测试用例管理 - UI自动化测试平台{% endblock %}
+{% block head %}
     <style>
         * {
             margin: 0;
@@ -11,14 +8,14 @@
             box-sizing: border-box;
         }
         
-        body {
+        .cases-mgmt-page {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+            min-height: calc(100vh - 72px);
             padding: 20px;
         }
         
-        .container {
+        .cases-mgmt-page .container {
             max-width: 1200px;
             margin: 0 auto;
             background: white;
@@ -425,32 +422,50 @@
             border-bottom: 3px solid #667eea;
             margin-bottom: 10px;
         }
+        html.dark .cases-mgmt-page { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
+        html.dark .cases-mgmt-page .container { background: #111827; color: #e5e7eb; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        html.dark .cases-mgmt-page .toolbar,
+        html.dark .cases-mgmt-page .selected-order-panel { background: #1f2937; border-color: #374151; }
+        html.dark .cases-mgmt-page .case-item,
+        html.dark .cases-mgmt-page .selected-order-item { background: #1f2937; border-color: #4b5563; }
+        html.dark .cases-mgmt-page .case-content h3,
+        html.dark .cases-mgmt-page .selected-order-item .step-content h4 { color: #f9fafb; }
+        html.dark .cases-mgmt-page .modal-content { background: #1f2937; color: #e5e7eb; }
+        html.dark .cases-mgmt-page .modal-header h3 { color: #f9fafb; }
+        html.dark .cases-mgmt-page .form-group label { color: #d1d5db; }
+        html.dark .cases-mgmt-page .form-group input,
+        html.dark .cases-mgmt-page .form-group textarea,
+        html.dark .cases-mgmt-page select { background: #111827; border-color: #4b5563; color: #e5e7eb; }
+        html.dark .cases-mgmt-page .empty-state { color: #9ca3af; }
+        html.dark .cases-mgmt-page .loading { color: #9ca3af; }
+        html.dark .cases-mgmt-page .selected-order-panel h4 { color: #d1d5db; }
     </style>
-</head>
-<body>
+{% endblock %}
+{% block content %}
+<div class="cases-mgmt-page">
     <div class="container">
         <div class="header">
-            <h1>测试用例管理</h1>
-            <div class="project-info" id="projectInfo">正在加载项目信息...</div>
+            <h1 data-i18n="tc_title">测试用例管理</h1>
+            <div class="project-info" id="projectInfo" data-i18n="tc_project_loading">正在加载项目信息...</div>
         </div>
         
         <div class="toolbar">
             <div class="toolbar-left">
-                <button onclick="showCreateCaseModal()" class="btn btn-primary">+ 创建用例</button>
-                <button onclick="executeSelectedCases()" class="btn btn-success">▶ 执行选中的用例</button>
-                <button onclick="stopCaseRun()" class="btn btn-danger" id="stopCaseRunBtn" disabled>⏹ 停止运行</button>
+                <button type="button" onclick="showCreateCaseModal()" class="btn btn-primary" data-i18n="tc_create_case">+ 创建用例</button>
+                <button type="button" onclick="executeSelectedCases()" class="btn btn-success" data-i18n="tc_run_selected">▶ 执行选中的用例</button>
+                <button type="button" onclick="stopCaseRun()" class="btn btn-danger" id="stopCaseRunBtn" disabled data-i18n="tc_stop_run">⏹ 停止运行</button>
             </div>
             <div class="toolbar-right">
-                <button onclick="selectAllCases()" class="btn btn-secondary btn-sm">全选</button>
-                <button onclick="deselectAllCases()" class="btn btn-secondary btn-sm">取消全选</button>
-                <button onclick="showImportModal()" class="btn btn-info">导入</button>
-                <button onclick="showExportModal()" class="btn btn-info">导出</button>
-                <button onclick="showMarkDefectModal()" class="btn btn-defect" id="markDefectBtn">⚠ 标记缺陷</button>
-                <button onclick="backToProjects()" class="btn btn-secondary">← 返回项目列表</button>
+                <button type="button" onclick="selectAllCases()" class="btn btn-secondary btn-sm" data-i18n="tc_select_all">全选</button>
+                <button type="button" onclick="deselectAllCases()" class="btn btn-secondary btn-sm" data-i18n="tc_deselect_all">取消全选</button>
+                <button type="button" onclick="showImportModal()" class="btn btn-info" data-i18n="tc_import">导入</button>
+                <button type="button" onclick="showExportModal()" class="btn btn-info" data-i18n="tc_export">导出</button>
+                <button type="button" onclick="showMarkDefectModal()" class="btn btn-defect" id="markDefectBtn" data-i18n="tc_mark_defect">⚠ 标记缺陷</button>
+                <button type="button" onclick="backToProjects()" class="btn btn-secondary" data-i18n="tc_back_projects">← 返回项目列表</button>
             </div>
         </div>
         <div id="selectedOrderPanel" class="selected-order-panel">
-            <h4>执行顺序（拖拽可调整，从上到下依次执行）</h4>
+            <h4 data-i18n="tc_exec_order_hint">执行顺序（拖拽可调整，从上到下依次执行）</h4>
             <div id="selectedOrderList" class="selected-order-list"></div>
         </div>
         
@@ -458,7 +473,7 @@
             <div id="casesList">
                 <div class="loading">
                     <div class="loading-spinner"></div>
-                    <p>正在加载测试用例...</p>
+                    <p data-i18n="tc_loading_cases">正在加载测试用例...</p>
                 </div>
             </div>
         </div>
@@ -467,31 +482,31 @@
     <div id="createCaseModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>创建测试用例</h3>
+                <h3 data-i18n="proj_modal_case_title">创建测试用例</h3>
             </div>
             <div class="form-group">
-                <label for="caseName">用例名称 *</label>
-                <input type="text" id="caseName" placeholder="请输入测试用例名称">
+                <label for="caseName" data-i18n="proj_case_name">用例名称 *</label>
+                <input type="text" id="caseName" data-i18n-placeholder="proj_case_ph_name" placeholder="请输入测试用例名称">
             </div>
             <div class="form-group">
-                <label for="caseUrl">测试URL</label>
-                <input type="text" id="caseUrl" placeholder="请输入测试URL">
+                <label for="caseUrl" data-i18n="proj_case_url">测试URL</label>
+                <input type="text" id="caseUrl" data-i18n-placeholder="proj_case_ph_url" placeholder="请输入测试URL">
             </div>
             <div class="form-group">
-                <label for="caseDescription">用例描述</label>
-                <textarea id="caseDescription" placeholder="请输入测试用例描述"></textarea>
+                <label for="caseDescription" data-i18n="proj_case_desc">用例描述</label>
+                <textarea id="caseDescription" data-i18n-placeholder="proj_case_ph_desc" placeholder="请输入测试用例描述"></textarea>
             </div>
             <div class="form-group">
-                <label for="casePrecondition">前置条件</label>
-                <textarea id="casePrecondition" placeholder="请输入前置条件"></textarea>
+                <label for="casePrecondition" data-i18n="proj_case_pre">前置条件</label>
+                <textarea id="casePrecondition" data-i18n-placeholder="proj_case_ph_pre" placeholder="请输入前置条件"></textarea>
             </div>
             <div class="form-group">
-                <label for="caseExpectedResult">预期结果</label>
-                <textarea id="caseExpectedResult" placeholder="请输入预期结果"></textarea>
+                <label for="caseExpectedResult" data-i18n="proj_case_exp">预期结果</label>
+                <textarea id="caseExpectedResult" data-i18n-placeholder="proj_case_ph_exp" placeholder="请输入预期结果"></textarea>
             </div>
             <div class="modal-footer">
-                <button onclick="closeCreateCaseModal()" class="btn btn-secondary">取消</button>
-                <button onclick="createTestCase()" class="btn btn-primary">创建</button>
+                <button type="button" onclick="closeCreateCaseModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
+                <button type="button" onclick="createTestCase()" class="btn btn-primary" data-i18n="proj_btn_create">创建</button>
             </div>
         </div>
     </div>
@@ -499,31 +514,31 @@
     <div id="editCaseModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>编辑测试用例</h3>
+                <h3 data-i18n="tc_modal_edit_case">编辑测试用例</h3>
             </div>
             <div class="form-group">
-                <label for="editCaseName">用例名称 *</label>
+                <label for="editCaseName" data-i18n="proj_case_name">用例名称 *</label>
                 <input type="text" id="editCaseName">
             </div>
             <div class="form-group">
-                <label for="editCaseUrl">测试URL</label>
+                <label for="editCaseUrl" data-i18n="proj_case_url">测试URL</label>
                 <input type="text" id="editCaseUrl">
             </div>
             <div class="form-group">
-                <label for="editCaseDescription">用例描述</label>
+                <label for="editCaseDescription" data-i18n="proj_case_desc">用例描述</label>
                 <textarea id="editCaseDescription"></textarea>
             </div>
             <div class="form-group">
-                <label for="editCasePrecondition">前置条件</label>
+                <label for="editCasePrecondition" data-i18n="proj_case_pre">前置条件</label>
                 <textarea id="editCasePrecondition"></textarea>
             </div>
             <div class="form-group">
-                <label for="editCaseExpectedResult">预期结果</label>
+                <label for="editCaseExpectedResult" data-i18n="proj_case_exp">预期结果</label>
                 <textarea id="editCaseExpectedResult"></textarea>
             </div>
             <div class="modal-footer">
-                <button onclick="closeEditCaseModal()" class="btn btn-secondary">取消</button>
-                <button onclick="updateTestCase()" class="btn btn-primary">保存</button>
+                <button type="button" onclick="closeEditCaseModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
+                <button type="button" onclick="updateTestCase()" class="btn btn-primary" data-i18n="proj_btn_save">保存</button>
             </div>
         </div>
     </div>
@@ -532,7 +547,7 @@
     <div id="runResultModal" class="modal">
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
-                <h3>测试用例执行结果</h3>
+                <h3 data-i18n="tc_run_result_title">测试用例执行结果</h3>
             </div>
             <div class="modal-body" style="max-height: 400px; overflow-y: auto;">
                 <div id="runResultContent">
@@ -540,7 +555,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button onclick="closeRunResultModal()" class="btn btn-primary">关闭</button>
+                <button type="button" onclick="closeRunResultModal()" class="btn btn-primary" data-i18n="tc_btn_close">关闭</button>
             </div>
         </div>
     </div>
@@ -549,28 +564,28 @@
     <div id="importModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>导入用例</h3>
-                <button onclick="closeImportModal()" class="modal-close">&times;</button>
+                <h3 data-i18n="tc_import_title">导入用例</h3>
+                <button type="button" onclick="closeImportModal()" class="modal-close">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label>选择文件 <span style="color:#888;font-size:12px;">（仅支持 .xlsx 格式）</span></label>
+                    <label><span data-i18n="tc_import_file_label">选择文件</span> <span style="color:#888;font-size:12px;" data-i18n="tc_import_xlsx_note">（仅支持 .xlsx 格式）</span></label>
                     <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
                         <label for="importFile" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#6366f1;color:#fff;border-radius:6px;cursor:pointer;font-size:14px;transition:background 0.2s;" onmouseover="this.style.background='#4f46e5'" onmouseout="this.style.background='#6366f1'">
-                            <i class="fas fa-upload"></i> 选择文件
+                            <i class="fas fa-upload"></i> <span data-i18n="tc_pick_file">选择文件</span>
                         </label>
                         <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none;" onchange="updateFileName(this)">
-                        <span id="importFileName" style="color:#555;font-size:14px;">未选择文件</span>
+                        <span id="importFileName" style="color:#555;font-size:14px;" data-i18n="tc_no_file">未选择文件</span>
                     </div>
                 </div>
                 <div class="form-group" style="margin-top:8px;">
-                    <button onclick="downloadTemplate('excel')" class="btn btn-secondary btn-sm">下载Excel模板</button>
+                    <button type="button" onclick="downloadTemplate('excel')" class="btn btn-secondary btn-sm" data-i18n="tc_dl_template">下载Excel模板</button>
                 </div>
                 <div id="importResult"></div>
             </div>
             <div class="modal-footer">
-                <button onclick="closeImportModal()" class="btn btn-secondary">取消</button>
-                <button onclick="importCases()" class="btn btn-primary">导入</button>
+                <button type="button" onclick="closeImportModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
+                <button type="button" onclick="importCases()" class="btn btn-primary" data-i18n="tc_import_btn">导入</button>
             </div>
         </div>
     </div>
@@ -579,25 +594,25 @@
     <div id="exportModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>导出用例</h3>
-                <button onclick="closeExportModal()" class="modal-close">&times;</button>
+                <h3 data-i18n="tc_export_title">导出用例</h3>
+                <button type="button" onclick="closeExportModal()" class="modal-close">&times;</button>
             </div>
             <div class="modal-body">
                 <p style="margin-bottom: 15px; color: #666;">
-                    <i class="fas fa-info-circle"></i> 
-                    提示: 如果选择了用例，则只导出选中的用例；否则导出整个项目的用例。
+                    <i class="fas fa-info-circle"></i>
+                    <span data-i18n="tc_export_hint">提示: 如果选择了用例，则只导出选中的用例；否则导出整个项目的用例。</span>
                 </p>
                 <div class="form-group">
-                    <button onclick="exportCases('excel')" class="btn btn-primary" style="margin-right: 10px;">
-                        <i class="fas fa-file-excel"></i> 导出为Excel
+                    <button type="button" onclick="exportCases('excel')" class="btn btn-primary" style="margin-right: 10px;">
+                        <i class="fas fa-file-excel"></i> <span data-i18n="tc_export_excel">导出为Excel</span>
                     </button>
-                    <button onclick="exportCases('json')" class="btn btn-info">
-                        <i class="fas fa-file-code"></i> 导出为JSON
+                    <button type="button" onclick="exportCases('json')" class="btn btn-info">
+                        <i class="fas fa-file-code"></i> <span data-i18n="tc_export_json">导出为JSON</span>
                     </button>
                 </div>
             </div>
             <div class="modal-footer">
-                <button onclick="closeExportModal()" class="btn btn-secondary">关闭</button>
+                <button type="button" onclick="closeExportModal()" class="btn btn-secondary" data-i18n="tc_btn_close">关闭</button>
             </div>
         </div>
     </div>
@@ -606,62 +621,64 @@
     <div id="markDefectModal" class="modal">
         <div class="modal-content" style="width: 620px; max-width: 95%;">
             <div class="modal-header">
-                <h3>⚠ 批量标记缺陷</h3>
+                <h3 data-i18n="tc_defect_modal_title">⚠ 批量标记缺陷</h3>
             </div>
             <div class="modal-body">
                 <!-- 已选用例展示 -->
                 <div id="defectCaseList" style="margin-bottom: 18px; padding: 12px; background: #fef9e7; border: 1px solid #f39c12; border-radius: 6px;">
-                    <div style="font-weight:600; color:#e67e22; margin-bottom:8px; font-size:13px;">⚠ 将对以下用例创建缺陷记录：</div>
+                    <div style="font-weight:600; color:#e67e22; margin-bottom:8px; font-size:13px;" data-i18n="tc_defect_will_create">⚠ 将对以下用例创建缺陷记录：</div>
                     <div id="defectCaseNames" style="font-size:13px; color:#555; line-height:1.8;"></div>
                 </div>
                 <!-- 缺陷信息填写 -->
                 <div class="form-group">
-                    <label>缺陷标题模板 <span style="color:#888;font-size:12px;">（可用 {case_name} 代表用例名称，留空则为『[缺陷]用例名』）</span></label>
-                    <input type="text" id="defectTitleTemplate" placeholder="例：{case_name} 执行失败 - 有缺陷" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                    <label><span data-i18n="tc_defect_title_tpl">缺陷标题模板</span> <span style="color:#888;font-size:12px;" data-i18n="tc_defect_title_tpl_hint">（可用 {case_name} 代表用例名称，留空则为「[缺陷]用例名」）</span></label>
+                    <input type="text" id="defectTitleTemplate" data-i18n-placeholder="tc_defect_title_ph" placeholder="例：{case_name} 执行失败 - 有缺陷" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
                 </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
                     <div class="form-group">
-                        <label>严重程度</label>
+                        <label data-i18n="tc_defect_severity">严重程度</label>
                         <select id="defectSeverity" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
-                            <option value="critical">严重 (Critical)</option>
-                            <option value="high">高 (High)</option>
-                            <option value="medium" selected>中 (Medium)</option>
-                            <option value="low">低 (Low)</option>
+                            <option value="critical" data-i18n="tc_sev_critical">严重 (Critical)</option>
+                            <option value="high" data-i18n="tc_sev_high">高 (High)</option>
+                            <option value="medium" selected data-i18n="tc_sev_medium">中 (Medium)</option>
+                            <option value="low" data-i18n="tc_sev_low">低 (Low)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>优先级</label>
+                        <label data-i18n="tc_defect_priority">优先级</label>
                         <select id="defectPriority" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
-                            <option value="urgent">紧急 (Urgent)</option>
-                            <option value="high">高 (High)</option>
-                            <option value="medium" selected>中 (Medium)</option>
-                            <option value="low">低 (Low)</option>
+                            <option value="urgent" data-i18n="tc_pri_urgent">紧急 (Urgent)</option>
+                            <option value="high" data-i18n="tc_pri_high">高 (High)</option>
+                            <option value="medium" selected data-i18n="tc_pri_medium">中 (Medium)</option>
+                            <option value="low" data-i18n="tc_pri_low">低 (Low)</option>
                         </select>
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>错误描述 <span style="color:#888;font-size:12px;">（统一填写，留空则自动使用用例描述）</span></label>
-                    <textarea id="defectDescription" rows="3" placeholder="请描述缺陷表现、影响范围等..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;"></textarea>
+                    <label><span data-i18n="tc_defect_err_desc">错误描述</span> <span style="color:#888;font-size:12px;" data-i18n="tc_defect_err_desc_hint">（统一填写，留空则自动使用用例描述）</span></label>
+                    <textarea id="defectDescription" rows="3" data-i18n-placeholder="tc_defect_err_ph" placeholder="请描述缺陷表现、影响范围等..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;"></textarea>
                 </div>
                 <div class="form-group">
-                    <label>实际结果 <span style="color:#888;font-size:12px;">（实际观察到的错误现象）</span></label>
-                    <textarea id="defectActualResult" rows="2" placeholder="请描述实际发生的情况..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;"></textarea>
+                    <label><span data-i18n="tc_defect_actual">实际结果</span> <span style="color:#888;font-size:12px;" data-i18n="tc_defect_actual_hint">（实际观察到的错误现象）</span></label>
+                    <textarea id="defectActualResult" rows="2" data-i18n-placeholder="tc_defect_actual_ph" placeholder="请描述实际发生的情况..." style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;"></textarea>
                 </div>
                 <div class="form-group">
-                    <label>测试环境 <span style="color:#888;font-size:12px;">（可选）</span></label>
-                    <input type="text" id="defectEnvironment" placeholder="例：Chrome 120 / Windows 11 / 测试环境" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                    <label><span data-i18n="tc_defect_env">测试环境</span> <span style="color:#888;font-size:12px;" data-i18n="tc_defect_env_hint">（可选）</span></label>
+                    <input type="text" id="defectEnvironment" data-i18n-placeholder="tc_defect_env_ph" placeholder="例：Chrome 120 / Windows 11 / 测试环境" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
                 </div>
-                <div style="padding:10px; background:#e8f4fd; border-radius:6px; font-size:12px; color:#2c7be5;">
-                    ℹ 系统将自动提取每个用例的测试步骤作为『复现步骤』，和用例预期结果作为『期望结果』填入缺陷记录。
+                <div style="padding:10px; background:#e8f4fd; border-radius:6px; font-size:12px; color:#2c7be5;" data-i18n="tc_defect_auto_note">
+                    ℹ 系统将自动提取每个用例的测试步骤作为「复现步骤」，和用例预期结果作为「期望结果」填入缺陷记录。
                 </div>
             </div>
             <div class="modal-footer">
-                <button onclick="closeMarkDefectModal()" class="btn btn-secondary">取消</button>
-                <button onclick="submitMarkDefects()" class="btn btn-defect" id="submitDefectBtn">✔ 确认创建缺陷</button>
+                <button onclick="closeMarkDefectModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
+                <button onclick="submitMarkDefects()" class="btn btn-defect" id="submitDefectBtn" data-i18n="tc_defect_confirm_create">✔ 确认创建缺陷</button>
             </div>
         </div>
     </div>
-    
+</div>
+{% endblock %}
+{% block scripts %}
     <script>
         let currentProjectId = null;
         let currentProjectName = '';
@@ -721,7 +738,7 @@
             currentProjectId = getProjectIdFromUrl();
             
             if (!currentProjectId) {
-                alert('未找到项目信息，请先选择项目');
+                alert(t('tc_alert_no_project'));
                 window.location.href = '/list_projects';
                 return;
             }
@@ -732,13 +749,13 @@
                 
                 if (data.project) {
                     currentProjectName = data.project.name;
-                    document.getElementById('projectInfo').textContent = `项目: ${escapeHtml(currentProjectName)}`;
+                    document.getElementById('projectInfo').textContent = t('tc_project_prefix') + currentProjectName;
                 } else {
-                    document.getElementById('projectInfo').textContent = `项目: 未知项目`;
+                    document.getElementById('projectInfo').textContent = t('tc_project_prefix') + t('tc_project_unknown');
                 }
             } catch (error) {
                 console.error('加载项目信息失败:', error);
-                document.getElementById('projectInfo').textContent = `项目: 未知项目`;
+                document.getElementById('projectInfo').textContent = t('tc_project_prefix') + t('tc_project_unknown');
             }
         }
         
@@ -761,6 +778,11 @@
                         caseItem.className = 'case-item';
                         caseItem.id = `case-${testCase.id}`;
                         const isSelected = selectedCaseIdsOrdered.includes(testCase.id);
+                        const bSteps = escapeHtml(t('tc_view_steps'));
+                        const bHist = escapeHtml(t('tc_history'));
+                        const bEdit = escapeHtml(t('tc_btn_edit'));
+                        const bRun = escapeHtml(t('tc_run'));
+                        const bDel = escapeHtml(t('tc_btn_delete'));
                         caseItem.innerHTML = `
                             <div class="case-checkbox">
                                 <input type="checkbox" id="select-${testCase.id}" onchange="toggleCaseSelection(${testCase.id})" ${isSelected ? 'checked' : ''}>
@@ -769,11 +791,11 @@
                                 <h3>${escapeHtml(testCase.name)}</h3>
                             </div>
                             <div class="case-actions">
-                                <button onclick="viewCaseSteps(${testCase.id})" class="btn btn-info btn-sm">查看步骤</button>
-                                <button onclick="viewRunHistory(${testCase.id})" class="btn btn-secondary btn-sm">历史记录</button>
-                                <button onclick="editTestCase(${testCase.id})" class="btn btn-sm">编辑</button>
-                                <button onclick="runTestCase(${testCase.id})" class="btn btn-success btn-sm">运行</button>
-                                <button onclick="deleteTestCase(${testCase.id})" class="btn btn-danger btn-sm">删除</button>
+                                <button type="button" onclick="viewCaseSteps(${testCase.id})" class="btn btn-info btn-sm">${bSteps}</button>
+                                <button type="button" onclick="viewRunHistory(${testCase.id})" class="btn btn-secondary btn-sm">${bHist}</button>
+                                <button type="button" onclick="editTestCase(${testCase.id})" class="btn btn-sm">${bEdit}</button>
+                                <button type="button" onclick="runTestCase(${testCase.id})" class="btn btn-success btn-sm">${bRun}</button>
+                                <button type="button" onclick="deleteTestCase(${testCase.id})" class="btn btn-danger btn-sm">${bDel}</button>
                             </div>
                         `;
                         
@@ -784,8 +806,8 @@
                     casesList.innerHTML = `
                         <div class="empty-state">
                             <div class="empty-state-icon">📋</div>
-                            <div class="empty-state-text">该项目下暂无测试用例</div>
-                            <button onclick="showCreateCaseModal()" class="btn btn-primary">创建第一个测试用例</button>
+                            <div class="empty-state-text">${escapeHtml(t('tc_empty_cases'))}</div>
+                            <button type="button" onclick="showCreateCaseModal()" class="btn btn-primary">${escapeHtml(t('tc_create_first_case'))}</button>
                         </div>
                     `;
                 }
@@ -794,8 +816,8 @@
                 document.getElementById('casesList').innerHTML = `
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
-                        <div class="empty-state-text">加载测试用例失败</div>
-                        <button onclick="loadTestCases()" class="btn btn-primary">重新加载</button>
+                        <div class="empty-state-text">${escapeHtml(t('tc_load_fail'))}</div>
+                        <button type="button" onclick="loadTestCases()" class="btn btn-primary">${escapeHtml(t('tc_reload'))}</button>
                     </div>
                 `;
             }
@@ -808,6 +830,7 @@
             document.getElementById('caseDescription').value = '';
             document.getElementById('casePrecondition').value = '';
             document.getElementById('caseExpectedResult').value = '';
+            if (typeof applyUiLang === 'function') applyUiLang();
         }
         
         function closeCreateCaseModal() {
@@ -822,7 +845,7 @@
             const expected_result = document.getElementById('caseExpectedResult').value.trim();
             
             if (!name) {
-                alert('请输入测试用例名称');
+                alert(t('tc_case_need_name'));
                 return;
             }
             
@@ -845,14 +868,14 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('测试用例创建成功！');
+                    alert(t('tc_case_created_ok'));
                     closeCreateCaseModal();
                     loadTestCases();
                 } else {
-                    alert('创建失败: ' + (data.error || '未知错误'));
+                    alert(t('proj_case_fail') + (data.error || t('index_err_unknown')));
                 }
             } catch (error) {
-                alert('创建测试用例时发生错误: ' + error.message);
+                alert(t('proj_case_fail') + error.message);
             }
         }
         
@@ -864,6 +887,7 @@
             document.getElementById('editCaseDescription').value = caseData.description || '';
             document.getElementById('editCasePrecondition').value = caseData.precondition || '';
             document.getElementById('editCaseExpectedResult').value = caseData.expected_result || '';
+            if (typeof applyUiLang === 'function') applyUiLang();
         }
         
         function closeEditCaseModal() {
@@ -879,10 +903,10 @@
                 if (data.test_case) {
                     showEditCaseModal(caseId, data.test_case);
                 } else {
-                    alert('获取测试用例信息失败');
+                    alert(t('tc_fail_get_case'));
                 }
             } catch (error) {
-                alert('获取测试用例信息时发生错误: ' + error.message);
+                alert(t('tc_fail_get_case') + ': ' + error.message);
             }
         }
         
@@ -894,7 +918,7 @@
             const expected_result = document.getElementById('editCaseExpectedResult').value.trim();
             
             if (!name) {
-                alert('请输入测试用例名称');
+                alert(t('tc_case_need_name'));
                 return;
             }
             
@@ -916,19 +940,19 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('测试用例更新成功！');
+                    alert(t('tc_case_updated_ok'));
                     closeEditCaseModal();
                     loadTestCases();
                 } else {
-                    alert('更新失败: ' + (data.error || '未知错误'));
+                    alert(t('proj_alert_fail_update') + (data.error || t('index_err_unknown')));
                 }
             } catch (error) {
-                alert('更新测试用例时发生错误: ' + error.message);
+                alert(t('proj_alert_fail_update') + error.message);
             }
         }
         
         async function deleteTestCase(caseId) {
-            if (confirm('确定要删除这个测试用例吗？此操作将同时删除相关的所有测试步骤。')) {
+            if (confirm(t('tc_del_confirm'))) {
                 try {
                     const response = await fetch(`/api/cases/${caseId}`, {
                         method: 'DELETE'
@@ -938,21 +962,20 @@
                     try {
                         data = await response.json();
                     } catch (e) {
-                        // 处理非JSON响应
                         const text = await response.text();
-                        alert(`删除失败：服务器返回无效响应: ${text.substring(0, 100)}`);
+                        alert(t('proj_err_del_case') + text.substring(0, 100));
                         return;
                     }
                     
                     if (data.success) {
-                        alert('测试用例删除成功！');
+                        alert(t('tc_del_ok'));
                         selectedCaseIdsOrdered = selectedCaseIdsOrdered.filter(id => id !== caseId);
                         loadTestCases();
                     } else {
-                        alert('删除失败: ' + (data.error || '未知错误'));
+                        alert(t('proj_alert_fail_del') + (data.error || t('index_err_unknown')));
                     }
                 } catch (error) {
-                    alert('删除测试用例时发生错误: ' + error.message);
+                    alert(t('proj_alert_fail_del') + error.message);
                 }
             }
         }
@@ -1155,7 +1178,7 @@
         
         async function executeSelectedCases() {
             if (selectedCaseIdsOrdered.length === 0) {
-                alert('请先选择要执行的测试用例');
+                alert(t('tc_select_run_first'));
                 return;
             }
             
@@ -1407,7 +1430,7 @@
                 // 如果没有选中的用例，尝试获取所有已勾选的用例
                 const checked = document.querySelectorAll('.case-checkbox input:checked');
                 if (checked.length === 0) {
-                    alert('请先勾选要标记缺陷的测试用例');
+                    alert(t('tc_defect_select_first'));
                     return;
                 }
                 checked.forEach(cb => {
@@ -1419,7 +1442,7 @@
             }
             // 展示选中用例名称
             const namesHtml = selectedCaseIdsOrdered.map((id, idx) => {
-                const name = caseNamesById[id] || ('用例 #' + id);
+                const name = caseNamesById[id] || t('tc_case_fallback').replace('{id}', String(id));
                 return `<span style="display:inline-block; padding:2px 8px; background:#fff; border:1px solid #f39c12; border-radius:12px; margin:2px 4px;">${idx+1}. ${escapeHtml(name)}</span>`;
             }).join('');
             document.getElementById('defectCaseNames').innerHTML = namesHtml;
@@ -1431,6 +1454,7 @@
             document.getElementById('defectActualResult').value = '';
             document.getElementById('defectEnvironment').value = '';
             document.getElementById('markDefectModal').classList.add('active');
+            if (typeof applyUiLang === 'function') applyUiLang();
         }
         
         function closeMarkDefectModal() {
@@ -1440,13 +1464,13 @@
         async function submitMarkDefects() {
             const caseIds = [...selectedCaseIdsOrdered];
             if (caseIds.length === 0) {
-                alert('请先选择要标记缺陷的测试用例');
+                alert(t('tc_defect_select_first'));
                 return;
             }
             
             const submitBtn = document.getElementById('submitDefectBtn');
             submitBtn.disabled = true;
-            submitBtn.textContent = '创建中...';
+            submitBtn.textContent = t('tc_defect_submitting');
             
             const payload = {
                 case_ids: caseIds,
@@ -1469,33 +1493,33 @@
                 
                 if (data.success) {
                     closeMarkDefectModal();
-                    const severityLabels = { critical: '严重', high: '高', medium: '中', low: '低' };
-                    const priorityLabels = { urgent: '紧急', high: '高', medium: '中', low: '低' };
-                    const caseNames = caseIds.map(id => caseNamesById[id] || ('用例 #' + id));
+                    const severityLabels = { critical: t('tc_sev_critical'), high: t('tc_sev_high'), medium: t('tc_sev_medium'), low: t('tc_sev_low') };
+                    const priorityLabels = { urgent: t('tc_pri_urgent'), high: t('tc_pri_high'), medium: t('tc_pri_medium'), low: t('tc_pri_low') };
+                    const caseNames = caseIds.map(id => caseNamesById[id] || t('tc_case_fallback').replace('{id}', String(id)));
                     showRunResultModal(`
                         <div style="padding:16px;">
-                            <div style="color:#27ae60; font-size:18px; font-weight:600; margin-bottom:12px;">✔ 缺陷创建成功</div>
-                            <p style="margin-bottom:8px;"><strong>创建数量：</strong>${data.created_count} 个缺陷记录</p>
-                            <p style="margin-bottom:8px;"><strong>涉及用例：</strong></p>
+                            <div style="color:#27ae60; font-size:18px; font-weight:600; margin-bottom:12px;">${escapeHtml(t('tc_defect_success_title'))}</div>
+                            <p style="margin-bottom:8px;"><strong>${escapeHtml(t('tc_defect_created_line').replace('{n}', String(data.created_count)))}</strong></p>
+                            <p style="margin-bottom:8px;"><strong>${escapeHtml(t('tc_defect_cases_label'))}</strong></p>
                             <ul style="margin:0 0 10px 18px; font-size:13px; color:#555;">
                                 ${caseNames.map(n => '<li>' + escapeHtml(n) + '</li>').join('')}
                             </ul>
-                            <p style="margin-bottom:4px;"><strong>严重程度：</strong>${severityLabels[payload.severity] || payload.severity}</p>
-                            <p style="margin-bottom:4px;"><strong>优先级：</strong>${priorityLabels[payload.priority] || payload.priority}</p>
+                            <p style="margin-bottom:4px;"><strong>${escapeHtml(t('tc_defect_severity_label'))}</strong>${escapeHtml(severityLabels[payload.severity] || payload.severity)}</p>
+                            <p style="margin-bottom:4px;"><strong>${escapeHtml(t('tc_defect_priority_label'))}</strong>${escapeHtml(priorityLabels[payload.priority] || payload.priority)}</p>
                             <div style="margin-top:12px; padding:8px 12px; background:#e8f4fd; border-radius:6px; font-size:12px; color:#2c7be5;">
-                                可前往『缺陷管理』页面查看和管理所有缺陷记录。
+                                ${escapeHtml(t('tc_defect_goto_defects'))}
                             </div>
                         </div>
                     `, false);
                 } else {
-                    alert('创建失败：' + (data.error || '未知错误'));
+                    alert(t('tc_defect_create_fail') + (data.error || t('index_err_unknown')));
                 }
             } catch (e) {
                 console.error('标记缺陷失败:', e);
-                alert('请求失败：' + e.message);
+                alert(t('tc_request_fail') + e.message);
             } finally {
                 submitBtn.disabled = false;
-                submitBtn.textContent = '✔ 确认创建缺陷';
+                submitBtn.textContent = t('tc_defect_confirm_create');
             }
         }
         
@@ -1509,7 +1533,7 @@
             const modal = document.getElementById('importModal');
             modal.classList.remove('active');
             document.getElementById('importFile').value = '';
-            document.getElementById('importFileName').textContent = '未选择文件';
+            document.getElementById('importFileName').textContent = t('tc_no_file');
             document.getElementById('importResult').innerHTML = '';
         }
         
@@ -1530,10 +1554,10 @@
                 if (data.success) {
                     window.open(data.download_url, '_blank');
                 } else {
-                    alert('下载模板失败: ' + (data.error || '未知错误'));
+                    alert(t('tc_dl_tpl_fail') + (data.error || t('index_err_unknown')));
                 }
             } catch (e) {
-                alert('下载模板失败: ' + e.message);
+                alert(t('tc_dl_tpl_fail') + e.message);
             }
         }
         
@@ -1543,7 +1567,7 @@
                 span.textContent = input.files[0].name;
                 span.style.color = '#333';
             } else {
-                span.textContent = '未选择文件';
+                span.textContent = t('tc_no_file');
                 span.style.color = '#555';
             }
         }
@@ -1553,7 +1577,7 @@
             const resultDiv = document.getElementById('importResult');
             
             if (!fileInput.files || fileInput.files.length === 0) {
-                alert('请选择文件');
+                alert(t('tc_pick_file_first'));
                 return;
             }
             
@@ -1562,7 +1586,7 @@
             formData.append('file', file);
             formData.append('project_id', currentProjectId);
             
-            resultDiv.innerHTML = '<p style="color: #666;">正在导入，请稍候...</p>';
+            resultDiv.innerHTML = '<p style="color: #666;">' + escapeHtml(t('tc_importing')) + '</p>';
             
             try {
                 const res = await fetch('/api/cases/import/excel', {
@@ -1572,22 +1596,22 @@
                 const data = await res.json();
                 
                 if (data.success) {
-                    let html = `<p style="color: green;">导入成功！</p>`;
-                    html += `<p>创建用例: ${data.cases_created} 个</p>`;
-                    html += `<p>创建步骤: ${data.steps_created} 个</p>`;
+                    let html = `<p style="color: green;">${escapeHtml(t('tc_import_ok'))}</p>`;
+                    html += `<p>${escapeHtml(t('tc_import_cases_line').replace('{n}', String(data.cases_created || 0)))}</p>`;
+                    html += `<p>${escapeHtml(t('tc_import_steps_line').replace('{n}', String(data.steps_created || 0)))}</p>`;
                     if (data.errors && data.errors.length > 0) {
-                        html += `<p style="color: orange;">警告: ${data.errors.length} 条</p>`;
+                        html += `<p style="color: orange;">${escapeHtml(t('tc_import_warn_line').replace('{n}', String(data.errors.length)))}</p>`;
                         html += `<ul style="color: #666; font-size: 12px; max-height: 100px; overflow-y: auto;">`;
-                        data.errors.forEach(err => html += `<li>${err}</li>`);
+                        data.errors.forEach(err => html += `<li>${escapeHtml(err)}</li>`);
                         html += `</ul>`;
                     }
                     resultDiv.innerHTML = html;
                     loadTestCases(); // 刷新列表
                 } else {
-                    resultDiv.innerHTML = `<p style="color: red;">导入失败: ${data.error || '未知错误'}</p>`;
+                    resultDiv.innerHTML = `<p style="color: red;">${escapeHtml(t('tc_import_fail') + (data.error || t('index_err_unknown')))}</p>`;
                 }
             } catch (e) {
-                resultDiv.innerHTML = `<p style="color: red;">导入失败: ${e.message}</p>`;
+                resultDiv.innerHTML = `<p style="color: red;">${escapeHtml(t('tc_import_fail') + e.message)}</p>`;
             }
         }
         
@@ -1612,17 +1636,18 @@
                     window.open(data.download_url, '_blank');
                     closeExportModal();
                 } else {
-                    alert('导出失败: ' + (data.error || '未知错误'));
+                    alert(t('tc_export_fail') + (data.error || t('index_err_unknown')));
                 }
             } catch (e) {
-                alert('导出失败: ' + e.message);
+                alert(t('tc_export_fail') + e.message);
             }
         }
         
         document.addEventListener('DOMContentLoaded', async function() {
+            try { document.title = t('tc_doc_title'); } catch (e) {}
             currentProjectId = getProjectIdFromUrl();
             if (!currentProjectId) {
-                alert('未找到项目信息，请先选择项目');
+                alert(t('tc_alert_no_project'));
                 window.location.href = '/list_projects';
                 return;
             }
@@ -1630,6 +1655,13 @@
             await syncCaseRunButtonState();
             caseRunStatusTimer = setInterval(syncCaseRunButtonState, 1000);
         });
+
+        window.addEventListener('ui-preferences-updated', function (ev) {
+            if (ev.detail && ev.detail.source === 'load') return;
+            try { document.title = t('tc_doc_title'); } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
+            loadProjectInfo();
+            loadTestCases();
+        });
     </script>
-</body>
-</html>
+{% endblock %}

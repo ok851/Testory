@@ -1,13 +1,7 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>缺陷管理 - UI自动化测试平台</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+{% extends "base.html" %}
+{% block title %}缺陷管理 - UI自动化测试平台{% endblock %}
+{% block head %}
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .severity-critical { background: #dc2626; color: white; }
         .severity-high { background: #ea580c; color: white; }
         .severity-medium { background: #ca8a04; color: white; }
@@ -18,275 +12,213 @@
         .status-closed { background: #6b7280; color: white; }
         .status-reopened { background: #f59e0b; color: white; }
     </style>
-</head>
-<body class="bg-gradient-to-br from-purple-600 to-indigo-700 min-h-screen">
-    <!-- 导航栏 -->
-    <nav class="bg-white shadow-md">
-        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
-            <!-- 左侧：Logo -->
-            <div class="flex items-center gap-3">
-                <i class="fas fa-robot text-blue-600 text-2xl"></i>
-                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
-            </div>
-            <!-- 右侧：功能按钮 + 用户信息 -->
-            <div class="flex items-center gap-2">
-                <a href="/" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-500 text-white hover:bg-blue-600" title="首页">
-                    <i class="fas fa-home"></i>
-                </a>
-                <a href="/list_projects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-green-500 text-white hover:bg-green-600" title="项目管理">
-                    <i class="fas fa-folder mr-1"></i>项目
-                </a>
-                <a href="/run-history" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600" title="运行历史">
-                    <i class="fas fa-history mr-1"></i>历史
-                </a>
-                <a href="/data-driven" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-purple-600 text-white hover:bg-purple-700" title="数据驱动">
-                    <i class="fas fa-table mr-1"></i>数据
-                </a>
-                <a href="/test_report" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700" title="测试报告">
-                    <i class="fas fa-chart-bar mr-1"></i>报告
-                </a>
-                <a href="/schedules" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-orange-500 text-white hover:bg-orange-600" title="定时任务">
-                    <i class="fas fa-clock mr-1"></i>定时
-                </a>
-                <a href="/notifications" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-pink-500 text-white hover:bg-pink-600" title="通知配置">
-                    <i class="fas fa-bell mr-1"></i>通知
-                </a>
-                <a href="/defects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-red-600 text-white hover:bg-red-700" title="缺陷管理">
-                    <i class="fas fa-bug mr-1"></i>缺陷
-                </a>
-                <!-- 用户信息区（最右边） -->
-                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
-                    <!-- 用户下拉菜单 -->
-                    <div id="userDropdown" class="relative hidden">
-                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
-                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
-                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
-                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
-                        </button>
-                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
-                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
-                            </a>
-                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
-                            </a>
-                            <div class="border-t border-gray-100 my-1"></div>
-                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
-                                <i class="fas fa-sign-out-alt mr-2"></i>注销
-                            </button>
-                        </div>
-                    </div>
-                    <a id="loginBtn" href="/login" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap bg-gray-100 text-gray-700 hover:bg-gray-200 hidden">
-                        <i class="fas fa-sign-in-alt"></i> 登录
-                    </a>
-                </div>
-            </div>
-        </div>
-    </nav>
-
-    <div class="max-w-7xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden mt-5">
+{% endblock %}
+{% block body_class %}bg-gradient-to-br from-purple-600 to-indigo-700 dark:from-gray-900 dark:to-gray-950 min-h-screen{% endblock %}
+{% block content %}
+    <div class="max-w-7xl mx-auto bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden mt-5 border border-transparent dark:border-gray-800">
         <!-- 头部 -->
-        <div class="bg-gradient-to-r from-purple-600 to-indigo-700 text-white p-8">
-            <h1 class="text-3xl font-bold mb-2"><i class="fas fa-bug mr-3"></i>缺陷管理</h1>
-            <p class="text-purple-200">跟踪和管理测试过程中发现的所有缺陷</p>
+        <div class="bg-gradient-to-r from-purple-600 to-indigo-700 dark:from-purple-900 dark:to-indigo-950 text-white p-8">
+            <h1 class="text-3xl font-bold mb-2"><i class="fas fa-bug mr-3"></i><span data-i18n="df_h1">缺陷管理</span></h1>
+            <p class="text-purple-200 dark:text-purple-300/90" data-i18n="df_sub">跟踪和管理测试过程中发现的所有缺陷</p>
         </div>
         
         <!-- 工具栏 -->
-        <div class="p-5 bg-gray-50 border-b flex flex-wrap gap-4 items-center justify-between">
+        <div class="p-5 bg-gray-50 dark:bg-gray-800/80 border-b border-gray-200 dark:border-gray-700 flex flex-wrap gap-4 items-center justify-between">
             <div class="flex flex-wrap gap-3 items-center">
-                <!-- 项目筛选 -->
-                <select id="filterProject" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <option value="">所有项目</option>
+                <select id="filterProject" class="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+                    <option value="" data-i18n="df_all_proj">所有项目</option>
                 </select>
-                <!-- 状态筛选 -->
-                <select id="filterStatus" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <option value="">所有状态</option>
-                    <option value="open">待处理</option>
-                    <option value="in_progress">处理中</option>
-                    <option value="resolved">已解决</option>
-                    <option value="closed">已关闭</option>
-                    <option value="reopened">重新打开</option>
+                <select id="filterStatus" class="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+                    <option value="" data-i18n="df_all_stat">所有状态</option>
+                    <option value="open" data-i18n="df_st_open">待处理</option>
+                    <option value="in_progress" data-i18n="df_st_ip">处理中</option>
+                    <option value="resolved" data-i18n="df_st_res">已解决</option>
+                    <option value="closed" data-i18n="df_st_cl">已关闭</option>
+                    <option value="reopened" data-i18n="df_st_reop">重新打开</option>
                 </select>
-                <!-- 严重级别筛选 -->
-                <select id="filterSeverity" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                    <option value="">所有级别</option>
-                    <option value="critical">致命</option>
-                    <option value="high">严重</option>
-                    <option value="medium">一般</option>
-                    <option value="low">轻微</option>
+                <select id="filterSeverity" class="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+                    <option value="" data-i18n="df_all_sev">所有级别</option>
+                    <option value="critical" data-i18n="df_sev_crit">致命</option>
+                    <option value="high" data-i18n="df_sev_hi">严重</option>
+                    <option value="medium" data-i18n="df_sev_med">一般</option>
+                    <option value="low" data-i18n="df_sev_lo">轻微</option>
                 </select>
-                <button onclick="loadDefects()" class="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-lg transition">
-                    <i class="fas fa-search mr-1"></i>筛选
+                <button onclick="loadDefects()" class="bg-gray-500 hover:bg-gray-600 dark:bg-gray-600 dark:hover:bg-gray-500 text-white px-4 py-2 rounded-lg transition">
+                    <i class="fas fa-search mr-1"></i><span data-i18n="df_filter">筛选</span>
                 </button>
             </div>
             <div class="flex gap-3">
                 <button onclick="showCreateModal()" class="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-lg transition">
-                    <i class="fas fa-plus mr-2"></i>新建缺陷
+                    <i class="fas fa-plus mr-2"></i><span data-i18n="df_new">新建缺陷</span>
                 </button>
-                <a href="/" class="bg-gray-500 hover:bg-gray-600 text-white px-5 py-2 rounded-lg transition">
-                    <i class="fas fa-arrow-left mr-2"></i>返回首页
+                <a href="/" class="bg-gray-500 hover:bg-gray-600 text-white px-5 py-2 rounded-lg transition inline-flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i><span data-i18n="df_home">返回首页</span>
                 </a>
             </div>
         </div>
         
-        <!-- 统计卡片 -->
         <div class="p-5 grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div class="bg-red-50 rounded-lg p-4 border border-red-200">
-                <div class="text-red-600 text-2xl font-bold" id="statOpen">0</div>
-                <div class="text-red-500 text-sm">待处理</div>
+            <div class="bg-red-50 dark:bg-red-950/40 rounded-lg p-4 border border-red-200 dark:border-red-900">
+                <div class="text-red-600 dark:text-red-400 text-2xl font-bold" id="statOpen">0</div>
+                <div class="text-red-500 dark:text-red-300 text-sm" data-i18n="df_card_open">待处理</div>
             </div>
-            <div class="bg-blue-50 rounded-lg p-4 border border-blue-200">
-                <div class="text-blue-600 text-2xl font-bold" id="statInProgress">0</div>
-                <div class="text-blue-500 text-sm">处理中</div>
+            <div class="bg-blue-50 dark:bg-blue-950/40 rounded-lg p-4 border border-blue-200 dark:border-blue-900">
+                <div class="text-blue-600 dark:text-blue-400 text-2xl font-bold" id="statInProgress">0</div>
+                <div class="text-blue-500 dark:text-blue-300 text-sm" data-i18n="df_card_ip">处理中</div>
             </div>
-            <div class="bg-green-50 rounded-lg p-4 border border-green-200">
-                <div class="text-green-600 text-2xl font-bold" id="statResolved">0</div>
-                <div class="text-green-500 text-sm">已解决</div>
+            <div class="bg-green-50 dark:bg-green-950/40 rounded-lg p-4 border border-green-200 dark:border-green-900">
+                <div class="text-green-600 dark:text-green-400 text-2xl font-bold" id="statResolved">0</div>
+                <div class="text-green-500 dark:text-green-300 text-sm" data-i18n="df_card_res">已解决</div>
             </div>
-            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <div class="text-gray-600 text-2xl font-bold" id="statClosed">0</div>
-                <div class="text-gray-500 text-sm">已关闭</div>
+            <div class="bg-gray-50 dark:bg-gray-800/80 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+                <div class="text-gray-600 dark:text-gray-300 text-2xl font-bold" id="statClosed">0</div>
+                <div class="text-gray-500 dark:text-gray-400 text-sm" data-i18n="df_card_cl">已关闭</div>
             </div>
-            <div class="bg-purple-50 rounded-lg p-4 border border-purple-200">
-                <div class="text-purple-600 text-2xl font-bold" id="statTotal">0</div>
-                <div class="text-purple-500 text-sm">总计</div>
+            <div class="bg-purple-50 dark:bg-purple-950/40 rounded-lg p-4 border border-purple-200 dark:border-purple-900">
+                <div class="text-purple-600 dark:text-purple-400 text-2xl font-bold" id="statTotal">0</div>
+                <div class="text-purple-500 dark:text-purple-300 text-sm" data-i18n="df_card_tot">总计</div>
             </div>
         </div>
         
-        <!-- 缺陷列表 -->
         <div class="p-5">
-            <div class="overflow-x-auto">
-                <table class="w-full border-collapse">
+            <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+                <table class="w-full border-collapse text-gray-900 dark:text-gray-100">
                     <thead>
-                        <tr class="bg-gray-100">
-                            <th class="p-3 text-left font-semibold">ID</th>
-                            <th class="p-3 text-left font-semibold">标题</th>
-                            <th class="p-3 text-left font-semibold">项目</th>
-                            <th class="p-3 text-left font-semibold">严重级别</th>
-                            <th class="p-3 text-left font-semibold">状态</th>
-                            <th class="p-3 text-left font-semibold">负责人</th>
-                            <th class="p-3 text-left font-semibold">创建时间</th>
-                            <th class="p-3 text-left font-semibold">操作</th>
+                        <tr class="bg-gray-100 dark:bg-gray-800">
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_id">ID</th>
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_title">标题</th>
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_proj">项目</th>
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_sev">严重级别</th>
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_stat">状态</th>
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_asg">负责人</th>
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_created">创建时间</th>
+                            <th class="p-3 text-left font-semibold" data-i18n="df_th_act">操作</th>
                         </tr>
                     </thead>
-                    <tbody id="defectList">
-                        <tr><td colspan="8" class="p-8 text-center text-gray-500">加载中...</td></tr>
+                    <tbody id="defectList" class="dark:bg-gray-900/50">
+                        <tr><td colspan="8" class="p-8 text-center text-gray-500 dark:text-gray-400" data-i18n="df_loading">加载中...</td></tr>
                     </tbody>
                 </table>
             </div>
-            
-            <!-- 分页 -->
             <div class="mt-5 flex justify-between items-center">
-                <div class="text-gray-500 text-sm" id="paginationInfo">显示 0 - 0 条，共 0 条</div>
+                <div class="text-gray-500 dark:text-gray-400 text-sm" id="paginationInfo"></div>
                 <div class="flex gap-2" id="paginationButtons"></div>
             </div>
         </div>
     </div>
     
     <!-- 新建/编辑缺陷模态框 -->
-    <div id="defectModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div class="p-5 border-b flex justify-between items-center bg-gradient-to-r from-purple-600 to-indigo-700 text-white rounded-t-xl">
-                <h3 class="text-xl font-bold" id="modalTitle"><i class="fas fa-bug mr-2"></i>新建缺陷</h3>
+    <div id="defectModal" class="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center z-50 hidden">
+        <div class="bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-gray-700">
+            <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gradient-to-r from-purple-600 to-indigo-700 dark:from-purple-900 dark:to-indigo-950 text-white rounded-t-xl">
+                <h3 class="text-xl font-bold" id="modalTitle"><i class="fas fa-bug mr-2"></i><span data-i18n="df_modal_new">新建缺陷</span></h3>
                 <button onclick="closeModal()" class="text-white hover:text-gray-200 text-2xl">&times;</button>
             </div>
-            <form id="defectForm" class="p-5 space-y-4">
+            <form id="defectForm" class="p-5 space-y-4 text-gray-900 dark:text-gray-100">
                 <input type="hidden" id="defectId">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-gray-700 font-medium mb-1">项目 <span class="text-red-500">*</span></label>
-                        <select id="defectProject" required onchange="loadCasesForProject(this.value)" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            <option value="">请选择项目</option>
+                        <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1"><span data-i18n="df_lbl_proj">项目</span> <span class="text-red-500">*</span></label>
+                        <select id="defectProject" required onchange="loadCasesForProject(this.value)" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                            <option value="" data-i18n="df_proj_ph">请选择项目</option>
                         </select>
                     </div>
                     <div>
-                        <label class="block text-gray-700 font-medium mb-1">关联用例</label>
-                        <select id="defectCase" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            <option value="">无</option>
+                        <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_case">关联用例</label>
+                        <select id="defectCase" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                            <option value="" data-i18n="df_case_none">无</option>
                         </select>
                     </div>
                 </div>
                 <div>
-                    <label class="block text-gray-700 font-medium mb-1">标题 <span class="text-red-500">*</span></label>
-                    <input type="text" id="defectTitle" required class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="请输入缺陷标题">
+                    <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1"><span data-i18n="df_lbl_title">标题</span> <span class="text-red-500">*</span></label>
+                    <input type="text" id="defectTitle" required data-i18n-placeholder="df_ph_title" placeholder="请输入缺陷标题" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
                 </div>
                 <div>
-                    <label class="block text-gray-700 font-medium mb-1">描述</label>
-                    <textarea id="defectDescription" rows="4" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="请详细描述缺陷"></textarea>
+                    <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_desc">描述</label>
+                    <textarea id="defectDescription" rows="4" data-i18n-placeholder="df_ph_desc" placeholder="请详细描述缺陷" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"></textarea>
                 </div>
                 <div class="grid grid-cols-3 gap-4">
                     <div>
-                        <label class="block text-gray-700 font-medium mb-1">严重级别</label>
-                        <select id="defectSeverity" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            <option value="critical">致命</option>
-                            <option value="high">严重</option>
-                            <option value="medium" selected>一般</option>
-                            <option value="low">轻微</option>
+                        <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_sev">严重级别</label>
+                        <select id="defectSeverity" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                            <option value="critical" data-i18n="df_sev_crit">致命</option>
+                            <option value="high" data-i18n="df_sev_hi">严重</option>
+                            <option value="medium" selected data-i18n="df_sev_med">一般</option>
+                            <option value="low" data-i18n="df_sev_lo">轻微</option>
                         </select>
                     </div>
                     <div>
-                        <label class="block text-gray-700 font-medium mb-1">优先级</label>
-                        <select id="defectPriority" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            <option value="high">高</option>
-                            <option value="medium" selected>中</option>
-                            <option value="low">低</option>
+                        <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_pri">优先级</label>
+                        <select id="defectPriority" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                            <option value="high" data-i18n="df_pri_hi">高</option>
+                            <option value="medium" selected data-i18n="df_pri_med">中</option>
+                            <option value="low" data-i18n="df_pri_lo">低</option>
                         </select>
                     </div>
                     <div>
-                        <label class="block text-gray-700 font-medium mb-1">负责人</label>
-                        <select id="defectAssignee" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            <option value="">未分配</option>
+                        <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_asg">负责人</label>
+                        <select id="defectAssignee" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                            <option value="" data-i18n="df_unassigned_opt">未分配</option>
                         </select>
                     </div>
                 </div>
-                <!-- 状态选择（新建和编辑都显示） -->
                 <div id="statusEditRow">
-                    <label class="block text-gray-700 font-medium mb-1"><i class="fas fa-exchange-alt mr-1 text-purple-500"></i>状态</label>
+                    <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1"><i class="fas fa-exchange-alt mr-1 text-purple-500"></i><span data-i18n="df_lbl_stat">状态</span></label>
                     <div class="flex gap-3 items-start">
-                        <select id="defectStatus" class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" style="min-width:160px;" onchange="toggleResolutionField()">
-                            <option value="open" selected>待处理</option>
-                            <option value="in_progress">处理中</option>
-                            <option value="resolved">已解决</option>
-                            <option value="closed">已关闭</option>
-                            <option value="reopened">重新打开</option>
+                        <select id="defectStatus" class="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100" style="min-width:160px;" onchange="toggleResolutionField()">
+                            <option value="open" selected data-i18n="df_st_open">待处理</option>
+                            <option value="in_progress" data-i18n="df_st_ip">处理中</option>
+                            <option value="resolved" data-i18n="df_st_res">已解决</option>
+                            <option value="closed" data-i18n="df_st_cl">已关闭</option>
+                            <option value="reopened" data-i18n="df_st_reop">重新打开</option>
                         </select>
                         <div id="resolutionEditSection" style="display:none; flex:1;">
-                            <textarea id="defectResolution" rows="2" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="解决方案说明..."></textarea>
+                            <textarea id="defectResolution" rows="2" data-i18n-placeholder="df_ph_res" placeholder="解决方案说明..." class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"></textarea>
                         </div>
                     </div>
                 </div>
                 <div>
-                    <label class="block text-gray-700 font-medium mb-1">复现步骤</label>
-                    <textarea id="defectReproduceSteps" rows="3" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500" placeholder="描述缺陷的复现步骤"></textarea>
+                    <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_repro">复现步骤</label>
+                    <textarea id="defectReproduceSteps" rows="3" data-i18n-placeholder="df_ph_repro" placeholder="描述缺陷的复现步骤" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"></textarea>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-gray-700 font-medium mb-1">预期结果</label>
-                        <textarea id="defectExpected" rows="2" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"></textarea>
+                        <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_exp">预期结果</label>
+                        <textarea id="defectExpected" rows="2" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"></textarea>
                     </div>
                     <div>
-                        <label class="block text-gray-700 font-medium mb-1">实际结果</label>
-                        <textarea id="defectActual" rows="2" class="w-full border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"></textarea>
+                        <label class="block text-gray-700 dark:text-gray-300 font-medium mb-1" data-i18n="df_lbl_act2">实际结果</label>
+                        <textarea id="defectActual" rows="2" class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"></textarea>
                     </div>
                 </div>
-                <div class="flex justify-end gap-3 pt-4 border-t">
-                    <button type="button" onclick="closeModal()" class="px-5 py-2 border rounded-lg hover:bg-gray-100 transition">取消</button>
-                    <button type="submit" class="px-5 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition">保存</button>
+                <div class="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <button type="button" onclick="closeModal()" class="px-5 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition" data-i18n="index_btn_cancel">取消</button>
+                    <button type="submit" class="px-5 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition" data-i18n="steps_btn_save">保存</button>
                 </div>
             </form>
         </div>
     </div>
-    
+{% endblock %}
+{% block scripts %}
     <script>
         let currentPage = 1;
         const pageSize = 20;
         let projects = [];
         let users = [];
         
-        // 页面加载
         document.addEventListener('DOMContentLoaded', function() {
+            try { document.title = t('df_doc_title'); } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
             loadProjects();
             loadUsers();
+            loadDefects();
+            loadStatistics();
+        });
+        window.addEventListener('ui-preferences-updated', function (ev) {
+            if (ev.detail && ev.detail.source === 'load') return;
+            try { document.title = t('df_doc_title'); } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
             loadDefects();
             loadStatistics();
         });
@@ -314,7 +246,7 @@
         // 根据项目加载用例列表
         async function loadCasesForProject(projectId) {
             const caseSelect = document.getElementById('defectCase');
-            caseSelect.innerHTML = '<option value="">无</option>';
+            caseSelect.innerHTML = '<option value="">' + escapeHtml(t('df_case_none')) + '</option>';
             
             if (!projectId) return;
             
@@ -369,7 +301,7 @@
                 }
             } catch (e) {
                 console.error('加载缺陷失败:', e);
-                document.getElementById('defectList').innerHTML = `<tr><td colspan="8" class="p-8 text-center text-red-500">加载失败</td></tr>`;
+                document.getElementById('defectList').innerHTML = `<tr><td colspan="8" class="p-8 text-center text-red-500 dark:text-red-400">${escapeHtml(t('df_load_fail'))}</td></tr>`;
             }
         }
         
@@ -378,34 +310,35 @@
             const tbody = document.getElementById('defectList');
             
             if (!defects || defects.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-gray-500">暂无缺陷数据</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" class="p-8 text-center text-gray-500 dark:text-gray-400">${escapeHtml(t('df_empty'))}</td></tr>`;
                 return;
             }
             
-            const severityLabels = { critical: '致命', high: '严重', medium: '一般', low: '轻微' };
-            const statusLabels = { open: '待处理', in_progress: '处理中', resolved: '已解决', closed: '已关闭', reopened: '重新打开' };
+            const severityLabels = { critical: t('df_sev_crit'), high: t('df_sev_hi'), medium: t('df_sev_med'), low: t('df_sev_lo') };
+            const statusLabels = { open: t('df_st_open'), in_progress: t('df_st_ip'), resolved: t('df_st_res'), closed: t('df_st_cl'), reopened: t('df_st_reop') };
+            const unassigned = escapeHtml(t('df_unassigned'));
             
             tbody.innerHTML = defects.map(d => `
-                <tr class="border-b hover:bg-gray-50 transition">
-                    <td class="p-3 text-gray-600">#${d.id}</td>
+                <tr class="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition">
+                    <td class="p-3 text-gray-600 dark:text-gray-400">#${d.id}</td>
                     <td class="p-3">
-                        <a href="/defects/${d.id}" class="text-purple-600 hover:text-purple-800 font-medium">${escapeHtml(d.title)}</a>
-                        ${d.case_name ? `<div class="text-xs text-gray-400 mt-1"><i class="fas fa-link mr-1"></i>${escapeHtml(d.case_name)}</div>` : ''}
+                        <a href="/defects/${d.id}" class="text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 font-medium">${escapeHtml(d.title)}</a>
+                        ${d.case_name ? `<div class="text-xs text-gray-400 dark:text-gray-500 mt-1"><i class="fas fa-link mr-1"></i>${escapeHtml(d.case_name)}</div>` : ''}
                     </td>
-                    <td class="p-3 text-gray-600">${d.project_name || '-'}</td>
+                    <td class="p-3 text-gray-600 dark:text-gray-400">${d.project_name || '-'}</td>
                     <td class="p-3">
-                        <span class="px-2 py-1 rounded text-xs severity-${d.severity}">${severityLabels[d.severity] || d.severity}</span>
+                        <span class="px-2 py-1 rounded text-xs severity-${d.severity}">${escapeHtml(severityLabels[d.severity] || d.severity)}</span>
                     </td>
                     <td class="p-3">
-                        <span class="px-2 py-1 rounded text-xs status-${d.status}">${statusLabels[d.status] || d.status}</span>
+                        <span class="px-2 py-1 rounded text-xs status-${d.status}">${escapeHtml(statusLabels[d.status] || d.status)}</span>
                     </td>
-                    <td class="p-3 text-gray-600">${d.assignee_name || '<span class="text-gray-400">未分配</span>'}</td>
-                    <td class="p-3 text-gray-500 text-sm">${formatDate(d.created_at)}</td>
+                    <td class="p-3 text-gray-600 dark:text-gray-400">${d.assignee_name ? escapeHtml(d.assignee_name) : '<span class="text-gray-400 dark:text-gray-500">' + unassigned + '</span>'}</td>
+                    <td class="p-3 text-gray-500 dark:text-gray-400 text-sm">${formatDate(d.created_at)}</td>
                     <td class="p-3">
                         <div class="flex gap-2">
-                            <a href="/defects/${d.id}" class="text-blue-500 hover:text-blue-700" title="查看详情"><i class="fas fa-eye"></i></a>
-                            <button onclick="editDefect(${d.id})" class="text-yellow-500 hover:text-yellow-700" title="编辑"><i class="fas fa-edit"></i></button>
-                            <button onclick="deleteDefect(${d.id})" class="text-red-500 hover:text-red-700" title="删除"><i class="fas fa-trash"></i></button>
+                            <a href="/defects/${d.id}" class="text-blue-500 dark:text-blue-400 hover:text-blue-700" title="${escapeHtml(t('df_ttl_view'))}"><i class="fas fa-eye"></i></a>
+                            <button onclick="editDefect(${d.id})" class="text-yellow-600 dark:text-yellow-500 hover:text-yellow-700" title="${escapeHtml(t('df_ttl_edit'))}"><i class="fas fa-edit"></i></button>
+                            <button onclick="deleteDefect(${d.id})" class="text-red-500 dark:text-red-400 hover:text-red-700" title="${escapeHtml(t('df_ttl_del'))}"><i class="fas fa-trash"></i></button>
                         </div>
                     </td>
                 </tr>
@@ -414,8 +347,10 @@
         
         // 渲染分页
         function renderPagination(total, page, totalPages) {
-            document.getElementById('paginationInfo').textContent = 
-                `显示 ${(page-1)*pageSize+1} - ${Math.min(page*pageSize, total)} 条，共 ${total} 条`;
+            const from = total ? (page - 1) * pageSize + 1 : 0;
+            const to = Math.min(page * pageSize, total);
+            document.getElementById('paginationInfo').textContent = t('df_page')
+                .replace('{from}', String(from)).replace('{to}', String(to)).replace('{total}', String(total));
             
             const btns = document.getElementById('paginationButtons');
             btns.innerHTML = '';
@@ -423,16 +358,16 @@
             if (totalPages <= 1) return;
             
             if (page > 1) {
-                btns.innerHTML += `<button onclick="goToPage(${page-1})" class="px-3 py-1 border rounded hover:bg-gray-100">上一页</button>`;
+                btns.innerHTML += `<button onclick="goToPage(${page-1})" class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200">${escapeHtml(t('df_prev'))}</button>`;
             }
             
             for (let i = Math.max(1, page-2); i <= Math.min(totalPages, page+2); i++) {
-                const active = i === page ? 'bg-purple-600 text-white' : 'hover:bg-gray-100';
+                const active = i === page ? 'bg-purple-600 text-white border-purple-600' : 'hover:bg-gray-100 dark:hover:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-800 dark:text-gray-200';
                 btns.innerHTML += `<button onclick="goToPage(${i})" class="px-3 py-1 border rounded ${active}">${i}</button>`;
             }
             
             if (page < totalPages) {
-                btns.innerHTML += `<button onclick="goToPage(${page+1})" class="px-3 py-1 border rounded hover:bg-gray-100">下一页</button>`;
+                btns.innerHTML += `<button onclick="goToPage(${page+1})" class="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200">${escapeHtml(t('df_next'))}</button>`;
             }
         }
         
@@ -462,7 +397,8 @@
         
         // 显示新建模态框
         function showCreateModal() {
-            document.getElementById('modalTitle').innerHTML = '<i class="fas fa-bug mr-2"></i>新建缺陷';
+            document.getElementById('modalTitle').innerHTML = '<i class="fas fa-bug mr-2"></i>' + escapeHtml(t('df_modal_new'));
+            if (typeof applyUiLang === 'function') applyUiLang();
             document.getElementById('defectId').value = '';
             document.getElementById('defectForm').reset();
             // 重置状态为待处理
@@ -485,7 +421,8 @@
                 
                 if (data.success) {
                     const d = data.defect;
-                    document.getElementById('modalTitle').innerHTML = '<i class="fas fa-edit mr-2"></i>编辑缺陷';
+                    document.getElementById('modalTitle').innerHTML = '<i class="fas fa-edit mr-2"></i>' + escapeHtml(t('df_modal_edit'));
+                    if (typeof applyUiLang === 'function') applyUiLang();
                     document.getElementById('defectId').value = d.id;
                     document.getElementById('defectProject').value = d.project_id || '';
                     // 先加载该项目的用例，再设置关联用例
@@ -509,13 +446,13 @@
                     document.getElementById('defectModal').classList.remove('hidden');
                 }
             } catch (e) {
-                alert('加载缺陷失败: ' + e.message);
+                alert(t('df_alert_load') + e.message);
             }
         }
         
         // 删除缺陷
         async function deleteDefect(id) {
-            if (!confirm('确定要删除此缺陷吗？此操作不可撤销。')) return;
+            if (!confirm(t('df_confirm_del'))) return;
             
             try {
                 const res = await fetch(`/api/defects/${id}`, { method: 'DELETE' });
@@ -525,10 +462,10 @@
                     loadDefects();
                     loadStatistics();
                 } else {
-                    alert('删除失败: ' + (data.error || '未知错误'));
+                    alert(t('df_del_fail') + (data.error || t('index_err_unknown')));
                 }
             } catch (e) {
-                alert('删除失败: ' + e.message);
+                alert(t('df_del_fail') + e.message);
             }
         }
         
@@ -572,10 +509,10 @@
                     loadDefects();
                     loadStatistics();
                 } else {
-                    alert('保存失败: ' + (data.error || '未知错误'));
+                    alert(t('df_save_fail') + (data.error || t('index_err_unknown')));
                 }
             } catch (e) {
-                alert('保存失败: ' + e.message);
+                alert(t('df_save_fail') + e.message);
             }
         });
         
@@ -595,59 +532,9 @@
         function formatDate(dateStr) {
             if (!dateStr) return '-';
             const d = new Date(dateStr);
-            return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+            var loc = (localStorage.getItem('ui_lang') || 'zh') === 'en' ? 'en-US' : 'zh-CN';
+            return d.toLocaleString(loc, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
 
-        // ==================== 登录状态管理 ====================
-        function initUserArea() {
-            fetch('/api/auth/me')
-                .then(res => res.json())
-                .then(data => {
-                    if (data.success) {
-                        const user = data.user;
-                        document.getElementById('userLabel').textContent = user.username;
-                        document.getElementById('userDropdown').classList.remove('hidden');
-                        document.getElementById('loginBtn').classList.add('hidden');
-                    } else {
-                        document.getElementById('loginBtn').classList.remove('hidden');
-                        document.getElementById('userDropdown').classList.add('hidden');
-                    }
-                })
-                .catch(() => {
-                    document.getElementById('loginBtn').classList.remove('hidden');
-                    document.getElementById('userDropdown').classList.add('hidden');
-                });
-        }
-
-        // 切换用户菜单显示
-        function toggleUserMenu() {
-            const menu = document.getElementById('userMenu');
-            menu.classList.toggle('hidden');
-        }
-
-        // 点击外部关闭菜单
-        document.addEventListener('click', function(e) {
-            const dropdown = document.getElementById('userDropdown');
-            const menu = document.getElementById('userMenu');
-            if (dropdown && !dropdown.contains(e.target)) {
-                menu.classList.add('hidden');
-            }
-        });
-
-        async function handleLogout() {
-            try {
-                await fetch('/api/auth/logout', {method: 'POST'});
-                localStorage.removeItem('currentUser');
-                window.location.href = '/login';
-            } catch(e) {
-                window.location.href = '/login';
-            }
-        }
-
-        // 页面加载
-        document.addEventListener('DOMContentLoaded', function() {
-            initUserArea();
-        });
     </script>
-</body>
-</html>
+{% endblock %}

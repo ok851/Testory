@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 from database import Database
+from license_manager import license_manager, LicenseType
 
 
 class PaymentMethod(Enum):
@@ -99,6 +100,24 @@ class PaymentManager:
     def __init__(self, db: Database = None, config: PaymentConfig = None):
         self.db = db or Database()
         self.config = config or PaymentConfig()
+        self._ensure_order_license_table()
+
+    def _ensure_order_license_table(self):
+        """确保订单 License 映射表存在（兼容老库升级）"""
+        import sqlite3
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS order_licenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_no TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                license_key TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
     
     # ==================== 订单管理 ====================
     
@@ -184,12 +203,14 @@ class PaymentManager:
         if not row:
             return None
         
+        plan_info = PLAN_PRICES.get(row[4], {})
         return {
             'id': row[0],
             'order_no': row[1],
             'user_id': row[2],
             'tenant_id': row[3],
             'plan_type': row[4],
+            'plan_name': plan_info.get('name', row[4]),
             'amount': row[5],
             'amount_yuan': row[5] / 100,
             'currency': row[6],
@@ -266,6 +287,71 @@ class PaymentManager:
             self._activate_subscription(order_no)
         
         return success
+
+    def cancel_order(self, order_no: str, user_id: int) -> Tuple[bool, str]:
+        """取消订单（仅待支付订单可取消）"""
+        import sqlite3
+        order = self.get_order(order_no=order_no)
+        if not order:
+            return False, "订单不存在"
+        if order['user_id'] != user_id:
+            return False, "无权限取消此订单"
+        if order['status'] != PaymentStatus.PENDING.value:
+            return False, f"当前订单状态为 {order['status']}，无法取消"
+
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE orders SET status = ? WHERE order_no = ?",
+            (PaymentStatus.CANCELLED.value, order_no)
+        )
+        conn.commit()
+        ok = cursor.rowcount > 0
+        conn.close()
+        return (ok, "" if ok else "取消失败")
+
+    def get_or_create_order_license(self, order_no: str) -> Optional[str]:
+        """为已支付订单获取或生成 license key。"""
+        import sqlite3
+        order = self.get_order(order_no=order_no)
+        if not order or order['status'] != PaymentStatus.PAID.value:
+            return None
+
+        conn = sqlite3.connect(self.db.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT license_key FROM order_licenses WHERE order_no = ?", (order_no,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            conn.close()
+            return row[0]
+
+        # 根据套餐映射为 license 类型
+        plan = order.get('plan_type')
+        if plan in (PlanType.ENTERPRISE.value, PlanType.FLAGSHIP.value):
+            lt = LicenseType.ENTERPRISE
+        else:
+            lt = LicenseType.PROFESSIONAL
+
+        issued_to = f"user-{order.get('user_id')}"
+        expires_days = 365
+        try:
+            exp = order.get('expires_at')
+            if exp:
+                exp_dt = datetime.fromisoformat(str(exp))
+                delta_days = (exp_dt - datetime.now()).days
+                if delta_days > 0:
+                    expires_days = delta_days
+        except Exception:
+            pass
+
+        key = license_manager.generate_license(lt, issued_to=issued_to, expires_days=expires_days)
+        cursor.execute(
+            "INSERT INTO order_licenses (order_no, user_id, license_key) VALUES (?, ?, ?)",
+            (order_no, order['user_id'], key)
+        )
+        conn.commit()
+        conn.close()
+        return key
     
     def _activate_subscription(self, order_no: str):
         """激活订阅"""

@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}设置中心 - UI自动化测试平台{% endblock %}
+{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}
+{% block content %}
+    <div class="max-w-2xl mx-auto px-4 py-10">
+        <div class="mb-8">
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                <i class="fas fa-sliders-h text-blue-600 dark:text-blue-400"></i>
+                <span data-i18n="settings_heading">设置中心</span>
+            </h2>
+            <p class="mt-2 text-sm text-gray-600 dark:text-gray-400" data-i18n="settings_intro">管理界面语言与系统外观，设置将保存在本机浏览器中。</p>
+        </div>
+
+        <div class="space-y-6">
+            <!-- 语言 -->
+            <div class="bg-white dark:bg-gray-900 rounded-xl shadow border border-gray-200 dark:border-gray-700 p-6">
+                <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1 flex items-center gap-2">
+                    <i class="fas fa-language text-indigo-500"></i>
+                    <span data-i18n="settings_language">界面语言</span>
+                </h3>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mb-4" data-i18n="settings_language_hint">切换后顶部导航与菜单将立即更新；部分业务页面正文仍为中文。</p>
+                <div class="flex flex-wrap gap-3">
+                    <button type="button" id="langZh" class="px-4 py-2 rounded-lg text-sm font-medium border-2 border-blue-600 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200 transition-colors">
+                        <span data-i18n="settings_lang_zh">简体中文</span>
+                    </button>
+                    <button type="button" id="langEn" class="px-4 py-2 rounded-lg text-sm font-medium border-2 border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-800 dark:text-gray-200 hover:border-blue-400 transition-colors">
+                        <span data-i18n="settings_lang_en">English</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 主题 -->
+            <div class="bg-white dark:bg-gray-900 rounded-xl shadow border border-gray-200 dark:border-gray-700 p-6">
+                <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1 flex items-center gap-2">
+                    <i class="fas fa-palette text-amber-500"></i>
+                    <span data-i18n="settings_theme">系统外观</span>
+                </h3>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mb-4" data-i18n="settings_theme_hint">默认亮色；深色模式采用深色背景以降低刺眼感。</p>
+                <div class="flex flex-wrap gap-3">
+                    <button type="button" id="themeLight" class="px-4 py-2 rounded-lg text-sm font-medium border-2 border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 transition-colors">
+                        <i class="fas fa-sun mr-2"></i><span data-i18n="settings_theme_light">亮色</span>
+                    </button>
+                    <button type="button" id="themeDark" class="px-4 py-2 rounded-lg text-sm font-medium border-2 border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-800 dark:text-gray-200 hover:border-gray-900 dark:hover:border-gray-400 transition-colors">
+                        <i class="fas fa-moon mr-2"></i><span data-i18n="settings_theme_dark">深色</span>
+                    </button>
+                </div>
+            </div>
+
+            <p id="settingsSaved" class="hidden text-sm text-green-600 dark:text-green-400" data-i18n="settings_saved">已应用</p>
+        </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script>
+        (function () {
+            function showSaved() {
+                var el = document.getElementById('settingsSaved');
+                if (!el) return;
+                el.classList.remove('hidden');
+                clearTimeout(window._settingsSavedT);
+                window._settingsSavedT = setTimeout(function () {
+                    el.classList.add('hidden');
+                }, 2000);
+            }
+
+            function syncLangButtons() {
+                var lang = localStorage.getItem('ui_lang') || 'zh';
+                var zh = document.getElementById('langZh');
+                var en = document.getElementById('langEn');
+                if (!zh || !en) return;
+                var active = 'px-4 py-2 rounded-lg text-sm font-medium border-2 border-blue-600 bg-blue-50 text-blue-800 dark:bg-blue-950/40 dark:text-blue-200 transition-colors';
+                var inactive = 'px-4 py-2 rounded-lg text-sm font-medium border-2 border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-800 dark:text-gray-200 hover:border-blue-400 transition-colors';
+                if (lang === 'en') {
+                    zh.className = inactive;
+                    en.className = active.replace('border-blue-600', 'border-blue-500').replace('bg-blue-50', 'bg-blue-50 dark:bg-blue-900/50');
+                } else {
+                    zh.className = active;
+                    en.className = inactive;
+                }
+            }
+
+            function syncThemeButtons() {
+                var t = localStorage.getItem('ui_theme') || 'light';
+                var light = document.getElementById('themeLight');
+                var dark = document.getElementById('themeDark');
+                if (!light || !dark) return;
+                var aLight = 'px-4 py-2 rounded-lg text-sm font-medium border-2 border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 transition-colors';
+                var iBoth = 'px-4 py-2 rounded-lg text-sm font-medium border-2 border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors';
+                if (t === 'dark') {
+                    light.className = iBoth + ' hover:border-amber-400';
+                    dark.className = aLight.replace('amber-500', 'gray-700').replace('amber-50', 'gray-800').replace('amber-900', 'gray-100');
+                } else {
+                    light.className = aLight;
+                    dark.className = iBoth + ' dark:hover:border-gray-400';
+                }
+            }
+
+            document.getElementById('langZh').addEventListener('click', function () {
+                localStorage.setItem('ui_lang', 'zh');
+                if (typeof syncUiPreferences === 'function') syncUiPreferences({ source: 'settings' });
+                else if (typeof applyUiLang === 'function') applyUiLang();
+                syncLangButtons();
+                showSaved();
+            });
+            document.getElementById('langEn').addEventListener('click', function () {
+                localStorage.setItem('ui_lang', 'en');
+                if (typeof syncUiPreferences === 'function') syncUiPreferences({ source: 'settings' });
+                else if (typeof applyUiLang === 'function') applyUiLang();
+                syncLangButtons();
+                showSaved();
+            });
+            document.getElementById('themeLight').addEventListener('click', function () {
+                localStorage.setItem('ui_theme', 'light');
+                if (typeof syncUiPreferences === 'function') syncUiPreferences({ source: 'settings' });
+                else if (typeof applyThemeFromStorage === 'function') applyThemeFromStorage();
+                syncThemeButtons();
+                showSaved();
+            });
+            document.getElementById('themeDark').addEventListener('click', function () {
+                localStorage.setItem('ui_theme', 'dark');
+                if (typeof syncUiPreferences === 'function') syncUiPreferences({ source: 'settings' });
+                else if (typeof applyThemeFromStorage === 'function') applyThemeFromStorage();
+                syncThemeButtons();
+                showSaved();
+            });
+
+            document.addEventListener('DOMContentLoaded', function () {
+                syncLangButtons();
+                syncThemeButtons();
+            });
+
+            window.addEventListener('ui-preferences-updated', function () {
+                syncLangButtons();
+                syncThemeButtons();
+            });
+        })();
+    </script>
+{% endblock %}

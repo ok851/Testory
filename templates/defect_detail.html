@@ -1,11 +1,6 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>缺陷详情 - UI自动化测试平台</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+{% extends "base.html" %}
+{% block title %}缺陷详情 - UI自动化测试平台{% endblock %}
+{% block head %}
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .severity-critical { background: #dc2626; color: white; }
@@ -18,8 +13,9 @@
         .status-closed { background: #6b7280; color: white; }
         .status-reopened { background: #f59e0b; color: white; }
     </style>
-</head>
-<body class="bg-gradient-to-br from-purple-600 to-indigo-700 min-h-screen p-5">
+{% endblock %}
+{% block body_class %}bg-gradient-to-br from-purple-600 to-indigo-700 min-h-screen p-5{% endblock %}
+{% block content %}
     <div class="max-w-5xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden">
         <!-- 头部 -->
         <div class="bg-gradient-to-r from-purple-600 to-indigo-700 text-white p-6">
@@ -194,7 +190,8 @@
             </div>
         </div>
     </div>
-    
+{% endblock %}
+{% block scripts %}
     <script>
         const defectId = '{{ defect_id }}';
         let currentDefect = null;
@@ -441,5 +438,4 @@
             return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
     </script>
-</body>
-</html>
+{% endblock %}

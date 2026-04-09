@@ -1,9 +1,6 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>项目管理 - UI自动化测试平台</title>
+{% extends "base.html" %}
+{% block title %}项目管理 - UI自动化测试平台{% endblock %}
+{% block head %}
     <style>
         * {
             margin: 0;
@@ -11,14 +8,14 @@
             box-sizing: border-box;
         }
         
-        body {
+        .project-mgmt-page {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+            min-height: calc(100vh - 72px);
             padding: 20px;
         }
         
-        .container {
+        .project-mgmt-page .container {
             max-width: 1200px;
             margin: 0 auto;
             background: white;
@@ -332,49 +329,67 @@
             background: #f8f9fa;
             border-top: 1px solid #e9ecef;
         }
+        html.dark .project-mgmt-page { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
+        html.dark .project-mgmt-page .container { background: #111827; color: #e5e7eb; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        html.dark .project-mgmt-page .header-actions,
+        html.dark .project-mgmt-page .navigation { background: #1f2937; border-color: #374151; }
+        html.dark .project-mgmt-page .project-card { background: #1f2937; border-color: #4b5563; }
+        html.dark .project-mgmt-page .project-name { color: #f9fafb; }
+        html.dark .project-mgmt-page .project-info { color: #d1d5db; }
+        html.dark .project-mgmt-page .project-info strong { color: #e5e7eb; }
+        html.dark .project-mgmt-page .stat-item { color: #d1d5db; }
+        html.dark .project-mgmt-page .modal-content { background: #1f2937; color: #e5e7eb; }
+        html.dark .project-mgmt-page .modal-header h3 { color: #f9fafb; }
+        html.dark .project-mgmt-page .form-group label { color: #d1d5db; }
+        html.dark .project-mgmt-page .form-group input,
+        html.dark .project-mgmt-page .form-group textarea { background: #111827; border-color: #4b5563; color: #e5e7eb; }
+        html.dark .project-mgmt-page .close-btn { color: #9ca3af; }
+        html.dark .project-mgmt-page .empty-state { color: #9ca3af; }
+        html.dark .project-mgmt-page .loading { color: #9ca3af; }
     </style>
-</head>
-<body>
+{% endblock %}
+{% block content %}
+<div class="project-mgmt-page">
     <div class="container">
         <div class="header">
-            <h1>项目管理</h1>
+            <h1 data-i18n="proj_title">项目管理</h1>
         </div>
         
         <div class="header-actions">
-            <button onclick="showCreateProjectModal()" class="btn btn-success">+ 创建新项目</button>
+            <button type="button" onclick="showCreateProjectModal()" class="btn btn-success" data-i18n="proj_create_new">+ 创建新项目</button>
         </div>
         
         <div class="content">
             <div id="projectsList">
                 <div class="loading">
                     <div class="loading-spinner"></div>
-                    <p>正在加载项目列表...</p>
+                    <p data-i18n="proj_loading_list">正在加载项目列表...</p>
                 </div>
             </div>
         </div>
         
         <div class="navigation">
-            <a href="/" class="btn btn-secondary">← 返回首页</a>
+            <a href="/" class="btn btn-secondary" data-i18n="proj_back_home">← 返回首页</a>
         </div>
     </div>
 
     <div id="createProjectModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>创建新项目</h3>
-                <button class="close-btn" onclick="hideCreateProjectModal()">&times;</button>
+                <h3 data-i18n="proj_modal_create_title">创建新项目</h3>
+                <button type="button" class="close-btn" onclick="hideCreateProjectModal()">&times;</button>
             </div>
             <div class="form-group">
-                <label for="projectName">项目名称 *</label>
-                <input type="text" id="projectName" placeholder="请输入项目名称">
+                <label for="projectName" data-i18n="proj_field_name_req">项目名称 *</label>
+                <input type="text" id="projectName" data-i18n-placeholder="proj_ph_name" placeholder="请输入项目名称">
             </div>
             <div class="form-group">
-                <label for="projectDescription">项目描述</label>
-                <textarea id="projectDescription" placeholder="请输入项目描述（可选）"></textarea>
+                <label for="projectDescription" data-i18n="proj_field_desc">项目描述</label>
+                <textarea id="projectDescription" data-i18n-placeholder="proj_ph_desc" placeholder="请输入项目描述（可选）"></textarea>
             </div>
             <div class="modal-footer">
-                <button onclick="createProject()" class="btn btn-success">创建</button>
-                <button onclick="hideCreateProjectModal()" class="btn btn-secondary" style="margin-left: 10px;">取消</button>
+                <button type="button" onclick="createProject()" class="btn btn-success" data-i18n="proj_btn_create">创建</button>
+                <button type="button" onclick="hideCreateProjectModal()" class="btn btn-secondary" style="margin-left: 10px;" data-i18n="index_btn_cancel">取消</button>
             </div>
         </div>
     </div>
@@ -382,20 +397,20 @@
     <div id="editProjectModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>编辑项目</h3>
-                <button class="close-btn" onclick="hideEditProjectModal()">&times;</button>
+                <h3 data-i18n="proj_modal_edit_title">编辑项目</h3>
+                <button type="button" class="close-btn" onclick="hideEditProjectModal()">&times;</button>
             </div>
             <div class="form-group">
-                <label for="editProjectName">项目名称 *</label>
-                <input type="text" id="editProjectName" placeholder="请输入项目名称">
+                <label for="editProjectName" data-i18n="proj_field_name_req">项目名称 *</label>
+                <input type="text" id="editProjectName" data-i18n-placeholder="proj_ph_name" placeholder="请输入项目名称">
             </div>
             <div class="form-group">
-                <label for="editProjectDescription">项目描述</label>
-                <textarea id="editProjectDescription" placeholder="请输入项目描述（可选）"></textarea>
+                <label for="editProjectDescription" data-i18n="proj_field_desc">项目描述</label>
+                <textarea id="editProjectDescription" data-i18n-placeholder="proj_ph_desc" placeholder="请输入项目描述（可选）"></textarea>
             </div>
             <div class="modal-footer">
-                <button onclick="saveProjectEdit()" class="btn btn-success">保存</button>
-                <button onclick="hideEditProjectModal()" class="btn btn-secondary" style="margin-left: 10px;">取消</button>
+                <button type="button" onclick="saveProjectEdit()" class="btn btn-success" data-i18n="proj_btn_save">保存</button>
+                <button type="button" onclick="hideEditProjectModal()" class="btn btn-secondary" style="margin-left: 10px;" data-i18n="index_btn_cancel">取消</button>
             </div>
         </div>
     </div>
@@ -404,37 +419,38 @@
     <div id="createCaseModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>创建测试用例</h3>
-                <button class="close-btn" onclick="closeCreateCaseModal()">&times;</button>
+                <h3 data-i18n="proj_modal_case_title">创建测试用例</h3>
+                <button type="button" class="close-btn" onclick="closeCreateCaseModal()">&times;</button>
             </div>
             <div class="form-group">
-                <label for="caseName">用例名称 *</label>
-                <input type="text" id="caseName" placeholder="请输入测试用例名称">
+                <label for="caseName" data-i18n="proj_case_name">用例名称 *</label>
+                <input type="text" id="caseName" data-i18n-placeholder="proj_case_ph_name" placeholder="请输入测试用例名称">
             </div>
             <div class="form-group">
-                <label for="caseUrl">测试URL</label>
-                <input type="text" id="caseUrl" placeholder="请输入测试URL">
+                <label for="caseUrl" data-i18n="proj_case_url">测试URL</label>
+                <input type="text" id="caseUrl" data-i18n-placeholder="proj_case_ph_url" placeholder="请输入测试URL">
             </div>
             <div class="form-group">
-                <label for="caseDescription">用例描述</label>
-                <textarea id="caseDescription" placeholder="请输入测试用例描述"></textarea>
+                <label for="caseDescription" data-i18n="proj_case_desc">用例描述</label>
+                <textarea id="caseDescription" data-i18n-placeholder="proj_case_ph_desc" placeholder="请输入测试用例描述"></textarea>
             </div>
             <div class="form-group">
-                <label for="casePrecondition">前置条件</label>
-                <textarea id="casePrecondition" placeholder="请输入前置条件"></textarea>
+                <label for="casePrecondition" data-i18n="proj_case_pre">前置条件</label>
+                <textarea id="casePrecondition" data-i18n-placeholder="proj_case_ph_pre" placeholder="请输入前置条件"></textarea>
             </div>
             <div class="form-group">
-                <label for="caseExpectedResult">预期结果</label>
-                <textarea id="caseExpectedResult" placeholder="请输入预期结果"></textarea>
+                <label for="caseExpectedResult" data-i18n="proj_case_exp">预期结果</label>
+                <textarea id="caseExpectedResult" data-i18n-placeholder="proj_case_ph_exp" placeholder="请输入预期结果"></textarea>
             </div>
             <div class="modal-footer">
-                <button onclick="createTestCase()" class="btn btn-success">创建</button>
-                <button onclick="closeCreateCaseModal()" class="btn btn-secondary" style="margin-left: 10px;">取消</button>
+                <button type="button" onclick="createTestCase()" class="btn btn-success" data-i18n="proj_btn_create">创建</button>
+                <button type="button" onclick="closeCreateCaseModal()" class="btn btn-secondary" style="margin-left: 10px;" data-i18n="index_btn_cancel">取消</button>
             </div>
         </div>
     </div>
-
-
+</div>
+{% endblock %}
+{% block scripts %}
     <script>
         let currentEditProjectId = null;
         let currentProjectIdForCase = null;
@@ -462,22 +478,26 @@
                         const projectCard = document.createElement('div');
                         projectCard.className = 'project-card';
                         
+                        const descDisp = project.description ? escapeHtml(project.description) : escapeHtml(t('proj_no_desc'));
+                        const safeNameJs = String(project.name).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                        const safeDescJs = String(project.description || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                         projectCard.innerHTML = `
                             <div class="project-name">${escapeHtml(project.name)}</div>
-                            <div class="project-info"><strong>ID:</strong> ${project.id}</div>
-                            <div class="project-info"><strong>描述:</strong> ${escapeHtml(project.description || '无描述')}</div>
-                            <div class="project-info"><strong>创建时间:</strong> ${project.created_at}</div>
+                            <div class="project-info"><strong>${escapeHtml(t('proj_lbl_id'))}</strong> ${project.id}</div>
+                            <div class="project-info"><strong>${escapeHtml(t('proj_lbl_desc'))}</strong> ${descDisp}</div>
+                            <div class="project-info"><strong>${escapeHtml(t('proj_lbl_created'))}</strong> ${escapeHtml(project.created_at)}</div>
                             <div class="project-stats">
                                 <div class="stat-item">
-                                    <span class="stat-label">测试用例:</span>
+                                    <span class="stat-label">${escapeHtml(t('proj_lbl_cases'))}</span>
                                     <span class="stat-value">${caseCount}</span>
                                 </div>
                             </div>
-                            <div class="project-actions">                                <button onclick="createCaseForProject(${project.id})" class="btn btn-success">创建用例</button>
-                                <a href="/list_cases_v2/${project.id}" class="btn btn-info">查看用例</a>
-                                <button onclick="showEditProjectModal(${project.id}, '${escapeHtml(project.name)}', '${escapeHtml(project.description || '')}')" class="btn">编辑</button>
-                                <button onclick="deleteProject(${project.id})" class="btn btn-danger">删除</button>                            </div>
-
+                            <div class="project-actions">
+                                <button type="button" onclick="createCaseForProject(${project.id})" class="btn btn-success">${escapeHtml(t('proj_btn_create_case'))}</button>
+                                <a href="/list_cases_v2/${project.id}" class="btn btn-info">${escapeHtml(t('proj_btn_view_cases'))}</a>
+                                <button type="button" onclick="showEditProjectModal(${project.id}, '${safeNameJs}', '${safeDescJs}')" class="btn">${escapeHtml(t('proj_btn_edit'))}</button>
+                                <button type="button" onclick="deleteProject(${project.id})" class="btn btn-danger">${escapeHtml(t('proj_btn_delete'))}</button>
+                            </div>
                         `;
                         
                         grid.appendChild(projectCard);
@@ -486,8 +506,8 @@
                     projectsList.innerHTML = `
                         <div class="empty-state">
                             <div class="empty-state-icon">📁</div>
-                            <div class="empty-state-text">暂无项目，请创建一个新项目</div>
-                            <button onclick="showCreateProjectModal()" class="btn btn-success">创建第一个项目</button>
+                            <div class="empty-state-text">${escapeHtml(t('proj_empty_hint'))}</div>
+                            <button type="button" onclick="showCreateProjectModal()" class="btn btn-success">${escapeHtml(t('proj_empty_create_first'))}</button>
                         </div>
                     `;
                 }
@@ -496,8 +516,8 @@
                 document.getElementById('projectsList').innerHTML = `
                     <div class="empty-state">
                         <div class="empty-state-icon">❌</div>
-                        <div class="empty-state-text">加载项目列表失败</div>
-                        <button onclick="loadProjects()" class="btn btn-primary">重新加载</button>
+                        <div class="empty-state-text">${escapeHtml(t('proj_err_load'))}</div>
+                        <button type="button" onclick="loadProjects()" class="btn btn-primary">${escapeHtml(t('proj_btn_reload'))}</button>
                     </div>
                 `;
             }
@@ -518,6 +538,7 @@
             document.getElementById('createProjectModal').classList.add('active');
             document.getElementById('projectName').value = '';
             document.getElementById('projectDescription').value = '';
+            if (typeof applyUiLang === 'function') applyUiLang();
         }
 
         function hideCreateProjectModal() {
@@ -529,7 +550,7 @@
             const description = document.getElementById('projectDescription').value.trim();
             
             if (!name) {
-                alert('请输入项目名称');
+                alert(t('proj_alert_name'));
                 return;
             }
             
@@ -548,14 +569,14 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('项目创建成功！');
+                    alert(t('proj_alert_ok_create'));
                     hideCreateProjectModal();
                     loadProjects();
                 } else {
-                    alert('创建失败: ' + (data.error || '未知错误'));
+                    alert(t('proj_alert_fail_create') + (data.error || t('index_err_unknown')));
                 }
             } catch (error) {
-                alert('创建项目时发生错误: ' + error.message);
+                alert(t('proj_alert_fail_create') + error.message);
             }
         }
 
@@ -564,6 +585,7 @@
             document.getElementById('editProjectModal').classList.add('active');
             document.getElementById('editProjectName').value = name;
             document.getElementById('editProjectDescription').value = description;
+            if (typeof applyUiLang === 'function') applyUiLang();
         }
 
         function hideEditProjectModal() {
@@ -573,7 +595,7 @@
 
         async function saveProjectEdit() {
             if (!currentEditProjectId) {
-                alert('无效的项目ID');
+                alert(t('proj_alert_bad_id'));
                 return;
             }
             
@@ -581,7 +603,7 @@
             const description = document.getElementById('editProjectDescription').value.trim();
             
             if (!name) {
-                alert('请输入项目名称');
+                alert(t('proj_alert_name'));
                 return;
             }
             
@@ -600,19 +622,19 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('项目更新成功！');
+                    alert(t('proj_alert_ok_update'));
                     hideEditProjectModal();
                     loadProjects();
                 } else {
-                    alert('更新失败: ' + (data.error || '未知错误'));
+                    alert(t('proj_alert_fail_update') + (data.error || t('index_err_unknown')));
                 }
             } catch (error) {
-                alert('更新项目时发生错误: ' + error.message);
+                alert(t('proj_alert_fail_update') + error.message);
             }
         }
 
         async function deleteProject(projectId) {
-            if (confirm('确定要删除这个项目吗？此操作将同时删除项目下的所有测试用例和测试步骤。')) {
+            if (confirm(t('proj_confirm_del'))) {
                 try {
                     const response = await fetch(`/api/projects/${projectId}`, {
                         method: 'DELETE'
@@ -621,13 +643,13 @@
                     const data = await response.json();
                     
                     if (data.success) {
-                        alert('项目删除成功！');
+                        alert(t('proj_alert_ok_del'));
                         loadProjects();
                     } else {
-                        alert('删除失败: ' + (data.error || '未知错误'));
+                        alert(t('proj_alert_fail_del') + (data.error || t('index_err_unknown')));
                     }
                 } catch (error) {
-                    alert('删除项目时发生错误: ' + error.message);
+                    alert(t('proj_alert_fail_del') + error.message);
                 }
             }
         }
@@ -655,12 +677,12 @@
             const expected_result = document.getElementById('caseExpectedResult').value.trim();
             
             if (!name) {
-                alert('请输入测试用例名称');
+                alert(t('proj_case_need_name'));
                 return;
             }
             
             if (!currentProjectIdForCase) {
-                alert('项目ID无效');
+                alert(t('proj_case_bad_proj'));
                 return;
             }
             
@@ -683,19 +705,19 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    alert('测试用例创建成功！');
+                    alert(t('proj_case_ok'));
                     closeCreateCaseModal();
                     loadProjects(); // 刷新项目列表显示最新用例数
                 } else {
-                    alert('创建失败: ' + (data.error || '未知错误'));
+                    alert(t('proj_case_fail') + (data.error || t('index_err_unknown')));
                 }
             } catch (error) {
-                alert('创建测试用例时发生错误: ' + error.message);
+                alert(t('proj_case_fail') + error.message);
             }
         }
 
         async function deleteCase(caseId, projectId) {
-            if (confirm('确定要删除这个测试用例吗？')) {
+            if (confirm(t('proj_case_del_confirm'))) {
                 try {
                     const response = await fetch(`/api/cases/${caseId}`, {
                         method: 'DELETE'
@@ -707,23 +729,31 @@
                     } catch (e) {
                         // 处理非JSON响应
                         const text = await response.text();
-                        alert(`删除失败：服务器返回无效响应: ${text.substring(0, 100)}`);
+                        alert(t('proj_err_del_case') + text.substring(0, 100));
                         return;
                     }
                     
                     if (data.success) {
-                        alert('测试用例删除成功！');
+                        alert(t('proj_case_del_ok'));
                         loadProjects();
                     } else {
-                        alert('删除失败: ' + (data.error || '未知错误'));
+                        alert(t('proj_alert_fail_del') + (data.error || t('index_err_unknown')));
                     }
                 } catch (error) {
-                    alert('删除测试用例时发生错误: ' + error.message);
+                    alert(t('proj_alert_fail_del') + error.message);
                 }
             }
         }
 
-        document.addEventListener('DOMContentLoaded', loadProjects);
+        document.addEventListener('DOMContentLoaded', function () {
+            try { document.title = t('proj_doc_title'); } catch (e) {}
+            loadProjects();
+        });
+        window.addEventListener('ui-preferences-updated', function (ev) {
+            if (ev.detail && ev.detail.source === 'load') return;
+            try { document.title = t('proj_doc_title'); } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
+            loadProjects();
+        });
     </script>
-</body>
-</html>
+{% endblock %}

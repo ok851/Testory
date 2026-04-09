@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}订单支付 - UI自动化测试平台{% endblock %}
+{% block content %}
+    <div class="max-w-3xl mx-auto py-10 px-4">
+        <div class="bg-white dark:bg-gray-900 rounded-xl shadow dark:shadow-black/30 border border-gray-100 dark:border-gray-800 p-6">
+            <div class="flex items-center justify-between mb-6 flex-wrap gap-2">
+                <h1 class="text-xl font-semibold text-gray-900 dark:text-white" data-i18n="payment_title">订单支付</h1>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <a href="/license" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 shadow-sm transition-colors dark:focus:ring-offset-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-1">
+                        <i class="fas fa-key"></i><span data-i18n="menu_license">授权管理</span>
+                    </a>
+                    <a href="/payment/orders" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 shadow-sm transition-colors dark:focus:ring-offset-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
+                        <i class="fas fa-receipt"></i><span data-i18n="menu_orders">我的订单</span>
+                    </a>
+                </div>
+            </div>
+
+            <p id="pollHint" class="hidden text-xs text-gray-500 dark:text-gray-400 mb-3" data-i18n="payment_poll_hint">订单待支付时将自动检测支付结果（约每 3 秒），支付成功后请在当前页查看 License 密钥或前往授权管理页激活。</p>
+
+            <div id="loading" class="text-gray-500 dark:text-gray-400" data-i18n="payment_loading">正在加载订单...</div>
+            <div id="content" class="hidden">
+                <div class="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                    <div><span data-i18n="payment_lbl_order">订单号：</span><span id="orderNo" class="font-medium text-gray-900 dark:text-white"></span></div>
+                    <div><span data-i18n="payment_lbl_plan">套餐：</span><span id="planType" class="text-gray-900 dark:text-white"></span></div>
+                    <div><span data-i18n="payment_lbl_amount">金额：</span><span id="amount" class="font-semibold text-lg text-gray-900 dark:text-white"></span></div>
+                    <div><span data-i18n="payment_lbl_status">状态：</span><span id="status" class="inline-block px-2 py-0.5 rounded text-xs font-medium"></span></div>
+                </div>
+
+                <div id="payActions" class="mt-6 flex flex-wrap gap-3">
+                    <button type="button" onclick="createPay('alipay')" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500 transition-colors" data-i18n="payment_alipay">支付宝支付</button>
+                    <button type="button" onclick="createPay('wechat')" class="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 dark:bg-green-600 dark:hover:bg-green-500 transition-colors" data-i18n="payment_wechat">微信支付</button>
+                    <button type="button" onclick="cancelOrder()" class="px-4 py-2 rounded bg-red-600 text-white hover:bg-red-700 dark:bg-red-600 dark:hover:bg-red-500 transition-colors" data-i18n="orders_cancel">取消订单</button>
+                    <button type="button" onclick="mockComplete()" class="px-4 py-2 rounded bg-gray-800 text-white hover:bg-black dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors" data-i18n="payment_mock_complete">模拟支付成功</button>
+                </div>
+                <div id="licenseBox" class="hidden mt-6 p-4 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/40">
+                    <p class="text-sm font-semibold text-green-800 dark:text-green-200 mb-2" data-i18n="payment_license_title">订单 License 密钥（系统自动生成）</p>
+                    <textarea id="licenseKey" class="w-full h-28 text-xs font-mono rounded border border-green-200 dark:border-green-800 p-2 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100" readonly></textarea>
+                    <div class="mt-2 flex gap-2 flex-wrap">
+                        <button type="button" onclick="copyLicense()" class="px-3 py-1.5 text-sm rounded bg-green-700 text-white hover:bg-green-800 dark:bg-green-800 dark:hover:bg-green-700 transition-colors" data-i18n="payment_copy_key">复制密钥</button>
+                        <a href="/license" class="px-3 py-1.5 text-sm rounded bg-white dark:bg-gray-900 border border-green-300 dark:border-green-700 text-green-700 dark:text-green-300 hover:bg-green-100 dark:hover:bg-gray-800 transition-colors" data-i18n="payment_goto_license">去授权页激活</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script>
+        const orderNo = "{{ order_no }}";
+        let pollTimer = null;
+        let pollCount = 0;
+        const MAX_POLL = 120;
+        const POLL_MS = 3000;
+
+        function prettyStatus(s) {
+            if (!s) return "";
+            var k = "orders_st_" + s;
+            var v = t(k);
+            return v === k ? s : v;
+        }
+
+        function setStatusStyle(el, status) {
+            el.textContent = prettyStatus(status);
+            el.className = "inline-block px-2 py-0.5 rounded text-xs font-medium ";
+            if (status === "pending") el.className += "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200";
+            else if (status === "paid") el.className += "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200";
+            else if (status === "failed") el.className += "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-200";
+            else el.className += "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200";
+        }
+
+        function stopPoll() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+            pollCount = 0;
+            document.getElementById("pollHint").classList.add("hidden");
+        }
+
+        function onPaidSuccess() {
+            stopPoll();
+            const actions = document.getElementById("payActions");
+            if (actions) actions.classList.add("hidden");
+            Swal.fire({
+                icon: "success",
+                title: t("payment_paid_ok"),
+                text: t("payment_paid_hint"),
+                confirmButtonText: t("payment_ok")
+            });
+        }
+
+        function applyOrder(o, licenseKey) {
+            document.getElementById("orderNo").textContent = o.order_no;
+            document.getElementById("planType").textContent = o.plan_name || o.plan_type || "-";
+            document.getElementById("amount").textContent = "¥" + o.amount_yuan;
+            setStatusStyle(document.getElementById("status"), o.status);
+            const actions = document.getElementById("payActions");
+            const licenseBox = document.getElementById("licenseBox");
+            if (o.status === "paid") {
+                actions.classList.add("hidden");
+                if (licenseKey) {
+                    document.getElementById("licenseKey").value = licenseKey;
+                    licenseBox.classList.remove("hidden");
+                }
+            } else if (o.status === "pending") {
+                actions.classList.remove("hidden", "opacity-50", "pointer-events-none");
+                licenseBox.classList.add("hidden");
+            } else {
+                actions.classList.add("hidden");
+                licenseBox.classList.add("hidden");
+            }
+        }
+
+        function startPollIfPending(status) {
+            stopPoll();
+            if (status !== "pending") return;
+            document.getElementById("pollHint").classList.remove("hidden");
+            pollTimer = setInterval(async function () {
+                pollCount++;
+                if (pollCount > MAX_POLL) {
+                    stopPoll();
+                    return;
+                }
+                try {
+                    const resp = await fetch("/api/payment/orders/" + encodeURIComponent(orderNo));
+                    const data = await resp.json();
+                    if (!data.success || !data.order) return;
+                    applyOrder(data.order, data.license_key);
+                    if (data.order.status === "paid") {
+                        onPaidSuccess();
+                    }
+                } catch (_e) {}
+            }, POLL_MS);
+        }
+
+        async function loadOrder() {
+            var loadingEl = document.getElementById("loading");
+            try {
+                const resp = await fetch("/api/payment/orders/" + encodeURIComponent(orderNo));
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.error || t("payment_unknown"));
+                const o = data.order;
+                loadingEl.classList.add("hidden");
+                document.getElementById("content").classList.remove("hidden");
+                applyOrder(o, data.license_key);
+                startPollIfPending(o.status);
+                if (o.status === "paid") {
+                    document.getElementById("payActions").classList.add("hidden");
+                }
+            } catch (e) {
+                loadingEl.textContent = t("payment_err_load") + (e.message || "");
+                loadingEl.classList.remove("hidden");
+                document.getElementById("content").classList.add("hidden");
+            }
+        }
+
+        async function createPay(method) {
+            const resp = await fetch("/api/payment/pay/" + encodeURIComponent(orderNo), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ payment_method: method })
+            });
+            const data = await resp.json();
+            if (!data.success) {
+                Swal.fire({ icon: "error", title: t("payment_pay_create_fail"), text: data.error || t("payment_unknown") });
+                return;
+            }
+            if (data.payment_url) {
+                window.open(data.payment_url, "_blank", "noopener,noreferrer");
+            }
+            Swal.fire({ icon: "success", title: t("payment_pay_created"), text: data.message || t("payment_pay_created_hint") });
+            startPollIfPending("pending");
+        }
+
+        async function mockComplete() {
+            const resp = await fetch("/api/payment/mock/complete/" + encodeURIComponent(orderNo), { method: "POST" });
+            const data = await resp.json();
+            if (!data.success) {
+                Swal.fire({ icon: "error", title: t("payment_err_op"), text: data.error || t("payment_unknown") });
+                return;
+            }
+            const r2 = await fetch("/api/payment/orders/" + encodeURIComponent(orderNo));
+            const d2 = await r2.json();
+            if (d2.success && d2.order) {
+                applyOrder(d2.order, d2.license_key);
+                if (d2.order.status === "paid") {
+                    onPaidSuccess();
+                }
+            }
+        }
+
+        async function cancelOrder() {
+            const ok = confirm(t("payment_confirm_cancel_long"));
+            if (!ok) return;
+            const resp = await fetch("/api/payment/orders/" + encodeURIComponent(orderNo) + "/cancel", { method: "POST" });
+            const data = await resp.json();
+            if (!data.success) {
+                Swal.fire({ icon: "error", title: t("payment_err_op"), text: data.error || t("payment_unknown") });
+                return;
+            }
+            Swal.fire({ icon: "success", title: t("payment_cancelled"), text: t("payment_cancelled_ok") });
+            loadOrder();
+        }
+
+        function copyTextFallback(str) {
+            const ta = document.createElement("textarea");
+            ta.value = str;
+            ta.setAttribute("readonly", "");
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            document.body.appendChild(ta);
+            ta.select();
+            ta.setSelectionRange(0, str.length);
+            var ok = false;
+            try {
+                ok = document.execCommand("copy");
+            } catch (_e) {}
+            document.body.removeChild(ta);
+            return ok;
+        }
+
+        async function copyLicense() {
+            const el = document.getElementById("licenseKey");
+            const text = el ? el.value : "";
+            if (!text) return;
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                    Swal.fire({ icon: "success", title: t("payment_copied"), text: t("payment_copied_hint") });
+                    return;
+                }
+            } catch (_e) { /* fall through */ }
+            try {
+                var ro = el.getAttribute("readonly");
+                if (ro !== null) el.removeAttribute("readonly");
+                el.focus();
+                el.select();
+                el.setSelectionRange(0, text.length);
+                var copied = false;
+                try {
+                    copied = document.execCommand("copy");
+                } catch (_x) {}
+                if (ro !== null) el.setAttribute("readonly", "readonly");
+                if (copied) {
+                    Swal.fire({ icon: "success", title: t("payment_copied"), text: t("payment_copied_hint") });
+                } else if (copyTextFallback(text)) {
+                    Swal.fire({ icon: "success", title: t("payment_copied"), text: t("payment_copied_hint") });
+                } else {
+                    Swal.fire({ icon: "info", title: t("payment_manual_copy"), text: t("payment_manual_copy_hint") });
+                }
+            } catch (_e2) {
+                if (copyTextFallback(text)) {
+                    Swal.fire({ icon: "success", title: t("payment_copied"), text: t("payment_copied_hint") });
+                } else {
+                    Swal.fire({ icon: "warning", title: t("payment_copy_err"), text: t("payment_copy_err_hint") });
+                }
+            }
+        }
+
+        function startPaymentPage() {
+            try {
+                document.title = t("payment_doc_title");
+            } catch (e) {}
+            var loadEl = document.getElementById("loading");
+            if (loadEl) {
+                loadEl.classList.remove("hidden");
+                loadEl.textContent = t("payment_loading");
+            }
+            document.getElementById("content").classList.add("hidden");
+            loadOrder();
+        }
+
+        window.addEventListener("ui-preferences-updated", function (ev) {
+            if (ev.detail && ev.detail.source === "load") return;
+            try {
+                document.title = t("payment_doc_title");
+            } catch (e) {}
+            loadOrder();
+        });
+
+        document.addEventListener("DOMContentLoaded", startPaymentPage);
+
+        window.addEventListener("beforeunload", stopPoll);
+    </script>
+{% endblock %}

@@ -5,6 +5,7 @@ import json
 import hashlib
 import secrets
 import requests
+from urllib.parse import quote, urlencode
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -50,12 +51,36 @@ class SSOConfig:
     wecom_secret: Optional[str] = None
 
 
+# 允许通过 API 更新的列（防止任意字段名注入 SQL）
+_SSO_UPDATE_COLUMNS = frozenset({
+    'tenant_id', 'provider_type', 'name', 'client_id', 'client_secret',
+    'auth_url', 'token_url', 'userinfo_url', 'callback_url',
+    'ldap_host', 'ldap_port', 'ldap_base_dn', 'ldap_bind_dn',
+    'ldap_bind_password', 'ldap_user_filter',
+    'wecom_corp_id', 'wecom_agent_id', 'wecom_secret', 'is_active',
+})
+
+
+def _ldap_attr_one(entry, attr_name: str):
+    """从 ldap3 Entry 上安全读取单值属性。"""
+    if not hasattr(entry, attr_name):
+        return None
+    val = getattr(entry, attr_name)
+    if hasattr(val, 'value'):
+        v = val.value
+        if isinstance(v, (list, tuple)) and v:
+            v = v[0]
+        return str(v) if v is not None else None
+    return str(val) if val is not None else None
+
+
 class SSOManager:
     """SSO 单点登录管理器"""
     
     def __init__(self, db: Database = None):
         self.db = db or Database()
-        self._state_cache = {}  # 用于存储 OAuth state
+        # OAuth / 企业微信 state（内存）；多进程部署时需改为 Redis 等共享存储
+        self._state_cache = {}
     
     # ==================== SSO 配置管理 ====================
     
@@ -178,9 +203,12 @@ class SSOManager:
         fields = []
         values = []
         for key, value in config_data.items():
-            if key not in ('id', 'created_at'):
-                fields.append(f"{key} = ?")
-                values.append(value)
+            if key in ('id', 'created_at') or key not in _SSO_UPDATE_COLUMNS:
+                continue
+            if key == 'is_active':
+                value = 1 if value else 0
+            fields.append(f"{key} = ?")
+            values.append(value)
         
         if not fields:
             return False
@@ -247,13 +275,15 @@ class SSOManager:
             if not user_conn.bind():
                 return False, None, "密码错误"
             
+            ext = _ldap_attr_one(user_entry, 'uid') or username
+            disp = _ldap_attr_one(user_entry, 'displayName') or _ldap_attr_one(user_entry, 'cn') or username
             # 获取用户信息
             user_info = {
-                'external_id': str(user_entry.uid) if hasattr(user_entry, 'uid') else username,
+                'external_id': ext,
                 'username': username,
-                'display_name': str(user_entry.displayName) if hasattr(user_entry, 'displayName') else str(user_entry.cn),
-                'email': str(user_entry.mail) if hasattr(user_entry, 'mail') else None,
-                'phone': str(user_entry.telephoneNumber) if hasattr(user_entry, 'telephoneNumber') else None
+                'display_name': disp,
+                'email': _ldap_attr_one(user_entry, 'mail'),
+                'phone': _ldap_attr_one(user_entry, 'telephoneNumber'),
             }
             
             return True, user_info, "认证成功"
@@ -268,15 +298,17 @@ class SSOManager:
         state = secrets.token_urlsafe(16)
         self._state_cache[state] = {'config_id': config.id, 'expires': datetime.now() + timedelta(minutes=10)}
         
-        # 企业微信扫码登录
-        url = (
-            f"https://open.work.weixin.qq.com/wwopen/sso/qrConnect?"
-            f"appid={config.wecom_corp_id}&"
-            f"agentid={config.wecom_agent_id}&"
-            f"redirect_uri={redirect_uri}&"
-            f"state={state}"
+        # 企业微信扫码登录（query 必须 URL 编码）
+        q = urlencode(
+            {
+                'appid': config.wecom_corp_id or '',
+                'agentid': config.wecom_agent_id or '',
+                'redirect_uri': redirect_uri,
+                'state': state,
+            },
+            quote_via=quote,
         )
-        return url
+        return f"https://open.work.weixin.qq.com/wwopen/sso/qrConnect?{q}"
     
     def wecom_authenticate(self, config: SSOConfig, code: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
         """
@@ -314,7 +346,7 @@ class SSOManager:
             if user_data.get('errcode', 0) != 0:
                 return False, None, f"获取用户信息失败: {user_data.get('errmsg')}"
             
-            user_id = user_data.get('UserId')
+            user_id = user_data.get('UserId') or user_data.get('userid')
             if not user_id:
                 return False, None, "无法获取用户 ID"
             
@@ -347,15 +379,21 @@ class SSOManager:
         state = secrets.token_urlsafe(16)
         self._state_cache[state] = {'config_id': config.id, 'expires': datetime.now() + timedelta(minutes=10)}
         
-        url = (
-            f"{config.auth_url}?"
-            f"client_id={config.client_id}&"
-            f"redirect_uri={config.callback_url}&"
-            f"response_type=code&"
-            f"scope={scope}&"
-            f"state={state}"
+        base = (config.auth_url or '').strip()
+        if not base:
+            return ''
+        q = urlencode(
+            {
+                'client_id': config.client_id or '',
+                'redirect_uri': config.callback_url or '',
+                'response_type': 'code',
+                'scope': scope,
+                'state': state,
+            },
+            quote_via=quote,
         )
-        return url
+        sep = '&' if ('?' in base) else '?'
+        return f"{base}{sep}{q}"
     
     def oauth2_authenticate(self, config: SSOConfig, code: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
         """

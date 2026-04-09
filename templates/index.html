@@ -1,31 +1,12 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UI自动化测试平台</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+{% extends "base.html" %}
+{% block title %}UI自动化测试平台{% endblock %}
+{% block head %}
     <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        primary: '#3b82f6',
-                        secondary: '#10b981',
-                        accent: '#8b5cf6',
-                        danger: '#ef4444',
-                        warning: '#f59e0b',
-                        info: '#3b82f6',
-                        light: '#f3f4f6',
-                        dark: '#1f2937',
-                    },
-                    fontFamily: {
-                        sans: ['Inter', 'system-ui', 'sans-serif'],
-                    },
-                }
-            }
-        }
+        tailwind.config.theme.extend.fontFamily = { sans: ['Inter', 'system-ui', 'sans-serif'] };
+        tailwind.config.theme.extend.colors = Object.assign({}, tailwind.config.theme.extend.colors, {
+            light: '#f3f4f6',
+            dark: '#1f2937',
+        });
     </script>
     <style type="text/tailwindcss">
         @layer utilities {
@@ -33,7 +14,7 @@
                 content-visibility: auto;
             }
             .btn {
-                @apply px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 text-sm whitespace-nowrap;
+                @apply px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 text-sm whitespace-nowrap;
             }
             .btn-primary {
                 @apply bg-primary text-white hover:bg-blue-600 focus:ring-blue-500;
@@ -44,200 +25,125 @@
             .btn-accent {
                 @apply bg-accent text-white hover:bg-purple-600 focus:ring-purple-500;
             }
+            .btn-outline {
+                @apply border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 focus:ring-gray-500 bg-white dark:bg-gray-800;
+            }
             .card {
-                @apply bg-white rounded-lg shadow-md p-6;
+                @apply bg-white dark:bg-gray-800 rounded-lg shadow-md dark:shadow-black/40 p-6;
             }
             .container {
                 @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
             }
             .hero-section {
-                @apply bg-gradient-to-r from-blue-500 to-purple-600 text-white py-20 px-4;
+                @apply bg-gradient-to-r from-blue-500 to-purple-600 dark:from-slate-900 dark:via-blue-950 dark:to-purple-950 text-white py-20 px-4;
             }
             .hero-content {
                 @apply max-w-4xl mx-auto text-center;
             }
             .feature-card {
-                @apply bg-white rounded-lg shadow-md p-6 border-l-4 border-primary transition-transform duration-300 hover:transform hover:scale-105;
+                @apply bg-white dark:bg-gray-800 rounded-lg shadow-md dark:shadow-black/40 p-6 border-l-4 border-primary dark:border-blue-400 transition-transform duration-300 hover:transform hover:scale-105;
             }
             .workflow-card {
-                @apply bg-gray-100 rounded-lg p-4 text-center;
+                @apply bg-gray-100 dark:bg-gray-800/90 rounded-lg p-4 text-center border border-transparent dark:border-gray-700;
             }
             .step-number {
                 @apply inline-flex items-center justify-center w-10 h-10 bg-primary text-white rounded-full mb-4;
             }
         }
     </style>
-</head>
-<body class="bg-gray-100 font-sans">
-    <!-- 导航栏 -->
-    <nav class="bg-white shadow-md">
-        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
-            <!-- 左侧：Logo -->
-            <div class="flex items-center gap-3">
-                <i class="fas fa-robot text-primary text-2xl"></i>
-                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
-            </div>
-            <!-- 右侧：功能按钮 + 用户信息 -->
-            <div class="flex items-center gap-2">
-                <a href="/" class="btn btn-primary" title="首页">
-                    <i class="fas fa-home"></i>
-                </a>
-                <a href="/list_projects" class="btn btn-secondary" title="项目管理">
-                    <i class="fas fa-folder mr-1"></i>项目
-                </a>
-                <a href="/run-history" class="nav-btn btn btn-accent" data-feature="basic" title="运行历史">
-                    <i class="fas fa-history mr-1"></i>历史
-                </a>
-                <a href="/data-driven" id="navDataDriven" class="nav-btn btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500 hidden" data-feature="data_driven" title="数据驱动">
-                    <i class="fas fa-table mr-1"></i>数据
-                </a>
-                <a href="/test_report" class="nav-btn btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" data-feature="basic" title="测试报告">
-                    <i class="fas fa-chart-bar mr-1"></i>报告
-                </a>
-                <a href="/schedules" id="navSchedules" class="nav-btn btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500 hidden" data-feature="schedule" title="定时任务">
-                    <i class="fas fa-clock mr-1"></i>定时
-                </a>
-                <a href="/notifications" id="navNotifications" class="nav-btn btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500 hidden" data-feature="email_notification" data-role="admin" title="通知配置">
-                    <i class="fas fa-bell mr-1"></i>通知
-                </a>
-                <a href="/defects" id="navDefects" class="nav-btn btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500 hidden" data-feature="defect_management" title="缺陷管理">
-                    <i class="fas fa-bug mr-1"></i>缺陷
-                </a>
-                <!-- 用户信息区（最右边） -->
-                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
-                    <!-- 用户下拉菜单 -->
-                    <div id="userDropdown" class="relative hidden">
-                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
-                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
-                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
-                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
-                        </button>
-                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
-                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
-                            </a>
-                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
-                            </a>
-                            <a href="/user-management" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100" id="userManagementLink" style="display: none;">
-                                <i class="fas fa-users-cog mr-2 text-gray-400"></i>用户管理
-                            </a>
-                            <div class="border-t border-gray-100 my-1"></div>
-                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
-                                <i class="fas fa-sign-out-alt mr-2"></i>注销
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </nav>
-
+{% endblock %}
+{% block body_class %}bg-gray-100 font-sans text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}
+{% block content %}
     <!-- 英雄区域 -->
     <section class="hero-section">
         <div class="hero-content">
-            <h2 class="text-4xl font-bold mb-4">欢迎使用UI自动化测试平台</h2>
-            <p class="text-xl mb-8">高效、便捷的自动化测试解决方案</p>
+            <h2 class="text-4xl font-bold mb-4" data-i18n="index_hero_title">欢迎使用UI自动化测试平台</h2>
+            <p class="text-xl mb-8 text-blue-50 dark:text-gray-300" data-i18n="index_hero_subtitle">高效、便捷的自动化测试解决方案</p>
             <div class="flex justify-center gap-4">
                     <a href="/list_projects" class="btn btn-secondary">
                         <i class="fas fa-folder-plus"></i>
-                        管理项目
+                        <span data-i18n="index_btn_manage_projects">管理项目</span>
                     </a>
                     <a href="/create_project" class="btn btn-primary">
                         <i class="fas fa-plus-circle"></i>
-                        新建项目
+                        <span data-i18n="index_btn_new_project">新建项目</span>
                     </a>
                 </div>
         </div>
     </section>
 
     <!-- 功能区域 -->
-    <section class="py-16 px-4">
+    <section class="py-16 px-4 bg-gray-100 dark:bg-gray-900">
         <div class="container mx-auto">
-            <h3 class="text-2xl font-bold text-center mb-12">核心功能</h3>
+            <h3 class="text-2xl font-bold text-center mb-12 text-gray-900 dark:text-gray-100" data-i18n="index_features_title">核心功能</h3>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-                <!-- 功能卡片 1 -->
                 <div class="feature-card">
-                    <div class="text-primary text-4xl mb-4">
+                    <div class="text-primary dark:text-blue-400 text-4xl mb-4">
                         <i class="fas fa-window-maximize"></i>
                     </div>
-                    <h4 class="text-xl font-semibold mb-2">浏览器控制</h4>
-                    <p class="text-gray-600">打开、关闭浏览器，控制窗口大小</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_feat1_title">浏览器控制</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_feat1_desc">打开、关闭浏览器，控制窗口大小</p>
                 </div>
-                
-                <!-- 功能卡片 2 -->
                 <div class="feature-card">
-                    <div class="text-primary text-4xl mb-4">
+                    <div class="text-primary dark:text-blue-400 text-4xl mb-4">
                         <i class="fas fa-mouse-pointer"></i>
                     </div>
-                    <h4 class="text-xl font-semibold mb-2">页面操作</h4>
-                    <p class="text-gray-600">点击、滑动、输入等用户交互</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_feat2_title">页面操作</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_feat2_desc">点击、滑动、输入等用户交互</p>
                 </div>
-                
-                <!-- 功能卡片 3 -->
                 <div class="feature-card">
-                    <div class="text-primary text-4xl mb-4">
+                    <div class="text-primary dark:text-blue-400 text-4xl mb-4">
                         <i class="fas fa-exchange-alt"></i>
                     </div>
-                    <h4 class="text-xl font-semibold mb-2">页面跳转</h4>
-                    <p class="text-gray-600">导航到不同URL和页面</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_feat3_title">页面跳转</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_feat3_desc">导航到不同URL和页面</p>
                 </div>
-                
-                <!-- 功能卡片 4 -->
                 <div class="feature-card">
-                    <div class="text-primary text-4xl mb-4">
+                    <div class="text-primary dark:text-blue-400 text-4xl mb-4">
                         <i class="fas fa-file-alt"></i>
                     </div>
-                    <h4 class="text-xl font-semibold mb-2">数据提取</h4>
-                    <p class="text-gray-600">分析文本内容和提取网页数据</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_feat4_title">数据提取</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_feat4_desc">分析文本内容和提取网页数据</p>
                 </div>
             </div>
         </div>
     </section>
 
     <!-- 工作流程 -->
-    <section class="py-16 px-4 bg-gray-50">
+    <section class="py-16 px-4 bg-gray-50 dark:bg-gray-950 border-y border-gray-200 dark:border-gray-800">
         <div class="container mx-auto">
-            <h3 class="text-2xl font-bold text-center mb-12">工作流程</h3>
+            <h3 class="text-2xl font-bold text-center mb-12 text-gray-900 dark:text-gray-100" data-i18n="index_workflow_title">工作流程</h3>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-                <!-- 步骤 1 -->
                 <div class="workflow-card">
                     <div class="step-number">1</div>
-                    <h4 class="text-xl font-semibold mb-2">创建项目</h4>
-                    <p class="text-gray-600">新建测试项目</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_step1_title">创建项目</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_step1_desc">新建测试项目</p>
                 </div>
-                
-                <!-- 步骤 2 -->
                 <div class="workflow-card">
                     <div class="step-number">2</div>
-                    <h4 class="text-xl font-semibold mb-2">创建测试用例</h4>
-                    <p class="text-gray-600">为项目创建测试用例</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_step2_title">创建测试用例</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_step2_desc">为项目创建测试用例</p>
                 </div>
-                
-                <!-- 步骤 3 -->
                 <div class="workflow-card">
                     <div class="step-number">3</div>
-                    <h4 class="text-xl font-semibold mb-2">编辑测试用例</h4>
-                    <p class="text-gray-600">编辑测试用例的详细信息</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_step3_title">编辑测试用例</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_step3_desc">编辑测试用例的详细信息</p>
                 </div>
-                
-                <!-- 步骤 4 -->
                 <div class="workflow-card">
                     <div class="step-number">4</div>
-                    <h4 class="text-xl font-semibold mb-2">执行测试用例</h4>
-                    <p class="text-gray-600">运行测试用例并查看结果</p>
+                    <h4 class="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100" data-i18n="index_step4_title">执行测试用例</h4>
+                    <p class="text-gray-600 dark:text-gray-400" data-i18n="index_step4_desc">运行测试用例并查看结果</p>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- 新建项目模态框 -->
-    <div id="createProjectModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
-        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-            <div class="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-4 rounded-t-lg">
+    <div id="createProjectModal" class="fixed inset-0 bg-black/60 dark:bg-black/70 flex items-center justify-center z-50 hidden">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 border border-gray-200 dark:border-gray-700">
+            <div class="bg-gradient-to-r from-blue-500 to-purple-600 dark:from-blue-800 dark:to-purple-900 text-white px-6 py-4 rounded-t-lg">
                 <h3 class="text-xl font-bold flex justify-between items-center">
-                    <span>新建项目</span>
-                    <button type="button" onclick="closeCreateProjectModal()" class="text-white hover:text-gray-200">
+                    <span data-i18n="index_modal_title">新建项目</span>
+                    <button type="button" onclick="closeCreateProjectModal()" class="text-white hover:text-gray-200" aria-label="Close">
                         <i class="fas fa-times text-xl"></i>
                     </button>
                 </h3>
@@ -245,243 +151,93 @@
             <div class="p-6">
                 <form id="createProjectForm">
                     <div class="mb-4">
-                        <label for="projectName" class="block text-gray-700 font-medium mb-2">项目名称</label>
-                        <input type="text" id="projectName" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="请输入项目名称" required>
+                        <label for="projectName" class="block text-gray-700 dark:text-gray-200 font-medium mb-2" data-i18n="index_label_name">项目名称</label>
+                        <input type="text" id="projectName" class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" data-i18n-placeholder="index_ph_name" placeholder="请输入项目名称" required>
                     </div>
                     <div class="mb-6">
-                        <label for="projectDescription" class="block text-gray-700 font-medium mb-2">项目描述</label>
-                        <textarea id="projectDescription" rows="3" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" placeholder="请输入项目描述"></textarea>
+                        <label for="projectDescription" class="block text-gray-700 dark:text-gray-200 font-medium mb-2" data-i18n="index_label_desc">项目描述</label>
+                        <textarea id="projectDescription" rows="3" class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" data-i18n-placeholder="index_ph_desc" placeholder="请输入项目描述"></textarea>
                     </div>
                     <div class="flex justify-end gap-4">
-                        <button type="button" onclick="closeCreateProjectModal()" class="btn btn-outline">取消</button>
-                        <button type="submit" class="btn btn-primary">创建项目</button>
+                        <button type="button" onclick="closeCreateProjectModal()" class="btn btn-outline"><span data-i18n="index_btn_cancel">取消</span></button>
+                        <button type="submit" class="btn btn-primary"><span data-i18n="index_btn_create">创建项目</span></button>
                     </div>
                 </form>
             </div>
         </div>
     </div>
 
-    <!-- 底部 -->
-    <footer class="bg-gray-800 text-white py-8 px-4">
+    <footer class="bg-gray-800 dark:bg-black text-gray-200 py-8 px-4 border-t border-gray-700 dark:border-gray-900">
         <div class="container mx-auto text-center">
-            <p>&copy; 2026 UI自动化测试平台. 保留胡的所有权利</p>
+            <p data-i18n="index_footer_copyright">&copy; 2026 UI自动化测试平台. 保留所有权利</p>
         </div>
     </footer>
-
+{% endblock %}
+{% block scripts %}
     <script>
-        // 页面加载完成后执行
-        document.addEventListener('DOMContentLoaded', function() {
-            // 绑定新建项目按钮点击事件
-            const createProjectBtn = document.querySelector('a[href="/create_project"]');
-            if (createProjectBtn) {
-                createProjectBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    openCreateProjectModal();
-                });
-            }
-
-            // 绑定表单提交事件
-            const createProjectForm = document.getElementById('createProjectForm');
-            if (createProjectForm) {
-                createProjectForm.addEventListener('submit', function(e) {
-                    e.preventDefault();
-                    createProject();
-                });
-            }
-        });
-
-        // 打开新建项目模态框
         function openCreateProjectModal() {
             document.getElementById('createProjectModal').classList.remove('hidden');
-            // 清空表单
             document.getElementById('projectName').value = '';
             document.getElementById('projectDescription').value = '';
+            if (typeof applyUiLang === 'function') applyUiLang();
         }
 
-        // 关闭新建项目模态框
         function closeCreateProjectModal() {
             document.getElementById('createProjectModal').classList.add('hidden');
         }
 
-        // 创建项目
         function createProject() {
-            const projectName = document.getElementById('projectName').value.trim();
-            const projectDescription = document.getElementById('projectDescription').value.trim();
+            var projectName = document.getElementById('projectName').value.trim();
+            var projectDescription = document.getElementById('projectDescription').value.trim();
 
-            // 表单验证
             if (!projectName) {
-                alert('项目名称不能为空');
+                alert(t('index_err_name_required'));
                 return;
             }
 
-            // 显示加载状态
-            const submitBtn = document.querySelector('#createProjectForm button[type="submit"]');
-            const originalText = submitBtn.innerHTML;
-            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 创建中...';
+            var submitBtn = document.querySelector('#createProjectForm button[type="submit"]');
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + t('index_creating');
             submitBtn.disabled = true;
 
-            // 调用API创建项目
             fetch('/api/projects', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     name: projectName,
                     description: projectDescription
                 })
             })
-            .then(response => response.json())
-            .then(data => {
-                // 恢复按钮状态
-                submitBtn.innerHTML = originalText;
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                submitBtn.innerHTML = '<span data-i18n="index_btn_create"></span>';
                 submitBtn.disabled = false;
+                if (typeof applyUiLang === 'function') applyUiLang();
 
                 if (data.success) {
-                    // 显示成功消息
-                    alert('项目创建成功！');
-                    // 关闭模态框
+                    alert(t('index_ok_created'));
                     closeCreateProjectModal();
-                    // 跳转到项目管理页面
                     window.location.href = '/list_projects';
                 } else {
-                    // 显示错误消息
-                    alert('项目创建失败: ' + (data.error || '未知错误'));
+                    alert(t('index_err_create_prefix') + (data.error || t('index_err_unknown')));
                 }
             })
-            .catch(error => {
-                // 恢复按钮状态
-                submitBtn.innerHTML = originalText;
+            .catch(function (error) {
+                submitBtn.innerHTML = '<span data-i18n="index_btn_create"></span>';
                 submitBtn.disabled = false;
-                // 显示错误消息
-                alert('项目创建失败: ' + error.message);
-                console.error('创建项目失败:', error);
+                if (typeof applyUiLang === 'function') applyUiLang();
+                alert(t('index_err_create_prefix') + error.message);
             });
-        }
-
-        // ==================== 登录状态管理 ====================
-        function initUserArea() {
-            fetch('/api/auth/me')
-                .then(res => res.json())
-                .then(data => {
-                    const userLabel = document.getElementById('userLabel');
-                    const userDropdown = document.getElementById('userDropdown');
-                    const loginBtn = document.getElementById('loginBtn');
-
-                    if (data.success) {
-                        const user = data.user;
-                        if (userLabel) userLabel.textContent = user.username;
-                        if (userDropdown) userDropdown.classList.remove('hidden');
-                        if (loginBtn) loginBtn.classList.add('hidden');
-                        // 管理员显示用户管理入口
-                        if (user.role === 'admin') {
-                            const userManagementLink = document.getElementById('userManagementLink');
-                            if (userManagementLink) userManagementLink.style.display = 'block';
-                        }
-                        // 根据 License 和角色显示/隐藏导航按钮
-                        updateNavigationButtons(data);
-                    } else {
-                        if (loginBtn) loginBtn.classList.remove('hidden');
-                        if (userDropdown) userDropdown.classList.add('hidden');
-                    }
-                })
-                .catch(() => {
-                    const loginBtn = document.getElementById('loginBtn');
-                    const userDropdown = document.getElementById('userDropdown');
-                    if (loginBtn) loginBtn.classList.remove('hidden');
-                    if (userDropdown) userDropdown.classList.add('hidden');
-                });
-        }
-
-        // 根据用户权限更新导航按钮显示
-        function updateNavigationButtons(data) {
-            console.log('[DEBUG] updateNavigationButtons called with data:', data);
-
-            // 安全地获取数据
-            const userRole = (data.user && data.user.role) ? data.user.role : 'viewer';
-            const features = (data.license && data.license.features) ? data.license.features : [];
-
-            console.log('[DEBUG] User role:', userRole, 'Features:', features);
-
-            // 确保 features 是数组
-            if (!Array.isArray(features)) {
-                console.error('[DEBUG] Features is not an array:', features);
-                return;
-            }
-
-            // 获取所有需要权限控制的导航按钮
-            const navButtons = document.querySelectorAll('.nav-btn[data-feature]');
-            console.log('[DEBUG] Found nav buttons:', navButtons.length);
-
-            navButtons.forEach(function(btn) {
-                const requiredFeature = btn.getAttribute('data-feature');
-                const requiredRole = btn.getAttribute('data-role');
-                const btnText = btn.textContent.trim();
-
-                let shouldShow = true;
-
-                // 检查功能权限
-                if (requiredFeature && requiredFeature !== 'basic') {
-                    shouldShow = features.indexOf(requiredFeature) !== -1;
-                    console.log('[DEBUG] Button "' + btnText + '" requires feature "' + requiredFeature + '", has it: ' + shouldShow);
-                }
-
-                // 检查角色权限
-                if (shouldShow && requiredRole) {
-                    shouldShow = userRole === requiredRole;
-                    console.log('[DEBUG] Button "' + btnText + '" requires role "' + requiredRole + '", user has: ' + userRole + ', match: ' + shouldShow);
-                }
-
-                // 显示或隐藏按钮
-                if (shouldShow) {
-                    btn.classList.remove('hidden');
-                    console.log('[DEBUG] Showing button: ' + btnText);
-                } else {
-                    btn.classList.add('hidden');
-                    console.log('[DEBUG] Hiding button: ' + btnText);
-                }
-            });
-        }
-
-        // 切换用户菜单显示
-        function toggleUserMenu() {
-            const menu = document.getElementById('userMenu');
-            menu.classList.toggle('hidden');
-        }
-
-        // 点击外部关闭菜单
-        document.addEventListener('click', function(e) {
-            const dropdown = document.getElementById('userDropdown');
-            const menu = document.getElementById('userMenu');
-            if (dropdown && !dropdown.contains(e.target)) {
-                menu.classList.add('hidden');
-            }
-        });
-
-        async function handleLogout() {
-            try {
-                await fetch('/api/auth/logout', {method: 'POST'});
-                localStorage.removeItem('currentUser');
-                window.location.href = '/login';
-            } catch(e) {
-                window.location.href = '/login';
-            }
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            initUserArea();
-
-            // 绑定新建项目按钮点击事件
-            const createProjectBtn = document.querySelector('a[href="/create_project"]');
+            var createProjectBtn = document.querySelector('a[href="/create_project"]');
             if (createProjectBtn) {
                 createProjectBtn.addEventListener('click', function(e) {
                     e.preventDefault();
                     openCreateProjectModal();
                 });
             }
-
-            // 绑定表单提交事件
-            const createProjectForm = document.getElementById('createProjectForm');
+            var createProjectForm = document.getElementById('createProjectForm');
             if (createProjectForm) {
                 createProjectForm.addEventListener('submit', function(e) {
                     e.preventDefault();
@@ -490,5 +246,4 @@
             }
         });
     </script>
-</body>
-</html>
+{% endblock %}

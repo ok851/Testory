@@ -348,6 +348,11 @@ def login_page():
 def profile_page():
     return render_template('profile.html')
 
+@app.route('/settings')
+@login_required
+def settings_center_page():
+    return render_template('settings.html')
+
 @app.route('/schedules')
 @login_required
 @feature_required('schedule')
@@ -4552,6 +4557,21 @@ def api_create_sso_config():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/sso/configs/<int:config_id>', methods=['GET'])
+@login_required
+@role_required('admin')
+def api_get_sso_config_detail(config_id):
+    """获取单个 SSO 配置详情（用于编辑）"""
+    try:
+        from sso_manager import sso_manager
+        config = sso_manager.get_sso_config(config_id)
+        if not config:
+            return jsonify({'success': False, 'error': 'SSO 配置不存在'}), 404
+        return jsonify({'success': True, 'config': config.__dict__})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/sso/configs/<int:config_id>', methods=['PUT'])
 @login_required
 @role_required('admin')
@@ -4597,6 +4617,8 @@ def api_sso_login_url(config_id):
             login_url = sso_manager.wecom_get_login_url(config, redirect_uri)
         elif config.provider_type == SSOProviderType.OAUTH2.value:
             login_url = sso_manager.oauth2_get_login_url(config)
+            if not login_url:
+                return jsonify({'success': False, 'error': 'OAuth2 授权地址或回调地址未配置完整'}), 400
         else:
             return jsonify({'success': False, 'error': '该 SSO 类型不支持跳转登录'}), 400
         
@@ -4609,24 +4631,44 @@ def api_sso_login_url(config_id):
 def api_sso_callback(config_id):
     """处理 SSO 登录回调"""
     try:
-        from sso_manager import sso_manager
+        from urllib.parse import quote
+
+        from sso_manager import sso_manager, SSOProviderType
+
+        def _err_redirect(msg: str):
+            return redirect('/login?error=' + quote(msg, safe=''))
+
+        config = sso_manager.get_sso_config(config_id)
+        if not config:
+            return _err_redirect('SSO配置不存在')
+
         code = request.args.get('code')
         state = request.args.get('state')
-        
+
+        # 企业微信 / OAuth2：校验 state，防止 CSRF 与伪造回调
+        if config.provider_type in (SSOProviderType.WECOM.value, SSOProviderType.OAUTH2.value):
+            if not state:
+                return _err_redirect('缺少安全参数state请重新登录')
+            verified_id = sso_manager.verify_state(state)
+            if verified_id != config_id:
+                uat_logger.warning(
+                    'SSO state 校验失败: path_config_id=%s verified_id=%s', config_id, verified_id
+                )
+                return _err_redirect('登录状态已失效请重新登录')
+
         if not code:
-            return redirect('/login?error=sso_failed')
-        
+            return _err_redirect('授权失败未返回code')
+
         success, user_info, message = sso_manager.authenticate(config_id, code=code)
-        
+
         if not success:
             uat_logger.error(f"SSO 登录失败: {message}")
-            return redirect(f'/login?error={message}')
-        
+            return _err_redirect(message or 'SSO登录失败')
+
         # 获取或创建用户
-        config = sso_manager.get_sso_config(config_id)
         user_id = sso_manager.get_or_create_user(
-            config.provider_type, 
-            user_info, 
+            config.provider_type,
+            user_info,
             tenant_id=config.tenant_id
         )
         
@@ -4776,7 +4818,25 @@ def api_get_order_detail(order_no):
         if order['user_id'] != current_user.id and current_user.role != 'admin':
             return jsonify({'success': False, 'error': '无权限查看此订单'}), 403
         
-        return jsonify({'success': True, 'order': order})
+        # 已支付订单返回自动生成的 License Key（按订单唯一）
+        license_key = None
+        if order.get('status') == 'paid':
+            license_key = payment_manager.get_or_create_order_license(order_no)
+        return jsonify({'success': True, 'order': order, 'license_key': license_key})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/payment/orders/<order_no>/cancel', methods=['POST'])
+@login_required
+def api_cancel_order(order_no):
+    """取消订单"""
+    try:
+        from payment_manager import payment_manager
+        ok, err = payment_manager.cancel_order(order_no, current_user.id)
+        if not ok:
+            return jsonify({'success': False, 'error': err}), 400
+        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -4863,6 +4923,46 @@ def api_get_subscription():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/payment/mock/complete/<order_no>', methods=['POST'])
+@login_required
+def api_mock_complete_payment(order_no):
+    """模拟支付成功（开发/演示使用）"""
+    try:
+        from payment_manager import payment_manager, PaymentStatus, PaymentMethod
+        order = payment_manager.get_order(order_no=order_no)
+        if not order:
+            return jsonify({'success': False, 'error': '订单不存在'}), 404
+        if order['user_id'] != current_user.id and current_user.role != 'admin':
+            return jsonify({'success': False, 'error': '无权限操作此订单'}), 403
+        if order['status'] == PaymentStatus.PAID.value:
+            return jsonify({'success': True, 'message': '订单已支付'})
+
+        txid = f"MOCK-{int(time.time())}-{current_user.id}"
+        ok = payment_manager.update_order_status(
+            order_no=order_no,
+            status=PaymentStatus.PAID.value,
+            payment_method=PaymentMethod.MANUAL.value,
+            transaction_id=txid
+        )
+        return jsonify({'success': bool(ok), 'transaction_id': txid})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/payment/<order_no>')
+@login_required
+def payment_page(order_no):
+    """支付页面"""
+    return render_template('payment.html', order_no=order_no)
+
+
+@app.route('/payment/orders')
+@login_required
+def payment_orders_page():
+    """订单列表页面"""
+    return render_template('payment_orders.html')
+
+
 # ==================== 审计日志页面 ====================
 
 @app.route('/audit-logs')
@@ -4871,15 +4971,6 @@ def api_get_subscription():
 def audit_logs_page():
     """审计日志页面"""
     return render_template('audit_logs.html')
-
-
-# ==================== Allure 风格报告 API ====================
-
-@app.route('/allure-report')
-@login_required
-def allure_report_page():
-    """返回 Allure 风格报告页面"""
-    return render_template('allure_report.html')
 
 
 # ==================== 缺陷管理 API ====================

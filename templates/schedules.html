@@ -1,25 +1,6 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>定时任务管理 - UI自动化测试平台</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        primary: '#3b82f6',
-                        secondary: '#10b981',
-                        accent: '#8b5cf6',
-                        danger: '#ef4444',
-                    }
-                }
-            }
-        }
-    </script>
+{% extends "base.html" %}
+{% block title %}定时任务管理 - UI自动化测试平台{% endblock %}
+{% block head %}
     <style type="text/tailwindcss">
         @layer utilities {
             /* 统一按钮样式规范 */
@@ -48,132 +29,69 @@
                 @apply bg-gray-500 text-white hover:bg-gray-600 focus:ring-gray-500 shadow-sm;
             }
             .btn-outline {
-                @apply border-2 border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50 focus:ring-gray-500;
+                @apply border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-50 dark:hover:bg-gray-800 focus:ring-gray-500;
             }
             /* 卡片样式 */
             .card {
-                @apply bg-white rounded-xl shadow-sm border border-gray-200 p-6;
+                @apply bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6;
             }
             .card-header {
-                @apply pb-4 mb-4 border-b border-gray-100;
+                @apply pb-4 mb-4 border-b border-gray-100 dark:border-gray-800;
             }
             /* 表单样式 */
             .form-input {
-                @apply w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all;
+                @apply w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all;
             }
             .form-label {
-                @apply block text-sm font-semibold text-gray-700 mb-2;
+                @apply block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2;
             }
             /* 表格样式 */
             .table-container {
-                @apply overflow-hidden rounded-xl border border-gray-200;
+                @apply overflow-hidden rounded-xl border border-gray-200 dark:border-gray-800;
             }
             .data-table {
-                @apply min-w-full divide-y divide-gray-200;
+                @apply min-w-full divide-y divide-gray-200 dark:divide-gray-800;
             }
             .data-table th {
-                @apply px-6 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50;
+                @apply px-6 py-3.5 text-left text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider bg-gray-50 dark:bg-gray-800;
             }
             .data-table td {
-                @apply px-6 py-4 whitespace-nowrap text-sm text-gray-700;
+                @apply px-6 py-4 whitespace-nowrap text-sm text-gray-700 dark:text-gray-200;
             }
             /* 状态标签 */
             .badge {
                 @apply px-2.5 py-0.5 rounded-full text-xs font-medium;
             }
             .badge-success {
-                @apply bg-green-100 text-green-800;
+                @apply bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-200;
             }
             .badge-danger {
-                @apply bg-red-100 text-red-800;
+                @apply bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-200;
             }
             .badge-warning {
-                @apply bg-amber-100 text-amber-800;
+                @apply bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200;
             }
             .badge-gray {
-                @apply bg-gray-100 text-gray-800;
+                @apply bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200;
             }
         }
     </style>
-</head>
-<body class="bg-gray-50 font-sans min-h-screen">
-    <!-- 导航栏 -->
-    <nav class="bg-white shadow-md">
-        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
-            <!-- 左侧：Logo -->
-            <div class="flex items-center gap-3">
-                <i class="fas fa-robot text-primary text-2xl"></i>
-                <h1 class="text-xl font-bold text-gray-800">UI 自动化测试平台</h1>
-            </div>
-            <!-- 右侧：功能按钮 + 用户信息 -->
-            <div class="flex items-center gap-2">
-                <a href="/" class="btn btn-primary" title="首页">
-                    <i class="fas fa-home"></i>
-                </a>
-                <a href="/list_projects" class="btn btn-secondary" title="项目管理">
-                    <i class="fas fa-folder mr-1"></i>项目
-                </a>
-                <a href="/run-history" class="btn btn-accent" title="运行历史">
-                    <i class="fas fa-history mr-1"></i>历史
-                </a>
-                <a href="/data-driven" class="btn btn-primary bg-purple-600 hover:bg-purple-700 focus:ring-purple-500" title="数据驱动">
-                    <i class="fas fa-table mr-1"></i>数据
-                </a>
-                <a href="/test_report" class="btn btn-primary bg-blue-600 hover:bg-blue-700 focus:ring-blue-500" title="测试报告">
-                    <i class="fas fa-chart-bar mr-1"></i>报告
-                </a>
-                <a href="/schedules" class="btn btn-primary bg-orange-500 hover:bg-orange-600 focus:ring-orange-500" title="定时任务">
-                    <i class="fas fa-clock mr-1"></i>定时
-                </a>
-                <a href="/notifications" class="btn btn-primary bg-pink-500 hover:bg-pink-600 focus:ring-pink-500" title="通知配置">
-                    <i class="fas fa-bell mr-1"></i>通知
-                </a>
-                <a href="/defects" class="btn btn-danger bg-red-600 hover:bg-red-700 focus:ring-red-500" title="缺陷管理">
-                    <i class="fas fa-bug mr-1"></i>缺陷
-                </a>
-                <!-- 用户信息区（最右边） -->
-                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 pl-4 ml-2">
-                    <!-- 用户下拉菜单 -->
-                    <div id="userDropdown" class="relative hidden">
-                        <button onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 transition-colors">
-                            <i class="fas fa-user-circle text-gray-600 text-lg"></i>
-                            <span id="userLabel" class="text-sm text-gray-700 font-medium"></span>
-                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
-                        </button>
-                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border border-gray-200">
-                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-id-card mr-2 text-gray-400"></i>个人信息
-                            </a>
-                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
-                                <i class="fas fa-key mr-2 text-gray-400"></i>授权管理
-                            </a>
-                            <div class="border-t border-gray-100 my-1"></div>
-                            <button onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100">
-                                <i class="fas fa-sign-out-alt mr-2"></i>注销
-                            </button>
-                        </div>
-                    </div>
-                    <a id="loginBtn" href="/login" class="btn bg-gray-100 text-gray-700 hover:bg-gray-200 text-sm hidden">
-                        <i class="fas fa-sign-in-alt"></i> 登录
-                    </a>
-                </div>
-            </div>
-        </div>
-    </nav>
-
+{% endblock %}
+{% block body_class %}bg-gray-50 font-sans min-h-screen dark:bg-gray-950{% endblock %}
+{% block content %}
     <!-- 主内容区 -->
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <!-- 页面标题 -->
         <div class="mb-8 flex justify-between items-center">
             <div>
-                <h2 class="text-2xl font-bold text-gray-900">
-                    <i class="fas fa-clock text-blue-600 mr-2"></i>
-                    定时任务管理
+                <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                    <i class="fas fa-clock text-blue-600 dark:text-blue-400 mr-2"></i>
+                    <span data-i18n="sch_h1">定时任务管理</span>
                 </h2>
-                <p class="mt-2 text-gray-600">配置和管理自动化测试的定时执行计划</p>
+                <p class="mt-2 text-gray-600 dark:text-gray-400" data-i18n="sch_sub">配置和管理自动化测试的定时执行计划</p>
             </div>
             <button onclick="openCreateModal()" class="btn btn-primary">
-                <i class="fas fa-plus mr-2"></i>新建定时任务
+                <i class="fas fa-plus mr-2"></i><span data-i18n="sch_new">新建定时任务</span>
             </button>
         </div>
 
@@ -183,37 +101,37 @@
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>任务名称</th>
-                            <th>执行用例</th>
-                            <th>Cron表达式</th>
-                            <th>状态</th>
-                            <th>操作</th>
+                            <th data-i18n="sch_th_name">任务名称</th>
+                            <th data-i18n="sch_th_cases">执行用例</th>
+                            <th data-i18n="sch_th_cron">Cron表达式</th>
+                            <th data-i18n="sch_th_stat">状态</th>
+                            <th data-i18n="sch_th_act">操作</th>
                         </tr>
                     </thead>
-                    <tbody id="scheduleList" class="divide-y divide-gray-200">
+                    <tbody id="scheduleList" class="divide-y divide-gray-200 dark:divide-gray-800 bg-white dark:bg-gray-900">
                         <!-- 动态加载 -->
                     </tbody>
                 </table>
             </div>
             <div id="emptyState" class="hidden text-center py-16">
-                <div class="inline-flex items-center justify-center w-20 h-20 bg-gray-100 rounded-full mb-4">
-                    <i class="fas fa-clock text-gray-400 text-3xl"></i>
+                <div class="inline-flex items-center justify-center w-20 h-20 bg-gray-100 dark:bg-gray-800 rounded-full mb-4">
+                    <i class="fas fa-clock text-gray-400 dark:text-gray-500 text-3xl"></i>
                 </div>
-                <h3 class="text-lg font-medium text-gray-900 mb-2">暂无定时任务</h3>
-                <p class="text-gray-500 mb-6">创建您的第一个定时任务，开始自动化测试</p>
+                <h3 class="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2" data-i18n="sch_empty_h">暂无定时任务</h3>
+                <p class="text-gray-500 dark:text-gray-400 mb-6" data-i18n="sch_empty_p">创建您的第一个定时任务，开始自动化测试</p>
                 <button onclick="openCreateModal()" class="btn btn-primary">
-                    <i class="fas fa-plus mr-2"></i>创建第一个任务
+                    <i class="fas fa-plus mr-2"></i><span data-i18n="sch_first">创建第一个任务</span>
                 </button>
             </div>
         </div>
     </div>
 
     <!-- 创建/编辑任务模态框 -->
-    <div id="scheduleModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center backdrop-blur-sm">
-        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                <h3 id="modalTitle" class="text-lg font-semibold text-gray-900">新建定时任务</h3>
-                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+    <div id="scheduleModal" class="hidden fixed inset-0 bg-black/50 dark:bg-black/60 z-50 flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white dark:bg-gray-900 rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-gray-800">
+            <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
+                <h3 id="modalTitle" class="text-lg font-semibold text-gray-900 dark:text-gray-100">新建定时任务</h3>
+                <button type="button" onclick="closeModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors" data-i18n-title="tc_btn_close" title="">
                     <i class="fas fa-times text-xl"></i>
                 </button>
             </div>
@@ -221,122 +139,122 @@
                 <input type="hidden" id="scheduleId">
                 
                 <div>
-                    <label class="form-label">任务名称</label>
-                    <input type="text" id="scheduleName" class="form-input" placeholder="例如：每日回归测试">
+                    <label class="form-label" data-i18n="sch_lbl_name">任务名称</label>
+                    <input type="text" id="scheduleName" class="form-input" data-i18n-placeholder="sch_ph_name" placeholder="">
                 </div>
 
                 <div>
-                    <label class="form-label">选择项目</label>
+                    <label class="form-label" data-i18n="sch_lbl_proj">选择项目</label>
                     <select id="projectSelect" class="form-input" onchange="loadCases()">
-                        <option value="">请选择项目</option>
+                        <option value="" data-i18n-opt="sch_proj_ph">请选择项目</option>
                     </select>
                 </div>
 
                 <div>
-                    <label class="form-label">选择测试用例</label>
-                    <div id="caseList" class="border border-gray-300 rounded-lg p-3 max-h-40 overflow-y-auto bg-gray-50">
-                        <p class="text-gray-500 text-sm">请先选择项目</p>
+                    <label class="form-label" data-i18n="sch_lbl_cases">选择测试用例</label>
+                    <div id="caseList" class="border border-gray-300 dark:border-gray-600 rounded-lg p-3 max-h-40 overflow-y-auto bg-gray-50 dark:bg-gray-950">
+                        <p class="text-gray-500 dark:text-gray-400 text-sm" data-i18n="sch_pick_proj">请先选择项目</p>
                     </div>
                 </div>
 
                 <div>
-                    <label class="form-label">Cron 表达式</label>
+                    <label class="form-label" data-i18n="sch_lbl_cron">Cron 表达式</label>
                     <div class="flex gap-2">
                         <input type="text" id="cronExpr" class="form-input flex-1 font-mono" placeholder="0 0 2 * * ?">
-                        <button onclick="openCronHelper()" class="btn btn-accent whitespace-nowrap">
-                            <i class="fas fa-magic mr-1"></i>生成器
+                        <button type="button" onclick="openCronHelper()" class="btn btn-accent whitespace-nowrap">
+                            <i class="fas fa-magic mr-1"></i><span data-i18n="sch_gen">生成器</span>
                         </button>
                     </div>
-                    <p id="cronDesc" class="text-sm text-blue-600 mt-2 font-medium"></p>
-                    <p class="text-xs text-gray-500 mt-1">格式：秒 分 时 日 月 周（例如：0 0 2 * * ? 表示每天凌晨2点）</p>
+                    <p id="cronDesc" class="text-sm text-blue-600 dark:text-blue-400 mt-2 font-medium"></p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" data-i18n="sch_cron_fmt">格式：秒 分 时 日 月 周（例如：0 0 2 * * ? 表示每天凌晨2点）</p>
                 </div>
 
                 <div>
-                    <label class="form-label">执行次数 <span class="text-gray-400 font-normal">(-1=无限；0=不按计划/不执行；≥1=剩余次数)</span></label>
+                    <label class="form-label"><span data-i18n="sch_ec_lbl">执行次数</span> <span class="text-gray-400 dark:text-gray-500 font-normal" data-i18n="sch_ec_hint">(-1=无限；0=不按计划/不执行；≥1=剩余次数)</span></label>
                     <input type="number" id="executionCount" class="form-input" placeholder="-1" min="-1" value="-1">
-                    <p class="text-xs text-gray-500 mt-1">达到设定次数后任务自动停用；0 时不注册定时触发也不会执行「立即执行」</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" data-i18n="sch_ec_note">达到设定次数后任务自动停用；0 时不注册定时触发也不会执行「立即执行」</p>
                 </div>
 
-                <div class="flex items-center bg-gray-50 p-3 rounded-lg">
-                    <input type="checkbox" id="isActive" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded" checked>
-                    <label for="isActive" class="ml-2 block text-sm text-gray-900">启用任务</label>
+                <div class="flex items-center bg-gray-50 dark:bg-gray-800/80 p-3 rounded-lg border border-gray-100 dark:border-gray-800">
+                    <input type="checkbox" id="isActive" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded" checked>
+                    <label for="isActive" class="ml-2 block text-sm text-gray-900 dark:text-gray-100" data-i18n="sch_enable">启用任务</label>
                 </div>
             </div>
-            <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-3 bg-gray-50">
-                <button onclick="closeModal()" class="btn btn-outline">取消</button>
-                <button onclick="saveSchedule()" class="btn btn-primary">
-                    <i class="fas fa-save mr-1"></i>保存
+            <div class="px-6 py-4 border-t border-gray-200 dark:border-gray-800 flex justify-end gap-3 bg-gray-50 dark:bg-gray-800/50">
+                <button type="button" onclick="closeModal()" class="btn btn-outline"><span data-i18n="index_btn_cancel">取消</span></button>
+                <button type="button" onclick="saveSchedule()" class="btn btn-primary">
+                    <i class="fas fa-save mr-1"></i><span data-i18n="sch_save">保存</span>
                 </button>
             </div>
         </div>
     </div>
 
     <!-- Cron 表达式生成器模态框 -->
-    <div id="cronModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center backdrop-blur-sm">
-        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                <h3 class="text-lg font-semibold text-gray-900">Cron 表达式生成器</h3>
-                <button onclick="closeCronModal()" class="text-gray-400 hover:text-gray-600 transition-colors">
+    <div id="cronModal" class="hidden fixed inset-0 bg-black/50 dark:bg-black/60 z-50 flex items-center justify-center backdrop-blur-sm">
+        <div class="bg-white dark:bg-gray-900 rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-gray-800">
+            <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100" data-i18n="sch_cron_title">Cron 表达式生成器</h3>
+                <button type="button" onclick="closeCronModal()" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors" data-i18n-title="tc_btn_close" title="">
                     <i class="fas fa-times text-xl"></i>
                 </button>
             </div>
             <div class="p-6 space-y-5">
                 <div>
-                    <label class="form-label">执行频率</label>
+                    <label class="form-label" data-i18n="sch_freq">执行频率</label>
                     <select id="cronFrequency" class="form-input" onchange="updateCronUI()">
-                        <option value="daily">每天</option>
-                        <option value="weekly">每周</option>
-                        <option value="monthly">每月</option>
-                        <option value="hourly">每小时</option>
-                        <option value="interval">间隔执行</option>
-                        <option value="custom">自定义</option>
+                        <option value="daily" data-i18n-opt="sch_freq_daily">每天</option>
+                        <option value="weekly" data-i18n-opt="sch_freq_weekly">每周</option>
+                        <option value="monthly" data-i18n-opt="sch_freq_monthly">每月</option>
+                        <option value="hourly" data-i18n-opt="sch_freq_hourly">每小时</option>
+                        <option value="interval" data-i18n-opt="sch_freq_interval">间隔执行</option>
+                        <option value="custom" data-i18n-opt="sch_freq_custom">自定义</option>
                     </select>
                 </div>
 
                 <!-- 时间选择器 -->
                 <div id="timeSelector">
-                    <label class="form-label">执行时间</label>
+                    <label class="form-label" data-i18n="sch_time">执行时间</label>
                     <input type="time" id="cronTime" class="form-input" value="02:00" onchange="updateCronPreview()">
                 </div>
 
                 <!-- 每周执行 - 多天选择 -->
                 <div id="weekDaySelector" class="hidden">
-                    <label class="form-label">选择执行日期（可多选）</label>
+                    <label class="form-label" data-i18n="sch_weekdays">选择执行日期（可多选）</label>
                     <div class="grid grid-cols-7 gap-2">
-                        <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                        <label class="flex items-center p-2 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
                             <input type="checkbox" value="1" class="weekday-checkbox mr-2" onchange="updateCronPreview()">
-                            <span class="text-sm">周一</span>
+                            <span class="text-sm text-gray-800 dark:text-gray-200" data-i18n="sch_wd_1">周一</span>
                         </label>
-                        <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                        <label class="flex items-center p-2 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
                             <input type="checkbox" value="2" class="weekday-checkbox mr-2" onchange="updateCronPreview()">
-                            <span class="text-sm">周二</span>
+                            <span class="text-sm text-gray-800 dark:text-gray-200" data-i18n="sch_wd_2">周二</span>
                         </label>
-                        <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                        <label class="flex items-center p-2 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
                             <input type="checkbox" value="3" class="weekday-checkbox mr-2" onchange="updateCronPreview()">
-                            <span class="text-sm">周三</span>
+                            <span class="text-sm text-gray-800 dark:text-gray-200" data-i18n="sch_wd_3">周三</span>
                         </label>
-                        <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                        <label class="flex items-center p-2 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
                             <input type="checkbox" value="4" class="weekday-checkbox mr-2" onchange="updateCronPreview()">
-                            <span class="text-sm">周四</span>
+                            <span class="text-sm text-gray-800 dark:text-gray-200" data-i18n="sch_wd_4">周四</span>
                         </label>
-                        <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                        <label class="flex items-center p-2 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
                             <input type="checkbox" value="5" class="weekday-checkbox mr-2" onchange="updateCronPreview()">
-                            <span class="text-sm">周五</span>
+                            <span class="text-sm text-gray-800 dark:text-gray-200" data-i18n="sch_wd_5">周五</span>
                         </label>
-                        <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                        <label class="flex items-center p-2 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
                             <input type="checkbox" value="6" class="weekday-checkbox mr-2" onchange="updateCronPreview()">
-                            <span class="text-sm">周六</span>
+                            <span class="text-sm text-gray-800 dark:text-gray-200" data-i18n="sch_wd_6">周六</span>
                         </label>
-                        <label class="flex items-center p-2 border rounded cursor-pointer hover:bg-gray-50">
+                        <label class="flex items-center p-2 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
                             <input type="checkbox" value="7" class="weekday-checkbox mr-2" onchange="updateCronPreview()">
-                            <span class="text-sm">周日</span>
+                            <span class="text-sm text-gray-800 dark:text-gray-200" data-i18n="sch_wd_7">周日</span>
                         </label>
                     </div>
                 </div>
 
                 <!-- 每月执行 - 具体日期选择 -->
                 <div id="monthDaySelector" class="hidden">
-                    <label class="form-label">选择每月执行日期（可多选）</label>
+                    <label class="form-label" data-i18n="sch_monthdays">选择每月执行日期（可多选）</label>
                     <div class="grid grid-cols-7 gap-1 max-h-40 overflow-y-auto">
                         <!-- 1-31日 -->
                     </div>
@@ -345,15 +263,15 @@
 
                 <!-- 间隔执行选择器 -->
                 <div id="intervalSelector" class="hidden">
-                    <label class="form-label">间隔设置</label>
-                    <div class="flex gap-3 items-center">
-                        <span>每</span>
+                    <label class="form-label" data-i18n="sch_interval">间隔设置</label>
+                    <div class="flex gap-3 items-center flex-wrap text-gray-800 dark:text-gray-200">
+                        <span data-i18n="sch_every">每</span>
                         <input type="number" id="intervalValue" class="form-input w-20" value="30" min="1" max="60" onchange="updateCronPreview()">
                         <select id="intervalUnit" class="form-input w-24" onchange="updateCronPreview()">
-                            <option value="minute">分钟</option>
-                            <option value="hour">小时</option>
+                            <option value="minute" data-i18n-opt="sch_unit_min">分钟</option>
+                            <option value="hour" data-i18n-opt="sch_unit_hour">小时</option>
                         </select>
-                        <span>执行一次</span>
+                        <span data-i18n="sch_once">执行一次</span>
                     </div>
                 </div>
 
@@ -361,52 +279,88 @@
                 <div id="customSelector" class="hidden space-y-3">
                     <div class="grid grid-cols-2 gap-4">
                         <div>
-                            <label class="form-label">秒 (0-59)</label>
+                            <label class="form-label" data-i18n="sch_cf_sec">秒 (0-59)</label>
                             <input type="text" id="customSecond" class="form-input" value="0" placeholder="0" onchange="updateCronPreview()">
                         </div>
                         <div>
-                            <label class="form-label">分 (0-59)</label>
+                            <label class="form-label" data-i18n="sch_cf_min">分 (0-59)</label>
                             <input type="text" id="customMinute" class="form-input" value="0" placeholder="0,30 或 */5" onchange="updateCronPreview()">
                         </div>
                         <div>
-                            <label class="form-label">时 (0-23)</label>
+                            <label class="form-label" data-i18n="sch_cf_hour">时 (0-23)</label>
                             <input type="text" id="customHour" class="form-input" value="2" placeholder="2 或 9-17" onchange="updateCronPreview()">
                         </div>
                         <div>
-                            <label class="form-label">日 (1-31)</label>
+                            <label class="form-label" data-i18n="sch_cf_day">日 (1-31)</label>
                             <input type="text" id="customDay" class="form-input" value="*" placeholder="* 或 1,15" onchange="updateCronPreview()">
                         </div>
                         <div>
-                            <label class="form-label">月 (1-12)</label>
+                            <label class="form-label" data-i18n="sch_cf_month">月 (1-12)</label>
                             <input type="text" id="customMonth" class="form-input" value="*" placeholder="* 或 1-6" onchange="updateCronPreview()">
                         </div>
                         <div>
-                            <label class="form-label">周 (1-7, 1=周一)</label>
+                            <label class="form-label" data-i18n="sch_cf_week">周 (1-7, 1=周一)</label>
                             <input type="text" id="customWeekday" class="form-input" value="?" placeholder="? 或 1-5" onchange="updateCronPreview()">
                         </div>
                     </div>
-                    <p class="text-xs text-gray-500">提示：使用 * 表示所有，? 表示不指定，1,3,5 表示指定值，1-5 表示范围，*/5 表示每隔</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400" data-i18n="sch_custom_hint">提示：使用 * 表示所有，? 表示不指定，1,3,5 表示指定值，1-5 表示范围，*/5 表示每隔</p>
                 </div>
 
-                <div class="bg-blue-50 border border-blue-200 p-4 rounded-lg">
-                    <p class="text-sm text-gray-600 mb-1">生成的表达式：</p>
-                    <p id="cronPreview" class="text-lg font-mono font-bold text-blue-600">0 0 2 * * ?</p>
-                    <p id="cronDescPreview" class="text-sm text-gray-500 mt-1">每天凌晨 2:00 执行</p>
+                <div class="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-4 rounded-lg">
+                    <p class="text-sm text-gray-600 dark:text-gray-300 mb-1" data-i18n="sch_generated">生成的表达式：</p>
+                    <p id="cronPreview" class="text-lg font-mono font-bold text-blue-600 dark:text-blue-400">0 0 2 * * ?</p>
+                    <p id="cronDescPreview" class="text-sm text-gray-500 dark:text-gray-400 mt-1"></p>
                 </div>
             </div>
-            <div class="px-6 py-4 border-t border-gray-200 flex justify-end gap-3 bg-gray-50">
-                <button onclick="closeCronModal()" class="btn btn-outline">取消</button>
-                <button onclick="applyCron()" class="btn btn-primary">
-                    <i class="fas fa-check mr-1"></i>应用
+            <div class="px-6 py-4 border-t border-gray-200 dark:border-gray-800 flex justify-end gap-3 bg-gray-50 dark:bg-gray-800/50">
+                <button type="button" onclick="closeCronModal()" class="btn btn-outline"><span data-i18n="index_btn_cancel">取消</span></button>
+                <button type="button" onclick="applyCron()" class="btn btn-primary">
+                    <i class="fas fa-check mr-1"></i><span data-i18n="sch_apply">应用</span>
                 </button>
             </div>
         </div>
     </div>
-
+{% endblock %}
+{% block scripts %}
     <script>
         let schedules = [];
         let projects = [];
         let cases = [];
+
+        function schSub(str, map) {
+            if (!str) return '';
+            var s = str;
+            if (!map) return s;
+            for (var k in map) {
+                if (Object.prototype.hasOwnProperty.call(map, k)) {
+                    var v = map[k];
+                    s = s.split('{' + k + '}').join(v == null ? '' : String(v));
+                }
+            }
+            return s;
+        }
+
+        function refreshScheduleSelectOptions() {
+            document.querySelectorAll('[data-i18n-opt]').forEach(function (opt) {
+                var k = opt.getAttribute('data-i18n-opt');
+                if (k && typeof t === 'function') opt.textContent = t(k);
+            });
+        }
+
+        /** @returns {'zh'|'en'} */
+        function schUiLang() {
+            try {
+                var lang = localStorage.getItem('ui_lang') || 'zh';
+                return lang === 'en' ? 'en' : 'zh';
+            } catch (e) {
+                return 'zh';
+            }
+        }
+
+        function escAttr(s) {
+            if (s == null) return '';
+            return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        }
 
         // 加载定时任务列表
         async function loadSchedules() {
@@ -434,40 +388,50 @@
             }
 
             emptyState.classList.add('hidden');
-            tbody.innerHTML = schedules.map(s => `
-                <tr class="hover:bg-gray-50 transition-colors">
+            tbody.innerHTML = schedules.map(s => {
+                const nCases = typeof t === 'function' ? schSub(t('sch_cases_n'), { n: s.case_ids.length }) : '';
+                const onoff = s.is_active ? (typeof t === 'function' ? t('sch_on') : '') : (typeof t === 'function' ? t('sch_off') : '');
+                const ttlRun = typeof t === 'function' ? t('sch_ttl_run') : '';
+                const ttlEdit = typeof t === 'function' ? t('sch_ttl_edit') : '';
+                const ttlDis = typeof t === 'function' ? t('sch_ttl_dis') : '';
+                const ttlEn = typeof t === 'function' ? t('sch_ttl_en') : '';
+                const ttlDel = typeof t === 'function' ? t('sch_ttl_del') : '';
+                const toggTitle = s.is_active ? ttlDis : ttlEn;
+                return `
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/80 transition-colors">
                     <td>
-                        <div class="font-medium text-gray-900">${s.name}</div>
+                        <div class="font-medium text-gray-900 dark:text-gray-100">${s.name}</div>
                     </td>
                     <td>
-                        <div class="text-gray-900">${s.case_ids.length} 个用例</div>
+                        <div class="text-gray-900 dark:text-gray-200">${nCases}</div>
                     </td>
                     <td>
-                        <code class="text-sm bg-gray-100 px-2 py-1 rounded font-mono">${s.cron_expr}</code>
+                        <code class="text-sm bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded font-mono text-gray-800 dark:text-gray-200">${s.cron_expr}</code>
                     </td>
                     <td>
                         <span class="badge ${s.is_active ? 'badge-success' : 'badge-gray'}">
-                            ${s.is_active ? '启用' : '禁用'}
+                            ${onoff}
                         </span>
                     </td>
                     <td>
                         <div class="flex items-center space-x-2">
-                            <button onclick="runScheduleNow(${s.id})" class="btn btn-sm btn-primary" title="立即执行">
+                            <button type="button" onclick="runScheduleNow(${s.id})" class="btn btn-sm btn-primary" title="${escAttr(ttlRun)}">
                                 <i class="fas fa-play"></i>
                             </button>
-                            <button onclick="editSchedule(${s.id})" class="btn btn-sm btn-accent" title="编辑">
+                            <button type="button" onclick="editSchedule(${s.id})" class="btn btn-sm btn-accent" title="${escAttr(ttlEdit)}">
                                 <i class="fas fa-edit"></i>
                             </button>
-                            <button onclick="toggleSchedule(${s.id}, ${s.is_active})" class="btn btn-sm ${s.is_active ? 'btn-warning' : 'btn-secondary'}" title="${s.is_active ? '禁用' : '启用'}">
+                            <button type="button" onclick="toggleSchedule(${s.id}, ${s.is_active})" class="btn btn-sm ${s.is_active ? 'btn-warning' : 'btn-secondary'}" title="${escAttr(toggTitle)}">
                                 <i class="fas ${s.is_active ? 'fa-pause' : 'fa-play-circle'}"></i>
                             </button>
-                            <button onclick="deleteSchedule(${s.id})" class="btn btn-sm btn-danger" title="删除">
+                            <button type="button" onclick="deleteSchedule(${s.id})" class="btn btn-sm btn-danger" title="${escAttr(ttlDel)}">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
                     </td>
                 </tr>
-            `).join('');
+            `;
+            }).join('');
         }
 
         // 加载项目列表
@@ -478,8 +442,10 @@
                 // API 返回格式可能是 {projects: [...]} 或 {success: true, projects: [...]}
                 projects = result.projects || [];
                 const select = document.getElementById('projectSelect');
-                select.innerHTML = '<option value="">请选择项目</option>' +
+                const ph = typeof t === 'function' ? t('sch_proj_ph') : '';
+                select.innerHTML = '<option value="" data-i18n-opt="sch_proj_ph">' + ph + '</option>' +
                     projects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+                refreshScheduleSelectOptions();
             } catch (error) {
                 console.error('加载项目失败:', error);
             }
@@ -489,7 +455,8 @@
         async function loadCases() {
             const projectId = document.getElementById('projectSelect').value;
             if (!projectId) {
-                document.getElementById('caseList').innerHTML = '<p class="text-gray-500 text-sm">请先选择项目</p>';
+                const pick = typeof t === 'function' ? t('sch_pick_proj') : '';
+                document.getElementById('caseList').innerHTML = '<p class="text-gray-500 dark:text-gray-400 text-sm">' + pick + '</p>';
                 return;
             }
 
@@ -501,7 +468,8 @@
                 renderCaseList();
             } catch (error) {
                 console.error('加载用例失败:', error);
-                document.getElementById('caseList').innerHTML = '<p class="text-red-500 text-sm">加载用例失败</p>';
+                const msg = typeof t === 'function' ? t('sch_load_case_fail') : '';
+                document.getElementById('caseList').innerHTML = '<p class="text-red-500 dark:text-red-400 text-sm">' + msg + '</p>';
             }
         }
 
@@ -509,13 +477,14 @@
         function renderCaseList() {
             const container = document.getElementById('caseList');
             if (cases.length === 0) {
-                container.innerHTML = '<p class="text-gray-500 text-sm">该项目暂无测试用例</p>';
+                const msg = typeof t === 'function' ? t('sch_no_cases') : '';
+                container.innerHTML = '<p class="text-gray-500 dark:text-gray-400 text-sm">' + msg + '</p>';
                 return;
             }
             container.innerHTML = cases.map(c => `
                 <div class="flex items-center mb-2">
-                    <input type="checkbox" id="case_${c.id}" value="${c.id}" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded case-checkbox">
-                    <label for="case_${c.id}" class="ml-2 block text-sm text-gray-900">${c.name}</label>
+                    <input type="checkbox" id="case_${c.id}" value="${c.id}" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 dark:border-gray-600 rounded case-checkbox">
+                    <label for="case_${c.id}" class="ml-2 block text-sm text-gray-900 dark:text-gray-100">${c.name}</label>
                 </div>
             `).join('');
         }
@@ -523,10 +492,11 @@
         // 打开创建模态框
         function openCreateModal() {
             document.getElementById('scheduleId').value = '';
-            document.getElementById('modalTitle').textContent = '新建定时任务';
+            document.getElementById('modalTitle').textContent = typeof t === 'function' ? t('sch_modal_new') : '';
             document.getElementById('scheduleName').value = '';
             document.getElementById('projectSelect').value = '';
-            document.getElementById('caseList').innerHTML = '<p class="text-gray-500 text-sm">请先选择项目</p>';
+            const pick = typeof t === 'function' ? t('sch_pick_proj') : '';
+            document.getElementById('caseList').innerHTML = '<p class="text-gray-500 dark:text-gray-400 text-sm">' + pick + '</p>';
             document.getElementById('cronExpr').value = '';
             document.getElementById('cronDesc').textContent = '';
             document.getElementById('isActive').checked = true;
@@ -541,7 +511,7 @@
             if (!schedule) return;
 
             document.getElementById('scheduleId').value = schedule.id;
-            document.getElementById('modalTitle').textContent = '编辑定时任务';
+            document.getElementById('modalTitle').textContent = typeof t === 'function' ? t('sch_modal_edit') : '';
             document.getElementById('scheduleName').value = schedule.name;
             document.getElementById('cronExpr').value = schedule.cron_expr;
             {
@@ -559,7 +529,8 @@
                 // 加载该项目的用例列表
                 await loadCasesForEdit(schedule.case_ids);
             } else {
-                document.getElementById('caseList').innerHTML = '<p class="text-gray-500 text-sm">请先选择项目</p>';
+                const pick = typeof t === 'function' ? t('sch_pick_proj') : '';
+                document.getElementById('caseList').innerHTML = '<p class="text-gray-500 dark:text-gray-400 text-sm">' + pick + '</p>';
             }
 
             document.getElementById('scheduleModal').classList.remove('hidden');
@@ -569,7 +540,8 @@
         async function loadCasesForEdit(selectedCaseIds = []) {
             const projectId = document.getElementById('projectSelect').value;
             if (!projectId) {
-                document.getElementById('caseList').innerHTML = '<p class="text-gray-500 text-sm">请先选择项目</p>';
+                const pick = typeof t === 'function' ? t('sch_pick_proj') : '';
+                document.getElementById('caseList').innerHTML = '<p class="text-gray-500 dark:text-gray-400 text-sm">' + pick + '</p>';
                 return;
             }
 
@@ -580,7 +552,8 @@
                 
                 const container = document.getElementById('caseList');
                 if (cases.length === 0) {
-                    container.innerHTML = '<p class="text-gray-500 text-sm">该项目暂无测试用例</p>';
+                    const msg = typeof t === 'function' ? t('sch_no_cases') : '';
+                    container.innerHTML = '<p class="text-gray-500 dark:text-gray-400 text-sm">' + msg + '</p>';
                     return;
                 }
                 
@@ -589,14 +562,15 @@
                     const isChecked = selectedCaseIds.includes(c.id) ? 'checked' : '';
                     return `
                         <div class="flex items-center mb-2">
-                            <input type="checkbox" id="case_${c.id}" value="${c.id}" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded case-checkbox" ${isChecked}>
-                            <label for="case_${c.id}" class="ml-2 block text-sm text-gray-900">${c.name}</label>
+                            <input type="checkbox" id="case_${c.id}" value="${c.id}" class="h-4 w-4 text-primary focus:ring-primary border-gray-300 dark:border-gray-600 rounded case-checkbox" ${isChecked}>
+                            <label for="case_${c.id}" class="ml-2 block text-sm text-gray-900 dark:text-gray-100">${c.name}</label>
                         </div>
                     `;
                 }).join('');
             } catch (error) {
                 console.error('加载用例失败:', error);
-                document.getElementById('caseList').innerHTML = '<p class="text-red-500 text-sm">加载用例失败</p>';
+                const msg = typeof t === 'function' ? t('sch_load_case_fail') : '';
+                document.getElementById('caseList').innerHTML = '<p class="text-red-500 dark:text-red-400 text-sm">' + msg + '</p>';
             }
         }
 
@@ -614,12 +588,12 @@
             const projectId = document.getElementById('projectSelect').value;
 
             if (!name || !cronExpr) {
-                alert('请填写任务名称和 Cron 表达式');
+                alert(typeof t === 'function' ? t('sch_need_nc') : '');
                 return;
             }
 
             if (!projectId) {
-                alert('请选择项目');
+                alert(typeof t === 'function' ? t('sch_need_proj') : '');
                 return;
             }
 
@@ -628,7 +602,7 @@
             const caseIds = Array.from(checkedCases).map(cb => parseInt(cb.value));
 
             if (caseIds.length === 0) {
-                alert('请至少选择一个测试用例');
+                alert(typeof t === 'function' ? t('sch_need_cases') : '');
                 return;
             }
 
@@ -658,29 +632,29 @@
                     closeModal();
                     loadSchedules();
                 } else {
-                    alert(result.error || '保存失败');
+                    alert(result.error || (typeof t === 'function' ? t('sch_save_fail') : ''));
                 }
             } catch (error) {
                 console.error('保存失败:', error);
-                alert('保存失败，请重试');
+                alert(typeof t === 'function' ? t('sch_save_fail_net') : '');
             }
         }
 
         // 立即执行任务
         async function runScheduleNow(id) {
-            if (!confirm('确定要立即执行该任务吗？')) return;
+            if (!confirm(typeof t === 'function' ? t('sch_run_confirm') : '')) return;
 
             try {
                 const response = await fetch(`/api/schedules/${id}/run`, { method: 'POST' });
                 const result = await response.json();
                 if (result.success) {
-                    alert('任务已开始执行');
+                    alert(typeof t === 'function' ? t('sch_run_ok') : '');
                 } else {
-                    alert(result.error || '执行失败');
+                    alert(result.error || (typeof t === 'function' ? t('sch_run_fail') : ''));
                 }
             } catch (error) {
                 console.error('执行失败:', error);
-                alert('执行失败，请重试');
+                alert(typeof t === 'function' ? t('sch_run_fail_net') : '');
             }
         }
 
@@ -697,17 +671,17 @@
                 if (result.success) {
                     loadSchedules();
                 } else {
-                    alert(result.error || '操作失败');
+                    alert(result.error || (typeof t === 'function' ? t('sch_toggle_fail') : ''));
                 }
             } catch (error) {
                 console.error('操作失败:', error);
-                alert('操作失败，请重试');
+                alert(typeof t === 'function' ? t('sch_toggle_fail_net') : '');
             }
         }
 
         // 删除任务
         async function deleteSchedule(id) {
-            if (!confirm('确定要删除该定时任务吗？')) return;
+            if (!confirm(typeof t === 'function' ? t('sch_del_confirm') : '')) return;
 
             try {
                 const response = await fetch(`/api/schedules/${id}`, { method: 'DELETE' });
@@ -715,11 +689,11 @@
                 if (result.success) {
                     loadSchedules();
                 } else {
-                    alert(result.error || '删除失败');
+                    alert(result.error || (typeof t === 'function' ? t('sch_del_fail') : ''));
                 }
             } catch (error) {
                 console.error('删除失败:', error);
-                alert('删除失败，请重试');
+                alert(typeof t === 'function' ? t('sch_del_fail_net') : '');
             }
         }
 
@@ -870,7 +844,7 @@
             
             for (let i = 1; i <= 31; i++) {
                 const label = document.createElement('label');
-                label.className = 'flex items-center justify-center p-1 border rounded cursor-pointer hover:bg-gray-50 text-sm';
+                label.className = 'flex items-center justify-center p-1 border border-gray-200 dark:border-gray-700 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-800 dark:text-gray-200';
                 label.innerHTML = `
                     <input type="checkbox" value="${i}" class="monthday-checkbox hidden" onchange="updateCronPreview()">
                     <span class="w-6 h-6 flex items-center justify-center rounded">${i}</span>
@@ -930,23 +904,30 @@
             const [hour, minute] = time.split(':');
             let cron = '';
             let desc = '';
+            const lang = schUiLang();
+            const dayParts = typeof t === 'function' ? t('sch_days').split(',') : [];
 
             switch (frequency) {
                 case 'daily':
                     cron = `0 ${minute} ${hour} * * ?`;
-                    desc = `每天 ${time} 执行`;
+                    desc = typeof t === 'function' ? schSub(t('sch_cron_daily'), { time: time }) : '';
                     break;
                 case 'weekly': {
                     const checkedDays = Array.from(document.querySelectorAll('.weekday-checkbox:checked'))
                         .map(cb => cb.value);
                     if (checkedDays.length === 0) {
                         cron = `0 ${minute} ${hour} ? * 1`;
-                        desc = `每周一 ${time} 执行`;
+                        desc = typeof t === 'function' ? schSub(t('sch_cron_weekly_def'), { time: time }) : '';
                     } else {
                         cron = `0 ${minute} ${hour} ? * ${checkedDays.join(',')}`;
-                        const dayNames = ['一', '二', '三', '四', '五', '六', '日'];
-                        const selectedNames = checkedDays.map(d => '周' + dayNames[parseInt(d) - 1]).join('、');
-                        desc = `每周${selectedNames} ${time} 执行`;
+                        if (lang === 'en') {
+                            const selectedNames = checkedDays.map(d => dayParts[parseInt(d, 10) - 1] || d).join(', ');
+                            desc = typeof t === 'function' ? schSub(t('sch_weekly_en'), { days: selectedNames, time: time }) : '';
+                        } else {
+                            const pfx = typeof t === 'function' ? t('sch_prefix_week') : '';
+                            const selectedNames = checkedDays.map(d => pfx + (dayParts[parseInt(d, 10) - 1] || d)).join('、');
+                            desc = typeof t === 'function' ? schSub(t('sch_cron_weekly'), { days: selectedNames, time: time }) : '';
+                        }
                     }
                     break;
                 }
@@ -955,26 +936,27 @@
                         .map(cb => cb.value);
                     if (checkedMonthDays.length === 0) {
                         cron = `0 ${minute} ${hour} 1 * ?`;
-                        desc = `每月 1 日 ${time} 执行`;
+                        desc = typeof t === 'function' ? schSub(t('sch_cron_monthly_def'), { time: time }) : '';
                     } else {
                         cron = `0 ${minute} ${hour} ${checkedMonthDays.join(',')} * ?`;
-                        desc = `每月 ${checkedMonthDays.join(', ')} 日 ${time} 执行`;
+                        const daysStr = checkedMonthDays.join(', ');
+                        desc = typeof t === 'function' ? schSub(t('sch_cron_monthly'), { days: daysStr, time: time }) : '';
                     }
                     break;
                 }
                 case 'hourly':
                     cron = `0 0 * * * ?`;
-                    desc = `每小时整点执行`;
+                    desc = typeof t === 'function' ? t('sch_cron_hourly') : '';
                     break;
                 case 'interval': {
                     const intervalValue = document.getElementById('intervalValue').value || 30;
                     const intervalUnit = document.getElementById('intervalUnit').value;
                     if (intervalUnit === 'minute') {
                         cron = `0 */${intervalValue} * * * ?`;
-                        desc = `每 ${intervalValue} 分钟执行一次`;
+                        desc = typeof t === 'function' ? schSub(t('sch_cron_im'), { n: intervalValue }) : '';
                     } else {
                         cron = `0 0 */${intervalValue} * * ?`;
-                        desc = `每 ${intervalValue} 小时执行一次`;
+                        desc = typeof t === 'function' ? schSub(t('sch_cron_ih'), { n: intervalValue }) : '';
                     }
                     break;
                 }
@@ -986,12 +968,12 @@
                     const customMonth = document.getElementById('customMonth').value || '*';
                     const customWeekday = document.getElementById('customWeekday').value || '?';
                     cron = `${second} ${customMinute} ${customHour} ${customDay} ${customMonth} ${customWeekday}`;
-                    desc = `自定义表达式`;
+                    desc = typeof t === 'function' ? t('sch_cron_custom') : '';
                     break;
                 }
                 default:
                     cron = `0 ${minute} ${hour} * * ?`;
-                    desc = `每天 ${time} 执行`;
+                    desc = typeof t === 'function' ? schSub(t('sch_cron_daily'), { time: time }) : '';
             }
 
             document.getElementById('cronPreview').textContent = cron;
@@ -1006,57 +988,24 @@
             closeCronModal();
         }
 
-        // ==================== 登录状态管理 ====================
-        function initUserArea() {
-            fetch('/api/auth/me')
-                .then(res => res.json())
-                .then(data => {
-                    if (data.success) {
-                        const user = data.user;
-                        document.getElementById('userLabel').textContent = user.username;
-                        document.getElementById('userDropdown').classList.remove('hidden');
-                        document.getElementById('loginBtn').classList.add('hidden');
-                    } else {
-                        document.getElementById('loginBtn').classList.remove('hidden');
-                        document.getElementById('userDropdown').classList.add('hidden');
-                    }
-                })
-                .catch(() => {
-                    document.getElementById('loginBtn').classList.remove('hidden');
-                    document.getElementById('userDropdown').classList.add('hidden');
-                });
-        }
-
-        // 切换用户菜单显示
-        function toggleUserMenu() {
-            const menu = document.getElementById('userMenu');
-            menu.classList.toggle('hidden');
-        }
-
-        // 点击外部关闭菜单
-        document.addEventListener('click', function(e) {
-            const dropdown = document.getElementById('userDropdown');
-            const menu = document.getElementById('userMenu');
-            if (dropdown && !dropdown.contains(e.target)) {
-                menu.classList.add('hidden');
-            }
-        });
-
-        async function handleLogout() {
-            try {
-                await fetch('/api/auth/logout', {method: 'POST'});
-                localStorage.removeItem('currentUser');
-                window.location.href = '/login';
-            } catch(e) {
-                window.location.href = '/login';
-            }
-        }
-
-        // 页面加载
-        document.addEventListener('DOMContentLoaded', function() {
+        function initSchedulesPage() {
+            try { document.title = typeof t === 'function' ? t('sch_doc_title') : ''; } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
+            refreshScheduleSelectOptions();
             loadSchedules();
-            initUserArea();
+            var cm = document.getElementById('cronModal');
+            if (cm && !cm.classList.contains('hidden') && typeof updateCronPreview === 'function') updateCronPreview();
+        }
+
+        document.addEventListener('DOMContentLoaded', initSchedulesPage);
+        window.addEventListener('ui-preferences-updated', function (ev) {
+            if (ev.detail && ev.detail.source === 'load') return;
+            try { document.title = typeof t === 'function' ? t('sch_doc_title') : ''; } catch (e) {}
+            if (typeof applyUiLang === 'function') applyUiLang();
+            refreshScheduleSelectOptions();
+            renderSchedules();
+            var cm = document.getElementById('cronModal');
+            if (cm && !cm.classList.contains('hidden') && typeof updateCronPreview === 'function') updateCronPreview();
         });
     </script>
-</body>
-</html>
+{% endblock %}

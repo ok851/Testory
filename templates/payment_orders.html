@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}我的订单 - UI自动化测试平台{% endblock %}
+{% block body_class %}bg-gray-50 dark:bg-gray-950 min-h-screen{% endblock %}
+{% block content %}
+    <div class="max-w-5xl mx-auto py-10 px-4">
+        <div class="bg-white dark:bg-gray-900 rounded-xl shadow dark:shadow-black/30 border border-gray-100 dark:border-gray-800 p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-xl font-semibold text-gray-900 dark:text-white" data-i18n="orders_title">我的订单</h1>
+                <a href="/pricing" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 shadow-sm transition-colors dark:focus:ring-offset-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1" data-i18n-title="orders_back_pricing" title="返回定价">
+                    <i class="fas fa-tags"></i><span data-i18n="orders_back_pricing">返回定价</span>
+                </a>
+            </div>
+            <div id="loading" class="text-gray-500 dark:text-gray-400" data-i18n="orders_loading">加载中...</div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm text-gray-900 dark:text-gray-100">
+                    <thead>
+                        <tr class="border-b border-gray-200 dark:border-gray-700">
+                            <th class="py-2 text-left font-medium text-gray-700 dark:text-gray-300" data-i18n="orders_col_no">订单号</th>
+                            <th class="py-2 text-left font-medium text-gray-700 dark:text-gray-300" data-i18n="orders_col_plan">套餐</th>
+                            <th class="py-2 text-left font-medium text-gray-700 dark:text-gray-300" data-i18n="orders_col_amount">金额</th>
+                            <th class="py-2 text-left font-medium text-gray-700 dark:text-gray-300" data-i18n="orders_col_status">状态</th>
+                            <th class="py-2 text-left font-medium text-gray-700 dark:text-gray-300" data-i18n="orders_col_time">创建时间</th>
+                            <th class="py-2 text-left font-medium text-gray-700 dark:text-gray-300" data-i18n="orders_col_action">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rows"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+    <script>
+        function prettyStatus(s) {
+            if (!s) return '';
+            var k = 'orders_st_' + s;
+            var v = t(k);
+            return v === k ? s : v;
+        }
+
+        async function loadOrders() {
+            const resp = await fetch("/api/payment/orders");
+            const data = await resp.json();
+            const rows = document.getElementById("rows");
+            document.getElementById("loading").classList.add("hidden");
+            if (!data.success || !Array.isArray(data.orders) || data.orders.length === 0) {
+                rows.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-gray-500 dark:text-gray-400">' + t("orders_empty") + "</td></tr>";
+                return;
+            }
+            var pay = t("orders_pay");
+            var cancel = t("orders_cancel");
+            var detail = t("orders_detail");
+            const btnPay = (no) => '<a href="/payment/' + no + '" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-600 text-white hover:bg-green-700 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 dark:focus:ring-offset-gray-900 focus:ring-offset-1" title="' + pay.replace(/"/g, '&quot;') + '"><i class="fas fa-credit-card"></i>' + pay + "</a>";
+            const btnCancel = (no) => '<button type="button" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600 text-white hover:bg-red-700 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-red-500 dark:focus:ring-offset-gray-900 focus:ring-offset-1" title="' + cancel.replace(/"/g, '&quot;') + '" onclick="cancelOrder(\'' + no + '\')"><i class="fas fa-times"></i>' + cancel + "</button>";
+            const btnDetail = (no) => '<a href="/payment/' + no + '" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-offset-gray-900 focus:ring-offset-1" title="' + detail.replace(/"/g, '&quot;') + '"><i class="fas fa-file-invoice"></i>' + detail + "</a>";
+
+            rows.innerHTML = data.orders.map(function (o) {
+                return (
+                    '<tr class="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50/80 dark:hover:bg-gray-800/60">' +
+                    '<td class="py-3 pl-1 text-gray-800 dark:text-gray-200">' + (o.order_no || "") + "</td>" +
+                    '<td class="py-3 text-gray-800 dark:text-gray-200">' + (o.plan_name || o.plan_type || "") + "</td>" +
+                    '<td class="py-3 font-medium text-gray-900 dark:text-white">¥' + (o.amount_yuan != null ? o.amount_yuan : "") + "</td>" +
+                    '<td class="py-3">' + prettyStatus(o.status) + "</td>" +
+                    '<td class="py-3 text-gray-600 dark:text-gray-400">' + (o.created_at || "-") + "</td>" +
+                    '<td class="py-3">' +
+                    (o.status === "pending"
+                        ? '<div class="flex flex-wrap items-center gap-2">' + btnPay(o.order_no) + btnCancel(o.order_no) + "</div>"
+                        : btnDetail(o.order_no)) +
+                    "</td>" +
+                    "</tr>"
+                );
+            }).join("");
+        }
+
+        async function cancelOrder(orderNo) {
+            if (!confirm(t("orders_confirm_cancel"))) return;
+            const resp = await fetch("/api/payment/orders/" + encodeURIComponent(orderNo) + "/cancel", { method: "POST" });
+            const data = await resp.json();
+            if (!data.success) {
+                alert(data.error || t("orders_cancel_fail"));
+                return;
+            }
+            loadOrders();
+        }
+
+        window.addEventListener("ui-preferences-updated", function (ev) {
+            try {
+                document.title = t("orders_doc_title");
+            } catch (e) {}
+            if (typeof applyUiLang === "function") applyUiLang();
+            if (ev.detail && ev.detail.source === "load") return;
+            loadOrders();
+        });
+
+        document.addEventListener("DOMContentLoaded", function () {
+            try {
+                document.title = t("orders_doc_title");
+            } catch (e) {}
+            if (typeof applyUiLang === "function") applyUiLang();
+            loadOrders();
+        });
+    </script>
+{% endblock %}
