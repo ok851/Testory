@@ -981,6 +981,22 @@
         const pageSize = 10;
         let runCaseStatusTimer = null;
         let runCaseButtonSyncTimer = null;
+
+        /** 用例未在运行（完成或已停止）时恢复工具栏，避免停止后仍显示「执行中」且按钮不同步 */
+        function resetRunCaseToolbarIdle() {
+            if (runCaseStatusTimer) {
+                clearInterval(runCaseStatusTimer);
+                runCaseStatusTimer = null;
+            }
+            const runBtn = document.getElementById('runCaseBtn');
+            const stopBtn = document.getElementById('stopRunCaseBtn');
+            if (runBtn) {
+                runBtn.disabled = false;
+                runBtn.textContent = t('steps_run');
+            }
+            if (stopBtn) stopBtn.disabled = true;
+        }
+
         let draggedElement = null;
         let draggedStepId = null;
         let isDragging = false;
@@ -1627,6 +1643,9 @@ function changePage(page) {
             selectorTypeField.style.display = 'block';
             selectorValueField.style.display = 'block';
             inputValueField.style.display = 'block';
+            // 重置动态标签（从 enter_iframe / navigate 等切回时必须恢复，否则会一直显示 iframe/URL 等错误标题）
+            document.querySelector('label[for="stepSelectorValue"]').textContent = t('steps_label_sel_val');
+            document.querySelector('label[for="stepInputValue"]').textContent = t('steps_label_in_val');
             
             const scrollFields = document.getElementById('scrollFields');
             const compareTypeField = document.getElementById('stepCompareType');
@@ -1741,6 +1760,7 @@ function changePage(page) {
                 scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_extra_opt');
             }
+            updateSelectorHelp();
         }
         
         // 断言选项切换函数
@@ -1831,6 +1851,8 @@ function changePage(page) {
             selectorTypeField.style.display = 'block';
             selectorValueField.style.display = 'block';
             inputValueField.style.display = 'block';
+            document.querySelector('label[for="editStepSelectorValue"]').textContent = t('steps_label_sel_val');
+            document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_label_in_val');
             editScrollFields.style.display = 'none';
             editCompareTypeField.style.display = 'none';
             editSwipeDirectionField.style.display = 'none';
@@ -1922,6 +1944,7 @@ function changePage(page) {
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_extra_opt');
             }
+            updateEditSelectorHelp();
         }
         
         // 可视化选择功能
@@ -1967,70 +1990,15 @@ function changePage(page) {
             setPickButtonsLoading(true);
             showToast(t('steps_toast_pick_starting'), 'info');
             
-            // 1. 获取当前用例ID
             const caseId = currentCaseId;
-            
-            // 2. 获取当前用例的步骤数据
-            console.log('正在获取用例步骤，case_id:', caseId);
-            fetch(`/api/cases/${caseId}/steps`)
-            .then(response => {
-                console.log('获取步骤响应状态:', response.status);
-                if (!response.ok) {
-                    throw new Error(t('steps_fetch_steps_fail').replace('{code}', String(response.status)));
-                }
-                return response.json();
-            })
-            .then(stepsData => {
-                // 3. 查找导航步骤并提取URL；无导航步骤则回退到用例URL
-                let targetUrl = '';
-                if (stepsData.steps && stepsData.steps.length > 0) {
-                    const navigateStep = stepsData.steps.find(step => {
-                        if (step.action !== 'navigate') return false;
-                        const u = (step.url || step.input_value || '').trim();
-                        if (!u) return false;
-                        const low = u.toLowerCase();
-                        return !(low === 'about:blank' || low === 'about:newtab');
-                    });
-                    if (navigateStep) {
-                        targetUrl = navigateStep.url || navigateStep.input_value || '';
-                    }
-                }
-                if (!targetUrl) {
-                    targetUrl = (currentCaseUrl || '').trim();
-                }
-                if (!targetUrl) {
-                    // loadCaseInfo 还未完成时兜底再取一次用例详情
-                    return fetch(`/api/cases/${caseId}`)
-                        .then(r => (r.ok ? r.json() : {}))
-                        .then(cd => {
-                            const fallbackUrl = ((cd && cd.test_case && cd.test_case.url) || '').trim();
-                            if (fallbackUrl) currentCaseUrl = fallbackUrl;
-                            return fallbackUrl;
-                        })
-                        .then(url2 => {
-                            if (!url2) {
-                                throw new Error(t('steps_no_url_err'));
-                            }
-                            console.log('提取到的导航URL(用例兜底):', url2);
-                            return fetch('/api/start_visual_selection', {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify({ url: url2 })
-                            });
-                        });
-                }
-                console.log('提取到的导航URL:', targetUrl);
-                // 4. 调用后端API启动可视化选择，并传递导航URL
-                console.log('正在启动可视化选择，目标URL:', targetUrl);
-                return fetch('/api/start_visual_selection', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ url: targetUrl })
-                });
+            console.log('正在启动可视化选择，case_id:', caseId);
+            // URL 统一交给后端解析（case.url > step.url > navigate.input_value），前端不再拼接，避免 about:blank 干扰
+            fetch('/api/start_visual_selection', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ case_id: caseId, url: (currentCaseUrl || '') })
             })
             .then(response => {
                 console.log('启动选择响应状态:', response.status);
@@ -2042,6 +2010,11 @@ function changePage(page) {
             })
             .then(data => {
                 if (data.success) {
+                    if (data.stopped) {
+                        showToast(data.message || t('steps_toast_stop_pick'), 'info');
+                        stopVisualSelection();
+                        return;
+                    }
                     console.log('可视化选择已启动');
                     // 开始监听元素选择事件
                     startListeningForSelection();
@@ -2085,6 +2058,7 @@ function changePage(page) {
         function startListeningForSelection() {
             const startedAt = Date.now();
             const maxPickMs = 180000; // 3 分钟兜底，防止前端一直“拾取中”
+            let pickerClosedHits = 0;
             // 启动轮询，检查是否有元素被选择
             const pollInterval = setInterval(() => {
                 if (!isSelecting) {
@@ -2108,11 +2082,17 @@ function changePage(page) {
                         return;
                     }
                     if (data && data.picker_closed) {
+                        pickerClosedHits += 1;
+                        if (pickerClosedHits < 3) {
+                            // 后端会尝试自动恢复，连续多次 closed 才真正停止
+                            return;
+                        }
                         showToast(t('steps_pick_closed'), 'warning');
                         stopVisualSelection();
                         clearInterval(pollInterval);
                         return;
                     }
+                    pickerClosedHits = 0;
                     if (data.success && data.selected_element) {
                         // 元素已被选择，填充到表单
                         fillElementToForm(data.selected_element, selectionTarget);
@@ -2392,7 +2372,11 @@ function changePage(page) {
                     try {
                         const stResp = await fetch('/api/cases/current-run/status');
                         const st = await stResp.json();
-                        if (!stResp.ok || !st.success || !st.active) return;
+                        if (!stResp.ok || !st.success) return;
+                        if (!st.active) {
+                            resetRunCaseToolbarIdle();
+                            return;
+                        }
                         const progress = Math.max(0, Math.min(100, st.progress || 0));
                         bar.style.width = `${progress}%`;
                         pct.textContent = `${progress}%`;
@@ -2426,18 +2410,14 @@ function changePage(page) {
                     clearInterval(runCaseStatusTimer);
                     runCaseStatusTimer = null;
                 }
-                if (runButton) {
-                    runButton.disabled = false;
-                    runButton.textContent = t('steps_run');
-                }
-                if (stopButton) stopButton.disabled = true;
+                resetRunCaseToolbarIdle();
             }
         }
 
         async function stopRunCase() {
+            const stopBtn = document.getElementById('stopRunCaseBtn');
+            if (stopBtn) stopBtn.disabled = true;
             try {
-                const stopBtn = document.getElementById('stopRunCaseBtn');
-                if (stopBtn) stopBtn.disabled = true;
                 const resp = await fetch('/api/cases/current-run/stop', { method: 'POST' });
                 const data = await resp.json();
                 if (!resp.ok || !data.success) {
@@ -2450,8 +2430,18 @@ function changePage(page) {
                 if (pct) pct.textContent = '100%';
                 if (txt) txt.textContent = t('steps_run_stop_pending');
                 showToast(t('steps_toast_stopped'), 'warning');
+                resetRunCaseToolbarIdle();
             } catch (e) {
                 showToast(t('steps_toast_stop_fail').replace('{msg}', e.message), 'error');
+                if (stopBtn) {
+                    try {
+                        const st = await (await fetch('/api/cases/current-run/status')).json();
+                        const still = st && st.success && st.active;
+                        stopBtn.disabled = !still;
+                    } catch (_) {
+                        stopBtn.disabled = false;
+                    }
+                }
             }
         }
         
@@ -3141,13 +3131,23 @@ function changePage(page) {
 
         async function syncRunCaseButtonState() {
             const stopBtn = document.getElementById('stopRunCaseBtn');
+            const runBtn = document.getElementById('runCaseBtn');
             if (!stopBtn) return;
             try {
                 const resp = await fetch('/api/cases/current-run/status');
                 const data = await resp.json();
-                stopBtn.disabled = !(resp.ok && data.success && data.active);
+                const active = !!(resp.ok && data.success && data.active);
+                stopBtn.disabled = !active;
+                if (runBtn) {
+                    runBtn.disabled = active;
+                    runBtn.textContent = active ? t('steps_run_btn_running') : t('steps_run');
+                }
             } catch (_) {
                 stopBtn.disabled = true;
+                if (runBtn) {
+                    runBtn.disabled = false;
+                    runBtn.textContent = t('steps_run');
+                }
             }
         }
         

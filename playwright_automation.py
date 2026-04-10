@@ -81,6 +81,7 @@ def force_reset_execution_state():
     try:
         automation.recording = False
         automation.recorded_steps = []
+        automation.current_iframe = None
     except Exception:
         pass
     
@@ -136,6 +137,18 @@ def _normalize_xpath_selector_value(selector: str) -> str:
         out.append(selector[i])
         i += 1
     return "".join(out)
+
+
+def _fill_text_compare_equal(expected: Optional[str], actual: Optional[str]) -> bool:
+    """与预期填充文本比对（忽略首尾空白、NBSP）。"""
+    if expected is None:
+        expected = ""
+    if actual is None:
+        actual = ""
+    return (
+        str(expected).replace("\u00a0", " ").strip()
+        == str(actual).replace("\u00a0", " ").strip()
+    )
 
 
 _URL_RE = re.compile(
@@ -254,7 +267,7 @@ def _pa_validate_url(url: str) -> tuple:
     """
     if not url or not url.strip():
         return None, None
-    url = url.strip()
+    url = url.strip().replace('：', ':')
     for pat in _INVALID_URL_SKIP:
         if pat in url.lower():
             uat_logger.warning(f"占位符URL ({url})，跳过")
@@ -428,6 +441,7 @@ class PlaywrightAutomation:
         self._platform_origin = ""
         self._recording_session_clear_cb = None
         self._selection_mode_active = False
+        self.current_iframe = None  # {'selector', 'selector_type', 'iframe'} 由 enter_iframe 设置
 
     def _is_recorder_panel_page(self, p) -> bool:
         rp = getattr(self, "recorder_panel_page", None)
@@ -909,7 +923,9 @@ class PlaywrightAutomation:
                 self._notify_recording_session_cleared()
                 return await self.start_browser(headless=headless, _retry=False)
             if not page_ok or not br_ok:
-                raise Exception("浏览器会话不可用（页面可能已被手动关闭），已尝试恢复失败，请重试")
+                raise Exception(
+                    "浏览器会话不可用（页面或连接已失效，无头环境下多为断连/崩溃；不一定是手动关闭），已尝试自动恢复失败，请重试"
+                )
             
             return self.page
         except Exception as e:
@@ -967,6 +983,74 @@ class PlaywrightAutomation:
         self.current_url = url
         
         uat_logger.info(f"执行导航操作: {url}")
+
+    async def enter_iframe(self, selector: str, selector_type: str = "css") -> None:
+        """记录 iframe 定位串到 current_iframe。
+
+        执行器会把后续步骤默认映射到该 iframe（直到 exit_iframe）。本身不向页面发送额外点击。
+        必须在 Playwright Worker 同线程事件循环中调用（与 click/navigate 一致），勿用 asyncio.run。
+        """
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        if not (selector or "").strip():
+            raise Exception("进入 iframe 失败: 未提供 iframe 元素选择器")
+
+        uat_logger.info(f"🔄 进入iframe（隐式上下文）: {selector} (类型: {selector_type})")
+
+        sel = selector.strip()
+        st = (selector_type or "css").lower()
+        if st in (
+            "id",
+            "class",
+            "name",
+            "text",
+            "partial_text",
+            "placeholder",
+            "label",
+            "title",
+            "alt",
+            "data",
+            "aria",
+        ):
+            if st == "label":
+                sel, st = await self.find_element_by_label(sel, self.page)
+                if sel is None:
+                    raise Exception(f"未找到与 label 关联的 iframe 元素: {selector}")
+            else:
+                sel, st = self.convert_selector(sel, st)
+
+        wait_sel = sel
+        if st == "xpath":
+            wait_sel = sel if str(sel).startswith("xpath=") else f"xpath={sel}"
+
+        try:
+            # iframe 常因尺寸/跨域等不满足 visible；attached 即可确认节点存在再 frame_locator
+            await self.page.wait_for_selector(wait_sel, state="attached", timeout=20000)
+            uat_logger.info(f"✅ 找到 iframe 元素: {wait_sel}")
+            iframe_fl = self.page.frame_locator(wait_sel)
+            self.current_iframe = {
+                "selector": wait_sel,
+                "selector_type": st,
+                "iframe": iframe_fl,
+            }
+            uat_logger.info("✅ 已进入 iframe 并保存 frame_locator 上下文")
+        except Exception as e:
+            uat_logger.error(f"❌ 进入iframe失败: {e}")
+            raise Exception(f"进入iframe失败: {e}") from e
+
+    async def exit_iframe(self) -> None:
+        """清除 current_iframe；后续步骤默认回到主文档（直到再次 enter_iframe）。
+
+        须在 Playwright Worker 同线程中调用，勿用 asyncio.run。
+        嵌套 iframe：当前实现为单层，再次 enter 会覆盖；exit 一次即清空。
+        """
+        uat_logger.info("🔄 跳出iframe（隐式上下文结束），返回主文档")
+        try:
+            self.current_iframe = None
+            uat_logger.info("✅ 成功跳出iframe，返回主文档")
+        except Exception as e:
+            uat_logger.error(f"❌ 跳出iframe失败: {e}")
+            raise Exception(f"跳出iframe失败: {e}") from e
     
     async def select_option(self, selector: str, select_value: str, selector_type: str = "css", iframe_selector: str = None, page=None):
         """选择下拉框选项。支持原生select和自定义下拉框（如Element Plus）。page: 可选，指定在哪个标签页执行"""
@@ -3384,86 +3468,113 @@ class PlaywrightAutomation:
                                     except Exception as e7:
                                         uat_logger.error(f"❌ [FILL_DEBUG] 方式7失败: {str(e7)}")
             
-        # 🔥 最终验证：确保输入真正成功
+        # 最终验证：与 Playwright fill 语义对齐，兼容 Vue/uni-app 异步回填、shadow DOM；不以「两次必须同字面值」苛判
         if fill_success:
             try:
-                async def _read_current_value():
-                    # 最终验证输入值
-                    if selector_type == "css":
-                        return await target_context.evaluate(
-                            """(selector) => {
-                                let element = document.querySelector(selector);
-                                if (!element) return null;
-                                const tagName = element.tagName.toLowerCase();
-                                const isWrapper = tagName === 'div' && (
-                                    element.classList.contains('el-textarea') ||
-                                    element.classList.contains('el-input') ||
-                                    element.classList.contains('el-input__wrapper')
-                                );
-                                if (isWrapper) {
-                                    const innerInput = element.querySelector('input, textarea');
-                                    if (innerInput) element = innerInput;
-                                }
-                                return element ? element.value : null;
-                            }""",
-                            selector
-                        )
-                    elif selector_type in ["link_text", "partial_link_text"]:
-                        return await target_context.evaluate(
-                            """(text) => {
-                                let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
-                                if (input) return input.value;
-                                const labels = document.querySelectorAll('label');
-                                for (const label of labels) {
-                                    if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
-                                        const forAttr = label.getAttribute('for');
-                                        if (forAttr) {
-                                            input = document.getElementById(forAttr);
-                                            if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) return input.value;
+                async def _read_best_fill_value() -> Optional[str]:
+                    try:
+                        loc = target_context.locator(full_selector)
+                        if await loc.count() > 0:
+                            v = await loc.first.input_value(timeout=4000)
+                            if v is not None:
+                                return v
+                    except Exception as _e:
+                        uat_logger.debug(f"[FILL_VERIFY] locator.input_value: {_e}")
+                    if not hasattr(target_context, "evaluate"):
+                        return None
+                    _read_deep_fn = """function readDeep(el) {
+    if (!el) return null;
+    let e = el;
+    if (e.shadowRoot) {
+        const si = e.shadowRoot.querySelector('input, textarea');
+        if (si) e = si;
+    }
+    const t = (e.tagName || '').toLowerCase();
+    const cls = (e.className || '').toString();
+    if (t === 'input' || t === 'textarea')
+        return e.value != null ? String(e.value) : '';
+    if (e.isContentEditable)
+        return (e.innerText || e.textContent || '').trim();
+    if (t === 'div' && (
+            cls.includes('el-textarea') ||
+            cls.includes('el-input') ||
+            cls.includes('el-input__wrapper'))) {
+        const inner = e.querySelector('input, textarea');
+        if (inner) return inner.value != null ? String(inner.value) : '';
+    }
+    if (e.querySelector) {
+        const inner = e.querySelector('input, textarea');
+        if (inner) return inner.value != null ? String(inner.value) : '';
+    }
+    return null;
+}"""
+                    _js_css = "(sel) => {\n" + _read_deep_fn + "\nreturn readDeep(document.querySelector(sel));\n}"
+                    _js_xpath = (
+                        "(xpath) => {\n"
+                        + _read_deep_fn
+                        + "\nconst result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);\n"
+                        "return readDeep(result.singleNodeValue);\n}"
+                    )
+                    try:
+                        if selector_type == "css":
+                            return await target_context.evaluate(_js_css, selector)
+                        if selector_type in ["link_text", "partial_link_text"]:
+                            return await target_context.evaluate(
+                                """(text) => {
+                                    let input = document.querySelector('input[placeholder="' + text + '"], textarea[placeholder="' + text + '"]');
+                                    if (input) return input.value;
+                                    const labels = document.querySelectorAll('label');
+                                    for (const label of labels) {
+                                        if (label.textContent.trim() === text || label.textContent.trim().includes(text)) {
+                                            const forAttr = label.getAttribute('for');
+                                            if (forAttr) {
+                                                input = document.getElementById(forAttr);
+                                                if (input && (input.tagName === 'INPUT' || input.tagName === 'TEXTAREA')) return input.value;
+                                            }
+                                            input = label.querySelector('input, textarea');
+                                            if (input) return input.value;
                                         }
-                                        input = label.querySelector('input, textarea');
-                                        if (input) return input.value;
                                     }
-                                }
-                                return null;
-                            }""",
-                            selector
-                        )
-                    else:  # xpath
-                        return await target_context.evaluate(
-                            """(xpath) => {
-                                const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-                                let element = result.singleNodeValue;
-                                if (!element) return null;
-                                const tagName = (element.tagName || '').toLowerCase();
-                                const className = element.className || '';
-                                const isWrapper = tagName === 'div' && (
-                                    className.includes('el-textarea') ||
-                                    className.includes('el-input') ||
-                                    className.includes('el-input__wrapper')
-                                );
-                                if (isWrapper) {
-                                    const innerInput = element.querySelector('input, textarea');
-                                    if (innerInput) element = innerInput;
-                                }
-                                return element ? element.value : null;
-                            }""",
-                            selector
-                        )
+                                    return null;
+                                }""",
+                                selector,
+                            )
+                        return await target_context.evaluate(_js_xpath, selector)
+                    except Exception as _e3:
+                        uat_logger.debug(f"[FILL_VERIFY] evaluate: {_e3}")
+                    return None
 
-                # 严格验证：两次回读都必须匹配，避免“输入后被组件清空”误判成功
-                await asyncio.sleep(0.2)
-                first_value = await _read_current_value()
-                await asyncio.sleep(0.35)
-                second_value = await _read_current_value()
+                await asyncio.sleep(0.15)
+                first_value = await _read_best_fill_value()
+                await asyncio.sleep(0.45)
+                second_value = await _read_best_fill_value()
 
-                if first_value != text or second_value != text:
+                if _fill_text_compare_equal(second_value, text):
+                    if not _fill_text_compare_equal(first_value, text):
+                        uat_logger.info(
+                            f"✅ 输入验证通过（异步回填/UI 模型后同步）: 首次='{first_value}' → 二次='{second_value}'，预期='{text}'"
+                        )
+                    else:
+                        uat_logger.debug(f"✅ 输入验证成功: '{text}'")
+                elif _fill_text_compare_equal(first_value, text) and not _fill_text_compare_equal(
+                    second_value, text
+                ):
                     uat_logger.error(
-                        f"🔥 输入验证失败: 期望值 '{text}'，首次回读 '{first_value}'，二次回读 '{second_value}'"
+                        f"🔥 输入验证失败: 已写入后又被组件清空 — 首次='{first_value}'，二次='{second_value}'，预期='{text}'"
                     )
                     fill_success = False
                 else:
-                    uat_logger.debug(f"✅ 输入严格验证成功: 值 '{text}' 稳定存在")
+                    await asyncio.sleep(0.55)
+                    third_value = await _read_best_fill_value()
+                    if _fill_text_compare_equal(third_value, text):
+                        uat_logger.info(
+                            f"✅ 输入验证在延长等待后通过（如 uni-app 晚步刷新）: '{third_value}'"
+                        )
+                    else:
+                        uat_logger.error(
+                            f"🔥 输入验证失败: 预期='{text}'，首次='{first_value}'，二次='{second_value}'，三次='{third_value}'"
+                        )
+                        fill_success = False
             except Exception as verify_error:
                 uat_logger.error(f"输入验证异常: {verify_error}，判定为失败")
                 fill_success = False
@@ -8749,7 +8860,79 @@ class PlaywrightAutomation:
                 pass  # 忽略错误
             self.playwright = None
         self._last_headless = None
-    
+
+    async def _wait_pick_page_ready(self, *, after_nav: bool = False, timeout_ms: int = 30000):
+        """拾取器注入前等待主框架就绪。避免 networkidle（SPA / 长连接页面常永不满足或易与导航竞态）。"""
+        try:
+            await self.page.wait_for_load_state('domcontentloaded', timeout=timeout_ms)
+        except Exception as e:
+            uat_logger.warning(f'[拾取] 等待 domcontentloaded: {e}')
+        if not after_nav:
+            return
+        try:
+            await self.page.wait_for_load_state('load', timeout=min(20000, timeout_ms))
+        except Exception:
+            pass
+
+    async def _picker_goto(self, url: str):
+        """拾取专用导航：domcontentloaded 为主；ERR_ABORTED 时用 commit 减轻竞态与重定向场景。"""
+        target = (url or '').strip()
+        if not target:
+            return
+        timeout = 60000.0
+        try:
+            opt = int(os.environ.get('PLAYWRIGHT_NAV_TIMEOUT_MS', '0') or '0')
+            if opt > 0:
+                timeout = float(opt)
+        except ValueError:
+            pass
+        try:
+            await self.page.goto(target, wait_until='domcontentloaded', timeout=timeout)
+        except Exception as e1:
+            msg = str(e1)
+            if 'Target page, context or browser has been closed' in msg:
+                uat_logger.warning("[拾取] 导航时页面已关闭，重建浏览器后重试一次")
+                await self.start_browser(headless=False)
+                await self.page.goto(target, wait_until='domcontentloaded', timeout=timeout)
+            elif 'ERR_ABORTED' in msg or 'net::' in msg:
+                uat_logger.warning(f'[拾取] goto(domcontentloaded) 失败，尝试 commit: {e1}')
+                try:
+                    await self.page.goto(target, wait_until='commit', timeout=timeout)
+                except Exception as e2:
+                    msg2 = str(e2)
+                    if 'Target page, context or browser has been closed' in msg2:
+                        uat_logger.warning("[拾取] commit 导航时页面已关闭，重建浏览器后重试一次")
+                        await self.start_browser(headless=False)
+                        await self.page.goto(target, wait_until='domcontentloaded', timeout=timeout)
+                    else:
+                        msg2l = msg2.lower()
+                        if (
+                            "err_connection_timed_out" in msg2l
+                            or "err_connection_refused" in msg2l
+                            or "err_name_not_resolved" in msg2l
+                        ):
+                            raise Exception(f"目标地址不可达，请检查网络或服务是否启动: {target}") from e2
+                        raise Exception(f'拾取导航失败: {e2}') from e2
+            else:
+                msgl = msg.lower()
+                if (
+                    "err_connection_timed_out" in msgl
+                    or "err_connection_refused" in msgl
+                    or "err_name_not_resolved" in msgl
+                ):
+                    # 网络不可达场景，给用户可读提示，避免内部错误细节暴露
+                    raise Exception(f"目标地址不可达，请检查网络或服务是否启动: {target}") from e1
+                raise
+        await self._wait_pick_page_ready(after_nav=True, timeout_ms=int(timeout))
+        try:
+            cur = (self.page.url or "").strip().lower()
+        except Exception:
+            cur = ""
+        if cur in ("about:blank", "about:newtab", "about:newtab/"):
+            uat_logger.warning(f"[拾取] 导航后仍为空白页({cur})，尝试再次强制导航")
+            await self.page.goto(target, wait_until='load', timeout=timeout)
+            await self._wait_pick_page_ready(after_nav=True, timeout_ms=int(timeout))
+
     async def enable_element_selection(self, url=''):
         """启用元素选择模式,显示悬浮窗让用户选择页面元素"""
         try:
@@ -8804,18 +8987,26 @@ class PlaywrightAutomation:
                     await self.start_browser(headless=False)
                 else:
                     uat_logger.info("复用已存在的浏览器实例")
-                # 确保页面已加载
-                await self.page.wait_for_load_state('networkidle')
-            
-            # 如果提供了URL,则导航到该URL
-            if url:
-                await self.page.goto(url)
-                await self.page.wait_for_load_state('networkidle')
+                try:
+                    await self.page.bring_to_front()
+                except Exception:
+                    pass
+
+            # 如果提供了URL,则导航到该URL（_picker_goto 内已等待 load）；否则确保当前页 dom 就绪
+            if (url or '').strip():
+                await self._picker_goto(url)
+            else:
+                await self._wait_pick_page_ready(after_nav=False)
+
+            if self.page.is_closed():
+                raise Exception('拾取页面已关闭，请重新打开可视化选择')
 
             # 注入拾取器浮动条与选择逻辑
-            await self.page.evaluate("""
+            picker_injected = await self.page.evaluate("""
                 (() => {
                     try {
+                        const host = document.body || document.documentElement;
+                        if (!host) return false;
                         if (window.automationSelection && window.automationSelection._inited) {
                             if (typeof window.enableElementSelection === 'function') {
                                 window.enableElementSelection();
@@ -8856,6 +9047,11 @@ class PlaywrightAutomation:
                             if (cls) return `${tag}${cls}`;
                             return tag;
                         }
+                        function resolveElementTarget(raw) {
+                            if (!raw) return null;
+                            if (raw.nodeType === 1) return raw;
+                            return raw.parentElement || null;
+                        }
                         window.generateSelector = generateSelector;
 
                         function ensureOverlay() {
@@ -8863,7 +9059,7 @@ class PlaywrightAutomation:
                             const ov = document.createElement('div');
                             ov.id = 'automation-picker-overlay';
                             ov.style.cssText = 'position:fixed;pointer-events:none;border:2px solid #2f80ff;background:rgba(47,128,255,0.10);z-index:2147483646;display:none;';
-                            document.body.appendChild(ov);
+                            host.appendChild(ov);
                             state.overlay = ov;
                             return ov;
                         }
@@ -8882,23 +9078,39 @@ class PlaywrightAutomation:
                             tip.textContent = '点击后在页面选择目标';
                             bar.appendChild(btn);
                             bar.appendChild(tip);
-                            document.body.appendChild(bar);
+                            host.appendChild(bar);
                             state.toolbar = bar;
                             state.btn = btn;
                             state.tip = tip;
+                            function broadcastPickerState(enabled) {
+                                try {
+                                    const fs = document.querySelectorAll('iframe');
+                                    for (const f of fs) {
+                                        if (f && f.contentWindow) {
+                                            f.contentWindow.postMessage({
+                                                __automationPicker: true,
+                                                type: 'picker_state',
+                                                enabled: !!enabled
+                                            }, '*');
+                                        }
+                                    }
+                                } catch (_) {}
+                            }
                             btn.onclick = () => {
                                 state.enabled = !state.enabled;
                                 btn.textContent = state.enabled ? '退出拾取' : '拾取元素';
                                 btn.style.background = state.enabled ? '#ef4444' : '#3b82f6';
                                 tip.textContent = state.enabled ? '请点击目标元素' : '点击后在页面选择目标';
                                 if (!state.enabled && state.overlay) state.overlay.style.display = 'none';
+                                broadcastPickerState(state.enabled);
                             };
                             return bar;
                         }
 
                         function onMove(e) {
                             if (!state.enabled) return;
-                            const target = e.target;
+                            const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
+                            const target = resolveElementTarget(raw);
                             if (!target || target === state.toolbar || state.toolbar.contains(target)) return;
                             const rect = target.getBoundingClientRect();
                             const ov = ensureOverlay();
@@ -8911,7 +9123,8 @@ class PlaywrightAutomation:
 
                         function onClick(e) {
                             if (!state.enabled) return;
-                            const target = e.target;
+                            const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
+                            const target = resolveElementTarget(raw);
                             if (!target || target === state.toolbar || state.toolbar.contains(target)) return;
                             e.preventDefault();
                             e.stopPropagation();
@@ -8930,6 +9143,7 @@ class PlaywrightAutomation:
                             if (state.overlay) state.overlay.style.display = 'none';
                             const detail = {
                                 selector: generateSelector(target),
+                                source_frame: 'main',
                                 elementInfo: {
                                     tagName: target.tagName,
                                     id: target.id || '',
@@ -8950,6 +9164,7 @@ class PlaywrightAutomation:
                                     }
                                 }
                             };
+                            state.selectedElementPayload = detail;
                             window.dispatchEvent(new CustomEvent('elementSelected', { detail }));
                         }
 
@@ -8957,15 +9172,65 @@ class PlaywrightAutomation:
                             window.__automationPickerBound = true;
                             document.addEventListener('mousemove', onMove, true);
                             document.addEventListener('click', onClick, true);
+                            window.addEventListener('message', (evt) => {
+                                try {
+                                    const d = evt && evt.data;
+                                    if (!(d && d.__automationPicker)) return;
+                                    if (d.type === 'selected' && d.payload) {
+                                        state.selectedElementPayload = d.payload;
+                                        state.enabled = false;
+                                        if (state.overlay) state.overlay.style.display = 'none';
+                                        if (state.btn) {
+                                            state.btn.textContent = '拾取元素';
+                                            state.btn.style.background = '#3b82f6';
+                                        }
+                                        if (state.tip) {
+                                            state.tip.textContent = '已成功拾取元素';
+                                            window.setTimeout(() => {
+                                                if (state.tip && !state.enabled) state.tip.textContent = '请点击目标元素';
+                                            }, 3000);
+                                        }
+                                    }
+                                } catch (_) {}
+                            }, true);
                         }
 
                         window.enableElementSelection = function () {
                             ensureToolbar();
                             state.enabled = false;
+                            if (state.btn) {
+                                state.btn.textContent = '拾取元素';
+                                state.btn.style.background = '#3b82f6';
+                            }
+                            if (state.tip) state.tip.textContent = '点击后在页面选择目标';
+                            try {
+                                const fs = document.querySelectorAll('iframe');
+                                for (const f of fs) {
+                                    if (f && f.contentWindow) {
+                                        f.contentWindow.postMessage({
+                                            __automationPicker: true,
+                                            type: 'picker_state',
+                                            enabled: true
+                                        }, '*');
+                                    }
+                                }
+                            } catch (_) {}
                         };
                         window.disableElementSelection = function () {
                             state.enabled = false;
                             if (state.overlay) state.overlay.style.display = 'none';
+                            try {
+                                const fs = document.querySelectorAll('iframe');
+                                for (const f of fs) {
+                                    if (f && f.contentWindow) {
+                                        f.contentWindow.postMessage({
+                                            __automationPicker: true,
+                                            type: 'picker_state',
+                                            enabled: false
+                                        }, '*');
+                                    }
+                                }
+                            } catch (_) {}
                         };
 
                         window.enableElementSelection();
@@ -8975,6 +9240,135 @@ class PlaywrightAutomation:
                     }
                 })()
             """)
+            if not picker_injected:
+                raise Exception("拾取器注入失败：页面DOM尚未就绪或被页面脚本拦截")
+            # 同源 iframe 轻量拾取桥接：frame 内点击后把元素详情回传到 top 的 automationSelection
+            try:
+                for fr in self.page.frames:
+                    if fr == self.page.main_frame:
+                        continue
+                    try:
+                        await fr.evaluate("""
+                            (() => {
+                                try {
+                                    if (window.__automationFramePickerBound) return true;
+                                    window.__automationFramePickerBound = true;
+                                    function stableClassSelector(el) {
+                                        if (!el || !el.classList || !el.classList.length) return '';
+                                        const keep = [];
+                                        for (const c of Array.from(el.classList)) {
+                                            if (!c || c.length <= 2) continue;
+                                            if (/\\d{4,}/.test(c)) continue;
+                                            if (/[a-f0-9]{8,}/i.test(c)) continue;
+                                            keep.push(c);
+                                            if (keep.length >= 3) break;
+                                        }
+                                        return keep.length ? ('.' + keep.join('.')) : '';
+                                    }
+                                    function generateSelector(element) {
+                                        if (!element || !element.tagName) return '';
+                                        const tag = element.tagName.toLowerCase();
+                                        const id = element.id || '';
+                                        if (id && !/(\\d{6,}|[a-f0-9]{10,})/i.test(id)) return '#' + id;
+                                        const cls = stableClassSelector(element);
+                                        if (cls) return `${tag}${cls}`;
+                                        return tag;
+                                    }
+                                    function resolveElementTarget(raw) {
+                                        if (!raw) return null;
+                                        if (raw.nodeType === 1) return raw;
+                                        return raw.parentElement || null;
+                                    }
+                                    const frameState = { enabled: false };
+                                    let overlay = null;
+                                    function ensureOverlay() {
+                                        if (overlay && overlay.isConnected) return overlay;
+                                        const host = document.body || document.documentElement;
+                                        if (!host) return null;
+                                        overlay = document.createElement('div');
+                                        overlay.id = '__automation-frame-picker-overlay';
+                                        overlay.style.cssText = 'position:fixed;pointer-events:none;border:2px solid #2f80ff;background:rgba(47,128,255,0.10);z-index:2147483646;display:none;';
+                                        host.appendChild(overlay);
+                                        return overlay;
+                                    }
+                                    function onMove(e) {
+                                        if (!frameState.enabled) {
+                                            if (overlay) overlay.style.display = 'none';
+                                            return;
+                                        }
+                                        const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
+                                        const target = resolveElementTarget(raw);
+                                        if (!target) return;
+                                        const rect = target.getBoundingClientRect();
+                                        const ov = ensureOverlay();
+                                        if (!ov) return;
+                                        ov.style.display = 'block';
+                                        ov.style.left = rect.left + 'px';
+                                        ov.style.top = rect.top + 'px';
+                                        ov.style.width = rect.width + 'px';
+                                        ov.style.height = rect.height + 'px';
+                                    }
+                                    function onClick(e) {
+                                        if (!frameState.enabled) return;
+                                        const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
+                                        const target = resolveElementTarget(raw);
+                                        if (!target) return;
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        const detail = {
+                                            selector: generateSelector(target),
+                                            source_frame: window.location.href || 'iframe',
+                                            elementInfo: {
+                                                tagName: target.tagName,
+                                                id: target.id || '',
+                                                className: target.className || '',
+                                                textContent: target.textContent ? target.textContent.substring(0, 100) : '',
+                                                attributes: {
+                                                    type: target.type || '',
+                                                    name: target.name || '',
+                                                    value: target.value || '',
+                                                    href: target.href || '',
+                                                    src: target.src || '',
+                                                    alt: target.alt || '',
+                                                    title: target.title || '',
+                                                    'data-testid': target.getAttribute('data-testid') || '',
+                                                    'data-test': target.getAttribute('data-test') || '',
+                                                    'data-id': target.getAttribute('data-id') || '',
+                                                    role: target.getAttribute('role') || ''
+                                                }
+                                            }
+                                        };
+                                        try {
+                                            window.top.postMessage({
+                                                __automationPicker: true,
+                                                type: 'selected',
+                                                payload: detail
+                                            }, '*');
+                                        } catch (_) {}
+                                        frameState.enabled = false;
+                                        if (overlay) overlay.style.display = 'none';
+                                    }
+                                    window.addEventListener('message', (evt) => {
+                                        try {
+                                            const d = evt && evt.data;
+                                            if (!(d && d.__automationPicker && d.type === 'picker_state')) return;
+                                            frameState.enabled = !!d.enabled;
+                                            if (!frameState.enabled && overlay) overlay.style.display = 'none';
+                                        } catch (_) {}
+                                    }, true);
+                                    document.addEventListener('mousemove', onMove, true);
+                                    document.addEventListener('click', onClick, true);
+                                    return true;
+                                } catch (e) {
+                                    return false;
+                                }
+                            })()
+                        """)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
             self._selection_mode_active = True
             
             uat_logger.info("元素选择模式已启用")
@@ -8987,7 +9381,7 @@ class PlaywrightAutomation:
         """禁用元素选择模式"""
         if self.page is None:
             self._selection_mode_active = False
-            return False
+            return True
         
         try:
             await self.page.evaluate("""
@@ -8995,16 +9389,19 @@ class PlaywrightAutomation:
                     if (typeof disableElementSelection === 'function') {
                         disableElementSelection();
                     }
-                })
+                })()
             """)
             
             uat_logger.info("元素选择模式已禁用")
             self._selection_mode_active = False
             return True
         except Exception as e:
-            uat_logger.error(f"禁用元素选择模式时出错: {str(e)}")
+            if "Target page, context or browser has been closed" in str(e):
+                uat_logger.info("拾取窗口已关闭，按已停止处理")
+            else:
+                uat_logger.error(f"禁用元素选择模式时出错: {str(e)}")
             self._selection_mode_active = False
-            return False
+            return True
 
     async def get_selected_element(self):
         """获取用户选择的元素信息"""
@@ -9017,12 +9414,173 @@ class PlaywrightAutomation:
             return {"_picker_closed": True}
         
         try:
+            # H5 页面常在运行中动态重建 iframe，这里做一次轻量自愈：
+            # 1) 广播当前拾取状态给所有 iframe
+            # 2) 给新出现的 frame 补注入拾取桥接监听
+            try:
+                await self.page.evaluate("""
+                    (() => {
+                        try {
+                            const st = window.automationSelection;
+                            const enabled = !!(st && st.enabled);
+                            const fs = document.querySelectorAll('iframe');
+                            for (const f of fs) {
+                                if (f && f.contentWindow) {
+                                    f.contentWindow.postMessage({
+                                        __automationPicker: true,
+                                        type: 'picker_state',
+                                        enabled
+                                    }, '*');
+                                }
+                            }
+                        } catch (_) {}
+                    })()
+                """)
+            except Exception:
+                pass
+
+            try:
+                injected = 0
+                for fr in self.page.frames:
+                    if fr == self.page.main_frame:
+                        continue
+                    try:
+                        ok = await fr.evaluate("""
+                            (() => {
+                                try {
+                                    if (window.__automationFramePickerBound) return false;
+                                    window.__automationFramePickerBound = true;
+                                    const frameState = { enabled: false };
+                                    function stableClassSelector(el) {
+                                        if (!el || !el.classList || !el.classList.length) return '';
+                                        const keep = [];
+                                        for (const c of Array.from(el.classList)) {
+                                            if (!c || c.length <= 2) continue;
+                                            if (/\\d{4,}/.test(c)) continue;
+                                            if (/[a-f0-9]{8,}/i.test(c)) continue;
+                                            keep.push(c);
+                                            if (keep.length >= 3) break;
+                                        }
+                                        return keep.length ? ('.' + keep.join('.')) : '';
+                                    }
+                                    function generateSelector(element) {
+                                        if (!element || !element.tagName) return '';
+                                        const tag = element.tagName.toLowerCase();
+                                        const id = element.id || '';
+                                        if (id && !/(\\d{6,}|[a-f0-9]{10,})/i.test(id)) return '#' + id;
+                                        const cls = stableClassSelector(element);
+                                        if (cls) return `${tag}${cls}`;
+                                        return tag;
+                                    }
+                                    function resolveElementTarget(raw) {
+                                        if (!raw) return null;
+                                        if (raw.nodeType === 1) return raw;
+                                        return raw.parentElement || null;
+                                    }
+                                    let overlay = null;
+                                    function ensureOverlay() {
+                                        if (overlay && overlay.isConnected) return overlay;
+                                        const host = document.body || document.documentElement;
+                                        if (!host) return null;
+                                        overlay = document.createElement('div');
+                                        overlay.id = '__automation-frame-picker-overlay';
+                                        overlay.style.cssText = 'position:fixed;pointer-events:none;border:2px solid #2f80ff;background:rgba(47,128,255,0.10);z-index:2147483646;display:none;';
+                                        host.appendChild(overlay);
+                                        return overlay;
+                                    }
+                                    function onMove(e) {
+                                        if (!frameState.enabled) {
+                                            if (overlay) overlay.style.display = 'none';
+                                            return;
+                                        }
+                                        const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
+                                        const target = resolveElementTarget(raw);
+                                        if (!target) return;
+                                        const rect = target.getBoundingClientRect();
+                                        const ov = ensureOverlay();
+                                        if (!ov) return;
+                                        ov.style.display = 'block';
+                                        ov.style.left = rect.left + 'px';
+                                        ov.style.top = rect.top + 'px';
+                                        ov.style.width = rect.width + 'px';
+                                        ov.style.height = rect.height + 'px';
+                                    }
+                                    function onClick(e) {
+                                        if (!frameState.enabled) return;
+                                        const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
+                                        const target = resolveElementTarget(raw);
+                                        if (!target) return;
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        const detail = {
+                                            selector: generateSelector(target),
+                                            source_frame: window.location.href || 'iframe',
+                                            elementInfo: {
+                                                tagName: target.tagName,
+                                                id: target.id || '',
+                                                className: target.className || '',
+                                                textContent: target.textContent ? target.textContent.substring(0, 100) : '',
+                                                attributes: {
+                                                    type: target.type || '',
+                                                    name: target.name || '',
+                                                    value: target.value || '',
+                                                    href: target.href || '',
+                                                    src: target.src || '',
+                                                    alt: target.alt || '',
+                                                    title: target.title || '',
+                                                    'data-testid': target.getAttribute('data-testid') || '',
+                                                    'data-test': target.getAttribute('data-test') || '',
+                                                    'data-id': target.getAttribute('data-id') || '',
+                                                    role: target.getAttribute('role') || ''
+                                                }
+                                            }
+                                        };
+                                        try {
+                                            window.top.postMessage({
+                                                __automationPicker: true,
+                                                type: 'selected',
+                                                payload: detail
+                                            }, '*');
+                                        } catch (_) {}
+                                        frameState.enabled = false;
+                                        if (overlay) overlay.style.display = 'none';
+                                    }
+                                    window.addEventListener('message', (evt) => {
+                                        try {
+                                            const d = evt && evt.data;
+                                            if (!(d && d.__automationPicker && d.type === 'picker_state')) return;
+                                            frameState.enabled = !!d.enabled;
+                                            if (!frameState.enabled && overlay) overlay.style.display = 'none';
+                                        } catch (_) {}
+                                    }, true);
+                                    document.addEventListener('mousemove', onMove, true);
+                                    document.addEventListener('click', onClick, true);
+                                    return true;
+                                } catch (_) {
+                                    return false;
+                                }
+                            })()
+                        """)
+                        if ok:
+                            injected += 1
+                    except Exception:
+                        continue
+                if injected > 0:
+                    uat_logger.info(f"[PICKER] 轮询阶段为 {injected} 个新 frame 补注入拾取桥接")
+            except Exception:
+                pass
+
             # 获取页面标题,用于填充页面名称
             page_name = await self.page.title()
             
             # 非阻塞检查：由前端轮询触发，不在这里等待事件
             raw_element_info = await self.page.evaluate("""
                 (() => {
+                    if (window.automationSelection && window.automationSelection.selectedElementPayload) {
+                        const p = window.automationSelection.selectedElementPayload;
+                        window.automationSelection.selectedElementPayload = null;
+                        return p;
+                    }
                     if (!(window.automationSelection && window.automationSelection.selectedElement)) {
                         return null;
                     }
@@ -9140,6 +9698,8 @@ class PlaywrightAutomation:
                 return formatted_element_info
             return None
         except Exception as e:
+            if "Target page, context or browser has been closed" in str(e):
+                return {"_picker_closed": True}
             uat_logger.error(f"获取选中元素信息时出错: {str(e)}")
             raise Exception(f"获取选中元素信息失败: {str(e)}")
 
@@ -9759,48 +10319,6 @@ try:
         extractor = self.init_high_performance_extractor()
         return await extractor.extract_element_text_fast(selector, use_cache)
     
-    async def enter_iframe(self, selector: str, selector_type: str = 'css') -> None:
-        """进入iframe框架"""
-        if self.page is None:
-            raise Exception("浏览器未启动")
-        
-        uat_logger.info(f"🔄 进入iframe: {selector} (类型: {selector_type})")
-        
-        try:
-            # 等待iframe元素加载完成
-            await self.page.wait_for_selector(selector, timeout=15000)
-            uat_logger.info(f"✅ 找到iframe元素: {selector}")
-            
-            # 切换到iframe
-            iframe = self.page.frame_locator(selector)
-            uat_logger.info(f"✅ 成功切换到iframe: {selector}")
-            
-            # 保存当前iframe信息，以便后续操作使用
-            if not hasattr(self, 'current_iframe'):
-                self.current_iframe = None
-            self.current_iframe = {
-                'selector': selector,
-                'selector_type': selector_type,
-                'iframe': iframe
-            }
-            uat_logger.info(f"✅ 保存当前iframe状态: {selector}")
-        except Exception as e:
-            uat_logger.error(f"❌ 进入iframe失败: {e}")
-            raise Exception(f"进入iframe失败: {e}")
-    
-    async def exit_iframe(self) -> None:
-        """跳出iframe框架，返回主文档"""
-        uat_logger.info("🔄 跳出iframe，返回主文档")
-        
-        try:
-            # 清除当前iframe信息
-            if hasattr(self, 'current_iframe'):
-                self.current_iframe = None
-            uat_logger.info("✅ 成功跳出iframe，返回主文档")
-        except Exception as e:
-            uat_logger.error(f"❌ 跳出iframe失败: {e}")
-            raise Exception(f"跳出iframe失败: {e}")
-    
     async def extract_element_text_with_fallback(self, selector: str, timeout: int = 5000) -> str:
         """
         带降级策略的文本提取
@@ -9854,14 +10372,23 @@ except ImportError:
     # 如果无法导入高性能提取模块,保持优化后的基础功能
     pass
 
-# 同步包装器函数
+# 同步包装器函数（必须与 sync_click / navigate 等一致，走 worker，禁止 asyncio.run，否则会卡死或死锁）
 def sync_enter_iframe(selector, selector_type='css'):
-    """进入iframe框架（同步版本）"""
-    return asyncio.run(automation.enter_iframe(selector, selector_type))
+    """进入 iframe 隐式上下文（在 Worker 事件循环中执行）。"""
+
+    async def run():
+        return await automation.enter_iframe(selector, selector_type)
+
+    return worker.execute(run)
+
 
 def sync_exit_iframe():
-    """跳出iframe框架（同步版本）"""
-    return asyncio.run(automation.exit_iframe())
+    """跳出 iframe 隐式上下文（在 Worker 事件循环中执行）。"""
+
+    async def run():
+        return await automation.exit_iframe()
+
+    return worker.execute(run)
 """
 滑块验证码优化模块 - 针对弹窗滑块定位问题的专项修复
 核心优化:

@@ -538,7 +538,8 @@ def _validate_and_fix_url(url: str) -> tuple:
     if not url or not url.strip():
         return None, None  # 空 URL 跳过
 
-    url = url.strip()
+    # 兼容全角冒号等输入，避免 about：blank 等变体漏判
+    url = url.strip().replace('：', ':')
 
     # 跳过无意义占位符URL
     skip_patterns = [
@@ -625,6 +626,51 @@ def _resolve_case_navigation_url(case: dict = None, case_id: int = None, steps: 
             return None, f"无效的URL地址: {fallback_url}"
 
     return None, None
+
+
+def _resolve_case_navigation_url_for_data_row(
+    db,
+    case: dict,
+    case_id: int,
+    steps: list,
+    row_data: dict,
+    project_id,
+    resolve_with_row_fn,
+):
+    """数据驱动每行：与单用例相同的 URL 优先级，并对地址做项目/用例变量与 {{row.*}} 替换。"""
+    local_case = case or {}
+    raw_case_url = (local_case.get('url') or '').strip()
+    if raw_case_url:
+        resolved = resolve_with_row_fn(
+            db.resolve_variables(raw_case_url, project_id=project_id, case_id=case_id),
+            row_data,
+        )
+        fixed_url, url_err = _validate_and_fix_url((resolved or '').strip())
+        if fixed_url:
+            return fixed_url, 'case.url'
+        if url_err:
+            uat_logger.warning(f'[数据驱动] 用例 URL 无效，继续尝试步骤: {url_err}')
+
+    for step in steps or []:
+        action = (step.get('action') or '').strip().lower()
+        candidates = []
+        if step.get('url'):
+            candidates.append(('step.url', step.get('url')))
+        if action == 'navigate' and step.get('input_value'):
+            candidates.append(('navigate.input_value', step.get('input_value')))
+        for source, raw in candidates:
+            resolved = resolve_with_row_fn(
+                db.resolve_variables(raw or '', project_id=project_id, case_id=case_id),
+                row_data,
+            )
+            fixed_url, url_err = _validate_and_fix_url((resolved or '').strip())
+            if fixed_url:
+                return fixed_url, source
+            if url_err:
+                uat_logger.warning(f'[数据驱动] 步骤 URL 无效已跳过（{source}）: {url_err}')
+
+    return None, None
+
 
 # 测试用例管理页面（新版本）
 @app.route('/list_cases_v2/<int:project_id>')
@@ -983,14 +1029,53 @@ def api_start_visual_selection():
     try:
         # 获取请求数据，使用silent=True避免解析失败时返回400错误
         data = request.get_json(silent=True) or {}
-        target_url = data.get('url', '')
-        
+        case_id = data.get('case_id')
+        target_url = (data.get('url', '') or '').strip()
+
+        # 优先使用前端传入 URL；若为空或无效，后端基于 case_id 兜底解析
+        fixed_url = None
+        if target_url:
+            fixed_url, url_err = _validate_and_fix_url(target_url)
+            if url_err:
+                uat_logger.warning(f"可视化选择传入URL无效，将尝试按用例解析: {url_err}")
+
+        if not fixed_url and case_id:
+            try:
+                parsed_case_id = int(case_id)
+            except Exception:
+                parsed_case_id = None
+            if parsed_case_id:
+                case_info = db.get_test_case_v2(parsed_case_id)
+                case_steps = db.get_case_steps(parsed_case_id)
+                resolved_url, source = _resolve_case_navigation_url(
+                    case=case_info, case_id=parsed_case_id, steps=case_steps
+                )
+                if resolved_url:
+                    fixed_url = resolved_url
+                    uat_logger.info(f"可视化选择URL已按用例兜底解析: {source} -> {fixed_url}")
+
+        if not fixed_url:
+            # 无 URL 时不要悄悄停在 about:blank，直接提示用户
+            return jsonify({'success': False, 'error': '未找到可用导航URL，请先配置用例URL或导航步骤URL'}), 400
+
         # 启动可视化选择功能，并传递目标URL
-        sync_enable_element_selection(target_url)
+        sync_enable_element_selection(fixed_url)
         return jsonify({'success': True, 'message': '可视化选择已启动'})
     except Exception as e:
+        msg = str(e)
+        # 用户手动关闭拾取窗口属于正常结束，不作为错误提示
+        if "Target page, context or browser has been closed" in msg:
+            try:
+                sync_disable_element_selection()
+            except Exception:
+                pass
+            uat_logger.info("拾取窗口已关闭，按已停止拾取处理")
+            return jsonify({'success': True, 'stopped': True, 'message': '已停止拾取'})
+        if "目标地址不可达，请检查网络或服务是否启动" in msg:
+            uat_logger.warning(f"可视化选择目标不可达: {msg}")
+            return jsonify({'success': False, 'error': msg}), 400
         uat_logger.error(f"启动可视化选择失败: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({'success': False, 'error': msg})
 
 # API: 停止可视化选择
 @app.route('/api/stop_visual_selection', methods=['POST'])
@@ -1193,11 +1278,8 @@ def api_screenshot():
 @api_error_handler
 @log_api_request
 def api_enable_element_selection():
-    try:
-        sync_enable_element_selection()
-        return jsonify({'success': True, 'message': '元素选择模式已启用'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    # 与 start_visual_selection 统一，避免旧接口直启导致 about:blank
+    return api_start_visual_selection()
 
 # API: 禁用元素选择模式
 @app.route('/api/disable_element_selection', methods=['POST'])
@@ -1594,6 +1676,26 @@ def api_update_step_order(case_id):
         return jsonify({'success': False, 'error': '更新步骤顺序失败'}), 400
 
 
+def _effective_step_iframe_selector(automation, db, step, project_id, case_id, row_resolve_fn=None):
+    """
+    本步操作使用的 iframe 定位串（与 frame_locator 一致）。
+    「进入 iframe / 跳出 iframe」为隐式上下文：执行 enter_iframe 步骤后，只要未 exit_iframe，
+    且当前步骤未单独勾选「在 iframe 内」+ 选择器列，则默认沿用 automation.current_iframe。
+    若步骤单独配置了 iframe 列，则该步优先使用步骤配置（支持 {{变量}}）。
+    row_resolve_fn: 数据驱动等对解析结果再套一层 {{row.field}}。
+    """
+    if bool(step.get('enter_iframe')):
+        raw = (step.get('iframe_selector') or '').strip()
+        if raw:
+            resolved = db.resolve_variables(raw, project_id=project_id, case_id=case_id)
+            if row_resolve_fn and resolved:
+                resolved = row_resolve_fn(resolved)
+            return (resolved or '').strip() or None
+    ci = getattr(automation, 'current_iframe', None) or {}
+    sel = ci.get('selector')
+    return sel if sel else None
+
+
 def _run_db_step_scroll(input_value: str, iframe_selector=None):
     """按平台存储的 up/down/left/right 像素执行滚动；无有效值时回退为向下 500px。"""
     v = parse_platform_scroll_input_value(input_value)
@@ -1603,6 +1705,220 @@ def _run_db_step_scroll(input_value: str, iframe_selector=None):
         sync_scroll_by_delta(dx, dy, iframe_selector=iframe_selector)
     else:
         sync_scroll_page("down", 500, iframe_selector=iframe_selector)
+
+
+def _run_assert_automation_step(
+    step: dict,
+    selector_value: str,
+    input_value: str,
+    selector_type: str,
+    iframe_sel,
+):
+    """执行断言步骤（与单用例运行一致）。文本类断言返回应写入 extracted 的片段，否则返回 None。"""
+    assert_type = step.get('compare_type', 'text_equals')
+    expected_value = input_value
+    uat_logger.info(
+        f"执行断言操作: 类型={assert_type}, 选择器={selector_value}, 预期={expected_value}"
+    )
+    extracted_fragment = None
+    try:
+        if assert_type in ['text_equals', 'text_contains', 'text_regex']:
+            actual_text = sync_extract_element_text(
+                selector_value, selector_type, iframe_selector=iframe_sel
+            )
+            if assert_type == 'text_equals':
+                if actual_text != expected_value:
+                    raise Exception(
+                        f"断言失败: 实际文本 '{actual_text}' 不等于预期 '{expected_value}'"
+                    )
+            elif assert_type == 'text_contains':
+                if expected_value not in actual_text:
+                    raise Exception(
+                        f"断言失败: 实际文本 '{actual_text}' 不包含预期 '{expected_value}'"
+                    )
+            elif assert_type == 'text_regex':
+                import re
+
+                if not re.search(expected_value, actual_text):
+                    raise Exception(
+                        f"断言失败: 实际文本 '{actual_text}' 不匹配正则 '{expected_value}'"
+                    )
+            extracted_fragment = actual_text
+            uat_logger.info(f"断言成功: {assert_type}")
+        elif assert_type in ['element_exists', 'element_visible']:
+            if assert_type == 'element_exists':
+                sync_wait_for_selector(selector_value, timeout=5000)
+                uat_logger.info(f"断言成功: 元素存在 {selector_value}")
+            else:
+                sync_wait_for_element_visible(selector_value, timeout=5000)
+                uat_logger.info(f"断言成功: 元素可见 {selector_value}")
+        elif assert_type == 'element_count':
+            actual_count = sync_get_element_count(selector_value, selector_type)
+            expected_count = int(expected_value) if expected_value else 0
+            operator = step.get('swipe_x', 'equals')
+            success = False
+            if operator == 'equals':
+                success = actual_count == expected_count
+            elif operator == 'gt':
+                success = actual_count > expected_count
+            elif operator == 'lt':
+                success = actual_count < expected_count
+            elif operator == 'gte':
+                success = actual_count >= expected_count
+            elif operator == 'lte':
+                success = actual_count <= expected_count
+            if not success:
+                raise Exception(
+                    f"断言失败: 实际数量 {actual_count} 不符合预期 {operator} {expected_count}"
+                )
+            uat_logger.info("断言成功: 元素数量符合预期")
+        elif assert_type in ['url_equals', 'url_contains']:
+            actual_url = sync_get_current_url()
+            if assert_type == 'url_equals':
+                if actual_url != expected_value:
+                    raise Exception(
+                        f"断言失败: 实际URL '{actual_url}' 不等于预期 '{expected_value}'"
+                    )
+            else:
+                if expected_value not in actual_url:
+                    raise Exception(
+                        f"断言失败: 实际URL '{actual_url}' 不包含预期 '{expected_value}'"
+                    )
+            uat_logger.info(f"断言成功: {assert_type}")
+        elif assert_type == 'element_attr':
+            attr_name = step.get('page_name', '')
+
+            async def get_attr():
+                page = await automation.get_page()
+                element = await page.query_selector(selector_value)
+                if element:
+                    return await element.get_attribute(attr_name)
+                return None
+
+            actual_attr = worker.execute(get_attr)
+            if actual_attr != expected_value:
+                raise Exception(
+                    f"断言失败: 属性 {attr_name} 实际值 '{actual_attr}' 不等于预期 '{expected_value}'"
+                )
+            uat_logger.info(f"断言成功: 属性 {attr_name} = {actual_attr}")
+        else:
+            uat_logger.warning(f"未知的断言类型: {assert_type}")
+    except Exception as assert_error:
+        uat_logger.error(f"断言失败: {assert_error}")
+        raise
+    sync_wait_for_timeout(500)
+    return extracted_fragment
+
+
+def _run_extract_text_automation_step(
+    action: str,
+    step: dict,
+    selector_value: str,
+    input_value: str,
+    description: str,
+    selector_type: str,
+    iframe_sel,
+):
+    """extract_text / text_compare 与单用例运行一致。返回 (extracted_text, expected_text)。"""
+    current_expected = input_value or description
+    expected_text = current_expected
+    verify_type = step.get('compare_type', step.get('verify_type', 'equals'))
+    extracted_text = ""
+
+    if selector_value:
+        try:
+            current_extracted = sync_extract_element_text(
+                selector_value, selector_type, iframe_selector=iframe_sel
+            )
+            uat_logger.info(f"提取到文本: {current_extracted[:100]}...")
+            extracted_text = current_extracted
+        except Exception as extract_error:
+            uat_logger.error(f"提取文本失败: {extract_error}")
+            raise Exception(f"提取文本失败: {extract_error}") from extract_error
+
+        if expected_text:
+            if extracted_text:
+                uat_logger.info(
+                    f"验证文本 - 提取: {extracted_text[:100]}..., 预期: {expected_text[:100]}..., 验证方式: {verify_type}"
+                )
+                if verify_type == 'equals':
+                    if extracted_text != expected_text:
+                        uat_logger.error("文本验证失败: 提取的文本与预期结果不相等")
+                        raise Exception("文本验证失败: 提取的文本与预期结果不相等")
+                elif verify_type == 'not_equals':
+                    if extracted_text == expected_text:
+                        uat_logger.error("文本验证失败: 提取的文本与预期结果相等")
+                        raise Exception("文本验证失败: 提取的文本与预期结果相等")
+                elif verify_type == 'contains':
+                    if expected_text not in extracted_text:
+                        uat_logger.error("文本验证失败: 提取的文本不包含预期内容")
+                        raise Exception("文本验证失败: 提取的文本不包含预期内容")
+                elif verify_type == 'partial':
+                    if expected_text not in extracted_text:
+                        uat_logger.error(
+                            "文本验证失败: 提取的文本不包含预期的部分内容"
+                        )
+                        raise Exception(
+                            "文本验证失败: 提取的文本不包含预期的部分内容"
+                        )
+                uat_logger.info("文本验证成功")
+            else:
+                if action == 'text_compare':
+                    uat_logger.warning("未提取到文本，跳过文本验证")
+                else:
+                    uat_logger.info("提取文本操作完成（未提取到文本）")
+    else:
+        try:
+            current_extracted = sync_get_page_text()
+            uat_logger.info(f"提取到页面文本: {current_extracted[:100]}...")
+            extracted_text = current_extracted
+        except Exception as extract_error:
+            uat_logger.error(f"提取页面文本失败: {extract_error}")
+            raise Exception(f"提取页面文本失败: {extract_error}") from extract_error
+
+        if expected_text:
+            if extracted_text:
+                uat_logger.info(
+                    f"验证页面文本 - 提取: {extracted_text[:100]}..., 预期: {expected_text[:100]}..., 验证方式: {verify_type}"
+                )
+                if verify_type == 'equals':
+                    if extracted_text != expected_text:
+                        uat_logger.error("页面文本验证失败: 提取的文本与预期结果不相等")
+                        raise Exception(
+                            "页面文本验证失败: 提取的文本与预期结果不相等"
+                        )
+                elif verify_type == 'not_equals':
+                    if extracted_text == expected_text:
+                        uat_logger.error("页面文本验证失败: 提取的文本与预期结果相等")
+                        raise Exception(
+                            "页面文本验证失败: 提取的文本与预期结果相等"
+                        )
+                elif verify_type == 'contains':
+                    if expected_text not in extracted_text:
+                        uat_logger.error(
+                            "页面文本验证失败: 提取的文本不包含预期内容"
+                        )
+                        raise Exception(
+                            "页面文本验证失败: 提取的文本不包含预期内容"
+                        )
+                elif verify_type == 'partial':
+                    if expected_text not in extracted_text:
+                        uat_logger.error(
+                            "页面文本验证失败: 提取的文本不包含预期的部分内容"
+                        )
+                        raise Exception(
+                            "页面文本验证失败: 提取的文本不包含预期的部分内容"
+                        )
+                uat_logger.info("页面文本验证成功")
+            else:
+                if action == 'text_compare':
+                    uat_logger.warning("未提取到页面文本，跳过文本验证")
+                else:
+                    uat_logger.error("提取页面文本操作失败：未提取到文本")
+                    raise Exception("提取页面文本操作失败：未提取到文本")
+
+    sync_wait_for_timeout(1000)
+    return extracted_text, expected_text
 
 
 # ==================== Playwright Codegen 录制：粘贴导入 ====================
@@ -1995,6 +2311,9 @@ def api_run_case(case_id):
                 # 添加iframe相关字段
                 enter_iframe = step.get('enter_iframe', False)
                 iframe_selector = step.get('iframe_selector', '')
+                iframe_for_step = _effective_step_iframe_selector(
+                    automation, db, step, case.get('project_id'), case_id
+                )
                 locator_candidates = step.get('locator_candidates') or None
 
                 step_start_time = time.time()
@@ -2012,7 +2331,11 @@ def api_run_case(case_id):
                 )
                                                         
                 # 详细的调试日志，跟踪 action 值和执行的方法
-                uat_logger.debug(f"执行步骤：ID={step.get('id')}, Action={action}, SelectorType={selector_type}, SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, IframeSelector={iframe_selector}")
+                uat_logger.debug(
+                    f"执行步骤：ID={step.get('id')}, Action={action}, SelectorType={selector_type}, "
+                    f"SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, "
+                    f"IframeSelector={iframe_selector}, IframeEffective={iframe_for_step}"
+                )
                 
                 if action == 'navigate':
                     # 获取URL并进行有效性检查
@@ -2032,7 +2355,7 @@ def api_run_case(case_id):
                                     sync_click_element(
                                         selector_value,
                                         selector_type,
-                                        iframe_selector=iframe_selector if enter_iframe else None,
+                                        iframe_selector=iframe_for_step,
                                         locator_candidates=locator_candidates,
                                     )
                                 except Exception as click_error:
@@ -2061,7 +2384,7 @@ def api_run_case(case_id):
                                     selector_value,
                                     safe_input_value,
                                     selector_type,
-                                    iframe_selector=iframe_selector if enter_iframe else None,
+                                    iframe_selector=iframe_for_step,
                                     locator_candidates=locator_candidates,
                                 )
                             uat_logger.info(f"✅ 输入操作执行完成: 步骤ID={step.get('id', 'unknown')}")
@@ -2073,7 +2396,7 @@ def api_run_case(case_id):
                             uat_logger.error(f"   选择器值: {selector_value}")
                             uat_logger.error(f"   输入值: {input_value}")
                             uat_logger.error(f"   错误信息: {input_error}")
-                            uat_logger.error(f"   iframe选择器: {iframe_selector if enter_iframe else None}")
+                            uat_logger.error(f"   iframe选择器: {iframe_for_step}")
                             
                             # 🔥 提供改进建议
                             if len(selector_value) > 200:
@@ -2091,7 +2414,7 @@ def api_run_case(case_id):
                 elif action == 'hover':
                     if selector_value:
                         try:
-                            sync_hover_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            sync_hover_element(selector_value, selector_type, iframe_selector=iframe_for_step)
                             # 悬停后等待页面响应
                             sync_wait_for_timeout(1000)
                         except Exception as hover_error:
@@ -2104,7 +2427,7 @@ def api_run_case(case_id):
                 elif action == 'double_click':
                     if selector_value:
                         try:
-                            sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_for_step)
                             # 双击后等待页面响应
                             sync_wait_for_timeout(2000)
                         except Exception as double_click_error:
@@ -2117,7 +2440,7 @@ def api_run_case(case_id):
                 elif action == 'right_click':
                     if selector_value:
                         try:
-                            sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_for_step)
                             # 右键点击后等待页面响应
                             sync_wait_for_timeout(1000)
                         except Exception as right_click_error:
@@ -2146,7 +2469,7 @@ def api_run_case(case_id):
                     # 修复：添加下拉框选择操作
                     if selector_value and input_value:
                         try:
-                            sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_for_step)
                             # 选择后等待页面响应
                             sync_wait_for_timeout(1000)
                         except Exception as select_error:
@@ -2168,7 +2491,7 @@ def api_run_case(case_id):
                     try:
                         _run_db_step_scroll(
                             input_value or "",
-                            iframe_selector=iframe_selector if enter_iframe else None,
+                            iframe_selector=iframe_for_step,
                         )
                         # 滚动后等待页面响应
                         sync_wait_for_timeout(1500)
@@ -2193,7 +2516,7 @@ def api_run_case(case_id):
                                 # 兼容旧格式 (只有方向)
                                 direction = input_value
                         try:
-                            sync_swipe_element(selector_value, direction, distance, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                            sync_swipe_element(selector_value, direction, distance, selector_type, iframe_selector=iframe_for_step)
                             # 滑动后等待页面响应
                             sync_wait_for_timeout(1500)
                         except Exception as swipe_error:
@@ -2204,7 +2527,7 @@ def api_run_case(case_id):
                     # 验证操作处理
                     verify_type = input_value if input_value else 'auto'
                     try:
-                        sync_verify_element(selector=selector_value, verify_type=verify_type, selector_type=selector_type, iframe_selector=iframe_selector if enter_iframe else None)
+                        sync_verify_element(selector=selector_value, verify_type=verify_type, selector_type=selector_type, iframe_selector=iframe_for_step)
                         # 验证后等待页面响应
                         sync_wait_for_timeout(1500)
                     except Exception as verify_error:
@@ -2212,113 +2535,15 @@ def api_run_case(case_id):
                         # 直接抛出错误，视为测试用例执行失败
                         raise
                 elif action == 'extract_text' or action == 'text_compare':
-                    if selector_value:
-                        # 构建完整的选择器
-                        full_selector = selector_value
-                        if selector_type == 'xpath' and not full_selector.startswith('xpath='):
-                            full_selector = f'xpath={full_selector}'
-                        # 提取元素文本（添加异常处理）
-                        try:
-                            current_extracted = sync_extract_element_text(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                            uat_logger.info(f"提取到文本: {current_extracted[:100]}...")
-                            # 保存到extracted_text变量，而不是覆盖
-                            extracted_text = current_extracted
-                        except Exception as extract_error:
-                            uat_logger.error(f"提取文本失败: {extract_error}")
-                            # 🔥 修复：提取文本失败应该视为测试失败
-                            raise Exception(f"提取文本失败: {extract_error}")
-                        
-                        # 检查是否需要验证文本
-                        current_expected = input_value or description
-                        verify_type = step.get('compare_type', step.get('verify_type', 'equals'))
-                        # 保存预期结果
-                        expected_text = current_expected
-                        
-                        if expected_text:
-                            # 只有当提取到文本时才进行验证
-                            if extracted_text:
-                                uat_logger.info(f"验证文本 - 提取: {extracted_text[:100]}..., 预期: {expected_text[:100]}..., 验证方式: {verify_type}")
-                                
-                                # 根据验证方式执行不同的验证逻辑
-                                if verify_type == 'equals':
-                                    if extracted_text != expected_text:
-                                        uat_logger.error("文本验证失败: 提取的文本与预期结果不相等")
-                                        raise Exception(f"文本验证失败: 提取的文本与预期结果不相等")
-                                elif verify_type == 'not_equals':
-                                    if extracted_text == expected_text:
-                                        uat_logger.error("文本验证失败: 提取的文本与预期结果相等")
-                                        raise Exception(f"文本验证失败: 提取的文本与预期结果相等")
-                                elif verify_type == 'contains':
-                                    if expected_text not in extracted_text:
-                                        uat_logger.error("文本验证失败: 提取的文本不包含预期内容")
-                                        raise Exception(f"文本验证失败: 提取的文本不包含预期内容")
-                                elif verify_type == 'partial':
-                                    if expected_text not in extracted_text:
-                                        uat_logger.error("文本验证失败: 提取的文本不包含预期的部分内容")
-                                        raise Exception(f"文本验证失败: 提取的文本不包含预期的部分内容")
-                                
-                                uat_logger.info("文本验证成功")
-                            else:
-                                # 如果没有提取到文本，且是text_compare操作，则跳过验证
-                                if action == 'text_compare':
-                                    uat_logger.warning("未提取到文本，跳过文本验证")
-                                else:
-                                    uat_logger.info("提取文本操作完成（未提取到文本）")
-                        
-                        # 提取后等待页面响应
-                        sync_wait_for_timeout(1000)
-                    else:
-                        # 提取整个页面文本
-                        try:
-                            current_extracted = sync_get_page_text()
-                            uat_logger.info(f"提取到页面文本: {current_extracted[:100]}...")
-                            # 保存到extracted_text变量
-                            extracted_text = current_extracted
-                        except Exception as extract_error:
-                            uat_logger.error(f"提取页面文本失败: {extract_error}")
-                            # 🔥 修复：提取页面文本失败应该视为测试失败
-                            raise Exception(f"提取页面文本失败: {extract_error}")
-                        
-                        # 检查是否需要验证文本
-                        current_expected = input_value or description
-                        verify_type = step.get('compare_type', step.get('verify_type', 'equals'))
-                        # 保存预期结果
-                        expected_text = current_expected
-                        
-                        if expected_text:
-                            # 只有当提取到文本时才进行验证
-                            if extracted_text:
-                                uat_logger.info(f"验证页面文本 - 提取: {extracted_text[:100]}..., 预期: {expected_text[:100]}..., 验证方式: {verify_type}")
-                                
-                                # 根据验证方式执行不同的验证逻辑
-                                if verify_type == 'equals':
-                                    if extracted_text != expected_text:
-                                        uat_logger.error("页面文本验证失败: 提取的文本与预期结果不相等")
-                                        raise Exception(f"页面文本验证失败: 提取的文本与预期结果不相等")
-                                elif verify_type == 'not_equals':
-                                    if extracted_text == expected_text:
-                                        uat_logger.error("页面文本验证失败: 提取的文本与预期结果相等")
-                                        raise Exception(f"页面文本验证失败: 提取的文本与预期结果相等")
-                                elif verify_type == 'contains':
-                                    if expected_text not in extracted_text:
-                                        uat_logger.error("页面文本验证失败: 提取的文本不包含预期内容")
-                                        raise Exception(f"页面文本验证失败: 提取的文本不包含预期内容")
-                                elif verify_type == 'partial':
-                                    if expected_text not in extracted_text:
-                                        uat_logger.error("页面文本验证失败: 提取的文本不包含预期的部分内容")
-                                        raise Exception(f"页面文本验证失败: 提取的文本不包含预期的部分内容")
-                                
-                                uat_logger.info("页面文本验证成功")
-                            else:
-                                # 🔥 修复：如果没有提取到文本，应该视为失败（除非是text_compare）
-                                if action == 'text_compare':
-                                    uat_logger.warning("未提取到页面文本，跳过文本验证")
-                                else:
-                                    uat_logger.error("提取页面文本操作失败：未提取到文本")
-                                    raise Exception("提取页面文本操作失败：未提取到文本")
-                        
-                        # 提取后等待页面响应
-                        sync_wait_for_timeout(1000)
+                    extracted_text, expected_text = _run_extract_text_automation_step(
+                        action,
+                        step,
+                        selector_value,
+                        input_value,
+                        description,
+                        selector_type,
+                        iframe_for_step,
+                    )
                 elif action == 'extract_json':
                     if selector_value:
                         # 提取元素JSON数据
@@ -2339,115 +2564,16 @@ def api_run_case(case_id):
                     # 提取后等待页面响应
                     sync_wait_for_timeout(1000)
                 elif action == 'assert':
-                    # 断言操作 - 使用断言引擎执行断言
-                    from assertion_engine import AssertionEngine
-                    
-                    # 获取断言类型和参数
-                    assert_type = step.get('compare_type', 'text_equals')  # 复用compare_type字段存储断言类型
-                    expected_value = input_value
-                    
-                    uat_logger.info(f"执行断言操作: 类型={assert_type}, 选择器={selector_value}, 预期={expected_value}")
-                    
-                    try:
-                        # 根据断言类型执行不同的断言
-                        if assert_type in ['text_equals', 'text_contains', 'text_regex']:
-                            # 文本类断言 - 需要先提取元素文本
-                            actual_text = sync_extract_element_text(selector_value, selector_type, iframe_selector=iframe_selector if enter_iframe else None)
-                            
-                            if assert_type == 'text_equals':
-                                if actual_text != expected_value:
-                                    raise Exception(f"断言失败: 实际文本 '{actual_text}' 不等于预期 '{expected_value}'")
-                            elif assert_type == 'text_contains':
-                                if expected_value not in actual_text:
-                                    raise Exception(f"断言失败: 实际文本 '{actual_text}' 不包含预期 '{expected_value}'")
-                            elif assert_type == 'text_regex':
-                                import re
-                                if not re.search(expected_value, actual_text):
-                                    raise Exception(f"断言失败: 实际文本 '{actual_text}' 不匹配正则 '{expected_value}'")
-                            
-                            extracted_text = actual_text
-                            uat_logger.info(f"断言成功: {assert_type}")
-                            
-                        elif assert_type in ['element_exists', 'element_visible']:
-                            # 元素存在/可见断言
-                            from playwright_automation import sync_wait_for_selector, sync_wait_for_element_visible
-                            
-                            if assert_type == 'element_exists':
-                                sync_wait_for_selector(selector_value, timeout=5000)
-                                uat_logger.info(f"断言成功: 元素存在 {selector_value}")
-                            else:
-                                sync_wait_for_element_visible(selector_value, timeout=5000)
-                                uat_logger.info(f"断言成功: 元素可见 {selector_value}")
-                                
-                        elif assert_type == 'element_count':
-                            # 元素数量断言
-                            actual_count = sync_get_element_count(selector_value, selector_type)
-                            expected_count = int(expected_value) if expected_value else 0
-                            operator = step.get('swipe_x', 'equals')  # 复用swipe_x字段存储运算符
-                            
-                            success = False
-                            if operator == 'equals':
-                                success = actual_count == expected_count
-                            elif operator == 'gt':
-                                success = actual_count > expected_count
-                            elif operator == 'lt':
-                                success = actual_count < expected_count
-                            elif operator == 'gte':
-                                success = actual_count >= expected_count
-                            elif operator == 'lte':
-                                success = actual_count <= expected_count
-                            
-                            if not success:
-                                raise Exception(f"断言失败: 实际数量 {actual_count} 不符合预期 {operator} {expected_count}")
-                            uat_logger.info(f"断言成功: 元素数量符合预期")
-                            
-                        elif assert_type in ['url_equals', 'url_contains']:
-                            # URL断言
-                            actual_url = sync_get_current_url()
-                            
-                            if assert_type == 'url_equals':
-                                if actual_url != expected_value:
-                                    raise Exception(f"断言失败: 实际URL '{actual_url}' 不等于预期 '{expected_value}'")
-                            else:
-                                if expected_value not in actual_url:
-                                    raise Exception(f"断言失败: 实际URL '{actual_url}' 不包含预期 '{expected_value}'")
-                            
-                            uat_logger.info(f"断言成功: {assert_type}")
-                            
-                        elif assert_type == 'element_attr':
-                            # 元素属性断言
-                            attr_name = step.get('page_name', '')  # 复用page_name字段存储属性名
-                            # 使用JavaScript获取属性值（automation/worker 已在文件顶部导入；此处再 import 会使
-                            # api_run_case 整函数内 automation 变为局部变量，导致前面浏览器检测处 UnboundLocalError）
-                            async def get_attr():
-                                page = await automation.get_page()
-                                element = await page.query_selector(selector_value)
-                                if element:
-                                    return await element.get_attribute(attr_name)
-                                return None
-                            actual_attr = worker.execute(get_attr)
-                            
-                            if actual_attr != expected_value:
-                                raise Exception(f"断言失败: 属性 {attr_name} 实际值 '{actual_attr}' 不等于预期 '{expected_value}'")
-                            uat_logger.info(f"断言成功: 属性 {attr_name} = {actual_attr}")
-                            
-                        else:
-                            uat_logger.warning(f"未知的断言类型: {assert_type}")
-                            
-                    except Exception as assert_error:
-                        uat_logger.error(f"断言失败: {assert_error}")
-                        raise
-                    
-                    # 断言后等待页面响应
-                    sync_wait_for_timeout(500)
+                    extra_ex = _run_assert_automation_step(
+                        step, selector_value, input_value, selector_type, iframe_for_step
+                    )
+                    if extra_ex is not None:
+                        extracted_text = extra_ex
                 elif action == 'enter_iframe':
                     if selector_value:
-                        # 进入iframe
+                        # 进入 iframe：状态在 automation.current_iframe，下游步骤由 _effective_step_iframe_selector 继承
                         try:
                             sync_enter_iframe(selector_value, selector_type)
-                            # 更新iframe状态
-                            enter_iframe = True
-                            iframe_selector = selector_value
                             uat_logger.info(f"✅ 成功进入iframe: {selector_value}")
                         except Exception as enter_error:
                             uat_logger.error(f"执行进入iframe操作时出错: {enter_error}")
@@ -2456,12 +2582,9 @@ def api_run_case(case_id):
                     else:
                         uat_logger.warning("进入iframe操作缺少选择器")
                 elif action == 'exit_iframe':
-                    # 跳出iframe
+                    # 跳出 iframe：清除 automation.current_iframe，后续步骤回到主文档（除非步骤自身勾选 iframe）
                     try:
                         sync_exit_iframe()
-                        # 更新iframe状态
-                        enter_iframe = False
-                        iframe_selector = None
                         uat_logger.info("✅ 成功跳出iframe，返回主文档")
                     except Exception as exit_error:
                         uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
@@ -2521,12 +2644,38 @@ def api_run_case(case_id):
             duration = round(time.time() - start_time, 2)
             error_msg = str(e)
             
-            # 检测浏览器是否被手动关闭
-            browser_closed_keywords = ['browser', 'closed', 'connection', 'target', 'page', 'context', 'crashed', 'disconnected']
-            if any(keyword in error_msg.lower() for keyword in browser_closed_keywords):
+            # 将会话断开类错误单独归类（无头模式下也常见，并非一定是「人为关窗口」）
+            # 注意：不要用单词 page/target/context 等做子串匹配，否则 “timeout waiting for …” 等普通错误会被误判。
+            _el = error_msg.lower()
+            _disconnect_patterns = (
+                'has been closed',
+                'browser has been closed',
+                'browser was closed',
+                'browser closed',
+                'target page, context or browser has been closed',
+                'page was closed',
+                'context was closed',
+                'browser disconnected',
+                'connection closed',
+                'connection lost',
+                'websocket',
+                'econnreset',
+                'broken pipe',
+                'execution context was destroyed',
+                'session deleted',
+                'browser crashed',
+                ' crashed',
+                'disconnected',
+            )
+            if any(p in _el for p in _disconnect_patterns):
                 browser_closed_manually = True
-                error_msg = "浏览器被手动关闭或连接中断"
-                uat_logger.warning(f"测试用例 #{case_id} 执行中断: {error_msg}")
+                error_msg = (
+                    "浏览器或自动化连接已中断（无头模式下常见于进程崩溃、资源不足、超时或被系统结束；"
+                    "不一定是手动关闭窗口）"
+                )
+                uat_logger.warning(
+                    f"测试用例 #{case_id} 执行中断（会话/连接断开）: {error_msg} | 原始: {str(e)[:800]}"
+                )
                 # 🔥 浏览器被关闭时强制重置所有状态（包括执行锁和浏览器引用）
                 try:
                     force_reset_execution_state()
@@ -3377,6 +3526,29 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
             step_results_list = []
 
             try:
+                sync_start_browser()
+                initial_nav_url, nav_source = _resolve_case_navigation_url_for_data_row(
+                    _db,
+                    case,
+                    case_id,
+                    steps,
+                    row_data,
+                    case.get('project_id'),
+                    resolve_with_row,
+                )
+                if initial_nav_url:
+                    uat_logger.log_automation_step(
+                        'navigate',
+                        initial_nav_url,
+                        f'数据驱动 行{row_index} 测试开始时导航({nav_source})',
+                    )
+                    sync_navigate_to(initial_nav_url)
+                else:
+                    uat_logger.warning(
+                        f'[数据驱动] 行{row_index} 未解析到用例初始 URL（case.url 或步骤中首个有效 navigate），'
+                        '若首步为 enter_iframe 等需已有页面，可能失败；请配置用例地址或在首步增加导航。'
+                    )
+
                 for step_idx, step in enumerate(steps):
                     with _dataset_run_lock:
                         if _dataset_run_jobs.get(run_id, {}).get('cancel_requested'):
@@ -3389,7 +3561,14 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                         _db.resolve_variables(step.get('input_value', ''), project_id=case.get('project_id'), case_id=case_id),
                         row_data
                     )
-                    url_value = resolve_with_row(step.get('url', '') or '', row_data)
+                    url_value = resolve_with_row(
+                        _db.resolve_variables(step.get('url', '') or '', project_id=case.get('project_id'), case_id=case_id),
+                        row_data,
+                    )
+                    description = resolve_with_row(
+                        _db.resolve_variables(step.get('description', '') or '', project_id=case.get('project_id'), case_id=case_id),
+                        row_data,
+                    )
 
                     step_start = _time.time()
                     step_status = 'success'
@@ -3397,14 +3576,21 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                     try:
                         action = step.get('action', '')
                         selector_type = step.get('selector_type', 'css')
-                        enter_iframe = step.get('enter_iframe', False)
-                        iframe_sel = step.get('iframe_selector', '') if enter_iframe else None
+                        iframe_sel = _effective_step_iframe_selector(
+                            automation,
+                            _db,
+                            step,
+                            case.get('project_id'),
+                            case_id,
+                            row_resolve_fn=lambda t: resolve_with_row(t, row_data),
+                        )
                         if action == 'navigate':
-                            nav_url = url_value or input_value or case.get('url', '')
-                            if nav_url:
-                                if not nav_url.startswith(('http://', 'https://')):
-                                    nav_url = 'http://' + nav_url
-                                sync_navigate_to(nav_url)
+                            raw_url = (url_value or input_value or case.get('url') or '').strip()
+                            fixed_url, url_err = _validate_and_fix_url(raw_url)
+                            if url_err:
+                                raise Exception(url_err)
+                            if fixed_url:
+                                sync_navigate_to(fixed_url)
                         elif action == 'click':
                             if selector_value:
                                 sync_click_element(
@@ -3427,14 +3613,120 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 )
                             else:
                                 raise Exception("输入操作缺少选择器")
+                        elif action == 'hover':
+                            if selector_value:
+                                sync_hover_element(selector_value, selector_type, iframe_selector=iframe_sel)
+                                sync_wait_for_timeout(1000)
+                            else:
+                                raise Exception("悬停操作缺少选择器")
+                        elif action == 'double_click':
+                            if selector_value:
+                                sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_sel)
+                                sync_wait_for_timeout(2000)
+                            else:
+                                raise Exception("双击操作缺少选择器")
+                        elif action == 'right_click':
+                            if selector_value:
+                                sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_sel)
+                                sync_wait_for_timeout(1000)
+                            else:
+                                raise Exception("右键点击操作缺少选择器")
                         elif action == 'wait':
-                            wait_ms = int(input_value) * 1000 if input_value and int(input_value) < 1000 else (int(input_value) if input_value else 1000)
-                            sync_wait_for_timeout(wait_ms)
+                            if input_value:
+                                try:
+                                    wait_time = (
+                                        int(input_value) * 1000
+                                        if int(input_value) < 1000
+                                        else int(input_value)
+                                    )
+                                    sync_wait_for_timeout(wait_time)
+                                except ValueError:
+                                    raise Exception(f"无效的等待时间值: {input_value}")
+                            else:
+                                sync_wait_for_timeout(1000)
                         elif action == 'select':
                             if selector_value and input_value:
-                                sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_sel)
+                                sync_select_option(
+                                    selector_value,
+                                    input_value,
+                                    selector_type,
+                                    iframe_selector=iframe_sel,
+                                )
+                                sync_wait_for_timeout(1000)
+                        elif action == 'date':
+                            if selector_value and input_value:
+                                sync_select_date(selector_value, input_value)
+                                sync_wait_for_timeout(1000)
                         elif action == 'scroll':
                             _run_db_step_scroll(input_value or "", iframe_selector=iframe_sel)
+                            sync_wait_for_timeout(1500)
+                        elif action == 'swipe':
+                            if selector_value:
+                                direction = 'up'
+                                distance = 100
+                                if input_value:
+                                    parts = input_value.split(':')
+                                    if len(parts) == 2:
+                                        direction = parts[0]
+                                        try:
+                                            distance = int(parts[1])
+                                        except ValueError:
+                                            uat_logger.warning(
+                                                f"无效的滑动距离值: {parts[1]}，使用默认值 100"
+                                            )
+                                    else:
+                                        direction = input_value
+                                sync_swipe_element(
+                                    selector_value,
+                                    direction,
+                                    distance,
+                                    selector_type,
+                                    iframe_selector=iframe_sel,
+                                )
+                                sync_wait_for_timeout(1500)
+                            else:
+                                raise Exception("滑动操作缺少选择器")
+                        elif action == 'verify':
+                            verify_type = input_value if input_value else 'auto'
+                            sync_verify_element(
+                                selector=selector_value,
+                                verify_type=verify_type,
+                                selector_type=selector_type,
+                                iframe_selector=iframe_sel,
+                            )
+                            sync_wait_for_timeout(1500)
+                        elif action == 'extract_text' or action == 'text_compare':
+                            _run_extract_text_automation_step(
+                                action,
+                                step,
+                                selector_value,
+                                input_value,
+                                description,
+                                selector_type,
+                                iframe_sel,
+                            )
+                        elif action == 'extract_json':
+                            if selector_value:
+                                sync_extract_element_json(selector_value, selector_type)
+                                sync_wait_for_timeout(1000)
+                            else:
+                                raise Exception("提取JSON数据时缺少选择器")
+                        elif action == 'assert':
+                            _run_assert_automation_step(
+                                step, selector_value, input_value, selector_type, iframe_sel
+                            )
+                        elif action == 'enter_iframe':
+                            if selector_value:
+                                sync_enter_iframe(selector_value, selector_type)
+                            else:
+                                raise Exception('进入 iframe 步骤缺少选择器')
+                        elif action == 'exit_iframe':
+                            sync_exit_iframe()
+                        elif action:
+                            raise Exception(
+                                f"数据驱动执行不支持的操作类型「{action}」。"
+                                "支持的类型：navigate, click, input, hover, double_click, right_click, wait, select, date, scroll, swipe, verify, extract_text, text_compare, extract_json, assert, enter_iframe, exit_iframe。"
+                            )
                     except Exception as e:
                         step_status = 'failed'
                         step_error = str(e)

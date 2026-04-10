@@ -807,20 +807,77 @@ class Database:
         
         return success
     
+    def _delete_case_cascade(self, cursor, case_id: int) -> None:
+        """在同一 cursor/事务内删除用例及依赖行（SQLite 外键顺序：缺陷 → 步骤结果 → 运行历史 → … → 用例）。"""
+        cursor.execute("SELECT id FROM run_history WHERE case_id = ?", (case_id,))
+        rh_ids = [row[0] for row in cursor.fetchall()]
+
+        sr_ids = []
+        if rh_ids:
+            ph = ",".join("?" * len(rh_ids))
+            cursor.execute(
+                f"SELECT id FROM step_results WHERE run_history_id IN ({ph})",
+                rh_ids,
+            )
+            sr_ids = [row[0] for row in cursor.fetchall()]
+
+        defect_ids = set()
+        cursor.execute("SELECT id FROM defects WHERE case_id = ?", (case_id,))
+        defect_ids.update(row[0] for row in cursor.fetchall())
+        if rh_ids:
+            ph = ",".join("?" * len(rh_ids))
+            cursor.execute(f"SELECT id FROM defects WHERE run_history_id IN ({ph})", rh_ids)
+            defect_ids.update(row[0] for row in cursor.fetchall())
+        if sr_ids:
+            sph = ",".join("?" * len(sr_ids))
+            cursor.execute(
+                f"SELECT id FROM defects WHERE step_result_id IN ({sph})",
+                sr_ids,
+            )
+            defect_ids.update(row[0] for row in cursor.fetchall())
+
+        if defect_ids:
+            ids_list = list(defect_ids)
+            dph = ",".join("?" * len(ids_list))
+            cursor.execute(f"DELETE FROM defect_comments WHERE defect_id IN ({dph})", ids_list)
+            cursor.execute(f"DELETE FROM defect_history WHERE defect_id IN ({dph})", ids_list)
+            cursor.execute(f"DELETE FROM defects WHERE id IN ({dph})", ids_list)
+
+        if rh_ids:
+            ph = ",".join("?" * len(rh_ids))
+            cursor.execute(f"DELETE FROM step_results WHERE run_history_id IN ({ph})", rh_ids)
+            cursor.execute(f"DELETE FROM run_history WHERE id IN ({ph})", rh_ids)
+
+        cursor.execute("DELETE FROM test_scripts WHERE case_id = ?", (case_id,))
+        cursor.execute("DELETE FROM variables WHERE case_id = ?", (case_id,))
+
+        cursor.execute("SELECT id FROM test_data_sets WHERE case_id = ?", (case_id,))
+        ds_ids = [row[0] for row in cursor.fetchall()]
+        if ds_ids:
+            dph = ",".join("?" * len(ds_ids))
+            cursor.execute(f"DELETE FROM test_data_rows WHERE dataset_id IN ({dph})", ds_ids)
+            cursor.execute(f"DELETE FROM test_data_sets WHERE id IN ({dph})", ds_ids)
+
+        cursor.execute("DELETE FROM test_steps WHERE case_id = ?", (case_id,))
+        cursor.execute("DELETE FROM test_cases WHERE id = ?", (case_id,))
+
     def delete_test_case(self, case_id: int) -> bool:
-        """删除测试用例"""
+        """删除测试用例（级联删除步骤、运行历史、缺陷等依赖数据）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
-        # 删除测试用例
-        cursor.execute("DELETE FROM test_cases WHERE id = ?", (case_id,))
-        
-        success = cursor.rowcount > 0
-        
-        conn.commit()
-        conn.close()
-        
-        return success
+        try:
+            cursor.execute("SELECT 1 FROM test_cases WHERE id = ?", (case_id,))
+            if not cursor.fetchone():
+                return False
+            self._delete_case_cascade(cursor, case_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"删除测试用例失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
     
     # ==================== 项目管理方法 ====================
     
@@ -906,30 +963,65 @@ class Database:
         return success
     
     def delete_project(self, project_id: int) -> bool:
-        """删除项目及其相关测试用例和步骤"""
+        """删除项目及调度、令牌、用例（级联）、数据集、缺陷、变量等依赖数据。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
-        # 获取该项目下的所有测试用例
-        cursor.execute("SELECT id FROM test_cases WHERE project_id = ?", (project_id,))
-        case_ids = [row[0] for row in cursor.fetchall()]
-        
-        # 删除所有测试用例的步骤
-        for case_id in case_ids:
-            cursor.execute("DELETE FROM test_steps WHERE case_id = ?", (case_id,))
-        
-        # 删除所有测试用例
-        cursor.execute("DELETE FROM test_cases WHERE project_id = ?", (project_id,))
-        
-        # 删除项目
-        cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-        
-        success = cursor.rowcount > 0
-        
-        conn.commit()
-        conn.close()
-        
-        return success
+        try:
+            cursor.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,))
+            if not cursor.fetchone():
+                return False
+
+            cursor.execute("SELECT id FROM schedules WHERE project_id = ?", (project_id,))
+            sched_ids = [row[0] for row in cursor.fetchall()]
+            if sched_ids:
+                sph = ",".join("?" * len(sched_ids))
+                cursor.execute(
+                    f"DELETE FROM schedule_history WHERE schedule_id IN ({sph})",
+                    sched_ids,
+                )
+            cursor.execute("DELETE FROM schedules WHERE project_id = ?", (project_id,))
+
+            cursor.execute("DELETE FROM api_tokens WHERE project_id = ?", (project_id,))
+
+            cursor.execute("SELECT id FROM test_cases WHERE project_id = ?", (project_id,))
+            case_ids = [row[0] for row in cursor.fetchall()]
+            for cid in case_ids:
+                self._delete_case_cascade(cursor, cid)
+
+            cursor.execute("SELECT id FROM test_data_sets WHERE project_id = ?", (project_id,))
+            ds_ids = [row[0] for row in cursor.fetchall()]
+            if ds_ids:
+                dph = ",".join("?" * len(ds_ids))
+                cursor.execute(
+                    f"DELETE FROM test_data_rows WHERE dataset_id IN ({dph})", ds_ids
+                )
+                cursor.execute("DELETE FROM test_data_sets WHERE project_id = ?", (project_id,))
+
+            cursor.execute("SELECT id FROM defects WHERE project_id = ?", (project_id,))
+            defect_ids = [row[0] for row in cursor.fetchall()]
+            if defect_ids:
+                dph = ",".join("?" * len(defect_ids))
+                cursor.execute(
+                    f"DELETE FROM defect_comments WHERE defect_id IN ({dph})",
+                    defect_ids,
+                )
+                cursor.execute(
+                    f"DELETE FROM defect_history WHERE defect_id IN ({dph})",
+                    defect_ids,
+                )
+                cursor.execute("DELETE FROM defects WHERE project_id = ?", (project_id,))
+
+            cursor.execute("DELETE FROM variables WHERE project_id = ?", (project_id,))
+            cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+            success = cursor.rowcount > 0
+            conn.commit()
+            return success
+        except Exception as e:
+            print(f"删除项目失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
     
     def get_project_case_count(self, project_id: int) -> int:
         """项目下用例数量（仅 COUNT，避免拉全量用例 + JOIN 步骤）。"""
@@ -1000,7 +1092,7 @@ class Database:
         row = cursor.fetchone()
         
         if row:
-            return {
+            out = {
                 'id': row[0],
                 'project_id': row[1],
                 'name': row[2],
@@ -1010,7 +1102,9 @@ class Database:
                 'precondition': row[6] if len(row) > 6 else '',
                 'expected_result': row[7] if len(row) > 7 else ''
             }
-        
+            conn.close()
+            return out
+
         conn.close()
         return None
     
@@ -1058,25 +1152,16 @@ class Database:
         return success
     
     def delete_test_case_v2(self, case_id: int) -> bool:
-        """删除测试用例及其相关步骤（新版本）"""
+        """删除测试用例及其步骤、运行历史、缺陷等依赖（新版本，与 delete_test_case 级联一致）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
         try:
-            # 删除该用例的所有步骤
-            cursor.execute("DELETE FROM test_steps WHERE case_id = ?", (case_id,))
-            
-            # 删除测试用例
-            cursor.execute("DELETE FROM test_cases WHERE id = ?", (case_id,))
-            
-            # 提交事务
+            cursor.execute("SELECT 1 FROM test_cases WHERE id = ?", (case_id,))
+            if not cursor.fetchone():
+                return False
+            self._delete_case_cascade(cursor, case_id)
             conn.commit()
-            
-            # 验证测试用例是否真的被删除
-            cursor.execute("SELECT id FROM test_cases WHERE id = ?", (case_id,))
-            case_exists = cursor.fetchone() is not None
-            
-            return not case_exists
+            return True
         except Exception as e:
             print(f"删除测试用例失败: {e}")
             conn.rollback()

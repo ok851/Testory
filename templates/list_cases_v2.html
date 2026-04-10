@@ -1390,6 +1390,22 @@
             }
         }
 
+        function restoreCasesListRunToolbarIdle() {
+            const runBulk = document.querySelector('button.btn-success[onclick="executeSelectedCases()"]');
+            if (runBulk) {
+                runBulk.disabled = false;
+                runBulk.textContent = t('tc_run_selected');
+            }
+            document.querySelectorAll('button.btn-success.btn-sm').forEach(btn => {
+                const oc = btn.getAttribute('onclick') || '';
+                if (!oc.includes('runTestCase(')) return;
+                btn.disabled = false;
+                btn.textContent = t('tc_run');
+            });
+            const stopBtn = document.getElementById('stopCaseRunBtn');
+            if (stopBtn) stopBtn.disabled = true;
+        }
+
         async function stopCaseRun() {
             const stopBtn = document.getElementById('stopCaseRunBtn');
             if (stopBtn) stopBtn.disabled = true;
@@ -1400,23 +1416,56 @@
                     throw new Error(data.error || `HTTP ${resp.status}`);
                 }
                 localCaseExecutionRunning = false;
-                // 手动停止不弹任何提示弹窗，避免干扰批量执行场景
+                restoreCasesListRunToolbarIdle();
             } catch (error) {
                 console.warn('停止运行失败:', error.message);
+                try {
+                    const stRes = await fetch('/api/cases/current-run/status');
+                    const st = await stRes.json();
+                    const still = stRes.ok && st && st.success && st.active;
+                    if (stopBtn) stopBtn.disabled = !still;
+                } catch (_) {
+                    if (stopBtn) stopBtn.disabled = false;
+                }
             }
         }
 
         async function syncCaseRunButtonState() {
+            const stopBtn = document.getElementById('stopCaseRunBtn');
+            const runBulk = document.querySelector('button.btn-success[onclick="executeSelectedCases()"]');
+            if (!stopBtn) return;
             try {
                 const resp = await fetch('/api/cases/current-run/status');
                 const data = await resp.json();
-                const stopBtn = document.getElementById('stopCaseRunBtn');
-                if (!stopBtn) return;
                 const backendActive = !!(resp.ok && data.success && data.active);
-                stopBtn.disabled = !(backendActive || localCaseExecutionRunning);
+                const active = backendActive || localCaseExecutionRunning;
+                stopBtn.disabled = !active;
+                if (runBulk) {
+                    runBulk.disabled = active;
+                    if (!active) runBulk.textContent = t('tc_run_selected');
+                }
+                if (!active) {
+                    document.querySelectorAll('button.btn-success.btn-sm').forEach(btn => {
+                        const oc = btn.getAttribute('onclick') || '';
+                        if (!oc.includes('runTestCase(')) return;
+                        btn.disabled = false;
+                        btn.textContent = t('tc_run');
+                    });
+                }
             } catch (_) {
-                const stopBtn = document.getElementById('stopCaseRunBtn');
-                if (stopBtn) stopBtn.disabled = !localCaseExecutionRunning;
+                stopBtn.disabled = !localCaseExecutionRunning;
+                if (!localCaseExecutionRunning) {
+                    if (runBulk) {
+                        runBulk.disabled = false;
+                        runBulk.textContent = t('tc_run_selected');
+                    }
+                    document.querySelectorAll('button.btn-success.btn-sm').forEach(btn => {
+                        const oc = btn.getAttribute('onclick') || '';
+                        if (!oc.includes('runTestCase(')) return;
+                        btn.disabled = false;
+                        btn.textContent = t('tc_run');
+                    });
+                }
             }
         }
         
