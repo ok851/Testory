@@ -66,6 +66,8 @@ from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 from logger import uat_logger
 from license_manager import license_manager, LicenseType
+from cloud_llm_gateway import CloudLLMGateway
+from ai_local_inference import local_ai_service
 import asyncio
 import threading
 import datetime
@@ -80,6 +82,7 @@ _dataset_run_jobs: dict = {}
 _dataset_run_lock = threading.Lock()
 _case_run_jobs: dict = {}
 _case_run_lock = threading.Lock()
+_ai_model_cfg_lock = threading.Lock()
 
 def _case_job_update(user_id: int, **kwargs):
     with _case_run_lock:
@@ -144,6 +147,158 @@ app = Flask(__name__)
 CORS(app)
 # 设置Flask应用的密钥，用于session加密
 app.secret_key = 'your-secret-key-here'
+
+# ==================== AI模型路由与云端安全网关 ====================
+_CLOUD_LLM_ENDPOINT = os.environ.get('CLOUD_LLM_ENDPOINT', '').strip()
+_CLOUD_LLM_API_KEY = os.environ.get('CLOUD_LLM_API_KEY', '').strip()
+_cloud_llm_gateway = None
+_AI_MODEL_CFG_FILE = os.path.join(os.path.dirname(__file__), 'ai_model_registry.json')
+
+
+def _get_cloud_llm_gateway():
+    global _cloud_llm_gateway
+    if _cloud_llm_gateway is None:
+        if not _CLOUD_LLM_ENDPOINT or not _CLOUD_LLM_API_KEY:
+            return None
+        _cloud_llm_gateway = CloudLLMGateway(
+            endpoint=_CLOUD_LLM_ENDPOINT,
+            api_key=_CLOUD_LLM_API_KEY,
+            timeout=45,
+        )
+    return _cloud_llm_gateway
+
+
+def _route_ai_model(task_type: str) -> dict:
+    """
+    双模型策略:
+    - 本地开源模型: 高频、低复杂任务
+    - 云端大模型: 脚本修复/复杂报错分析（强制脱敏后上云）
+    """
+    local_light_tasks = {'intent_classification', 'report_summary', 'log_tagging'}
+    local_mid_tasks = {'test_case_generation', 'test_step_generation', 'base_fix_suggestion'}
+    cloud_tasks = {'script_repair', 'complex_error_analysis'}
+
+    if task_type in local_light_tasks:
+        return {'provider': 'local', 'model': 'qwen2-1.5b-or-qwen1.8b'}
+    if task_type in local_mid_tasks:
+        return {'provider': 'local', 'model': 'llama3-8b-instruct'}
+    if task_type in cloud_tasks:
+        return {'provider': 'cloud', 'model': 'cloud_llm'}
+    return {'provider': 'local', 'model': _get_active_local_model()}
+
+
+def _default_ai_model_config() -> dict:
+    local_mid = os.environ.get('LOCAL_LLM_MODEL_MID', 'llama3:8b-instruct').strip()
+    local_light = os.environ.get('LOCAL_LLM_MODEL_LIGHT', 'qwen2:1.5b').strip()
+    models = [m for m in [local_mid, local_light, 'qwen:1.8b-chat'] if m]
+    dedup_models = []
+    for m in models:
+        if m not in dedup_models:
+            dedup_models.append(m)
+    return {
+        'active_local_model': local_mid,
+        'local_models': dedup_models,
+    }
+
+
+def _load_ai_model_config() -> dict:
+    with _ai_model_cfg_lock:
+        cfg = _default_ai_model_config()
+        try:
+            if os.path.exists(_AI_MODEL_CFG_FILE):
+                with open(_AI_MODEL_CFG_FILE, 'r', encoding='utf-8') as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    models = raw.get('local_models') or []
+                    if not isinstance(models, list):
+                        models = []
+                    clean_models = []
+                    for m in models:
+                        m = (str(m) if m is not None else '').strip()
+                        if m and m not in clean_models:
+                            clean_models.append(m)
+                    if clean_models:
+                        cfg['local_models'] = clean_models
+                    active = (raw.get('active_local_model') or '').strip()
+                    if active:
+                        cfg['active_local_model'] = active
+                        if active not in cfg['local_models']:
+                            cfg['local_models'].insert(0, active)
+        except Exception:
+            pass
+        return cfg
+
+
+def _save_ai_model_config(cfg: dict) -> None:
+    with _ai_model_cfg_lock:
+        with open(_AI_MODEL_CFG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def _get_active_local_model() -> str:
+    cfg = _load_ai_model_config()
+    return (cfg.get('active_local_model') or '').strip() or os.environ.get('LOCAL_LLM_MODEL_MID', 'llama3:8b-instruct')
+
+
+def _normalize_ai_step(step: dict) -> dict:
+    allowed_actions = {'navigate', 'click', 'input', 'wait', 'verify', 'extract_text'}
+    action = (step.get('action') or '').strip().lower()
+    if action not in allowed_actions:
+        action = 'click'
+    selector_type = (step.get('selector_type') or '').strip().lower()
+    selector_value = (step.get('selector_value') or '').strip()
+    input_value = (step.get('input_value') or '').strip()
+    description = (step.get('description') or '').strip()
+    return {
+        'action': action,
+        'selector_type': selector_type,
+        'selector_value': selector_value,
+        'input_value': input_value,
+        'description': description,
+    }
+
+
+def _dedupe_and_validate_ai_steps(steps: list) -> tuple:
+    """
+    Returns: (clean_steps, warnings)
+    """
+    warnings = []
+    clean_steps = []
+    seen = set()
+
+    for raw in steps or []:
+        if not isinstance(raw, dict):
+            continue
+        step = _normalize_ai_step(raw)
+        key = (
+            step['action'],
+            step['selector_type'],
+            step['selector_value'],
+            step['input_value'],
+        )
+        if key in seen:
+            warnings.append(f"检测到重复步骤并已去重: {step['action']} {step['selector_value']}")
+            continue
+        seen.add(key)
+        clean_steps.append(step)
+
+    if clean_steps:
+        first_action = clean_steps[0].get('action')
+        if first_action != 'navigate':
+            warnings.append('建议首步使用 navigate 进入目标页面，以提升执行稳定性。')
+
+    for idx, step in enumerate(clean_steps, start=1):
+        if step['action'] in {'click', 'input', 'verify', 'extract_text'} and not step['selector_value']:
+            warnings.append(f'第{idx}步缺少 selector_value，运行时可能失败。')
+        if step['action'] == 'wait':
+            try:
+                ms = int(step['input_value'] or '0')
+                if ms > 15000:
+                    warnings.append(f'第{idx}步等待时间较长({ms}ms)，建议改为显式条件等待。')
+            except Exception:
+                warnings.append(f'第{idx}步 wait 参数非数字: {step["input_value"]}')
+
+    return clean_steps, warnings
 
 # ==================== Flask-Login 初始化 ====================
 login_manager = LoginManager(app)
@@ -1140,6 +1295,338 @@ def api_analyze_content():
     
     analysis = automation.analyze_page_content(selector)
     return jsonify({'success': True, 'analysis': analysis})
+
+
+@app.route('/api/ai/models', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_get_ai_models():
+    cfg = _load_ai_model_config()
+    return jsonify({
+        'success': True,
+        'active_local_model': cfg.get('active_local_model'),
+        'local_models': cfg.get('local_models', []),
+    })
+
+
+@app.route('/api/ai/models', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_add_ai_model():
+    data = request.get_json(silent=True) or {}
+    model_name = (data.get('model_name') or '').strip()
+    if not model_name:
+        return jsonify({'success': False, 'error': 'model_name不能为空'}), 400
+    cfg = _load_ai_model_config()
+    models = cfg.get('local_models', [])
+    if model_name not in models:
+        models.append(model_name)
+    cfg['local_models'] = models
+    _save_ai_model_config(cfg)
+    return jsonify({'success': True, 'active_local_model': cfg.get('active_local_model'), 'local_models': models})
+
+
+@app.route('/api/ai/models/active', methods=['PUT'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_set_active_ai_model():
+    data = request.get_json(silent=True) or {}
+    model_name = (data.get('model_name') or '').strip()
+    if not model_name:
+        return jsonify({'success': False, 'error': 'model_name不能为空'}), 400
+    cfg = _load_ai_model_config()
+    models = cfg.get('local_models', [])
+    if model_name not in models:
+        models.append(model_name)
+    cfg['local_models'] = models
+    cfg['active_local_model'] = model_name
+    _save_ai_model_config(cfg)
+    return jsonify({'success': True, 'active_local_model': model_name, 'local_models': models})
+
+
+@app.route('/api/ai/task/plan', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_task_plan():
+    """
+    AI任务规划入口（本地模型真实推理）。
+    """
+    data = request.get_json(silent=True) or {}
+    task_type = (data.get('task_type') or 'test_case_generation').strip()
+    goal = (data.get('goal') or '').strip()
+    project_name = (data.get('project_name') or '').strip()
+    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+
+    if not goal:
+        return jsonify({'success': False, 'error': 'goal不能为空'}), 400
+
+    route = _route_ai_model(task_type)
+    if route['provider'] != 'local':
+        return jsonify({
+            'success': False,
+            'error': '该任务需走云端分析接口，请调用 /api/ai/task/cloud-analyze'
+        }), 400
+
+    try:
+        generated = local_ai_service.generate_case_and_steps(goal, project_name, model=selected_model)
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hint': '可先执行: ollama serve，并确认模型已拉取。'
+        }), 503
+    return jsonify({
+        'success': True,
+        'provider': route['provider'],
+        'model': generated.get('meta', {}).get('model') or route['model'],
+        'plan': generated
+    })
+
+
+@app.route('/api/ai/task/cloud-analyze', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_task_cloud_analyze():
+    """
+    云端高复杂任务入口（脚本修复/复杂报错分析）。
+    铁律：任何上云内容必须先经过自动全量脱敏。
+    """
+    data = request.get_json(silent=True) or {}
+    task_type = (data.get('task_type') or '').strip()
+    payload = data.get('payload')
+
+    if task_type not in {'script_repair', 'complex_error_analysis'}:
+        return jsonify({'success': False, 'error': '仅支持 script_repair / complex_error_analysis'}), 400
+    if payload is None:
+        return jsonify({'success': False, 'error': 'payload不能为空'}), 400
+
+    route = _route_ai_model(task_type)
+    if route['provider'] != 'cloud':
+        return jsonify({'success': False, 'error': '该任务不需要云端模型'}), 400
+
+    gateway = _get_cloud_llm_gateway()
+    if gateway is None:
+        return jsonify({
+            'success': False,
+            'error': '云端模型未配置，请设置 CLOUD_LLM_ENDPOINT 和 CLOUD_LLM_API_KEY'
+        }), 400
+
+    result = gateway.call({
+        'task_type': task_type,
+        'payload': payload,
+        'request_meta': {
+            'requested_by': current_user.username,
+            'requested_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+    })
+    return jsonify({
+        'success': True,
+        'provider': route['provider'],
+        'model': route['model'],
+        'result': result
+    })
+
+
+@app.route('/api/ai/cases/generate-and-save', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+@audit_log('CREATE_CASE', 'case')
+def api_ai_generate_case_and_save():
+    """
+    使用本地模型生成测试用例与步骤，并直接保存到项目。
+    """
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    goal = (data.get('goal') or '').strip()
+    project_name = (data.get('project_name') or '').strip()
+    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+
+    if not project_id:
+        return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
+    if not goal:
+        return jsonify({'success': False, 'error': 'goal不能为空'}), 400
+
+    _db = Database()
+    if not _db.check_project_access(current_user.id, project_id, 'editor'):
+        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+
+    license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
+    current_case_count = _db.get_project_case_count(project_id)
+    if limits['max_cases_per_project'] != -1 and current_case_count >= limits['max_cases_per_project']:
+        return jsonify({
+            'success': False,
+            'error': f'已达到项目用例数量限制（{limits["max_cases_per_project"]}个）。请升级至专业版解除限制。',
+            'limit_reached': True,
+            'current_count': current_case_count,
+            'limit': limits['max_cases_per_project'],
+            'upgrade_url': '/license'
+        }), 403
+    if license_info.license_type == LicenseType.FREE.value:
+        _db.increment_created_cases(current_user.id)
+
+    try:
+        generated = local_ai_service.generate_case_and_steps(goal, project_name, model=selected_model)
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hint': '可先执行: ollama serve，并确认模型已拉取。'
+        }), 503
+    clean_steps, warnings = _dedupe_and_validate_ai_steps(generated.get('steps') or [])
+    generated['steps'] = clean_steps
+    generated['warnings'] = warnings
+    case_id = db.create_test_case_v2(
+        project_id,
+        generated.get('case_name', ''),
+        generated.get('case_url', ''),
+        generated.get('description', ''),
+        generated.get('precondition', ''),
+        generated.get('expected_result', ''),
+    )
+
+    created_steps = 0
+    steps = generated.get('steps') or []
+    for idx, step in enumerate(steps, start=1):
+        db.create_test_step(
+            case_id=case_id,
+            action=(step.get('action') or '').strip(),
+            selector_type=(step.get('selector_type') or '').strip(),
+            selector_value=(step.get('selector_value') or '').strip(),
+            input_value=(step.get('input_value') or '').strip(),
+            description=(step.get('description') or '').strip(),
+            step_order=idx,
+            page_name='',
+            swipe_x='',
+            swipe_y='',
+            url='',
+            enter_iframe=False,
+            iframe_selector='',
+            compare_type='equals',
+            locator_candidates='',
+        )
+        created_steps += 1
+
+    return jsonify({
+        'success': True,
+        'case_id': case_id,
+        'steps_created': created_steps,
+        'generated': generated,
+        'warnings': warnings,
+    })
+
+
+@app.route('/api/ai/task/chat', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_task_chat():
+    """
+    多轮AI对话生成/优化测试用例步骤（本地模型）。
+    """
+    data = request.get_json(silent=True) or {}
+    message = (data.get('message') or '').strip()
+    project_name = (data.get('project_name') or '').strip()
+    current_plan = data.get('current_plan') or {}
+    history = data.get('history') or []
+    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    if not message:
+        return jsonify({'success': False, 'error': 'message不能为空'}), 400
+
+    route = _route_ai_model('test_case_generation')
+    if route['provider'] != 'local':
+        return jsonify({'success': False, 'error': '当前仅支持本地模型对话'}), 400
+
+    try:
+        generated = local_ai_service.refine_case_and_steps(
+            user_message=message,
+            project_name=project_name,
+            current_plan=current_plan if isinstance(current_plan, dict) else {},
+            history=history if isinstance(history, list) else [],
+            model=selected_model,
+        )
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hint': '可先执行: ollama serve，并确认模型已拉取。'
+        }), 503
+    return jsonify({
+        'success': True,
+        'provider': 'local',
+        'model': generated.get('meta', {}).get('model') or route['model'],
+        'plan': generated,
+    })
+
+
+@app.route('/api/ai/cases/append-steps', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_append_steps_to_case():
+    """
+    将AI生成步骤追加到现有用例，不新建用例。
+    """
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id')
+    steps = data.get('steps') or []
+    if not case_id:
+        return jsonify({'success': False, 'error': 'case_id不能为空'}), 400
+    if not isinstance(steps, list) or not steps:
+        return jsonify({'success': False, 'error': 'steps不能为空'}), 400
+
+    case = db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+
+    _db = Database()
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+
+    old_steps, _total = db.get_case_steps_paginated(case_id, 1, 1000)
+    max_order = 0
+    if old_steps:
+        max_order = max([int(s.get('step_order') or 0) for s in old_steps] or [0])
+
+    clean_steps, warnings = _dedupe_and_validate_ai_steps(steps)
+
+    created_steps = 0
+    for idx, step in enumerate(clean_steps, start=1):
+        db.create_test_step(
+            case_id=case_id,
+            action=(step.get('action') or '').strip(),
+            selector_type=(step.get('selector_type') or '').strip(),
+            selector_value=(step.get('selector_value') or '').strip(),
+            input_value=(step.get('input_value') or '').strip(),
+            description=(step.get('description') or '').strip(),
+            step_order=max_order + idx,
+            page_name='',
+            swipe_x='',
+            swipe_y='',
+            url='',
+            enter_iframe=False,
+            iframe_selector='',
+            compare_type='equals',
+            locator_candidates='',
+        )
+        created_steps += 1
+
+    return jsonify({
+        'success': True,
+        'case_id': case_id,
+        'steps_created': created_steps,
+        'warnings': warnings,
+    })
 
 # API: 悬停在元素上
 @app.route('/api/hover_element', methods=['POST'])

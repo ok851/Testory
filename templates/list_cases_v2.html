@@ -452,6 +452,7 @@
         <div class="toolbar">
             <div class="toolbar-left">
                 <button type="button" onclick="showCreateCaseModal()" class="btn btn-primary" data-i18n="tc_create_case">+ 创建用例</button>
+                <button type="button" onclick="showAiCaseModal()" class="btn btn-info">AI生成用例</button>
                 <button type="button" onclick="executeSelectedCases()" class="btn btn-success" data-i18n="tc_run_selected">▶ 执行选中的用例</button>
                 <button type="button" onclick="stopCaseRun()" class="btn btn-danger" id="stopCaseRunBtn" disabled data-i18n="tc_stop_run">⏹ 停止运行</button>
             </div>
@@ -507,6 +508,51 @@
             <div class="modal-footer">
                 <button type="button" onclick="closeCreateCaseModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
                 <button type="button" onclick="createTestCase()" class="btn btn-primary" data-i18n="proj_btn_create">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="aiCaseModal" class="modal">
+        <div class="modal-content" style="width: 760px; max-width: 95%;">
+            <div class="modal-header">
+                <h3>AI对话生成测试用例</h3>
+            </div>
+            <div class="modal-body">
+                <div id="aiChatHistory" style="height: 260px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #f9fafb; margin-bottom: 12px;"></div>
+                <div class="form-group">
+                    <label for="aiGoalInput">自然语言目标</label>
+                    <textarea id="aiGoalInput" placeholder="例如：测试 Airbnb 预订流程，验证选择日期、填写入住信息、提交订单并看到成功提示"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="aiModelSelect">当前模型</label>
+                    <div style="display:flex; gap:8px;">
+                        <select id="aiModelSelect" style="flex:1;"></select>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="saveActiveAiModel()">设为默认</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="aiNewModelInput">手动添加模型</label>
+                    <div style="display:flex; gap:8px;">
+                        <input id="aiNewModelInput" type="text" placeholder="例如: qwen2.5:7b-instruct">
+                        <button type="button" class="btn btn-info btn-sm" onclick="addAiModel()">添加模型</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="aiTargetCaseSelect">追加到现有用例（可选）</label>
+                    <select id="aiTargetCaseSelect">
+                        <option value="">-- 不选择则新建用例 --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>生成预览</label>
+                    <textarea id="aiGeneratedPreview" readonly style="height: 180px; background: #f8fafc;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="closeAiCaseModal()" class="btn btn-secondary">关闭</button>
+                <button type="button" onclick="aiGeneratePreview()" class="btn btn-info" id="aiGenerateBtn">生成预览</button>
+                <button type="button" onclick="aiContinueRefine()" class="btn btn-secondary" id="aiContinueBtn">继续优化</button>
+                <button type="button" onclick="aiGenerateAndSaveCase()" class="btn btn-primary" id="aiGenerateSaveBtn">生成并保存</button>
             </div>
         </div>
     </div>
@@ -689,6 +735,10 @@
         let draggedOrderIndex = null;
         let caseRunStatusTimer = null;
         let localCaseExecutionRunning = false;
+        let latestAiPlan = null;
+        let aiChatMessages = [];
+        let aiModels = [];
+        let activeAiModel = '';
         
         function escapeHtml(text) {
             if (!text) return '';
@@ -835,6 +885,285 @@
         
         function closeCreateCaseModal() {
             document.getElementById('createCaseModal').classList.remove('active');
+        }
+
+        function showAiCaseModal() {
+            const modal = document.getElementById('aiCaseModal');
+            const chat = document.getElementById('aiChatHistory');
+            const preview = document.getElementById('aiGeneratedPreview');
+            const goal = document.getElementById('aiGoalInput');
+            const select = document.getElementById('aiTargetCaseSelect');
+            const modelSelect = document.getElementById('aiModelSelect');
+            latestAiPlan = null;
+            aiChatMessages = [];
+            chat.innerHTML = '<div style="color:#4b5563;">AI助手：请输入你的测试目标，我会生成测试用例与步骤。</div>';
+            preview.value = '';
+            goal.value = '';
+            if (select) {
+                const options = ['<option value="">-- 不选择则新建用例 --</option>'].concat(
+                    (allCasesList || []).map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
+                );
+                select.innerHTML = options.join('');
+            }
+            if (modelSelect) {
+                modelSelect.innerHTML = '';
+            }
+            modal.classList.add('active');
+            loadAiModels();
+        }
+
+        function closeAiCaseModal() {
+            document.getElementById('aiCaseModal').classList.remove('active');
+            latestAiPlan = null;
+            aiChatMessages = [];
+        }
+
+        function appendAiChat(role, content) {
+            const chat = document.getElementById('aiChatHistory');
+            if (!chat) return;
+            aiChatMessages.push({ role: role, content: content });
+            const isUser = role === 'user';
+            const color = isUser ? '#1d4ed8' : '#374151';
+            const prefix = isUser ? '你' : 'AI助手';
+            const item = document.createElement('div');
+            item.style.marginBottom = '10px';
+            item.innerHTML = `<strong style="color:${color};">${prefix}：</strong>${escapeHtml(content)}`;
+            chat.appendChild(item);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function getSelectedAiModel() {
+            const el = document.getElementById('aiModelSelect');
+            return (el && el.value) ? el.value.trim() : '';
+        }
+
+        async function loadAiModels() {
+            try {
+                const response = await fetch('/api/ai/models');
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                aiModels = Array.isArray(data.local_models) ? data.local_models : [];
+                activeAiModel = data.active_local_model || '';
+                const modelSelect = document.getElementById('aiModelSelect');
+                if (modelSelect) {
+                    modelSelect.innerHTML = aiModels.map(m =>
+                        `<option value="${escapeHtml(m)}" ${m === activeAiModel ? 'selected' : ''}>${escapeHtml(m)}</option>`
+                    ).join('');
+                }
+            } catch (error) {
+                console.warn('加载模型列表失败:', error.message);
+            }
+        }
+
+        async function addAiModel() {
+            const input = document.getElementById('aiNewModelInput');
+            const modelName = input ? input.value.trim() : '';
+            if (!modelName) {
+                alert('请输入模型名称');
+                return;
+            }
+            try {
+                const response = await fetch('/api/ai/models', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_name: modelName })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                if (input) input.value = '';
+                await loadAiModels();
+                alert('模型添加成功');
+            } catch (error) {
+                alert('添加模型失败: ' + error.message);
+            }
+        }
+
+        async function saveActiveAiModel() {
+            const modelName = getSelectedAiModel();
+            if (!modelName) {
+                alert('请先选择模型');
+                return;
+            }
+            try {
+                const response = await fetch('/api/ai/models/active', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_name: modelName })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                activeAiModel = data.active_local_model || modelName;
+                alert('默认模型已更新');
+            } catch (error) {
+                alert('设置默认模型失败: ' + error.message);
+            }
+        }
+
+        function renderAiPreview(plan) {
+            const preview = document.getElementById('aiGeneratedPreview');
+            if (!preview) return;
+            const steps = (plan.steps || []).map((s, idx) =>
+                `${idx + 1}. [${s.action}] ${s.description || ''} | ${s.selector_type || ''}:${s.selector_value || ''} | 输入:${s.input_value || ''}`
+            );
+            const warnings = (plan.warnings || []).map((w, idx) => `!${idx + 1}. ${w}`);
+            preview.value =
+                `用例名称: ${plan.case_name || ''}\n` +
+                `URL: ${plan.case_url || ''}\n` +
+                `描述: ${plan.description || ''}\n` +
+                `前置条件: ${plan.precondition || ''}\n` +
+                `预期结果: ${plan.expected_result || ''}\n\n` +
+                `步骤:\n${steps.join('\n')}\n\n` +
+                `风险提示:\n${warnings.length ? warnings.join('\n') : '无'}`;
+        }
+
+        async function aiGeneratePreview() {
+            const goal = document.getElementById('aiGoalInput').value.trim();
+            if (!goal) {
+                alert('请输入自然语言目标');
+                return;
+            }
+            appendAiChat('user', goal);
+            const generateBtn = document.getElementById('aiGenerateBtn');
+            if (generateBtn) {
+                generateBtn.disabled = true;
+                generateBtn.textContent = '生成中...';
+            }
+            try {
+                const response = await fetch('/api/ai/task/plan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        task_type: 'test_case_generation',
+                        goal: goal,
+                        project_name: currentProjectName,
+                        model: getSelectedAiModel()
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                latestAiPlan = data.plan || null;
+                renderAiPreview(latestAiPlan || {});
+                appendAiChat('assistant', `已生成用例《${(latestAiPlan && latestAiPlan.case_name) || '未命名'}》，共 ${(latestAiPlan && latestAiPlan.steps ? latestAiPlan.steps.length : 0)} 步。`);
+            } catch (error) {
+                appendAiChat('assistant', `生成失败：${error.message}`);
+                alert('AI生成失败: ' + error.message + '\n\n请检查本地模型服务是否启动（例如先执行: ollama serve）。');
+            } finally {
+                if (generateBtn) {
+                    generateBtn.disabled = false;
+                    generateBtn.textContent = '生成预览';
+                }
+            }
+        }
+
+        async function aiContinueRefine() {
+            const message = document.getElementById('aiGoalInput').value.trim();
+            if (!message) {
+                alert('请输入优化指令，例如：增加异常流程和断言');
+                return;
+            }
+            appendAiChat('user', message);
+            const btn = document.getElementById('aiContinueBtn');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = '优化中...';
+            }
+            try {
+                const response = await fetch('/api/ai/task/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        project_name: currentProjectName,
+                        current_plan: latestAiPlan || {},
+                        history: aiChatMessages,
+                        model: getSelectedAiModel()
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                latestAiPlan = data.plan || latestAiPlan;
+                renderAiPreview(latestAiPlan || {});
+                appendAiChat('assistant', `已按你的要求优化，当前步骤数 ${(latestAiPlan && latestAiPlan.steps ? latestAiPlan.steps.length : 0)}。`);
+            } catch (error) {
+                appendAiChat('assistant', `优化失败：${error.message}`);
+                alert('AI继续优化失败: ' + error.message + '\n\n请检查本地模型服务是否启动（例如先执行: ollama serve）。');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '继续优化';
+                }
+            }
+        }
+
+        async function aiGenerateAndSaveCase() {
+            const goal = document.getElementById('aiGoalInput').value.trim();
+            if (!goal) {
+                alert('请输入自然语言目标');
+                return;
+            }
+            const targetCaseId = (document.getElementById('aiTargetCaseSelect').value || '').trim();
+            const saveBtn = document.getElementById('aiGenerateSaveBtn');
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.textContent = '保存中...';
+            }
+            try {
+                let response;
+                if (targetCaseId && latestAiPlan && Array.isArray(latestAiPlan.steps) && latestAiPlan.steps.length > 0) {
+                    response = await fetch('/api/ai/cases/append-steps', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            case_id: parseInt(targetCaseId),
+                            steps: latestAiPlan.steps
+                        })
+                    });
+                } else {
+                    response = await fetch('/api/ai/cases/generate-and-save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            project_id: parseInt(currentProjectId),
+                            project_name: currentProjectName,
+                            goal: goal,
+                            model: getSelectedAiModel()
+                        })
+                    });
+                }
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${response.status}`);
+                }
+                if (data.generated) {
+                    latestAiPlan = data.generated || latestAiPlan;
+                }
+                renderAiPreview(latestAiPlan || {});
+                appendAiChat('assistant', `保存成功：用例ID ${data.case_id}，处理步骤 ${data.steps_created} 条。`);
+                if (data.warnings && data.warnings.length) {
+                    appendAiChat('assistant', `风险提示：${data.warnings.join('；')}`);
+                }
+                alert(`AI保存成功：用例ID ${data.case_id}，步骤 ${data.steps_created}`);
+                closeAiCaseModal();
+                await loadTestCases();
+            } catch (error) {
+                appendAiChat('assistant', `保存失败：${error.message}`);
+                alert('AI生成并保存失败: ' + error.message + '\n\n请检查本地模型服务是否启动（例如先执行: ollama serve）。');
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = '生成并保存';
+                }
+            }
         }
         
         async function createTestCase() {
