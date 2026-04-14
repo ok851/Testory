@@ -9,6 +9,7 @@ import shlex
 import shutil
 import secrets
 import json
+import re
 import functools
 import tempfile
 import subprocess
@@ -153,6 +154,18 @@ _CLOUD_LLM_ENDPOINT = os.environ.get('CLOUD_LLM_ENDPOINT', '').strip()
 _CLOUD_LLM_API_KEY = os.environ.get('CLOUD_LLM_API_KEY', '').strip()
 _cloud_llm_gateway = None
 _AI_MODEL_CFG_FILE = os.path.join(os.path.dirname(__file__), 'ai_model_registry.json')
+_AI_MODEL_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._:/+\-]{0,199}$')
+
+
+def _validate_ai_model_name(name: str) -> tuple:
+    n = (name or '').strip()
+    if not n:
+        return False, 'model_name不能为空'
+    if len(n) > 200:
+        return False, '模型名称过长（最多200字符）'
+    if not _AI_MODEL_NAME_RE.match(n):
+        return False, '模型名称格式无效：需以字母或数字开头，仅允许字母、数字及 . _ : / + -'
+    return True, n
 
 
 def _get_cloud_llm_gateway():
@@ -202,31 +215,42 @@ def _default_ai_model_config() -> dict:
 
 
 def _load_ai_model_config() -> dict:
+    """
+优先读取 ai_model_registry.json。若文件不存在则返回环境默认列表（首次部署）。
+    注意：文件中 local_models 可以为空列表；必须用文件内容覆盖默认值，
+    否则「删除全部模型」后重启仍会回到 _default_ai_model_config() 的内置列表。
+    """
     with _ai_model_cfg_lock:
-        cfg = _default_ai_model_config()
+        defaults = _default_ai_model_config()
+        if not os.path.exists(_AI_MODEL_CFG_FILE):
+            return defaults
         try:
-            if os.path.exists(_AI_MODEL_CFG_FILE):
-                with open(_AI_MODEL_CFG_FILE, 'r', encoding='utf-8') as f:
-                    raw = json.load(f)
-                if isinstance(raw, dict):
-                    models = raw.get('local_models') or []
-                    if not isinstance(models, list):
-                        models = []
-                    clean_models = []
-                    for m in models:
-                        m = (str(m) if m is not None else '').strip()
-                        if m and m not in clean_models:
-                            clean_models.append(m)
-                    if clean_models:
-                        cfg['local_models'] = clean_models
-                    active = (raw.get('active_local_model') or '').strip()
-                    if active:
-                        cfg['active_local_model'] = active
-                        if active not in cfg['local_models']:
-                            cfg['local_models'].insert(0, active)
+            with open(_AI_MODEL_CFG_FILE, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                return defaults
+            if 'local_models' in raw:
+                models = raw.get('local_models')
+                if models is None:
+                    models = []
+            else:
+                models = list(defaults.get('local_models') or [])
+            if not isinstance(models, list):
+                models = []
+            clean_models = []
+            for m in models:
+                m = (str(m) if m is not None else '').strip()
+                if m and m not in clean_models:
+                    clean_models.append(m)
+            active = (raw.get('active_local_model') or '').strip()
+            if active and active not in clean_models:
+                active = clean_models[0] if clean_models else ''
+            return {
+                'active_local_model': active,
+                'local_models': clean_models,
+            }
         except Exception:
-            pass
-        return cfg
+            return defaults
 
 
 def _save_ai_model_config(cfg: dict) -> None:
@@ -240,15 +264,21 @@ def _get_active_local_model() -> str:
     return (cfg.get('active_local_model') or '').strip() or os.environ.get('LOCAL_LLM_MODEL_MID', 'llama3:8b-instruct')
 
 
+def _ai_str(value) -> str:
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
 def _normalize_ai_step(step: dict) -> dict:
     allowed_actions = {'navigate', 'click', 'input', 'wait', 'verify', 'extract_text'}
-    action = (step.get('action') or '').strip().lower()
+    action = _ai_str(step.get('action')).lower()
     if action not in allowed_actions:
         action = 'click'
-    selector_type = (step.get('selector_type') or '').strip().lower()
-    selector_value = (step.get('selector_value') or '').strip()
-    input_value = (step.get('input_value') or '').strip()
-    description = (step.get('description') or '').strip()
+    selector_type = _ai_str(step.get('selector_type')).lower()
+    selector_value = _ai_str(step.get('selector_value'))
+    input_value = _ai_str(step.get('input_value'))
+    description = _ai_str(step.get('description'))
     return {
         'action': action,
         'selector_type': selector_type,
@@ -299,6 +329,37 @@ def _dedupe_and_validate_ai_steps(steps: list) -> tuple:
                 warnings.append(f'第{idx}步 wait 参数非数字: {step["input_value"]}')
 
     return clean_steps, warnings
+
+
+def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
+    """将 AI 步骤转为 create_test_step 参数；navigate 的 URL 写入 url 与 input_value。"""
+    action = _ai_str(step.get("action"))
+    st = _ai_str(step.get("selector_type"))
+    sv = _ai_str(step.get("selector_value"))
+    iv = _ai_str(step.get("input_value"))
+    desc = _ai_str(step.get("description"))
+    url_col = ""
+    if action == "navigate":
+        url_col = iv or sv
+        st, sv = "", ""
+        iv = url_col
+    return {
+        "case_id": case_id,
+        "action": action,
+        "selector_type": st,
+        "selector_value": sv,
+        "input_value": iv,
+        "description": desc,
+        "step_order": step_order,
+        "page_name": "",
+        "swipe_x": "",
+        "swipe_y": "",
+        "url": url_col,
+        "enter_iframe": False,
+        "iframe_selector": "",
+        "compare_type": "equals",
+        "locator_candidates": "",
+    }
 
 # ==================== Flask-Login 初始化 ====================
 login_manager = LoginManager(app)
@@ -677,6 +738,14 @@ def create_case_v2():
     response.headers['Expires'] = '0'
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     return response
+
+# AI 测试工作台（本地 Ollama + 无头 Playwright页面探测）
+@app.route('/ai-test')
+@login_required
+def ai_test_page():
+    """本地 AI + Playwright 无头探测生成测试步骤（工作台页面）。"""
+    return render_template('ai_test.html')
+
 
 # 项目管理页面
 @app.route('/list_projects')
@@ -1303,10 +1372,28 @@ def api_analyze_content():
 @log_api_request
 def api_get_ai_models():
     cfg = _load_ai_model_config()
+    ollama_models, ollama_error = local_ai_service.list_installed_models()
     return jsonify({
         'success': True,
         'active_local_model': cfg.get('active_local_model'),
         'local_models': cfg.get('local_models', []),
+        'ollama_base_url': local_ai_service.base_url,
+        'ollama_models': ollama_models,
+        'ollama_error': ollama_error,
+    })
+
+
+@app.route('/api/ai/models/ollama', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_get_ollama_models():
+    ollama_models, ollama_error = local_ai_service.list_installed_models()
+    return jsonify({
+        'success': True,
+        'ollama_base_url': local_ai_service.base_url,
+        'ollama_models': ollama_models,
+        'ollama_error': ollama_error,
     })
 
 
@@ -1317,9 +1404,25 @@ def api_get_ai_models():
 @log_api_request
 def api_add_ai_model():
     data = request.get_json(silent=True) or {}
-    model_name = (data.get('model_name') or '').strip()
-    if not model_name:
-        return jsonify({'success': False, 'error': 'model_name不能为空'}), 400
+    ok, model_name_or_err = _validate_ai_model_name(data.get('model_name') or '')
+    if not ok:
+        return jsonify({'success': False, 'error': model_name_or_err}), 400
+    model_name = model_name_or_err
+    verify_ollama = bool(data.get('verify_ollama'))
+    if verify_ollama:
+        installed, err = local_ai_service.list_installed_models()
+        if err:
+            return jsonify({
+                'success': False,
+                'error': f'无法校验 Ollama：{err}',
+                'hint': '可关闭「添加前校验」后重试，或检查 LOCAL_LLM_BASE_URL 与 ollama serve',
+            }), 503
+        if model_name not in installed:
+            return jsonify({
+                'success': False,
+                'error': f'Ollama 中未找到模型「{model_name}」，请先执行 ollama pull',
+                'ollama_models': installed,
+            }), 400
     cfg = _load_ai_model_config()
     models = cfg.get('local_models', [])
     if model_name not in models:
@@ -1336,9 +1439,10 @@ def api_add_ai_model():
 @log_api_request
 def api_set_active_ai_model():
     data = request.get_json(silent=True) or {}
-    model_name = (data.get('model_name') or '').strip()
-    if not model_name:
-        return jsonify({'success': False, 'error': 'model_name不能为空'}), 400
+    ok, model_name_or_err = _validate_ai_model_name(data.get('model_name') or '')
+    if not ok:
+        return jsonify({'success': False, 'error': model_name_or_err}), 400
+    model_name = model_name_or_err
     cfg = _load_ai_model_config()
     models = cfg.get('local_models', [])
     if model_name not in models:
@@ -1347,6 +1451,33 @@ def api_set_active_ai_model():
     cfg['active_local_model'] = model_name
     _save_ai_model_config(cfg)
     return jsonify({'success': True, 'active_local_model': model_name, 'local_models': models})
+
+
+@app.route('/api/ai/models', methods=['DELETE'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_delete_ai_model():
+    data = request.get_json(silent=True) or {}
+    ok, model_name_or_err = _validate_ai_model_name(data.get('model_name') or '')
+    if not ok:
+        return jsonify({'success': False, 'error': model_name_or_err}), 400
+    model_name = model_name_or_err
+    cfg = _load_ai_model_config()
+    models = list(cfg.get('local_models') or [])
+    if model_name not in models:
+        return jsonify({'success': False, 'error': '该平台未注册此模型'}), 404
+    models = [m for m in models if m != model_name]
+    cfg['local_models'] = models
+    if (cfg.get('active_local_model') or '').strip() == model_name:
+        cfg['active_local_model'] = models[0] if models else ''
+    _save_ai_model_config(cfg)
+    return jsonify({
+        'success': True,
+        'active_local_model': cfg.get('active_local_model'),
+        'local_models': models,
+    })
 
 
 @app.route('/api/ai/task/plan', methods=['POST'])
@@ -1362,6 +1493,7 @@ def api_ai_task_plan():
     goal = (data.get('goal') or '').strip()
     project_name = (data.get('project_name') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    probe_page = bool(data.get('probe_page'))
 
     if not goal:
         return jsonify({'success': False, 'error': 'goal不能为空'}), 400
@@ -1374,7 +1506,9 @@ def api_ai_task_plan():
         }), 400
 
     try:
-        generated = local_ai_service.generate_case_and_steps(goal, project_name, model=selected_model)
+        generated = local_ai_service.generate_case_and_steps(
+            goal, project_name, model=selected_model, probe_page=probe_page
+        )
     except ValueError as e:
         return jsonify({
             'success': False,
@@ -1449,11 +1583,11 @@ def api_ai_generate_case_and_save():
     goal = (data.get('goal') or '').strip()
     project_name = (data.get('project_name') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    probe_page = bool(data.get('probe_page'))
+    client_plan = data.get('plan')
 
     if not project_id:
         return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
-    if not goal:
-        return jsonify({'success': False, 'error': 'goal不能为空'}), 400
 
     _db = Database()
     if not _db.check_project_access(current_user.id, project_id, 'editor'):
@@ -1474,14 +1608,30 @@ def api_ai_generate_case_and_save():
     if license_info.license_type == LicenseType.FREE.value:
         _db.increment_created_cases(current_user.id)
 
-    try:
-        generated = local_ai_service.generate_case_and_steps(goal, project_name, model=selected_model)
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'hint': '可先执行: ollama serve，并确认模型已拉取。'
-        }), 503
+    if isinstance(client_plan, dict) and isinstance(client_plan.get('steps'), list) and client_plan.get('steps'):
+        goal = goal or _ai_str(client_plan.get('case_name')) or 'AI用例'
+        generated = {
+            'case_name': client_plan.get('case_name') or goal,
+            'case_url': client_plan.get('case_url') or '',
+            'description': client_plan.get('description') or '',
+            'precondition': client_plan.get('precondition') or '',
+            'expected_result': client_plan.get('expected_result') or '',
+            'steps': list(client_plan.get('steps') or []),
+            'meta': client_plan.get('meta') or {},
+        }
+    else:
+        if not goal:
+            return jsonify({'success': False, 'error': 'goal不能为空'}), 400
+        try:
+            generated = local_ai_service.generate_case_and_steps(
+                goal, project_name, model=selected_model, probe_page=probe_page
+            )
+        except ValueError as e:
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'hint': '可先执行: ollama serve，并确认模型已拉取。'
+            }), 503
     clean_steps, warnings = _dedupe_and_validate_ai_steps(generated.get('steps') or [])
     generated['steps'] = clean_steps
     generated['warnings'] = warnings
@@ -1497,23 +1647,7 @@ def api_ai_generate_case_and_save():
     created_steps = 0
     steps = generated.get('steps') or []
     for idx, step in enumerate(steps, start=1):
-        db.create_test_step(
-            case_id=case_id,
-            action=(step.get('action') or '').strip(),
-            selector_type=(step.get('selector_type') or '').strip(),
-            selector_value=(step.get('selector_value') or '').strip(),
-            input_value=(step.get('input_value') or '').strip(),
-            description=(step.get('description') or '').strip(),
-            step_order=idx,
-            page_name='',
-            swipe_x='',
-            swipe_y='',
-            url='',
-            enter_iframe=False,
-            iframe_selector='',
-            compare_type='equals',
-            locator_candidates='',
-        )
+        db.create_test_step(**_ai_step_to_db_kwargs(step, case_id, idx))
         created_steps += 1
 
     return jsonify({
@@ -1539,6 +1673,7 @@ def api_ai_task_chat():
     current_plan = data.get('current_plan') or {}
     history = data.get('history') or []
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    probe_page = bool(data.get('probe_page'))
     if not message:
         return jsonify({'success': False, 'error': 'message不能为空'}), 400
 
@@ -1553,6 +1688,7 @@ def api_ai_task_chat():
             current_plan=current_plan if isinstance(current_plan, dict) else {},
             history=history if isinstance(history, list) else [],
             model=selected_model,
+            probe_page=probe_page,
         )
     except ValueError as e:
         return jsonify({
@@ -1602,23 +1738,7 @@ def api_ai_append_steps_to_case():
 
     created_steps = 0
     for idx, step in enumerate(clean_steps, start=1):
-        db.create_test_step(
-            case_id=case_id,
-            action=(step.get('action') or '').strip(),
-            selector_type=(step.get('selector_type') or '').strip(),
-            selector_value=(step.get('selector_value') or '').strip(),
-            input_value=(step.get('input_value') or '').strip(),
-            description=(step.get('description') or '').strip(),
-            step_order=max_order + idx,
-            page_name='',
-            swipe_x='',
-            swipe_y='',
-            url='',
-            enter_iframe=False,
-            iframe_selector='',
-            compare_type='equals',
-            locator_candidates='',
-        )
+        db.create_test_step(**_ai_step_to_db_kwargs(step, case_id, max_order + idx))
         created_steps += 1
 
     return jsonify({

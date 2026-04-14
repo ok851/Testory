@@ -8222,8 +8222,13 @@ class PlaywrightAutomation:
                     exec_step["key"] = step["input_value"]
                 elif step["action"] == "wait":
                     try:
-                        # 修复：将秒转换为毫秒，确保等待时间正确
-                        exec_step["time"] = int(step["input_value"]) * 1000
+                        raw_w = (step.get("input_value") or "1").strip()
+                        iv = int(float(raw_w)) if raw_w else 1
+                        # 兼容：1–120 视为秒；更大整数视为毫秒（如 AI 常写的 1500）
+                        if iv <= 120:
+                            exec_step["time"] = iv * 1000
+                        else:
+                            exec_step["time"] = max(100, iv)
                     except Exception:
                         exec_step["time"] = 1000  # 默认1秒
                 elif step["action"] == "select":
