@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "model_types": [
+    {
+      "id": "test_case_generation",
+      "name_zh": "测试用例生成",
+      "name_en": "Test case generation"
+    },
+    {
+      "id": "coding",
+      "name_zh": "代码/脚本辅助",
+      "name_en": "Coding / script assist"
+    }
+  ],
+  "providers": [
+    {
+      "id": "ollama",
+      "region": "local",
+      "name_zh": "Ollama（本地）",
+      "name_en": "Ollama (local)",
+      "api_style": "ollama",
+      "requires_api_key": false,
+      "default_base_url": "http://127.0.0.1:11434",
+      "docs_url": "https://ollama.com",
+      "popular_models": ["llama3.2", "llama3.1:8b", "qwen2.5", "qwen2.5-coder", "deepseek-r1", "mistral", "phi4"]
+    },
+    {
+      "id": "openai",
+      "region": "intl",
+      "name_zh": "OpenAI",
+      "name_en": "OpenAI",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.openai.com/v1",
+      "docs_url": "https://platform.openai.com/docs",
+      "popular_models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1-mini", "o3-mini"]
+    },
+    {
+      "id": "azure_openai",
+      "region": "intl",
+      "name_zh": "Azure OpenAI",
+      "name_en": "Azure OpenAI",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "",
+      "docs_url": "https://learn.microsoft.com/azure/ai-services/openai/",
+      "popular_models": ["请在 Azure 门户查看部署名称"],
+      "notes_zh": "base_url 填资源端点 + /openai/deployments/部署名，模型 ID 与部署名一致"
+    },
+    {
+      "id": "anthropic",
+      "region": "intl",
+      "name_zh": "Anthropic Claude",
+      "name_en": "Anthropic Claude",
+      "api_style": "anthropic_messages",
+      "requires_api_key": true,
+      "default_base_url": "https://api.anthropic.com",
+      "docs_url": "https://docs.anthropic.com",
+      "popular_models": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"]
+    },
+    {
+      "id": "google_gemini",
+      "region": "intl",
+      "name_zh": "Google Gemini",
+      "name_en": "Google Gemini",
+      "api_style": "google_gemini",
+      "requires_api_key": true,
+      "default_base_url": "https://generativelanguage.googleapis.com",
+      "docs_url": "https://ai.google.dev/gemini-api/docs",
+      "popular_models": ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+    },
+    {
+      "id": "groq",
+      "region": "intl",
+      "name_zh": "Groq",
+      "name_en": "Groq",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.groq.com/openai/v1",
+      "docs_url": "https://console.groq.com/docs",
+      "popular_models": ["llama-3.3-70b-versatile", "mixtral-8x7b-32768", "gemma2-9b-it"]
+    },
+    {
+      "id": "mistral",
+      "region": "intl",
+      "name_zh": "Mistral AI",
+      "name_en": "Mistral AI",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.mistral.ai/v1",
+      "docs_url": "https://docs.mistral.ai",
+      "popular_models": ["mistral-large-latest", "mistral-small-latest", "codestral-latest"]
+    },
+    {
+      "id": "alibaba_dashscope",
+      "region": "cn",
+      "name_zh": "阿里云百炼（DashScope）",
+      "name_en": "Alibaba DashScope",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "docs_url": "https://help.aliyun.com/zh/model-studio/",
+      "popular_models": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct", "deepseek-v3"]
+    },
+    {
+      "id": "deepseek",
+      "region": "cn",
+      "name_zh": "DeepSeek",
+      "name_en": "DeepSeek",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.deepseek.com/v1",
+      "docs_url": "https://api-docs.deepseek.com",
+      "popular_models": ["deepseek-chat", "deepseek-reasoner"]
+    },
+    {
+      "id": "moonshot",
+      "region": "cn",
+      "name_zh": "月之暗面 Kimi",
+      "name_en": "Moonshot (Kimi)",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.moonshot.cn/v1",
+      "docs_url": "https://platform.moonshot.cn/docs",
+      "popular_models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-latest"]
+    },
+    {
+      "id": "zhipu",
+      "region": "cn",
+      "name_zh": "智谱 GLM",
+      "name_en": "Zhipu GLM",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "docs_url": "https://open.bigmodel.cn/dev/api",
+      "popular_models": ["glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4v", "glm-z1-flash"]
+    },
+    {
+      "id": "baidu_qianfan",
+      "region": "cn",
+      "name_zh": "百度千帆",
+      "name_en": "Baidu Qianfan",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://qianfan.baidubce.com/v2",
+      "docs_url": "https://cloud.baidu.com/doc/qianfan/s/",
+      "popular_models": ["ernie-4.0-turbo-8k", "ernie-3.5-8k", "deepseek-v3"]
+    },
+    {
+      "id": "tencent_hunyuan",
+      "region": "cn",
+      "name_zh": "腾讯混元",
+      "name_en": "Tencent Hunyuan",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.hunyuan.cloud.tencent.com/v1",
+      "docs_url": "https://cloud.tencent.com/document/product/1729",
+      "popular_models": ["hunyuan-turbo", "hunyuan-standard", "hunyuan-lite"]
+    },
+    {
+      "id": "minimax",
+      "region": "cn",
+      "name_zh": "MiniMax",
+      "name_en": "MiniMax",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.minimax.chat/v1",
+      "docs_url": "https://platform.minimax.io/document",
+      "popular_models": ["MiniMax-Text-01", "abab6.5s-chat"]
+    },
+    {
+      "id": "siliconflow",
+      "region": "cn",
+      "name_zh": "硅基流动 SiliconFlow",
+      "name_en": "SiliconFlow",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.siliconflow.cn/v1",
+      "docs_url": "https://docs.siliconflow.cn",
+      "popular_models": ["Qwen/Qwen2.5-7B-Instruct", "deepseek-ai/DeepSeek-V3", "meta-llama/Llama-3.3-70B-Instruct"]
+    },
+    {
+      "id": "volcengine_doubao",
+      "region": "cn",
+      "name_zh": "火山引擎豆包",
+      "name_en": "Volcengine Doubao",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "docs_url": "https://www.volcengine.com/docs/82379",
+      "popular_models": ["doubao-pro-32k", "doubao-lite-32k", "deepseek-v3-250324"]
+    }
+  ]
+}

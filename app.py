@@ -8,6 +8,7 @@ import time
 import shlex
 import shutil
 import secrets
+import uuid
 import json
 import re
 import functools
@@ -154,7 +155,9 @@ _CLOUD_LLM_ENDPOINT = os.environ.get('CLOUD_LLM_ENDPOINT', '').strip()
 _CLOUD_LLM_API_KEY = os.environ.get('CLOUD_LLM_API_KEY', '').strip()
 _cloud_llm_gateway = None
 _AI_MODEL_CFG_FILE = os.path.join(os.path.dirname(__file__), 'ai_model_registry.json')
+_AI_CATALOG_FILE = os.path.join(os.path.dirname(__file__), 'ai_provider_catalog.json')
 _AI_MODEL_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._:/+\-]{0,199}$')
+_AI_PROFILE_MODEL_ID_RE = re.compile(r'^[^\s]{1,220}$')
 
 
 def _validate_ai_model_name(name: str) -> tuple:
@@ -214,53 +217,157 @@ def _default_ai_model_config() -> dict:
     }
 
 
+def _load_ai_provider_catalog() -> dict:
+    try:
+        with open(_AI_CATALOG_FILE, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _catalog_provider_meta(provider_id: str) -> dict:
+    for p in _load_ai_provider_catalog().get('providers') or []:
+        if isinstance(p, dict) and p.get('id') == provider_id:
+            return p
+    return {}
+
+
+def _migrate_v1_config_to_v2(raw: dict, defaults: dict) -> dict:
+    models = raw.get('local_models')
+    if not isinstance(models, list) or not models:
+        models = list(defaults.get('local_models') or [])
+    clean_models = []
+    for m in models:
+        m = (str(m) if m is not None else '').strip()
+        if m and m not in clean_models:
+            clean_models.append(m)
+    active_name = (raw.get('active_local_model') or '').strip()
+    profiles = []
+    active_id = ''
+    for m in clean_models:
+        pid = str(uuid.uuid4())
+        profiles.append({
+            'id': pid,
+            'provider': 'ollama',
+            'api_style': 'ollama',
+            'model_type': 'test_case_generation',
+            'model_id': m,
+            'label': m,
+            'api_key': '',
+            'base_url': '',
+        })
+        if m == active_name:
+            active_id = pid
+    if not active_id and profiles:
+        active_id = profiles[0]['id']
+    return {'version': 2, 'active_profile_id': active_id, 'profiles': profiles}
+
+
+def _normalize_v2_config(raw: dict) -> dict:
+    profiles_in = raw.get('profiles')
+    if not isinstance(profiles_in, list):
+        profiles_in = []
+    profiles = []
+    seen = set()
+    for p in profiles_in:
+        if not isinstance(p, dict):
+            continue
+        pid = (p.get('id') or '').strip() or str(uuid.uuid4())
+        if pid in seen:
+            continue
+        seen.add(pid)
+        profiles.append({
+            'id': pid,
+            'provider': (p.get('provider') or 'ollama').strip(),
+            'api_style': (p.get('api_style') or 'ollama').strip(),
+            'model_type': (p.get('model_type') or 'test_case_generation').strip(),
+            'model_id': (p.get('model_id') or '').strip(),
+            'label': (p.get('label') or '').strip(),
+            'api_key': p.get('api_key') if isinstance(p.get('api_key'), str) else '',
+            'base_url': (p.get('base_url') or '').strip() if isinstance(p.get('base_url'), str) else '',
+        })
+    aid = (raw.get('active_profile_id') or '').strip()
+    if aid and not any(x.get('id') == aid for x in profiles):
+        aid = profiles[0]['id'] if profiles else ''
+    if not aid and profiles:
+        aid = profiles[0]['id']
+    return {'version': 2, 'active_profile_id': aid, 'profiles': profiles}
+
+
 def _load_ai_model_config() -> dict:
     """
-优先读取 ai_model_registry.json。若文件不存在则返回环境默认列表（首次部署）。
-    注意：文件中 local_models 可以为空列表；必须用文件内容覆盖默认值，
-    否则「删除全部模型」后重启仍会回到 _default_ai_model_config() 的内置列表。
+    读取 ai_model_registry.json。v1 仅含 local_models，将迁移为 v2 profiles。
     """
     with _ai_model_cfg_lock:
         defaults = _default_ai_model_config()
         if not os.path.exists(_AI_MODEL_CFG_FILE):
-            return defaults
+            return _migrate_v1_config_to_v2({}, defaults)
         try:
             with open(_AI_MODEL_CFG_FILE, 'r', encoding='utf-8') as f:
                 raw = json.load(f)
             if not isinstance(raw, dict):
-                return defaults
-            if 'local_models' in raw:
-                models = raw.get('local_models')
-                if models is None:
-                    models = []
-            else:
-                models = list(defaults.get('local_models') or [])
-            if not isinstance(models, list):
-                models = []
-            clean_models = []
-            for m in models:
-                m = (str(m) if m is not None else '').strip()
-                if m and m not in clean_models:
-                    clean_models.append(m)
-            active = (raw.get('active_local_model') or '').strip()
-            if active and active not in clean_models:
-                active = clean_models[0] if clean_models else ''
-            return {
-                'active_local_model': active,
-                'local_models': clean_models,
-            }
+                return _migrate_v1_config_to_v2({}, defaults)
+            if int(raw.get('version') or 0) >= 2 or 'profiles' in raw:
+                return _normalize_v2_config(raw)
+            return _migrate_v1_config_to_v2(raw, defaults)
         except Exception:
-            return defaults
+            return _migrate_v1_config_to_v2({}, defaults)
 
 
 def _save_ai_model_config(cfg: dict) -> None:
     with _ai_model_cfg_lock:
+        if 'profiles' in cfg or int(cfg.get('version') or 0) >= 2:
+            to_write = _normalize_v2_config(cfg)
+            to_write['version'] = 2
+        else:
+            to_write = cfg
         with open(_AI_MODEL_CFG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            json.dump(to_write, f, ensure_ascii=False, indent=2)
+
+
+def _mask_profile_for_api(p: dict) -> dict:
+    if not isinstance(p, dict):
+        return {}
+    key = p.get('api_key')
+    has_key = bool((key or '').strip()) if isinstance(key, str) else False
+    out = {k: v for k, v in p.items() if k != 'api_key'}
+    out['has_api_key'] = has_key
+    return out
+
+
+def _resolve_inference_profile(selected: str) -> tuple:
+    """
+    返回 (profile 或 None, 纯 Ollama 模型名字符串)。
+    选中云端 profile 时 profile 非空；仅本地 Ollama 字符串模式时 profile 为空、第二项为模型名。
+    """
+    cfg = _load_ai_model_config()
+    profiles = cfg.get('profiles') or []
+    sel = (selected or '').strip()
+    if not profiles:
+        return (None, sel or os.environ.get('LOCAL_LLM_MODEL_MID', 'llama3:8b-instruct'))
+    if not sel:
+        sel = (cfg.get('active_profile_id') or '').strip()
+    for p in profiles:
+        if p.get('id') == sel:
+            return (p, '')
+    if sel:
+        for p in profiles:
+            if p.get('provider') == 'ollama' and p.get('model_id') == sel:
+                return (p, '')
+        return (None, sel)
+    return (None, os.environ.get('LOCAL_LLM_MODEL_MID', 'llama3:8b-instruct'))
 
 
 def _get_active_local_model() -> str:
+    """当前默认：优先 active_profile_id，兼容旧版 active_local_model / 环境变量。"""
     cfg = _load_ai_model_config()
+    profiles = cfg.get('profiles') or []
+    if profiles:
+        aid = (cfg.get('active_profile_id') or '').strip()
+        if aid:
+            return aid
+        return profiles[0].get('id') or ''
     return (cfg.get('active_local_model') or '').strip() or os.environ.get('LOCAL_LLM_MODEL_MID', 'llama3:8b-instruct')
 
 
@@ -279,13 +386,26 @@ def _normalize_ai_step(step: dict) -> dict:
     selector_value = _ai_str(step.get('selector_value'))
     input_value = _ai_str(step.get('input_value'))
     description = _ai_str(step.get('description'))
-    return {
+    lc = step.get('locator_candidates')
+    if lc is not None and not isinstance(lc, str):
+        try:
+            lc = json.dumps(lc, ensure_ascii=False)
+        except Exception:
+            lc = ''
+    elif lc is None:
+        lc = ''
+    else:
+        lc = _ai_str(lc)
+    out = {
         'action': action,
         'selector_type': selector_type,
         'selector_value': selector_value,
         'input_value': input_value,
         'description': description,
     }
+    if lc:
+        out['locator_candidates'] = lc
+    return out
 
 
 def _dedupe_and_validate_ai_steps(steps: list) -> tuple:
@@ -320,6 +440,10 @@ def _dedupe_and_validate_ai_steps(steps: list) -> tuple:
     for idx, step in enumerate(clean_steps, start=1):
         if step['action'] in {'click', 'input', 'verify', 'extract_text'} and not step['selector_value']:
             warnings.append(f'第{idx}步缺少 selector_value，运行时可能失败。')
+        if step['action'] == 'input' and not step['input_value']:
+            warnings.append(f'第{idx}步 input 未填写输入值，请在步骤编辑中补充或重新生成。')
+        if step['action'] == 'navigate' and not step['input_value']:
+            warnings.append(f'第{idx}步 navigate 未填写 URL，请在步骤编辑中补充或重新生成。')
         if step['action'] == 'wait':
             try:
                 ms = int(step['input_value'] or '0')
@@ -343,6 +467,16 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         url_col = iv or sv
         st, sv = "", ""
         iv = url_col
+    lc = step.get("locator_candidates")
+    if lc is not None and not isinstance(lc, str):
+        try:
+            lc = json.dumps(lc, ensure_ascii=False)
+        except Exception:
+            lc = ""
+    elif lc is None:
+        lc = ""
+    else:
+        lc = str(lc).strip()
     return {
         "case_id": case_id,
         "action": action,
@@ -358,7 +492,7 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         "enter_iframe": False,
         "iframe_selector": "",
         "compare_type": "equals",
-        "locator_candidates": "",
+        "locator_candidates": lc,
     }
 
 # ==================== Flask-Login 初始化 ====================
@@ -1373,10 +1507,16 @@ def api_analyze_content():
 def api_get_ai_models():
     cfg = _load_ai_model_config()
     ollama_models, ollama_error = local_ai_service.list_installed_models()
+    profiles = [_mask_profile_for_api(p) for p in (cfg.get('profiles') or [])]
+    local_names = [p.get('model_id') for p in (cfg.get('profiles') or []) if p.get('provider') == 'ollama' and p.get('model_id')]
     return jsonify({
         'success': True,
+        'version': cfg.get('version') or 2,
+        'active_profile_id': cfg.get('active_profile_id'),
+        'profiles': profiles,
         'active_local_model': cfg.get('active_local_model'),
-        'local_models': cfg.get('local_models', []),
+        'local_models': local_names or cfg.get('local_models', []),
+        'provider_catalog': _load_ai_provider_catalog(),
         'ollama_base_url': local_ai_service.base_url,
         'ollama_models': ollama_models,
         'ollama_error': ollama_error,
@@ -1397,6 +1537,17 @@ def api_get_ollama_models():
     })
 
 
+def _validate_profile_model_id(mid: str) -> tuple:
+    m = (mid or '').strip()
+    if not m:
+        return False, 'model_id不能为空'
+    if len(m) > 220:
+        return False, 'model_id过长'
+    if not _AI_PROFILE_MODEL_ID_RE.match(m):
+        return False, 'model_id格式无效（勿含空白）'
+    return True, m
+
+
 @app.route('/api/ai/models', methods=['POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
@@ -1404,6 +1555,8 @@ def api_get_ollama_models():
 @log_api_request
 def api_add_ai_model():
     data = request.get_json(silent=True) or {}
+    if (data.get('provider') or '').strip() or (data.get('model_id') or '').strip():
+        return _api_add_ai_profile(data)
     ok, model_name_or_err = _validate_ai_model_name(data.get('model_name') or '')
     if not ok:
         return jsonify({'success': False, 'error': model_name_or_err}), 400
@@ -1424,12 +1577,90 @@ def api_add_ai_model():
                 'ollama_models': installed,
             }), 400
     cfg = _load_ai_model_config()
-    models = cfg.get('local_models', [])
-    if model_name not in models:
-        models.append(model_name)
-    cfg['local_models'] = models
+    profiles = list(cfg.get('profiles') or [])
+    meta = _catalog_provider_meta('ollama')
+    pid = str(uuid.uuid4())
+    profiles.append({
+        'id': pid,
+        'provider': 'ollama',
+        'api_style': meta.get('api_style') or 'ollama',
+        'model_type': 'test_case_generation',
+        'model_id': model_name,
+        'label': model_name,
+        'api_key': '',
+        'base_url': '',
+    })
+    cfg['profiles'] = profiles
+    cfg['version'] = 2
+    cfg['active_profile_id'] = pid
     _save_ai_model_config(cfg)
-    return jsonify({'success': True, 'active_local_model': cfg.get('active_local_model'), 'local_models': models})
+    return jsonify({
+        'success': True,
+        'active_profile_id': cfg.get('active_profile_id'),
+        'profiles': [_mask_profile_for_api(p) for p in profiles],
+    })
+
+
+def _api_add_ai_profile(data: dict):
+    provider = (data.get('provider') or '').strip()
+    if not provider:
+        return jsonify({'success': False, 'error': 'provider不能为空'}), 400
+    cmeta = _catalog_provider_meta(provider)
+    if not cmeta:
+        return jsonify({'success': False, 'error': f'未知提供商: {provider}'}), 400
+    api_style = (data.get('api_style') or cmeta.get('api_style') or '').strip()
+    if not api_style:
+        return jsonify({'success': False, 'error': '无法解析 api_style'}), 400
+    ok, model_id = _validate_profile_model_id(data.get('model_id') or '')
+    if not ok:
+        return jsonify({'success': False, 'error': model_id}), 400
+    model_type = (data.get('model_type') or 'test_case_generation').strip()
+    label = (data.get('label') or '').strip() or model_id
+    api_key = data.get('api_key')
+    api_key = api_key.strip() if isinstance(api_key, str) else ''
+    base_url = (data.get('base_url') or '').strip() if isinstance(data.get('base_url'), str) else ''
+    if not base_url:
+        base_url = (cmeta.get('default_base_url') or '').strip()
+    requires_key = bool(cmeta.get('requires_api_key'))
+    if requires_key and provider != 'ollama' and not api_key:
+        return jsonify({'success': False, 'error': '该提供商需要 API 密钥'}), 400
+    verify_ollama = bool(data.get('verify_ollama'))
+    if provider == 'ollama' and verify_ollama:
+        installed, err = local_ai_service.list_installed_models()
+        if err:
+            return jsonify({
+                'success': False,
+                'error': f'无法校验 Ollama：{err}',
+                'hint': '可关闭「添加前校验」后重试',
+            }), 503
+        if model_id not in installed:
+            return jsonify({
+                'success': False,
+                'error': f'Ollama 中未找到模型「{model_id}」',
+                'ollama_models': installed,
+            }), 400
+    cfg = _load_ai_model_config()
+    profiles = list(cfg.get('profiles') or [])
+    pid = str(uuid.uuid4())
+    profiles.append({
+        'id': pid,
+        'provider': provider,
+        'api_style': api_style,
+        'model_type': model_type,
+        'model_id': model_id,
+        'label': label,
+        'api_key': api_key,
+        'base_url': base_url,
+    })
+    cfg['profiles'] = profiles
+    cfg['version'] = 2
+    cfg['active_profile_id'] = pid
+    _save_ai_model_config(cfg)
+    return jsonify({
+        'success': True,
+        'active_profile_id': cfg.get('active_profile_id'),
+        'profiles': [_mask_profile_for_api(p) for p in profiles],
+    })
 
 
 @app.route('/api/ai/models/active', methods=['PUT'])
@@ -1439,18 +1670,35 @@ def api_add_ai_model():
 @log_api_request
 def api_set_active_ai_model():
     data = request.get_json(silent=True) or {}
+    profile_id = (data.get('profile_id') or '').strip()
+    cfg = _load_ai_model_config()
+    profiles = cfg.get('profiles') or []
+    if profile_id:
+        if not any(p.get('id') == profile_id for p in profiles):
+            return jsonify({'success': False, 'error': '未找到该模型配置'}), 404
+        cfg['active_profile_id'] = profile_id
+        cfg['version'] = 2
+        _save_ai_model_config(cfg)
+        return jsonify({
+            'success': True,
+            'active_profile_id': profile_id,
+            'profiles': [_mask_profile_for_api(p) for p in profiles],
+        })
     ok, model_name_or_err = _validate_ai_model_name(data.get('model_name') or '')
     if not ok:
         return jsonify({'success': False, 'error': model_name_or_err}), 400
     model_name = model_name_or_err
-    cfg = _load_ai_model_config()
-    models = cfg.get('local_models', [])
-    if model_name not in models:
-        models.append(model_name)
-    cfg['local_models'] = models
-    cfg['active_local_model'] = model_name
-    _save_ai_model_config(cfg)
-    return jsonify({'success': True, 'active_local_model': model_name, 'local_models': models})
+    for p in profiles:
+        if p.get('provider') == 'ollama' and p.get('model_id') == model_name:
+            cfg['active_profile_id'] = p.get('id')
+            cfg['version'] = 2
+            _save_ai_model_config(cfg)
+            return jsonify({
+                'success': True,
+                'active_profile_id': cfg.get('active_profile_id'),
+                'profiles': [_mask_profile_for_api(x) for x in profiles],
+            })
+    return jsonify({'success': False, 'error': '请使用 profile_id 或已注册的 Ollama 模型名'}), 400
 
 
 @app.route('/api/ai/models', methods=['DELETE'])
@@ -1460,23 +1708,47 @@ def api_set_active_ai_model():
 @log_api_request
 def api_delete_ai_model():
     data = request.get_json(silent=True) or {}
+    profile_id = (data.get('profile_id') or '').strip()
+    cfg = _load_ai_model_config()
+    profiles = list(cfg.get('profiles') or [])
+    if profile_id:
+        if not any(p.get('id') == profile_id for p in profiles):
+            return jsonify({'success': False, 'error': '未找到该模型配置'}), 404
+        profiles = [p for p in profiles if p.get('id') != profile_id]
+        cfg['profiles'] = profiles
+        cfg['version'] = 2
+        if (cfg.get('active_profile_id') or '').strip() == profile_id:
+            cfg['active_profile_id'] = profiles[0]['id'] if profiles else ''
+        _save_ai_model_config(cfg)
+        return jsonify({
+            'success': True,
+            'active_profile_id': cfg.get('active_profile_id'),
+            'profiles': [_mask_profile_for_api(p) for p in profiles],
+        })
     ok, model_name_or_err = _validate_ai_model_name(data.get('model_name') or '')
     if not ok:
         return jsonify({'success': False, 'error': model_name_or_err}), 400
     model_name = model_name_or_err
-    cfg = _load_ai_model_config()
-    models = list(cfg.get('local_models') or [])
-    if model_name not in models:
+    removed = False
+    new_profiles = []
+    for p in profiles:
+        if p.get('provider') == 'ollama' and p.get('model_id') == model_name:
+            removed = True
+            continue
+        new_profiles.append(p)
+    if not removed:
         return jsonify({'success': False, 'error': '该平台未注册此模型'}), 404
-    models = [m for m in models if m != model_name]
-    cfg['local_models'] = models
-    if (cfg.get('active_local_model') or '').strip() == model_name:
-        cfg['active_local_model'] = models[0] if models else ''
+    cfg['profiles'] = new_profiles
+    cfg['version'] = 2
+    if (cfg.get('active_profile_id') or '').strip() and not any(
+        p.get('id') == cfg.get('active_profile_id') for p in new_profiles
+    ):
+        cfg['active_profile_id'] = new_profiles[0]['id'] if new_profiles else ''
     _save_ai_model_config(cfg)
     return jsonify({
         'success': True,
-        'active_local_model': cfg.get('active_local_model'),
-        'local_models': models,
+        'active_profile_id': cfg.get('active_profile_id'),
+        'profiles': [_mask_profile_for_api(p) for p in new_profiles],
     })
 
 
@@ -1494,6 +1766,8 @@ def api_ai_task_plan():
     project_name = (data.get('project_name') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
     probe_page = bool(data.get('probe_page'))
+    profile, legacy_model = _resolve_inference_profile(selected_model)
+    probe_url_hint = (data.get('target_page_url') or data.get('probe_url_hint') or '').strip()
 
     if not goal:
         return jsonify({'success': False, 'error': 'goal不能为空'}), 400
@@ -1507,7 +1781,12 @@ def api_ai_task_plan():
 
     try:
         generated = local_ai_service.generate_case_and_steps(
-            goal, project_name, model=selected_model, probe_page=probe_page
+            goal,
+            project_name,
+            model=legacy_model,
+            probe_page=probe_page,
+            profile=profile,
+            probe_url_hint=probe_url_hint,
         )
     except ValueError as e:
         return jsonify({
@@ -1585,6 +1864,8 @@ def api_ai_generate_case_and_save():
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
     probe_page = bool(data.get('probe_page'))
     client_plan = data.get('plan')
+    profile, legacy_model = _resolve_inference_profile(selected_model)
+    probe_url_hint = (data.get('target_page_url') or data.get('probe_url_hint') or '').strip()
 
     if not project_id:
         return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
@@ -1624,7 +1905,12 @@ def api_ai_generate_case_and_save():
             return jsonify({'success': False, 'error': 'goal不能为空'}), 400
         try:
             generated = local_ai_service.generate_case_and_steps(
-                goal, project_name, model=selected_model, probe_page=probe_page
+                goal,
+                project_name,
+                model=legacy_model,
+                probe_page=probe_page,
+                profile=profile,
+                probe_url_hint=probe_url_hint,
             )
         except ValueError as e:
             return jsonify({
@@ -1632,6 +1918,12 @@ def api_ai_generate_case_and_save():
                 'error': str(e),
                 'hint': '可先执行: ollama serve，并确认模型已拉取。'
             }), 503
+    local_ai_service._fill_missing_step_payloads(
+        generated.get('steps') or [],
+        goal or '',
+        _ai_str(generated.get('case_url')),
+        None,
+    )
     clean_steps, warnings = _dedupe_and_validate_ai_steps(generated.get('steps') or [])
     generated['steps'] = clean_steps
     generated['warnings'] = warnings
@@ -1674,6 +1966,8 @@ def api_ai_task_chat():
     history = data.get('history') or []
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
     probe_page = bool(data.get('probe_page'))
+    profile, legacy_model = _resolve_inference_profile(selected_model)
+    probe_url_hint = (data.get('target_page_url') or data.get('probe_url_hint') or '').strip()
     if not message:
         return jsonify({'success': False, 'error': 'message不能为空'}), 400
 
@@ -1687,8 +1981,10 @@ def api_ai_task_chat():
             project_name=project_name,
             current_plan=current_plan if isinstance(current_plan, dict) else {},
             history=history if isinstance(history, list) else [],
-            model=selected_model,
+            model=legacy_model,
             probe_page=probe_page,
+            profile=profile,
+            probe_url_hint=probe_url_hint,
         )
     except ValueError as e:
         return jsonify({
@@ -1734,6 +2030,13 @@ def api_ai_append_steps_to_case():
     if old_steps:
         max_order = max([int(s.get('step_order') or 0) for s in old_steps] or [0])
 
+    goal_hint = _ai_str(data.get('goal')) or _ai_str(case.get('name')) or _ai_str(case.get('description'))
+    local_ai_service._fill_missing_step_payloads(
+        steps,
+        goal_hint,
+        _ai_str(case.get('url')),
+        None,
+    )
     clean_steps, warnings = _dedupe_and_validate_ai_steps(steps)
 
     created_steps = 0
@@ -2331,7 +2634,10 @@ def _run_assert_automation_step(
     try:
         if assert_type in ['text_equals', 'text_contains', 'text_regex']:
             actual_text = sync_extract_element_text(
-                selector_value, selector_type, iframe_selector=iframe_sel
+                selector_value,
+                selector_type,
+                iframe_selector=iframe_sel,
+                locator_candidates=step.get('locator_candidates') or None,
             )
             if assert_type == 'text_equals':
                 if actual_text != expected_value:
@@ -2425,6 +2731,7 @@ def _run_extract_text_automation_step(
     description: str,
     selector_type: str,
     iframe_sel,
+    locator_candidates=None,
 ):
     """extract_text / text_compare 与单用例运行一致。返回 (extracted_text, expected_text)。"""
     current_expected = input_value or description
@@ -2435,7 +2742,10 @@ def _run_extract_text_automation_step(
     if selector_value:
         try:
             current_extracted = sync_extract_element_text(
-                selector_value, selector_type, iframe_selector=iframe_sel
+                selector_value,
+                selector_type,
+                iframe_selector=iframe_sel,
+                locator_candidates=locator_candidates,
             )
             uat_logger.info(f"提取到文本: {current_extracted[:100]}...")
             extracted_text = current_extracted
@@ -3134,7 +3444,13 @@ def api_run_case(case_id):
                     # 验证操作处理
                     verify_type = input_value if input_value else 'auto'
                     try:
-                        sync_verify_element(selector=selector_value, verify_type=verify_type, selector_type=selector_type, iframe_selector=iframe_for_step)
+                        sync_verify_element(
+                            selector=selector_value,
+                            verify_type=verify_type,
+                            selector_type=selector_type,
+                            iframe_selector=iframe_for_step,
+                            locator_candidates=locator_candidates,
+                        )
                         # 验证后等待页面响应
                         sync_wait_for_timeout(1500)
                     except Exception as verify_error:
@@ -3150,6 +3466,7 @@ def api_run_case(case_id):
                         description,
                         selector_type,
                         iframe_for_step,
+                        locator_candidates=locator_candidates,
                     )
                 elif action == 'extract_json':
                     if selector_value:
@@ -4300,6 +4617,7 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 verify_type=verify_type,
                                 selector_type=selector_type,
                                 iframe_selector=iframe_sel,
+                                locator_candidates=step.get('locator_candidates') or None,
                             )
                             sync_wait_for_timeout(1500)
                         elif action == 'extract_text' or action == 'text_compare':
@@ -4311,6 +4629,7 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 description,
                                 selector_type,
                                 iframe_sel,
+                                locator_candidates=step.get('locator_candidates') or None,
                             )
                         elif action == 'extract_json':
                             if selector_value:

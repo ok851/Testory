@@ -4433,7 +4433,16 @@ class PlaywrightAutomation:
             print(f"获取页面文本时出错: {e}")
             return ""
     
-    async def extract_element_text(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None) -> str:
+    async def extract_element_text(
+        self,
+        selector: str,
+        selector_type: str = "css",
+        iframe_selector: str = None,
+        iframe_context=None,
+        page=None,
+        locator_candidates=None,
+        _no_fallback: bool = False,
+    ) -> str:
         """提取特定元素的文本，支持多种定位方式。page: 可选，指定在哪个标签页执行（多标签并行时使用）
         Parameters:
             selector: Locator string
@@ -4445,12 +4454,31 @@ class PlaywrightAutomation:
                 - testid: Test ID (data-testid attribute value)
             iframe_selector: iframe selector (optional)
             iframe_context: iframe context (optional)
+            locator_candidates: 与 click/input 相同，主定位失败时按 score 尝试备选。
         """
         target_page = page if page is not None else self.page
         if target_page is None:
             raise Exception("Browser not started")
         
         uat_logger.info(f"📝 [TEXT_EXTRACT_DEBUG] Start extracting text, selector: {selector}, selector_type: {selector_type}")
+        
+        if locator_candidates and not _no_fallback:
+            attempts = [(selector, selector_type)] + list(
+                _fallback_locator_tuples(selector, selector_type, locator_candidates)
+            )
+            last_exc = None
+            for esel, etype in attempts:
+                try:
+                    return await self.extract_element_text(
+                        esel, etype, iframe_selector, iframe_context, page, None, True
+                    )
+                except Exception as e:
+                    last_exc = e
+                    uat_logger.warning(
+                        f"⚠️ [TEXT_EXTRACT_FALLBACK] 失败 ({etype}={str(esel)[:120]}): {e}"
+                    )
+            if last_exc:
+                raise last_exc
         
         try:
             element = None
@@ -5541,11 +5569,74 @@ class PlaywrightAutomation:
         uat_logger.info(f"✅ 滑动元素成功: {selector}, 方向: {direction}, 距离: {distance}px")
         
     
-    async def verify_element(self, selector: str = None, verify_type: str = "visible", selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None):
+    async def _verify_element_state_attempt(
+        self,
+        target_page,
+        target_context,
+        selector: str,
+        selector_type: str,
+        wait_state: str,
+    ) -> None:
+        """单组 selector 的可见/存在类校验（与 click 的 selector 转换规则对齐）。"""
+        original_selector_type = selector_type
+        raw_partial_text = None
+        if selector_type in [
+            "id",
+            "class",
+            "name",
+            "text",
+            "partial_text",
+            "placeholder",
+            "label",
+            "title",
+            "alt",
+            "data",
+            "aria",
+        ]:
+            if selector_type == "label":
+                selector, selector_type = await self.find_element_by_label(selector, target_page)
+                if selector is None:
+                    raise Exception(f"未找到与label关联的元素: {original_selector_type}={selector}")
+            else:
+                if selector_type == "partial_text":
+                    raw_partial_text = (selector or "").strip() or None
+                selector, selector_type = self.convert_selector(selector, selector_type)
+            uat_logger.info(
+                f"🔍 [VERIFY_CONVERT] {original_selector_type} -> {selector_type}, 值: {selector}"
+            )
+        if selector_type == "xpath" and selector:
+            selector = _normalize_xpath_selector_value(selector)
+        if raw_partial_text and hasattr(target_context, "get_by_text"):
+            pw_loc = target_context.get_by_text(raw_partial_text, exact=False)
+            if await pw_loc.count() == 0:
+                raise Exception(f"partial_text 无匹配: {raw_partial_text!r}")
+            await pw_loc.first.wait_for(state=wait_state, timeout=10000)
+            return
+        full_selector = selector
+        if selector_type == "xpath":
+            full_selector = f"xpath={selector}"
+        if hasattr(target_context, "wait_for_selector"):
+            await target_context.wait_for_selector(full_selector, state=wait_state, timeout=10000)
+            target_context.locator(full_selector)
+        else:
+            element = target_context.locator(full_selector)
+            await element.wait_for(state=wait_state, timeout=10000)
+
+    async def verify_element(
+        self,
+        selector: str = None,
+        verify_type: str = "visible",
+        selector_type: str = "css",
+        iframe_selector: str = None,
+        iframe_context=None,
+        page=None,
+        locator_candidates=None,
+    ):
         """验证元素。用于处理人机验证弹窗等场景。page: 可选，指定在哪个标签页执行（多标签并行时使用）
         
         如果没有提供selector，则自动识别并处理验证弹窗
         verify_type 可以是 'visible', 'exist', 'clickable' 或验证码类型: 'auto', 'slider', 'image'
+        locator_candidates: 与 click/input 相同，主定位失败时按 score 尝试备选。
         """
         target_page = page if page is not None else self.page
         if target_page is None:
@@ -5775,11 +5866,6 @@ class PlaywrightAutomation:
         
         uat_logger.info(f"🔍 [VERIFY_DEBUG] 开始验证元素,选择器: {selector}, 验证类型: {verify_type}, 选择器类型: {selector_type}, iframe选择器: {iframe_selector}")
         
-        # 构建完整的选择器
-        full_selector = selector
-        if selector_type == "xpath":
-            full_selector = f"xpath={selector}"
-        
         # 确定操作上下文
         target_context = target_page
         if iframe_context:
@@ -5788,25 +5874,31 @@ class PlaywrightAutomation:
             uat_logger.info(f"🔄 [IFRAME_DEBUG] 使用iframe上下文,选择器: {iframe_selector}")
             target_context = target_page.frame_locator(iframe_selector)
         
-        # 等待元素满足验证条件
-        # 确保只使用有效的 state 值
         valid_states = ['attached', 'detached', 'visible', 'hidden']
         wait_state = verify_type if verify_type in valid_states else 'visible'
         
-        if hasattr(target_context, 'wait_for_selector'):
-            # 对于page对象
-            await target_context.wait_for_selector(full_selector, state=wait_state, timeout=10000)
-            element = target_context.locator(full_selector)
-        else:
-            # 对于frame_locator对象
-            element = target_context.locator(full_selector)
-            await element.wait_for(state=wait_state, timeout=10000)
-        
-        # 执行基本的验证操作（这里可以根据需要扩展更复杂的验证逻辑）
-        # 例如：点击验证按钮、输入验证码等
-        
-        # 记录验证成功
-        uat_logger.info(f"✅ 验证元素成功: {selector}, 验证类型: {verify_type}")
+        attempts = [(selector, selector_type)]
+        if locator_candidates:
+            attempts.extend(
+                _fallback_locator_tuples(selector, selector_type, locator_candidates)
+            )
+        last_exc = None
+        for attempt_sel, attempt_type in attempts:
+            try:
+                await self._verify_element_state_attempt(
+                    target_page, target_context, attempt_sel, attempt_type, wait_state
+                )
+                uat_logger.info(
+                    f"✅ 验证元素成功: {attempt_sel!s}, 类型: {attempt_type}, 验证: {verify_type}"
+                )
+                return
+            except Exception as _ve:
+                last_exc = _ve
+                uat_logger.warning(
+                    f"⚠️ [VERIFY_FALLBACK] 失败 ({attempt_type}={str(attempt_sel)[:120]}): {_ve}"
+                )
+        if last_exc:
+            raise last_exc
         
     
     async def _auto_handle_verification_popup(self, page, verify_type='auto'):
@@ -10016,9 +10108,19 @@ def sync_get_page_text():
         return await automation.get_page_text()
     return worker.execute(run)
 
-def sync_extract_element_text(selector: str, selector_type: str = "css", iframe_selector: str = None):
+def sync_extract_element_text(
+    selector: str,
+    selector_type: str = "css",
+    iframe_selector: str = None,
+    locator_candidates=None,
+):
     async def run():
-        return await automation.extract_element_text(selector, selector_type, iframe_selector=iframe_selector)
+        return await automation.extract_element_text(
+            selector,
+            selector_type,
+            iframe_selector=iframe_selector,
+            locator_candidates=locator_candidates,
+        )
     return worker.execute(run)
 
 def sync_extract_element_json(selector: str, selector_type: str = "css"):
@@ -10088,9 +10190,21 @@ def sync_swipe_element(selector: str, direction: str, distance: int = 100, selec
         return await automation.swipe_element(selector, direction, distance, selector_type, iframe_selector=iframe_selector)
     return worker.execute(run)
 
-def sync_verify_element(selector: str = None, verify_type: str = "visible", selector_type: str = "css", iframe_selector: str = None):
+def sync_verify_element(
+    selector: str = None,
+    verify_type: str = "visible",
+    selector_type: str = "css",
+    iframe_selector: str = None,
+    locator_candidates=None,
+):
     async def run():
-        return await automation.verify_element(selector, verify_type, selector_type, iframe_selector=iframe_selector)
+        return await automation.verify_element(
+            selector,
+            verify_type,
+            selector_type,
+            iframe_selector=iframe_selector,
+            locator_candidates=locator_candidates,
+        )
     return worker.execute(run)
 
 def sync_get_page_elements():

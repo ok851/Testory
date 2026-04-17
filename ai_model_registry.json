@@ -1,6 +1,16 @@
 {
-  "active_local_model": "",
-  "local_models": [
-    "qwen2:7b"
+  "version": 2,
+  "active_profile_id": "a1b2c3d4-e5f6-47a8-9abc-def012345678",
+  "profiles": [
+    {
+      "id": "a1b2c3d4-e5f6-47a8-9abc-def012345678",
+      "provider": "ollama",
+      "api_style": "ollama",
+      "model_type": "test_case_generation",
+      "model_id": "qwen2:7b",
+      "label": "qwen2:7b",
+      "api_key": "",
+      "base_url": ""
+    }
   ]
 }
