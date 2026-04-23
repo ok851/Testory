@@ -9,8 +9,6 @@ from requests.exceptions import RequestException
 from ai_page_probe import (
     build_locator_candidates_from_probe_entry,
     extract_http_urls,
-    fetch_page_controls_bundle,
-    pick_probe_url,
     validate_plan_locators,
 )
 
@@ -282,28 +280,11 @@ class LocalAIService:
         goal: str,
         project_name: str = "",
         model: str = "",
-        probe_page: bool = False,
         profile: Optional[Dict[str, Any]] = None,
-        probe_url_hint: str = "",
     ) -> Dict[str, Any]:
-        probe_note = ""
         page_snapshot = ""
         probe_registry: List[Dict[str, Any]] = []
         probe_url: Optional[str] = None
-        if probe_page:
-            hint = _norm_str(probe_url_hint)
-            probe_url = pick_probe_url(
-                goal,
-                "",
-                None,
-                extra_hints=[hint] if hint else None,
-            )
-            if probe_url:
-                page_snapshot, perr, probe_registry = fetch_page_controls_bundle(probe_url)
-                if perr:
-                    probe_note = perr
-            else:
-                probe_note = "未在描述中找到 http(s) URL，已跳过页面探测（请在目标中写明完整网址）"
         prompt = self._build_prompt(goal, project_name, page_snapshot=page_snapshot)
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
@@ -319,10 +300,6 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        if probe_note:
-            meta["probe_note"] = probe_note
-        if page_snapshot:
-            meta["probe_used"] = True
         self._attach_locator_validation(meta, probe_url, out.get("steps") or [])
         return out
 
@@ -333,30 +310,11 @@ class LocalAIService:
         current_plan: Dict[str, Any] = None,
         history: List[Dict[str, str]] = None,
         model: str = "",
-        probe_page: bool = False,
         profile: Optional[Dict[str, Any]] = None,
-        probe_url_hint: str = "",
     ) -> Dict[str, Any]:
         page_snapshot = ""
-        probe_note = ""
         probe_registry: List[Dict[str, Any]] = []
         probe_url: Optional[str] = None
-        if probe_page:
-            plan = current_plan if isinstance(current_plan, dict) else {}
-            cu = _norm_str(plan.get("case_url") or plan.get("caseUrl"))
-            hint = _norm_str(probe_url_hint)
-            probe_url = pick_probe_url(
-                user_message,
-                cu,
-                plan,
-                extra_hints=[hint] if hint else None,
-            )
-            if probe_url:
-                page_snapshot, perr, probe_registry = fetch_page_controls_bundle(probe_url)
-                if perr:
-                    probe_note = perr
-            else:
-                probe_note = "未找到可探测的 URL（请在指令或当前用例中提供 http(s) 地址）"
         prompt = self._build_refine_prompt(
             user_message=user_message,
             project_name=project_name,
@@ -378,10 +336,6 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        if probe_note:
-            meta["probe_note"] = probe_note
-        if page_snapshot:
-            meta["probe_used"] = True
         self._attach_locator_validation(meta, probe_url, out.get("steps") or [])
         return out
 

@@ -10,7 +10,7 @@
         box-sizing: border-box;
     }
     .ai-test-shell {
-        max-width: 1180px;
+        max-width: 1600px;
         margin: 0 auto;
         border-radius: 20px;
         overflow: hidden;
@@ -18,7 +18,8 @@
         background: #fff;
         display: flex;
         flex-direction: column;
-        min-height: min(calc(100vh - 120px), 920px);
+        /* 不再用 min(vh,1100) 限高，否则大屏下整页和内置区被压扁 */
+        min-height: calc(100vh - 64px);
     }
     /* 顶栏 */
     .ai-test-topbar {
@@ -107,18 +108,244 @@
     .ai-test-context select:focus,
     .ai-test-context input:focus { border-color: #6366f1; outline: none; box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
 
-    /* 主区双栏 */
+    /* 主区：上 AI，下为大画幅浏览器；用例预览在浏览器下方全宽 */
     .ai-gen-modal__body {
-        flex: 1 1 auto; min-height: 0; overflow-y: auto;
-        padding: 22px 26px 20px;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 18px 26px 20px;
         background: #f1f5f9;
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 20px;
-        align-content: start;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
     }
-    @media (max-width: 960px) {
-        .ai-gen-modal__body { grid-template-columns: 1fr; }
+    .ai-stack-ai { flex-shrink: 0; min-width: 0; }
+    .ai-stack-browser {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+        min-height: 55vh;
+        width: 100%;
+    }
+    .ai-preview-section { flex-shrink: 0; width: 100%; margin-top: 4px; }
+    .ai-inspect-pre {
+        margin: 0; max-height: 220px; overflow: auto;
+        font-size: 11px; line-height: 1.45; padding: 10px 12px;
+        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;
+        white-space: pre-wrap; word-break: break-word;
+        font-family: ui-monospace, monospace; color: #334155;
+    }
+    html.dark .ai-inspect-pre { background: #0f172a; border-color: #334155; color: #cbd5e1; }
+    .ai-browser-panel {
+        background: #fff; border-radius: 14px; border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+    .ai-browser-panel.ai-browser-panel--fullscreen {
+        position: fixed;
+        z-index: 10045;
+        left: 0; top: 0; right: 0; bottom: 0;
+        width: 100vw;
+        max-width: none;
+        min-height: 100vh;
+        border-radius: 0;
+        margin: 0;
+        box-shadow: none;
+    }
+    .ai-browser-panel.ai-browser-panel--fullscreen .ai-browser-viewport {
+        min-height: 0;
+        flex: 1 1 auto;
+        /* 全屏时内嵌区占满大部分视口，避免「分辨率」过小 */
+        height: calc(100vh - 200px);
+        max-height: none;
+    }
+    .ai-browser-stage {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+    .ai-browser-viewport-col {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    /* 与 iframe 并排右侧停靠，不盖在页面上方（因跨域无法把条真正画进被嵌网页 DOM，此为并列布局的等价体验） */
+    .ai-browser-tools--dock {
+        position: relative;
+        flex: 0 0 300px;
+        width: 300px;
+        max-width: 40vw;
+        z-index: 1;
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        box-shadow: none;
+        border-left: 1px solid #e2e8f0;
+        background: #f8fafc;
+        min-height: 0;
+    }
+    html.dark .ai-browser-tools--dock { background: #0f172a; border-color: #334155; }
+    .ai-browser-tools--dock.is-collapsed {
+        flex: 0 0 40px;
+        width: 40px;
+        max-width: none;
+    }
+    .ai-browser-tools--dock.is-collapsed .ai-browser-tools-inner { display: none; }
+    .ai-browser-tools-collapse {
+        width: 40px; flex-shrink: 0; border: none; border-right: 1px solid #e2e8f0;
+        background: #eef2ff; color: #4338ca; font-size: 18px; font-weight: 700; cursor: pointer;
+        line-height: 1; padding: 0;
+    }
+    .ai-browser-tools-collapse:hover { background: #e0e7ff; }
+    html.dark .ai-browser-tools-collapse { background: #1e293b; border-color: #334155; color: #a5b4fc; }
+    .ai-browser-tools-inner {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+    .ai-browser-tools-inner .ai-browser-tool-tabs {
+        display: flex;
+        border-bottom: 1px solid #e2e8f0;
+        flex-shrink: 0;
+    }
+    html.dark .ai-browser-tool-tabs { border-color: #334155; }
+    .ai-browser-tool-tab {
+        flex: 1;
+        padding: 10px 6px;
+        font-size: 12px;
+        font-weight: 600;
+        border: none;
+        background: transparent;
+        color: #64748b;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+    }
+    .ai-browser-tool-tab:hover { color: #4338ca; background: rgba(99,102,241,0.06); }
+    .ai-browser-tool-tab.is-active {
+        color: #4f46e5;
+        border-bottom-color: #4f46e5;
+        background: #fff;
+    }
+    html.dark .ai-browser-tool-tab.is-active { background: #1e293b; color: #a5b4fc; border-bottom-color: #6366f1; }
+    .ai-browser-tool-panel {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 12px;
+        font-size: 12px;
+        color: #334155;
+    }
+    html.dark .ai-browser-tool-panel { color: #e2e8f0; }
+    .ai-browser-tool-panel[hidden] { display: none !important; }
+    .ai-browser-viewport-hint {
+        font-size: 11px;
+        color: #64748b;
+        padding: 6px 10px;
+        background: #f1f5f9;
+        border-top: 1px solid #e2e8f0;
+    }
+    html.dark .ai-browser-viewport-hint { background: #1e293b; border-color: #334155; color: #94a3b8; }
+    .ai-browser-viewport.ai--nav-mode { cursor: default; }
+    .ai-browser-panel__head {
+        padding: 12px 14px; font-size: 13px; font-weight: 700; color: #334155;
+        border-bottom: 1px solid #f1f5f9; background: #fafafa;
+        display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    }
+    .ai-browser-panel__head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ai-browser-panel__head-actions .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .ai-browser-chrome {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+        padding: 10px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+    }
+    .ai-browser-chrome__nav {
+        display: flex; gap: 6px; flex-shrink: 0;
+    }
+    .ai-browser-chrome__nav button {
+        width: 36px; height: 36px; border-radius: 10px; border: 1px solid #cbd5e1;
+        background: #fff; color: #475569; cursor: pointer; font-size: 15px;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.15s, border-color 0.15s;
+    }
+    .ai-browser-chrome__nav button:hover { background: #eef2ff; border-color: #a5b4fc; color: #4338ca; }
+    .ai-browser-chrome__url {
+        flex: 1; min-width: 140px; display: flex; gap: 8px; align-items: stretch;
+    }
+    .ai-browser-chrome__url input {
+        flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px;
+        border: 1px solid #cbd5e1; font-size: 13px; background: #fff; box-sizing: border-box;
+    }
+    .ai-browser-chrome__url input:focus { border-color: #6366f1; outline: none; box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
+    .ai-browser-chrome__go {
+        padding: 8px 14px; border: none; border-radius: 10px; background: #4f46e5; color: #fff;
+        font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .ai-browser-chrome__go:hover { filter: brightness(1.06); }
+    .ai-browser-chrome__go:disabled { opacity: 0.6; cursor: not-allowed; }
+    .ai-browser-viewport {
+        position: relative;
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        flex: 1 1 auto;
+        min-height: 0;
+        min-height: max(58vh, 520px, calc(100vh - 360px));
+        max-height: none;
+        background: #0f172a;
+        overflow: hidden;
+    }
+    .ai-browser-embed-col {
+        position: relative;
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 100%;
+        align-self: stretch;
+    }
+    .ai-browser-embed {
+        position: absolute;
+        left: 0; top: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        z-index: 2;
+        background: #fff;
+    }
+    .ai-browser-placeholder {
+        position: relative;
+        z-index: 3;
+        height: 100%;
+        min-height: 120px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #94a3b8; font-size: 13px; text-align: center; padding: 32px 20px; line-height: 1.6;
+        max-width: 100%;
+        box-sizing: border-box;
+        pointer-events: none;
+    }
+    .ai-browser-placeholder.is-hidden { display: none; }
+    .ai-browser-toolbar {
+        display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+        padding: 8px 12px; background: #fff; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;
+    }
+    .ai-browser-toolbar label { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+    .ai-browser-meta {
+        font-size: 12px; color: #64748b; line-height: 1.45;
+        flex: 1; min-width: 0;
+        overflow: hidden; text-overflow: ellipsis;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+        white-space: normal;
     }
     .ai-card {
         background: #fff; border-radius: 14px; border: 1px solid #e2e8f0;
@@ -272,6 +499,12 @@
     html.dark .ai-test-context select,
     html.dark .ai-test-context input { background: #111827; border-color: #475569; color: #e5e7eb; }
     html.dark .ai-gen-modal__body { background: #020617; }
+    html.dark .ai-browser-panel { background: #1e293b; border-color: #334155; }
+    html.dark .ai-browser-panel__head { background: #1a2537; border-color: #334155; color: #e2e8f0; }
+    html.dark .ai-browser-chrome { background: #0f172a; border-color: #334155; }
+    html.dark .ai-browser-chrome__nav button { background: #1e293b; border-color: #475569; color: #cbd5e1; }
+    html.dark .ai-browser-chrome__url input { background: #111827; border-color: #475569; color: #e5e7eb; }
+    html.dark .ai-browser-toolbar { background: #1e293b; border-color: #334155; }
     html.dark .ai-card { background: #1e293b; border-color: #334155; }
     html.dark .ai-card__title { background: #1a2537; border-color: #334155; color: #e2e8f0; }
     html.dark .ai-chat-log { background: #0f172a; border-color: #334155; }
@@ -358,7 +591,7 @@
                 <a href="/list_projects" class="ai-test-back" title="返回项目" data-i18n-title="aitest_back_projects">←</a>
                 <div class="ai-test-topbar__titles">
                     <h3 data-i18n="aitest_title">AI 测试工作台</h3>
-                    <p data-i18n="aitest_subtitle">本地 Ollama 推理 + Playwright 无头抓取真实 DOM；数据不出本机。</p>
+                    <p data-i18n="aitest_subtitle">上方描述场景并生成用例；中间为大画幅内置浏览器，用例预览在浏览器下方。请先打开页面再生成，便于步骤贴合真实页。</p>
                 </div>
             </div>
             <div class="ai-test-topbar__right">
@@ -376,9 +609,11 @@
             <span class="ai-workflow-bar__label" data-i18n="aitest_workflow_caption">建议流程</span>
             <span class="ai-workflow-step"><span class="num">1</span><span data-i18n="aitest_step1_short">选项目与 URL</span></span>
             <span class="ai-workflow-arrow">→</span>
-            <span class="ai-workflow-step"><span class="num">2</span><span data-i18n="aitest_step2_short">描述并生成</span></span>
+            <span class="ai-workflow-step"><span class="num">2</span><span>打开内置页</span></span>
             <span class="ai-workflow-arrow">→</span>
-            <span class="ai-workflow-step"><span class="num">3</span><span data-i18n="aitest_step3_short">预览后保存</span></span>
+            <span class="ai-workflow-step"><span class="num">3</span><span data-i18n="aitest_step2_short">描述并生成</span></span>
+            <span class="ai-workflow-arrow">→</span>
+            <span class="ai-workflow-step"><span class="num">4</span><span data-i18n="aitest_step3_short">预览后保存</span></span>
         </div>
 
         <section class="ai-test-context" aria-label="context">
@@ -389,13 +624,14 @@
                     <select id="aiProjectSelect"></select>
                 </div>
                 <div>
-                    <label for="aiTargetUrlInput" data-i18n="aitest_label_url">目标页面 URL（无头探测）</label>
+                    <label for="aiTargetUrlInput" data-i18n="aitest_label_url">目标页面 URL（与下方「打开」共用）</label>
                     <input type="url" id="aiTargetUrlInput" placeholder="https://example.com" data-i18n-placeholder="aitest_ph_url" autocomplete="url">
                 </div>
             </div>
         </section>
 
         <div class="ai-gen-modal__body">
+            <div class="ai-stack-ai">
             <div class="ai-card">
                 <div class="ai-card__title"><span class="ai-card__step">1</span><span data-i18n="aitest_col_left_title">描述场景并生成</span></div>
                 <div class="ai-card__content">
@@ -408,7 +644,7 @@
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiContinueBtn" onclick="aiContinueRefine()" data-i18n="aitest_btn_refine">发送优化</button>
                         </div>
                     </div>
-                    <p class="ai-hint-inline" data-i18n="aitest_hint_flow_short">填写上方 URL 与场景后点「生成预览」。模型与无头探测等选项在右上角设置中配置。</p>
+                    <p class="ai-hint-inline" data-i18n="aitest_hint_flow_short">填写上方 URL 与场景后点「生成预览」。模型在右上角设置中配置。建议先在下栏打开目标页，再生成。</p>
                     <ul class="ai-actions-help" aria-label="actions help">
                         <li><strong data-i18n="aitest_btn_preview">生成预览</strong> — <span data-i18n="aitest_act_preview_expl">根据 URL 与场景生成步骤，仅更新预览，不写库。</span></li>
                         <li><strong data-i18n="aitest_btn_refine">发送优化</strong> — <span data-i18n="aitest_act_refine_expl">在已有预览上，仅按输入框内补充说明再生成（需先有预览）。</span></li>
@@ -416,16 +652,89 @@
                     </ul>
                 </div>
             </div>
+            </div>
+
+            <div class="ai-stack-browser">
+            <div class="ai-browser-panel" aria-label="内置浏览器">
+                <div class="ai-browser-panel__head">
+                    <span>内置浏览器 <span style="font-weight:500;opacity:.85;font-size:12px;">(本区域为 <strong>内嵌真实页面</strong>；部分站禁止嵌入或会长时间「读取中…」，为站点防护非本平台遮罩，请用「全屏内嵌 / 新窗口」尝试)</span></span>
+                    <div class="ai-browser-panel__head-actions">
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserFullscreenBtn" title="全屏本区域，便于大画面浏览">全屏内嵌</button>
+                    </div>
+                </div>
+                <div class="ai-browser-chrome">
+                    <div class="ai-browser-chrome__nav" title="历史前进/后退">
+                        <button type="button" id="aiBrowserBackBtn" aria-label="后退">←</button>
+                        <button type="button" id="aiBrowserForwardBtn" aria-label="前进">→</button>
+                        <button type="button" id="aiBrowserReloadBtn" aria-label="刷新">⟳</button>
+                    </div>
+                    <div class="ai-browser-chrome__url">
+                        <input type="url" id="aiBrowserUrlInput" placeholder="https:// 输入后点打开" autocomplete="url" title="与上方「目标页面 URL」同步">
+                        <button type="button" class="ai-browser-chrome__go" id="aiBrowserOpenBtn">打开</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserNewTabBtn" style="white-space:nowrap;" title="在系统默认浏览器中打开">新窗口</button>
+                    </div>
+                </div>
+                <div class="ai-browser-stage">
+                <div class="ai-browser-viewport-col">
+                <div class="ai-browser-viewport ai--nav-mode" id="aiBrowserViewport">
+                <div class="ai-browser-embed-col">
+                    <iframe id="aiBrowserEmbed" class="ai-browser-embed" title="内嵌页面"
+                        sandbox="allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
+                        referrerpolicy="no-referrer-when-downgrade"
+                        src="about:blank"></iframe>
+                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">在上方输入以 https 开头的地址并点「打开」。此处为真实网页（非截图）；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。下方「拉取结构」等仍使用本机 **Playwright 会话**（与「打开」时地址同步）。</div>
+                </div>
+                <aside class="ai-browser-tools--dock is-collapsed" id="aiBrowserToolsAside" aria-label="内嵌区右侧工具（与页面并排，不叠在页面上方）">
+                    <button type="button" class="ai-browser-tools-collapse" id="aiBrowserToolsCollapseBtn" title="展开/折叠工具" aria-expanded="false">⟨</button>
+                    <div class="ai-browser-tools-inner">
+                    <div class="ai-browser-tool-tabs" role="tablist">
+                        <button type="button" class="ai-browser-tool-tab is-active" data-aitab="dev" role="tab" aria-selected="true">开发者</button>
+                        <button type="button" class="ai-browser-tool-tab" data-aitab="pick" role="tab" aria-selected="false">元素</button>
+                        <button type="button" class="ai-browser-tool-tab" data-aitab="ai" role="tab" aria-selected="false">AI</button>
+                    </div>
+                    <div id="aiBrowserTabDev" class="ai-browser-tool-panel" role="tabpanel">
+                        <p class="text-muted" style="margin:0 0 8px;line-height:1.5;">运行诊断、可交互结构；完整控制台/网络留待后续。</p>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiPageDiagnosticsBtn" style="width:100%;">刷新页面对诊断</button>
+                        <pre id="aiPageDiagnosticsOut" class="ai-inspect-pre" style="margin-top:8px; max-height:min(24vh,200px);">诊断未加载。先打开页面后点上方按钮。</pre>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiPageInspectBtn" style="width:100%; margin-top:10px;">拉取可交互结构</button>
+                        <pre id="aiPageInspectOut" class="ai-inspect-pre" style="margin-top:8px; max-height:min(32vh,280px);">结构 JSON 将显示在这里…</pre>
+                    </div>
+                    <div id="aiBrowserTabPick" class="ai-browser-tool-panel" hidden role="tabpanel">
+                        <p class="text-muted" style="margin:0 0 8px;line-height:1.5;">在左侧内嵌区可直接 <strong>右键检查 / F12</strong> 查看真实 DOM。下方「拉取可交互结构」是<strong>本机 Playwright 后台会话</strong>的页面结构快照，用于与用例/AI 对齐，不是浏览器扩展式逐条录制。</p>
+                        <p class="text-muted" style="margin:0 0 10px;line-height:1.5;font-size:11px;">与<strong>用例步骤</strong>页的「<strong>启动 Playwright Codegen</strong> + 从 Codegen 导入」为互补：Codegen 在本机录交互代码；本页侧重「看页 + 拉结构 + 生成」。因跨域，无法把 Codegen/Inspector 嵌进内嵌站点的 DOM 里。平台保留步骤页的 Codegen/录制教程，<strong>不删除</strong>该主录制入口。参见 <a href="/recording-tutorial" target="_blank" rel="noopener">录制教程</a>。进入项目用例步骤：<a id="aiBrowserGotoListProjects" href="/list_projects">项目列表 → 用例</a>。</p>
+                        <pre id="aiPickElementOut" class="ai-inspect-pre" style="max-height:min(38vh,320px);">在「开发者」中拉取可交互结构后，可将 JSON 中 suggestedSelector 复制至此对照。</pre>
+                    </div>
+                    <div id="aiBrowserTabAi" class="ai-browser-tool-panel" hidden role="tabpanel">
+                        <label class="ai-gen-label" for="aiBrowserAiHint">补充说明（可选）</label>
+                        <textarea id="aiBrowserAiHint" rows="3" style="width:100%; box-sizing:border-box; border-radius:8px; border:1px solid #cbd5e1; padding:8px; font-size:12px;" placeholder="例如：覆盖搜索并验证结果列表"></textarea>
+                        <button type="button" class="btn btn-primary btn-sm" id="aiBrowserAiRunBtn" style="width:100%; margin-top:10px;">分析当前页并生成用例</button>
+                        <p class="text-muted" style="margin:10px 0 0;font-size:11px;">将把当前页可交互结构发给模型，结果写入下方「用例预览」。</p>
+                    </div>
+                    </div>
+                </aside>
+                </div>
+                <div class="ai-browser-viewport-hint">工具在右侧<strong>并排</strong>，不叠在网页上；若需完全无侧栏仅看站，可点 ⟨ 折叠。若长期「读取中…」多为站点在 iframe 下的策略，可「新窗口」打开。跨域时外框无法代劳页内历史，请用站内返回/前进。</div>
+                <div class="ai-browser-toolbar">
+                    <div class="ai-browser-meta" id="aiBrowserMeta" title="">自动化(Playwright)：未同步</div>
+                </div>
+                </div>
+                </div>
+            </div>
+
+            <div class="ai-preview-section">
             <div class="ai-card">
                 <div class="ai-card__title"><span class="ai-card__step">2</span><span data-i18n="aitest_col_right_title">预览与保存到用例</span></div>
                 <div class="ai-card__content">
                     <label class="ai-gen-label" for="aiTargetCaseSelect" data-i18n="aitest_target_case_label">保存方式</label>
-                    <select id="aiTargetCaseSelect" class="ai-gen-select" style="margin-bottom:14px;">
+                    <select id="aiTargetCaseSelect" class="ai-gen-select" style="margin-bottom:10px;">
                         <option value="" data-i18n="aitest_new_case">+ 新建用例（不追加）</option>
                     </select>
                     <label class="ai-gen-label" for="aiGeneratedPreview" data-i18n="aitest_preview_label">用例预览</label>
-                    <textarea id="aiGeneratedPreview" class="ai-gen-textarea--preview" rows="8" readonly data-i18n-placeholder="aitest_preview_ph" placeholder="生成的用例预览将显示在这里…"></textarea>
+                    <textarea id="aiGeneratedPreview" class="ai-gen-textarea--preview" rows="10" readonly data-i18n-placeholder="aitest_preview_ph" placeholder="生成的用例预览将显示在这里…"></textarea>
+                    <p class="ai-hint-inline" style="margin-top:10px; font-size:12px;" id="aiEditCaseHint">保存后在项目用例中继续编步骤与定位。<a href="#" id="aiOpenCaseListLink" style="color:#4f46e5;font-weight:600;">打开用例列表</a></p>
                 </div>
+            </div>
+            </div>
             </div>
         </div>
 
@@ -469,12 +778,8 @@
             </div>
         </div>
         <div class="ai-settings-section">
-            <h5 data-i18n="aitest_probe_section">生成选项</h5>
-            <label class="ai-chk-label">
-                <input type="checkbox" id="aiProbePageChk" checked>
-                <span data-i18n="aitest_probe_label">无头浏览器抓取页面真实控件后再生成（推荐）</span>
-            </label>
-            <p class="ai-settings-hint" data-i18n="aitest_env_hint">服务端环境变量可调整：LOCAL_LLM_BASE_URL、LOCAL_LLM_TIMEOUT、LOCAL_AI_PROBE_TIMEOUT_MS 等。</p>
+            <h5 data-i18n="aitest_env_section">环境</h5>
+            <p class="ai-settings-hint" data-i18n="aitest_env_hint">服务端环境变量可调整：LOCAL_LLM_BASE_URL、LOCAL_LLM_TIMEOUT 等。</p>
         </div>
     </div>
 </aside>
@@ -541,6 +846,255 @@
 
     function escapeHtml(text) { if (!text) return ''; const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
 
+    function normalizeUrlForEmbed(u) {
+        u = (u || '').trim();
+        if (!u) return '';
+        if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+        return u;
+    }
+
+    function wireEmbedFrame() {
+        const iframe = document.getElementById('aiBrowserEmbed');
+        if (!iframe) return;
+        iframe.addEventListener('load', function() {
+            const ph = document.getElementById('aiBrowserPlaceholder');
+            var href = '';
+            var couldRead = false;
+            try {
+                if (iframe.contentWindow && iframe.contentWindow.location) {
+                    href = String(iframe.contentWindow.location.href || '');
+                    couldRead = true;
+                }
+            } catch (e) {
+                href = '';
+            }
+            if (!couldRead) {
+                if (ph) ph.classList.add('is-hidden');
+                return;
+            }
+            if (href === 'about:blank' || !href) {
+                if (ph) ph.classList.remove('is-hidden');
+                return;
+            }
+            if (href.indexOf('chrome-error://') === 0) {
+                if (ph) ph.classList.add('is-hidden');
+                return;
+            }
+            if (ph) ph.classList.add('is-hidden');
+            try {
+                const bi = document.getElementById('aiBrowserUrlInput');
+                const ta = document.getElementById('aiTargetUrlInput');
+                if (bi) bi.value = href;
+                if (ta) ta.value = href;
+            } catch (e2) {}
+        });
+    }
+
+    function updateAiOpenCaseListLink() {
+        const ocl = document.getElementById('aiOpenCaseListLink');
+        if (!ocl) return;
+        if (currentProjectId) {
+            ocl.href = '/list_cases_v2/' + currentProjectId;
+            ocl.classList.remove('pointer-events-none', 'opacity-50');
+        } else {
+            ocl.href = '#';
+        }
+    }
+
+    function wireAiBrowserUrlSync() {
+        const a = document.getElementById('aiTargetUrlInput');
+        const b = document.getElementById('aiBrowserUrlInput');
+        if (!a || !b) return;
+        if (b.value === '' && a.value) b.value = a.value;
+        a.addEventListener('input', function() { if (b.value !== a.value) b.value = a.value; });
+        b.addEventListener('input', function() { if (a.value !== b.value) a.value = b.value; syncAiSendButtons(); });
+    }
+
+    async function updateBrowserStatusLine() {
+        const el = document.getElementById('aiBrowserMeta');
+        if (!el) return;
+        const prefix = '自动化(Playwright)：';
+        try {
+            const resp = await fetch('/api/browser/status', { credentials: 'same-origin' });
+            const data = await resp.json();
+            if (!data || !data.success || !data.ready) {
+                el.textContent = prefix + '无活动（请先点「打开」以同步到后台会话）';
+                el.title = '';
+                return;
+            }
+            const t = (data.title || '').trim();
+            const u = (data.url || '').trim();
+            el.textContent = prefix + (t ? (t + ' — ' + u) : (u || '已连接'));
+            el.title = u;
+        } catch (e) {
+            el.textContent = prefix + '—';
+        }
+    }
+
+    async function openInternalBrowserPage() {
+        const b = document.getElementById('aiBrowserUrlInput');
+        const u = normalizeUrlForEmbed(b && b.value || '');
+        if (!u) { alert('请输入 URL'); return; }
+        const a = document.getElementById('aiTargetUrlInput');
+        if (a) a.value = u;
+        if (b) b.value = u;
+        const btn = document.getElementById('aiBrowserOpenBtn');
+        if (btn) { btn.disabled = true; }
+        const iframe = document.getElementById('aiBrowserEmbed');
+        if (iframe) { iframe.src = u; }
+        const ph = document.getElementById('aiBrowserPlaceholder');
+        if (ph) { ph.classList.add('is-hidden'); }
+        try {
+            const resp = await fetch('/api/navigate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u }), credentials: 'same-origin' });
+            const data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok || (data && data.error)) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
+        } catch (e) {
+            alert('后台自动化会话未同步: ' + (e && e.message ? e.message : e) + '。内嵌区若已显示页面，「拉取结构/诊断」等可能仍失败，请检查服务。');
+        } finally {
+            if (btn) { btn.disabled = false; }
+        }
+        await updateBrowserStatusLine();
+    }
+
+    function openEmbedInNewSystemWindow() {
+        const b = document.getElementById('aiBrowserUrlInput');
+        const u = normalizeUrlForEmbed(b && b.value || '');
+        if (!u) { alert('请先输入 URL'); return; }
+        window.open(u, '_blank', 'noopener,noreferrer');
+    }
+
+    function toggleAiBrowserFullscreen(force) {
+        const panel = document.querySelector('.ai-browser-panel');
+        const btn = document.getElementById('aiBrowserFullscreenBtn');
+        if (!panel) return;
+        var next = force === true ? true : force === false ? false : !panel.classList.contains('ai-browser-panel--fullscreen');
+        panel.classList.toggle('ai-browser-panel--fullscreen', next);
+        document.body.classList.toggle('ai-browser-fullscreen-active', next);
+        document.body.style.overflow = next ? 'hidden' : '';
+        if (btn) {
+            btn.textContent = next ? '退出全屏' : '全屏内嵌';
+            btn.setAttribute('title', next ? '恢复为页面内嵌布局' : '全屏本区域，便于大画面浏览');
+        }
+    }
+
+    async function aiBrowserHistory(action) {
+        const iframe = document.getElementById('aiBrowserEmbed');
+        if (action === 'reload') {
+            if (iframe) {
+                try {
+                    if (iframe.contentWindow) iframe.contentWindow.location.reload();
+                } catch (e) {
+                    var b = document.getElementById('aiBrowserUrlInput');
+                    var uu = b && b.value && normalizeUrlForEmbed(b.value);
+                    if (uu && iframe) {
+                        var sep = uu.indexOf('?') >= 0 ? '&' : '?';
+                        iframe.src = uu + sep + '_r=' + Date.now();
+                    }
+                }
+            }
+            try {
+                const resp = await fetch('/api/browser/reload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}), credentials: 'same-origin' });
+                await resp.json().catch(function() { return {}; });
+            } catch (e) {}
+            await updateBrowserStatusLine();
+            return;
+        }
+        if (!iframe || !iframe.contentWindow) return;
+        if (action === 'back' || action === 'forward') {
+            try {
+                if (action === 'back') iframe.contentWindow.history.back();
+                else iframe.contentWindow.history.forward();
+            } catch (e) {
+                alert('无法从外框控制该页历史（多因跨域限制），请使用网站内的「返回/前进」链接。');
+            }
+        }
+    }
+
+    function wireBrowserToolTabs() {
+        const tabs = document.querySelectorAll('.ai-browser-tool-tab');
+        const panels = { dev: document.getElementById('aiBrowserTabDev'), pick: document.getElementById('aiBrowserTabPick'), ai: document.getElementById('aiBrowserTabAi') };
+        tabs.forEach(function(tab) {
+            tab.addEventListener('click', function() {
+                const id = tab.getAttribute('data-aitab');
+                tabs.forEach(function(t) {
+                    t.classList.toggle('is-active', t === tab);
+                    t.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+                });
+                Object.keys(panels).forEach(function(k) {
+                    var p = panels[k];
+                    if (p) p.hidden = (k !== id);
+                });
+            });
+        });
+    }
+
+    async function aiRunBrowserPageAi() {
+        if (aiProfiles && aiProfiles.length > 0 && !getSelectedAiModel()) {
+            appendAiChat('assistant', '请先在右上角「AI 设置」中选择推理模型。');
+            return;
+        }
+        const hintEl = document.getElementById('aiBrowserAiHint');
+        const hint = (hintEl && hintEl.value || '').trim();
+        const btn = document.getElementById('aiBrowserAiRunBtn');
+        if (btn) { btn.disabled = true; }
+        try {
+            const payload = { hint: hint, project_name: currentProjectName, model: getSelectedAiModel() };
+            const resp = await fetch('/api/browser/ai-analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                credentials: 'same-origin',
+            });
+            const data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok || !data.success) throw new Error((data && data.error) || '生成失败');
+            latestAiPlan = data.plan;
+            renderAiPreview(latestAiPlan);
+            appendAiChat('assistant', '已根据当前页结构生成用例《' + ((latestAiPlan && latestAiPlan.case_name) || '未命名') + '》，并写入用例预览。');
+        } catch (e) {
+            appendAiChat('assistant', '页面 AI 分析失败: ' + (e && e.message ? e.message : e));
+        } finally {
+            if (btn) { btn.disabled = false; }
+        }
+    }
+
+    async function aiLoadPageInspect() {
+        const out = document.getElementById('aiPageInspectOut');
+        const btn = document.getElementById('aiPageInspectBtn');
+        if (!out) return;
+        if (btn) { btn.disabled = true; }
+        out.textContent = '加载中…';
+        try {
+            const resp = await fetch('/api/browser/inspect', { credentials: 'same-origin' });
+            const raw = await resp.text();
+            var data;
+            try { data = JSON.parse(raw); } catch (e) { throw new Error(raw.slice(0, 200)); }
+            if (!resp.ok || !data.success) throw new Error((data && data.error) || ('HTTP ' + resp.status));
+            out.textContent = JSON.stringify(data.data, null, 2);
+        } catch (e) {
+            out.textContent = '失败: ' + (e && e.message ? e.message : e);
+        } finally {
+            if (btn) { btn.disabled = false; }
+        }
+    }
+
+    async function aiLoadPageDiagnostics() {
+        const out = document.getElementById('aiPageDiagnosticsOut');
+        const btn = document.getElementById('aiPageDiagnosticsBtn');
+        if (!out) return;
+        if (btn) { btn.disabled = true; }
+        out.textContent = '加载中…';
+        try {
+            const resp = await fetch('/api/browser/diagnostics', { credentials: 'same-origin' });
+            const data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok || !data.success) throw new Error((data && data.error) || ('HTTP ' + resp.status));
+            out.textContent = JSON.stringify(data.data, null, 2);
+        } catch (e) {
+            out.textContent = '失败: ' + (e && e.message ? e.message : e);
+        } finally {
+            if (btn) { btn.disabled = false; }
+        }
+    }
+
     function composeAiGoal() {
         const u = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
         const t = (document.getElementById('aiMessageInput') && document.getElementById('aiMessageInput').value || '').trim();
@@ -561,8 +1115,6 @@
     }
 
     function getSelectedAiModel() { const el = document.getElementById('aiModelSelect'); return (el && el.value) ? el.value.trim() : ''; }
-    function isAiProbePageEnabled() { return !!(document.getElementById('aiProbePageChk') && document.getElementById('aiProbePageChk').checked); }
-
     function profileLabel(p) {
         if (!p) return '';
         const z = (typeof t === 'function' && providerCatalog && providerCatalog.providers) ? providerCatalog.providers.find(function(x) { return x.id === p.provider; }) : null;
@@ -625,10 +1177,11 @@
         const data = await resp.json();
         const projects = data.projects || [];
         const sel = document.getElementById('aiProjectSelect');
-        if (!projects.length) {
+            if (!projects.length) {
             sel.innerHTML = '<option value="">— 暂无项目，请先创建 —</option>';
             currentProjectId = null;
             currentProjectName = '';
+            updateAiOpenCaseListLink();
             return;
         }
         sel.innerHTML = projects.map(p => '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>').join('');
@@ -637,6 +1190,7 @@
         currentProjectId = parseInt(sel.value, 10);
         const pr = projects.find(p => p.id === currentProjectId);
         currentProjectName = pr ? pr.name : '';
+        updateAiOpenCaseListLink();
         await loadAiTargetCases();
     }
 
@@ -881,9 +1435,7 @@
         };
         const steps = (plan.steps || []).map((s, idx) => fmtStep(s, idx));
         const warnings = (plan.warnings || []).map(w => '! ' + w);
-        const meta = plan.meta || {};
-        const probeLine = meta.probe_note ? ('\n页面探测: ' + meta.probe_note) : (meta.probe_used ? '\n页面探测: 已注入 DOM 摘要' : '');
-        preview.value = '用例名称: ' + (plan.case_name || '') + '\nURL: ' + (plan.case_url || '') + '\n描述: ' + (plan.description || '') + '\n前置: ' + (plan.precondition || '') + '\n预期: ' + (plan.expected_result || '') + probeLine + '\n\n步骤:\n' + steps.join('\n') + '\n\n风险:\n' + (warnings.join('\n') || '无');
+        preview.value = '用例名称: ' + (plan.case_name || '') + '\nURL: ' + (plan.case_url || '') + '\n描述: ' + (plan.description || '') + '\n前置: ' + (plan.precondition || '') + '\n预期: ' + (plan.expected_result || '') + '\n\n步骤:\n' + steps.join('\n') + '\n\n风险:\n' + (warnings.join('\n') || '无');
     }
 
     function tBtn(key, fallback) {
@@ -936,7 +1488,7 @@
         if (genBtn) { genBtn.disabled = true; genBtn.textContent = '…'; }
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            const data = await aiPostJsonWithTimeout('/api/ai/task/plan', { task_type: 'test_case_generation', goal, project_name: currentProjectName, model: getSelectedAiModel(), probe_page: isAiProbePageEnabled(), target_page_url: targetPageUrl });
+            const data = await aiPostJsonWithTimeout('/api/ai/task/plan', { task_type: 'test_case_generation', goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl });
             if (!data) return;
             latestAiPlan = data.plan;
             renderAiPreview(latestAiPlan);
@@ -958,7 +1510,7 @@
         if (btn) { btn.disabled = true; btn.textContent = '…'; }
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            const data = await aiPostJsonWithTimeout('/api/ai/task/chat', { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: aiChatMessages, model: getSelectedAiModel(), probe_page: isAiProbePageEnabled(), target_page_url: targetPageUrl });
+            const data = await aiPostJsonWithTimeout('/api/ai/task/chat', { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: aiChatMessages, model: getSelectedAiModel(), target_page_url: targetPageUrl });
             if (!data) return;
             latestAiPlan = data.plan || latestAiPlan;
             renderAiPreview(latestAiPlan);
@@ -984,7 +1536,7 @@
                 resp = await fetch('/api/ai/cases/append-steps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ case_id: parseInt(targetCaseId, 10), steps: latestAiPlan.steps }) });
             } else {
                 const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-                const saveBody = { project_id: currentProjectId, project_name: currentProjectName, goal: goal || (latestAiPlan && latestAiPlan.case_name) || '', model: getSelectedAiModel(), probe_page: isAiProbePageEnabled(), target_page_url: targetPageUrl };
+                const saveBody = { project_id: currentProjectId, project_name: currentProjectName, goal: goal || (latestAiPlan && latestAiPlan.case_name) || '', model: getSelectedAiModel(), target_page_url: targetPageUrl };
                 if (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) saveBody.plan = latestAiPlan;
                 resp = await fetch('/api/ai/cases/generate-and-save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveBody) });
             }
@@ -1019,6 +1571,11 @@
             });
         }
         document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && document.body.classList.contains('ai-browser-fullscreen-active')) {
+                e.preventDefault();
+                toggleAiBrowserFullscreen(false);
+                return;
+            }
             if (e.key !== 'Escape') return;
             if (typeof window.openAiAddModelModal === 'function') window.openAiAddModelModal(false);
             if (typeof window.toggleAiSettings === 'function') window.toggleAiSettings(false);
@@ -1026,14 +1583,36 @@
     })();
 
     document.addEventListener('DOMContentLoaded', async function() {
-        document.getElementById('aiChatHistory').innerHTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。请先选择项目并填写目标 URL与测试场景；右上角可配置模型与无头探测。完成后点击「生成预览」。</div></div>';
+        document.getElementById('aiChatHistory').innerHTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。左侧主区域是<strong>内嵌的真实网页</strong>，可直接像浏览器一样操作。点「打开」时后台会同步 Playwright 用于「拉取结构 / AI 分析 / 用例执行」。内嵌中跳转后，若需分析当前址，请把地址栏中 URL 更新后再点一次「打开」。部分站点会禁止在框架中显示，请用「新窗口」打开。用例预览在下方。模型在右上角设置。</div></div>';
         await loadProjectList();
         await loadAiModels();
+        wireAiBrowserUrlSync();
+        wireEmbedFrame();
+        wireBrowserToolTabs();
+        document.getElementById('aiBrowserOpenBtn') && document.getElementById('aiBrowserOpenBtn').addEventListener('click', function(e) { e.preventDefault(); openInternalBrowserPage(); });
+        document.getElementById('aiBrowserNewTabBtn') && document.getElementById('aiBrowserNewTabBtn').addEventListener('click', function(e) { e.preventDefault(); openEmbedInNewSystemWindow(); });
+        document.getElementById('aiBrowserFullscreenBtn') && document.getElementById('aiBrowserFullscreenBtn').addEventListener('click', function(e) { e.preventDefault(); toggleAiBrowserFullscreen(); });
+        document.getElementById('aiBrowserBackBtn') && document.getElementById('aiBrowserBackBtn').addEventListener('click', function() { aiBrowserHistory('back'); });
+        document.getElementById('aiBrowserForwardBtn') && document.getElementById('aiBrowserForwardBtn').addEventListener('click', function() { aiBrowserHistory('forward'); });
+        document.getElementById('aiBrowserReloadBtn') && document.getElementById('aiBrowserReloadBtn').addEventListener('click', function() { aiBrowserHistory('reload'); });
+        document.getElementById('aiPageInspectBtn') && document.getElementById('aiPageInspectBtn').addEventListener('click', function() { aiLoadPageInspect(); });
+        document.getElementById('aiPageDiagnosticsBtn') && document.getElementById('aiPageDiagnosticsBtn').addEventListener('click', function() { aiLoadPageDiagnostics(); });
+        var tcol = document.getElementById('aiBrowserToolsCollapseBtn');
+        var tas = document.getElementById('aiBrowserToolsAside');
+        if (tcol && tas) {
+            tcol.addEventListener('click', function() {
+                var collapsed = tas.classList.toggle('is-collapsed');
+                tcol.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+                tcol.textContent = collapsed ? '⟨' : '⟩';
+            });
+        }
+        document.getElementById('aiBrowserAiRunBtn') && document.getElementById('aiBrowserAiRunBtn').addEventListener('click', function() { aiRunBrowserPageAi(); });
         const ps = document.getElementById('aiProjectSelect');
         if (ps) ps.addEventListener('change', async function() {
             currentProjectId = parseInt(this.value, 10) || null;
             const opt = this.options[this.selectedIndex];
             currentProjectName = opt ? opt.text : '';
+            updateAiOpenCaseListLink();
             await loadAiTargetCases();
         });
         const msg = document.getElementById('aiMessageInput');
@@ -1041,6 +1620,7 @@
         if (msg) msg.addEventListener('input', syncAiSendButtons);
         if (urlI) urlI.addEventListener('input', syncAiSendButtons);
         syncAiSendButtons();
+        updateBrowserStatusLine();
         if (typeof applyUiLang === 'function') applyUiLang();
         var ap = document.getElementById('aiAddProvider');
         if (ap) ap.addEventListener('change', syncAiAddProviderFields);

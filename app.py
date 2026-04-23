@@ -12,6 +12,7 @@ import uuid
 import json
 import re
 import functools
+import io
 import tempfile
 import subprocess
 from database import Database
@@ -21,7 +22,19 @@ from playwright_automation import (
     parse_platform_scroll_input_value,
     scroll_event_to_platform_input_value,
     sync_analyze_page_content,
+    sync_automation_session_usable,
+    sync_browser_go_back,
+    sync_browser_go_forward,
+    sync_browser_keyboard_press,
+    sync_browser_keyboard_type,
+    sync_browser_mouse_click,
+    sync_browser_mouse_wheel,
+    sync_browser_reload,
     sync_click_element,
+    sync_element_info_at_point,
+    sync_get_interactive_page_snapshot,
+    sync_get_page_diagnostics,
+    sync_get_viewport_size,
     sync_close_browser,
     sync_disable_element_selection,
     sync_double_click_element,
@@ -52,6 +65,7 @@ from playwright_automation import (
     sync_start_browser,
     sync_swipe_element,
     sync_take_screenshot,
+    sync_take_screenshot_bytes,
     sync_verify_element,
     sync_wait_for_element_visible,
     sync_wait_for_page_stable,
@@ -873,11 +887,11 @@ def create_case_v2():
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     return response
 
-# AI 测试工作台（本地 Ollama + 无头 Playwright页面探测）
+# AI 测试工作台（本地模型 + 内置浏览器与 Playwright 会话）
 @app.route('/ai-test')
 @login_required
 def ai_test_page():
-    """本地 AI + Playwright 无头探测生成测试步骤（工作台页面）。"""
+    """AI 生成测试步骤；与内置浏览器共用 Playwright 会话。"""
     return render_template('ai_test.html')
 
 
@@ -1765,9 +1779,7 @@ def api_ai_task_plan():
     goal = (data.get('goal') or '').strip()
     project_name = (data.get('project_name') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
-    probe_page = bool(data.get('probe_page'))
     profile, legacy_model = _resolve_inference_profile(selected_model)
-    probe_url_hint = (data.get('target_page_url') or data.get('probe_url_hint') or '').strip()
 
     if not goal:
         return jsonify({'success': False, 'error': 'goal不能为空'}), 400
@@ -1784,9 +1796,7 @@ def api_ai_task_plan():
             goal,
             project_name,
             model=legacy_model,
-            probe_page=probe_page,
             profile=profile,
-            probe_url_hint=probe_url_hint,
         )
     except ValueError as e:
         return jsonify({
@@ -1862,10 +1872,8 @@ def api_ai_generate_case_and_save():
     goal = (data.get('goal') or '').strip()
     project_name = (data.get('project_name') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
-    probe_page = bool(data.get('probe_page'))
     client_plan = data.get('plan')
     profile, legacy_model = _resolve_inference_profile(selected_model)
-    probe_url_hint = (data.get('target_page_url') or data.get('probe_url_hint') or '').strip()
 
     if not project_id:
         return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
@@ -1908,9 +1916,7 @@ def api_ai_generate_case_and_save():
                 goal,
                 project_name,
                 model=legacy_model,
-                probe_page=probe_page,
                 profile=profile,
-                probe_url_hint=probe_url_hint,
             )
         except ValueError as e:
             return jsonify({
@@ -1965,9 +1971,7 @@ def api_ai_task_chat():
     current_plan = data.get('current_plan') or {}
     history = data.get('history') or []
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
-    probe_page = bool(data.get('probe_page'))
     profile, legacy_model = _resolve_inference_profile(selected_model)
-    probe_url_hint = (data.get('target_page_url') or data.get('probe_url_hint') or '').strip()
     if not message:
         return jsonify({'success': False, 'error': 'message不能为空'}), 400
 
@@ -1982,9 +1986,7 @@ def api_ai_task_chat():
             current_plan=current_plan if isinstance(current_plan, dict) else {},
             history=history if isinstance(history, list) else [],
             model=legacy_model,
-            probe_page=probe_page,
             profile=profile,
-            probe_url_hint=probe_url_hint,
         )
     except ValueError as e:
         return jsonify({
@@ -2182,6 +2184,271 @@ def api_screenshot():
         return send_file(filepath, as_attachment=True, download_name=filename)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# —— 内置浏览器（与 AI 测试工作台共用 Playwright 会话，PNG 直出供侧栏预览）——
+
+@app.route('/api/browser/frame', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_frame():
+    from flask import send_file
+
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动，请先「打开页面」'}), 400
+    data = sync_take_screenshot_bytes()
+    return send_file(
+        io.BytesIO(data),
+        mimetype='image/png',
+        max_age=0,
+        conditional=False,
+    )
+
+
+@app.route('/api/browser/status', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_status():
+    try:
+        if not sync_automation_session_usable():
+            return jsonify({'success': True, 'ready': False, 'url': '', 'title': ''})
+        url = sync_get_current_url()
+        title = sync_get_page_title()
+        return jsonify({'success': True, 'ready': True, 'url': url, 'title': title})
+    except Exception as e:
+        uat_logger.debug(f"api_browser_status: {e}")
+        return jsonify({'success': True, 'ready': False, 'url': '', 'title': ''})
+
+
+@app.route('/api/browser/go-back', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_go_back():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    ok = sync_browser_go_back()
+    return jsonify({'success': True, 'moved': ok})
+
+
+@app.route('/api/browser/go-forward', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_go_forward():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    ok = sync_browser_go_forward()
+    return jsonify({'success': True, 'moved': ok})
+
+
+@app.route('/api/browser/reload', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_reload():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    sync_browser_reload()
+    return jsonify({'success': True})
+
+
+@app.route('/api/browser/diagnostics', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_diagnostics():
+    """页面/性能轻量诊断（开发者面板）。"""
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    payload = sync_get_page_diagnostics()
+    return jsonify({'success': True, 'data': payload})
+
+
+@app.route('/api/browser/inspect', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_inspect():
+    """内置浏览器「页面结构」：可交互元素列表 + 建议定位（非完整 F12）。"""
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动，请先打开页面'}), 400
+    payload = sync_get_interactive_page_snapshot(150)
+    return jsonify({'success': True, 'data': payload})
+
+
+@app.route('/api/browser/viewport', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_viewport():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    v = sync_get_viewport_size()
+    return jsonify({'success': True, 'viewport': v})
+
+
+@app.route('/api/browser/click', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_click():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    data = request.get_json(silent=True) or {}
+    try:
+        x = float(data.get('x'))
+        y = float(data.get('y'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': '需要有效的 x, y（视口坐标，与截图像素一致）'}), 400
+    btn = (data.get('button') or 'left')
+    dbl = bool(data.get('double'))
+    try:
+        sync_browser_mouse_click(x, y, button=btn, click_count=2 if dbl else 1)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'success': True})
+
+
+@app.route('/api/browser/wheel', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_wheel():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    data = request.get_json(silent=True) or {}
+    try:
+        sync_browser_mouse_wheel(float(data.get('delta_x', 0)), float(data.get('delta_y', 0)))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'success': True})
+
+
+@app.route('/api/browser/type', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_type_text():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    data = request.get_json(silent=True) or {}
+    t = (data.get('text') or '')
+    try:
+        sync_browser_keyboard_type(t)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'success': True})
+
+
+@app.route('/api/browser/key', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_key_press():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    data = request.get_json(silent=True) or {}
+    k = (data.get('key') or 'Enter')
+    try:
+        sync_browser_keyboard_press(k)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'success': True})
+
+
+@app.route('/api/browser/pick', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_browser_pick_element():
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动'}), 400
+    data = request.get_json(silent=True) or {}
+    try:
+        x = float(data.get('x'))
+        y = float(data.get('y'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': '需要有效的 x, y'}), 400
+    try:
+        el = sync_element_info_at_point(x, y)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'success': True, 'element': el})
+
+
+@app.route('/api/browser/ai-analyze', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_browser_ai_analyze():
+    """根据当前已打开页的可交互结构生成用例（写入侧栏/工作台预览由前端处理）。"""
+    if not sync_automation_session_usable():
+        return jsonify({'success': False, 'error': '浏览器未启动，请先打开页面'}), 400
+    data = request.get_json(silent=True) or {}
+    hint = (data.get('hint') or '').strip()
+    project_name = (data.get('project_name') or '').strip()
+    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    profile, legacy_model = _resolve_inference_profile(selected_model)
+    try:
+        snap = sync_get_interactive_page_snapshot(120)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    items = snap.get('items') or []
+    page_body = {
+        'url': snap.get('url', ''),
+        'title': snap.get('title', ''),
+        'viewport': snap.get('viewport', {}),
+        'items': items,
+    }
+    parts = [
+        '请根据以下「用户已在内置浏览器中打开的当前页面」生成可执行 UI 用例与步骤，输出 JSON 需符合本平台的 step 结构。',
+        f"页面标题: {page_body['title']}",
+        f"URL: {page_body['url']}",
+    ]
+    if hint:
+        parts.append('用户补充的测试目标: ' + hint)
+    parts.append('可交互元素（请优先为 click/input 填写与下列 suggestedSelector 一致或等价的定位）:')
+    try:
+        parts.append(json.dumps(page_body, ensure_ascii=False)[:30000])
+    except Exception:
+        parts.append('{}')
+    goal = '\n'.join(parts)
+    try:
+        generated = local_ai_service.generate_case_and_steps(
+            goal,
+            project_name,
+            model=legacy_model,
+            profile=profile,
+        )
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'hint': '可先执行: ollama serve，并确认模型已拉取。',
+        }), 503
+    return jsonify({
+        'success': True,
+        'plan': generated,
+        'page_snapshot': page_body,
+    })
+
 
 # API: 启用元素选择模式
 @app.route('/api/enable_element_selection', methods=['POST'])

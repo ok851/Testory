@@ -7604,6 +7604,229 @@ class PlaywrightAutomation:
         
         await target_page.screenshot(path=path)
         return path
+
+    async def take_screenshot_bytes(self, full_page: bool = False, page=None) -> bytes:
+        """返回 PNG 字节，供内置浏览器预览等内联展示。"""
+        target_page = page if page is not None else self.page
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        # scale='css'：截图约 1 个 CSS 像素 = 1 个图像像素，与 page.mouse 坐标系一致（否则高分屏/系统缩放下会错位）
+        return await target_page.screenshot(
+            type="png", full_page=full_page, scale="css"
+        )
+
+    async def browser_go_back(self) -> bool:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        try:
+            await self.page.go_back(wait_until="domcontentloaded", timeout=15000)
+            return True
+        except Exception as e:
+            uat_logger.debug(f"browser_go_back: {e}")
+            return False
+
+    async def browser_go_forward(self) -> bool:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        try:
+            await self.page.go_forward(wait_until="domcontentloaded", timeout=15000)
+            return True
+        except Exception as e:
+            uat_logger.debug(f"browser_go_forward: {e}")
+            return False
+
+    async def browser_reload(self) -> None:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        await self.page.reload(wait_until="domcontentloaded", timeout=30000)
+
+    async def get_viewport_size(self) -> Dict[str, int]:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        v = self.page.viewport_size
+        if v:
+            return {"width": int(v["width"]), "height": int(v["height"])}
+        size = await self.page.evaluate("() => ({ width: window.innerWidth, height: window.innerHeight })")
+        return {"width": int(size.get("width", 0)), "height": int(size.get("height", 0))}
+
+    async def browser_mouse_click(
+        self, x: float, y: float, button: str = "left", click_count: int = 1
+    ) -> None:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        if button not in ("left", "right", "middle"):
+            button = "left"
+        await self.page.mouse.move(x, y)
+        await self.page.wait_for_timeout(25)
+        await self.page.mouse.click(x, y, button=button, click_count=click_count)
+
+    async def browser_mouse_wheel(self, delta_x: float, delta_y: float) -> None:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        await self.page.mouse.wheel(delta_x, delta_y)
+
+    async def browser_keyboard_type(self, text: str) -> None:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        if text:
+            await self.page.keyboard.type(text, delay=0)
+
+    async def browser_keyboard_press(self, key: str) -> None:
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        if (key or "").strip():
+            await self.page.keyboard.press(key.strip())
+
+    async def element_info_at_point(self, x: float, y: float) -> Dict[str, Any]:
+        """elementFromPoint，坐标为视口内 CSS 像素（与截图一致）。"""
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        return await self.page.evaluate(
+            """([x, y]) => {
+                const el = document.elementFromPoint(x, y);
+                if (!el) return { found: false, reason: 'no_element' };
+                const r = el.getBoundingClientRect();
+                const tag = (el.tagName || '').toLowerCase();
+                const idv = (el.id || '').toString();
+                const cn = (el.className && typeof el.className === 'string') ? el.className : '';
+                const cls0 = cn.split(/\\s+/).filter(Boolean).slice(0, 2);
+                const dt = (el.getAttribute('data-testid') || el.getAttribute('data-test') || '');
+                const nm = (el.getAttribute('name') || '');
+                let suggest = '';
+                if (idv) { suggest = tag + '#' + idv; }
+                else if (dt) { suggest = tag + '[data-testid="' + String(dt).replace(/"/g, '\\\\"') + '"]'; }
+                else if (nm) { suggest = tag + '[name="' + String(nm).replace(/"/g, '\\\\"') + '"]'; }
+                else if (cls0.length) { suggest = tag + '.' + cls0.join('.'); }
+                else { suggest = tag; }
+                const tv = (el.value !== undefined && el.value !== null) ? String(el.value) : '';
+                return {
+                    found: true,
+                    tag, id: idv, className: cn,
+                    name: nm,
+                    type: (el.getAttribute('type') || '') || '',
+                    href: (el.getAttribute('href') || '') || '',
+                    role: (el.getAttribute('role') || '') || '',
+                    text: (el.textContent || '').trim().slice(0, 200),
+                    value: tv.slice(0, 200),
+                    placeholder: (el.getAttribute('placeholder') || '') || '',
+                    ariaLabel: (el.getAttribute('aria-label') || '') || '',
+                    dataTestid: dt,
+                    box: { x: r.x, y: r.y, w: r.width, h: r.height, top: r.top, left: r.left },
+                    suggestedSelector: suggest
+                };
+            }""",
+            [x, y],
+        )
+
+    async def get_interactive_page_snapshot(self, max_items: int = 100) -> Dict[str, Any]:
+        """
+        可交互元素列表（带推荐定位），用于内置浏览器侧栏与 AI；不含整页 HTML。
+        """
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        n = max(20, min(int(max_items or 100), 200))
+        data = await self.page.evaluate(
+            """(n) => {
+            const v = { width: window.innerWidth, height: window.innerHeight };
+            const set = 'a, button, input, textarea, select, [role=button], [role=link], [role=tab], [role=searchbox]';
+            const nodes = Array.from(document.querySelectorAll(set));
+            const out = [];
+            for (const el of nodes) {
+                if (out.length >= n) break;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+                const r = el.getBoundingClientRect();
+                if (r.width < 1 && r.height < 1) continue;
+                if (r.bottom < 0 || r.top > v.height || r.right < 0 || r.left > v.width) continue;
+                const tag = (el.tagName || '').toLowerCase();
+                const idv = (el.id || '').toString();
+                const cn = (el.className && typeof el.className === 'string') ? el.className : '';
+                const cls = cn.split(/\\s+/).filter(c => c && c.length < 50).slice(0, 2);
+                const dt = (el.getAttribute('data-testid') || el.getAttribute('data-test') || '');
+                const nm = (el.getAttribute('name') || '');
+                const tx = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+                const ph = (el.getAttribute('placeholder') || '') || '';
+                const al = (el.getAttribute('aria-label') || '') || '';
+                let suggest = '';
+                if (idv) suggest = tag + '#' + idv;
+                else if (dt) suggest = tag + '[data-testid="' + String(dt).replace(/"/g, '\\\\"') + '"]';
+                else if (nm) suggest = tag + '[name="' + String(nm).replace(/"/g, '\\\\"') + '"]';
+                else if (cls.length) suggest = tag + '.' + cls.join('.');
+                else if (al) suggest = tag + '[aria-label="' + al.slice(0, 40).replace(/"/g, '\\\\"') + '"]';
+                else if (ph) suggest = tag + '[placeholder="' + ph.slice(0, 32).replace(/"/g, '\\\\"') + '"]';
+                else suggest = tag;
+                out.push({
+                    n: out.length + 1,
+                    tag,
+                    id: idv || null,
+                    class: cls.join(' ') || null,
+                    name: nm || null,
+                    type: (el.getAttribute('type') || '') || null,
+                    href: (el.getAttribute('href') || '') || null,
+                    role: (el.getAttribute('role') || '') || null,
+                    text: tx || null,
+                    placeholder: ph || null,
+                    ariaLabel: al || null,
+                    dataTestid: dt || null,
+                    box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+                    suggestedSelector: suggest
+                });
+            }
+            return {
+                url: window.location.href,
+                title: (document.title || '') || '',
+                viewport: v,
+                items: out
+            };
+        }""",
+            n,
+        )
+        return data if isinstance(data, dict) else {"url": "", "title": "", "viewport": {}, "items": []}
+
+    async def get_page_diagnostics(self) -> Dict[str, Any]:
+        """轻量页面与性能信息，供内置浏览器「开发者」面板（非完整 DevTools）。"""
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        return await self.page.evaluate(
+            """() => {
+            const nav = performance.getEntriesByType('navigation')[0];
+            const res = performance.getEntriesByType('resource') || [];
+            const mem = performance.memory || null;
+            const navS = nav ? {
+                domContentLoaded: Math.round((nav.domContentLoadedEventEnd || 0) - (nav.domContentLoadedEventStart || 0)),
+                load: Math.round((nav.loadEventEnd || 0) - (nav.loadEventStart || 0)),
+                transferSize: nav.transferSize || 0,
+            } : {};
+            const topRes = res
+                .slice()
+                .sort((a, b) => (b.duration || 0) - (a.duration || 0))
+                .slice(0, 12)
+                .map(r => ({
+                    name: String(r.name || '').slice(0, 140),
+                    type: r.initiatorType || '',
+                    duration: Math.round(r.duration || 0),
+                    transferSize: r.transferSize || 0,
+                }));
+            return {
+                url: location.href,
+                title: document.title || '',
+                userAgent: navigator.userAgent || '',
+                languages: navigator.languages ? navigator.languages.slice(0, 4) : [],
+                viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 },
+                domNodeCount: document.getElementsByTagName('*').length,
+                scriptCount: document.scripts ? document.scripts.length : 0,
+                stylesheetCount: document.styleSheets ? document.styleSheets.length : 0,
+                resourceEntries: res.length,
+                navigation: navS,
+                memory: mem ? {
+                    usedJSHeapSize: mem.usedJSHeapSize,
+                    totalJSHeapSize: mem.totalJSHeapSize,
+                    limit: mem.jsHeapSizeLimit,
+                } : null,
+                slowestResources: topRes,
+            };
+        }"""
+        )
     
     async def execute_script_steps(self, steps: List[Dict[str, Any]]):
         """执行脚本步骤（严格按顺序串行执行，禁用所有并行逻辑）"""
@@ -10168,6 +10391,78 @@ def sync_get_element_count(selector: str):
 def sync_take_screenshot(path: str = None):
     async def run():
         return await automation.take_screenshot(path)
+    return worker.execute(run)
+
+
+def sync_take_screenshot_bytes(full_page: bool = False):
+    async def run():
+        return await automation.take_screenshot_bytes(full_page=full_page)
+    return worker.execute(run)
+
+
+def sync_browser_go_back():
+    async def run():
+        return await automation.browser_go_back()
+    return worker.execute(run)
+
+
+def sync_browser_go_forward():
+    async def run():
+        return await automation.browser_go_forward()
+    return worker.execute(run)
+
+
+def sync_browser_reload():
+    async def run():
+        return await automation.browser_reload()
+    return worker.execute(run)
+
+
+def sync_get_viewport_size():
+    async def run():
+        return await automation.get_viewport_size()
+    return worker.execute(run)
+
+
+def sync_browser_mouse_click(x: float, y: float, button: str = "left", click_count: int = 1):
+    async def run():
+        return await automation.browser_mouse_click(x, y, button=button, click_count=click_count)
+    return worker.execute(run)
+
+
+def sync_browser_mouse_wheel(delta_x: float, delta_y: float):
+    async def run():
+        return await automation.browser_mouse_wheel(delta_x, delta_y)
+    return worker.execute(run)
+
+
+def sync_browser_keyboard_type(text: str):
+    async def run():
+        return await automation.browser_keyboard_type(text)
+    return worker.execute(run)
+
+
+def sync_browser_keyboard_press(key: str):
+    async def run():
+        return await automation.browser_keyboard_press(key)
+    return worker.execute(run)
+
+
+def sync_element_info_at_point(x: float, y: float):
+    async def run():
+        return await automation.element_info_at_point(x, y)
+    return worker.execute(run)
+
+
+def sync_get_interactive_page_snapshot(max_items: int = 100):
+    async def run():
+        return await automation.get_interactive_page_snapshot(max_items=max_items)
+    return worker.execute(run)
+
+
+def sync_get_page_diagnostics():
+    async def run():
+        return await automation.get_page_diagnostics()
     return worker.execute(run)
 
 def sync_hover_element(selector: str, selector_type: str = "css", iframe_selector: str = None):
