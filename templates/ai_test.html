@@ -138,6 +138,7 @@
     }
     html.dark .ai-inspect-pre { background: #0f172a; border-color: #334155; color: #cbd5e1; }
     .ai-browser-panel {
+        position: relative;
         background: #fff; border-radius: 14px; border: 1px solid #e2e8f0;
         box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         overflow: hidden;
@@ -321,6 +322,16 @@
         z-index: 2;
         background: #fff;
     }
+    .ai-remote-canvas {
+        position: absolute;
+        left: 0; top: 0;
+        width: 100%;
+        height: 100%;
+        display: none;
+        z-index: 4;
+        background: #0f172a;
+        cursor: crosshair;
+    }
     .ai-browser-placeholder {
         position: relative;
         z-index: 3;
@@ -425,6 +436,17 @@
         display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 12px;
         padding: 16px 26px 20px; background: #fff; border-top: 1px solid #e2e8f0; flex-shrink: 0;
     }
+    .ai-gen-modal__foot .ai-test-build-marker {
+        flex: 1 1 100%;
+        order: -1;
+        margin: 0;
+        text-align: left;
+        font-size: 10px;
+        line-height: 1.35;
+        opacity: 0.55;
+        color: #64748b;
+    }
+    html.dark .ai-gen-modal__foot .ai-test-build-marker { color: #94a3b8; }
     .ai-gen-modal__foot .btn {
         padding: 11px 22px; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600;
     }
@@ -517,12 +539,174 @@
     html.dark .ai-gen-textarea--preview { background: #0f172a; border-color: #475569; color: #e2e8f0; }
     html.dark .ai-gen-select { background: #0f172a; border-color: #475569; color: #f1f5f9; }
     html.dark .ai-gen-modal__foot { background: #0f172a; border-color: #334155; }
+    html.dark .ai-studio-context-row { background: #0f172a; border-color: #334155; }
+    html.dark .ai-studio-context-row label { color: #94a3b8; }
     html.dark .ai-settings-panel { background: #0f172a; border-left: 1px solid #334155; }
     html.dark .ai-settings-panel__head { background: #1e293b; border-color: #334155; }
     html.dark .ai-settings-panel__head h4 { color: #f1f5f9; }
     html.dark .ai-registry-box { background: #020617; border-color: #334155; }
     html.dark .ai-registry-name { color: #e2e8f0; }
     html.dark .ai-register-row input, html.dark .ai-register-row select { background: #111827; border-color: #475569; color: #e5e7eb; }
+
+    /* ========== Agent 工作室布局（对标原型：左任务 / 中浏览器 / 右统计） ========== */
+    .ai-studio-header {
+        padding: 16px 22px 12px;
+        background: linear-gradient(135deg, #4f46e5 0%, #6366f1 45%, #7c3aed 100%);
+        color: #fff;
+        flex-shrink: 0;
+    }
+    .ai-studio-header__row1 {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .ai-session-title {
+        flex: 1 1 200px; min-width: 0;
+        padding: 10px 14px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.35);
+        background: rgba(255,255,255,0.12); color: #fff; font-size: 1.05rem; font-weight: 700;
+        box-sizing: border-box;
+    }
+    .ai-session-title::placeholder { color: rgba(255,255,255,0.55); }
+    .ai-studio-header__tools {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    }
+    .ai-studio-header__tools .ai-toolbar-btn {
+        padding: 8px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35);
+        background: rgba(255,255,255,0.15); color: #fff; font-size: 13px; font-weight: 600;
+        cursor: pointer; transition: background 0.15s;
+    }
+    .ai-studio-header__tools .ai-toolbar-btn:hover { background: rgba(255,255,255,0.28); }
+    .ai-studio-header__tools .ai-toolbar-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ai-studio-header__tools .ai-btn-run {
+        background: #fff; color: #4f46e5; border-color: #fff;
+        padding: 8px 20px; font-weight: 700;
+    }
+    .ai-studio-header__tools .ai-btn-run:hover { filter: brightness(1.05); }
+    .ai-studio-header__hint {
+        margin: 10px 0 0; font-size: 12px; opacity: 0.9; line-height: 1.45; max-width: 72ch;
+    }
+    .ai-studio-context-row {
+        display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-end;
+        padding: 12px 22px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+    }
+    .ai-studio-context-row label { font-size: 12px; font-weight: 600; color: #475569; display: flex; flex-direction: column; gap: 6px; }
+    .ai-studio-context-row select, .ai-studio-context-row input[type="url"] {
+        min-width: min(100%, 220px); padding: 8px 10px; border-radius: 10px; border: 1px solid #cbd5e1;
+        font-size: 14px; background: #fff; box-sizing: border-box;
+    }
+    .ai-studio-context-row .ai-pw-browser-select { min-height: 40px; width: 100%; }
+    .ai-studio-context-row .ctx-grow { flex: 1 1 280px; }
+    .ai-agent-studio-grid {
+        display: grid;
+        grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(260px, 300px);
+        gap: 0;
+        flex: 1 1 auto;
+        min-height: 0;
+        border-top: 1px solid #e2e8f0;
+    }
+    @media (max-width: 1200px) {
+        .ai-agent-studio-grid { grid-template-columns: 1fr; }
+        .ai-rail-right { border-left: none; border-top: 1px solid #e2e8f0; max-height: 420px; }
+    }
+    .ai-rail-left {
+        background: #eef2ff; border-right: 1px solid #c7d2fe;
+        padding: 16px 14px; overflow-y: auto;
+        display: flex; flex-direction: column; gap: 14px;
+    }
+    html.dark .ai-rail-left { background: #1e1b4b; border-color: #4338ca; }
+    .ai-flow-node--start {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 8px 14px; border-radius: 999px; background: #4f46e5; color: #fff;
+        font-size: 13px; font-weight: 700;
+    }
+    .ai-task-card {
+        background: #fff; border-radius: 14px; border: 1px solid #c7d2fe;
+        padding: 14px; box-shadow: 0 2px 8px rgba(79,70,229,0.08);
+    }
+    html.dark .ai-task-card { background: #0f172a; border-color: #4338ca; }
+    .ai-task-card__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .ai-task-card__agent {
+        font-size: 12px; font-weight: 700; color: #4338ca; background: #e0e7ff;
+        padding: 4px 10px; border-radius: 8px;
+    }
+    html.dark .ai-task-card__agent { color: #c7d2fe; background: #312e81; }
+    .ai-task-version {
+        flex: 1 1 120px; padding: 8px 10px; border-radius: 10px; border: 1px solid #cbd5e1;
+        font-size: 12px; box-sizing: border-box;
+    }
+    html.dark .ai-task-version { background: #111827; border-color: #475569; color: #e5e7eb; }
+    .ai-rail-left .ai-gen-label { margin-top: 4px; }
+    .ai-rail-left .ai-agent-engine-select {
+        width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #cbd5e1;
+        font-size: 13px; margin-bottom: 10px; box-sizing: border-box; background: #fff;
+    }
+    html.dark .ai-agent-engine-select { background: #111827; border-color: #475569; color: #f1f5f9; }
+    .ai-rail-left .ai-input-row { flex-direction: column; }
+    .ai-rail-left .ai-input-row textarea { min-height: 140px; max-height: 320px; }
+    .ai-rail-left .ai-input-actions { flex-direction: row; flex-wrap: wrap; }
+    .ai-chat-log--rail { min-height: 100px; max-height: 200px; margin-bottom: 0; margin-top: 12px; }
+    .ai-stage-center {
+        display: flex; flex-direction: column;
+        min-height: min(72vh, 820px);
+        min-width: 0;
+        background: #f1f5f9;
+        position: relative;
+    }
+    html.dark .ai-stage-center { background: #020617; }
+    .ai-stage-center .ai-browser-panel { border-radius: 0; border-left: none; border-right: none; }
+    .ai-agent-overlay {
+        position: absolute; left: 12px; top: 52px; z-index: 20;
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 16px; border-radius: 12px;
+        background: rgba(15, 23, 42, 0.88); color: #e2e8f0; font-size: 13px; font-weight: 600;
+        pointer-events: none; box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+        max-width: min(90%, 360px);
+    }
+    .ai-agent-overlay.is-hidden { display: none !important; }
+    .ai-agent-overlay .ai-pulse {
+        width: 10px; height: 10px; border-radius: 50%; background: #34d399;
+        animation: aiPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes aiPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.85); } }
+    .ai-agent-hitl-btn {
+        position: absolute; right: 16px; bottom: 56px; z-index: 25;
+        padding: 12px 18px; border-radius: 999px; border: none;
+        background: linear-gradient(135deg, #f59e0b, #ea580c); color: #fff;
+        font-size: 13px; font-weight: 700; cursor: pointer;
+        box-shadow: 0 4px 16px rgba(234, 88, 12, 0.45);
+        transition: transform 0.15s, filter 0.15s;
+    }
+    .ai-agent-hitl-btn:hover { transform: scale(1.03); filter: brightness(1.06); }
+    .ai-rail-right {
+        background: #fafafa; border-left: 1px solid #e2e8f0;
+        padding: 16px 14px; overflow-y: auto;
+        display: flex; flex-direction: column; gap: 14px;
+    }
+    html.dark .ai-rail-right { background: #0f172a; border-color: #334155; }
+    .ai-stats-card {
+        background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px;
+        font-size: 13px; color: #334155; line-height: 1.7;
+    }
+    html.dark .ai-stats-card { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+    .ai-stats-card strong { color: #4f46e5; font-size: 1.15em; }
+    html.dark .ai-stats-card strong { color: #a5b4fc; }
+    .ai-stat-status {
+        margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+        background: #eef2ff; color: #3730a3; font-weight: 600; font-size: 12px;
+    }
+    html.dark .ai-stat-status { background: #312e81; color: #c7d2fe; }
+    .ai-preview-in-rail .ai-gen-textarea--preview { min-height: 200px; max-height: 40vh; }
+    .ai-code-modal-backdrop {
+        display: none; position: fixed; inset: 0; z-index: 10070;
+        background: rgba(15,23,42,0.5); align-items: center; justify-content: center; padding: 20px;
+    }
+    .ai-code-modal-backdrop.is-open { display: flex; }
+    .ai-code-modal {
+        width: min(900px, 100%); max-height: 85vh; display: flex; flex-direction: column;
+        background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 25px 50px rgba(0,0,0,0.3);
+    }
+    html.dark .ai-code-modal { background: #0f172a; border: 1px solid #334155; }
+    .ai-code-modal__head { padding: 14px 18px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+    .ai-code-modal__body { padding: 14px; flex: 1; overflow: auto; }
+    .ai-code-modal__body pre { margin: 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 
     /* 添加模型弹窗 */
     .ai-add-modal-backdrop {
@@ -584,78 +768,76 @@
 </style>
 {% endblock %}
 {% block content %}
+<!-- ai-test template build: playwright-browser-dual 2026-04-24 (若页面源码无此注释，说明运行的不是本仓库当前模板) -->
 <div class="ai-test-page">
-    <div class="ai-test-shell">
-        <header class="ai-test-topbar">
-            <div class="ai-test-topbar__left">
+    <div class="ai-test-shell" style="display:flex;flex-direction:column;min-height:calc(100vh - 64px);">
+        <header class="ai-studio-header">
+            <div class="ai-studio-header__row1">
                 <a href="/list_projects" class="ai-test-back" title="返回项目" data-i18n-title="aitest_back_projects">←</a>
-                <div class="ai-test-topbar__titles">
-                    <h3 data-i18n="aitest_title">AI 测试工作台</h3>
-                    <p data-i18n="aitest_subtitle">上方描述场景并生成用例；中间为大画幅内置浏览器，用例预览在浏览器下方。请先打开页面再生成，便于步骤贴合真实页。</p>
+                <input type="text" class="ai-session-title" id="aiSessionTitle" value="AI 自动化任务" maxlength="120" autocomplete="off" aria-label="任务标题" data-i18n-placeholder="aitest_session_title_ph" placeholder="任务标题（如：提取购物车商品数量）">
+                <div class="ai-studio-header__tools">
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnViewCode" title="查看当前计划的 JSON">代码</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnSaveDraft" title="将草稿存到浏览器本地">保存</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnUndo" disabled>撤销</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnRedo" disabled>重做</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnParams" title="运行参数说明">参数</button>
+                    <button type="button" class="ai-toolbar-btn ai-btn-run" id="aiBtnRunAgent" data-i18n="aitest_btn_run" data-i18n-title="aitest_btn_run_title" title="与「生成预览」相同：根据左侧任务描述调用 AI 生成自动化步骤草案（结果在右侧「用例预览」，未点「生成并保存」前不会写入数据库）" aria-label="与生成预览相同：根据任务描述调用 AI 生成自动化步骤">运行</button>
+                    <div class="ai-model-chip" id="aiActiveModelChip" title="">
+                        <span data-i18n="aitest_model_chip">模型</span>
+                        <code id="aiActiveModelName">—</code>
+                    </div>
+                    <button type="button" class="ai-settings-trigger" id="aiOpenSettingsBtn" data-i18n-title="aitest_settings_aria" title="AI 设置" aria-expanded="false" aria-controls="aiSettingsPanel">
+                        <i class="fas fa-cog" aria-hidden="true"></i>
+                    </button>
                 </div>
             </div>
-            <div class="ai-test-topbar__right">
-                <div class="ai-model-chip" id="aiActiveModelChip" title="">
-                    <span data-i18n="aitest_model_chip">模型</span>
-                    <code id="aiActiveModelName">—</code>
-                </div>
-                <button type="button" class="ai-settings-trigger" id="aiOpenSettingsBtn" data-i18n-title="aitest_settings_aria" title="AI 设置" aria-expanded="false" aria-controls="aiSettingsPanel">
-                    <i class="fas fa-cog" aria-hidden="true"></i>
-                </button>
-            </div>
+            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">左栏：自然语言任务与推理引擎；中栏：实时内嵌页 + Playwright；右栏：统计与用例预览。先输入 URL 点「打开」，再点顶栏「运行」，步骤更贴页面。</p>
         </header>
 
-        <div class="ai-workflow-bar">
-            <span class="ai-workflow-bar__label" data-i18n="aitest_workflow_caption">建议流程</span>
-            <span class="ai-workflow-step"><span class="num">1</span><span data-i18n="aitest_step1_short">选项目与 URL</span></span>
-            <span class="ai-workflow-arrow">→</span>
-            <span class="ai-workflow-step"><span class="num">2</span><span>打开内置页</span></span>
-            <span class="ai-workflow-arrow">→</span>
-            <span class="ai-workflow-step"><span class="num">3</span><span data-i18n="aitest_step2_short">描述并生成</span></span>
-            <span class="ai-workflow-arrow">→</span>
-            <span class="ai-workflow-step"><span class="num">4</span><span data-i18n="aitest_step3_short">预览后保存</span></span>
+        <div class="ai-studio-context-row" aria-label="context">
+            <label class="ctx-grow"><span data-i18n="aitest_label_project">保存到项目</span>
+                <select id="aiProjectSelect"></select>
+            </label>
+            <label class="ctx-grow" style="flex:0 1 260px;"><span data-i18n="aitest_label_browser">自动化浏览器</span>
+                <select id="aiPlaywrightBrowserSelect" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 与「远程画布」默认使用；Chrome/Edge 需本机或镜像内已安装（playwright install chrome / msedge）"></select>
+            </label>
+            <label class="ctx-grow" style="flex:2 1 360px;"><span data-i18n="aitest_label_url">目标页面 URL</span>
+                <input type="url" id="aiTargetUrlInput" placeholder="https://example.com" data-i18n-placeholder="aitest_ph_url" autocomplete="url">
+            </label>
         </div>
 
-        <section class="ai-test-context" aria-label="context">
-            <div class="ai-test-context__title" data-i18n="aitest_context_section">测试归属与目标页面</div>
-            <div class="ai-test-context-grid">
-                <div>
-                    <label for="aiProjectSelect" data-i18n="aitest_label_project">保存到项目</label>
-                    <select id="aiProjectSelect"></select>
-                </div>
-                <div>
-                    <label for="aiTargetUrlInput" data-i18n="aitest_label_url">目标页面 URL（与下方「打开」共用）</label>
-                    <input type="url" id="aiTargetUrlInput" placeholder="https://example.com" data-i18n-placeholder="aitest_ph_url" autocomplete="url">
-                </div>
-            </div>
-        </section>
-
-        <div class="ai-gen-modal__body">
-            <div class="ai-stack-ai">
-            <div class="ai-card">
-                <div class="ai-card__title"><span class="ai-card__step">1</span><span data-i18n="aitest_col_left_title">描述场景并生成</span></div>
-                <div class="ai-card__content">
-                    <div id="aiChatHistory" class="ai-chat-log" role="log" aria-live="polite"></div>
-                    <label class="ai-gen-label" for="aiMessageInput" data-i18n="aitest_label_goal">测试目标描述</label>
+        <div class="ai-agent-studio-grid">
+            <aside class="ai-rail-left" aria-label="任务流">
+                <div class="ai-flow-node--start">开始</div>
+                <div class="ai-task-card">
+                    <div class="ai-task-card__head">
+                        <span class="ai-task-card__agent">智能体任务</span>
+                        <input type="text" class="ai-task-version" id="aiTaskVersion" placeholder="任务版本 / 标签（如 v7）" maxlength="80" autocomplete="off">
+                    </div>
+                    <label class="ai-gen-label" for="aiAgentEngineSelect">推理引擎</label>
+                    <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"></select>
+                    <label class="ai-gen-label" for="aiPlaywrightBrowserSelectRail" data-i18n="aitest_label_browser">自动化浏览器</label>
+                    <select id="aiPlaywrightBrowserSelectRail" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 与「远程画布」默认使用；Chrome/Edge 需本机或镜像内已安装（playwright install chrome / msedge）"></select>
+                    <label class="ai-gen-label" for="aiMessageInput" data-i18n="aitest_label_goal">任务目标（自然语言）</label>
                     <div class="ai-input-row">
-                        <textarea id="aiMessageInput" data-i18n-placeholder="aitest_ph_goal" placeholder="例如：在百度搜索「自动化测试」，验证结果页出现相关标题。"></textarea>
+                        <textarea id="aiMessageInput" data-i18n-placeholder="aitest_ph_goal" placeholder="例如：打开目标站 → 搜索商品 → 加入购物车 → 进入购物车页 → 提取数量信息（不结账）。"></textarea>
                         <div class="ai-input-actions">
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGenerateBtn" onclick="aiGeneratePreview()" data-i18n="aitest_btn_preview">生成预览</button>
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiContinueBtn" onclick="aiContinueRefine()" data-i18n="aitest_btn_refine">发送优化</button>
                         </div>
                     </div>
-                    <p class="ai-hint-inline" data-i18n="aitest_hint_flow_short">填写上方 URL 与场景后点「生成预览」。模型在右上角设置中配置。建议先在下栏打开目标页，再生成。</p>
-                    <ul class="ai-actions-help" aria-label="actions help">
-                        <li><strong data-i18n="aitest_btn_preview">生成预览</strong> — <span data-i18n="aitest_act_preview_expl">根据 URL 与场景生成步骤，仅更新预览，不写库。</span></li>
-                        <li><strong data-i18n="aitest_btn_refine">发送优化</strong> — <span data-i18n="aitest_act_refine_expl">在已有预览上，仅按输入框内补充说明再生成（需先有预览）。</span></li>
-                        <li><strong data-i18n="aitest_btn_save">生成并保存</strong> — <span data-i18n="aitest_act_save_expl">把当前预览写入项目（新建或追加到所选用例）。</span></li>
-                    </ul>
+                    <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;">「运行」或「生成预览」将调用已配置模型拆解步骤；若已连接<strong>远程画布</strong>，规划会附带当前远程页的 probe 控件摘要。<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 快速生成。顶栏标题在「生成并保存」时将作为用例名称。</p>
+                    <div id="aiChatHistory" class="ai-chat-log ai-chat-log--rail" role="log" aria-live="polite"></div>
                 </div>
-            </div>
-            </div>
+            </aside>
 
-            <div class="ai-stack-browser">
-            <div class="ai-browser-panel" aria-label="内置浏览器">
+            <section class="ai-stage-center" aria-label="浏览器舞台">
+            <div class="ai-browser-panel" aria-label="内置浏览器" style="flex:1;min-height:0;">
+                <div id="aiAgentWorkingOverlay" class="ai-agent-overlay is-hidden" aria-live="polite">
+                    <span class="ai-pulse" aria-hidden="true"></span>
+                    <span id="aiAgentOverlayText">特工正在工作</span>
+                </div>
+                <button type="button" class="ai-agent-hitl-btn" id="aiTakeControlBtn" title="暂停 AI 请求并放大浏览器，由您手动操作页面">掌控局面</button>
                 <div class="ai-browser-panel__head">
                     <span>内置浏览器 <span style="font-weight:500;opacity:.85;font-size:12px;">(本区域为 <strong>内嵌真实页面</strong>；部分站禁止嵌入或会长时间「读取中…」，为站点防护非本平台遮罩，请用「全屏内嵌 / 新窗口」尝试)</span></span>
                     <div class="ai-browser-panel__head-actions">
@@ -671,6 +853,8 @@
                     <div class="ai-browser-chrome__url">
                         <input type="url" id="aiBrowserUrlInput" placeholder="https:// 输入后点打开" autocomplete="url" title="与上方「目标页面 URL」同步">
                         <button type="button" class="ai-browser-chrome__go" id="aiBrowserOpenBtn">打开</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiRemoteEmbedStartBtn" style="white-space:nowrap;" disabled title="需配置 EMBEDDED_BROWSER_* 并启动 python -m embedded_browser_gateway">远程画布</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiRemoteEmbedStopBtn" style="white-space:nowrap;display:none;">断开远程</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserNewTabBtn" style="white-space:nowrap;" title="在系统默认浏览器中打开">新窗口</button>
                     </div>
                 </div>
@@ -682,7 +866,8 @@
                         sandbox="allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
                         referrerpolicy="no-referrer-when-downgrade"
                         src="about:blank"></iframe>
-                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">在上方输入以 https 开头的地址并点「打开」。此处为真实网页（非截图）；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。下方「拉取结构」等仍使用本机 **Playwright 会话**（与「打开」时地址同步）。</div>
+                    <canvas id="aiRemoteBrowserCanvas" class="ai-remote-canvas" width="1280" height="720" tabindex="0" aria-label="远程 Chromium 画面（点击后可键盘操作）"></canvas>
+                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">在上方输入以 https 开头的地址并点「打开」。此处为真实网页；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。下方「拉取结构」等仍使用本机 **Playwright 会话**（与「打开」时地址同步）。</div>
                 </div>
                 <aside class="ai-browser-tools--dock is-collapsed" id="aiBrowserToolsAside" aria-label="内嵌区右侧工具（与页面并排，不叠在页面上方）">
                     <button type="button" class="ai-browser-tools-collapse" id="aiBrowserToolsCollapseBtn" title="展开/折叠工具" aria-expanded="false">⟨</button>
@@ -708,7 +893,7 @@
                         <label class="ai-gen-label" for="aiBrowserAiHint">补充说明（可选）</label>
                         <textarea id="aiBrowserAiHint" rows="3" style="width:100%; box-sizing:border-box; border-radius:8px; border:1px solid #cbd5e1; padding:8px; font-size:12px;" placeholder="例如：覆盖搜索并验证结果列表"></textarea>
                         <button type="button" class="btn btn-primary btn-sm" id="aiBrowserAiRunBtn" style="width:100%; margin-top:10px;">分析当前页并生成用例</button>
-                        <p class="text-muted" style="margin:10px 0 0;font-size:11px;">将把当前页可交互结构发给模型，结果写入下方「用例预览」。</p>
+                        <p class="text-muted" style="margin:10px 0 0;font-size:11px;">将把<strong>当前页</strong>可交互结构发给模型（远程画布连接时使用<strong>远程 Chromium</strong>中的页面，否则使用主 Playwright 会话），结果写入下方「用例预览」。</p>
                     </div>
                     </div>
                 </aside>
@@ -720,28 +905,47 @@
                 </div>
                 </div>
             </div>
+            </section>
 
-            <div class="ai-preview-section">
-            <div class="ai-card">
-                <div class="ai-card__title"><span class="ai-card__step">2</span><span data-i18n="aitest_col_right_title">预览与保存到用例</span></div>
-                <div class="ai-card__content">
+            <aside class="ai-rail-right" aria-label="执行统计与用例预览">
+                <div class="ai-stats-card">
+                    <div>行动次数（规划）: <strong id="aiStatActions">0</strong></div>
+                    <div>步数: <strong id="aiStatSteps">0</strong></div>
+                    <div class="ai-stat-status" id="aiStatStatus" data-i18n="aitest_stat_ready">就绪 — 点击「运行」或「生成预览」开始</div>
+                    <p class="ai-stat-run-expl" style="margin:8px 0 0;font-size:11px;line-height:1.45;opacity:.88;" data-i18n="aitest_stat_run_expl">「运行」与下方「生成预览」相同：用 AI 根据左侧描述生成步骤，结果在下方「用例预览」。</p>
+                </div>
+                <div class="ai-preview-in-rail">
                     <label class="ai-gen-label" for="aiTargetCaseSelect" data-i18n="aitest_target_case_label">保存方式</label>
                     <select id="aiTargetCaseSelect" class="ai-gen-select" style="margin-bottom:10px;">
                         <option value="" data-i18n="aitest_new_case">+ 新建用例（不追加）</option>
                     </select>
                     <label class="ai-gen-label" for="aiGeneratedPreview" data-i18n="aitest_preview_label">用例预览</label>
                     <textarea id="aiGeneratedPreview" class="ai-gen-textarea--preview" rows="10" readonly data-i18n-placeholder="aitest_preview_ph" placeholder="生成的用例预览将显示在这里…"></textarea>
-                    <p class="ai-hint-inline" style="margin-top:10px; font-size:12px;" id="aiEditCaseHint">保存后在项目用例中继续编步骤与定位。<a href="#" id="aiOpenCaseListLink" style="color:#4f46e5;font-weight:600;">打开用例列表</a></p>
+                    <p class="ai-hint-inline" style="margin-top:10px; font-size:11px;" id="aiEditCaseHint">保存后在项目用例中继续编步骤与定位。<a href="#" id="aiOpenCaseListLink" style="color:#4f46e5;font-weight:600;">打开用例列表</a></p>
                 </div>
-            </div>
-            </div>
-            </div>
+            </aside>
         </div>
 
         <footer class="ai-gen-modal__foot">
+            <span id="aiTestBuildMarker" class="ai-test-build-marker" title="在开发者工具 Elements 中搜索 playwright-browser-dual；并查看本页文档请求的 Response Headers 是否含 X-AI-Test-Template">build: playwright-browser-dual-2026-04-24</span>
             <button type="button" class="btn btn-secondary" onclick="window.location.href='/list_projects'" data-i18n="aitest_btn_projects">项目列表</button>
             <button type="button" class="btn btn-primary" id="aiGenerateSaveBtn" onclick="aiGenerateAndSaveCase()" data-i18n="aitest_btn_save">生成并保存</button>
         </footer>
+    </div>
+</div>
+
+<div class="ai-code-modal-backdrop" id="aiCodeModalBackdrop" onclick="window.closeAiCodeModal()" aria-hidden="true">
+    <div class="ai-code-modal" onclick="event.stopPropagation()">
+        <div class="ai-code-modal__head">
+            <strong>当前计划 JSON</strong>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <button type="button" class="btn btn-secondary btn-sm" id="aiCodeModalCopyBtn" onclick="window.copyAiPlanJson()">复制</button>
+                <button type="button" class="ai-settings-close" onclick="window.closeAiCodeModal()" aria-label="关闭">&times;</button>
+            </div>
+        </div>
+        <div class="ai-code-modal__body">
+            <pre id="aiCodeModalPre">{}</pre>
+        </div>
     </div>
 </div>
 
@@ -843,8 +1047,145 @@
     let activeProfileId = '';
     let providerCatalog = null;
     let allCasesList = [];
+    let aiPlanAbort = null;
+    let aiUndoStack = [];
+    let aiRedoStack = [];
+    if (!window.aiRemoteEmbedded) {
+        window.aiRemoteEmbedded = {
+            sessionId: null, ws: null, pingTimer: null, scaleX: 1, scaleY: 1,
+            gatewayEnabled: false, canvasWired: false
+        };
+    }
+    const AI_UNDO_MAX = 24;
+    const AI_DRAFT_KEY = 'uat_ai_agent_draft_v1';
 
     function escapeHtml(text) { if (!text) return ''; const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
+
+    function setAgentBusy(on, overlayText) {
+        var ov = document.getElementById('aiAgentWorkingOverlay');
+        var tx = document.getElementById('aiAgentOverlayText');
+        if (tx && overlayText) tx.textContent = overlayText;
+        if (ov) ov.classList.toggle('is-hidden', !on);
+    }
+
+    function setAgentStatusLine(msg) {
+        var el = document.getElementById('aiStatStatus');
+        if (el) el.textContent = msg || '';
+    }
+
+    function countPlanActions(steps) {
+        if (!steps || !steps.length) return 0;
+        var act = { click: 1, input: 1, fill: 1, navigate: 1, submit: 1, select: 1, batch_input: 1, keypress: 1 };
+        var n = 0;
+        for (var i = 0; i < steps.length; i++) {
+            var a = (steps[i].action || '').toLowerCase();
+            if (act[a]) n++;
+        }
+        return n;
+    }
+
+    function updateStatsFromPlan(plan) {
+        var steps = (plan && plan.steps) ? plan.steps : [];
+        var sa = document.getElementById('aiStatActions');
+        var ss = document.getElementById('aiStatSteps');
+        if (ss) ss.textContent = String(steps.length);
+        if (sa) sa.textContent = String(countPlanActions(steps));
+    }
+
+    function getDraftState() {
+        return {
+            title: (document.getElementById('aiSessionTitle') && document.getElementById('aiSessionTitle').value) || '',
+            version: (document.getElementById('aiTaskVersion') && document.getElementById('aiTaskVersion').value) || '',
+            goal: (document.getElementById('aiMessageInput') && document.getElementById('aiMessageInput').value) || '',
+            plan: latestAiPlan ? JSON.parse(JSON.stringify(latestAiPlan)) : null
+        };
+    }
+
+    function applyDraftState(s) {
+        if (!s) return;
+        var t = document.getElementById('aiSessionTitle');
+        var v = document.getElementById('aiTaskVersion');
+        var g = document.getElementById('aiMessageInput');
+        if (t && s.title != null) t.value = s.title;
+        if (v && s.version != null) v.value = s.version;
+        if (g && s.goal != null) g.value = s.goal;
+        latestAiPlan = s.plan || null;
+        if (latestAiPlan) renderAiPreview(latestAiPlan);
+        else {
+            var p = document.getElementById('aiGeneratedPreview');
+            if (p) p.value = '';
+        }
+        updateStatsFromPlan(latestAiPlan);
+        syncAiSendButtons();
+    }
+
+    function pushUndoSnapshot() {
+        aiUndoStack.push(getDraftState());
+        if (aiUndoStack.length > AI_UNDO_MAX) aiUndoStack.shift();
+        aiRedoStack = [];
+        syncUndoRedoButtons();
+    }
+
+    function syncUndoRedoButtons() {
+        var u = document.getElementById('aiBtnUndo');
+        var r = document.getElementById('aiBtnRedo');
+        if (u) u.disabled = aiUndoStack.length === 0;
+        if (r) r.disabled = aiRedoStack.length === 0;
+    }
+
+    function syncAgentEngineSelect() {
+        var m = document.getElementById('aiModelSelect');
+        var a = document.getElementById('aiAgentEngineSelect');
+        if (!m || !a) return;
+        a.innerHTML = m.innerHTML;
+        a.value = m.value || '';
+        if (!a.value && a.options.length) a.selectedIndex = 0;
+    }
+
+    window.closeAiCodeModal = function() {
+        var b = document.getElementById('aiCodeModalBackdrop');
+        if (b) { b.classList.remove('is-open'); b.setAttribute('aria-hidden', 'true'); }
+    };
+
+    window.openAiCodeModal = function() {
+        var pre = document.getElementById('aiCodeModalPre');
+        var b = document.getElementById('aiCodeModalBackdrop');
+        if (pre) {
+            try {
+                pre.textContent = latestAiPlan ? JSON.stringify(latestAiPlan, null, 2) : '// 尚无计划，请先生成预览';
+            } catch (e) {
+                pre.textContent = String(e);
+            }
+        }
+        if (b) { b.classList.add('is-open'); b.setAttribute('aria-hidden', 'false'); }
+    };
+
+    window.copyAiPlanJson = async function() {
+        var text = '';
+        try {
+            text = latestAiPlan ? JSON.stringify(latestAiPlan, null, 2) : '';
+        } catch (e) {
+            alert('无法序列化: ' + e.message);
+            return;
+        }
+        if (!text) { alert('当前无计划可复制'); return; }
+        try {
+            await navigator.clipboard.writeText(text);
+            setAgentStatusLine('已复制计划 JSON 到剪贴板');
+        } catch (e) {
+            try {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                setAgentStatusLine('已复制计划 JSON');
+            } catch (e2) {
+                alert('复制失败，请手动全选复制');
+            }
+        }
+    };
 
     function normalizeUrlForEmbed(u) {
         u = (u || '').trim();
@@ -913,6 +1254,12 @@
     async function updateBrowserStatusLine() {
         const el = document.getElementById('aiBrowserMeta');
         if (!el) return;
+        if (aiRemoteSessionLive()) {
+            var ru = (document.getElementById('aiBrowserUrlInput') && document.getElementById('aiBrowserUrlInput').value) || el.title || '';
+            el.textContent = '远程 Chromium（CDP）：' + (ru.trim() || '已连接 — 点击画布可键盘输入');
+            el.title = ru.trim();
+            return;
+        }
         const prefix = '自动化(Playwright)：';
         try {
             const resp = await fetch('/api/browser/status', { credentials: 'same-origin' });
@@ -940,6 +1287,14 @@
         if (b) b.value = u;
         const btn = document.getElementById('aiBrowserOpenBtn');
         if (btn) { btn.disabled = true; }
+        if (window.aiRemoteEmbedded && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1) {
+            window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'navigate', url: u }));
+            const ph = document.getElementById('aiBrowserPlaceholder');
+            if (ph) { ph.classList.add('is-hidden'); }
+            if (btn) { btn.disabled = false; }
+            aiSetRemoteBrowserMeta(u);
+            return;
+        }
         const iframe = document.getElementById('aiBrowserEmbed');
         if (iframe) { iframe.src = u; }
         const ph = document.getElementById('aiBrowserPlaceholder');
@@ -978,6 +1333,13 @@
     }
 
     async function aiBrowserHistory(action) {
+        if (window.aiRemoteEmbedded && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1) {
+            const ws = window.aiRemoteEmbedded.ws;
+            if (action === 'reload') ws.send(JSON.stringify({ t: 'reload' }));
+            else if (action === 'back') ws.send(JSON.stringify({ t: 'go_back' }));
+            else if (action === 'forward') ws.send(JSON.stringify({ t: 'go_forward' }));
+            return;
+        }
         const iframe = document.getElementById('aiBrowserEmbed');
         if (action === 'reload') {
             if (iframe) {
@@ -1030,30 +1392,50 @@
 
     async function aiRunBrowserPageAi() {
         if (aiProfiles && aiProfiles.length > 0 && !getSelectedAiModel()) {
-            appendAiChat('assistant', '请先在右上角「AI 设置」中选择推理模型。');
+            appendAiChat('assistant', '请先在「推理引擎」或设置中选择模型。');
             return;
         }
+        pushUndoSnapshot();
         const hintEl = document.getElementById('aiBrowserAiHint');
         const hint = (hintEl && hintEl.value || '').trim();
         const btn = document.getElementById('aiBrowserAiRunBtn');
         if (btn) { btn.disabled = true; }
+        if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
+        aiPlanAbort = new AbortController();
+        setAgentBusy(true, '分析页面…');
+        setAgentStatusLine('结合当前页 DOM 生成步骤…');
         try {
             const payload = { hint: hint, project_name: currentProjectName, model: getSelectedAiModel() };
+            if (aiRemoteSessionLive() && window.aiRemoteEmbedded.sessionId) {
+                payload.embedded_session_id = window.aiRemoteEmbedded.sessionId;
+            }
             const resp = await fetch('/api/browser/ai-analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
                 credentials: 'same-origin',
+                signal: aiPlanAbort.signal,
             });
             const data = await resp.json().catch(function() { return {}; });
             if (!resp.ok || !data.success) throw new Error((data && data.error) || '生成失败');
             latestAiPlan = data.plan;
             renderAiPreview(latestAiPlan);
-            appendAiChat('assistant', '已根据当前页结构生成用例《' + ((latestAiPlan && latestAiPlan.case_name) || '未命名') + '》，并写入用例预览。');
+            var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
+            appendAiChat('assistant', '已根据当前页结构生成用例《' + ((latestAiPlan && latestAiPlan.case_name) || '未命名') + '》，共 ' + n + ' 步。');
+            setAgentStatusLine('页面分析完成 — ' + n + ' 步');
         } catch (e) {
-            appendAiChat('assistant', '页面 AI 分析失败: ' + (e && e.message ? e.message : e));
+            if (e && e.name === 'AbortError') {
+                appendAiChat('assistant', '页面分析已取消。');
+                setAgentStatusLine('已取消分析');
+            } else {
+                appendAiChat('assistant', '页面 AI 分析失败: ' + (e && e.message ? e.message : e));
+                setAgentStatusLine('页面分析失败');
+            }
         } finally {
+            setAgentBusy(false);
+            aiPlanAbort = null;
             if (btn) { btn.disabled = false; }
+            syncUndoRedoButtons();
         }
     }
 
@@ -1064,7 +1446,10 @@
         if (btn) { btn.disabled = true; }
         out.textContent = '加载中…';
         try {
-            const resp = await fetch('/api/browser/inspect', { credentials: 'same-origin' });
+            var sid = window.aiRemoteEmbedded && window.aiRemoteEmbedded.sessionId;
+            var useRemote = sid && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1;
+            var url = useRemote ? ('/api/embedded-browser/session/' + sid + '/inspect') : '/api/browser/inspect';
+            const resp = await fetch(url, { credentials: 'same-origin' });
             const raw = await resp.text();
             var data;
             try { data = JSON.parse(raw); } catch (e) { throw new Error(raw.slice(0, 200)); }
@@ -1084,7 +1469,10 @@
         if (btn) { btn.disabled = true; }
         out.textContent = '加载中…';
         try {
-            const resp = await fetch('/api/browser/diagnostics', { credentials: 'same-origin' });
+            var sid = window.aiRemoteEmbedded && window.aiRemoteEmbedded.sessionId;
+            var useRemote = sid && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1;
+            var url = useRemote ? ('/api/embedded-browser/session/' + sid + '/diagnostics') : '/api/browser/diagnostics';
+            const resp = await fetch(url, { credentials: 'same-origin' });
             const data = await resp.json().catch(function() { return {}; });
             if (!resp.ok || !data.success) throw new Error((data && data.error) || ('HTTP ' + resp.status));
             out.textContent = JSON.stringify(data.data, null, 2);
@@ -1093,6 +1481,268 @@
         } finally {
             if (btn) { btn.disabled = false; }
         }
+    }
+
+    function aiRemoteSessionLive() {
+        return !!(window.aiRemoteEmbedded && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1);
+    }
+
+    function aiSetRemoteBrowserMeta(url) {
+        var el = document.getElementById('aiBrowserMeta');
+        if (el) {
+            el.textContent = '远程 Chromium（CDP）：' + (url || '已连接');
+            el.title = url || '';
+        }
+    }
+
+    function aiSyncRemoteCanvasScale() {
+        var canvas = document.getElementById('aiRemoteBrowserCanvas');
+        if (!canvas || canvas.style.display === 'none') return;
+        var rect = canvas.getBoundingClientRect();
+        window.aiRemoteEmbedded.scaleX = canvas.width / Math.max(rect.width, 1);
+        window.aiRemoteEmbedded.scaleY = canvas.height / Math.max(rect.height, 1);
+    }
+
+    function pwBrowserSelectEls() {
+        return Array.prototype.slice.call(document.querySelectorAll('select.ai-pw-browser-select'));
+    }
+
+    (function wirePwBrowserSelectSync() {
+        if (window.__pwBrowserSelectDelegated) return;
+        window.__pwBrowserSelectDelegated = true;
+        document.addEventListener('change', function(ev) {
+            var t = ev.target;
+            if (!t || !t.classList || !t.classList.contains('ai-pw-browser-select')) return;
+            var v = t.value;
+            pwBrowserSelectEls().forEach(function(s) {
+                if (s !== t) s.value = v;
+            });
+            (async function() {
+                try {
+                    var r2 = await fetch('/api/playwright/browser', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ browser: v })
+                    });
+                    var d2 = await r2.json().catch(function() { return {}; });
+                    if (r2.ok && d2.success) {
+                        var label = (t.options[t.selectedIndex] && t.options[t.selectedIndex].text) || v;
+                        appendAiChat('assistant', '已切换自动化浏览器为「' + label + '」。请再次点「打开」或重连远程画布以使用新引擎。');
+                    } else {
+                        alert((d2 && d2.error) || '保存失败');
+                    }
+                } catch (e2) { alert(e2 && e2.message ? e2.message : String(e2)); }
+            })();
+        }, true);
+    })();
+
+    async function loadPlaywrightBrowserSelect() {
+        var sels = pwBrowserSelectEls();
+        if (!sels.length) return;
+        var options = [];
+        var current = 'chromium';
+        try {
+            var r = await fetch('/api/playwright/browser', { credentials: 'same-origin' });
+            var d = await r.json().catch(function() { return {}; });
+            if (r.ok && d.success && (d.options || []).length) {
+                options = d.options;
+                current = d.current || 'chromium';
+            }
+        } catch (e) { console.warn(e); }
+        if (!options.length) {
+            options = [
+                { id: 'chromium', label_zh: 'Chromium（Playwright 内置）', label_en: 'Chromium (bundled)' },
+                { id: 'chrome', label_zh: 'Google Chrome（本机渠道）', label_en: 'Google Chrome' },
+                { id: 'edge', label_zh: 'Microsoft Edge（本机渠道）', label_en: 'Microsoft Edge' },
+                { id: 'firefox', label_zh: 'Firefox', label_en: 'Firefox' },
+                { id: 'webkit', label_zh: 'WebKit', label_en: 'WebKit' }
+            ];
+        }
+        var lang = (typeof localStorage !== 'undefined' && localStorage.getItem('ui_lang') === 'en') ? 'en' : 'zh';
+        function optLabel(o) {
+            return lang === 'en' ? (o.label_en || o.label_zh || o.id) : (o.label_zh || o.label_en || o.id);
+        }
+        sels.forEach(function(sel) {
+            sel.innerHTML = '';
+            options.forEach(function(o) {
+                var opt = document.createElement('option');
+                opt.value = o.id;
+                opt.textContent = optLabel(o);
+                sel.appendChild(opt);
+            });
+            sel.value = current;
+            if (!Array.prototype.some.call(sel.options, function(o) { return o.value === sel.value; })) {
+                sel.value = 'chromium';
+            }
+        });
+    }
+
+    async function aiRefreshEmbeddedGatewayHint() {
+        var btn = document.getElementById('aiRemoteEmbedStartBtn');
+        try {
+            var r = await fetch('/api/embedded-browser/status', { credentials: 'same-origin' });
+            var d = await r.json().catch(function() { return {}; });
+            window.aiRemoteEmbedded.gatewayEnabled = !!(d && d.enabled && d.ws_base_configured);
+            if (btn) {
+                btn.disabled = !window.aiRemoteEmbedded.gatewayEnabled;
+                btn.title = window.aiRemoteEmbedded.gatewayEnabled
+                    ? '启动服务端 Chromium 远程画布（独立进程：python -m embedded_browser_gateway）'
+                    : '未就绪：请配置 EMBEDDED_BROWSER_GATEWAY_URL、SECRET、PUBLIC_WS_BASE 并启动网关';
+            }
+        } catch (e) {
+            if (btn) { btn.disabled = true; }
+        }
+    }
+
+    function aiWireRemoteEmbeddedCanvas() {
+        if (window.aiRemoteEmbedded.canvasWired) return;
+        var canvas = document.getElementById('aiRemoteBrowserCanvas');
+        if (!canvas) return;
+        window.aiRemoteEmbedded.canvasWired = true;
+        canvas.addEventListener('click', function(e) {
+            if (!aiRemoteSessionLive()) return;
+            try { canvas.focus(); } catch (e0) {}
+            aiSyncRemoteCanvasScale();
+            var rect = canvas.getBoundingClientRect();
+            var x = (e.clientX - rect.left) * window.aiRemoteEmbedded.scaleX;
+            var y = (e.clientY - rect.top) * window.aiRemoteEmbedded.scaleY;
+            window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'click', x: x, y: y }));
+        });
+        canvas.addEventListener('wheel', function(e) {
+            if (!aiRemoteSessionLive()) return;
+            e.preventDefault();
+            window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'wheel', dx: e.deltaX, dy: e.deltaY }));
+        }, { passive: false });
+        canvas.addEventListener('keydown', function(e) {
+            if (!aiRemoteSessionLive()) return;
+            try {
+                window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'keydown', key: e.key }));
+            } catch (err) {}
+        });
+        canvas.addEventListener('keyup', function(e) {
+            if (!aiRemoteSessionLive()) return;
+            try {
+                window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'keyup', key: e.key }));
+            } catch (err) {}
+        });
+        window.addEventListener('resize', function() { aiSyncRemoteCanvasScale(); });
+    }
+
+    async function aiStartRemoteEmbedded() {
+        if (aiRemoteSessionLive()) { alert('远程画布已连接'); return; }
+        if (!window.aiRemoteEmbedded.gatewayEnabled) {
+            alert('远程网关未配置或未就绪，请检查环境变量与 embedded_browser_gateway 进程。');
+            return;
+        }
+        var startBtn = document.getElementById('aiRemoteEmbedStartBtn');
+        var stopBtn = document.getElementById('aiRemoteEmbedStopBtn');
+        var u = normalizeUrlForEmbed((document.getElementById('aiTargetUrlInput') || {}).value || (document.getElementById('aiBrowserUrlInput') || {}).value || '');
+        var body = {};
+        if (u) body.initial_url = u;
+        var pbs = document.querySelector('select.ai-pw-browser-select');
+        if (pbs && pbs.value) body.browser = pbs.value;
+        if (startBtn) { startBtn.disabled = true; }
+        try {
+            var resp = await fetch('/api/embedded-browser/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            });
+            var data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok || !data.success) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
+            var canvas = document.getElementById('aiRemoteBrowserCanvas');
+            var iframe = document.getElementById('aiBrowserEmbed');
+            var ph = document.getElementById('aiBrowserPlaceholder');
+            if (iframe) iframe.style.display = 'none';
+            if (ph) ph.classList.add('is-hidden');
+            if (canvas) canvas.style.display = 'block';
+            window.aiRemoteEmbedded.sessionId = data.session_id;
+            var ws = new WebSocket(data.ws_url);
+            window.aiRemoteEmbedded.ws = ws;
+            ws.onmessage = function(ev) {
+                var msg = JSON.parse(ev.data);
+                if (msg.t === 'frame' && msg.data && canvas) {
+                    var img = new Image();
+                    img.onload = function() {
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        var ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        aiSyncRemoteCanvasScale();
+                    };
+                    img.src = 'data:image/jpeg;base64,' + msg.data;
+                } else if (msg.t === 'navigated' && msg.url) {
+                    var bi = document.getElementById('aiBrowserUrlInput');
+                    var ta = document.getElementById('aiTargetUrlInput');
+                    if (bi) bi.value = msg.url;
+                    if (ta) ta.value = msg.url;
+                    aiSetRemoteBrowserMeta(msg.url);
+                    updateBrowserStatusLine();
+                }
+            };
+            ws.onopen = function() {
+                if (startBtn) startBtn.style.display = 'none';
+                if (stopBtn) stopBtn.style.display = '';
+                if (window.aiRemoteEmbedded.pingTimer) clearInterval(window.aiRemoteEmbedded.pingTimer);
+                window.aiRemoteEmbedded.pingTimer = setInterval(function() {
+                    if (window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1) {
+                        try { window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'ping' })); } catch (e) {}
+                    }
+                }, 25000);
+                aiSetRemoteBrowserMeta(u || '');
+                try { canvas.focus(); } catch (e2) {}
+                appendAiChat('assistant', '远程 Chromium 已连接：画面来自服务端 CDP；点击画布可键鼠操作。「分析当前页并生成用例」将使用本远程页 DOM。');
+            };
+            ws.onclose = function() {
+                if (window.aiRemoteEmbedded.pingTimer) clearInterval(window.aiRemoteEmbedded.pingTimer);
+                window.aiRemoteEmbedded.pingTimer = null;
+                window.aiRemoteEmbedded.ws = null;
+                var c = document.getElementById('aiRemoteBrowserCanvas');
+                var ifr = document.getElementById('aiBrowserEmbed');
+                if (c) { c.style.display = 'none'; try { var cx = c.getContext('2d'); if (cx) cx.clearRect(0, 0, c.width, c.height); } catch (e2) {} }
+                if (ifr) ifr.style.display = '';
+                if (startBtn) { startBtn.style.display = ''; startBtn.disabled = !window.aiRemoteEmbedded.gatewayEnabled; }
+                if (stopBtn) stopBtn.style.display = 'none';
+                window.aiRemoteEmbedded.sessionId = null;
+                updateBrowserStatusLine();
+            };
+            ws.onerror = function() {
+                try { ws.close(); } catch (e) {}
+            };
+        } catch (e) {
+            alert('远程画布启动失败: ' + (e && e.message ? e.message : e));
+            if (startBtn) startBtn.disabled = !window.aiRemoteEmbedded.gatewayEnabled;
+        }
+    }
+
+    async function aiStopRemoteEmbedded() {
+        if (window.aiRemoteEmbedded.pingTimer) { clearInterval(window.aiRemoteEmbedded.pingTimer); }
+        window.aiRemoteEmbedded.pingTimer = null;
+        var sid = window.aiRemoteEmbedded.sessionId;
+        if (window.aiRemoteEmbedded.ws) {
+            try { window.aiRemoteEmbedded.ws.close(); } catch (e) {}
+            window.aiRemoteEmbedded.ws = null;
+        }
+        window.aiRemoteEmbedded.sessionId = null;
+        if (sid) {
+            try {
+                await fetch('/api/embedded-browser/session/' + sid, { method: 'DELETE', credentials: 'same-origin' });
+            } catch (e) {}
+        }
+        var canvas = document.getElementById('aiRemoteBrowserCanvas');
+        var iframe = document.getElementById('aiBrowserEmbed');
+        if (canvas) {
+            canvas.style.display = 'none';
+            try { var ctx = canvas.getContext('2d'); if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height); } catch (e) {}
+        }
+        if (iframe) iframe.style.display = '';
+        var sb = document.getElementById('aiRemoteEmbedStartBtn');
+        var st = document.getElementById('aiRemoteEmbedStopBtn');
+        if (sb) { sb.style.display = ''; sb.disabled = !window.aiRemoteEmbedded.gatewayEnabled; }
+        if (st) st.style.display = 'none';
+        updateBrowserStatusLine();
     }
 
     function composeAiGoal() {
@@ -1114,7 +1764,12 @@
         chat.scrollTop = chat.scrollHeight;
     }
 
-    function getSelectedAiModel() { const el = document.getElementById('aiModelSelect'); return (el && el.value) ? el.value.trim() : ''; }
+    function getSelectedAiModel() {
+        var eng = document.getElementById('aiAgentEngineSelect');
+        if (eng && eng.value) return eng.value.trim();
+        var el = document.getElementById('aiModelSelect');
+        return (el && el.value) ? el.value.trim() : '';
+    }
     function profileLabel(p) {
         if (!p) return '';
         const z = (typeof t === 'function' && providerCatalog && providerCatalog.providers) ? providerCatalog.providers.find(function(x) { return x.id === p.provider; }) : null;
@@ -1349,7 +2004,22 @@
                         return '<option value="' + escapeHtml(p.id) + '"' + sel + '>' + escapeHtml(profileLabel(p)) + '</option>';
                     }).join('')
                     : '<option value="">' + (typeof t === 'function' ? t('aitest_no_profiles') : '暂无已注册模型') + '</option>';
-                modelSelect.onchange = updateActiveModelChip;
+                modelSelect.onchange = function() {
+                    updateActiveModelChip();
+                    var eng = document.getElementById('aiAgentEngineSelect');
+                    if (eng) eng.value = modelSelect.value;
+                };
+            }
+            syncAgentEngineSelect();
+            var engSel = document.getElementById('aiAgentEngineSelect');
+            if (engSel && !engSel._wired) {
+                engSel._wired = true;
+                engSel.addEventListener('change', function() {
+                    var m = document.getElementById('aiModelSelect');
+                    if (m) m.value = engSel.value;
+                    updateActiveModelChip();
+                    if (typeof window.saveActiveAiModel === 'function') window.saveActiveAiModel();
+                });
             }
             const regOllama = ollamaRegisteredModelIds();
             const pick = document.getElementById('aiOllamaNewSelect');
@@ -1425,6 +2095,7 @@
     function renderAiPreview(plan) {
         const preview = document.getElementById('aiGeneratedPreview');
         if (!preview) return;
+        var st = (document.getElementById('aiSessionTitle') && document.getElementById('aiSessionTitle').value || '').trim();
         const fmtStep = (s, idx) => {
             const a = (s.action || '').toLowerCase();
             if (a === 'navigate') {
@@ -1435,7 +2106,9 @@
         };
         const steps = (plan.steps || []).map((s, idx) => fmtStep(s, idx));
         const warnings = (plan.warnings || []).map(w => '! ' + w);
-        preview.value = '用例名称: ' + (plan.case_name || '') + '\nURL: ' + (plan.case_url || '') + '\n描述: ' + (plan.description || '') + '\n前置: ' + (plan.precondition || '') + '\n预期: ' + (plan.expected_result || '') + '\n\n步骤:\n' + steps.join('\n') + '\n\n风险:\n' + (warnings.join('\n') || '无');
+        var displayName = st || plan.case_name || '';
+        preview.value = '用例名称: ' + displayName + (st && plan.case_name && st !== plan.case_name ? '（保存时将使用顶栏标题）' : '') + '\nURL: ' + (plan.case_url || '') + '\n描述: ' + (plan.description || '') + '\n前置: ' + (plan.precondition || '') + '\n预期: ' + (plan.expected_result || '') + '\n\n步骤:\n' + steps.join('\n') + '\n\n风险:\n' + (warnings.join('\n') || '无');
+        updateStatsFromPlan(plan);
     }
 
     function tBtn(key, fallback) {
@@ -1453,11 +2126,12 @@
         if (opts.loadingHint !== false) {
             appendAiChat('assistant', '正在请求本地模型（可能需要数十秒至数分钟，请耐心等待）…');
         }
-        var ctl = new AbortController();
-        var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, (opts.timeoutMs != null) ? opts.timeoutMs : 300000);
+        var ctl = opts.signal ? null : new AbortController();
+        var sig = opts.signal || (ctl && ctl.signal);
+        var timer = opts.signal ? null : setTimeout(function() { try { if (ctl) ctl.abort(); } catch (e) {} }, (opts.timeoutMs != null) ? opts.timeoutMs : 300000);
         try {
-            var resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: ctl.signal, credentials: 'same-origin' });
-            clearTimeout(timer);
+            var resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: sig, credentials: 'same-origin' });
+            if (timer) clearTimeout(timer);
             var raw = await resp.text();
             var data;
             try {
@@ -1468,9 +2142,9 @@
             if (!resp.ok || !data.success) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
             return data;
         } catch (e) {
-            clearTimeout(timer);
+            if (timer) clearTimeout(timer);
             if (e && e.name === 'AbortError') {
-                throw new Error('浏览器侧等待超时。若 Ollama 仍在推理，可在服务器环境增大 LOCAL_LLM_TIMEOUT 或换用更小模型。');
+                throw new Error(opts.userAbortMessage || '请求已取消（人工接管或超时）。');
             }
             throw e;
         }
@@ -1483,44 +2157,127 @@
             if (input) { input.style.borderColor = '#ef4444'; setTimeout(() => { input.style.borderColor = ''; }, 2000); }
             return;
         }
+        pushUndoSnapshot();
         appendAiChat('user', goal);
         const genBtn = document.getElementById('aiGenerateBtn');
         if (genBtn) { genBtn.disabled = true; genBtn.textContent = '…'; }
+        if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
+        aiPlanAbort = new AbortController();
+        setAgentBusy(true, '特工正在工作');
+        setAgentStatusLine('制定行动…');
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            const data = await aiPostJsonWithTimeout('/api/ai/task/plan', { task_type: 'test_case_generation', goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl });
+            const planPayload = { task_type: 'test_case_generation', goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl };
+            if (aiRemoteSessionLive() && window.aiRemoteEmbedded.sessionId) {
+                planPayload.embedded_session_id = window.aiRemoteEmbedded.sessionId;
+            }
+            const data = await aiPostJsonWithTimeout('/api/ai/task/plan', planPayload, { loadingHint: false, signal: aiPlanAbort.signal, userAbortMessage: '已取消规划（掌控局面）' });
             if (!data) return;
             latestAiPlan = data.plan;
             renderAiPreview(latestAiPlan);
-            appendAiChat('assistant', '已生成《' + (latestAiPlan && latestAiPlan.case_name || '未命名') + '》，共 ' + ((latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0) + ' 步。');
+            var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
+            var remoteHint = aiRemoteSessionLive() ? ' 已结合远程 Chromium 当前页的控件摘要（probe）。' : '';
+            appendAiChat('assistant', '已生成《' + (latestAiPlan && latestAiPlan.case_name || '未命名') + '》，共 ' + n + ' 步。' + remoteHint);
+            setAgentStatusLine('已完成规划 — ' + n + ' 步');
         } catch (e) {
             appendAiChat('assistant', '生成失败: ' + (e && e.message ? e.message : e));
+            setAgentStatusLine('规划失败 — ' + (e && e.message ? e.message : '错误'));
         } finally {
+            setAgentBusy(false);
+            aiPlanAbort = null;
             if (genBtn) { genBtn.disabled = false; genBtn.textContent = tBtn('aitest_btn_preview', '生成预览'); }
             syncAiSendButtons();
+            syncUndoRedoButtons();
         }
     }
 
     async function aiContinueRefine() {
         const message = (document.getElementById('aiMessageInput').value || '').trim();
         if (!message) return;
+        pushUndoSnapshot();
         appendAiChat('user', message);
         document.getElementById('aiMessageInput').value = '';
         const btn = document.getElementById('aiContinueBtn');
         if (btn) { btn.disabled = true; btn.textContent = '…'; }
+        if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
+        aiPlanAbort = new AbortController();
+        setAgentBusy(true, '特工正在工作');
+        setAgentStatusLine('优化方案中…');
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            const data = await aiPostJsonWithTimeout('/api/ai/task/chat', { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: aiChatMessages, model: getSelectedAiModel(), target_page_url: targetPageUrl });
+            const chatPayload = { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: aiChatMessages, model: getSelectedAiModel(), target_page_url: targetPageUrl };
+            if (aiRemoteSessionLive() && window.aiRemoteEmbedded.sessionId) {
+                chatPayload.embedded_session_id = window.aiRemoteEmbedded.sessionId;
+            }
+            const data = await aiPostJsonWithTimeout('/api/ai/task/chat', chatPayload, { loadingHint: false, signal: aiPlanAbort.signal, userAbortMessage: '已取消优化（掌控局面）' });
             if (!data) return;
             latestAiPlan = data.plan || latestAiPlan;
             renderAiPreview(latestAiPlan);
-            appendAiChat('assistant', '已优化，当前 ' + ((latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0) + ' 步。');
+            var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
+            var refineHint = aiRemoteSessionLive() ? '（已参考远程页控件摘要）' : '';
+            appendAiChat('assistant', '已优化，当前 ' + n + ' 步。' + refineHint);
+            setAgentStatusLine('已优化 — ' + n + ' 步');
         } catch (e) {
             appendAiChat('assistant', '优化失败: ' + (e && e.message ? e.message : e));
+            setAgentStatusLine('优化失败');
         } finally {
+            setAgentBusy(false);
+            aiPlanAbort = null;
             if (btn) { btn.disabled = false; btn.textContent = tBtn('aitest_btn_refine', '发送优化'); }
             syncAiSendButtons();
+            syncUndoRedoButtons();
         }
+    }
+
+    async function aiRunAgentWorkflow() {
+        await aiGeneratePreview();
+    }
+
+    function aiUndo() {
+        if (!aiUndoStack.length) return;
+        aiRedoStack.push(getDraftState());
+        var prev = aiUndoStack.pop();
+        applyDraftState(prev);
+        syncUndoRedoButtons();
+        appendAiChat('assistant', '已撤销上一步编辑。');
+    }
+
+    function aiRedo() {
+        if (!aiRedoStack.length) return;
+        aiUndoStack.push(getDraftState());
+        var next = aiRedoStack.pop();
+        applyDraftState(next);
+        syncUndoRedoButtons();
+        appendAiChat('assistant', '已重做。');
+    }
+
+    function aiSaveDraftLocal() {
+        try {
+            localStorage.setItem(AI_DRAFT_KEY, JSON.stringify(getDraftState()));
+            setAgentStatusLine('草稿已保存到本机浏览器');
+            appendAiChat('assistant', '任务标题、版本、目标与预览计划已写入本地草稿。');
+        } catch (e) {
+            alert('保存失败: ' + (e && e.message));
+        }
+    }
+
+    function aiLoadDraftLocal() {
+        try {
+            var raw = localStorage.getItem(AI_DRAFT_KEY);
+            if (!raw) return;
+            applyDraftState(JSON.parse(raw));
+            syncUndoRedoButtons();
+        } catch (e) { console.warn(e); }
+    }
+
+    function aiShowParamsHelp() {
+        alert('运行参数（由服务端环境变量控制，此处仅说明）\n\n'
+            + '• LOCAL_LLM_TIMEOUT — 本地模型请求超时（秒）\n'
+            + '• AI_SELECTOR_FALLBACK — 步骤执行失败时是否启用 LLM+DOM 兜底（1/0）\n'
+            + '• LOCAL_AI_PROBE_* — 页面探测节点数、超时等\n'
+            + '• EMBEDDED_BROWSER_GATEWAY_URL / SECRET / PUBLIC_WS_BASE — 远程 Chromium 画布（需 python -m embedded_browser_gateway）\n'
+            + '• PLAYWRIGHT_BROWSER — 默认引擎 chromium/chrome/edge/firefox/webkit（界面选择会写入会话并覆盖）\n\n'
+            + '详情见部署文档或 docker-compose 环境变量注释。');
     }
 
     async function aiGenerateAndSaveCase() {
@@ -1532,17 +2289,22 @@
         if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '…'; }
         try {
             let resp;
+            const sessionTitle = (document.getElementById('aiSessionTitle') && document.getElementById('aiSessionTitle').value || '').trim();
             if (targetCaseId && latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) {
-                resp = await fetch('/api/ai/cases/append-steps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ case_id: parseInt(targetCaseId, 10), steps: latestAiPlan.steps }) });
+                const appendBody = { case_id: parseInt(targetCaseId, 10), steps: latestAiPlan.steps };
+                if (sessionTitle) appendBody.case_name_override = sessionTitle;
+                resp = await fetch('/api/ai/cases/append-steps', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(appendBody) });
             } else {
                 const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
                 const saveBody = { project_id: currentProjectId, project_name: currentProjectName, goal: goal || (latestAiPlan && latestAiPlan.case_name) || '', model: getSelectedAiModel(), target_page_url: targetPageUrl };
+                if (sessionTitle) saveBody.case_name_override = sessionTitle;
                 if (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) saveBody.plan = latestAiPlan;
                 resp = await fetch('/api/ai/cases/generate-and-save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveBody) });
             }
             const data = await resp.json();
             if (!resp.ok || !data.success) throw new Error(data.error);
-            appendAiChat('assistant', '已保存。用例 ID ' + data.case_id);
+            var savedTitle = (data.case_name && String(data.case_name).trim()) || '';
+            appendAiChat('assistant', '已保存。用例 ID ' + data.case_id + (savedTitle ? ' 《' + savedTitle + '》' : ''));
             setTimeout(function() { window.location.href = '/list_cases_v2/' + currentProjectId; }, 1200);
         } catch (e) {
             appendAiChat('assistant', '保存失败: ' + e.message);
@@ -1557,6 +2319,11 @@
     window.aiGeneratePreview = aiGeneratePreview;
     window.aiContinueRefine = aiContinueRefine;
     window.aiGenerateAndSaveCase = aiGenerateAndSaveCase;
+    window.aiRunAgentWorkflow = aiRunAgentWorkflow;
+    window.aiUndo = aiUndo;
+    window.aiRedo = aiRedo;
+    window.aiSaveDraftLocal = aiSaveDraftLocal;
+    window.aiShowParamsHelp = aiShowParamsHelp;
     window.refreshOllamaModels = refreshOllamaModels;
     window.quickAddOllamaFromList = quickAddOllamaFromList;
     window.saveActiveAiModel = saveActiveAiModel;
@@ -1583,12 +2350,19 @@
     })();
 
     document.addEventListener('DOMContentLoaded', async function() {
-        document.getElementById('aiChatHistory').innerHTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。左侧主区域是<strong>内嵌的真实网页</strong>，可直接像浏览器一样操作。点「打开」时后台会同步 Playwright 用于「拉取结构 / AI 分析 / 用例执行」。内嵌中跳转后，若需分析当前址，请把地址栏中 URL 更新后再点一次「打开」。部分站点会禁止在框架中显示，请用「新窗口」打开。用例预览在下方。模型在右上角设置。</div></div>';
+        document.getElementById('aiChatHistory').innerHTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页已按「智能体工作室」布局：<strong>左栏</strong>自然语言任务与推理引擎，<strong>中栏</strong>内嵌真实页面 + Playwright 会话，<strong>右栏</strong>行动/步数统计与用例预览。顶栏「运行」与「生成预览」相同：生成步骤草案；「掌控局面」可中断 AI 并全屏手动操作页面。草稿可「保存」到本机浏览器。</div></div>';
         await loadProjectList();
+        await loadPlaywrightBrowserSelect();
         await loadAiModels();
+        aiLoadDraftLocal();
+        syncUndoRedoButtons();
         wireAiBrowserUrlSync();
         wireEmbedFrame();
         wireBrowserToolTabs();
+        await aiRefreshEmbeddedGatewayHint();
+        aiWireRemoteEmbeddedCanvas();
+        document.getElementById('aiRemoteEmbedStartBtn') && document.getElementById('aiRemoteEmbedStartBtn').addEventListener('click', function(e) { e.preventDefault(); aiStartRemoteEmbedded(); });
+        document.getElementById('aiRemoteEmbedStopBtn') && document.getElementById('aiRemoteEmbedStopBtn').addEventListener('click', function(e) { e.preventDefault(); aiStopRemoteEmbedded(); });
         document.getElementById('aiBrowserOpenBtn') && document.getElementById('aiBrowserOpenBtn').addEventListener('click', function(e) { e.preventDefault(); openInternalBrowserPage(); });
         document.getElementById('aiBrowserNewTabBtn') && document.getElementById('aiBrowserNewTabBtn').addEventListener('click', function(e) { e.preventDefault(); openEmbedInNewSystemWindow(); });
         document.getElementById('aiBrowserFullscreenBtn') && document.getElementById('aiBrowserFullscreenBtn').addEventListener('click', function(e) { e.preventDefault(); toggleAiBrowserFullscreen(); });
@@ -1622,6 +2396,35 @@
         syncAiSendButtons();
         updateBrowserStatusLine();
         if (typeof applyUiLang === 'function') applyUiLang();
+        var bCode = document.getElementById('aiBtnViewCode');
+        if (bCode) bCode.addEventListener('click', function() { window.openAiCodeModal(); });
+        var bSav = document.getElementById('aiBtnSaveDraft');
+        if (bSav) bSav.addEventListener('click', function() { aiSaveDraftLocal(); });
+        var bUn = document.getElementById('aiBtnUndo');
+        if (bUn) bUn.addEventListener('click', function() { aiUndo(); });
+        var bRe = document.getElementById('aiBtnRedo');
+        if (bRe) bRe.addEventListener('click', function() { aiRedo(); });
+        var bPa = document.getElementById('aiBtnParams');
+        if (bPa) bPa.addEventListener('click', function() { aiShowParamsHelp(); });
+        var bRun = document.getElementById('aiBtnRunAgent');
+        if (bRun) bRun.addEventListener('click', function() { aiRunAgentWorkflow(); });
+        var hitl = document.getElementById('aiTakeControlBtn');
+        if (hitl) hitl.addEventListener('click', function() {
+            if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} aiPlanAbort = null; }
+            setAgentBusy(false);
+            setAgentStatusLine('人工接管 — 可直接操作内嵌页');
+            try { toggleAiBrowserFullscreen(true); } catch (e) {}
+            appendAiChat('assistant', '已「掌控局面」：已尝试中断进行中的 AI 请求。浏览器已全屏，您可手动操作；按 Esc 退出全屏。');
+        });
+        if (msg) msg.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                if (typeof aiGeneratePreview === 'function') aiGeneratePreview();
+            }
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') window.closeAiCodeModal();
+        });
         var ap = document.getElementById('aiAddProvider');
         if (ap) ap.addEventListener('change', syncAiAddProviderFields);
     });

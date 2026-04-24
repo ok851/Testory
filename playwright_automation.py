@@ -27,10 +27,23 @@ from playwright_codegen_import import (
     runtime_xpath_button_link_fallback_items,
     xpath_click_attempt_variants,
 )
+from batch_input_parse import parse_batch_input_lines
+from ai_selector_recovery import try_recover_selector_with_llm
 
 # 🔥 添加全局执行锁，防止并发执行多个测试用例集
 _execution_lock = threading.Lock()
 _currently_executing = False
+
+def _norm_click_repeat_count_pa(raw) -> int:
+    """与 app._norm_click_repeat_count 一致：点击连续执行次数 1–99。"""
+    if raw is None or raw == '':
+        return 1
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(n, 99))
+
 
 def is_execution_in_progress():
     """检查是否有测试用例正在执行"""
@@ -294,6 +307,25 @@ def resolve_playwright_headless(requested: bool = True) -> bool:
     return requested
 
 
+def normalize_playwright_browser_name(raw: Optional[str]) -> str:
+    """
+    将用户/环境配置统一为内部引擎键：chromium | chrome | edge | firefox | webkit。
+    环境变量 PLAYWRIGHT_BROWSER 在未覆盖时作为默认值参考（由调用方传入合并后的字符串）。
+    """
+    key = (raw or "chromium").strip().lower()
+    if key in ("msedge", "edge", "microsoft-edge"):
+        return "edge"
+    if key in ("google-chrome", "chrome", "chrome-stable"):
+        return "chrome"
+    if key in ("chromium", "cr"):
+        return "chromium"
+    if key in ("firefox", "ff"):
+        return "firefox"
+    if key in ("webkit", "safari"):
+        return "webkit"
+    return "chromium"
+
+
 def _locator_candidates_json_from_event(event: Dict[str, Any]) -> Optional[str]:
     if not event:
         return None
@@ -428,6 +460,8 @@ class PlaywrightAutomation:
         self.browser = None
         self.page = None
         self.context = None
+        self._browser_engine_override: Optional[str] = None  # None 时仅用 PLAYWRIGHT_BROWSER
+        self._launched_browser_engine: Optional[str] = None  # 当前已启动实例的引擎键
         self._last_headless = None  # 记录最近一次启动模式，拾取器需要有头模式
         self.recording = False
         self.recorded_steps = []
@@ -483,6 +517,22 @@ class PlaywrightAutomation:
             except Exception as e:
                 uat_logger.debug(f"[RECORDING] session clear cb: {e}")
 
+    def set_browser_engine(self, name: Optional[str]) -> None:
+        """由 Flask session 或 API 设置；None/空 表示仅遵循环境变量 PLAYWRIGHT_BROWSER。"""
+        if name is None or not str(name).strip():
+            self._browser_engine_override = None
+        else:
+            self._browser_engine_override = str(name).strip().lower()
+
+    def get_browser_engine(self) -> str:
+        raw = self._browser_engine_override if self._browser_engine_override else os.environ.get(
+            "PLAYWRIGHT_BROWSER", "chromium"
+        )
+        return normalize_playwright_browser_name(raw)
+
+    def _normalized_browser_engine(self) -> str:
+        return self.get_browser_engine()
+
     def _handle_browser_disconnect_sync(self):
         """Playwright browser disconnected 事件（用户关掉整窗）"""
         try:
@@ -495,6 +545,7 @@ class PlaywrightAutomation:
         self.page = None
         self.context = None
         self.browser = None
+        self._launched_browser_engine = None
         self._notify_recording_session_cleared()
         uat_logger.info("🔌 [BROWSER] 已断开连接，录制已自动结束")
 
@@ -715,6 +766,21 @@ class PlaywrightAutomation:
         _retry: 内部使用，会话失效时自动重置并重试一次，避免用户手动关掉窗口后下次报错。"""
         try:
             headless = resolve_playwright_headless(headless)
+            effective_engine = self._normalized_browser_engine()
+            try:
+                engine_mismatch = (
+                    self.browser is not None
+                    and self.browser.is_connected()
+                    and getattr(self, "_launched_browser_engine", None) != effective_engine
+                )
+            except Exception:
+                engine_mismatch = False
+            if engine_mismatch:
+                uat_logger.info(
+                    f"🔁 [BROWSER] 引擎切换：已启动={getattr(self, '_launched_browser_engine', None)}，"
+                    f"目标={effective_engine}，清理后重启"
+                )
+                await self._cleanup_browser_resources()
 
             # 检查现有浏览器状态（必须同时检查连接有效性）
             browser_valid = False
@@ -833,11 +899,27 @@ class PlaywrightAutomation:
                         '--force-device-scale-factor=1',
                         '--disable-gpu',
                     ])
-                
-                self.browser = await self.playwright.chromium.launch(
-                    headless=headless,
-                    args=args
-                )
+
+                engine = effective_engine
+                uat_logger.info(f"🌐 [BROWSER] 启动引擎: {engine}, headless={headless}")
+
+                if engine in ("firefox", "webkit"):
+                    chromium_args: List[str] = []
+                else:
+                    chromium_args = args
+
+                if engine == "firefox":
+                    self.browser = await self.playwright.firefox.launch(headless=headless)
+                elif engine == "webkit":
+                    self.browser = await self.playwright.webkit.launch(headless=headless)
+                else:
+                    launch_kwargs: Dict[str, Any] = {"headless": headless, "args": chromium_args}
+                    if engine == "chrome":
+                        launch_kwargs["channel"] = "chrome"
+                    elif engine == "edge":
+                        launch_kwargs["channel"] = "msedge"
+                    self.browser = await self.playwright.chromium.launch(**launch_kwargs)
+                self._launched_browser_engine = engine
                 self._last_headless = bool(headless)
                 try:
                     self.browser.on("disconnected", lambda _: self._handle_browser_disconnect_sync())
@@ -7966,8 +8048,41 @@ class PlaywrightAutomation:
                                 pass
                         
                         if not click_success:
+                            goal = (step.get("description") or "").strip()
+                            if goal and target_page:
+                                try:
+                                    recovered = await try_recover_selector_with_llm(
+                                        target_page, goal, "click", selector
+                                    )
+                                    if recovered:
+                                        rs, rt = recovered
+                                        await self.click_element(
+                                            rs,
+                                            rt,
+                                            step.get("iframe_selector"),
+                                            page=target_page,
+                                            locator_candidates=None,
+                                        )
+                                        click_success = True
+                                except Exception as _airec_e:
+                                    uat_logger.warning(
+                                        f"[AI_RECOVERY] 点击兜底未成功: {_airec_e}"
+                                    )
+                        if not click_success:
                             # 如果所有尝试都失败,抛出异常
                             raise Exception(f"无法点击元素,所有选择器尝试均失败: {selector}")
+
+                    _n_extra = _norm_click_repeat_count_pa(step.get("click_repeat_count"))
+                    for _xi in range(1, _n_extra):
+                        await self.click_element(
+                            selector,
+                            step.get("selector_type", "css"),
+                            step.get("iframe_selector"),
+                            page=target_page,
+                            locator_candidates=step.get("locator_candidates"),
+                        )
+                        if target_page:
+                            await target_page.wait_for_timeout(150)
                     
                     # 对于点击操作,根据元素类型执行适当的等待策略
                     if target_page:
@@ -7987,6 +8102,24 @@ class PlaywrightAutomation:
                         except Exception as e:
                             uat_logger.warning(f"点击后等待时出错: {str(e)}")
                             # 发生错误时也继续执行
+                elif action == "batch_input":
+                    raw_bt = step.get("batch_text") or step.get("text") or step.get("input_value", "")
+                    b_pairs = parse_batch_input_lines(raw_bt or "")
+                    if not b_pairs:
+                        raise Exception("批量输入步骤缺少有效行")
+                    st = step.get("selector_type", "css")
+                    iframe_sel = step.get("iframe_selector")
+                    for bsel, btxt in b_pairs:
+                        await self.fill_input(
+                            bsel,
+                            btxt,
+                            st,
+                            iframe_sel,
+                            page=target_page,
+                            locator_candidates=None,
+                        )
+                    if target_page:
+                        await target_page.wait_for_timeout(300)
                 elif action in ["fill", "input"]:
                     selector = step.get("selector")
                     # 🔥 修复:对于input操作，text可能存储在input_value字段中
@@ -8052,7 +8185,29 @@ class PlaywrightAutomation:
                                 pass
                         
                         if not fill_success:
-                            # 如果所有尝试都失败,抛出异常
+                            goal = (step.get("description") or "").strip()
+                            if goal and target_page:
+                                try:
+                                    recovered = await try_recover_selector_with_llm(
+                                        target_page, goal, "fill", selector
+                                    )
+                                    if recovered:
+                                        rs, rt = recovered
+                                        await self.fill_input(
+                                            rs,
+                                            text,
+                                            rt,
+                                            step.get("iframe_selector"),
+                                            page=target_page,
+                                            locator_candidates=None,
+                                        )
+                                        fill_success = True
+                                except Exception as _airec_e:
+                                    uat_logger.warning(
+                                        f"[AI_RECOVERY] 填充兜底未成功: {_airec_e}"
+                                    )
+                        if not fill_success:
+                            # 如果所有尝试均失败,抛出异常
                             raise Exception(f"无法填充元素,所有选择器尝试均失败: {selector}")
                     
                     # 填充后等待一小段时间以确保值已设置,但不等待页面加载
@@ -8512,9 +8667,16 @@ class PlaywrightAutomation:
                     exec_step["selector"] = step["selector_value"]
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
+                    exec_step["locator_candidates"] = step.get("locator_candidates")
+                    exec_step["click_repeat_count"] = step.get("click_repeat_count", 1)
                 elif step["action"] in ["fill", "input"]:
                     exec_step["selector"] = step["selector_value"]
                     exec_step["text"] = step["input_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                    exec_step["locator_candidates"] = step.get("locator_candidates")
+                elif step["action"] == "batch_input":
+                    exec_step["batch_text"] = step.get("input_value", "")
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
                 elif step["action"] == "submit":
@@ -8909,13 +9071,38 @@ class PlaywrightAutomation:
                 selector_type = step.get("selector_type", "css")
                 iframe_selector = step.get("iframe_selector", "")
                 if selector:
-                    await self.click_element(
-                        selector,
-                        selector_type,
-                        iframe_selector,
-                        page=target_page,
-                        locator_candidates=step.get("locator_candidates"),
-                    )
+                    _nrep = _norm_click_repeat_count_pa(step.get("click_repeat_count"))
+                    try:
+                        for _ci in range(_nrep):
+                            await self.click_element(
+                                selector,
+                                selector_type,
+                                iframe_selector,
+                                page=target_page,
+                                locator_candidates=step.get("locator_candidates"),
+                            )
+                            if target_page and _ci + 1 < _nrep:
+                                await target_page.wait_for_timeout(150)
+                    except Exception:
+                        goal = (step.get("description") or "").strip()
+                        recovered = None
+                        if goal and target_page:
+                            recovered = await try_recover_selector_with_llm(
+                                target_page, goal, "click", selector
+                            )
+                        if not recovered:
+                            raise
+                        rs, rt = recovered
+                        for _ci in range(_nrep):
+                            await self.click_element(
+                                rs,
+                                rt,
+                                iframe_selector,
+                                page=target_page,
+                                locator_candidates=None,
+                            )
+                            if target_page and _ci + 1 < _nrep:
+                                await target_page.wait_for_timeout(150)
                     results.append({"status": "success", "step": step})
                 else:
                     raise Exception("点击步骤缺少选择器参数")
@@ -8926,17 +9113,54 @@ class PlaywrightAutomation:
                 selector_type = step.get("selector_type", "css")
                 iframe_selector = step.get("iframe_selector", "")
                 if selector and text:
-                    await self.fill_input(
-                        selector,
-                        text,
-                        selector_type,
-                        iframe_selector,
-                        page=target_page,
-                        locator_candidates=step.get("locator_candidates"),
-                    )
+                    try:
+                        await self.fill_input(
+                            selector,
+                            text,
+                            selector_type,
+                            iframe_selector,
+                            page=target_page,
+                            locator_candidates=step.get("locator_candidates"),
+                        )
+                    except Exception:
+                        goal = (step.get("description") or "").strip()
+                        recovered = None
+                        if goal and target_page:
+                            recovered = await try_recover_selector_with_llm(
+                                target_page, goal, "fill", selector
+                            )
+                        if not recovered:
+                            raise
+                        rs, rt = recovered
+                        await self.fill_input(
+                            rs,
+                            text,
+                            rt,
+                            iframe_selector,
+                            page=target_page,
+                            locator_candidates=None,
+                        )
                     results.append({"status": "success", "step": step})
                 else:
                     raise Exception("填充步骤缺少选择器或文本参数")
+
+            elif action == "batch_input":
+                raw_bt = step.get("batch_text") or step.get("text", "")
+                b_pairs = parse_batch_input_lines(raw_bt or "")
+                if not b_pairs:
+                    raise Exception("批量输入步骤缺少有效行")
+                st = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                for bsel, btxt in b_pairs:
+                    await self.fill_input(
+                        bsel,
+                        btxt,
+                        st,
+                        iframe_selector,
+                        page=target_page,
+                        locator_candidates=None,
+                    )
+                results.append({"status": "success", "step": step})
                     
             elif action == "scroll":
                 iv = (step.get("input_value") or "").strip()

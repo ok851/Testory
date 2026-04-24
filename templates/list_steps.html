@@ -600,6 +600,7 @@
                     <option value="navigate" data-i18n-opt="steps_act_navigate">导航</option>
                     <option value="click" data-i18n-opt="steps_act_click">点击</option>
                     <option value="input" data-i18n-opt="steps_act_input">输入</option>
+                    <option value="batch_input" data-i18n-opt="steps_act_batch_input">批量输入</option>
                     <option value="hover" data-i18n-opt="steps_act_hover">悬停</option>
                     <option value="double_click" data-i18n-opt="steps_act_double_click">双击</option>
                     <option value="right_click" data-i18n-opt="steps_act_right_click">右键点击</option>
@@ -650,9 +651,19 @@
                 </div>
                 <small id="selectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;"></small>
             </div>
+            <div class="form-group" id="stepClickRepeatGroup" style="display: none;">
+                <label for="stepClickRepeat" data-i18n="steps_label_click_repeat">执行次数</label>
+                <input type="number" id="stepClickRepeat" min="1" max="99" value="1" style="max-width: 120px;">
+                <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;" data-i18n="steps_hint_click_repeat">仅「点击」有效</small>
+            </div>
             <div class="form-group">
                 <label for="stepInputValue" data-i18n="steps_label_in_val">输入值/预期文本</label>
                 <input type="text" id="stepInputValue" data-i18n-placeholder="steps_ph_input" placeholder="">
+            </div>
+            <div class="form-group" id="stepBatchInputGroup" style="display: none;">
+                <label for="stepBatchInput" data-i18n="steps_batch_input_label">批量内容</label>
+                <textarea id="stepBatchInput" rows="8" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:13px;border:1px solid #ddd;border-radius:6px;padding:10px;"></textarea>
+                <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;" data-i18n="steps_batch_input_hint"></small>
             </div>
             <div class="form-group" id="stepCompareType" style="display: none;">
                 <label for="stepCompareTypeSelect" data-i18n="steps_label_compare">对比方式</label>
@@ -761,6 +772,7 @@
                     <option value="navigate" data-i18n-opt="steps_act_navigate">导航</option>
                     <option value="click" data-i18n-opt="steps_act_click">点击</option>
                     <option value="input" data-i18n-opt="steps_act_input">输入</option>
+                    <option value="batch_input" data-i18n-opt="steps_act_batch_input">批量输入</option>
                     <option value="hover" data-i18n-opt="steps_act_hover">悬停</option>
                     <option value="double_click" data-i18n-opt="steps_act_double_click">双击</option>
                     <option value="right_click" data-i18n-opt="steps_act_right_click">右键点击</option>
@@ -811,9 +823,19 @@
                 </div>
                 <small id="editSelectorHelp" style="color: #666; display: block; margin-top: 5px; font-size: 12px;"></small>
             </div>
+            <div class="form-group" id="editStepClickRepeatGroup" style="display: none;">
+                <label for="editStepClickRepeat" data-i18n="steps_label_click_repeat">执行次数</label>
+                <input type="number" id="editStepClickRepeat" min="1" max="99" value="1" style="max-width: 120px;">
+                <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;" data-i18n="steps_hint_click_repeat">仅「点击」有效</small>
+            </div>
             <div class="form-group">
                 <label for="editStepInputValue" data-i18n="steps_label_in_val">输入值/预期文本</label>
                 <input type="text" id="editStepInputValue" data-i18n-placeholder="steps_ph_input" placeholder="">
+            </div>
+            <div class="form-group" id="editStepBatchInputGroup" style="display: none;">
+                <label for="editStepBatchInput" data-i18n="steps_batch_input_label">批量内容</label>
+                <textarea id="editStepBatchInput" rows="8" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:13px;border:1px solid #ddd;border-radius:6px;padding:10px;"></textarea>
+                <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;" data-i18n="steps_batch_input_hint"></small>
             </div>
             <div class="form-group" id="editStepCompareType" style="display: none;">
                 <label for="editStepCompareTypeSelect" data-i18n="steps_label_compare">对比方式</label>
@@ -1157,6 +1179,7 @@
                 navigate: 'steps_act_navigate',
                 click: 'steps_act_click',
                 input: 'steps_act_input',
+                batch_input: 'steps_act_batch_input',
                 fill: 'steps_act_fill',
                 hover: 'steps_act_hover',
                 double_click: 'steps_act_double_click',
@@ -1240,7 +1263,8 @@
                         const showInputRow = step.input_value && step.input_value.trim() && (
                             step.action === 'input' || step.action === 'fill' || step.action === 'wait' ||
                             step.action === 'scroll' || step.action === 'swipe' || step.action === 'extract_text' ||
-                            step.action === 'verify' || step.action === 'text_compare' || step.action === 'select'
+                            step.action === 'verify' || step.action === 'text_compare' || step.action === 'select' ||
+                            step.action === 'batch_input'
                         );
                         const navigateUrlRow = isNavigate && step.input_value && step.input_value.trim()
                             ? `<div class="step-nav-url"><strong>${escapeHtml(t('steps_card_full_url'))}</strong> <span title="${escapeHtml(step.input_value)}">${escapeHtml(truncateMiddle(step.input_value, 72))}</span></div>`
@@ -1250,15 +1274,19 @@
                         const lblInp = escapeHtml(t('steps_card_input_value'));
                         const btnEd = escapeHtml(t('steps_btn_edit'));
                         const btnDel = escapeHtml(t('steps_btn_del'));
+                        const _crc = parseInt(step.click_repeat_count, 10);
+                        const clickRepBadge = (step.action === 'click' && Number.isFinite(_crc) && _crc > 1)
+                            ? ` <span style="color:#6b7280;font-weight:600;">×${_crc}</span>` : '';
+                        const showBatchLoc = step.action === 'batch_input' && step.selector_type;
                         stepItem.innerHTML = `
                             <div class="step-number">${actualStepNumber}</div>
                             <div class="step-content">
-                                <h4>${escapeHtml(step.description || actionText)}</h4>
+                                <h4>${escapeHtml(step.description || actionText)}${clickRepBadge}</h4>
                                 <div class="step-details">
-                                    ${step.selector_value ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
+                                    ${(step.selector_value || showBatchLoc) ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
                                     ${step.selector_value ? `<div><strong>${lblSel}</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
                                     ${navigateUrlRow}
-                                    ${showInputRow ? `<div><strong>${lblInp}</strong> ${escapeHtml(step.input_value)}</div>` : ''}
+                                    ${showInputRow ? `<div><strong>${lblInp}</strong> ${step.action === 'batch_input' ? '<pre style="margin:4px 0 0;font-size:12px;white-space:pre-wrap;max-height:120px;overflow:auto;">' + escapeHtml(truncateMiddle(step.input_value, 400)) + '</pre>' : escapeHtml(step.input_value)}</div>` : ''}
                                 </div>
                             </div>
                             <div class="step-actions">
@@ -1514,11 +1542,14 @@ function changePage(page) {
             document.getElementById('stepSelectorType').value = 'css';
             document.getElementById('stepSelectorValue').value = '';
             document.getElementById('stepInputValue').value = '';
+            const sbi = document.getElementById('stepBatchInput');
+            if (sbi) sbi.value = '';
             document.getElementById('stepDescription').value = '';
             document.getElementById('stepLocatorCandidates').value = '';
             document.getElementById('stepPickedCardBaseXpath').value = '';
             document.getElementById('stepCardNth').value = '1';
             document.getElementById('stepCardNthWrap').style.display = 'none';
+            document.getElementById('stepClickRepeat').value = '1';
             
             // 重置滚动操作的四个输入框
             document.getElementById('scrollUp').value = '';
@@ -1544,6 +1575,8 @@ function changePage(page) {
             document.getElementById('editStepSelectorType').value = step.selector_type || 'css';
             document.getElementById('editStepSelectorValue').value = step.selector_value || '';
             document.getElementById('editStepInputValue').value = step.input_value || '';
+            const eb = document.getElementById('editStepBatchInput');
+            if (eb) eb.value = (step.action === 'batch_input' ? (step.input_value || '') : '');
             document.getElementById('editStepDescription').value = step.description || '';
             document.getElementById('editStepLocatorCandidates').value = step.locator_candidates || '';
             document.getElementById('editPickedCardBaseXpath').value = '';
@@ -1599,6 +1632,12 @@ function changePage(page) {
                 const verifyType = step.input_value || 'auto';
                 document.getElementById('editStepVerifyTypeSelect').value = verifyType;
             }
+            let crc = step.click_repeat_count;
+            if (crc == null || crc === '') crc = 1;
+            const crcN = parseInt(crc, 10);
+            document.getElementById('editStepClickRepeat').value = String(
+                Number.isFinite(crcN) && crcN >= 1 ? Math.min(99, crcN) : 1
+            );
             
             toggleEditActionFields();
             refreshStepsFormSelectOptions();
@@ -1655,6 +1694,12 @@ function changePage(page) {
             const assertAttrField = document.getElementById('stepAssertAttr');
             const assertOperatorField = document.getElementById('stepAssertOperator');
             const verifyTypeField = document.getElementById('stepVerifyType');
+            const stepClickRepeatGroup = document.getElementById('stepClickRepeatGroup');
+            if (stepClickRepeatGroup) stepClickRepeatGroup.style.display = 'none';
+            const stepBatchInputGroup = document.getElementById('stepBatchInputGroup');
+            if (stepBatchInputGroup) stepBatchInputGroup.style.display = 'none';
+            const pickCreateBtn = document.getElementById('pickCreateBtn');
+            if (pickCreateBtn) pickCreateBtn.style.display = '';
             // 默认隐藏所有特殊字段
             compareTypeField.style.display = 'none';
             swipeDirectionField.style.display = 'none';
@@ -1688,6 +1733,13 @@ function changePage(page) {
                 inputValueField.style.display = 'block';
                 scrollFields.style.display = 'none';
                 document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_input_val');
+            } else if (action === 'batch_input') {
+                selectorTypeField.style.display = 'block';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'none';
+                if (stepBatchInputGroup) stepBatchInputGroup.style.display = 'block';
+                if (pickCreateBtn) pickCreateBtn.style.display = 'none';
             } else if (action === 'extract_text') {
                 // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
@@ -1707,6 +1759,7 @@ function changePage(page) {
                 // 点击相关操作只需要选择器，不需要输入值
                 inputValueField.style.display = 'none';
                 scrollFields.style.display = 'none';
+                if (stepClickRepeatGroup) stepClickRepeatGroup.style.display = action === 'click' ? 'block' : 'none';
             } else if (action === 'hover') {
                 // 悬停操作需要选择器和悬停时间
                 inputValueField.style.display = 'block';
@@ -1846,6 +1899,12 @@ function changePage(page) {
             const editAssertAttrField = document.getElementById('editStepAssertAttr');
             const editAssertOperatorField = document.getElementById('editStepAssertOperator');
             const editVerifyTypeField = document.getElementById('editStepVerifyType');
+            const editStepClickRepeatGroup = document.getElementById('editStepClickRepeatGroup');
+            if (editStepClickRepeatGroup) editStepClickRepeatGroup.style.display = 'none';
+            const editStepBatchInputGroup = document.getElementById('editStepBatchInputGroup');
+            if (editStepBatchInputGroup) editStepBatchInputGroup.style.display = 'none';
+            const pickEditBtn = document.getElementById('pickEditBtn');
+            if (pickEditBtn) pickEditBtn.style.display = '';
             
             // 重置所有字段为默认状态
             selectorTypeField.style.display = 'block';
@@ -1883,6 +1942,12 @@ function changePage(page) {
                 // 输入操作需要选择器和输入值
                 inputValueField.style.display = 'block';
                 document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_input_val');
+            } else if (action === 'batch_input') {
+                selectorTypeField.style.display = 'block';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
+                if (editStepBatchInputGroup) editStepBatchInputGroup.style.display = 'block';
+                if (pickEditBtn) pickEditBtn.style.display = 'none';
             } else if (action === 'extract_text') {
                 // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
@@ -1899,6 +1964,7 @@ function changePage(page) {
             } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
                 // 点击相关操作只需要选择器，不需要输入值
                 inputValueField.style.display = 'none';
+                if (editStepClickRepeatGroup) editStepClickRepeatGroup.style.display = action === 'click' ? 'block' : 'none';
             } else if (action === 'hover') {
                 // 悬停操作需要选择器和悬停时间
                 inputValueField.style.display = 'block';
@@ -2151,10 +2217,19 @@ function changePage(page) {
         async function createStep() {
             const action = document.getElementById('stepAction').value;
             const selectorType = document.getElementById('stepSelectorType').value;
-            const selectorValue = document.getElementById('stepSelectorValue').value.trim();
+            let selectorValue = document.getElementById('stepSelectorValue').value.trim();
             const locatorCandidates = document.getElementById('stepLocatorCandidates').value || '';
             let inputValue = document.getElementById('stepInputValue').value.trim();
             const description = document.getElementById('stepDescription').value.trim();
+            if (action === 'batch_input') {
+                const bt = (document.getElementById('stepBatchInput') && document.getElementById('stepBatchInput').value) || '';
+                if (!String(bt).trim()) {
+                    alert(t('steps_alert_batch_empty') || '请填写批量内容');
+                    return;
+                }
+                inputValue = bt;
+                selectorValue = '';
+            }
             // 获取对比方式选择
             let compareType = '';
             if (action === 'extract_text') {
@@ -2187,7 +2262,11 @@ function changePage(page) {
             try {
                 // 显示加载状态
                 showLoading(t('steps_add_loading'));
-                        
+                let clickRepeatCount = 1;
+                if (action === 'click') {
+                    const r = parseInt(document.getElementById('stepClickRepeat').value, 10);
+                    clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
+                }
                 const response = await fetch('/api/steps', {
                     method: 'POST',
                     headers: {
@@ -2202,7 +2281,8 @@ function changePage(page) {
                         locator_candidates: locatorCandidates,
                         input_value: inputValue,
                         description: description,
-                        compare_type: compareType
+                        compare_type: compareType,
+                        click_repeat_count: clickRepeatCount
                     })
                 });
                         
@@ -2242,10 +2322,19 @@ function changePage(page) {
         async function updateStep() {
             const action = document.getElementById('editStepAction').value;
             const selectorType = document.getElementById('editStepSelectorType').value;
-            const selectorValue = document.getElementById('editStepSelectorValue').value.trim();
+            let selectorValue = document.getElementById('editStepSelectorValue').value.trim();
             const locatorCandidates = document.getElementById('editStepLocatorCandidates').value || '';
             let inputValue = document.getElementById('editStepInputValue').value.trim();
             const description = document.getElementById('editStepDescription').value.trim();
+            if (action === 'batch_input') {
+                const bt = (document.getElementById('editStepBatchInput') && document.getElementById('editStepBatchInput').value) || '';
+                if (!String(bt).trim()) {
+                    alert(t('steps_alert_batch_empty') || '请填写批量内容');
+                    return;
+                }
+                inputValue = bt;
+                selectorValue = '';
+            }
             // 获取对比方式选择
             let compareType = '';
             if (action === 'extract_text') {
@@ -2278,7 +2367,11 @@ function changePage(page) {
             try {
                 // 显示加载状态
                 showLoading(t('steps_upd_loading'));
-                        
+                let clickRepeatCount = 1;
+                if (action === 'click') {
+                    const r = parseInt(document.getElementById('editStepClickRepeat').value, 10);
+                    clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
+                }
                 const response = await fetch(`/api/steps/${currentEditingStepId}`, {
                     method: 'PUT',
                     headers: {
@@ -2292,7 +2385,8 @@ function changePage(page) {
                         locator_candidates: locatorCandidates,
                         input_value: inputValue,
                         description: description,
-                        compare_type: compareType
+                        compare_type: compareType,
+                        click_repeat_count: clickRepeatCount
                     })
                 });
                         

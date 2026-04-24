@@ -230,6 +230,13 @@
         }
 
         document.addEventListener('DOMContentLoaded', function() {
+            var sp = new URLSearchParams(window.location.search);
+            if (sp.get('openCreateProject') === '1') {
+                openCreateProjectModal();
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState({}, '', window.location.pathname);
+                }
+            }
             var createProjectBtn = document.querySelector('a[href="/create_project"]');
             if (createProjectBtn) {
                 createProjectBtn.addEventListener('click', function(e) {

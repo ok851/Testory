@@ -16,8 +16,11 @@ import io
 import tempfile
 import subprocess
 from database import Database
+from embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled, embedded_gateway_json
+from batch_input_parse import parse_batch_input_lines
 from playwright_automation import (
     automation,
+    normalize_playwright_browser_name,
     force_reset_execution_state,
     parse_platform_scroll_input_value,
     scroll_event_to_platform_input_value,
@@ -99,6 +102,56 @@ _dataset_run_lock = threading.Lock()
 _case_run_jobs: dict = {}
 _case_run_lock = threading.Lock()
 _ai_model_cfg_lock = threading.Lock()
+_login_fail_lock = threading.Lock()
+_login_fail_timestamps: dict = {}
+
+def _is_production_env() -> bool:
+    return (
+        os.environ.get("FLASK_ENV", "").strip().lower() == "production"
+        or os.environ.get("APP_ENV", "").strip().lower() == "production"
+    )
+
+
+def _login_client_ip() -> str:
+    xff = (request.headers.get("X-Forwarded-For") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()[:100] or (request.remote_addr or "")
+    return request.remote_addr or ""
+
+
+def _login_is_rate_limited(ip: str) -> tuple:
+    max_n = int(os.environ.get("LOGIN_RATE_LIMIT_MAX", "40"))
+    win = int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW_SEC", "900"))
+    if max_n <= 0:
+        return False, 0
+    now = time.time()
+    with _login_fail_lock:
+        lst = _login_fail_timestamps.get(ip, [])
+        lst = [t for t in lst if now - t < win]
+        if not lst:
+            _login_fail_timestamps.pop(ip, None)
+        else:
+            _login_fail_timestamps[ip] = lst
+        if len(lst) >= max_n:
+            retry = int(win - (now - min(lst))) + 1
+            return True, max(1, retry)
+    return False, 0
+
+
+def _login_record_failure(ip: str) -> None:
+    win = int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW_SEC", "900"))
+    now = time.time()
+    with _login_fail_lock:
+        lst = _login_fail_timestamps.get(ip, [])
+        lst = [t for t in lst if now - t < win]
+        lst.append(now)
+        _login_fail_timestamps[ip] = lst
+
+
+def _login_clear_failures(ip: str) -> None:
+    with _login_fail_lock:
+        _login_fail_timestamps.pop(ip, None)
+
 
 def _case_job_update(user_id: int, **kwargs):
     with _case_run_lock:
@@ -124,13 +177,15 @@ def api_error_handler(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            # 记录异常
             uat_logger.log_exception(f"API Error in {func.__name__}", e)
-            # 返回统一的错误响应
-            return jsonify({
-                'success': False,
-                'error': str(e)
-            }), 500
+            detail = str(e)
+            if _is_production_env() and os.environ.get("API_DETAILED_ERRORS", "").strip().lower() not in (
+                "1",
+                "true",
+                "yes",
+            ):
+                detail = "服务器内部错误，请稍后重试或联系管理员"
+            return jsonify({"success": False, "error": detail}), 500
     return wrapper
 
 # API请求日志装饰器
@@ -139,7 +194,9 @@ def log_api_request(func):
     def wrapper(*args, **kwargs):
         # 记录请求，处理没有请求体的情况
         try:
-            request_data = request.json if request.method in ['POST', 'PUT', 'PATCH'] else None
+            request_data = (
+                request.get_json(silent=True) if request.method in ["POST", "PUT", "PATCH"] else None
+            )
         except Exception:
             # 如果解析JSON失败（如请求体为空），使用None
             request_data = None
@@ -159,10 +216,94 @@ def log_api_request(func):
         return response
     return wrapper
 
+
+def _init_cors(flask_app: Flask) -> None:
+    """跨域：生产默认不启用宽松 CORS；需跨域前端时设置 FLASK_CORS_ORIGINS（逗号分隔）。"""
+    raw = os.environ.get("FLASK_CORS_ORIGINS", "").strip()
+    if raw:
+        origins = [x.strip() for x in raw.split(",") if x.strip()]
+        if origins:
+            CORS(flask_app, resources={r"/*": {"origins": origins}})
+        return
+    if os.environ.get("FLASK_ENV", "").lower() == "production" or os.environ.get("APP_ENV", "").lower() == "production":
+        return
+    CORS(flask_app, resources={r"/*": {"origins": "*"}})
+
+
 app = Flask(__name__)
-CORS(app)
-# 设置Flask应用的密钥，用于session加密
-app.secret_key = 'your-secret-key-here'
+_init_cors(app)
+# Session 加密密钥：与 docker-compose 中 SECRET_KEY 一致；未设置时每次启动随机（会话在重启后失效）
+_secret_key = (os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY") or "").strip()
+if _secret_key:
+    app.secret_key = _secret_key
+else:
+    app.secret_key = secrets.token_hex(32)
+    uat_logger.warning(
+        "未设置环境变量 SECRET_KEY 或 FLASK_SECRET_KEY，已使用临时随机密钥；"
+        "生产环境请务必设置固定密钥，否则重启后会话将全部失效。"
+    )
+
+if os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes"):
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+_max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", "50") or "50")
+app.config["MAX_CONTENT_LENGTH"] = max(1, _max_upload_mb) * 1024 * 1024
+
+if os.environ.get("TRUST_X_FORWARDED", "").strip().lower() in ("1", "true", "yes"):
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+
+
+@app.after_request
+def _security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "geolocation=(), microphone=(), camera=()",
+    )
+    return response
+
+
+@app.before_request
+def _sync_playwright_browser_from_session():
+    """将当前登录用户的浏览器偏好同步到 Playwright worker（与 session / PLAYWRIGHT_BROWSER 一致）。"""
+    try:
+        if not current_user.is_authenticated:
+            return
+    except Exception:
+        return
+    path = request.path or ""
+    if not path.startswith("/api/"):
+        return
+    if path.startswith("/api/auth/") or path.startswith("/api/health"):
+        return
+    try:
+        sess_val = session.get("playwright_browser_engine")
+        if sess_val:
+            automation.set_browser_engine(str(sess_val).strip().lower())
+        else:
+            automation.set_browser_engine(None)
+    except Exception:
+        pass
+
+
+@app.errorhandler(413)
+def _request_entity_too_large(_e):
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "error": "请求体或上传文件超过大小限制"}), 413
+    return "Payload Too Large", 413
+
 
 # ==================== AI模型路由与云端安全网关 ====================
 _CLOUD_LLM_ENDPOINT = os.environ.get('CLOUD_LLM_ENDPOINT', '').strip()
@@ -469,6 +610,21 @@ def _dedupe_and_validate_ai_steps(steps: list) -> tuple:
     return clean_steps, warnings
 
 
+def _norm_click_repeat_count(raw) -> int:
+    """点击步骤连续执行次数：1–99，非法或空视为 1。"""
+    if raw is None or raw == '':
+        return 1
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    if n < 1:
+        n = 1
+    if n > 99:
+        n = 99
+    return n
+
+
 def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
     """将 AI 步骤转为 create_test_step 参数；navigate 的 URL 写入 url 与 input_value。"""
     action = _ai_str(step.get("action"))
@@ -491,6 +647,9 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         lc = ""
     else:
         lc = str(lc).strip()
+    crc = 1
+    if action == "click":
+        crc = _norm_click_repeat_count(step.get("click_repeat_count"))
     return {
         "case_id": case_id,
         "action": action,
@@ -507,6 +666,7 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         "iframe_selector": "",
         "compare_type": "equals",
         "locator_candidates": lc,
+        "click_repeat_count": crc,
     }
 
 # ==================== Flask-Login 初始化 ====================
@@ -585,10 +745,19 @@ def project_access_required(min_role='viewer'):
                 return jsonify({'success': False, 'error': '未登录'}), 401
 
             # 从参数中获取 project_id
-            project_id = kwargs.get('project_id') or request.view_args.get('project_id')
+            project_id = kwargs.get('project_id') or (
+                request.view_args.get('project_id') if request.view_args else None
+            )
             if not project_id:
-                # 尝试从请求参数中获取
-                project_id = request.args.get('project_id', type=int) or request.json.get('project_id') if request.json else None
+                project_id = request.args.get('project_id', type=int)
+            if not project_id:
+                _body = request.get_json(silent=True) or {}
+                pid = _body.get('project_id')
+                if pid is not None:
+                    try:
+                        project_id = int(pid)
+                    except (TypeError, ValueError):
+                        project_id = None
 
             if project_id:
                 _db = Database()
@@ -621,8 +790,8 @@ def audit_log(action: str, target_type: str):
                     details = None
                     if request.is_json:
                         try:
-                            details = json.dumps(request.get_json(), ensure_ascii=False)
-                        except:
+                            details = json.dumps(request.get_json(silent=True) or {}, ensure_ascii=False)
+                        except (TypeError, ValueError):
                             pass
 
                     _db.add_audit_log(
@@ -668,8 +837,8 @@ def check_limit(limit_type: str, get_current_value_func=None):
             if get_current_value_func:
                 try:
                     current_value = get_current_value_func()
-                except:
-                    pass
+                except Exception:
+                    current_value = 0
 
             result = license_manager.check_limit(limit_type, current_value)
             if not result['allowed']:
@@ -689,9 +858,33 @@ db = Database()
 
 # 首次启动自动创建管理员账号
 def _ensure_admin():
-    if db.count_users() == 0:
-        db.create_user('admin', generate_password_hash('admin123'), role='admin')
-        uat_logger.info("首次启动：已创建默认管理员账号 admin/admin123，请尽快修改密码！")
+    if db.count_users() != 0:
+        return
+    pw_env = (os.environ.get("ADMIN_INITIAL_PASSWORD") or "").strip()
+    if pw_env:
+        if len(pw_env) < 8:
+            uat_logger.warning(
+                "ADMIN_INITIAL_PASSWORD 长度不足 8 位，已忽略；将改为随机密码（请查看下一条日志）。"
+            )
+            pw_plain = secrets.token_urlsafe(14)
+            uat_logger.warning(
+                f"首次启动：已创建管理员 admin，随机初始密码（仅此一次输出，请保存并尽快修改）: {pw_plain}"
+            )
+        else:
+            pw_plain = pw_env
+            uat_logger.info("首次启动：已创建管理员 admin（密码来自环境变量 ADMIN_INITIAL_PASSWORD）。")
+    elif os.environ.get("ALLOW_INSECURE_DEFAULT_ADMIN", "").strip().lower() in ("1", "true", "yes"):
+        pw_plain = "admin123"
+        uat_logger.warning(
+            "首次启动：已创建管理员 admin/admin123（ALLOW_INSECURE_DEFAULT_ADMIN 已开启，切勿用于公网或生产）。"
+        )
+    else:
+        pw_plain = secrets.token_urlsafe(14)
+        uat_logger.warning(
+            f"首次启动：已创建管理员 admin，随机初始密码（仅此一次输出，请保存并尽快修改）: {pw_plain}"
+        )
+    db.create_user("admin", generate_password_hash(pw_plain), role="admin")
+
 
 _ensure_admin()
 
@@ -700,6 +893,13 @@ _ensure_admin()
 @login_required
 def index():
     return render_template('index.html')
+
+
+@app.route('/create_project')
+@login_required
+def create_project_landing():
+    """与首页「新建项目」链接一致；支持新标签页打开、收藏夹与直链，避免 404。"""
+    return redirect(f"{url_for('index')}?openCreateProject=1")
 
 # ==================== 用户认证路由 ====================
 
@@ -731,6 +931,13 @@ def notifications_page():
 
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
+    ip = _login_client_ip()
+    blocked, retry_after = _login_is_rate_limited(ip)
+    if blocked:
+        resp = jsonify({"success": False, "error": "登录尝试过于频繁，请稍后再试"})
+        resp.headers["Retry-After"] = str(retry_after)
+        return resp, 429
+
     data = request.get_json(silent=True) or {}
     username = data.get('username', '').strip()
     password = data.get('password', '')
@@ -739,9 +946,11 @@ def api_login():
     _db = Database()
     user_data = _db.get_user_by_username(username)
     if not user_data or not check_password_hash(user_data['password_hash'], password):
+        _login_record_failure(ip)
         return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
     if not user_data.get('is_active', 1):
         return jsonify({'success': False, 'error': '账号已被禁用'}), 403
+    _login_clear_failures(ip)
     user = UserModel(user_data)
     login_user(user, remember=True)
     _db.update_user_last_login(user_data['id'])
@@ -880,19 +1089,18 @@ def api_delete_user(user_id):
 @app.route('/create_case_v2')
 @login_required
 def create_case_v2():
-    response = make_response(render_template('create_case_v2.html'))
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    response.headers['Content-Type'] = 'text/html; charset=utf-8'
-    return response
+    """旧版独立建用例页；模板已移除，跳转到项目列表（从项目进入「用例管理」创建用例）。"""
+    return redirect(url_for('list_projects'))
 
 # AI 测试工作台（本地模型 + 内置浏览器与 Playwright 会话）
 @app.route('/ai-test')
 @login_required
 def ai_test_page():
     """AI 生成测试步骤；与内置浏览器共用 Playwright 会话。"""
-    return render_template('ai_test.html')
+    resp = make_response(render_template('ai_test.html'))
+    # 用于核对浏览器是否命中本仓库模板（与页内 #aiTestBuildMarker 文案一致）
+    resp.headers['X-AI-Test-Template'] = 'playwright-browser-dual-2026-04-24'
+    return resp
 
 
 # 项目管理页面
@@ -1791,12 +1999,43 @@ def api_ai_task_plan():
             'error': '该任务需走云端分析接口，请调用 /api/ai/task/cloud-analyze'
         }), 400
 
+    from ai_page_probe import probe_registry_from_interactive_snapshot
+
+    embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
+    target_page_url = (data.get('target_page_url') or '').strip()
+    page_snapshot = None
+    probe_registry = None
+    probe_url = (target_page_url or None) if not embedded_sid else None
+
+    if embedded_sid:
+        if not embedded_gateway_enabled():
+            return jsonify({'success': False, 'error': '远程 Chromium 网关未配置'}), 503
+        j, err = embedded_gateway_json(
+            'GET',
+            f'/internal/session/{embedded_sid}/inspect',
+            user_id=current_user.id,
+        )
+        if not j or not j.get('success'):
+            detail = (j or {}).get('detail')
+            return jsonify({
+                'success': False,
+                'error': str(err or detail or '无法获取远程页结构，请确认远程画布已连接'),
+            }), 502
+        snap = j.get('data') or {}
+        ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
+        page_snapshot = ps or None
+        probe_registry = pr if pr else None
+        probe_url = (pu or target_page_url).strip() or None
+
     try:
         generated = local_ai_service.generate_case_and_steps(
             goal,
             project_name,
             model=legacy_model,
             profile=profile,
+            page_snapshot=page_snapshot,
+            probe_registry=probe_registry,
+            probe_url=probe_url,
         )
     except ValueError as e:
         return jsonify({
@@ -1871,6 +2110,7 @@ def api_ai_generate_case_and_save():
     project_id = data.get('project_id')
     goal = (data.get('goal') or '').strip()
     project_name = (data.get('project_name') or '').strip()
+    case_name_override = (data.get('case_name_override') or data.get('session_title') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
     client_plan = data.get('plan')
     profile, legacy_model = _resolve_inference_profile(selected_model)
@@ -1908,6 +2148,8 @@ def api_ai_generate_case_and_save():
             'steps': list(client_plan.get('steps') or []),
             'meta': client_plan.get('meta') or {},
         }
+        if case_name_override:
+            generated['case_name'] = case_name_override
     else:
         if not goal:
             return jsonify({'success': False, 'error': 'goal不能为空'}), 400
@@ -1924,6 +2166,8 @@ def api_ai_generate_case_and_save():
                 'error': str(e),
                 'hint': '可先执行: ollama serve，并确认模型已拉取。'
             }), 503
+        if case_name_override:
+            generated['case_name'] = case_name_override
     local_ai_service._fill_missing_step_payloads(
         generated.get('steps') or [],
         goal or '',
@@ -1951,6 +2195,7 @@ def api_ai_generate_case_and_save():
     return jsonify({
         'success': True,
         'case_id': case_id,
+        'case_name': generated.get('case_name', ''),
         'steps_created': created_steps,
         'generated': generated,
         'warnings': warnings,
@@ -1979,6 +2224,34 @@ def api_ai_task_chat():
     if route['provider'] != 'local':
         return jsonify({'success': False, 'error': '当前仅支持本地模型对话'}), 400
 
+    from ai_page_probe import probe_registry_from_interactive_snapshot
+
+    embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
+    target_page_url = (data.get('target_page_url') or '').strip()
+    page_snapshot = None
+    probe_registry = None
+    probe_url = (target_page_url or None) if not embedded_sid else None
+
+    if embedded_sid:
+        if not embedded_gateway_enabled():
+            return jsonify({'success': False, 'error': '远程 Chromium 网关未配置'}), 503
+        j, err = embedded_gateway_json(
+            'GET',
+            f'/internal/session/{embedded_sid}/inspect',
+            user_id=current_user.id,
+        )
+        if not j or not j.get('success'):
+            detail = (j or {}).get('detail')
+            return jsonify({
+                'success': False,
+                'error': str(err or detail or '无法获取远程页结构'),
+            }), 502
+        snap = j.get('data') or {}
+        ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
+        page_snapshot = ps or None
+        probe_registry = pr if pr else None
+        probe_url = (pu or target_page_url).strip() or None
+
     try:
         generated = local_ai_service.refine_case_and_steps(
             user_message=message,
@@ -1987,6 +2260,9 @@ def api_ai_task_chat():
             history=history if isinstance(history, list) else [],
             model=legacy_model,
             profile=profile,
+            page_snapshot=page_snapshot,
+            probe_registry=probe_registry,
+            probe_url=probe_url,
         )
     except ValueError as e:
         return jsonify({
@@ -2009,11 +2285,13 @@ def api_ai_task_chat():
 @log_api_request
 def api_ai_append_steps_to_case():
     """
-    将AI生成步骤追加到现有用例，不新建用例。
+    将 AI 生成步骤追加到现有用例，不新建用例。
+    可选 case_name_override / session_title：同时重命名该用例（需编辑权限）。
     """
     data = request.get_json(silent=True) or {}
     case_id = data.get('case_id')
     steps = data.get('steps') or []
+    case_name_override = (data.get('case_name_override') or data.get('session_title') or '').strip()
     if not case_id:
         return jsonify({'success': False, 'error': 'case_id不能为空'}), 400
     if not isinstance(steps, list) or not steps:
@@ -2046,9 +2324,15 @@ def api_ai_append_steps_to_case():
         db.create_test_step(**_ai_step_to_db_kwargs(step, case_id, max_order + idx))
         created_steps += 1
 
+    final_name = case.get('name') or ''
+    if case_name_override:
+        db.update_test_case_v2(case_id, name=case_name_override)
+        final_name = case_name_override
+
     return jsonify({
         'success': True,
         'case_id': case_id,
+        'case_name': final_name,
         'steps_created': created_steps,
         'warnings': warnings,
     })
@@ -2286,6 +2570,165 @@ def api_browser_inspect():
     return jsonify({'success': True, 'data': payload})
 
 
+_PLAYWRIGHT_BROWSER_OPTIONS = [
+    {"id": "chromium", "label_zh": "Chromium（Playwright 内置）", "label_en": "Chromium (bundled)"},
+    {"id": "chrome", "label_zh": "Google Chrome", "label_en": "Google Chrome"},
+    {"id": "edge", "label_zh": "Microsoft Edge", "label_en": "Microsoft Edge"},
+    {"id": "firefox", "label_zh": "Firefox", "label_en": "Firefox"},
+    {"id": "webkit", "label_zh": "WebKit", "label_en": "WebKit"},
+]
+
+
+@app.route('/api/playwright/browser', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_playwright_browser():
+    """
+    主自动化会话使用的 Playwright 浏览器（Chromium / Chrome / Edge 等）。
+    偏好保存在 Flask session；未保存时遵循环境变量 PLAYWRIGHT_BROWSER。
+    使用系统 Chrome/Edge 前请在部署环境执行: playwright install chrome / playwright install msedge
+    """
+    if request.method == 'GET':
+        raw = session.get('playwright_browser_engine') or os.environ.get('PLAYWRIGHT_BROWSER') or 'chromium'
+        cur = normalize_playwright_browser_name(str(raw))
+        return jsonify({
+            'success': True,
+            'current': cur,
+            'options': _PLAYWRIGHT_BROWSER_OPTIONS,
+            'env_default': (os.environ.get('PLAYWRIGHT_BROWSER') or '').strip() or 'chromium',
+            'running_engine': automation.get_browser_engine(),
+        })
+    data = request.get_json(silent=True) or {}
+    b = (data.get('browser') or data.get('engine') or '').strip()
+    if not b:
+        return jsonify({'success': False, 'error': 'browser 不能为空'}), 400
+    norm = normalize_playwright_browser_name(b)
+    session['playwright_browser_engine'] = norm
+    session.modified = True
+    automation.set_browser_engine(norm)
+    return jsonify({
+        'success': True,
+        'current': norm,
+        'hint': '已保存。若自动化浏览器已在运行，下次打开/导航时会切换引擎；也可关闭浏览器窗口后重试。',
+    })
+
+
+@app.route('/api/embedded-browser/status', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_embedded_browser_status():
+    """远程 Chromium 网关是否可用（供 AI 测试页展示「远程画布」按钮）。"""
+    _, _, pub = embedded_gateway_config()
+    return jsonify({
+        'success': True,
+        'enabled': embedded_gateway_enabled(),
+        'ws_base_configured': bool(pub),
+    })
+
+
+@app.route('/api/embedded-browser/session', methods=['POST'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_embedded_browser_session_create():
+    """
+    在独立网关中创建 Playwright Chromium 会话，返回 WebSocket URL（CDP 画面 + 输入）。
+    需配置：EMBEDDED_BROWSER_GATEWAY_URL、EMBEDDED_BROWSER_GATEWAY_SECRET、
+    EMBEDDED_BROWSER_PUBLIC_WS_BASE（浏览器可达的 ws:// 或 wss:// 前缀）。
+    """
+    if not embedded_gateway_enabled():
+        return jsonify({
+            'success': False,
+            'error': '内嵌网关未配置：请设置 EMBEDDED_BROWSER_GATEWAY_URL 与 EMBEDDED_BROWSER_GATEWAY_SECRET',
+        }), 503
+    _, _, pub = embedded_gateway_config()
+    if not pub:
+        return jsonify({
+            'success': False,
+            'error': '请配置 EMBEDDED_BROWSER_PUBLIC_WS_BASE（例如 ws://127.0.0.1:8765）',
+        }), 503
+    data = request.get_json(silent=True) or {}
+    initial_url = (data.get('initial_url') or '').strip()
+    gw_body = {'user_id': current_user.id, 'initial_url': initial_url}
+    br = (data.get('browser') or data.get('engine') or '').strip()
+    gw_body['browser'] = normalize_playwright_browser_name(br) if br else automation.get_browser_engine()
+    j, err = embedded_gateway_json(
+        'POST',
+        '/internal/session',
+        user_id=current_user.id,
+        body=gw_body,
+    )
+    if j is None:
+        return jsonify({'success': False, 'error': err or '网关不可用'}), 502
+    sid = j.get('session_id')
+    tok = j.get('ws_token')
+    if not sid or not tok:
+        detail = j.get('detail')
+        return jsonify({'success': False, 'error': str(detail or err or '网关返回无效')}), 502
+    ws_url = f"{pub}/ws/{sid}?token={tok}"
+    return jsonify({'success': True, 'session_id': sid, 'ws_url': ws_url})
+
+
+@app.route('/api/embedded-browser/session/<session_id>', methods=['DELETE'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_embedded_browser_session_delete(session_id: str):
+    if not embedded_gateway_enabled():
+        return jsonify({'success': False, 'error': '内嵌网关未配置'}), 503
+    j, err = embedded_gateway_json(
+        'DELETE',
+        f'/internal/session/{session_id}',
+        user_id=current_user.id,
+    )
+    if err and not (j and j.get('success')):
+        return jsonify({'success': False, 'error': err or '删除失败'}), 502
+    return jsonify({'success': True})
+
+
+@app.route('/api/embedded-browser/session/<session_id>/inspect', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_embedded_browser_session_inspect(session_id: str):
+    """从远程 Chromium 会话拉取可交互结构（与 /api/browser/inspect 字段风格一致）。"""
+    if not embedded_gateway_enabled():
+        return jsonify({'success': False, 'error': '内嵌网关未配置'}), 503
+    j, err = embedded_gateway_json(
+        'GET',
+        f'/internal/session/{session_id}/inspect',
+        user_id=current_user.id,
+    )
+    if j is None or not j.get('success'):
+        return jsonify({'success': False, 'error': err or (j or {}).get('detail', 'inspect 失败')}), 502
+    return jsonify({'success': True, 'data': j.get('data')})
+
+
+@app.route('/api/embedded-browser/session/<session_id>/diagnostics', methods=['GET'])
+@login_required
+@role_required('admin', 'tester')
+@api_error_handler
+@log_api_request
+def api_embedded_browser_session_diagnostics(session_id: str):
+    if not embedded_gateway_enabled():
+        return jsonify({'success': False, 'error': '内嵌网关未配置'}), 503
+    j, err = embedded_gateway_json(
+        'GET',
+        f'/internal/session/{session_id}/diagnostics',
+        user_id=current_user.id,
+    )
+    if j is None or not j.get('success'):
+        return jsonify({'success': False, 'error': err or 'diagnostics 失败'}), 502
+    return jsonify({'success': True, 'data': j.get('data')})
+
+
 @app.route('/api/browser/viewport', methods=['GET'])
 @login_required
 @role_required('admin', 'tester')
@@ -2399,43 +2842,77 @@ def api_browser_pick_element():
 @log_api_request
 def api_browser_ai_analyze():
     """根据当前已打开页的可交互结构生成用例（写入侧栏/工作台预览由前端处理）。"""
-    if not sync_automation_session_usable():
-        return jsonify({'success': False, 'error': '浏览器未启动，请先打开页面'}), 400
     data = request.get_json(silent=True) or {}
+    embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
     hint = (data.get('hint') or '').strip()
     project_name = (data.get('project_name') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
     profile, legacy_model = _resolve_inference_profile(selected_model)
-    try:
-        snap = sync_get_interactive_page_snapshot(120)
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-    items = snap.get('items') or []
-    page_body = {
-        'url': snap.get('url', ''),
-        'title': snap.get('title', ''),
-        'viewport': snap.get('viewport', {}),
-        'items': items,
-    }
-    parts = [
-        '请根据以下「用户已在内置浏览器中打开的当前页面」生成可执行 UI 用例与步骤，输出 JSON 需符合本平台的 step 结构。',
+
+    if embedded_sid:
+        if not embedded_gateway_enabled():
+            return jsonify({'success': False, 'error': '远程 Chromium 网关未配置'}), 503
+        j, err = embedded_gateway_json(
+            'GET',
+            f'/internal/session/{embedded_sid}/inspect',
+            user_id=current_user.id,
+        )
+        if not j or not j.get('success'):
+            detail = (j or {}).get('detail')
+            return jsonify({
+                'success': False,
+                'error': str(err or detail or '远程会话无效或已过期，请重新连接「远程画布」'),
+            }), 502
+        snap = j.get('data') or {}
+        items = snap.get('items') or []
+        page_body = {
+            'url': snap.get('url', ''),
+            'title': snap.get('title', ''),
+            'viewport': snap.get('viewport', {}),
+            'items': items,
+            'source': snap.get('source') or 'embedded_gateway',
+        }
+    else:
+        if not sync_automation_session_usable():
+            return jsonify({'success': False, 'error': '浏览器未启动，请先打开页面或使用远程画布'}), 400
+        try:
+            snap = sync_get_interactive_page_snapshot(120)
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+        items = snap.get('items') or []
+        page_body = {
+            'url': snap.get('url', ''),
+            'title': snap.get('title', ''),
+            'viewport': snap.get('viewport', {}),
+            'items': items,
+        }
+
+    ctx_label = (
+        '用户已在远程 Chromium（服务端嵌入式网关）中打开的当前页面'
+        if embedded_sid
+        else '用户已在内置浏览器/主 Playwright 会话中打开的当前页面'
+    )
+    from ai_page_probe import probe_registry_from_interactive_snapshot
+
+    page_snapshot_txt, probe_registry, probe_pu = probe_registry_from_interactive_snapshot(snap)
+    goal_lines = [
+        f'请根据以下「{ctx_label}」生成可执行 UI 用例与步骤。',
         f"页面标题: {page_body['title']}",
         f"URL: {page_body['url']}",
     ]
     if hint:
-        parts.append('用户补充的测试目标: ' + hint)
-    parts.append('可交互元素（请优先为 click/input 填写与下列 suggestedSelector 一致或等价的定位）:')
-    try:
-        parts.append(json.dumps(page_body, ensure_ascii=False)[:30000])
-    except Exception:
-        parts.append('{}')
-    goal = '\n'.join(parts)
+        goal_lines.append('用户补充的测试目标: ' + hint)
+    goal = '\n'.join(goal_lines)
+    probe_url = (probe_pu or page_body.get('url') or '').strip() or None
     try:
         generated = local_ai_service.generate_case_and_steps(
             goal,
             project_name,
             model=legacy_model,
             profile=profile,
+            page_snapshot=page_snapshot_txt or None,
+            probe_registry=probe_registry if probe_registry else None,
+            probe_url=probe_url,
         )
     except ValueError as e:
         return jsonify({
@@ -2775,6 +3252,7 @@ def api_create_step():
     locator_candidates = data.get('locator_candidates', '')
     if locator_candidates is not None and not isinstance(locator_candidates, str):
         locator_candidates = json.dumps(locator_candidates, ensure_ascii=False)
+    click_repeat_count = _norm_click_repeat_count(data.get('click_repeat_count')) if action == 'click' else 1
     
     if not case_id:
         return jsonify({'error': '用例ID不能为空'}), 400
@@ -2784,7 +3262,7 @@ def api_create_step():
     step_id = db.create_test_step(case_id, action, selector_type, selector_value, 
                                   input_value, description, step_order, page_name,
                                   swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
-                                  locator_candidates or '')
+                                  locator_candidates or '', click_repeat_count=click_repeat_count)
     return jsonify({'success': True, 'step_id': step_id})
 
 # API: 更新测试步骤
@@ -2805,10 +3283,19 @@ def api_update_step(step_id):
     locator_candidates = data.get('locator_candidates')
     if locator_candidates is not None and not isinstance(locator_candidates, str):
         locator_candidates = json.dumps(locator_candidates, ensure_ascii=False)
-    
+    if action is not None:
+        if action == 'click':
+            click_repeat_count = _norm_click_repeat_count(data.get('click_repeat_count', 1))
+        else:
+            click_repeat_count = 1
+    elif 'click_repeat_count' in data:
+        click_repeat_count = _norm_click_repeat_count(data.get('click_repeat_count'))
+    else:
+        click_repeat_count = None
+
     success = db.update_test_step(step_id, action, selector_type, selector_value,
                                    input_value, description, step_order, enter_iframe, iframe_selector, compare_type,
-                                   locator_candidates)
+                                   locator_candidates, click_repeat_count)
     
     if success:
         return jsonify({'success': True})
@@ -3536,12 +4023,17 @@ def api_run_case(case_id):
                 elif action == 'click':
                             if selector_value:
                                 try:
-                                    sync_click_element(
-                                        selector_value,
-                                        selector_type,
-                                        iframe_selector=iframe_for_step,
-                                        locator_candidates=locator_candidates,
-                                    )
+                                    _repeat = _norm_click_repeat_count(step.get('click_repeat_count'))
+                                    for _r in range(_repeat):
+                                        with _case_run_lock:
+                                            if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
+                                                raise Exception("用户已停止执行")
+                                        sync_click_element(
+                                            selector_value,
+                                            selector_type,
+                                            iframe_selector=iframe_for_step,
+                                            locator_candidates=locator_candidates,
+                                        )
                                 except Exception as click_error:
                                     uat_logger.error(f"执行点击操作时出错: {click_error}")
                                     # 直接抛出错误，视为测试用例执行失败
@@ -3595,6 +4087,24 @@ def api_run_case(case_id):
                     else:
                         uat_logger.error("输入操作缺少选择器，步骤不能执行")
                         raise Exception("输入操作缺少选择器")
+                elif action == 'batch_input':
+                    pairs = parse_batch_input_lines(input_value or '')
+                    if not pairs:
+                        raise Exception("批量输入步骤缺少有效行（每行：选择器 + Tab 或逗号 + 文本，参见步骤说明）")
+                    for bsel, bval in pairs:
+                        with _case_run_lock:
+                            if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
+                                raise Exception("用户已停止执行")
+                        uat_logger.info(
+                            f"批量输入: 选择器={bsel!r} 值长={len(bval or '')}"
+                        )
+                        sync_fill_input(
+                            bsel,
+                            bval,
+                            selector_type,
+                            iframe_selector=iframe_for_step,
+                            locator_candidates=None,
+                        )
                 elif action == 'hover':
                     if selector_value:
                         try:
@@ -4784,12 +5294,17 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 sync_navigate_to(fixed_url)
                         elif action == 'click':
                             if selector_value:
-                                sync_click_element(
-                                    selector_value,
-                                    selector_type,
-                                    iframe_selector=iframe_sel,
-                                    locator_candidates=step.get('locator_candidates') or None,
-                                )
+                                _repeat = _norm_click_repeat_count(step.get('click_repeat_count'))
+                                for _r in range(_repeat):
+                                    with _dataset_run_lock:
+                                        if _dataset_run_jobs.get(run_id, {}).get('cancel_requested'):
+                                            raise Exception('用户已停止执行')
+                                    sync_click_element(
+                                        selector_value,
+                                        selector_type,
+                                        iframe_selector=iframe_sel,
+                                        locator_candidates=step.get('locator_candidates') or None,
+                                    )
                         elif action == 'input':
                             if selector_value:
                                 if input_value is None or str(input_value) == '':
@@ -4804,6 +5319,21 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 )
                             else:
                                 raise Exception("输入操作缺少选择器")
+                        elif action == 'batch_input':
+                            b_pairs = parse_batch_input_lines(input_value or '')
+                            if not b_pairs:
+                                raise Exception("批量输入步骤缺少有效行")
+                            for bsel, bval in b_pairs:
+                                with _dataset_run_lock:
+                                    if _dataset_run_jobs.get(run_id, {}).get('cancel_requested'):
+                                        raise Exception('用户已停止执行')
+                                sync_fill_input(
+                                    bsel,
+                                    bval,
+                                    selector_type,
+                                    iframe_selector=iframe_sel,
+                                    locator_candidates=None,
+                                )
                         elif action == 'hover':
                             if selector_value:
                                 sync_hover_element(selector_value, selector_type, iframe_selector=iframe_sel)
@@ -4918,7 +5448,7 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                         elif action:
                             raise Exception(
                                 f"数据驱动执行不支持的操作类型「{action}」。"
-                                "支持的类型：navigate, click, input, hover, double_click, right_click, wait, select, date, scroll, swipe, verify, extract_text, text_compare, extract_json, assert, enter_iframe, exit_iframe。"
+                                "支持的类型：navigate, click, input, batch_input, hover, double_click, right_click, wait, select, date, scroll, swipe, verify, extract_text, text_compare, extract_json, assert, enter_iframe, exit_iframe。"
                             )
                     except Exception as e:
                         step_status = 'failed'
@@ -5586,6 +6116,7 @@ def license_page():
     """License 管理页面"""
     return render_template('license.html')
 
+
 @app.route('/user-management')
 @login_required
 @role_required('admin')
@@ -5625,9 +6156,7 @@ def api_get_user_license_info():
             }
         })
     except Exception as e:
-        import traceback
-        print(f"[ERROR] api_get_user_license_info: {str(e)}")
-        print(traceback.format_exc())
+        uat_logger.log_exception('api_get_user_license_info', e)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -5809,11 +6338,27 @@ def api_remove_project_member(project_id, user_id):
 
 @app.route('/api/health', methods=['GET'])
 def api_health():
-    """健康检查接口"""
+    """存活探针：仅表示进程可响应（不访问数据库，便于与就绪探针区分）。"""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.datetime.now().isoformat(),
-        'version': '2.0.0'
+        'version': '2.0.0',
+    })
+
+
+@app.route('/api/health/ready', methods=['GET'])
+def api_health_ready():
+    """就绪探针：校验 SQLite 可连接（编排/负载均衡建议用此 URL）。"""
+    if not db.ping():
+        return jsonify({
+            'status': 'unready',
+            'database': 'unavailable',
+            'timestamp': datetime.datetime.now().isoformat(),
+        }), 503
+    return jsonify({
+        'status': 'ready',
+        'database': 'ok',
+        'timestamp': datetime.datetime.now().isoformat(),
     })
 
 
@@ -6650,8 +7195,6 @@ def api_update_defect_status(defect_id):
     data = request.get_json(silent=True) or {}
     new_status = data.get('status')
     
-    print(f"[DEBUG] Update defect status: defect_id={defect_id}, new_status={new_status}, user_id={current_user.id}")
-    
     if not new_status:
         return jsonify({'success': False, 'error': '状态不能为空'}), 400
     
@@ -6666,11 +7209,7 @@ def api_update_defect_status(defect_id):
     if not current_defect:
         return jsonify({'success': False, 'error': '缺陷不存在'}), 404
     
-    print(f"[DEBUG] Current defect status: {current_defect.get('status')}, new_status: {new_status}")
-    
     success = _db.update_defect_status(defect_id, current_user.id, new_status)
-    
-    print(f"[DEBUG] Update result: success={success}")
     
     if success:
         return jsonify({'success': True})
@@ -6930,13 +7469,27 @@ def api_get_json_template():
 @app.route('/api/download/<filename>')
 @login_required
 def api_download_file(filename):
-    """下载导出文件"""
-    from flask import send_from_directory
-    export_dir = os.path.join(os.path.dirname(__file__), 'exports')
-    return send_from_directory(export_dir, filename, as_attachment=True)
+    """下载导出文件（限制在 exports 目录内，防止路径穿越）"""
+    from flask import abort, send_from_directory
+    from werkzeug.utils import secure_filename
+
+    safe_name = secure_filename(os.path.basename(filename))
+    if not safe_name:
+        abort(404)
+    export_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'exports'))
+    candidate = os.path.abspath(os.path.join(export_dir, safe_name))
+    try:
+        if os.path.commonpath([export_dir, candidate]) != export_dir:
+            abort(404)
+    except ValueError:
+        abort(404)
+    if not os.path.isfile(candidate):
+        abort(404)
+    return send_from_directory(export_dir, safe_name, as_attachment=True)
 
 
 if __name__ == '__main__':
     _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
-    _debug = os.environ.get('FLASK_DEBUG', 'true').lower() in ('1', 'true', 'yes')
+    # 默认关闭 debug，避免生产式部署误暴露调试信息与 Werkzeug 交互式调试器
+    _debug = os.environ.get('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
     app.run(debug=_debug, host='0.0.0.0', port=_port)

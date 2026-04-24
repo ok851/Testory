@@ -723,17 +723,50 @@
         }
         function showCreateCaseModal() { document.getElementById('createCaseModal').classList.add('active'); document.getElementById('caseName').value = ''; document.getElementById('caseUrl').value = ''; document.getElementById('caseDescription').value = ''; document.getElementById('casePrecondition').value = ''; document.getElementById('caseExpectedResult').value = ''; if(typeof applyUiLang==='function') applyUiLang(); }
         function closeCreateCaseModal() { document.getElementById('createCaseModal').classList.remove('active'); }
+        async function createTestCase() {
+            const name = document.getElementById('caseName').value.trim();
+            if (!name) { alert(typeof t === 'function' ? t('proj_case_need_name') : '请填写用例名称'); return; }
+            if (!currentProjectId) { alert(typeof t === 'function' ? t('proj_case_bad_proj') : '无效的项目'); return; }
+            const url = document.getElementById('caseUrl').value.trim();
+            const description = document.getElementById('caseDescription').value.trim();
+            const precondition = document.getElementById('casePrecondition').value.trim();
+            const expected_result = document.getElementById('caseExpectedResult').value.trim();
+            try {
+                const response = await fetch('/api/cases', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project_id: parseInt(currentProjectId, 10),
+                        name,
+                        url,
+                        description,
+                        precondition,
+                        expected_result
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert(typeof t === 'function' ? t('tc_case_created_ok') : '用例已创建');
+                    closeCreateCaseModal();
+                    loadTestCases();
+                } else {
+                    alert((typeof t === 'function' ? t('proj_case_fail') : '创建失败：') + (data.error || (typeof t === 'function' ? t('index_err_unknown') : '未知错误')));
+                }
+            } catch (error) {
+                alert((typeof t === 'function' ? t('proj_case_fail') : '创建失败：') + error.message);
+            }
+        }
 
         function toggleCaseSelection(caseId) { const cb = document.getElementById(`select-${caseId}`); if(cb.checked) { if(!selectedCaseIdsOrdered.includes(caseId)) selectedCaseIdsOrdered.push(caseId); } else selectedCaseIdsOrdered = selectedCaseIdsOrdered.filter(id=>id!==caseId); updateSelectedOrderList(); }
         function selectAllCases() { selectedCaseIdsOrdered = allCasesList.map(c=>c.id); document.querySelectorAll('input[type="checkbox"][id^="select-"]').forEach(cb=>cb.checked=true); updateSelectedOrderList(); }
         function deselectAllCases() { selectedCaseIdsOrdered = []; document.querySelectorAll('input[type="checkbox"][id^="select-"]').forEach(cb=>cb.checked=false); updateSelectedOrderList(); }
         function updateSelectedOrderList() { const panel=document.getElementById('selectedOrderPanel'); const listEl=document.getElementById('selectedOrderList'); if(selectedCaseIdsOrdered.length===0){ panel.classList.remove('visible'); listEl.innerHTML=''; return; } panel.classList.add('visible'); listEl.innerHTML=selectedCaseIdsOrdered.map((id,idx)=>`<div class="selected-order-item" draggable="true" data-case-id="${id}" data-order-index="${idx}" ondragstart="handleOrderDragStart(event)" ondragover="handleOrderDragOver(event)" ondrop="handleOrderDrop(event)" ondragend="handleOrderDragEnd(event)"><div class="step-number">${idx+1}</div><div class="step-content"><h4>${escapeHtml(caseNamesById[id]||'用例')}</h4></div></div>`).join(''); }
-        function handleOrderDragStart(e){ draggedOrderIndex = parseInt(e.target.dataset.orderIndex); e.target.classList.add('dragging'); e.dataTransfer.setData('text/plain',''); }
+        function handleOrderDragStart(e){ const row = e.currentTarget; draggedOrderIndex = parseInt(row.dataset.orderIndex, 10); row.classList.add('dragging'); e.dataTransfer.setData('text/plain',''); }
         function handleOrderDragOver(e){ e.preventDefault(); const container=document.getElementById('selectedOrderList'); const items=container.querySelectorAll('.selected-order-item'); const dragged=document.querySelector('.selected-order-item.dragging'); if(!dragged) return; const rect=container.getBoundingClientRect(); const y=e.clientY-rect.top; let target=null; for(let item of items){ if(item===dragged) continue; const r=item.getBoundingClientRect(); const top=r.top-rect.top; if(y>=top && y<=top+r.height){ target=item; break; } } items.forEach(i=>i.classList.remove('drag-before','drag-after')); if(target){ const mid=target.getBoundingClientRect().height/2; const pos=y-(target.getBoundingClientRect().top-rect.top); target.classList.add(pos<mid?'drag-before':'drag-after'); } }
         function handleOrderDrop(e){ e.preventDefault(); const container=document.getElementById('selectedOrderList'); const dragged=document.querySelector('.selected-order-item.dragging'); if(!dragged) return; const rect=container.getBoundingClientRect(); const y=e.clientY-rect.top; let target=null, before=false; const items=container.querySelectorAll('.selected-order-item'); for(let item of items){ if(item===dragged) continue; const r=item.getBoundingClientRect(); const top=r.top-rect.top; if(y>=top && y<=top+r.height){ target=item; before = y < (top + r.height/2); break; } } if(target && draggedOrderIndex!==null){ const targetIdx=parseInt(target.dataset.orderIndex); const id=selectedCaseIdsOrdered[draggedOrderIndex]; selectedCaseIdsOrdered.splice(draggedOrderIndex,1); let newIdx = before ? (targetIdx > draggedOrderIndex ? targetIdx-1 : targetIdx) : (targetIdx > draggedOrderIndex ? targetIdx : targetIdx+1); newIdx=Math.max(0,Math.min(newIdx,selectedCaseIdsOrdered.length)); selectedCaseIdsOrdered.splice(newIdx,0,id); updateSelectedOrderList(); } dragged.classList.remove('dragging'); items.forEach(i=>i.classList.remove('drag-before','drag-after')); draggedOrderIndex=null; }
-        function handleOrderDragEnd(e){ e.target.classList.remove('dragging'); document.querySelectorAll('.selected-order-item').forEach(i=>i.classList.remove('drag-before','drag-after')); draggedOrderIndex=null; }
-        async function executeSelectedCases(){ if(selectedCaseIdsOrdered.length===0){ alert('请先勾选用例'); return; } if(selectedCaseIdsOrdered.length===1){ runTestCase(selectedCaseIdsOrdered[0]); return; } try{ const resp=await fetch('/api/execute_multiple_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_ids:selectedCaseIdsOrdered})}); const data=await resp.json(); if(data.success){ let html=`<div><strong>执行摘要</strong><br>总:${data.results.total_cases} 成功:${data.results.successful_cases} 失败:${data.results.failed_cases}</div><hr>`; data.results.case_results.forEach(r=>{html+=`<div><b>${r.case_name}</b> 状态:${r.status==='success'?'成功':'失败'}${r.error?`<br>错误:${r.error}`:''}</div>`;}); showRunResultModal(html); } else showRunResultModal(`执行失败:${data.error}`,true); }catch(e){ showRunResultModal(`错误:${e.message}`,true); } }
-        async function runTestCase(caseId){ try{ const resp=await fetch(`/api/cases/${caseId}/run`,{method:'POST'}); const data=await resp.json(); if(data.success) showRunResultModal(`<div>执行成功<br>耗时:${data.duration||0}秒</div>`); else showRunResultModal(`失败:${data.error}`,true); }catch(e){ showRunResultModal(`错误:${e.message}`,true); } }
+        function handleOrderDragEnd(e){ e.currentTarget.classList.remove('dragging'); document.querySelectorAll('.selected-order-item').forEach(i=>i.classList.remove('drag-before','drag-after')); draggedOrderIndex=null; }
+        async function executeSelectedCases(){ if(selectedCaseIdsOrdered.length===0){ alert('请先勾选用例'); return; } if(selectedCaseIdsOrdered.length===1){ return runTestCase(selectedCaseIdsOrdered[0]); } localCaseExecutionRunning=true; try{ const resp=await fetch('/api/execute_multiple_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({case_ids:selectedCaseIdsOrdered})}); const data=await resp.json(); if(data.success){ let html=`<div><strong>执行摘要</strong><br>总:${data.results.total_cases} 成功:${data.results.successful_cases} 失败:${data.results.failed_cases}</div><hr>`; data.results.case_results.forEach(r=>{html+=`<div><b>${r.case_name}</b> 状态:${r.status==='success'?'成功':'失败'}${r.error?`<br>错误:${r.error}`:''}</div>`;}); showRunResultModal(html); } else showRunResultModal(`执行失败:${data.error}`,true); }catch(e){ showRunResultModal(`错误:${e.message}`,true); } finally{ localCaseExecutionRunning=false; syncCaseRunButtonState(); } }
+        async function runTestCase(caseId){ localCaseExecutionRunning=true; try{ const resp=await fetch(`/api/cases/${caseId}/run`,{method:'POST'}); const data=await resp.json(); if(data.success) showRunResultModal(`<div>执行成功<br>耗时:${data.duration||0}秒</div>`); else showRunResultModal(`失败:${data.error}`,true); }catch(e){ showRunResultModal(`错误:${e.message}`,true); } finally{ localCaseExecutionRunning=false; syncCaseRunButtonState(); } }
         function stopCaseRun(){ fetch('/api/cases/current-run/stop',{method:'POST'}); localCaseExecutionRunning=false; document.getElementById('stopCaseRunBtn').disabled=true; }
         function backToProjects(){ window.location.href='/list_projects'; }
         function viewCaseSteps(caseId){ sessionStorage.setItem('currentCaseId',caseId); sessionStorage.setItem('currentProjectId',currentProjectId); window.location.href='/list_steps'; }
@@ -747,9 +780,9 @@
         function closeImportModal(){ document.getElementById('importModal').classList.remove('active'); document.getElementById('importFile').value=''; document.getElementById('importFileName').innerText='未选择文件'; }
         function showExportModal(){ document.getElementById('exportModal').classList.add('active'); }
         function closeExportModal(){ document.getElementById('exportModal').classList.remove('active'); }
-        async function downloadTemplate(){ window.open('/api/cases/template/excel','_blank'); }
+        function downloadTemplate(fmt){ const path = (fmt === 'json') ? '/api/cases/template/json' : '/api/cases/template/excel'; window.open(path, '_blank'); }
         function updateFileName(input){ document.getElementById('importFileName').innerText=input.files[0]?.name||'未选择文件'; }
-        async function importCases(){ const file=document.getElementById('importFile').files[0]; if(!file){ alert('请选择文件'); return; } const fd=new FormData(); fd.append('file',file); fd.append('project_id',currentProjectId); const resp=await fetch('/api/cases/import/excel',{method:'POST',body:fd}); const data=await resp.json(); if(data.success){ alert(`导入成功，创建用例${data.cases_created}个`); loadTestCases(); closeImportModal(); } else alert('导入失败'); }
+        async function importCases(){ const file=document.getElementById('importFile').files[0]; if(!file){ alert('请选择文件'); return; } const fd=new FormData(); fd.append('file',file); fd.append('project_id',currentProjectId); const resp=await fetch('/api/cases/import/excel',{method:'POST',body:fd}); const data=await resp.json(); if(data.success){ alert(`导入成功，创建用例${data.cases_created}个`); loadTestCases(); closeImportModal(); } else alert('导入失败' + (data.error ? (': ' + data.error) : '')); }
         async function exportCases(format){ const selected=Array.from(document.querySelectorAll('.case-checkbox input:checked')).map(cb=>parseInt(cb.id.replace('select-',''))); const payload={project_id:selected.length===0?currentProjectId:undefined,case_ids:selected.length?selected:undefined}; const resp=await fetch(`/api/cases/export/${format}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success) window.open(data.download_url,'_blank'); else alert('导出失败'); }
         function showMarkDefectModal(){ if(selectedCaseIdsOrdered.length===0){ alert('请先勾选用例'); return; } const names=selectedCaseIdsOrdered.map(id=>caseNamesById[id]).join(', '); document.getElementById('defectCaseNames').innerHTML=names; document.getElementById('markDefectModal').classList.add('active'); }
         function closeMarkDefectModal(){ document.getElementById('markDefectModal').classList.remove('active'); }

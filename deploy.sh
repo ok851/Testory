@@ -118,13 +118,13 @@ start_services() {
     
     # 检查健康状态
     if command -v curl &> /dev/null; then
-        if curl -f http://localhost:5000/api/health &> /dev/null; then
+        if curl -f http://localhost:5000/api/health/ready &> /dev/null; then
             echo_info "服务运行正常"
         else
             echo_warn "服务可能还在启动中，请稍后检查"
         fi
     elif command -v wget &> /dev/null; then
-        if wget -qO- http://localhost:5000/api/health &> /dev/null; then
+        if wget -qO- http://localhost:5000/api/health/ready &> /dev/null; then
             echo_info "服务运行正常"
         else
             echo_warn "服务可能还在启动中，请稍后检查"
@@ -144,9 +144,11 @@ show_info() {
     echo "访问地址:"
     echo "  - 本地访问: http://localhost:5000"
     echo ""
-    echo "默认账号:"
+    echo "管理员账号:"
     echo "  - 用户名: admin"
-    echo "  - 密码: admin123"
+    echo "  - 初始密码: 请在 .env 中设置 ADMIN_INITIAL_PASSWORD（≥8 位），"
+    echo "    或首次启动后查看容器日志中的随机密码；"
+    echo "    仅内网调试可设 ALLOW_INSECURE_DEFAULT_ADMIN=true 使用 admin/admin123"
     echo ""
     echo "数据目录:"
     echo "  - 数据库: ./data/"

@@ -91,9 +91,11 @@ class BrowserManager:
         if self.config.slow_mo > 0:
             launch_options["slow_mo"] = self.config.slow_mo
 
-        # Chrome/Edge 特定配置
-        if self.config.browser_type in ["chrome", "edge"]:
-            launch_options["channel"] = self.config.browser_type
+        # Chrome/Edge 特定配置（Playwright channel 名：chrome / msedge）
+        if self.config.browser_type == "chrome":
+            launch_options["channel"] = "chrome"
+        elif self.config.browser_type == "edge":
+            launch_options["channel"] = "msedge"
 
         self.browser = browser_launcher.launch(**launch_options)
 

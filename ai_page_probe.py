@@ -310,6 +310,57 @@ def _format_summary_lines(
     return text
 
 
+def probe_registry_from_interactive_snapshot(snap: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]], str]:
+    """
+    将 get_interactive_page_snapshot / 网关 inspect 返回的 data 转为
+    （page_snapshot 文本, probe 注册表, 页面 URL）。
+
+    注册表字段与 collect_page_controls / _probe_pick_selector / build_locator_candidates_from_probe_entry 兼容。
+    """
+    title = _norm_probe_str(snap.get("title"))
+    url = _norm_probe_str(snap.get("url"))
+    items = snap.get("items") or []
+    max_lines = _env_int("LOCAL_AI_PROBE_MAX_LINES", 90)
+    max_chars = _env_int("LOCAL_AI_PROBE_MAX_CHARS", 18000)
+    registry: List[Dict[str, Any]] = []
+    for it in items[:max_lines]:
+        if not isinstance(it, dict):
+            continue
+        try:
+            ii = int(it.get("n") or len(registry) + 1)
+        except (TypeError, ValueError):
+            ii = len(registry) + 1
+        tag = _norm_probe_str(it.get("tag")) or "div"
+        sel = _norm_probe_str(it.get("suggestedSelector"))
+        rty = "css"
+        if sel.startswith("//") or sel.lower().startswith("xpath:"):
+            rty = "xpath"
+            if sel.lower().startswith("xpath:"):
+                sel = sel[6:].strip()
+        row: Dict[str, Any] = {
+            "i": ii,
+            "frame": "main",
+            "tag": tag,
+            "typ": _norm_probe_str(it.get("type")).lower(),
+            "txt": _norm_probe_str(it.get("text")),
+            "al": _norm_probe_str(it.get("ariaLabel")),
+            "ph": _norm_probe_str(it.get("placeholder")),
+            "rid": _norm_probe_str(it.get("role")),
+            "href": _norm_probe_str(it.get("href")),
+            "id": _norm_probe_str(it.get("id")),
+            "name": _norm_probe_str(it.get("name")),
+            "testid": _norm_probe_str(it.get("dataTestid")),
+            "recommended_selector": sel,
+            "recommended_selector_type": rty,
+        }
+        eid = row["id"]
+        if eid and re.match(r"^[\w-]+$", eid):
+            row["css"] = f"#{eid}"
+        registry.append(row)
+    text = _format_summary_lines(title, url, registry, max_lines, max_chars)
+    return text, registry, url
+
+
 def collect_page_controls(url: str) -> Tuple[str, Optional[str], List[Dict[str, Any]]]:
     """
     打开 url（无头），抽取可见可交互控件，返回 (摘要文本, 错误信息, 注册表)。

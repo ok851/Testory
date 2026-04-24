@@ -1,8 +1,12 @@
 import sqlite3
 import os
 import json
+import logging
+import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+
+_db_log = logging.getLogger(__name__)
 
 # projects 表列（勿用 SELECT * + 固定下标：迁移后 tenant_id 与 created_at 顺序因建表/ALTER 而异）
 _PROJECTS_SELECT = "id, name, description, tenant_id, created_at"
@@ -40,6 +44,11 @@ def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict
 
 
 class Database:
+    """每个进程只对库执行一次 init_db（建表/迁移/索引）；避免每个 API 请求重复全量迁移。"""
+
+    _schema_lock = threading.Lock()
+    _schema_initialized: bool = False
+
     def __init__(self, db_path: str = "test_cases.db"):
         # 部署（Docker/服务器）时可能通过环境变量指定持久化数据库路径
         # 例如 docker-compose.yml 里的 DATABASE_PATH=/app/data/test_cases.db
@@ -47,7 +56,22 @@ class Database:
         if env_db_path and (db_path == "test_cases.db"):
             db_path = env_db_path
         self.db_path = db_path
-        self.init_db()
+        with Database._schema_lock:
+            if not Database._schema_initialized:
+                self.init_db()
+                Database._schema_initialized = True
+
+    def ping(self, timeout: float = 2.0) -> bool:
+        """快速检测库是否可读（用于就绪探针）。"""
+        try:
+            conn = self._sqlite_connect(timeout=timeout)
+            try:
+                conn.execute("SELECT 1")
+            finally:
+                conn.close()
+            return True
+        except sqlite3.Error:
+            return False
 
     def _sqlite_connect(self, timeout: Optional[float] = None) -> sqlite3.Connection:
         """统一连接参数：WAL 提升读并发；busy_timeout 缓解锁竞争（数据库在网络盘时仍可能较慢）。"""
@@ -211,6 +235,12 @@ class Database:
         # 录制器多定位器备选（JSON 数组：[{type,value,score}, ...]）
         try:
             cursor.execute("ALTER TABLE test_steps ADD COLUMN locator_candidates TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # 点击步骤连续执行次数（仅 action=click 时有效，默认 1）
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN click_repeat_count INTEGER DEFAULT 1")
         except sqlite3.OperationalError:
             pass
         
@@ -500,7 +530,7 @@ class Database:
                 cursor.execute(index_sql)
             except sqlite3.Error as e:
                 # 记录错误但继续执行，避免因为索引创建失败影响主要功能
-                print(f"创建索引失败: {index_sql}, 错误: {e}")
+                _db_log.warning("创建索引失败: %s, 错误: %s", index_sql, e)
 
     def _migrate_multi_tenant(self, cursor):
         """多租户数据库迁移 - 为现有表添加 tenant_id 字段"""
@@ -873,7 +903,7 @@ class Database:
             conn.commit()
             return True
         except Exception as e:
-            print(f"删除测试用例失败: {e}")
+            _db_log.warning("删除测试用例失败: %s", e)
             conn.rollback()
             return False
         finally:
@@ -1017,7 +1047,7 @@ class Database:
             conn.commit()
             return success
         except Exception as e:
-            print(f"删除项目失败: {e}")
+            _db_log.warning("删除项目失败: %s", e)
             conn.rollback()
             return False
         finally:
@@ -1163,7 +1193,7 @@ class Database:
             conn.commit()
             return True
         except Exception as e:
-            print(f"删除测试用例失败: {e}")
+            _db_log.warning("删除测试用例失败: %s", e)
             conn.rollback()
             return False
         finally:
@@ -1176,7 +1206,7 @@ class Database:
                          description: str = "", step_order: int = None, page_name: str = "",
                          swipe_x: str = "", swipe_y: str = "", url: str = "",
                          enter_iframe: bool = False, iframe_selector: str = "", compare_type: str = "equals",
-                         locator_candidates: str = "") -> int:
+                         locator_candidates: str = "", click_repeat_count: int = 1) -> int:
         """创建测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1186,12 +1216,20 @@ class Database:
             cursor.execute("SELECT MAX(step_order) FROM test_steps WHERE case_id = ?", (case_id,))
             max_order = cursor.fetchone()[0]
             step_order = (max_order or 0) + 1
+        try:
+            crc = int(click_repeat_count)
+        except (TypeError, ValueError):
+            crc = 1
+        if crc < 1:
+            crc = 1
+        if crc > 99:
+            crc = 99
             
         cursor.execute(
             """INSERT INTO test_steps 
-               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '')
+               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc)
         )
         step_id = cursor.lastrowid
             
@@ -1267,7 +1305,7 @@ class Database:
             conn.commit()
             return True
         except Exception as e:
-            print(f"批量插入步骤失败：{e}")
+            _db_log.warning("批量插入步骤失败：%s", e)
             conn.rollback()
             return False
         finally:
@@ -1299,13 +1337,23 @@ class Database:
                 'enter_iframe': row[13] if len(row) > 13 else False,
                 'iframe_selector': row[14] if len(row) > 14 else '',
                 'compare_type': row[15] if len(row) > 15 else 'equals',
-                'locator_candidates': row[16] if len(row) > 16 else ''
+                'locator_candidates': row[16] if len(row) > 16 else '',
+                'click_repeat_count': int(row[17]) if len(row) > 17 and row[17] is not None else 1,
             }
         
         conn.close()
         return None
     
     def _row_to_step_dict(self, row: tuple) -> Dict[str, Any]:
+        crc = row[17] if len(row) > 17 else 1
+        try:
+            crc = int(crc) if crc is not None else 1
+        except (TypeError, ValueError):
+            crc = 1
+        if crc < 1:
+            crc = 1
+        if crc > 99:
+            crc = 99
         return {
             'id': row[0],
             'case_id': row[1],
@@ -1323,7 +1371,8 @@ class Database:
             'enter_iframe': row[13] if len(row) > 13 else False,
             'iframe_selector': row[14] if len(row) > 14 else '',
             'compare_type': row[15] if len(row) > 15 else 'equals',
-            'locator_candidates': row[16] if len(row) > 16 else ''
+            'locator_candidates': row[16] if len(row) > 16 else '',
+            'click_repeat_count': crc
         }
 
     def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:
@@ -1340,7 +1389,7 @@ class Database:
         cursor.execute(
             """
             SELECT id, case_id, action, selector_type, selector_value, input_value, description,
-                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates,
+                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count,
                    COUNT(*) OVER() AS __total
             FROM test_steps
             WHERE case_id = ?
@@ -1373,7 +1422,7 @@ class Database:
                         selector_value: str = None, input_value: str = None,
                         description: str = None, step_order: int = None,
                         enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None,
-                        locator_candidates: str = None) -> bool:
+                        locator_candidates: str = None, click_repeat_count: int = None) -> bool:
         """更新测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1420,6 +1469,18 @@ class Database:
         if locator_candidates is not None:
             updates.append("locator_candidates = ?")
             params.append(locator_candidates)
+
+        if click_repeat_count is not None:
+            try:
+                crc = int(click_repeat_count)
+            except (TypeError, ValueError):
+                crc = 1
+            if crc < 1:
+                crc = 1
+            if crc > 99:
+                crc = 99
+            updates.append("click_repeat_count = ?")
+            params.append(crc)
         
         if not updates:
             conn.close()
@@ -1764,7 +1825,7 @@ class Database:
             conn.commit()
             return True
         except Exception as e:
-            print(f"更新步骤顺序失败: {e}")
+            _db_log.warning("更新步骤顺序失败: %s", e)
             conn.rollback()
             return False
         finally:
@@ -3013,9 +3074,6 @@ class Database:
             
             params.append(defect_id)
             cursor.execute(f"UPDATE defects SET {', '.join(updates)} WHERE id = ?", params)
-            print(f"[DB DEBUG] Executed UPDATE: {updates}")
-        else:
-            print(f"[DB DEBUG] No changes detected. kwargs={kwargs}, old_status={old_defect.get('status')}")
         
         conn.commit()
         conn.close()
@@ -3025,6 +3083,15 @@ class Database:
         """更新缺陷状态（状态流转）"""
         valid_statuses = ['open', 'in_progress', 'resolved', 'closed', 'reopened']
         if new_status not in valid_statuses:
+            return False
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM defects WHERE id = ?", (defect_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return False
+        if row[0] == new_status:
             return False
         return self.update_defect(defect_id, user_id, status=new_status)
 

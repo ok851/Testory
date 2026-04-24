@@ -281,17 +281,20 @@ class LocalAIService:
         project_name: str = "",
         model: str = "",
         profile: Optional[Dict[str, Any]] = None,
+        page_snapshot: Optional[str] = None,
+        probe_registry: Optional[List[Dict[str, Any]]] = None,
+        probe_url: Optional[str] = None,
     ) -> Dict[str, Any]:
-        page_snapshot = ""
-        probe_registry: List[Dict[str, Any]] = []
-        probe_url: Optional[str] = None
-        prompt = self._build_prompt(goal, project_name, page_snapshot=page_snapshot)
+        snap_t = (page_snapshot or "").strip()
+        pr: List[Dict[str, Any]] = list(probe_registry) if probe_registry else []
+        pu = (probe_url or "").strip() or None
+        prompt = self._build_prompt(goal, project_name, page_snapshot=snap_t)
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
         )
         parsed = self._parse_json_response(content)
         out = self._normalize_output(
-            parsed, goal, project_name, using_model, probe_registry=probe_registry
+            parsed, goal, project_name, using_model, probe_registry=pr if pr else None
         )
         meta = out.setdefault("meta", {})
         if profile and isinstance(profile, dict):
@@ -300,7 +303,7 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        self._attach_locator_validation(meta, probe_url, out.get("steps") or [])
+        self._attach_locator_validation(meta, pu, out.get("steps") or [])
         return out
 
     def refine_case_and_steps(
@@ -311,23 +314,26 @@ class LocalAIService:
         history: List[Dict[str, str]] = None,
         model: str = "",
         profile: Optional[Dict[str, Any]] = None,
+        page_snapshot: Optional[str] = None,
+        probe_registry: Optional[List[Dict[str, Any]]] = None,
+        probe_url: Optional[str] = None,
     ) -> Dict[str, Any]:
-        page_snapshot = ""
-        probe_registry: List[Dict[str, Any]] = []
-        probe_url: Optional[str] = None
+        snap_t = (page_snapshot or "").strip()
+        pr: List[Dict[str, Any]] = list(probe_registry) if probe_registry else []
+        pu = (probe_url or "").strip() or None
         prompt = self._build_refine_prompt(
             user_message=user_message,
             project_name=project_name,
             current_plan=current_plan or {},
             history=history or [],
-            page_snapshot=page_snapshot,
+            page_snapshot=snap_t,
         )
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
         )
         parsed = self._parse_json_response(content)
         out = self._normalize_output(
-            parsed, user_message, project_name, using_model, probe_registry=probe_registry
+            parsed, user_message, project_name, using_model, probe_registry=pr if pr else None
         )
         meta = out.setdefault("meta", {})
         if profile and isinstance(profile, dict):
@@ -336,7 +342,7 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        self._attach_locator_validation(meta, probe_url, out.get("steps") or [])
+        self._attach_locator_validation(meta, pu, out.get("steps") or [])
         return out
 
     def _complete_for_model(

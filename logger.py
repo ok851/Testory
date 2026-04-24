@@ -123,7 +123,14 @@ class UATLogger:
     
     def _filter_sensitive_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """过滤敏感数据，避免在日志中记录密码等信息"""
-        sensitive_keys = ['password', 'pwd', 'token', 'secret', 'key', 'authorization']
+        sensitive_keys = (
+            'password',
+            'pwd',
+            'token',
+            'secret',
+            'api_key',
+            'authorization',
+        )
         
         if not isinstance(data, dict):
             return data
@@ -131,12 +138,10 @@ class UATLogger:
         filtered = data.copy()
         
         for key, value in filtered.items():
-            # 检查键名是否包含敏感词
-            key_lower = key.lower()
+            key_lower = str(key).lower()
             if any(sensitive in key_lower for sensitive in sensitive_keys):
                 filtered[key] = '***'
-            # 检查值是否看起来像密码
-            elif isinstance(value, str) and len(value) > 8 and ' ' not in value:
+            elif key_lower.endswith('_key') or key_lower.endswith('_secret'):
                 filtered[key] = '***'
         
         return filtered

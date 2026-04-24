@@ -19,16 +19,65 @@ services:
       - FLASK_ENV=production
       - FLASK_DEBUG=0
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      # 首次初始化库时的管理员密码（≥8 字符）；不设置则启动时生成随机密码并写入日志
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
+      # 仅本地/内网可设为 true，等价于旧版 admin/admin123（极不安全）
+      - ALLOW_INSECURE_DEFAULT_ADMIN=${ALLOW_INSECURE_DEFAULT_ADMIN:-0}
+      # 跨域前端域名，逗号分隔；留空则生产环境不放宽 CORS
+      - FLASK_CORS_ORIGINS=${FLASK_CORS_ORIGINS:-}
+      # 全站 HTTPS 时设为 true，使 Session Cookie 带 Secure
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-0}
+      # 位于 Nginx/Ingress 之后时设为 1，以正确识别 HTTPS 与客户端 IP（登录限流、审计）
+      - TRUST_X_FORWARDED=${TRUST_X_FORWARDED:-0}
+      # 上传/请求体上限（MB）
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-50}
+      # 登录失败限流：窗口内（秒）允许失败次数；设为 0 关闭
+      - LOGIN_RATE_LIMIT_MAX=${LOGIN_RATE_LIMIT_MAX:-40}
+      - LOGIN_RATE_LIMIT_WINDOW_SEC=${LOGIN_RATE_LIMIT_WINDOW_SEC:-900}
+      # 生产环境排错时可设为 1，API 500 将返回详细异常信息（勿长期开启）
+      - API_DETAILED_ERRORS=${API_DETAILED_ERRORS:-0}
+      # 选择器全失败时是否用 LLM+当前页 DOM 摘要兜底（类似 Skyvern 的 NL 目标，非视觉）
+      - AI_SELECTOR_FALLBACK=${AI_SELECTOR_FALLBACK:-1}
+      - AI_SELECTOR_RECOVERY_MAX_NODES=${AI_SELECTOR_RECOVERY_MAX_NODES:-100}
       - DATABASE_PATH=/app/data/test_cases.db
       # 无显示环境默认无头；本地调试可在 .env 中设 PLAYWRIGHT_HEADLESS=0
       - PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-1}
+      # 默认自动化引擎：chromium | chrome | edge | firefox | webkit（用户可在 AI 测试页覆盖并写入会话）
+      - PLAYWRIGHT_BROWSER=${PLAYWRIGHT_BROWSER:-chromium}
+      # 可选：远程内嵌 Chromium（独立网关进程）；与本变量同时配置后 AI 测试页显示「远程画布」
+      - EMBEDDED_BROWSER_GATEWAY_URL=${EMBEDDED_BROWSER_GATEWAY_URL:-http://embedded-browser-gateway:8765}
+      - EMBEDDED_BROWSER_GATEWAY_SECRET=${EMBEDDED_BROWSER_GATEWAY_SECRET:-change-embedded-browser-secret}
+      # 浏览器侧 WebSocket 基址（宿主机访问 Docker 时一般为 ws://127.0.0.1:8765）
+      - EMBEDDED_BROWSER_PUBLIC_WS_BASE=${EMBEDDED_BROWSER_PUBLIC_WS_BASE:-ws://127.0.0.1:8765}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health/ready"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # 独立 FastAPI 网关：Playwright Chromium + CDP 画面 WebSocket（与主站 Flask 进程隔离）
+  embedded-browser-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "embedded_browser_gateway"]
+    ports:
+      - "8765:8765"
+    environment:
+      - EMBEDDED_BROWSER_GATEWAY_SECRET=${EMBEDDED_BROWSER_GATEWAY_SECRET:-change-embedded-browser-secret}
+      - EMBEDDED_BROWSER_GATE_LISTEN=0.0.0.0
+      - EMBEDDED_BROWSER_GATE_PORT=8765
+      - PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-1}
+      - PLAYWRIGHT_BROWSER=${PLAYWRIGHT_BROWSER:-chromium}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 35s
+    restart: unless-stopped
 
   # 可选：使用 Nginx 作为反向代理
   nginx:
