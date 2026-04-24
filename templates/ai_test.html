@@ -688,6 +688,23 @@
     html.dark .ai-stats-card { background: #1e293b; border-color: #334155; color: #e2e8f0; }
     .ai-stats-card strong { color: #4f46e5; font-size: 1.15em; }
     html.dark .ai-stats-card strong { color: #a5b4fc; }
+    .ai-stat-row {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        margin-bottom: 8px;
+    }
+    .ai-stat-row label { font-size: 13px; font-weight: 600; flex-shrink: 0; }
+    .ai-stat-input {
+        width: 5.5rem; max-width: 42%; padding: 6px 8px; border-radius: 8px;
+        border: 1px solid #cbd5e1; font-size: 14px; box-sizing: border-box;
+        background: #fff; color: #0f172a; text-align: right;
+    }
+    html.dark .ai-stat-input { background: #111827; border-color: #475569; color: #e5e7eb; }
+    .ai-browser-url-mirror {
+        cursor: default !important;
+        background: #f1f5f9 !important;
+        color: #475569 !important;
+    }
+    html.dark .ai-browser-url-mirror { background: #1e293b !important; color: #94a3b8 !important; }
     .ai-stat-status {
         margin-top: 10px; padding: 10px 12px; border-radius: 10px;
         background: #eef2ff; color: #3730a3; font-weight: 600; font-size: 12px;
@@ -768,7 +785,7 @@
 </style>
 {% endblock %}
 {% block content %}
-<!-- ai-test template build: playwright-browser-dual 2026-04-24 (若页面源码无此注释，说明运行的不是本仓库当前模板) -->
+<!-- ai-test template build: playwright-ui-dedup 2026-04-24 -->
 <div class="ai-test-page">
     <div class="ai-test-shell" style="display:flex;flex-direction:column;min-height:calc(100vh - 64px);">
         <header class="ai-studio-header">
@@ -791,7 +808,7 @@
                     </button>
                 </div>
             </div>
-            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">左栏：自然语言任务与推理引擎；中栏：实时内嵌页 + Playwright；右栏：统计与用例预览。先输入 URL 点「打开」，再点顶栏「运行」，步骤更贴页面。</p>
+            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">左栏：自然语言任务与推理引擎；中栏：实时内嵌页 + Playwright；右栏：统计与用例预览。仅在上方「目标页面 URL」填写地址，中间栏点「打开」同步内嵌与后台会话；顶栏「运行」生成步骤。</p>
         </header>
 
         <div class="ai-studio-context-row" aria-label="context">
@@ -816,8 +833,6 @@
                     </div>
                     <label class="ai-gen-label" for="aiAgentEngineSelect">推理引擎</label>
                     <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"></select>
-                    <label class="ai-gen-label" for="aiPlaywrightBrowserSelectRail" data-i18n="aitest_label_browser">自动化浏览器</label>
-                    <select id="aiPlaywrightBrowserSelectRail" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 与「远程画布」默认使用；Chrome/Edge 需本机或镜像内已安装（playwright install chrome / msedge）"></select>
                     <label class="ai-gen-label" for="aiMessageInput" data-i18n="aitest_label_goal">任务目标（自然语言）</label>
                     <div class="ai-input-row">
                         <textarea id="aiMessageInput" data-i18n-placeholder="aitest_ph_goal" placeholder="例如：打开目标站 → 搜索商品 → 加入购物车 → 进入购物车页 → 提取数量信息（不结账）。"></textarea>
@@ -851,7 +866,7 @@
                         <button type="button" id="aiBrowserReloadBtn" aria-label="刷新">⟳</button>
                     </div>
                     <div class="ai-browser-chrome__url">
-                        <input type="url" id="aiBrowserUrlInput" placeholder="https:// 输入后点打开" autocomplete="url" title="与上方「目标页面 URL」同步">
+                        <input type="url" id="aiBrowserUrlMirror" class="ai-browser-url-mirror" readonly tabindex="-1" autocomplete="off" placeholder="（只读）与上方「目标页面 URL」同步" title="地址请在上方「目标页面 URL」编辑；此处随动">
                         <button type="button" class="ai-browser-chrome__go" id="aiBrowserOpenBtn">打开</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="aiRemoteEmbedStartBtn" style="white-space:nowrap;" disabled title="需配置 EMBEDDED_BROWSER_* 并启动 python -m embedded_browser_gateway">远程画布</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="aiRemoteEmbedStopBtn" style="white-space:nowrap;display:none;">断开远程</button>
@@ -867,7 +882,7 @@
                         referrerpolicy="no-referrer-when-downgrade"
                         src="about:blank"></iframe>
                     <canvas id="aiRemoteBrowserCanvas" class="ai-remote-canvas" width="1280" height="720" tabindex="0" aria-label="远程 Chromium 画面（点击后可键盘操作）"></canvas>
-                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">在上方输入以 https 开头的地址并点「打开」。此处为真实网页；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。下方「拉取结构」等仍使用本机 **Playwright 会话**（与「打开」时地址同步）。</div>
+                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请先在页面顶部「目标页面 URL」填写 https 地址，再于本栏点「打开」。此处为真实网页；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。下方「拉取结构」等仍使用本机 Playwright 会话。</div>
                 </div>
                 <aside class="ai-browser-tools--dock is-collapsed" id="aiBrowserToolsAside" aria-label="内嵌区右侧工具（与页面并排，不叠在页面上方）">
                     <button type="button" class="ai-browser-tools-collapse" id="aiBrowserToolsCollapseBtn" title="展开/折叠工具" aria-expanded="false">⟨</button>
@@ -909,8 +924,14 @@
 
             <aside class="ai-rail-right" aria-label="执行统计与用例预览">
                 <div class="ai-stats-card">
-                    <div>行动次数（规划）: <strong id="aiStatActions">0</strong></div>
-                    <div>步数: <strong id="aiStatSteps">0</strong></div>
+                    <div class="ai-stat-row">
+                        <label for="aiStatActions">行动次数（规划）</label>
+                        <input type="number" class="ai-stat-input" id="aiStatActions" min="0" step="1" value="0" title="可手动修改；生成预览/运行后也会按当前计划自动填入">
+                    </div>
+                    <div class="ai-stat-row">
+                        <label for="aiStatSteps">步数</label>
+                        <input type="number" class="ai-stat-input" id="aiStatSteps" min="0" step="1" value="0" title="可手动修改；生成预览/运行后按步骤条数自动填入">
+                    </div>
                     <div class="ai-stat-status" id="aiStatStatus" data-i18n="aitest_stat_ready">就绪 — 点击「运行」或「生成预览」开始</div>
                     <p class="ai-stat-run-expl" style="margin:8px 0 0;font-size:11px;line-height:1.45;opacity:.88;" data-i18n="aitest_stat_run_expl">「运行」与下方「生成预览」相同：用 AI 根据左侧描述生成步骤，结果在下方「用例预览」。</p>
                 </div>
@@ -927,7 +948,7 @@
         </div>
 
         <footer class="ai-gen-modal__foot">
-            <span id="aiTestBuildMarker" class="ai-test-build-marker" title="在开发者工具 Elements 中搜索 playwright-browser-dual；并查看本页文档请求的 Response Headers 是否含 X-AI-Test-Template">build: playwright-browser-dual-2026-04-24</span>
+            <span id="aiTestBuildMarker" class="ai-test-build-marker" title="在开发者工具中搜索 playwright-ui-dedup；Response Headers: X-AI-Test-Template">build: playwright-ui-dedup-2026-04-24</span>
             <button type="button" class="btn btn-secondary" onclick="window.location.href='/list_projects'" data-i18n="aitest_btn_projects">项目列表</button>
             <button type="button" class="btn btn-primary" id="aiGenerateSaveBtn" onclick="aiGenerateAndSaveCase()" data-i18n="aitest_btn_save">生成并保存</button>
         </footer>
@@ -1088,8 +1109,14 @@
         var steps = (plan && plan.steps) ? plan.steps : [];
         var sa = document.getElementById('aiStatActions');
         var ss = document.getElementById('aiStatSteps');
-        if (ss) ss.textContent = String(steps.length);
-        if (sa) sa.textContent = String(countPlanActions(steps));
+        if (ss) ss.value = String(steps.length);
+        if (sa) sa.value = String(countPlanActions(steps));
+    }
+
+    function syncUrlMirrorFromTarget() {
+        var ta = document.getElementById('aiTargetUrlInput');
+        var m = document.getElementById('aiBrowserUrlMirror');
+        if (ta && m) m.value = ta.value;
     }
 
     function getDraftState() {
@@ -1223,10 +1250,9 @@
             }
             if (ph) ph.classList.add('is-hidden');
             try {
-                const bi = document.getElementById('aiBrowserUrlInput');
                 const ta = document.getElementById('aiTargetUrlInput');
-                if (bi) bi.value = href;
                 if (ta) ta.value = href;
+                syncUrlMirrorFromTarget();
             } catch (e2) {}
         });
     }
@@ -1244,18 +1270,16 @@
 
     function wireAiBrowserUrlSync() {
         const a = document.getElementById('aiTargetUrlInput');
-        const b = document.getElementById('aiBrowserUrlInput');
-        if (!a || !b) return;
-        if (b.value === '' && a.value) b.value = a.value;
-        a.addEventListener('input', function() { if (b.value !== a.value) b.value = a.value; });
-        b.addEventListener('input', function() { if (a.value !== b.value) a.value = b.value; syncAiSendButtons(); });
+        if (!a) return;
+        syncUrlMirrorFromTarget();
+        a.addEventListener('input', function() { syncUrlMirrorFromTarget(); syncAiSendButtons(); });
     }
 
     async function updateBrowserStatusLine() {
         const el = document.getElementById('aiBrowserMeta');
         if (!el) return;
         if (aiRemoteSessionLive()) {
-            var ru = (document.getElementById('aiBrowserUrlInput') && document.getElementById('aiBrowserUrlInput').value) || el.title || '';
+            var ru = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || el.title || '';
             el.textContent = '远程 Chromium（CDP）：' + (ru.trim() || '已连接 — 点击画布可键盘输入');
             el.title = ru.trim();
             return;
@@ -1279,12 +1303,10 @@
     }
 
     async function openInternalBrowserPage() {
-        const b = document.getElementById('aiBrowserUrlInput');
-        const u = normalizeUrlForEmbed(b && b.value || '');
-        if (!u) { alert('请输入 URL'); return; }
         const a = document.getElementById('aiTargetUrlInput');
-        if (a) a.value = u;
-        if (b) b.value = u;
+        const u = normalizeUrlForEmbed(a && a.value || '');
+        if (!u) { alert('请先在上方「目标页面 URL」填写地址'); return; }
+        syncUrlMirrorFromTarget();
         const btn = document.getElementById('aiBrowserOpenBtn');
         if (btn) { btn.disabled = true; }
         if (window.aiRemoteEmbedded && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1) {
@@ -1312,9 +1334,9 @@
     }
 
     function openEmbedInNewSystemWindow() {
-        const b = document.getElementById('aiBrowserUrlInput');
-        const u = normalizeUrlForEmbed(b && b.value || '');
-        if (!u) { alert('请先输入 URL'); return; }
+        const a = document.getElementById('aiTargetUrlInput');
+        const u = normalizeUrlForEmbed(a && a.value || '');
+        if (!u) { alert('请先在上方「目标页面 URL」填写地址'); return; }
         window.open(u, '_blank', 'noopener,noreferrer');
     }
 
@@ -1346,8 +1368,8 @@
                 try {
                     if (iframe.contentWindow) iframe.contentWindow.location.reload();
                 } catch (e) {
-                    var b = document.getElementById('aiBrowserUrlInput');
-                    var uu = b && b.value && normalizeUrlForEmbed(b.value);
+                    var ta = document.getElementById('aiTargetUrlInput');
+                    var uu = ta && ta.value && normalizeUrlForEmbed(ta.value);
                     if (uu && iframe) {
                         var sep = uu.indexOf('?') >= 0 ? '&' : '?';
                         iframe.src = uu + sep + '_r=' + Date.now();
@@ -1637,7 +1659,7 @@
         }
         var startBtn = document.getElementById('aiRemoteEmbedStartBtn');
         var stopBtn = document.getElementById('aiRemoteEmbedStopBtn');
-        var u = normalizeUrlForEmbed((document.getElementById('aiTargetUrlInput') || {}).value || (document.getElementById('aiBrowserUrlInput') || {}).value || '');
+        var u = normalizeUrlForEmbed((document.getElementById('aiTargetUrlInput') || {}).value || '');
         var body = {};
         if (u) body.initial_url = u;
         var pbs = document.querySelector('select.ai-pw-browser-select');
@@ -1674,10 +1696,9 @@
                     };
                     img.src = 'data:image/jpeg;base64,' + msg.data;
                 } else if (msg.t === 'navigated' && msg.url) {
-                    var bi = document.getElementById('aiBrowserUrlInput');
                     var ta = document.getElementById('aiTargetUrlInput');
-                    if (bi) bi.value = msg.url;
                     if (ta) ta.value = msg.url;
+                    syncUrlMirrorFromTarget();
                     aiSetRemoteBrowserMeta(msg.url);
                     updateBrowserStatusLine();
                 }

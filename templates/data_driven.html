@@ -21,6 +21,19 @@
         text-overflow: ellipsis;
         white-space: nowrap;
     }
+    /* 数据集列表：固定可视高度 + 内部滚动，避免条目过多撑长整页 */
+    #datasetListScroll {
+        max-height: min(26rem, 50vh);
+        overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-gutter: stable;
+    }
+    #datasetListScroll::-webkit-scrollbar { width: 6px; }
+    #datasetListScroll::-webkit-scrollbar-thumb {
+        background: rgba(100, 116, 139, 0.45);
+        border-radius: 999px;
+    }
+    html.dark #datasetListScroll::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.35); }
 </style>
 {% endblock %}
 
@@ -80,16 +93,25 @@
 
             <!-- 数据集列表 -->
             <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
-                <div class="flex justify-between items-center mb-4">
+                <div class="flex justify-between items-center mb-3">
                     <h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">
                         <i class="fas fa-database mr-2 text-green-500"></i><span data-i18n="dd_list">数据集列表</span>
                     </h2>
-                    <button onclick="loadDatasets()" class="text-xs text-gray-500 hover:text-blue-600">
+                    <button type="button" onclick="loadDatasets()" class="text-xs text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="刷新列表">
                         <i class="fas fa-sync-alt"></i>
                     </button>
                 </div>
-                <div id="datasetList" class="space-y-2">
-                    <p class="text-sm text-gray-400 dark:text-gray-500 text-center py-4" data-i18n="dd_loading">加载中...</p>
+                <input type="search" id="datasetListSearch" data-i18n-placeholder="dd_list_search_ph" placeholder="按名称筛选…" autocomplete="off"
+                    class="w-full mb-3 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                <div id="datasetListScroll" class="border-t border-gray-100 dark:border-gray-800 pt-3">
+                    <div id="datasetList" class="space-y-2">
+                        <p class="text-sm text-gray-400 dark:text-gray-500 text-center py-4" data-i18n="dd_loading">加载中...</p>
+                    </div>
+                </div>
+                <div id="datasetListPager" class="mt-3 pt-2 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between gap-2 flex-wrap" style="display: none;">
+                    <button type="button" id="datasetListPrev" class="px-2 py-1 rounded-md text-xs font-medium border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed" data-i18n="dd_list_prev">上一页</button>
+                    <span id="datasetListPageInfo" class="text-xs text-gray-500 dark:text-gray-400 flex-1 text-center min-w-0"></span>
+                    <button type="button" id="datasetListNext" class="px-2 py-1 rounded-md text-xs font-medium border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed" data-i18n="dd_list_next">下一页</button>
                 </div>
             </div>
         </div>
@@ -177,6 +199,9 @@
     let allCases = [];
     let activeDatasetRunId = null;
     const DATASET_RUN_STORAGE_KEY = 'activeDatasetRun';
+    let ddDatasetCache = [];
+    const DD_DATASET_PAGE_SIZE = 10;
+    let ddDatasetPage = 1;
 
     document.addEventListener('DOMContentLoaded', () => {
         try { document.title = t('dd_doc_title'); } catch (e) {}
@@ -185,6 +210,23 @@
         loadDatasets();
         initDropZone();
         restoreDatasetRunState();
+        var dsSearch = document.getElementById('datasetListSearch');
+        if (dsSearch) {
+            dsSearch.addEventListener('input', function () {
+                ddDatasetPage = 1;
+                renderDatasetList({ jumpToSelection: false, scrollTop: true });
+            });
+        }
+        var pPrev = document.getElementById('datasetListPrev');
+        var pNext = document.getElementById('datasetListNext');
+        if (pPrev) pPrev.addEventListener('click', function () {
+            if (ddDatasetPage > 1) { ddDatasetPage--; renderDatasetList({ jumpToSelection: false, scrollTop: true }); }
+        });
+        if (pNext) pNext.addEventListener('click', function () {
+            var filtered = getFilteredDatasets();
+            var pages = Math.max(1, Math.ceil(filtered.length / DD_DATASET_PAGE_SIZE));
+            if (ddDatasetPage < pages) { ddDatasetPage++; renderDatasetList({ jumpToSelection: false, scrollTop: true }); }
+        });
     });
     window.addEventListener('ui-preferences-updated', function (ev) {
         if (ev.detail && ev.detail.source === 'load') return;
@@ -218,15 +260,50 @@
         }
     }
 
-    async function loadDatasets() {
-        const res = await fetch('/api/datasets');
-        const data = await res.json();
-        const list = document.getElementById('datasetList');
-        if (!data.datasets || data.datasets.length === 0) {
+    function getFilteredDatasets() {
+        var q = '';
+        var inp = document.getElementById('datasetListSearch');
+        if (inp && inp.value) q = String(inp.value).trim().toLowerCase();
+        if (!q) return ddDatasetCache.slice();
+        return ddDatasetCache.filter(function (ds) {
+            var name = (ds.name != null ? String(ds.name) : '').toLowerCase();
+            return name.indexOf(q) !== -1 || String(ds.id).indexOf(q) !== -1;
+        });
+    }
+
+    function renderDatasetList(opts) {
+        opts = opts || {};
+        var list = document.getElementById('datasetList');
+        var pager = document.getElementById('datasetListPager');
+        if (!list) return;
+        if (!ddDatasetCache.length) {
+            if (pager) pager.style.display = 'none';
             list.innerHTML = '<p class="text-sm text-gray-400 dark:text-gray-500 text-center py-4">' + escHtml(t('dd_no_ds')) + '</p>';
             return;
         }
-        list.innerHTML = data.datasets.map(ds => `
+        var filtered = getFilteredDatasets();
+        var total = filtered.length;
+        var pages = Math.max(1, Math.ceil(total / DD_DATASET_PAGE_SIZE));
+        if (opts.jumpToSelection && currentDatasetId != null) {
+            var idx = -1;
+            for (var i = 0; i < filtered.length; i++) {
+                if (String(filtered[i].id) === String(currentDatasetId)) { idx = i; break; }
+            }
+            if (idx >= 0) ddDatasetPage = Math.floor(idx / DD_DATASET_PAGE_SIZE) + 1;
+            else ddDatasetPage = 1;
+        } else {
+            if (ddDatasetPage > pages) ddDatasetPage = pages;
+            if (ddDatasetPage < 1) ddDatasetPage = 1;
+        }
+        if (total === 0) {
+            list.innerHTML = '<p class="text-sm text-gray-400 dark:text-gray-500 text-center py-4">' + escHtml(t('dd_list_nomatch')) + '</p>';
+            if (pager) pager.style.display = 'none';
+            return;
+        }
+        var start = (ddDatasetPage - 1) * DD_DATASET_PAGE_SIZE;
+        var pageItems = filtered.slice(start, start + DD_DATASET_PAGE_SIZE);
+        list.innerHTML = pageItems.map(function (ds) {
+            return `
             <div class="border border-gray-200 dark:border-gray-600 rounded-lg p-3 cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-950/30 hover:border-blue-300 transition-colors ${currentDatasetId == ds.id ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-700' : 'dark:bg-gray-800/50'}"
                 onclick="selectDataset(${ds.id})">
                 <div class="flex justify-between items-start">
@@ -237,13 +314,50 @@
                             ${ds.case_id ? `<span class="ml-2"><i class="fas fa-link mr-1"></i>${escHtml(t('dd_linked'))}</span>` : ''}
                         </p>
                     </div>
-                    <button onclick="event.stopPropagation(); deleteDataset(${ds.id})"
+                    <button type="button" onclick="event.stopPropagation(); deleteDataset(${ds.id})"
                         class="text-gray-400 hover:text-red-500 ml-2 flex-shrink-0">
                         <i class="fas fa-trash text-xs"></i>
                     </button>
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
+        if (pager) {
+            if (pages > 1) {
+                pager.style.display = 'flex';
+                var info = document.getElementById('datasetListPageInfo');
+                if (info) {
+                    info.textContent = t('dd_list_pageinfo')
+                        .replace('{cur}', String(ddDatasetPage))
+                        .replace('{total}', String(pages))
+                        .replace('{n}', String(total));
+                }
+                var prev = document.getElementById('datasetListPrev');
+                var next = document.getElementById('datasetListNext');
+                if (prev) prev.disabled = ddDatasetPage <= 1;
+                if (next) next.disabled = ddDatasetPage >= pages;
+            } else {
+                pager.style.display = 'none';
+            }
+        }
+        try {
+            var sc = document.getElementById('datasetListScroll');
+            if (sc && opts.scrollTop) sc.scrollTop = 0;
+        } catch (e) {}
+    }
+
+    async function loadDatasets() {
+        const res = await fetch('/api/datasets');
+        const data = await res.json();
+        const list = document.getElementById('datasetList');
+        if (!data.datasets || data.datasets.length === 0) {
+            ddDatasetCache = [];
+            var pg0 = document.getElementById('datasetListPager');
+            if (pg0) pg0.style.display = 'none';
+            list.innerHTML = '<p class="text-sm text-gray-400 dark:text-gray-500 text-center py-4">' + escHtml(t('dd_no_ds')) + '</p>';
+            return;
+        }
+        ddDatasetCache = data.datasets;
+        renderDatasetList({ jumpToSelection: true, scrollTop: true });
     }
 
     async function selectDataset(datasetId) {

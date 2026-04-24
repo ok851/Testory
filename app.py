@@ -243,7 +243,11 @@ else:
         "生产环境请务必设置固定密钥，否则重启后会话将全部失效。"
     )
 
-if os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes"):
+# 模板热重载：DEBUG 开启时一定重载；否则在非 production 下也默认重载，避免改 ai_test.html 等必须反复杀进程。
+# （仅 .py 逻辑仍建议开 FLASK_DEBUG=1 以启用代码重载，或改后手动重启。）
+_flask_debug = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
+_is_prod = os.environ.get("APP_ENV", "").lower() == "production" or os.environ.get("FLASK_ENV", "").lower() == "production"
+if _flask_debug or not _is_prod:
     app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -1099,7 +1103,7 @@ def ai_test_page():
     """AI 生成测试步骤；与内置浏览器共用 Playwright 会话。"""
     resp = make_response(render_template('ai_test.html'))
     # 用于核对浏览器是否命中本仓库模板（与页内 #aiTestBuildMarker 文案一致）
-    resp.headers['X-AI-Test-Template'] = 'playwright-browser-dual-2026-04-24'
+    resp.headers['X-AI-Test-Template'] = 'playwright-ui-dedup-2026-04-24'
     return resp
 
 
