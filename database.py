@@ -478,6 +478,22 @@ class Database:
             )
         ''')
 
+        # AI 向量记忆：历史修复案例 / 用户习惯（Ollama embeddings + 余弦检索）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_context_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER,
+                user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                source_text TEXT NOT NULL,
+                meta_json TEXT,
+                embedding BLOB NOT NULL,
+                embedding_dim INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+
         # 添加数据库索引以优化查询性能
         self._create_indexes(cursor)
         
@@ -523,6 +539,8 @@ class Database:
             # 步骤列表：按用例查询 / 排序极常见，缺少索引时大数据量会明显变慢
             "CREATE INDEX IF NOT EXISTS idx_test_steps_case_id ON test_steps(case_id)",
             "CREATE INDEX IF NOT EXISTS idx_test_steps_case_order ON test_steps(case_id, step_order)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_context_memory_tenant ON ai_context_memory(tenant_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_context_memory_user ON ai_context_memory(user_id)",
         ]
         
         for index_sql in indexes:
@@ -1875,6 +1893,94 @@ class Database:
                     'email': row[3], 'role': row[4], 'is_active': row[5],
                     'created_at': row[6], 'last_login': row[7]}
         return None
+
+    def get_user_tenant_id(self, user_id: int) -> Optional[int]:
+        """多租户隔离：取用户所属租户；无则 None。"""
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT tenant_id FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            if not row or row[0] is None:
+                return None
+            return int(row[0])
+        finally:
+            conn.close()
+
+    def insert_ai_context_memory(
+        self,
+        user_id: int,
+        kind: str,
+        source_text: str,
+        embedding: bytes,
+        embedding_dim: int,
+        tenant_id: Optional[int] = None,
+        meta_json: Optional[str] = None,
+    ) -> int:
+        """写入一条向量记忆，返回 id。"""
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO ai_context_memory
+                (tenant_id, user_id, kind, source_text, meta_json, embedding, embedding_dim)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (tenant_id, user_id, kind, source_text, meta_json or "", embedding, embedding_dim),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+        finally:
+            conn.close()
+
+    def fetch_ai_context_memory_rows(
+        self,
+        user_id: int,
+        tenant_id: Optional[int],
+    ) -> List[Dict[str, Any]]:
+        """按租户或用户范围拉取全部记忆行（用于余弦检索；数据量由应用层限制）。"""
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            if tenant_id is not None:
+                cursor.execute(
+                    """
+                    SELECT id, kind, source_text, meta_json, embedding, embedding_dim
+                    FROM ai_context_memory
+                    WHERE tenant_id = ?
+                    ORDER BY id DESC
+                    LIMIT 5000
+                    """,
+                    (tenant_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, kind, source_text, meta_json, embedding, embedding_dim
+                    FROM ai_context_memory
+                    WHERE user_id = ? AND tenant_id IS NULL
+                    ORDER BY id DESC
+                    LIMIT 5000
+                    """,
+                    (user_id,),
+                )
+            rows = cursor.fetchall()
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "id": r[0],
+                        "kind": r[1],
+                        "source_text": r[2],
+                        "meta_json": r[3] or "",
+                        "embedding": r[4],
+                        "embedding_dim": int(r[5]),
+                    }
+                )
+            return out
+        finally:
+            conn.close()
 
     def get_all_users(self) -> List[Dict[str, Any]]:
         """获取所有用户"""

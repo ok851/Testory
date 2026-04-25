@@ -1,5 +1,11 @@
 """
-License 管理模块 - 用于验证和管理个人版/企业版授权
+License 管理模块 — 产品与部署形态（商业策略）
+
+- **免费版（free）**：公有云 / 线上实例，低门槛拉新，配额内使用。
+- **团队版（professional，对外也称「团队版」）**：SaaS 付费，多协作、更高配额与高级能力；枚举名保持 PROFESSIONAL 以兼容已有 license.key。
+- **企业版（enterprise）**：最高档；**私有化部署、专有云、内网发行**等主要作为本档增值项以提升利润；含 SSO、审计、集成等。
+
+功能开关用 `check_feature_available()`；企业专属能力见 FEATURES['enterprise'] 中的 `private_deployment` 等标识。
 """
 import json
 import hashlib
@@ -12,9 +18,10 @@ from enum import Enum
 
 
 class LicenseType(Enum):
-    FREE = "free"              # 免费版
-    PROFESSIONAL = "professional"  # 个人专业版(团队版)
-    ENTERPRISE = "enterprise"  # 企业版
+    FREE = "free"  # 免费版 · 线上使用（SaaS 免费层）
+    # 团队版 · 付费 Web（SaaS）；代码与存量证书仍用 professional
+    PROFESSIONAL = "professional"
+    ENTERPRISE = "enterprise"  # 企业版 · 含私有化部署/专有云权益（高毛利档）
 
 
 @dataclass
@@ -44,6 +51,21 @@ class LicenseInfo:
         return cls(**data)
 
 
+# 对外展示用名称（与 LicenseType 枚举值对应）
+TIER_DISPLAY_NAME: Dict[LicenseType, str] = {
+    LicenseType.FREE: "免费版",
+    LicenseType.PROFESSIONAL: "团队版",
+    LicenseType.ENTERPRISE: "企业版",
+}
+
+# 商业形态简述（用于控制台 / 升级文案，非 i18n 键）
+TIER_OFFERING_SUMMARY: Dict[LicenseType, str] = {
+    LicenseType.FREE: "线上免费使用（SaaS）",
+    LicenseType.PROFESSIONAL: "团队付费（SaaS）· 高阶自动化与协作",
+    LicenseType.ENTERPRISE: "企业协议 · 含私有化 / 专有云等交付选项（高价值档）",
+}
+
+
 class LicenseManager:
     """License 管理器"""
 
@@ -55,14 +77,17 @@ class LicenseManager:
             'project_management', 'case_management', 'test_execution',
             'advanced_report', 'schedule', 'data_driven',
             'export_pdf', 'export_excel', 'webhook', 'email_notification',
-            'defect_management'  # 个人专业版包含缺陷管理
+            'defect_management',
+            'team_collaboration',  # 团队版（SaaS）协作能力
         ],
         'enterprise': [
             'project_management', 'case_management', 'test_execution',
             'advanced_report', 'schedule', 'webhook', 'data_driven',
             'parallel_execution', 'audit_log', 'export_pdf', 'export_excel',
             'email_notification', 'api_access', 'team_collaboration',
-            'defect_management', 'sso', 'custom_integration'  # 企业版额外功能
+            'defect_management', 'sso', 'custom_integration',
+            # 商业位：可用于 UI/运维区分「可签私有化合同」的租户（具体交付仍由商务与部署方式决定）
+            'private_deployment', 'dedicated_support',
         ]
     }
 
@@ -274,8 +299,13 @@ class LicenseManager:
         return feature_name in license_info.features
 
     def get_limits(self) -> Dict[str, Any]:
-        """获取当前 License 的限制"""
+        """获取当前 License 的限制与产品档位元数据（供 API / 前端展示）。"""
         license_info = self.get_current_license()
+        lt = license_info.license_type
+        try:
+            enum_t = LicenseType(lt)
+        except ValueError:
+            enum_t = LicenseType.FREE
         return {
             'max_users': license_info.max_users,
             'max_projects': license_info.max_projects,
@@ -283,7 +313,11 @@ class LicenseManager:
             'max_executions_per_day': license_info.max_executions_per_day,
             'license_type': license_info.license_type,
             'expires_at': license_info.expires_at,
-            'features': license_info.features
+            'features': license_info.features,
+            'product_display_name': TIER_DISPLAY_NAME.get(enum_t, lt),
+            'offering_summary': TIER_OFFERING_SUMMARY.get(enum_t, ''),
+            # 企业版：商务上可交付私有化；是否已实施由部署环境决定
+            'private_deployment_eligible': enum_t == LicenseType.ENTERPRISE,
         }
 
     def check_limit(self, limit_type: str, current_value: int) -> Dict[str, Any]:
@@ -302,9 +336,15 @@ class LicenseManager:
         if current_value >= limit_value:
             license_type = limits['license_type']
             if license_type == LicenseType.FREE.value:
-                message = f'已达到免费版限制（{limit_type}: {limit_value}）。请升级到个人专业版或企业版解除限制。'
+                message = (
+                    f'已达到免费版限制（{limit_type}: {limit_value}）。'
+                    '请升级到团队版或企业版解除限制。'
+                )
             elif license_type == LicenseType.PROFESSIONAL.value:
-                message = f'已达到个人专业版限制（{limit_type}: {limit_value}）。请升级到企业版解除限制。'
+                message = (
+                    f'已达到团队版限制（{limit_type}: {limit_value}）。'
+                    '请升级到企业版解除限制。'
+                )
             else:
                 message = f'已达到限制（{limit_type}: {limit_value}）。'
 
@@ -334,13 +374,13 @@ if __name__ == '__main__':
     )
     print(f"企业版 License: {enterprise_license}")
 
-    # 生成个人专业版 License
+    # 团队版（professional）License
     professional_license = lm.generate_license(
         LicenseType.PROFESSIONAL,
         issued_to='Professional User',
         expires_days=365
     )
-    print(f"\n个人专业版 License: {professional_license}")
+    print(f"\n团队版 (professional) License: {professional_license}")
 
     # 验证
     result = lm.validate_license(enterprise_license)

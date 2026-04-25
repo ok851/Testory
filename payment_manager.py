@@ -35,7 +35,7 @@ class PaymentStatus(Enum):
 class PlanType(Enum):
     """套餐类型"""
     FREE = "free"               # 免费版
-    PERSONAL_PRO = "personal_pro"  # 个人专业版
+    PERSONAL_PRO = "personal_pro"  # 团队版（SaaS 付费），历史键名保留
     TEAM = "team"               # 团队版
     ENTERPRISE = "enterprise"   # 企业版
     FLAGSHIP = "flagship"       # 旗舰版
@@ -52,7 +52,7 @@ PLAN_PRICES = {
     PlanType.PERSONAL_PRO.value: {
         'monthly': 2900,        # ¥29/月
         'yearly': 29900,        # ¥299/年 (约8.3折)
-        'name': '个人专业版',
+        'name': '团队版',
         'features': ['无限执行', '10个项目', '200个用例/项目', '定时任务', '邮件通知', 'PDF/Excel导出']
     },
     PlanType.TEAM.value: {

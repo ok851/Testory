@@ -1,0 +1,518 @@
+/**
+ * HuFirst AI 助手：与 UX_AI_INTERACTION_ROADMAP 对齐
+ * - interaction_context 字段：focus_step_index、focus_step_indices、browser_selection_text、action_kind
+ * - sessionStorage 会话草稿、可复用 fetch / payload 工具
+ */
+(function (global) {
+  'use strict';
+
+  var CHAT_HISTORY_KEY_PREFIX = 'hufirst_ai_history_case_';
+  var SESSION_KEY = 'hufirst_ai_studio_session_v1';
+
+  function _safeJsonParse(s, fallback) {
+    try {
+      return JSON.parse(s);
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function _filterUndefined(obj) {
+    if (!obj || typeof obj !== 'object') return {};
+    var o = {};
+    for (var k in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] !== undefined && obj[k] !== null && obj[k] !== '') {
+        o[k] = obj[k];
+      }
+    }
+    return o;
+  }
+
+  /**
+   * 将「交互情境」合并进 /api/ai/task/chat 请求体（仅附加非空字段，向后兼容）
+   * ctx: { focus_step_index, focus_step_indices, browser_selection_text, selection_text, action_kind, intent }
+   */
+  function appendInteractionToPayload(base, ctx) {
+    var b = base || {};
+    var c = ctx || {};
+    var out = {};
+    for (var k in b) {
+      if (Object.prototype.hasOwnProperty.call(b, k)) out[k] = b[k];
+    }
+    if (c.focus_step_index != null && c.focus_step_index !== '' && isFinite(Number(c.focus_step_index))) {
+      out.focus_step_index = parseInt(c.focus_step_index, 10);
+    }
+    if (c.focus_step_indices && (Array.isArray(c.focus_step_indices) ? c.focus_step_indices.length : String(c.focus_step_indices).trim())) {
+      if (Array.isArray(c.focus_step_indices)) {
+        out.focus_step_indices = c.focus_step_indices.map(function (x) { return parseInt(x, 10); }).filter(function (n) { return isFinite(n); });
+      } else {
+        out.focus_step_indices = String(c.focus_step_indices).split(/[\s,;]+/).map(function (s) { return parseInt(s.trim(), 10); })
+          .filter(function (n) { return isFinite(n) && n > 0; });
+      }
+    }
+    var sel = c.browser_selection_text != null && String(c.browser_selection_text).trim()
+      ? c.browser_selection_text
+      : (c.selection_text != null ? c.selection_text : '');
+    if (String(sel).trim()) {
+      out.browser_selection_text = String(sel).trim();
+      out.selection_text = out.browser_selection_text;
+    }
+    var ak = (c.action_kind || c.intent || '').trim();
+    if (ak) {
+      out.action_kind = ak;
+      out.intent = ak;
+    }
+    return out;
+  }
+
+  function getInteractionContextFromForm(elPrefix) {
+    var p = elPrefix || 'aiIx';
+    function g(id) {
+      var n = p + id;
+      var e = document.getElementById(n);
+      return e ? e.value : '';
+    }
+    var rawIdx = (g('FocusStep') || '').trim();
+    var rawMulti = (g('FocusIndices') || '').trim();
+    var act = (g('ActionKind') || '').trim();
+    var sel = (g('SelectionText') || '').trim();
+    var ctx = {};
+    if (rawIdx && isFinite(parseInt(rawIdx, 10))) ctx.focus_step_index = parseInt(rawIdx, 10);
+    if (rawMulti) ctx.focus_step_indices = rawMulti;
+    if (act) ctx.action_kind = act;
+    if (sel) ctx.browser_selection_text = sel;
+    return ctx;
+  }
+
+  function clearInteractionForm(elPrefix) {
+    var p = elPrefix || 'aiIx';
+    var ids = ['FocusStep', 'FocusIndices', 'ActionKind', 'SelectionText'];
+    ids.forEach(function (s) {
+      var e = document.getElementById(p + s);
+      if (e) {
+        if (e.tagName === 'SELECT') e.selectedIndex = 0; else e.value = '';
+      }
+    });
+  }
+
+  function insertSelectionFromDocument(elPrefix) {
+    var t = '';
+    try {
+      t = (global.getSelection() && global.getSelection().toString()) || '';
+    } catch (e) {}
+    t = (t || '').trim();
+    if (!t) {
+      if (global.alert) global.alert('请先在页面上划选文字（跨域 iframe 内选区可能无法读取）。');
+      return;
+    }
+    var p = elPrefix || 'aiIx';
+    var e = document.getElementById(p + 'SelectionText');
+    if (e) e.value = t;
+  }
+
+  function dbStepToPlanStep(s) {
+    if (!s) return {};
+    return {
+      action: s.action || '',
+      selector_type: s.selector_type || 'css',
+      selector_value: s.selector_value != null ? String(s.selector_value) : '',
+      input_value: s.input_value != null ? String(s.input_value) : '',
+      description: s.description != null ? String(s.description) : '',
+      step_order: s.step_order,
+      url: s.url != null ? String(s.url) : undefined,
+      enter_iframe: !!s.enter_iframe,
+      iframe_selector: s.iframe_selector || '',
+      locator_candidates: s.locator_candidates || undefined,
+      click_repeat_count: s.click_repeat_count
+    };
+  }
+
+  function fetchAllCaseSteps(caseId) {
+    var all = [];
+    var page = 1;
+    var total = 0;
+    return (function next() {
+      return fetch('/api/cases/' + caseId + '/steps?page=' + page + '&page_size=100', { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var steps = data.steps || [];
+          total = data.total != null ? data.total : steps.length;
+          for (var i = 0; i < steps.length; i++) all.push(steps[i]);
+          if (all.length < total && steps.length > 0) {
+            page += 1;
+            return next();
+          }
+          return all;
+        });
+    })();
+  }
+
+  function buildCurrentPlanFromCase(testCase, steps) {
+    var list = (steps || []).map(dbStepToPlanStep);
+    return {
+      case_name: (testCase && testCase.name) || '',
+      case_url: (testCase && testCase.url) || '',
+      description: (testCase && testCase.description) || '',
+      precondition: (testCase && testCase.precondition) || '',
+      expected_result: (testCase && testCase.expected_result) || '',
+      steps: list
+    };
+  }
+
+  function getActiveProfileId() {
+    return fetch('/api/ai/models', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.success) return '';
+        return (d.active_profile_id != null) ? d.active_profile_id : '';
+      })
+      .catch(function () { return ''; });
+  }
+
+  function getProjectName(projectId) {
+    if (!projectId) return Promise.resolve('');
+    return fetch('/api/projects/' + projectId, { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.project && d.project.name) return d.project.name;
+        if (d.name) return d.name;
+        return '';
+      })
+      .catch(function () { return ''; });
+  }
+
+  /**
+   * 路线图「底角一句状态」：由 current_plan 拼一句（不依赖新 API）
+   */
+  function formatPlanStatusLine(plan) {
+    if (!plan || typeof plan !== 'object') return '';
+    var steps = plan.steps;
+    var n = Array.isArray(steps) ? steps.length : 0;
+    var wList = plan.warnings || (plan.meta && plan.meta.normalization_warnings) || [];
+    var wN = Array.isArray(wList) ? wList.length : 0;
+    var name = (plan.case_name && String(plan.case_name).trim()) ? String(plan.case_name).slice(0, 40) : '';
+    var parts = ['共 ' + n + ' 步'];
+    if (wN) parts.push('归一化提示 ' + wN + ' 条');
+    if (name) parts.push('《' + name + '》');
+    return parts.join(' · ');
+  }
+
+  function postJson(url, body, options) {
+    var opts = options || {};
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: opts.signal,
+      credentials: 'same-origin'
+    }).then(function (resp) {
+      return resp.text().then(function (raw) {
+        var data;
+        try { data = JSON.parse(raw); } catch (e) { throw new Error('非 JSON: ' + (raw || '').slice(0, 120)); }
+        if (!resp.ok || !data.success) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
+        return data;
+      });
+    });
+  }
+
+  function saveStudioSession(st) {
+    try {
+      var payload = { ts: Date.now(), v: 1, plan: st.plan, history: st.history || [] };
+      if (st.projectId != null) payload.project_id = st.projectId;
+      if (st.projectName) payload.project_name = st.projectName;
+      if (st.targetPageUrl) payload.target_page_url = st.targetPageUrl;
+      global.sessionStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+    } catch (e) {}
+  }
+
+  function loadStudioSession() {
+    try {
+      var raw = global.sessionStorage.getItem(SESSION_KEY);
+      if (!raw) return null;
+      return _safeJsonParse(raw, null);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function saveCaseChatHistory(caseId, history) {
+    if (!caseId) return;
+    try {
+      global.sessionStorage.setItem(CHAT_HISTORY_KEY_PREFIX + caseId, JSON.stringify(history || []));
+    } catch (e) {}
+  }
+
+  function loadCaseChatHistory(caseId) {
+    if (!caseId) return [];
+    try {
+      var raw = global.sessionStorage.getItem(CHAT_HISTORY_KEY_PREFIX + caseId);
+      if (!raw) return [];
+      var h = _safeJsonParse(raw, []);
+      return Array.isArray(h) ? h : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // --- 步骤页：浮层 + 可拖拽（最小实现）---
+  function mountStepsPageAssistant(options) {
+    var opt = options || {};
+    if (document.getElementById('hufirst-ai-steps-assistant')) return { destroy: function () {} };
+
+    var style = document.createElement('style');
+    style.id = 'hufirst-ai-assistant-style';
+    style.textContent = [
+      '#hufirst-ai-steps-assistant{position:fixed;z-index:10020;font-family:Segoe UI,system-ui,sans-serif;}',
+      '#hufirst-ai-fab{width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;box-shadow:0 4px 20px rgba(79,70,229,.45);',
+      'background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-size:22px;position:fixed;right:20px;bottom:24px;z-index:10021;transition:transform .2s;}',
+      '#hufirst-ai-fab:hover{transform:scale(1.05);}',
+      '#hufirst-ai-spanel{position:fixed;right:20px;bottom:88px;width:min(420px,96vw);max-height:78vh;overflow:hidden;display:none;flex-direction:column;border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.2);background:#fff;border:1px solid #e2e8f0;z-index:10022;}',
+      'html.dark #hufirst-ai-spanel{background:#1e1b4b;border-color:#4338ca;}',
+      '#hufirst-ai-spanel.hufirst-ai-open{display:flex;}',
+      '#hufirst-ai-shead{flex:0 0 auto;padding:10px 12px;cursor:move;user-select:none;font-weight:700;font-size:14px;',
+      'background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;border-radius:16px 16px 0 0;display:flex;justify-content:space-between;align-items:center;gap:8px;}',
+      '#hufirst-ai-sbody{flex:1;overflow-y:auto;padding:10px 12px;font-size:13px;max-height:48vh;}',
+      '#hufirst-ai-sfoot{flex:0 0 auto;padding:10px 12px;border-top:1px solid #e2e8f0;}',
+      'html.dark #hufirst-ai-sfoot{border-color:#4338ca;}',
+      '#hufirst-ai-slog{min-height:48px;max-height:120px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;background:#f8fafc;padding:8px;border-radius:8px;font-size:12px;margin-bottom:8px;}',
+      'html.dark #hufirst-ai-slog{background:#0f172a;}',
+      '.hufirst-ai-srow{margin-bottom:8px;}',
+      '.hufirst-ai-srow input,.hufirst-ai-srow select,.hufirst-ai-srow textarea{width:100%;box-sizing:border-box;border-radius:8px;border:1px solid #cbd5e1;padding:6px 8px;font-size:12px;}',
+      '.hufirst-ai-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}',
+      '.hufirst-ai-btns button{font-size:11px;padding:4px 8px;border-radius:6px;border:1px solid #c7d2fe;background:#eef2ff;cursor:pointer;}',
+      '#hufirst-steps-zen{position:fixed;left:12px;bottom:24px;z-index:10019;padding:6px 10px;border-radius:8px;border:1px solid #cbd5e1;background:rgba(255,255,255,.9);font-size:12px;cursor:pointer;}'
+    ].join('');
+    document.head.appendChild(style);
+
+    var root = document.createElement('div');
+    root.id = 'hufirst-ai-steps-assistant';
+    root.innerHTML = [
+      '<button type="button" id="hufirst-ai-fab" title="AI 助手" aria-label="打开 AI 助手">💬</button>',
+      '<div id="hufirst-ai-spanel" aria-label="AI 助手面板">',
+      '  <div id="hufirst-ai-shead">',
+      '    <span>AI 助手</span>',
+      '    <span><button type="button" id="hufirst-ai-sclose" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:6px;cursor:pointer;padding:2px 8px">✕</button></span>',
+      '  </div>',
+      '  <div id="hufirst-ai-sbody">',
+      '    <div class="hufirst-ai-srow" id="hufirst-ai-status" style="font-size:12px;color:#64748b;">与当前用例步骤对话；先「同步用例到上下文」或发送消息。</div>',
+      '    <div class="hufirst-ai-srow"><label>情境</label><select id="hufirst-s-ctx-kind"><option value="">（默认优化）</option>',
+      '    <option value="optimize_step">优化单步 (optimize_step)</option>',
+      '    <option value="merge_steps">合并步骤 (merge_steps)</option>',
+      '    <option value="assert_from_selection">划词断言 (assert_from_selection)</option></select></div>',
+      '    <div class="hufirst-ai-srow"><label>聚焦第几步 (1 起，可选)</label><input type="number" id="hufirst-s-focus" min="1" placeholder="如 2" /></div>',
+      '    <div class="hufirst-ai-srow"><label>多步索引 (如 2,3 合并，可选)</label><input type="text" id="hufirst-s-idx" placeholder="2,3" /></div>',
+      '    <div class="hufirst-ai-srow"><label>划词 / 子串 (可选)</label><textarea id="hufirst-s-selection" rows="2" placeholder="页面上划选后点「读选区」"></textarea></div>',
+      '    <div class="hufirst-ai-btns">',
+      '      <button type="button" id="hufirst-s-sync">同步用例到上下文</button>',
+      '      <button type="button" id="hufirst-s-btn-pick">读选区</button>',
+      '      <button type="button" id="hufirst-tpl-opt">模板：优化本步</button>',
+      '      <button type="button" id="hufirst-tpl-merge">模板：合并所选步</button>',
+      '      <button type="button" id="hufirst-tpl-assert">模板：断言选区</button>',
+      '      <button type="button" id="hufirst-s-clear-hist" title="清空本用例在浏览器中的短期对话记录">清空对话</button>',
+      '    </div>',
+      '    <div id="hufirst-ai-slog" style="margin-top:8px;"></div>',
+      '  </div>',
+      '  <div id="hufirst-ai-sfoot">',
+      '    <textarea id="hufirst-s-msg" rows="3" style="width:100%;box-sizing:border-box;border-radius:8px;border:1px solid #cbd5e1;padding:8px" placeholder="输入说明… 例如：为第2步增加等待"></textarea>',
+      '    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">',
+      '      <button type="button" class="btn btn-primary" id="hufirst-s-send" style="padding:6px 14px;cursor:pointer;">发送</button>',
+      '      <button type="button" id="hufirst-s-apply" style="padding:6px 10px;cursor:pointer;" disabled>追加 AI 步骤到用例</button>',
+      '    </div>',
+      '  </div>',
+      '</div>',
+      '<button type="button" id="hufirst-steps-zen" title="禅模式：隐藏主布局仅留本面板">禅</button>'
+    ].join('');
+    document.body.appendChild(root);
+
+    var state = { current_plan: { steps: [] }, history: [], lastPlan: null, projectName: '' };
+
+    function setStatus(s) {
+      var el = document.getElementById('hufirst-ai-status');
+      if (el) el.textContent = s;
+    }
+    function logLine(role, line) {
+      var log = document.getElementById('hufirst-ai-slog');
+      if (!log) return;
+      var prefix = role === 'user' ? '你: ' : 'AI: ';
+      log.textContent += (log.textContent ? '\n' : '') + prefix + line;
+    }
+
+    function getCaseSync() {
+      return Promise.resolve()
+        .then(function () { return getActiveProfileId(); })
+        .then(function (mid) { state.model = mid; return getProjectName(opt.getProjectId && opt.getProjectId()); })
+        .then(function (pn) { state.projectName = pn; return fetchAllCaseSteps(opt.getCaseId()); })
+        .then(function (stepRows) {
+          return fetch('/api/cases/' + opt.getCaseId(), { credentials: 'same-origin' }).then(function (r) { return r.json(); })
+            .then(function (cdata) {
+              var tc = (cdata && cdata.test_case) || {};
+              state.current_plan = buildCurrentPlanFromCase(tc, stepRows);
+              setStatus('已同步 ' + (stepRows.length || 0) + ' 步到 current_plan。');
+            });
+        })
+        .catch(function (e) { setStatus('同步失败: ' + (e.message || e)); });
+    }
+
+    function send() {
+      var msg = (document.getElementById('hufirst-s-msg') && document.getElementById('hufirst-s-msg').value || '').trim();
+      if (!msg) { if (global.alert) global.alert('请输入说明'); return; }
+      if (!state.model) {
+        return getActiveProfileId().then(function (m) { state.model = m; if (!m) { throw new Error('未配置 AI 模型'); } return send(); });
+      }
+      var ctx = {
+        focus_step_index: (document.getElementById('hufirst-s-focus') || {}).value,
+        focus_step_indices: (document.getElementById('hufirst-s-idx') || {}).value,
+        browser_selection_text: (document.getElementById('hufirst-s-selection') || {}).value
+      };
+      var k = (document.getElementById('hufirst-s-ctx-kind') || {}).value;
+      if (k) ctx.action_kind = k;
+      setStatus('正在请求…');
+      logLine('user', msg);
+      var body = { message: msg, project_name: state.projectName || '', current_plan: state.current_plan, history: state.history, model: state.model, target_page_url: (opt.getTargetUrl && opt.getTargetUrl()) || '' };
+      body = appendInteractionToPayload(body, ctx);
+      return postJson('/api/ai/task/chat', body)
+        .then(function (data) {
+          state.lastPlan = data.plan;
+          if (data.plan) state.current_plan = data.plan;
+          state.history = state.history || [];
+          state.history.push({ role: 'user', content: msg });
+          state.history.push({ role: 'assistant', content: '已更新方案（' + ((data.plan && data.plan.steps) ? data.plan.steps.length : 0) + ' 步）' });
+          if (state.history.length > 40) state.history = state.history.slice(-40);
+          saveCaseChatHistory(opt.getCaseId(), state.history);
+          setStatus('已更新。可将步骤追加到用例。');
+          logLine('assistant', '已返回 ' + (data.plan && data.plan.steps ? data.plan.steps.length : 0) + ' 步。');
+          var ap = document.getElementById('hufirst-s-apply');
+          if (ap) ap.disabled = !(data.plan && data.plan.steps && data.plan.steps.length);
+        })
+        .catch(function (e) { setStatus('错误: ' + (e.message || e)); logLine('assistant', '失败: ' + (e.message || e)); });
+    }
+
+    function applyAppend() {
+      if (!state.lastPlan || !state.lastPlan.steps || !state.lastPlan.steps.length) return;
+      return postJson('/api/ai/cases/append-steps', { case_id: opt.getCaseId(), steps: state.lastPlan.steps })
+        .then(function (r) {
+          if (opt.onApplied) opt.onApplied(r);
+        })
+        .catch(function (e) { if (global.alert) global.alert('追加失败: ' + (e.message || e)); });
+    }
+
+    document.getElementById('hufirst-ai-fab').addEventListener('click', function () {
+      var p = document.getElementById('hufirst-ai-spanel');
+      if (p) p.classList.toggle('hufirst-ai-open');
+    });
+    (function () {
+      var c = document.getElementById('hufirst-ai-sclose');
+      if (c) c.addEventListener('click', function () { var p = document.getElementById('hufirst-ai-spanel'); if (p) p.classList.remove('hufirst-ai-open'); });
+    })();
+    document.getElementById('hufirst-s-sync').addEventListener('click', function () { getCaseSync(); });
+    document.getElementById('hufirst-s-btn-pick').addEventListener('click', function () {
+      var t = ''; try { t = (global.getSelection() && global.getSelection().toString()) || ''; } catch (e) {}
+      t = t.trim();
+      if (t) { var e = document.getElementById('hufirst-s-selection'); if (e) e.value = t; }
+      else { if (global.alert) global.alert('未选中文本。'); }
+    });
+    document.getElementById('hufirst-tpl-opt').addEventListener('click', function () {
+      var n = (document.getElementById('hufirst-s-focus') || {}).value;
+      (document.getElementById('hufirst-s-ctx-kind') || {}).value = 'optimize_step';
+      (document.getElementById('hufirst-s-msg') || {}).value = '请优化第' + (n || 'N') + '步：在必要处增加等待或更稳的选择器。';
+    });
+    document.getElementById('hufirst-tpl-merge').addEventListener('click', function () {
+      (document.getElementById('hufirst-s-ctx-kind') || {}).value = 'merge_steps';
+      (document.getElementById('hufirst-s-msg') || {}).value = '将下列步骤合并为一步，并保持语义不变。';
+    });
+    document.getElementById('hufirst-tpl-assert').addEventListener('click', function () {
+      (document.getElementById('hufirst-s-ctx-kind') || {}).value = 'assert_from_selection';
+      (document.getElementById('hufirst-s-msg') || {}).value = '为当前划词/子串增加可见性断言或 verify 步骤。';
+    });
+    document.getElementById('hufirst-s-send').addEventListener('click', function () { send(); });
+    document.getElementById('hufirst-s-apply').addEventListener('click', function () { applyAppend(); });
+    document.getElementById('hufirst-s-clear-hist').addEventListener('click', function () {
+      state.history = [];
+      saveCaseChatHistory(opt.getCaseId(), state.history);
+      var log = document.getElementById('hufirst-ai-slog');
+      if (log) log.textContent = '';
+      setStatus('已清空本页对话记录（不影响用例内步骤）');
+    });
+    var zen = document.getElementById('hufirst-steps-zen');
+    if (zen) {
+      zen.addEventListener('click', function () {
+        var box = document.querySelector('.steps-page-root .container');
+        if (box) box.classList.toggle('hufirst-steps-zen');
+      });
+    }
+    // drag
+    (function () {
+      var head = document.getElementById('hufirst-ai-shead');
+      var panel = document.getElementById('hufirst-ai-spanel');
+      if (!head || !panel) return;
+      var dx, dy, ox, oy, drag = false;
+      head.addEventListener('mousedown', function (e) { drag = true; dx = e.clientX; dy = e.clientY; var r = panel.getBoundingClientRect(); ox = r.left; oy = r.top; e.preventDefault(); });
+      global.addEventListener('mousemove', function (e) {
+        if (!drag) return;
+        var nx = ox + (e.clientX - dx);
+        var ny = oy + (e.clientY - dy);
+        panel.style.left = nx + 'px';
+        panel.style.top = ny + 'px';
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        panel.style.position = 'fixed';
+      });
+      global.addEventListener('mouseup', function () { drag = false; });
+    })();
+
+    state.history = loadCaseChatHistory(opt.getCaseId());
+    (function hydrateLog() {
+      var log = document.getElementById('hufirst-ai-slog');
+      if (!log || !state.history || !state.history.length) return;
+      var lines = state.history.slice(-12);
+      log.textContent = lines.map(function (h) { return (h.role === 'user' ? '你: ' : 'AI: ') + (h.content || '').replace(/\n/g, '↵'); }).join('\n');
+    })();
+    getCaseSync();
+    if (opt.onReady) setTimeout(function () { try { opt.onReady(state); } catch (e) {} }, 0);
+
+    var api = {
+      open: function () { var p = document.getElementById('hufirst-ai-spanel'); if (p) p.classList.add('hufirst-ai-open'); },
+      clearLocalHistory: function () {
+        state.history = [];
+        saveCaseChatHistory(opt.getCaseId(), []);
+        var log = document.getElementById('hufirst-ai-slog');
+        if (log) log.textContent = '';
+      },
+      openOptimize: function (oneBasedStep) {
+        this.open();
+        if (oneBasedStep) { var f = document.getElementById('hufirst-s-focus'); if (f) f.value = String(oneBasedStep); }
+        (document.getElementById('hufirst-s-ctx-kind') || {}).value = 'optimize_step';
+        (document.getElementById('hufirst-s-msg') || {}).value = '请优化第' + (oneBasedStep || '') + '步：在必要处增加等待或更稳的选择器。';
+      },
+      openMerge: function (a, b) {
+        this.open();
+        (document.getElementById('hufirst-s-ctx-kind') || {}).value = 'merge_steps';
+        if (a && b) (document.getElementById('hufirst-s-idx') || {}).value = a + ',' + b;
+        (document.getElementById('hufirst-s-msg') || {}).value = '将第 ' + a + ' 与第 ' + b + ' 步合并为一步。';
+      }
+    };
+    global.HuFirstAiStepsPanel = api;
+    return { destroy: function () { var r = document.getElementById('hufirst-ai-steps-assistant'); if (r) r.remove(); var s = document.getElementById('hufirst-ai-assistant-style'); if (s) s.remove(); } };
+  }
+
+  var HuFirstAiAssistant = {
+    formatPlanStatusLine: formatPlanStatusLine,
+    appendInteractionToPayload: appendInteractionToPayload,
+    getInteractionContextFromForm: getInteractionContextFromForm,
+    clearInteractionForm: clearInteractionForm,
+    insertSelectionFromDocument: insertSelectionFromDocument,
+    dbStepToPlanStep: dbStepToPlanStep,
+    fetchAllCaseSteps: fetchAllCaseSteps,
+    buildCurrentPlanFromCase: buildCurrentPlanFromCase,
+    getActiveProfileId: getActiveProfileId,
+    getProjectName: getProjectName,
+    postJson: postJson,
+    saveStudioSession: saveStudioSession,
+    loadStudioSession: loadStudioSession,
+    saveCaseChatHistory: saveCaseChatHistory,
+    loadCaseChatHistory: loadCaseChatHistory,
+    mountStepsPageAssistant: mountStepsPageAssistant
+  };
+
+  global.HuFirstAiAssistant = HuFirstAiAssistant;
+})(typeof window !== 'undefined' ? window : this);

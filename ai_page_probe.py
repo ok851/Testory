@@ -310,6 +310,178 @@ def _format_summary_lines(
     return text
 
 
+def dom_context_pack_enabled() -> bool:
+    return (os.environ.get("LOCAL_AI_DOM_PACK", "0").strip().lower() in ("1", "true", "yes", "on"))
+
+
+def _dom_env_pack_chars() -> int:
+    return _env_int("LOCAL_AI_DOM_PACK_MAX_CHARS", 12000)
+
+
+def _dom_band_gap_px() -> int:
+    return _env_int("LOCAL_AI_DOM_PACK_BAND_GAP", 56)
+
+
+def format_a11y_snapshot_lines(root: Any, max_lines: int = 48) -> str:
+    """
+    将 Playwright accessibility.snapshot() 根节点压成缩进文本行（非完整树，节流行）。
+    root 为 dict 或 None。
+    """
+    if not isinstance(root, dict):
+        return ""
+    lines: List[str] = []
+    interesting = {
+        "button",
+        "link",
+        "textbox",
+        "searchbox",
+        "combobox",
+        "listbox",
+        "checkbox",
+        "radio",
+        "heading",
+        "navigation",
+        "main",
+        "form",
+        "menubar",
+        "menu",
+        "menuitem",
+        "tab",
+        "tablist",
+        "dialog",
+        "alert",
+    }
+    skip_roles = {"generic", "none", "invisible", "statictext", "InlineTextBox"}
+
+    def walk(node: Any, depth: int) -> None:
+        if len(lines) >= max_lines or not isinstance(node, dict):
+            return
+        role = (node.get("role") or "").strip()
+        name = re.sub(r"\s+", " ", (node.get("name") or "").strip())[:140]
+        rl = role.lower()
+        if rl in skip_roles and not name:
+            for ch in (node.get("children") or [])[:40]:
+                if len(lines) >= max_lines:
+                    return
+                walk(ch, depth)
+            return
+        if name or rl in interesting or (role and rl not in skip_roles):
+            indent = "  " * min(depth, 5)
+            line = f"{indent}{role or '?'}: {name}".strip() if name else f"{indent}{role or '?'}"
+            if line.strip():
+                lines.append(line[:220])
+        for ch in (node.get("children") or [])[:35]:
+            if len(lines) >= max_lines:
+                return
+            walk(ch, depth + 1)
+
+    walk(root, 0)
+    return "\n".join(lines)
+
+
+def dom_context_pack(
+    snap: Dict[str, Any],
+    a11y_outline: str = "",
+) -> str:
+    """
+    第二路上下文：视口内控件按垂直区域分组 + 可选无障碍大纲；不替代 probe 行表，只辅助主模型分块理解页面。
+    """
+    if not dom_context_pack_enabled() or not isinstance(snap, dict):
+        return ""
+    maxc = _dom_env_pack_chars()
+    title = _norm_probe_str(snap.get("title"))
+    url = _norm_probe_str(snap.get("url"))
+    vp = snap.get("viewport") or {}
+    vpt = ""
+    if isinstance(vp, dict) and (vp.get("width") or vp.get("height")):
+        vpt = f"{vp.get('width', '')}x{vp.get('height', '')}"
+    items_raw = [x for x in (snap.get("items") or []) if isinstance(x, dict)]
+    # 带 box 的项用于分带；无 box 则退化为单列列表
+    scored: List[Tuple[int, int, int, Dict[str, Any]]] = []
+    for it in items_raw:
+        box = it.get("box")
+        y = 10**9
+        x = 0
+        nprobe = 0
+        if isinstance(box, dict):
+            try:
+                y = int(box.get("y", 0))
+            except (TypeError, ValueError):
+                y = 0
+            try:
+                x = int(box.get("x", 0))
+            except (TypeError, ValueError):
+                x = 0
+        try:
+            nprobe = int(it.get("n") or 0)
+        except (TypeError, ValueError):
+            nprobe = 0
+        scored.append((y, x, nprobe, it))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    gap = _dom_band_gap_px()
+    bands: List[List[Dict[str, Any]]] = []
+    for _y, _x, _n, it in scored:
+        if not bands:
+            bands.append([it])
+            continue
+        last = bands[-1]
+        prev_box = last[-1].get("box") if last else None
+        cur_box = it.get("box")
+        y_prev = 0
+        y_cur = 0
+        if isinstance(prev_box, dict) and isinstance(cur_box, dict):
+            try:
+                y_prev = int(prev_box.get("y", 0))
+                y_cur = int(cur_box.get("y", 0))
+            except (TypeError, ValueError):
+                y_prev, y_cur = 0, 0
+        if y_cur - y_prev > gap and last:
+            bands.append([it])
+        else:
+            last.append(it)
+
+    lines: List[str] = [
+        "--- DOM context pack (grouped; probe_index in [n] matches the LIVE list above) ---",
+        f"Title: {title or '(无)'} | URL: {url}" + (f" | viewport {vpt}" if vpt else ""),
+    ]
+    if (a11y_outline or "").strip() and (os.environ.get("LOCAL_AI_DOM_A11Y", "1").strip().lower() not in ("0", "false", "no")):
+        lines.append("Accessibility outline (trimmed):")
+        for ln in a11y_outline.strip().splitlines()[:60]:
+            if ln.strip():
+                lines.append("  " + ln.strip()[:200])
+    lines.append("Controls by vertical region (y-order):")
+    for bi, group in enumerate(bands[:32], start=1):
+        if not group:
+            continue
+        y0 = None
+        b0 = group[0].get("box")
+        if isinstance(b0, dict):
+            try:
+                y0 = int(b0.get("y", 0))
+            except (TypeError, ValueError):
+                y0 = None
+        y_label = f"y≈{y0}" if y0 is not None else f"band{bi}"
+        lines.append(f"  [Region {bi} | {y_label}]")
+        for it in group[:24]:
+            try:
+                idx = int(it.get("n") or 0)
+            except (TypeError, ValueError):
+                idx = 0
+            tag = (it.get("tag") or "?").lower()
+            tx = re.sub(r"\s+", " ", (it.get("text") or ""))[:64]
+            sug = re.sub(r"\s+", " ", (it.get("suggestedSelector") or ""))[:100]
+            bit = f"    [n={idx}] <{tag}>"
+            if tx:
+                bit += f" text={tx!r}"
+            if sug:
+                bit += f" try={sug!r}"
+            lines.append(bit[:300])
+    out = "\n".join(lines)
+    if len(out) > maxc:
+        out = out[: maxc - 80] + "\n…(DOM pack truncated)…"
+    return out
+
+
 def probe_registry_from_interactive_snapshot(snap: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]], str]:
     """
     将 get_interactive_page_snapshot / 网关 inspect 返回的 data 转为

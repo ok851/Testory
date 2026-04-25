@@ -36,6 +36,7 @@ from playwright_automation import (
     sync_click_element,
     sync_element_info_at_point,
     sync_get_interactive_page_snapshot,
+    sync_get_accessibility_outline_text,
     sync_get_page_diagnostics,
     sync_get_viewport_size,
     sync_close_browser,
@@ -65,6 +66,8 @@ from playwright_automation import (
     sync_scroll_page,
     sync_select_date,
     sync_select_option,
+    single_step_action_supported,
+    sync_execute_single_db_step,
     sync_start_browser,
     sync_swipe_element,
     sync_take_screenshot,
@@ -87,6 +90,8 @@ from logger import uat_logger
 from license_manager import license_manager, LicenseType
 from cloud_llm_gateway import CloudLLMGateway
 from ai_local_inference import local_ai_service
+from ai_step_normalization import apply_step_normalization_to_plan, dedupe_and_validate_ai_steps
+from ai_platform_audit import log_ai_plan_to_audit
 import asyncio
 import threading
 import datetime
@@ -530,88 +535,54 @@ def _get_active_local_model() -> str:
     return (cfg.get('active_local_model') or '').strip() or os.environ.get('LOCAL_LLM_MODEL_MID', 'llama3:8b-instruct')
 
 
+def _ai_memory_context_block(
+    user_id: int,
+    goal: str,
+    probe_url: str = "",
+    project_name: str = "",
+) -> str:
+    """LOCAL_MEMORY_ENABLE=1 时从 SQLite 向量记忆检索相似片段，拼入本地 LLM 提示。"""
+    try:
+        from ai_memory_store import build_query_for_case, format_memory_block, memory_enabled, search
+
+        if not memory_enabled():
+            return ""
+        _db = Database()
+        tid = _db.get_user_tenant_id(user_id)
+        q = build_query_for_case(goal, probe_url=probe_url, project_name=project_name)
+        hits = search(user_id, q, tenant_id=tid)
+        return format_memory_block(hits)
+    except Exception as e:
+        uat_logger.debug("ai memory search skipped: %s", e)
+        return ""
+
+
+def _ai_build_dom_pack(snap, embed_remote: bool = False) -> str:
+    """LOCAL_AI_DOM_PACK=1 时生成分区 DOM 包；内嵌画布远程会话时不拉本地页 a11y（避免串页）。"""
+    if not isinstance(snap, dict) or not snap:
+        return ""
+    try:
+        from ai_page_probe import dom_context_pack, dom_context_pack_enabled
+
+        if not dom_context_pack_enabled():
+            return ""
+        a11y = ""
+        if not embed_remote and (os.environ.get("LOCAL_AI_DOM_A11Y", "1").strip().lower() not in ("0", "false", "no")):
+            if sync_automation_session_usable():
+                try:
+                    a11y = sync_get_accessibility_outline_text(48) or ""
+                except Exception as e:
+                    uat_logger.debug("accessibility outline skipped: %s", e)
+        return dom_context_pack(snap, a11y_outline=a11y) or ""
+    except Exception as e:
+        uat_logger.debug("dom context pack skipped: %s", e)
+        return ""
+
+
 def _ai_str(value) -> str:
     if value is None:
         return ''
     return str(value).strip()
-
-
-def _normalize_ai_step(step: dict) -> dict:
-    allowed_actions = {'navigate', 'click', 'input', 'wait', 'verify', 'extract_text'}
-    action = _ai_str(step.get('action')).lower()
-    if action not in allowed_actions:
-        action = 'click'
-    selector_type = _ai_str(step.get('selector_type')).lower()
-    selector_value = _ai_str(step.get('selector_value'))
-    input_value = _ai_str(step.get('input_value'))
-    description = _ai_str(step.get('description'))
-    lc = step.get('locator_candidates')
-    if lc is not None and not isinstance(lc, str):
-        try:
-            lc = json.dumps(lc, ensure_ascii=False)
-        except Exception:
-            lc = ''
-    elif lc is None:
-        lc = ''
-    else:
-        lc = _ai_str(lc)
-    out = {
-        'action': action,
-        'selector_type': selector_type,
-        'selector_value': selector_value,
-        'input_value': input_value,
-        'description': description,
-    }
-    if lc:
-        out['locator_candidates'] = lc
-    return out
-
-
-def _dedupe_and_validate_ai_steps(steps: list) -> tuple:
-    """
-    Returns: (clean_steps, warnings)
-    """
-    warnings = []
-    clean_steps = []
-    seen = set()
-
-    for raw in steps or []:
-        if not isinstance(raw, dict):
-            continue
-        step = _normalize_ai_step(raw)
-        key = (
-            step['action'],
-            step['selector_type'],
-            step['selector_value'],
-            step['input_value'],
-        )
-        if key in seen:
-            warnings.append(f"检测到重复步骤并已去重: {step['action']} {step['selector_value']}")
-            continue
-        seen.add(key)
-        clean_steps.append(step)
-
-    if clean_steps:
-        first_action = clean_steps[0].get('action')
-        if first_action != 'navigate':
-            warnings.append('建议首步使用 navigate 进入目标页面，以提升执行稳定性。')
-
-    for idx, step in enumerate(clean_steps, start=1):
-        if step['action'] in {'click', 'input', 'verify', 'extract_text'} and not step['selector_value']:
-            warnings.append(f'第{idx}步缺少 selector_value，运行时可能失败。')
-        if step['action'] == 'input' and not step['input_value']:
-            warnings.append(f'第{idx}步 input 未填写输入值，请在步骤编辑中补充或重新生成。')
-        if step['action'] == 'navigate' and not step['input_value']:
-            warnings.append(f'第{idx}步 navigate 未填写 URL，请在步骤编辑中补充或重新生成。')
-        if step['action'] == 'wait':
-            try:
-                ms = int(step['input_value'] or '0')
-                if ms > 15000:
-                    warnings.append(f'第{idx}步等待时间较长({ms}ms)，建议改为显式条件等待。')
-            except Exception:
-                warnings.append(f'第{idx}步 wait 参数非数字: {step["input_value"]}')
-
-    return clean_steps, warnings
 
 
 def _norm_click_repeat_count(raw) -> int:
@@ -1383,7 +1354,7 @@ def api_execute_multiple_cases():
         if current_count >= DAILY_LIMIT:
             return jsonify({
                 'success': False,
-                'error': f'今日执行次数已达上限（{DAILY_LIMIT}次）。请升级至专业版解除限制。',
+                'error': f'今日执行次数已达上限（{DAILY_LIMIT}次）。请升级至团队版解除限制。',
                 'limit_reached': True,
                 'current_count': current_count,
                 'daily_limit': DAILY_LIMIT,
@@ -2010,6 +1981,7 @@ def api_ai_task_plan():
     page_snapshot = None
     probe_registry = None
     probe_url = (target_page_url or None) if not embedded_sid else None
+    snap_data = None
 
     if embedded_sid:
         if not embedded_gateway_enabled():
@@ -2026,11 +1998,16 @@ def api_ai_task_plan():
                 'error': str(err or detail or '无法获取远程页结构，请确认远程画布已连接'),
             }), 502
         snap = j.get('data') or {}
+        snap_data = snap
         ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
         page_snapshot = ps or None
         probe_registry = pr if pr else None
         probe_url = (pu or target_page_url).strip() or None
 
+    dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
+    mem_ctx = _ai_memory_context_block(
+        current_user.id, goal, probe_url=probe_url or target_page_url or "", project_name=project_name
+    )
     try:
         generated = local_ai_service.generate_case_and_steps(
             goal,
@@ -2040,6 +2017,8 @@ def api_ai_task_plan():
             page_snapshot=page_snapshot,
             probe_registry=probe_registry,
             probe_url=probe_url,
+            memory_context=mem_ctx or None,
+            dom_context_pack=dpack or None,
         )
     except ValueError as e:
         return jsonify({
@@ -2047,11 +2026,20 @@ def api_ai_task_plan():
             'error': str(e),
             'hint': '可先执行: ollama serve，并确认模型已拉取。'
         }), 503
+    generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    log_ai_plan_to_audit(
+        current_user.id,
+        current_user.username,
+        'AI_PLAN_GENERATE',
+        generated,
+        request.remote_addr,
+    )
     return jsonify({
         'success': True,
         'provider': route['provider'],
         'model': generated.get('meta', {}).get('model') or route['model'],
-        'plan': generated
+        'plan': generated,
+        'warnings': norm_warnings,
     })
 
 
@@ -2092,12 +2080,59 @@ def api_ai_task_cloud_analyze():
             'requested_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     })
+    try:
+        from ai_memory_store import ingest_repair_case, memory_enabled
+
+        if memory_enabled():
+            _dbm = Database()
+            tidm = _dbm.get_user_tenant_id(current_user.id)
+            ingest_repair_case(
+                current_user.id,
+                task_type,
+                payload,
+                cloud_result=result,
+                tenant_id=tidm,
+            )
+    except Exception as e:
+        uat_logger.debug("ai memory ingest skipped: %s", e)
+
     return jsonify({
         'success': True,
         'provider': route['provider'],
         'model': route['model'],
         'result': result
     })
+
+
+@app.route('/api/ai/memory/ingest', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_memory_ingest():
+    """手工写入用户习惯/备注，进入本地向量记忆（需 LOCAL_MEMORY_ENABLE=1 且已拉取 LOCAL_EMBED_MODEL）。"""
+    data = request.get_json(silent=True) or {}
+    kind = (data.get('kind') or 'habit').strip()[:64]
+    text = (data.get('text') or data.get('source_text') or '').strip()
+    meta = data.get('meta')
+    if not text or len(text) < 4:
+        return jsonify({'success': False, 'error': 'text 过短或为空'}), 400
+    try:
+        from ai_memory_store import ingest, memory_enabled
+
+        if not memory_enabled():
+            return jsonify({'success': False, 'error': '未开启：设置 LOCAL_MEMORY_ENABLE=1'}), 400
+        _db = Database()
+        tid = _db.get_user_tenant_id(current_user.id)
+        mid = ingest(
+            current_user.id,
+            kind,
+            text,
+            tenant_id=tid,
+            meta=meta if isinstance(meta, dict) else None,
+        )
+        return jsonify({'success': True, 'id': mid})
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 502
 
 
 @app.route('/api/ai/cases/generate-and-save', methods=['POST'])
@@ -2132,7 +2167,7 @@ def api_ai_generate_case_and_save():
     if limits['max_cases_per_project'] != -1 and current_case_count >= limits['max_cases_per_project']:
         return jsonify({
             'success': False,
-            'error': f'已达到项目用例数量限制（{limits["max_cases_per_project"]}个）。请升级至专业版解除限制。',
+            'error': f'已达到项目用例数量限制（{limits["max_cases_per_project"]}个）。请升级至团队版或企业版以提升配额。',
             'limit_reached': True,
             'current_count': current_case_count,
             'limit': limits['max_cases_per_project'],
@@ -2157,12 +2192,14 @@ def api_ai_generate_case_and_save():
     else:
         if not goal:
             return jsonify({'success': False, 'error': 'goal不能为空'}), 400
+        mem_ctx = _ai_memory_context_block(current_user.id, goal, probe_url="", project_name=project_name)
         try:
             generated = local_ai_service.generate_case_and_steps(
                 goal,
                 project_name,
                 model=legacy_model,
                 profile=profile,
+                memory_context=mem_ctx or None,
             )
         except ValueError as e:
             return jsonify({
@@ -2178,9 +2215,14 @@ def api_ai_generate_case_and_save():
         _ai_str(generated.get('case_url')),
         None,
     )
-    clean_steps, warnings = _dedupe_and_validate_ai_steps(generated.get('steps') or [])
-    generated['steps'] = clean_steps
-    generated['warnings'] = warnings
+    generated, warnings = apply_step_normalization_to_plan(generated)
+    log_ai_plan_to_audit(
+        current_user.id,
+        current_user.username,
+        'AI_PLAN_GENERATE',
+        generated,
+        request.remote_addr,
+    )
     case_id = db.create_test_case_v2(
         project_id,
         generated.get('case_name', ''),
@@ -2213,6 +2255,12 @@ def api_ai_generate_case_and_save():
 def api_ai_task_chat():
     """
     多轮AI对话生成/优化测试用例步骤（本地模型）。
+
+    可选 body 字段（与左栏/浮层/右键菜单对接，全平台保持同一套语义）：
+    - focus_step_index: 用户聚焦的步骤序号（1-based，与 current_plan.steps 顺序一致）
+    - focus_step_indices: 多选步骤，如合并步骤、批量优化
+    - browser_selection_text / selection_text: 内嵌浏览器划词，用于「断言见划词内容」
+    - action_kind / intent: 如 optimize_step、merge_steps、assert_from_selection
     """
     data = request.get_json(silent=True) or {}
     message = (data.get('message') or '').strip()
@@ -2235,6 +2283,7 @@ def api_ai_task_chat():
     page_snapshot = None
     probe_registry = None
     probe_url = (target_page_url or None) if not embedded_sid else None
+    snap_data = None
 
     if embedded_sid:
         if not embedded_gateway_enabled():
@@ -2251,11 +2300,31 @@ def api_ai_task_chat():
                 'error': str(err or detail or '无法获取远程页结构'),
             }), 502
         snap = j.get('data') or {}
+        snap_data = snap
         ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
         page_snapshot = ps or None
         probe_registry = pr if pr else None
         probe_url = (pu or target_page_url).strip() or None
 
+    dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
+    mem_ctx = _ai_memory_context_block(
+        current_user.id, message, probe_url=probe_url or target_page_url or "", project_name=project_name
+    )
+    interaction_context = None
+    _ic: dict = {}
+    if data.get("focus_step_index") is not None and str(data.get("focus_step_index", "")).strip() != "":
+        _ic["focus_step_index"] = data.get("focus_step_index")
+    _fi = data.get("focus_step_indices")
+    if isinstance(_fi, list) and _fi:
+        _ic["focus_step_indices"] = _fi
+    _sel = (data.get("browser_selection_text") or data.get("selection_text") or "").strip()
+    if _sel:
+        _ic["browser_selection_text"] = _sel
+    _kind = (data.get("action_kind") or data.get("intent") or "").strip()
+    if _kind:
+        _ic["action_kind"] = _kind
+    if _ic:
+        interaction_context = _ic
     try:
         generated = local_ai_service.refine_case_and_steps(
             user_message=message,
@@ -2267,6 +2336,9 @@ def api_ai_task_chat():
             page_snapshot=page_snapshot,
             probe_registry=probe_registry,
             probe_url=probe_url,
+            memory_context=mem_ctx or None,
+            dom_context_pack=dpack or None,
+            interaction_context=interaction_context,
         )
     except ValueError as e:
         return jsonify({
@@ -2274,11 +2346,20 @@ def api_ai_task_chat():
             'error': str(e),
             'hint': '可先执行: ollama serve，并确认模型已拉取。'
         }), 503
+    generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    log_ai_plan_to_audit(
+        current_user.id,
+        current_user.username,
+        'AI_PLAN_REFINE',
+        generated,
+        request.remote_addr,
+    )
     return jsonify({
         'success': True,
         'provider': 'local',
         'model': generated.get('meta', {}).get('model') or route['model'],
         'plan': generated,
+        'warnings': norm_warnings,
     })
 
 
@@ -2321,7 +2402,7 @@ def api_ai_append_steps_to_case():
         _ai_str(case.get('url')),
         None,
     )
-    clean_steps, warnings = _dedupe_and_validate_ai_steps(steps)
+    clean_steps, warnings = dedupe_and_validate_ai_steps(steps)
 
     created_steps = 0
     for idx, step in enumerate(clean_steps, start=1):
@@ -2908,6 +2989,10 @@ def api_browser_ai_analyze():
         goal_lines.append('用户补充的测试目标: ' + hint)
     goal = '\n'.join(goal_lines)
     probe_url = (probe_pu or page_body.get('url') or '').strip() or None
+    dpack = _ai_build_dom_pack(snap, embed_remote=bool(embedded_sid))
+    mem_ctx = _ai_memory_context_block(
+        current_user.id, goal, probe_url=probe_url or page_body.get('url') or '', project_name=project_name
+    )
     try:
         generated = local_ai_service.generate_case_and_steps(
             goal,
@@ -2917,6 +3002,8 @@ def api_browser_ai_analyze():
             page_snapshot=page_snapshot_txt or None,
             probe_registry=probe_registry if probe_registry else None,
             probe_url=probe_url,
+            memory_context=mem_ctx or None,
+            dom_context_pack=dpack or None,
         )
     except ValueError as e:
         return jsonify({
@@ -2924,10 +3011,19 @@ def api_browser_ai_analyze():
             'error': str(e),
             'hint': '可先执行: ollama serve，并确认模型已拉取。',
         }), 503
+    generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    log_ai_plan_to_audit(
+        current_user.id,
+        current_user.username,
+        'AI_PLAN_PAGE_GENERATE',
+        generated,
+        request.remote_addr,
+    )
     return jsonify({
         'success': True,
         'plan': generated,
         'page_snapshot': page_body,
+        'warnings': norm_warnings,
     })
 
 
@@ -3111,7 +3207,7 @@ def api_create_case_v2():
     if limits['max_cases_per_project'] != -1 and current_case_count >= limits['max_cases_per_project']:
         return jsonify({
             'success': False,
-            'error': f'已达到项目用例数量限制（{limits["max_cases_per_project"]}个）。请升级至专业版解除限制。',
+            'error': f'已达到项目用例数量限制（{limits["max_cases_per_project"]}个）。请升级至团队版或企业版以提升配额。',
             'limit_reached': True,
             'current_count': current_case_count,
             'limit': limits['max_cases_per_project'],
@@ -3856,7 +3952,7 @@ def api_run_case(case_id):
         if current_count >= DAILY_LIMIT:
             return jsonify({
                 'success': False,
-                'error': f'今日执行次数已达上限（{DAILY_LIMIT}次）。请升级至专业版解除限制。',
+                'error': f'今日执行次数已达上限（{DAILY_LIMIT}次）。请升级至团队版解除限制。',
                 'limit_reached': True,
                 'current_count': current_count,
                 'daily_limit': DAILY_LIMIT,
@@ -4327,6 +4423,22 @@ def api_run_case(case_id):
                     db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
                         sr['selector_value'], sr['input_value'], sr['description'],
                         sr['status'], sr['error'], sr['screenshot'], sr['duration'])
+                try:
+                    from ai_memory_store import ingest_successful_run, memory_ingest_run_success_enabled
+
+                    if memory_ingest_run_success_enabled():
+                        tid = db.get_user_tenant_id(user_id)
+                        ingest_successful_run(
+                            user_id,
+                            tid,
+                            case_id,
+                            case.get('name') or '',
+                            case.get('url') or '',
+                            duration,
+                            run_id,
+                        )
+                except Exception as _mem_run_e:
+                    uat_logger.debug("memory ingest successful run: %s", _mem_run_e)
             except Exception as history_error:
                 uat_logger.warning(f"保存运行历史记录失败: {history_error}")
             
@@ -4485,6 +4597,141 @@ def api_run_case(case_id):
                 job['active'] = False
                 job['finished_at'] = time.time()
                 job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
+
+
+def _simplify_single_step_api_results(raw):
+    out = []
+    for r in raw or []:
+        if not isinstance(r, dict):
+            continue
+        o = {"status": r.get("status")}
+        if r.get("error"):
+            o["error"] = str(r.get("error"))
+        if r.get("extracted_text") is not None:
+            o["extracted_text"] = r.get("extracted_text")
+        if r.get("screenshot_path"):
+            o["screenshot_path"] = r.get("screenshot_path")
+        out.append(o)
+    return out
+
+
+@app.route("/api/cases/<int:case_id>/run-one-step", methods=["POST"])
+@login_required
+@role_required("admin", "tester", "project_manager", "test_lead")
+@api_error_handler
+@log_api_request
+def api_run_one_step(case_id):
+    """单条步骤试跑（与完整用例使用同一 Playwright 会话，便于调试导航/点击等）。"""
+    data = request.get_json(silent=True) or {}
+    step_id = data.get("step_id")
+    step_order = data.get("step_order")
+    navigate_first = bool(data.get("navigate_first"))
+    if step_id is None and step_order is None:
+        return jsonify({"success": False, "error": "需要 step_id 或 step_order"}), 400
+
+    db = Database()
+    case = db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({"success": False, "error": "测试用例不存在"}), 404
+    if case.get("project_id") and not db.check_project_access(
+        current_user.id, case["project_id"], "viewer"
+    ):
+        return jsonify({"success": False, "error": "无权限访问此用例"}), 403
+
+    user_id = current_user.id
+    with _case_run_lock:
+        j = _case_run_jobs.get(user_id)
+        if j and j.get("active"):
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "当前有进行中的用例整例执行，请先停止或等待完成后再单步试跑",
+                    "code": "case_run_in_progress",
+                }
+            ), 409
+
+    step = None
+    if step_id:
+        st = db.get_test_step(int(step_id))
+        if not st or int(st.get("case_id") or 0) != case_id:
+            return jsonify({"success": False, "error": "步骤不存在或不属于该用例"}), 400
+        step = st
+    else:
+        all_steps, _tot = db.get_case_steps_paginated(case_id, 1, 5000)
+        for st in all_steps:
+            if int(st.get("step_order") or 0) == int(step_order):
+                step = st
+                break
+        if not step:
+            return jsonify({"success": False, "error": "未找到该序号的步骤"}), 400
+
+    act = (step.get("action") or "").strip().lower()
+    if not single_step_action_supported(act):
+        return jsonify(
+            {
+                "success": False,
+                "error": f"单步试跑暂不支持操作「{act}」；请用「运行用例」全量执行。",
+            }
+        ), 400
+
+    if bool(getattr(automation, "_selection_mode_active", False)):
+        try:
+            sync_disable_element_selection()
+        except Exception:
+            pass
+        try:
+            automation._selection_mode_active = False
+        except Exception:
+            pass
+
+    project_id = case.get("project_id")
+    selector_value = db.resolve_variables(
+        step.get("selector_value", ""), project_id=project_id, case_id=case_id
+    )
+    input_value = db.resolve_variables(
+        step.get("input_value", ""), project_id=project_id, case_id=case_id
+    )
+    st2 = dict(step)
+    st2["selector_value"] = selector_value
+    st2["input_value"] = input_value
+
+    t0 = time.time()
+    try:
+        sync_start_browser()
+    except Exception as e:
+        uat_logger.warning("单步: sync_start_browser: %s", e)
+
+    case_url = (case.get("url") or "").strip()
+    if navigate_first and case_url and act != "navigate":
+        try:
+            sync_navigate_to(case_url)
+        except Exception as e:
+            return jsonify({"success": False, "error": f"按用例 URL 预导航失败: {e}"}), 200
+
+    try:
+        results = sync_execute_single_db_step(st2)
+    except Exception as e:
+        duration_ms = int((time.time() - t0) * 1000)
+        uat_logger.exception("单步执行失败 case=%s step=%s", case_id, step.get("id"))
+        return jsonify(
+            {
+                "success": False,
+                "error": str(e),
+                "duration_ms": duration_ms,
+                "action": act,
+            }
+        )
+    duration_ms = int((time.time() - t0) * 1000)
+    return jsonify(
+        {
+            "success": True,
+            "action": act,
+            "step_id": step.get("id"),
+            "step_order": step.get("step_order"),
+            "duration_ms": duration_ms,
+            "results": _simplify_single_step_api_results(results),
+        }
+    )
 
 
 @app.route('/api/cases/current-run/status', methods=['GET'])

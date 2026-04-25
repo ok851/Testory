@@ -284,11 +284,22 @@ class LocalAIService:
         page_snapshot: Optional[str] = None,
         probe_registry: Optional[List[Dict[str, Any]]] = None,
         probe_url: Optional[str] = None,
+        memory_context: Optional[str] = None,
+        dom_context_pack: Optional[str] = None,
     ) -> Dict[str, Any]:
         snap_t = (page_snapshot or "").strip()
         pr: List[Dict[str, Any]] = list(probe_registry) if probe_registry else []
         pu = (probe_url or "").strip() or None
-        prompt = self._build_prompt(goal, project_name, page_snapshot=snap_t)
+        dom_t = (dom_context_pack or "").strip()
+        if dom_t:
+            dom_t = self._maybe_compress_dom_pack(dom_t, profile, model)
+        prompt = self._build_prompt(
+            goal,
+            project_name,
+            page_snapshot=snap_t,
+            memory_context=(memory_context or "").strip() or None,
+            dom_context_pack=dom_t or None,
+        )
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
         )
@@ -317,16 +328,25 @@ class LocalAIService:
         page_snapshot: Optional[str] = None,
         probe_registry: Optional[List[Dict[str, Any]]] = None,
         probe_url: Optional[str] = None,
+        memory_context: Optional[str] = None,
+        dom_context_pack: Optional[str] = None,
+        interaction_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         snap_t = (page_snapshot or "").strip()
         pr: List[Dict[str, Any]] = list(probe_registry) if probe_registry else []
         pu = (probe_url or "").strip() or None
+        dom_t = (dom_context_pack or "").strip()
+        if dom_t:
+            dom_t = self._maybe_compress_dom_pack(dom_t, profile, model)
         prompt = self._build_refine_prompt(
             user_message=user_message,
             project_name=project_name,
             current_plan=current_plan or {},
             history=history or [],
             page_snapshot=snap_t,
+            memory_context=(memory_context or "").strip() or None,
+            dom_context_pack=dom_t or None,
+            interaction_context=interaction_context,
         )
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
@@ -470,6 +490,34 @@ class LocalAIService:
                     step["selector_type"] = st2 or "css"
                     step["selector_value"] = sv2
 
+    def _maybe_compress_dom_pack(
+        self,
+        text: str,
+        profile: Optional[Dict[str, Any]],
+        model: str,
+    ) -> str:
+        if (os.environ.get("LOCAL_AI_DOM_PACK_COMPRESS", "0").strip().lower() not in ("1", "true", "yes", "on")):
+            return text
+        try:
+            min_len = int((os.environ.get("LOCAL_AI_DOM_PACK_COMPRESS_MIN_CHARS") or "12000").strip() or "12000")
+        except ValueError:
+            min_len = 12000
+        if len(text) < min_len:
+            return text
+        light = (os.environ.get("LOCAL_LLM_MODEL_LIGHT") or "qwen2:1.5b").strip() or "qwen2-1.5b"
+        prompt = (
+            "Condense the following DOM context to at most 40 short lines. "
+            "Do NOT invent controls, URLs, or probe indices. Preserve any [n] or [Region …] labels that appear.\n\n"
+        ) + text[:20000]
+        try:
+            using_model, content = self._complete_for_model(prompt, light, profile, meta_fallback=light)
+            out = (content or "").strip()
+            return out if out else text
+        except ValueError as e:
+            if (os.environ.get("LOCAL_AI_DEBUG", "").strip() == "1"):
+                raise
+            return text
+
     def _attach_locator_validation(
         self,
         meta: Dict[str, Any],
@@ -487,7 +535,17 @@ class LocalAIService:
         if warnings:
             meta["locator_validation"] = warnings
 
-    def _build_prompt(self, goal: str, project_name: str, page_snapshot: str = "") -> str:
+    def _build_prompt(
+        self,
+        goal: str,
+        project_name: str,
+        page_snapshot: str = "",
+        memory_context: Optional[str] = None,
+        dom_context_pack: Optional[str] = None,
+    ) -> str:
+        mem_block = ""
+        if memory_context:
+            mem_block = f"\nRetrieved similar context (may be from past runs; verify against the LIVE snapshot):\n{memory_context}\n\n"
         snap_block = ""
         if (page_snapshot or "").strip():
             snap_block = (
@@ -495,6 +553,13 @@ class LocalAIService:
                 "(use ONLY selectors that appear here or can be derived from id/name/placeholder shown; "
                 "do not invent class names):\n"
                 f"{page_snapshot.strip()}\n\n"
+            )
+        dom_block = ""
+        if (dom_context_pack or "").strip():
+            dom_block = (
+                "\nDOM structure hint (grouped by vertical region; optional a11y trim — use only to disambiguate, "
+                "not as source of truth for selectors if it conflicts with the LIVE list above):\n"
+                f"{dom_context_pack.strip()}\n\n"
             )
         return (
             "You are the reasoning brain; when a LIVE page snapshot is included below, the server already used "
@@ -506,7 +571,9 @@ class LocalAIService:
             "Generate one executable UI test case with steps from this natural language goal.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"Goal: {goal}\n"
+            f"{mem_block}"
             f"{snap_block}"
+            f"{dom_block}"
             "Output strict JSON with this schema:\n"
             "{\n"
             '  "case_name": "string",\n'
@@ -537,6 +604,49 @@ class LocalAIService:
             "- Never omit JSON keys; use \"\" only where the rules above allow empty."
         )
 
+    @staticmethod
+    def _format_interaction_context(ctx: Optional[Dict[str, Any]]) -> str:
+        """UI 传入的结构化情境（高亮步骤、划词、操作类型），与对话气泡/右键优化对齐。"""
+        if not ctx or not isinstance(ctx, dict):
+            return ""
+        parts: List[str] = []
+        raw_ix = ctx.get("focus_step_index")
+        if raw_ix is not None and str(raw_ix).strip() != "":
+            try:
+                parts.append(
+                    f"User focused on step index (1-based, same order as steps array): {int(float(str(raw_ix)))}"
+                )
+            except (TypeError, ValueError):
+                pass
+        multi = ctx.get("focus_step_indices")
+        if isinstance(multi, (list, tuple)) and multi:
+            try:
+                norm = [int(float(str(x))) for x in multi[:24]]
+                parts.append(f"Relevant step indices (1-based): {norm}")
+            except (TypeError, ValueError):
+                pass
+        sel = (ctx.get("browser_selection_text") or ctx.get("selection_text") or "").strip()
+        if sel:
+            cap = 2400
+            if len(sel) > cap:
+                sel = sel[: cap - 1] + "…"
+            parts.append(
+                "User highlighted text in the page — treat as expected visible text for assertions or target copy: "
+                f"{sel}"
+            )
+        kind = (ctx.get("action_kind") or ctx.get("intent") or "").strip()
+        if kind:
+            parts.append(
+                f"UI intent hint: {kind}. If merge_steps: merge the indicated steps into one atomic step while "
+                "keeping probe_index valid. If assert_from_selection: add a verify (or assert visible text) using "
+                "the highlighted text. If optimize_step: adjust only the focused step (retry, wait, selectors)."
+            )
+        if not parts:
+            return ""
+        return "\nInteraction context (from editor / browser; obey when consistent with the LIVE snapshot):\n" + "\n".join(
+            f"- {p}" for p in parts
+        ) + "\n\n"
+
     def _build_refine_prompt(
         self,
         user_message: str,
@@ -544,26 +654,39 @@ class LocalAIService:
         current_plan: Dict[str, Any],
         history: List[Dict[str, str]],
         page_snapshot: str = "",
+        memory_context: Optional[str] = None,
+        dom_context_pack: Optional[str] = None,
+        interaction_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         history_text = "\n".join(
             [f"- {item.get('role', 'user')}: {item.get('content', '')}" for item in history[-6:]]
         )
         plan_text = json.dumps(current_plan or {}, ensure_ascii=False)
+        iact = self._format_interaction_context(interaction_context)
+        mem_block = ""
+        if memory_context:
+            mem_block = f"\nRetrieved similar context (past cases; verify against LIVE snapshot):\n{memory_context}\n\n"
         snap_block = ""
         if (page_snapshot or "").strip():
             snap_block = (
                 "\nLIVE page element snapshot (prefer these locators; do not invent):\n"
                 f"{page_snapshot.strip()}\n\n"
             )
+        dom_block = ""
+        if (dom_context_pack or "").strip():
+            dom_block = "\nDOM structure hint (grouped):\n" + dom_context_pack.strip() + "\n\n"
         return (
             "You refine plans using the same rules: if a LIVE snapshot is present, selectors must align with "
             "those real elements only.\n"
             "You are refining an existing UI test case plan.\n"
             f"Project: {project_name or 'unknown'}\n"
+            f"{iact}"
             f"User latest instruction: {user_message}\n"
             f"Chat history:\n{history_text or '- none'}\n"
             f"Current plan JSON:\n{plan_text}\n"
+            f"{mem_block}"
             f"{snap_block}"
+            f"{dom_block}"
             "Return strict JSON only, with full schema fields and a full updated steps list:\n"
             "{\n"
             '  "case_name": "string",\n'

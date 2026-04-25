@@ -171,6 +171,65 @@ def _apply_llm_choice(
     return None
 
 
+async def try_recover_selector_with_vision(
+    page: Any,
+    description: str,
+    action: str,
+    failed_selector: str,
+    registry: List[Dict[str, Any]],
+    lines: str,
+) -> Optional[Tuple[str, str]]:
+    if os.environ.get("LOCAL_VISION_RECOVERY", "0").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        return None
+    from ai_vision_local import vision_describe, vision_enabled
+
+    if not vision_enabled():
+        return None
+    desc = (description or "").strip()
+    if not desc or not registry:
+        return None
+    import asyncio
+
+    try:
+        shot = await page.screenshot(type="png")
+    except Exception as e:
+        uat_logger.warning(f"[AI_RECOVERY_VISION] screenshot failed: {e}")
+        return None
+    prompt = (
+        "You see a full-page screenshot of a web application. The UI automation could not use this "
+        f"selector: {failed_selector!s}\n"
+        f"Step goal (may be Chinese): {desc}\n"
+        f"Action type: {action}\n\n"
+        "Below is a list of interactive controls detected on the same page. Choose the one [n] that best "
+        f"matches the goal.\n{lines}\n\n"
+        "Reply with ONLY one JSON object, no markdown, e.g. "
+        '{"probe_index": 3} or {"selector_type":"css","selector_value":"#login"} with values consistent '
+        "with the list above."
+    )
+    try:
+        raw = await asyncio.to_thread(vision_describe, shot, prompt)
+    except Exception as e:
+        uat_logger.warning(f"[AI_RECOVERY_VISION] vision call failed: {e}")
+        return None
+    data = _extract_json_obj(raw)
+    if not data:
+        uat_logger.warning("[AI_RECOVERY_VISION] no JSON in model output")
+        return None
+    resolved = _apply_llm_choice(registry, data)
+    if not resolved:
+        uat_logger.warning("[AI_RECOVERY_VISION] choice did not map to a selector")
+        return None
+    uat_logger.info(
+        f"[AI_RECOVERY_VISION] type={resolved[1]} selector={resolved[0][:160]!r}"
+    )
+    return resolved
+
+
 async def try_recover_selector_with_llm(
     page: Any, description: str, action: str, failed_selector: str
 ) -> Optional[Tuple[str, str]]:
@@ -215,16 +274,22 @@ async def try_recover_selector_with_llm(
         raw = await asyncio.to_thread(dispatch_chat, prompt, profile, local_ai_service)
     except Exception as e:
         uat_logger.warning(f"[AI_RECOVERY] LLM 调用失败: {e}")
-        return None
+        return await try_recover_selector_with_vision(
+            page, desc, action, failed_selector, registry, lines
+        )
 
     data = _extract_json_obj(raw)
     if not data:
         uat_logger.warning("[AI_RECOVERY] 无法解析 LLM 返回 JSON")
-        return None
+        return await try_recover_selector_with_vision(
+            page, desc, action, failed_selector, registry, lines
+        )
     resolved = _apply_llm_choice(registry, data)
     if not resolved:
         uat_logger.warning("[AI_RECOVERY] LLM 返回未映射到有效选择器")
-        return None
+        return await try_recover_selector_with_vision(
+            page, desc, action, failed_selector, registry, lines
+        )
     uat_logger.info(
         f"[AI_RECOVERY] LLM 兜底定位: type={resolved[1]} selector={resolved[0][:160]!r}"
     )

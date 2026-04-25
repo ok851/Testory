@@ -5649,8 +5649,30 @@ class PlaywrightAutomation:
         await target_page.mouse.up()
         
         uat_logger.info(f"✅ 滑动元素成功: {selector}, 方向: {direction}, 距离: {distance}px")
-        
-    
+
+    async def _verify_expected_text_with_local_vision(
+        self,
+        target_page,
+        expected: str,
+    ) -> bool:
+        """
+        DOM 校验失败后的二次确认：视口截图 + 本地 VLM 或 Tesseract（LOCAL_VISION_VERIFY=1）。
+        """
+        if not (expected or "").strip():
+            return False
+        if (os.environ.get("LOCAL_VISION_VERIFY", "0").strip().lower() not in ("1", "true", "yes", "on")):
+            return False
+        from ai_vision_local import ocr_enabled, text_visible_in_screenshot, vision_enabled
+
+        if not vision_enabled() and not ocr_enabled():
+            return False
+        try:
+            sh = await target_page.screenshot(type="png")
+        except Exception as e:
+            uat_logger.debug("vision verify screenshot: %s", e)
+            return False
+        return text_visible_in_screenshot(sh, expected)
+
     async def _verify_element_state_attempt(
         self,
         target_page,
@@ -7865,6 +7887,21 @@ class PlaywrightAutomation:
         )
         return data if isinstance(data, dict) else {"url": "", "title": "", "viewport": {}, "items": []}
 
+    async def get_accessibility_outline_text(self, max_lines: int = 48) -> str:
+        """主文档可访问性树压平文本，供 LOCAL_AI_DOM_PACK 与 probe 行互补。"""
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        n = max(8, min(int(max_lines or 48), 120))
+        try:
+            root = await self.page.accessibility.snapshot(interesting_only=True)
+        except Exception:
+            return ""
+        if not root:
+            return ""
+        from ai_page_probe import format_a11y_snapshot_lines
+
+        return format_a11y_snapshot_lines(root, max_lines=n)
+
     async def get_page_diagnostics(self) -> Dict[str, Any]:
         """轻量页面与性能信息，供内置浏览器「开发者」面板（非完整 DevTools）。"""
         if self.page is None:
@@ -8488,8 +8525,9 @@ class PlaywrightAutomation:
                 elif action == "verify":
                     selector = step.get("selector")
                     verify_type = step.get("verify_type", "auto")
+                    expected_text = (step.get("input_value") or step.get("text") or "").strip()
                     uat_logger.info(f"🔍 [VERIFY_DEBUG] 开始执行验证操作,选择器: {selector}, 验证类型: {verify_type}")
-                    
+                    step_error = None
                     try:
                         # 执行验证操作
                         await self.verify_element(selector, verify_type, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
@@ -8500,6 +8538,18 @@ class PlaywrightAutomation:
                         uat_logger.error(f"❌ [VERIFY_DEBUG] 验证操作失败: {str(e)}")
                         step_status = "error"
                         step_error = str(e)
+                        if target_page and expected_text:
+                            try:
+                                if await self._verify_expected_text_with_local_vision(
+                                    target_page, expected_text
+                                ):
+                                    uat_logger.info(
+                                        "✅ [VERIFY_VISION] 视口视觉/子串确认成功，恢复本步为通过"
+                                    )
+                                    step_status = "success"
+                                    step_error = None
+                            except Exception as ve:
+                                uat_logger.debug("vision verify fallback: %s", ve)
                     
                     # 等待页面状态稳定
                     if target_page:
@@ -10452,6 +10502,56 @@ if __name__ == "__main__":
     print("   - 工作线程异步函数执行添加了1分钟超时控制")
     print("   - 所有步骤执行都会严格限制在60秒内")
 
+def _normalize_db_step_for_single_execution(step: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """将 `test_steps` 行（selector_value、input_value 等）映射为 `execute_single_step` 使用的字段名。"""
+    s = dict(step or {})
+    act = (s.get("action") or "").strip().lower()
+    if s.get("selector_value") and not s.get("selector"):
+        s["selector"] = s.get("selector_value") or ""
+    if act == "navigate":
+        u = (s.get("url") or s.get("input_value") or "").strip()
+        if u:
+            s["url"] = u
+    if act in ("input", "fill"):
+        if "text" not in s and s.get("input_value") is not None:
+            s["text"] = s["input_value"]
+    if act == "wait":
+        iv = s.get("input_value")
+        if iv is not None and str(iv).strip() != "":
+            try:
+                v = int(str(iv).strip())
+                s["time"] = v * 1000 if v < 1000 else v
+            except ValueError:
+                s["time"] = 1000
+        else:
+            s["time"] = int(s.get("time", 1000) or 1000)
+    if act == "verify":
+        s["verify_type"] = s.get("input_value") or s.get("verify_type") or "auto"
+    if act == "batch_input":
+        s["batch_text"] = s.get("input_value") or s.get("batch_text") or ""
+    return s
+
+
+SINGLE_STEP_SUPPORTED_ACTIONS = frozenset({
+    "navigate", "click", "input", "fill", "batch_input", "hover", "double_click", "right_click",
+    "wait", "scroll", "extract_text", "verify", "swipe", "select", "submit", "screenshot",
+    "wait_for_selector", "wait_for_element_visible",
+})
+
+
+def single_step_action_supported(action: str) -> bool:
+    a = (action or "").strip().lower()
+    return a in SINGLE_STEP_SUPPORTED_ACTIONS
+
+
+def sync_execute_single_db_step(step: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """对单条用例库步骤复用 `execute_single_step`（与完整跑同一 Playwright 会话）。"""
+    s = _normalize_db_step_for_single_execution(step)
+    async def run():
+        return await automation.execute_single_step(s)
+    return worker.execute(run)
+
+
 def sync_start_browser(headless: bool = True):
     async def run():
         return await automation.start_browser(headless)
@@ -10681,6 +10781,12 @@ def sync_element_info_at_point(x: float, y: float):
 def sync_get_interactive_page_snapshot(max_items: int = 100):
     async def run():
         return await automation.get_interactive_page_snapshot(max_items=max_items)
+    return worker.execute(run)
+
+
+def sync_get_accessibility_outline_text(max_lines: int = 48):
+    async def run():
+        return await automation.get_accessibility_outline_text(max_lines=max_lines)
     return worker.execute(run)
 
 

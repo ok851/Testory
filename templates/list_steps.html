@@ -539,6 +539,27 @@
         html.dark .steps-page-root #selectorHelp,
         html.dark .steps-page-root #editSelectorHelp { color: #9ca3af !important; }
 
+        /* UX 路线图：禅模式（步骤页 + AI 浮层） */
+        .steps-page-root .container.hufirst-steps-zen .header,
+        .steps-page-root .container.hufirst-steps-zen .toolbar,
+        .steps-page-root .container.hufirst-steps-zen #runCaseProgressPanel {
+            display: none !important;
+        }
+        .steps-page-root .container.hufirst-steps-zen {
+            max-width: 100% !important;
+            min-height: calc(100vh - 100px) !important;
+        }
+        .step-item.step-item--single-run-focus {
+            box-shadow: 0 0 0 2px #10b981, 0 4px 12px rgba(16, 185, 129, 0.2);
+        }
+        html.dark .step-item.step-item--single-run-focus { box-shadow: 0 0 0 2px #34d399, 0 4px 12px rgba(52, 211, 153, 0.25); }
+        .step-single-run-bar {
+            margin: 0 30px 12px; padding: 10px 14px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; font-size: 13px;
+        }
+        html.dark .step-single-run-bar { background: #022c22; border-color: #047857; color: #d1fae5; }
+        .step-single-run-bar pre { margin: 8px 0 0; max-height: 120px; overflow: auto; font-size: 11px; background: #fff; border-radius: 6px; padding: 8px; }
+        html.dark .step-single-run-bar pre { background: #0f172a; color: #e2e8f0; }
+
         </style>
 {% endblock %}
 {% block content %}
@@ -566,6 +587,15 @@
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
             </div>
+        </div>
+
+        <div class="step-single-run-bar" id="stepSingleRunBar">
+            <label style="cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
+                <input type="checkbox" id="stepSingleRunNavigateFirst" />
+                <span data-i18n="steps_single_nav_first">单步试跑前自动打开用例 URL（与完整运行相同的起始地址）</span>
+            </label>
+            <div id="stepSingleRunHint" style="font-size:12px;opacity:.9;margin-top:6px;" data-i18n="steps_single_hint">点击步骤行的「单步」在 Playwright 中只执行该步（assert / iframe 等需整例运行）。</div>
+            <pre id="stepSingleRunResult" style="display:none;">{}</pre>
         </div>
 
         <div id="runCaseProgressPanel" style="display:none; margin: 12px 30px 0; padding: 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:8px;">
@@ -992,6 +1022,7 @@
 </div>
 {% endblock %}
 {% block scripts %}
+    <script src="{{ url_for('static', filename='js/ai_assistant.js') }}"></script>
     <script>
         let currentCaseId = null;
         let currentCaseName = '';
@@ -1003,6 +1034,8 @@
         const pageSize = 10;
         let runCaseStatusTimer = null;
         let runCaseButtonSyncTimer = null;
+        /** 用例步骤总数（分页 API 的 total，供 AI 合并步等用） */
+        let caseStepTotal = 0;
 
         /** 用例未在运行（完成或已停止）时恢复工具栏，避免停止后仍显示「执行中」且按钮不同步 */
         function resetRunCaseToolbarIdle() {
@@ -1173,6 +1206,45 @@
             `;
             document.head.appendChild(style);
         }
+
+        async function runOneStepFromList(stepId) {
+            if (!currentCaseId || !stepId) return;
+            var navChk = document.getElementById('stepSingleRunNavigateFirst');
+            var payload = { step_id: stepId, navigate_first: !!(navChk && navChk.checked) };
+            showLoading((typeof t === 'function' && t('steps_single_loading')) ? t('steps_single_loading') : '单步执行中…');
+            try {
+                const response = await fetch('/api/cases/' + currentCaseId + '/run-one-step', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    credentials: 'same-origin'
+                });
+                const data = await response.json().catch(function () { return {}; });
+                if (response.status === 409) {
+                    showToast(data.error || '整例正在运行，请先停止', 'warning');
+                    return;
+                }
+                if (!response.ok || !data.success) {
+                    showToast(data.error || ('HTTP ' + response.status), 'error');
+                    return;
+                }
+                var okMsg = (typeof t === 'function' && t('steps_single_ok')) ? t('steps_single_ok') : '单步成功';
+                showToast(okMsg + ' · ' + (data.duration_ms || 0) + ' ms', 'success');
+                var pre = document.getElementById('stepSingleRunResult');
+                if (pre) {
+                    pre.style.display = 'block';
+                    try { pre.textContent = JSON.stringify(data, null, 2); } catch (e2) { pre.textContent = String(data); }
+                }
+                document.querySelectorAll('.step-item').forEach(function (n) { n.classList.remove('step-item--single-run-focus'); });
+                var row = document.getElementById('step-' + stepId);
+                if (row) row.classList.add('step-item--single-run-focus');
+            } catch (e) {
+                showToast('请求失败: ' + (e && e.message), 'error');
+            } finally {
+                hideLoading();
+            }
+        }
+        window.runOneStepFromList = runOneStepFromList;
         
         function translateStepAction(action) {
             var map = {
@@ -1239,6 +1311,7 @@
                 }
                 
                 if (data.steps && data.steps.length > 0) {
+                    caseStepTotal = typeof data.total === 'number' ? data.total : (data.steps || []).length;
                     // 计算总页数
                     totalPages = Math.ceil(data.total / pageSize);
                     
@@ -1274,6 +1347,7 @@
                         const lblInp = escapeHtml(t('steps_card_input_value'));
                         const btnEd = escapeHtml(t('steps_btn_edit'));
                         const btnDel = escapeHtml(t('steps_btn_del'));
+                        const btnOne = escapeHtml(t('steps_btn_single')) || '单步';
                         const _crc = parseInt(step.click_repeat_count, 10);
                         const clickRepBadge = (step.action === 'click' && Number.isFinite(_crc) && _crc > 1)
                             ? ` <span style="color:#6b7280;font-weight:600;">×${_crc}</span>` : '';
@@ -1290,6 +1364,7 @@
                                 </div>
                             </div>
                             <div class="step-actions">
+                                <button type="button" onclick="runOneStepFromList(${step.id})" class="btn btn-sm" style="background:#0d9488;color:#fff;" title="单步试跑">${btnOne}</button>
                                 <button type="button" onclick="editStep(${step.id})" class="btn btn-sm btn-secondary">${btnEd}</button>
                                 <button type="button" onclick="deleteStep(${step.id})" class="btn btn-sm btn-danger">${btnDel}</button>
                             </div>
@@ -1302,6 +1377,17 @@
                         stepItem.addEventListener('dragend', handleDragEnd);
                         stepItem.addEventListener('dragover', handleDragOver);
                         stepItem.addEventListener('drop', handleDrop);
+
+                        stepItem.addEventListener('contextmenu', function (ev) {
+                            ev.preventDefault();
+                            if (!window.HuFirstAiStepsPanel) return;
+                            if (ev.shiftKey && caseStepTotal > 0 && actualStepNumber < caseStepTotal) {
+                                window.HuFirstAiStepsPanel.openMerge(actualStepNumber, actualStepNumber + 1);
+                            } else {
+                                window.HuFirstAiStepsPanel.openOptimize(actualStepNumber);
+                            }
+                        });
+                        stepItem.setAttribute('title', '右键：打开 AI 助手并优化本步；Shift+右键：合并本步与下一步');
                         
                         stepsListContainer.appendChild(stepItem);
                     });
@@ -1311,6 +1397,7 @@
                     
                     console.log(`页面 ${currentPage} 的步骤加载完成`);
                 } else {
+                    caseStepTotal = 0;
                     console.log(`页面 ${currentPage} 没有步骤`);
                     stepsList.innerHTML = `
                         <div class="empty-state">
@@ -3197,6 +3284,26 @@ function changePage(page) {
                 return;
             }
             await Promise.all([loadCaseInfo(), loadSteps()]);
+            if (typeof HuFirstAiAssistant !== 'undefined' && HuFirstAiAssistant.mountStepsPageAssistant) {
+                try {
+                    HuFirstAiAssistant.mountStepsPageAssistant({
+                        getCaseId: function () { return currentCaseId; },
+                        getProjectId: function () { return currentProjectId; },
+                        getTargetUrl: function () { return currentCaseUrl || ''; },
+                        onApplied: function (r) {
+                            var n = (r && r.steps_created != null) ? r.steps_created : 0;
+                            var w = (r && r.warnings) ? r.warnings : [];
+                            var msg = '已追加 ' + n + ' 步到用例';
+                            if (w && w.length) {
+                                msg += '（' + w.length + ' 条归一化提示，首条：' + String(w[0] || '').slice(0, 80) + (String(w[0] || '').length > 80 ? '…' : '') + '）';
+                                if (console && console.log) console.log('append-steps warnings', w);
+                            }
+                            showToast(msg, (w && w.length) ? 'warning' : 'success');
+                            loadSteps(true);
+                        }
+                    });
+                } catch (e) { console.warn('AI assistant mount', e); }
+            }
             await syncRunCaseButtonState();
             runCaseButtonSyncTimer = setInterval(syncRunCaseButtonState, 1000);
         });

@@ -9,8 +9,14 @@ from license_manager import LicenseManager, LicenseType
 
 def main():
     parser = argparse.ArgumentParser(description='UAT Platform License 生成工具')
-    parser.add_argument('type', choices=['enterprise', 'professional', 'free'],
-                        help='License 类型 (enterprise: 企业版, professional: 个人专业版, free: 免费版)')
+    parser.add_argument(
+        'type',
+        choices=['enterprise', 'professional', 'free'],
+        help=(
+            'License 类型: free=免费版(SaaS); professional=团队版/付费SaaS; '
+            'enterprise=企业版(含私有化等权益)'
+        ),
+    )
     parser.add_argument('--to', '-t', required=True,
                         help='授权对象（公司名或个人名）')
     parser.add_argument('--days', '-d', type=int, default=365,
