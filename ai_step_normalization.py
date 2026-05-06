@@ -112,3 +112,119 @@ def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Op
     if warnings:
         meta["normalization_warnings"] = warnings
     return plan, warnings
+
+
+def _wait_ms_from_ai_input(input_value: str) -> int:
+    """AI 步骤 wait：<=120 视为秒，否则视为毫秒（与模型提示一致）。"""
+    raw = _str(input_value)
+    if not raw:
+        return 1000
+    try:
+        v = int(float(raw))
+    except Exception:
+        return 1000
+    if v <= 0:
+        return 1000
+    if v <= 120:
+        return min(v * 1000, 120_000)
+    return min(v, 600_000)
+
+
+def _parse_locator_candidates(val: Any) -> Any:
+    if val is None:
+        return None
+    if isinstance(val, (list, dict)):
+        return val
+    s = _str(val)
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+
+
+def ai_plan_steps_to_playwright_script_steps(steps: Any) -> List[Dict[str, Any]]:
+    """
+    将 AI 规划步骤转为 playwright_automation.execute_script_steps 可执行的步骤列表。
+    （navigate 使用 url；click/input 使用 selector；wait 使用 time 毫秒）
+    """
+    out: List[Dict[str, Any]] = []
+    if not isinstance(steps, list):
+        return out
+    for raw in steps:
+        if not isinstance(raw, dict):
+            continue
+        step = normalize_ai_step(raw)
+        action = step["action"]
+        st = step["selector_type"] or "css"
+        sv = step["selector_value"]
+        iv = step["input_value"]
+        desc = step["description"]
+        lc = _parse_locator_candidates(step.get("locator_candidates"))
+
+        if action == "navigate":
+            url = iv or sv
+            if url:
+                out.append({"action": "navigate", "url": url, "description": desc})
+            continue
+        if action == "click":
+            if not sv:
+                continue
+            row: Dict[str, Any] = {
+                "action": "click",
+                "selector": sv,
+                "selector_type": st,
+                "iframe_selector": "",
+                "description": desc,
+            }
+            if lc is not None:
+                row["locator_candidates"] = lc
+            out.append(row)
+            continue
+        if action == "input":
+            if not sv or not iv:
+                continue
+            row = {
+                "action": "input",
+                "selector": sv,
+                "selector_type": st,
+                "iframe_selector": "",
+                "text": iv,
+                "input_value": iv,
+                "description": desc,
+            }
+            if lc is not None:
+                row["locator_candidates"] = lc
+            out.append(row)
+            continue
+        if action == "wait":
+            out.append({"action": "wait", "time": _wait_ms_from_ai_input(iv), "description": desc})
+            continue
+        if action == "verify":
+            if not sv:
+                continue
+            out.append(
+                {
+                    "action": "verify",
+                    "selector": sv,
+                    "selector_type": st,
+                    "iframe_selector": "",
+                    "verify_type": "visible",
+                    "input_value": iv,
+                    "text": iv,
+                    "description": desc,
+                }
+            )
+            continue
+        if action == "extract_text":
+            row = {
+                "action": "extract_text",
+                "selector": sv,
+                "selector_type": st,
+                "iframe_selector": "",
+                "description": desc,
+            }
+            out.append(row)
+            continue
+    return out

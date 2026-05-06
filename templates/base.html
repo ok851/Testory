@@ -143,22 +143,25 @@
                 nav_aitest: 'AI测试',
                 nav_aitest_title: 'AI测试工作台（本地模型 + 内置浏览器）',
                 aitest_title: 'AI 测试工作台',
-                aitest_subtitle: '左栏：任务与推理引擎；中栏：内嵌页 + Playwright；右栏：统计与预览。仅在上方「目标页面 URL」填写地址，中间点「打开」；顶栏「运行」生成步骤。',
+                aitest_subtitle: '左栏描述任务；「生成用例」只生成步骤；「运行」在主 Playwright 浏览器打开 URL 后生成并尝试执行。中栏填 URL 点「打开」；右栏预览。',
                 aitest_back_projects: '返回项目列表',
                 aitest_label_project: '保存到项目',
-                aitest_label_url: '目标页面 URL（与下方「打开」同步）',
+                aitest_label_save_case: '保存到用例',
+                aitest_label_url: '目标页面 URL',
                 aitest_ph_url: 'https://example.com',
                 aitest_chat_title: '与 AI 对话',
                 aitest_label_goal: '测试目标描述',
                 aitest_ph_goal: '例如：在百度搜索「自动化测试」，验证结果页出现相关标题。',
-                aitest_btn_preview: '生成预览',
-                aitest_btn_refine: '发送优化',
+                aitest_btn_preview: '生成用例',
+                aitest_btn_refine: '优化',
+                aitest_btn_stop: '停止',
+                aitest_btn_stop_title: '停止当前 AI 请求',
                 aitest_btn_run: '运行',
-                aitest_btn_run_title: '与「生成预览」相同：根据左侧任务描述调用 AI 生成自动化步骤草案（结果在「用例预览」；未点「生成并保存」前不入库）',
+                aitest_btn_run_title: '在主 Playwright 会话中打开 URL，结合页面结构生成步骤并尝试执行',
                 aitest_label_browser: '自动化浏览器',
-                aitest_browser_select_title: '主 Playwright 与「远程画布」默认使用；Chrome/Edge 需本机或镜像内已安装（playwright install chrome / msedge）',
-                aitest_stat_ready: '就绪 — 点击「运行」或「生成预览」开始',
-                aitest_stat_run_expl: '「运行」与「生成预览」做同一件事：用 AI 根据左侧描述生成步骤，结果在下方「用例预览」。',
+                aitest_browser_select_title: '主 Playwright 自动化浏览器；Chrome/Edge 需本机已安装（playwright install chrome / msedge）',
+                aitest_stat_ready: '就绪 — 「生成用例」仅规划；「运行」将尝试在主浏览器执行',
+                aitest_stat_run_expl: '「生成用例」只生成步骤草案。「运行」需填写 URL：服务端导航并拉取页面结构后生成，再在主 Playwright 中串行执行。',
                 aitest_hint_flow: '先填 URL，在下方打开页面，再描述场景并生成。',
                 aitest_probe_label: '',
                 aitest_ollama_title: '本地模型 (Ollama)',
@@ -208,12 +211,12 @@
                 aitest_context_section: '测试归属与目标页面',
                 aitest_probe_section: '环境',
                 aitest_env_section: '环境',
-                aitest_hint_flow_short: '填写 URL 与场景后点「生成预览」。建议先在下方打开页面；模型在右上角设置。',
+                aitest_hint_flow_short: '填写 URL 与场景：点「生成用例」只出步骤；点顶栏「运行」会执行。模型在右上角设置。',
                 aitest_target_case_label: '保存方式',
                 aitest_preview_label: '用例预览',
                 aitest_env_hint: '服务端环境变量可调整：LOCAL_LLM_BASE_URL、LOCAL_LLM_TIMEOUT 等。',
-                aitest_act_preview_expl: '根据上方 URL 与场景描述调用模型生成步骤，只更新右侧预览与对话，不会写入数据库。',
-                aitest_act_refine_expl: '在已有预览结果上，仅根据输入框里的补充说明再跑一轮模型（例如改步骤、加断言）。请先完成一次生成预览。',
+                aitest_act_preview_expl: '根据描述调用模型生成步骤（可选 URL），只更新预览与对话，不入库。',
+                aitest_act_refine_expl: '在已有预览结果上，仅根据输入框里的补充说明再跑一轮模型（例如改步骤、加断言）。请先完成一次「生成用例」。',
                 aitest_act_save_expl: '将当前预览中的步骤保存到所选项目：可新建用例，或追加到右侧所选已有用例。',
                 nav_history: '历史',
                 nav_history_title: '运行历史',
@@ -876,22 +879,25 @@
                 nav_aitest: 'AI Test',
                 nav_aitest_title: 'AI test lab (local LLM + embedded browser)',
                 aitest_title: 'AI Test Lab',
-                aitest_subtitle: 'Left: task & model; center: embedded page + Playwright; right: stats & preview. Enter URL only in Target URL above; click Open in the middle; Run in the header to generate steps.',
+                aitest_subtitle: 'Left: describe the task. Generate Case drafts steps only; Run opens the URL in main Playwright, plans from the live page, then tries to execute. Center: URL + Open; right: preview.',
                 aitest_back_projects: 'Projects',
                 aitest_label_project: 'Save to project',
-                aitest_label_url: 'Target URL (synced with Open below)',
+                aitest_label_save_case: 'Save to case',
+                aitest_label_url: 'Target page URL',
                 aitest_ph_url: 'https://example.com',
                 aitest_chat_title: 'Chat',
                 aitest_label_goal: 'Test goal',
                 aitest_ph_goal: 'e.g. Search on Baidu and verify results.',
-                aitest_btn_preview: 'Generate preview',
-                aitest_btn_refine: 'Send refinement',
+                aitest_btn_preview: 'Generate case',
+                aitest_btn_refine: 'Optimize',
+                aitest_btn_stop: 'Stop',
+                aitest_btn_stop_title: 'Stop the current AI request',
                 aitest_btn_run: 'Run',
-                aitest_btn_run_title: 'Same as Generate preview: call the model to draft automation steps from the goal (shown in Case preview; not saved until you click Save)',
+                aitest_btn_run_title: 'Open URL in main Playwright, snapshot the page, generate steps, then try to run them',
                 aitest_label_browser: 'Automation browser',
-                aitest_browser_select_title: 'Used by main Playwright and remote canvas; Chrome/Edge need install (playwright install chrome / msedge)',
-                aitest_stat_ready: 'Ready — click Run or Generate preview to start',
-                aitest_stat_run_expl: 'Run does the same as Generate preview: the model drafts steps from the goal; results appear in Case preview below.',
+                aitest_browser_select_title: 'Main Playwright automation browser; Chrome/Edge need install (playwright install chrome / msedge)',
+                aitest_stat_ready: 'Ready — Generate Case plans only; Run tries execution in the main browser',
+                aitest_stat_run_expl: 'Generate Case only produces steps. Run requires a URL: the server navigates, snapshots the page, generates, then runs steps in Playwright.',
                 aitest_hint_flow: 'Enter URL, open the page below, then describe the scenario and generate.',
                 aitest_probe_label: '',
                 aitest_ollama_title: 'Local models (Ollama)',
@@ -941,12 +947,12 @@
                 aitest_context_section: 'Project & target page',
                 aitest_probe_section: 'Environment',
                 aitest_env_section: 'Environment',
-                aitest_hint_flow_short: 'Fill URL and scenario, then Generate preview. Open the page below first; model in settings (top right).',
+                aitest_hint_flow_short: 'Fill URL + scenario: Generate Case drafts steps; header Run executes. Model in settings.',
                 aitest_target_case_label: 'Save as',
                 aitest_preview_label: 'Case preview',
                 aitest_env_hint: 'Server env: LOCAL_LLM_BASE_URL, LOCAL_LLM_TIMEOUT, etc.',
-                aitest_act_preview_expl: 'Calls the model with URL + scenario to build steps; updates preview and chat only—nothing is saved yet.',
-                aitest_act_refine_expl: 'Runs the model again using only the text in the input box to refine the current preview (e.g. fix steps). Run Generate preview first.',
+                aitest_act_preview_expl: 'Calls the model from your description (URL optional); updates preview/chat only—not saved.',
+                aitest_act_refine_expl: 'Runs the model again using only the input box to refine the preview. Generate Case once first.',
                 aitest_act_save_expl: 'Persists the current preview to the project: create a new case or append steps to the case selected on the right.',
                 nav_history: 'History',
                 nav_history_title: 'Run history',
@@ -1843,6 +1849,69 @@
             _pollGlobalRunBanner();
             if (_globalRunBannerTimer) clearInterval(_globalRunBannerTimer);
             _globalRunBannerTimer = setInterval(_pollGlobalRunBanner, 2000);
+        });
+
+        /** AI 后台任务：离开 AI 测试页后由全站轮询拉取结果，写入 sessionStorage 供返回时合并 */
+        window.uatAiRegisterPendingJob = function (jobId, kind) {
+            try {
+                var raw = sessionStorage.getItem('uat_ai_pending_jobs');
+                var list = raw ? JSON.parse(raw) : [];
+                if (!Array.isArray(list)) list = [];
+                if (!list.some(function (x) { return x.id === jobId; })) {
+                    list.push({ id: jobId, kind: kind || 'plan', ts: Date.now() });
+                }
+                sessionStorage.setItem('uat_ai_pending_jobs', JSON.stringify(list));
+            } catch (e) {}
+        };
+        window.uatAiRemovePendingJob = function (jobId) {
+            try {
+                var raw = sessionStorage.getItem('uat_ai_pending_jobs');
+                var list = raw ? JSON.parse(raw) : [];
+                if (!Array.isArray(list)) return;
+                list = list.filter(function (x) { return x.id !== jobId; });
+                if (list.length) sessionStorage.setItem('uat_ai_pending_jobs', JSON.stringify(list));
+                else sessionStorage.removeItem('uat_ai_pending_jobs');
+            } catch (e) {}
+        };
+        async function _pollUatAiBgJobs() {
+            try {
+                var path = window.location.pathname || '';
+                if (path.startsWith('/ai-test')) return;
+                var raw = sessionStorage.getItem('uat_ai_pending_jobs');
+                if (!raw) return;
+                var list = JSON.parse(raw);
+                if (!Array.isArray(list) || !list.length) return;
+                for (var i = 0; i < list.length; i++) {
+                    var jobId = list[i].id;
+                    var kind = list[i].kind || 'plan';
+                    var resp = await fetch('/api/ai/task/job/' + encodeURIComponent(jobId), { credentials: 'same-origin' });
+                    var j = await resp.json().catch(function () { return {}; });
+                    if (!resp.ok || !j.success) continue;
+                    if (j.status === 'running') continue;
+                    window.uatAiRemovePendingJob(jobId);
+                    try {
+                        if (sessionStorage.getItem('uat_ai_consumed_' + jobId)) continue;
+                    } catch (e) {}
+                    if (j.status === 'cancelled') continue;
+                    var entry = { id: jobId, kind: kind, status: j.status, result: j.result, error: j.error, ts: Date.now() };
+                    try {
+                        var inboxRaw = sessionStorage.getItem('uat_ai_inbox');
+                        var inbox = inboxRaw ? JSON.parse(inboxRaw) : [];
+                        if (!Array.isArray(inbox)) inbox = [];
+                        if (inbox.some(function (x) { return x.id === jobId; })) continue;
+                        inbox.push(entry);
+                        if (inbox.length > 12) inbox = inbox.slice(-12);
+                        sessionStorage.setItem('uat_ai_inbox', JSON.stringify(inbox));
+                    } catch (e2) {}
+                    try {
+                        window.dispatchEvent(new CustomEvent('uat-ai-bg-job-finished', { detail: entry }));
+                    } catch (e3) {}
+                }
+            } catch (e) {}
+        }
+        document.addEventListener('DOMContentLoaded', function () {
+            _pollUatAiBgJobs();
+            setInterval(_pollUatAiBgJobs, 1600);
         });
     </script>
     {% block scripts %}{% endblock %}

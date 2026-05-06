@@ -179,77 +179,6 @@
         display: flex;
         flex-direction: column;
     }
-    /* 与 iframe 并排右侧停靠，不盖在页面上方（因跨域无法把条真正画进被嵌网页 DOM，此为并列布局的等价体验） */
-    .ai-browser-tools--dock {
-        position: relative;
-        flex: 0 0 300px;
-        width: 300px;
-        max-width: 40vw;
-        z-index: 1;
-        display: flex;
-        flex-direction: row;
-        align-items: stretch;
-        box-shadow: none;
-        border-left: 1px solid #e2e8f0;
-        background: #f8fafc;
-        min-height: 0;
-    }
-    html.dark .ai-browser-tools--dock { background: #0f172a; border-color: #334155; }
-    .ai-browser-tools--dock.is-collapsed {
-        flex: 0 0 40px;
-        width: 40px;
-        max-width: none;
-    }
-    .ai-browser-tools--dock.is-collapsed .ai-browser-tools-inner { display: none; }
-    .ai-browser-tools-collapse {
-        width: 40px; flex-shrink: 0; border: none; border-right: 1px solid #e2e8f0;
-        background: #eef2ff; color: #4338ca; font-size: 18px; font-weight: 700; cursor: pointer;
-        line-height: 1; padding: 0;
-    }
-    .ai-browser-tools-collapse:hover { background: #e0e7ff; }
-    html.dark .ai-browser-tools-collapse { background: #1e293b; border-color: #334155; color: #a5b4fc; }
-    .ai-browser-tools-inner {
-        flex: 1 1 auto;
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-        overflow: hidden;
-    }
-    .ai-browser-tools-inner .ai-browser-tool-tabs {
-        display: flex;
-        border-bottom: 1px solid #e2e8f0;
-        flex-shrink: 0;
-    }
-    html.dark .ai-browser-tool-tabs { border-color: #334155; }
-    .ai-browser-tool-tab {
-        flex: 1;
-        padding: 10px 6px;
-        font-size: 12px;
-        font-weight: 600;
-        border: none;
-        background: transparent;
-        color: #64748b;
-        cursor: pointer;
-        border-bottom: 2px solid transparent;
-    }
-    .ai-browser-tool-tab:hover { color: #4338ca; background: rgba(99,102,241,0.06); }
-    .ai-browser-tool-tab.is-active {
-        color: #4f46e5;
-        border-bottom-color: #4f46e5;
-        background: #fff;
-    }
-    html.dark .ai-browser-tool-tab.is-active { background: #1e293b; color: #a5b4fc; border-bottom-color: #6366f1; }
-    .ai-browser-tool-panel {
-        flex: 1 1 auto;
-        min-height: 0;
-        overflow-y: auto;
-        padding: 12px;
-        font-size: 12px;
-        color: #334155;
-    }
-    html.dark .ai-browser-tool-panel { color: #e2e8f0; }
-    .ai-browser-tool-panel[hidden] { display: none !important; }
     .ai-browser-viewport-hint {
         font-size: 11px;
         color: #64748b;
@@ -321,16 +250,6 @@
         border: 0;
         z-index: 2;
         background: #fff;
-    }
-    .ai-remote-canvas {
-        position: absolute;
-        left: 0; top: 0;
-        width: 100%;
-        height: 100%;
-        display: none;
-        z-index: 4;
-        background: #0f172a;
-        cursor: crosshair;
     }
     .ai-browser-placeholder {
         position: relative;
@@ -407,9 +326,11 @@
         min-width: 120px; padding: 9px 14px; border: none; border-radius: 10px;
         cursor: pointer; font-size: 13px; font-weight: 600;
     }
+    .ai-rail-left .ai-input-actions .btn { min-width: 0; }
     .ai-send-btn { transition: background 0.2s, opacity 0.2s; }
     .ai-send-btn--empty { background: #94a3b8 !important; color: #fff !important; }
     .ai-send-btn--ready { background: #4f46e5 !important; color: #fff !important; box-shadow: 0 2px 8px rgba(79, 70, 229, 0.35); }
+    .ai-send-btn--stop.ai-send-btn--ready { background: #dc2626 !important; box-shadow: 0 2px 8px rgba(220, 38, 38, 0.35); }
     .ai-hint-inline {
         margin-top: 12px; font-size: 12px; color: #64748b; line-height: 1.5;
         padding: 10px 12px; background: #eff6ff; border-radius: 10px; border-left: 3px solid #6366f1;
@@ -573,7 +494,25 @@
     }
     .ai-session-title::placeholder { color: rgba(255,255,255,0.55); }
     .ai-studio-header__tools {
-        display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+        display: flex; flex-wrap: nowrap; align-items: center; gap: 8px;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+        padding-bottom: 2px;
+        justify-content: flex-end;
+    }
+    .ai-studio-header__tools::-webkit-scrollbar { height: 6px; }
+    .ai-studio-header__tools::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.35);
+        border-radius: 999px;
+    }
+    .ai-studio-header__tools .ai-toolbar-btn,
+    .ai-studio-header__tools .ai-model-chip,
+    .ai-studio-header__tools .ai-settings-trigger {
+        flex-shrink: 0;
     }
     .ai-studio-header__tools .ai-toolbar-btn {
         padding: 8px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35);
@@ -601,6 +540,14 @@
     }
     .ai-studio-context-row .ai-pw-browser-select { min-height: 40px; width: 100%; }
     .ai-studio-context-row .ctx-grow { flex: 1 1 280px; }
+    .ai-studio-context-row .ctx-project {
+        flex: 0 1 200px; max-width: 220px; min-width: 140px;
+    }
+    .ai-studio-context-row .ctx-project select { min-width: 0; width: 100%; }
+    .ai-studio-context-row .ctx-case {
+        flex: 0 1 220px; max-width: 280px; min-width: 160px;
+    }
+    .ai-studio-context-row .ctx-case select { min-width: 0; width: 100%; }
     .ai-agent-studio-grid {
         display: grid;
         grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(260px, 300px);
@@ -619,11 +566,6 @@
         display: flex; flex-direction: column; gap: 14px;
     }
     html.dark .ai-rail-left { background: #1e1b4b; border-color: #4338ca; }
-    .ai-flow-node--start {
-        display: inline-flex; align-items: center; gap: 8px;
-        padding: 8px 14px; border-radius: 999px; background: #4f46e5; color: #fff;
-        font-size: 13px; font-weight: 700;
-    }
     .ai-task-card {
         background: #fff; border-radius: 14px; border: 1px solid #c7d2fe;
         padding: 14px; box-shadow: 0 2px 8px rgba(79,70,229,0.08);
@@ -648,8 +590,15 @@
     html.dark .ai-agent-engine-select { background: #111827; border-color: #475569; color: #f1f5f9; }
     .ai-rail-left .ai-input-row { flex-direction: column; }
     .ai-rail-left .ai-input-row textarea { min-height: 140px; max-height: 320px; }
-    .ai-rail-left .ai-input-actions { flex-direction: row; flex-wrap: wrap; }
-    .ai-chat-log--rail { min-height: 100px; max-height: 200px; margin-bottom: 0; margin-top: 12px; }
+    .ai-rail-left .ai-input-actions {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        justify-content: stretch;
+        width: 100%;
+        gap: 8px;
+    }
+    .ai-rail-left .ai-input-actions .btn { flex: 1 1 0; }
+    .ai-chat-log--rail { min-height: 100px; max-height: 200px; margin: 0 0 12px; }
     .ai-stage-center {
         display: flex; flex-direction: column;
         min-height: min(72vh, 820px);
@@ -673,40 +622,10 @@
         animation: aiPulse 1.2s ease-in-out infinite;
     }
     @keyframes aiPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.85); } }
-    .ai-agent-hitl-btn {
-        position: absolute; right: 16px; bottom: 56px; z-index: 25;
-        padding: 12px 18px; border-radius: 999px; border: none;
-        background: linear-gradient(135deg, #f59e0b, #ea580c); color: #fff;
-        font-size: 13px; font-weight: 700; cursor: pointer;
-        box-shadow: 0 4px 16px rgba(234, 88, 12, 0.45);
-        transition: transform 0.15s, filter 0.15s;
+    .ai-browser-target-url-label {
+        flex-shrink: 0; font-size: 12px; font-weight: 600; color: #475569; align-self: center; white-space: nowrap;
     }
-    .ai-agent-hitl-btn:hover { transform: scale(1.03); filter: brightness(1.06); }
-    /* 路线图：禅模式 + 底栏 */
-    body.ai-studio-zen .ai-rail-left,
-    body.ai-studio-zen .ai-rail-right { display: none !important; }
-    body.ai-studio-zen .ai-workflow-bar { display: none !important; }
-    body.ai-studio-zen .ai-agent-studio-grid {
-        grid-template-columns: 1fr !important;
-    }
-    .ai-zen-dock {
-        position: fixed; z-index: 10050; left: 0; right: 0; bottom: 0;
-        padding: 10px 16px 16px; background: linear-gradient(180deg, transparent, rgba(15,23,42,0.88));
-        display: flex; justify-content: center; align-items: flex-end; pointer-events: none;
-    }
-    .ai-zen-dock[hidden] { display: none !important; }
-    .ai-zen-dock__inner {
-        pointer-events: auto; max-width: 720px; width: 100%;
-        display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;
-        background: #fff; border: 1px solid #c7d2fe; border-radius: 12px; padding: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.15);
-    }
-    html.dark .ai-zen-dock__inner { background: #0f172a; border-color: #4338ca; }
-    .ai-zen-dock__inner textarea { flex: 1 1 200px; min-height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 8px; font-size: 13px; }
-    .ai-ix-wrap {
-        border-top: 1px dashed #c7d2fe; margin-top: 8px; padding-top: 8px; font-size: 12px; color: #475569;
-    }
-    html.dark .ai-ix-wrap { border-color: #4338ca; color: #94a3b8; }
-    .ai-ix-wrap input, .ai-ix-wrap select, .ai-ix-wrap textarea { font-size: 12px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 4px 6px; }
+    html.dark .ai-browser-target-url-label { color: #94a3b8; }
     .ai-rail-right {
         background: #fafafa; border-left: 1px solid #e2e8f0;
         padding: 16px 14px; overflow-y: auto;
@@ -725,18 +644,11 @@
         margin-bottom: 8px;
     }
     .ai-stat-row label { font-size: 13px; font-weight: 600; flex-shrink: 0; }
-    .ai-stat-input {
-        width: 5.5rem; max-width: 42%; padding: 6px 8px; border-radius: 8px;
-        border: 1px solid #cbd5e1; font-size: 14px; box-sizing: border-box;
-        background: #fff; color: #0f172a; text-align: right;
+    .ai-stat-value {
+        min-width: 2.5rem; padding: 4px 0; font-size: 15px; font-weight: 700; text-align: right;
+        color: #4f46e5; font-variant-numeric: tabular-nums;
     }
-    html.dark .ai-stat-input { background: #111827; border-color: #475569; color: #e5e7eb; }
-    .ai-browser-url-mirror {
-        cursor: default !important;
-        background: #f1f5f9 !important;
-        color: #475569 !important;
-    }
-    html.dark .ai-browser-url-mirror { background: #1e293b !important; color: #94a3b8 !important; }
+    html.dark .ai-stat-value { color: #a5b4fc; }
     .ai-stat-status {
         margin-top: 10px; padding: 10px 12px; border-radius: 10px;
         background: #eef2ff; color: #3730a3; font-weight: 600; font-size: 12px;
@@ -828,11 +740,10 @@
                     <button type="button" class="ai-toolbar-btn" id="aiBtnViewCode" title="查看当前计划的 JSON">代码</button>
                     <button type="button" class="ai-toolbar-btn" id="aiBtnSaveDraft" title="将草稿存到浏览器本地">保存</button>
                     <button type="button" class="ai-toolbar-btn" id="aiBtnRestoreSession" title="从 sessionStorage 再次强制恢复（进入本页时通常已自动恢复；若异常可点此）">恢复会话</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnUndo" disabled>撤销</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnRedo" disabled>重做</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnUndo" disabled title="在「生成用例」「优化」或页面 AI 分析成功后，可撤销对计划草稿的最近一次变更">撤销</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnRedo" disabled title="在撤销之后，可恢复被撤销的状态">重做</button>
                     <button type="button" class="ai-toolbar-btn" id="aiBtnParams" title="运行参数说明">参数</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnZen" title="禅模式：隐藏左右栏，底部快速输入">禅</button>
-                    <button type="button" class="ai-toolbar-btn ai-btn-run" id="aiBtnRunAgent" data-i18n="aitest_btn_run" data-i18n-title="aitest_btn_run_title" title="与「生成预览」相同：根据左侧任务描述调用 AI 生成自动化步骤草案（结果在右侧「用例预览」，未点「生成并保存」前不会写入数据库）" aria-label="与生成预览相同：根据任务描述调用 AI 生成自动化步骤">运行</button>
+                    <button type="button" class="ai-toolbar-btn ai-btn-run" id="aiBtnRunAgent" data-i18n="aitest_btn_run" data-i18n-title="aitest_btn_run_title" title="根据任务描述生成步骤，并在主 Playwright 浏览器中按步骤执行（需填写 URL）" aria-label="运行：生成并在主浏览器中执行步骤">运行</button>
                     <div class="ai-model-chip" id="aiActiveModelChip" title="">
                         <span data-i18n="aitest_model_chip">模型</span>
                         <code id="aiActiveModelName">—</code>
@@ -842,24 +753,25 @@
                     </button>
                 </div>
             </div>
-            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">左栏：自然语言任务与推理引擎；中栏：实时内嵌页 + Playwright；右栏：统计与用例预览。仅在上方「目标页面 URL」填写地址，中间栏点「打开」同步内嵌与后台会话；顶栏「运行」生成步骤。</p>
+            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">左栏：任务与推理；中栏填 URL 点「打开」同步内嵌与主 Playwright；右栏预览用例。下方「生成用例」只出步骤；顶栏「运行」会导航到 URL、结合页面结构生成并在主浏览器中尝试执行步骤。</p>
         </header>
 
         <div class="ai-studio-context-row" aria-label="context">
-            <label class="ctx-grow"><span data-i18n="aitest_label_project">保存到项目</span>
+            <label class="ctx-project"><span data-i18n="aitest_label_project">保存到项目</span>
                 <select id="aiProjectSelect"></select>
             </label>
-            <label class="ctx-grow" style="flex:0 1 260px;"><span data-i18n="aitest_label_browser">自动化浏览器</span>
-                <select id="aiPlaywrightBrowserSelect" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 与「远程画布」默认使用；Chrome/Edge 需本机或镜像内已安装（playwright install chrome / msedge）"></select>
+            <label class="ctx-case"><span data-i18n="aitest_label_save_case">保存到用例</span>
+                <select id="aiTargetCaseSelect" class="ai-gen-select">
+                    <option value="" data-i18n="aitest_new_case">+ 新建用例（不追加）</option>
+                </select>
             </label>
-            <label class="ctx-grow" style="flex:2 1 360px;"><span data-i18n="aitest_label_url">目标页面 URL</span>
-                <input type="url" id="aiTargetUrlInput" placeholder="https://example.com" data-i18n-placeholder="aitest_ph_url" autocomplete="url">
+            <label class="ctx-grow" style="flex:1 1 320px;"><span data-i18n="aitest_label_browser">自动化浏览器</span>
+                <select id="aiPlaywrightBrowserSelect" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 自动化浏览器；Chrome/Edge 需本机已安装（playwright install chrome / msedge）"></select>
             </label>
         </div>
 
         <div class="ai-agent-studio-grid">
             <aside class="ai-rail-left" aria-label="任务流">
-                <div class="ai-flow-node--start">开始</div>
                 <div class="ai-task-card">
                     <div class="ai-task-card__head">
                         <span class="ai-task-card__agent">智能体任务</span>
@@ -867,37 +779,17 @@
                     </div>
                     <label class="ai-gen-label" for="aiAgentEngineSelect">推理引擎</label>
                     <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"></select>
+                    <div id="aiChatHistory" class="ai-chat-log ai-chat-log--rail" role="log" aria-live="polite"></div>
                     <label class="ai-gen-label" for="aiMessageInput" data-i18n="aitest_label_goal">任务目标（自然语言）</label>
                     <div class="ai-input-row">
                         <textarea id="aiMessageInput" data-i18n-placeholder="aitest_ph_goal" placeholder="例如：打开目标站 → 搜索商品 → 加入购物车 → 进入购物车页 → 提取数量信息（不结账）。"></textarea>
                         <div class="ai-input-actions">
-                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGenerateBtn" onclick="aiGeneratePreview()" data-i18n="aitest_btn_preview">生成预览</button>
-                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiContinueBtn" onclick="aiContinueRefine()" data-i18n="aitest_btn_refine">发送优化</button>
+                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGenerateBtn" onclick="aiGeneratePreview()" data-i18n="aitest_btn_preview">生成用例</button>
+                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiContinueBtn" onclick="aiContinueRefine()" data-i18n="aitest_btn_refine">优化</button>
+                            <button type="button" class="btn ai-send-btn ai-send-btn--empty ai-send-btn--stop" id="aiStopBtn" onclick="aiStopAgentWork()" data-i18n="aitest_btn_stop" disabled data-i18n-title="aitest_btn_stop_title" title="停止当前 AI 请求">停止</button>
                         </div>
                     </div>
-                    <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;">「运行」或「生成预览」将调用已配置模型拆解步骤；若已连接<strong>远程画布</strong>，规划会附带当前远程页的 probe 控件摘要。<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 快速生成。顶栏标题在「生成并保存」时将作为用例名称。下方可填「聚焦步、合并多步、划词」以驱动对话情境（全站与用例步骤页浮层使用同一套字段）。</p>
-                    <div class="ai-ix-wrap">
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;align-items:end;">
-                            <label>聚焦第几步 <input type="number" id="aiIxFocusStep" min="1" placeholder="1 起" /></label>
-                            <label>多步索引 <input type="text" id="aiIxFocusIndices" placeholder="如 2,3 合并" /></label>
-                        </div>
-                        <label style="display:block;margin-top:6px;">意图
-                            <select id="aiIxActionKind" style="width:100%;margin-top:2px;">
-                                <option value="">（默认 / 不指定）</option>
-                                <option value="optimize_step">optimize_step 优化本步</option>
-                                <option value="merge_steps">merge_steps 合并</option>
-                                <option value="assert_from_selection">assert_from_selection 划词断言</option>
-                            </select>
-                        </label>
-                        <label style="display:block;margin-top:6px;">划词 / 子串
-                            <textarea id="aiIxSelectionText" rows="2" style="width:100%;box-sizing:border-box;margin-top:2px;" placeholder="可手动粘贴；或点「读选区」"></textarea>
-                        </label>
-                        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
-                            <button type="button" class="btn btn-secondary btn-sm" id="aiIxBtnSel" onclick="(window.HuFirstAiAssistant||{}).insertSelectionFromDocument && HuFirstAiAssistant.insertSelectionFromDocument()">读选区</button>
-                            <button type="button" class="btn btn-secondary btn-sm" id="aiIxBtnClr" onclick="(window.HuFirstAiAssistant||{}).clearInteractionForm && HuFirstAiAssistant.clearInteractionForm()">清空情境</button>
-                        </div>
-                    </div>
-                    <div id="aiChatHistory" class="ai-chat-log ai-chat-log--rail" role="log" aria-live="polite"></div>
+                    <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;">「生成用例」仅调用模型生成步骤；「运行」会先在<strong>主 Playwright</strong>打开上方 URL、拉取页面结构再生成并<strong>尝试执行</strong>步骤。<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 等同于「生成用例」。顶栏标题在「生成并保存」时作为用例名称。</p>
                 </div>
             </aside>
 
@@ -905,9 +797,8 @@
             <div class="ai-browser-panel" aria-label="内置浏览器" style="flex:1;min-height:0;">
                 <div id="aiAgentWorkingOverlay" class="ai-agent-overlay is-hidden" aria-live="polite">
                     <span class="ai-pulse" aria-hidden="true"></span>
-                    <span id="aiAgentOverlayText">特工正在工作</span>
+                    <span id="aiAgentOverlayText">AI正在工作</span>
                 </div>
-                <button type="button" class="ai-agent-hitl-btn" id="aiTakeControlBtn" title="暂停 AI 请求并放大浏览器，由您手动操作页面">掌控局面</button>
                 <div class="ai-browser-panel__head">
                     <span>内置浏览器 <span style="font-weight:500;opacity:.85;font-size:12px;">(本区域为 <strong>内嵌真实页面</strong>；部分站禁止嵌入或会长时间「读取中…」，为站点防护非本平台遮罩，请用「全屏内嵌 / 新窗口」尝试)</span></span>
                     <div class="ai-browser-panel__head-actions">
@@ -915,16 +806,13 @@
                     </div>
                 </div>
                 <div class="ai-browser-chrome">
-                    <div class="ai-browser-chrome__nav" title="历史前进/后退">
-                        <button type="button" id="aiBrowserBackBtn" aria-label="后退">←</button>
-                        <button type="button" id="aiBrowserForwardBtn" aria-label="前进">→</button>
+                    <div class="ai-browser-chrome__nav" title="刷新内嵌页与后台会话">
                         <button type="button" id="aiBrowserReloadBtn" aria-label="刷新">⟳</button>
                     </div>
                     <div class="ai-browser-chrome__url">
-                        <input type="url" id="aiBrowserUrlMirror" class="ai-browser-url-mirror" readonly tabindex="-1" autocomplete="off" placeholder="（只读）与上方「目标页面 URL」同步" title="地址请在上方「目标页面 URL」编辑；此处随动">
+                        <span class="ai-browser-target-url-label" data-i18n="aitest_label_url">目标页面 URL</span>
+                        <input type="url" id="aiTargetUrlInput" placeholder="https://example.com" data-i18n-placeholder="aitest_ph_url" autocomplete="url" title="">
                         <button type="button" class="ai-browser-chrome__go" id="aiBrowserOpenBtn">打开</button>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiRemoteEmbedStartBtn" style="white-space:nowrap;" disabled title="需配置 EMBEDDED_BROWSER_* 并启动 python -m embedded_browser_gateway">远程画布</button>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiRemoteEmbedStopBtn" style="white-space:nowrap;display:none;">断开远程</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserNewTabBtn" style="white-space:nowrap;" title="在系统默认浏览器中打开">新窗口</button>
                     </div>
                 </div>
@@ -936,39 +824,10 @@
                         sandbox="allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
                         referrerpolicy="no-referrer-when-downgrade"
                         src="about:blank"></iframe>
-                    <canvas id="aiRemoteBrowserCanvas" class="ai-remote-canvas" width="1280" height="720" tabindex="0" aria-label="远程 Chromium 画面（点击后可键盘操作）"></canvas>
-                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请先在页面顶部「目标页面 URL」填写 https 地址，再于本栏点「打开」。此处为真实网页；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。下方「拉取结构」等仍使用本机 Playwright 会话。</div>
+                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请先在上方地址栏填写 https 地址，再点「打开」。此处为真实网页；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。</div>
                 </div>
-                <aside class="ai-browser-tools--dock is-collapsed" id="aiBrowserToolsAside" aria-label="内嵌区右侧工具（与页面并排，不叠在页面上方）">
-                    <button type="button" class="ai-browser-tools-collapse" id="aiBrowserToolsCollapseBtn" title="展开/折叠工具" aria-expanded="false">⟨</button>
-                    <div class="ai-browser-tools-inner">
-                    <div class="ai-browser-tool-tabs" role="tablist">
-                        <button type="button" class="ai-browser-tool-tab is-active" data-aitab="dev" role="tab" aria-selected="true">开发者</button>
-                        <button type="button" class="ai-browser-tool-tab" data-aitab="pick" role="tab" aria-selected="false">元素</button>
-                        <button type="button" class="ai-browser-tool-tab" data-aitab="ai" role="tab" aria-selected="false">AI</button>
-                    </div>
-                    <div id="aiBrowserTabDev" class="ai-browser-tool-panel" role="tabpanel">
-                        <p class="text-muted" style="margin:0 0 8px;line-height:1.5;">运行诊断、可交互结构；完整控制台/网络留待后续。</p>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiPageDiagnosticsBtn" style="width:100%;">刷新页面对诊断</button>
-                        <pre id="aiPageDiagnosticsOut" class="ai-inspect-pre" style="margin-top:8px; max-height:min(24vh,200px);">诊断未加载。先打开页面后点上方按钮。</pre>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiPageInspectBtn" style="width:100%; margin-top:10px;">拉取可交互结构</button>
-                        <pre id="aiPageInspectOut" class="ai-inspect-pre" style="margin-top:8px; max-height:min(32vh,280px);">结构 JSON 将显示在这里…</pre>
-                    </div>
-                    <div id="aiBrowserTabPick" class="ai-browser-tool-panel" hidden role="tabpanel">
-                        <p class="text-muted" style="margin:0 0 8px;line-height:1.5;">在左侧内嵌区可直接 <strong>右键检查 / F12</strong> 查看真实 DOM。下方「拉取可交互结构」是<strong>本机 Playwright 后台会话</strong>的页面结构快照，用于与用例/AI 对齐，不是浏览器扩展式逐条录制。</p>
-                        <p class="text-muted" style="margin:0 0 10px;line-height:1.5;font-size:11px;">与<strong>用例步骤</strong>页的「<strong>启动 Playwright Codegen</strong> + 从 Codegen 导入」为互补：Codegen 在本机录交互代码；本页侧重「看页 + 拉结构 + 生成」。因跨域，无法把 Codegen/Inspector 嵌进内嵌站点的 DOM 里。平台保留步骤页的 Codegen/录制教程，<strong>不删除</strong>该主录制入口。参见 <a href="/recording-tutorial" target="_blank" rel="noopener">录制教程</a>。进入项目用例步骤：<a id="aiBrowserGotoListProjects" href="/list_projects">项目列表 → 用例</a>。</p>
-                        <pre id="aiPickElementOut" class="ai-inspect-pre" style="max-height:min(38vh,320px);">在「开发者」中拉取可交互结构后，可将 JSON 中 suggestedSelector 复制至此对照。</pre>
-                    </div>
-                    <div id="aiBrowserTabAi" class="ai-browser-tool-panel" hidden role="tabpanel">
-                        <label class="ai-gen-label" for="aiBrowserAiHint">补充说明（可选）</label>
-                        <textarea id="aiBrowserAiHint" rows="3" style="width:100%; box-sizing:border-box; border-radius:8px; border:1px solid #cbd5e1; padding:8px; font-size:12px;" placeholder="例如：覆盖搜索并验证结果列表"></textarea>
-                        <button type="button" class="btn btn-primary btn-sm" id="aiBrowserAiRunBtn" style="width:100%; margin-top:10px;">分析当前页并生成用例</button>
-                        <p class="text-muted" style="margin:10px 0 0;font-size:11px;">将把<strong>当前页</strong>可交互结构发给模型（远程画布连接时使用<strong>远程 Chromium</strong>中的页面，否则使用主 Playwright 会话），结果写入下方「用例预览」。</p>
-                    </div>
-                    </div>
-                </aside>
                 </div>
-                <div class="ai-browser-viewport-hint">工具在右侧<strong>并排</strong>，不叠在网页上；若需完全无侧栏仅看站，可点 ⟨ 折叠。若长期「读取中…」多为站点在 iframe 下的策略，可「新窗口」打开。跨域时外框无法代劳页内历史，请用站内返回/前进。</div>
+                <div class="ai-browser-viewport-hint">若页面长时间「读取中…」，多为站点在 iframe 下的策略，可用「新窗口」打开。跨域时无法在顶部代替站内前进/后退。</div>
                 <div class="ai-browser-toolbar">
                     <div class="ai-browser-meta" id="aiBrowserMeta" title="">自动化(Playwright)：未同步</div>
                 </div>
@@ -980,22 +839,18 @@
             <aside class="ai-rail-right" aria-label="执行统计与用例预览">
                 <div class="ai-stats-card">
                     <div class="ai-stat-row">
-                        <label for="aiStatActions">行动次数（规划）</label>
-                        <input type="number" class="ai-stat-input" id="aiStatActions" min="0" step="1" value="0" title="可手动修改；生成预览/运行后也会按当前计划自动填入">
+                        <label id="aiStatActionsLabel">行动次数（规划）</label>
+                        <span class="ai-stat-value" id="aiStatActions" role="status" aria-labelledby="aiStatActionsLabel" title="根据当前 AI 规划自动统计（点击、输入、导航等动作数）">0</span>
                     </div>
                     <div class="ai-stat-row">
-                        <label for="aiStatSteps">步数</label>
-                        <input type="number" class="ai-stat-input" id="aiStatSteps" min="0" step="1" value="0" title="可手动修改；生成预览/运行后按步骤条数自动填入">
+                        <label id="aiStatStepsLabel">步数</label>
+                        <span class="ai-stat-value" id="aiStatSteps" role="status" aria-labelledby="aiStatStepsLabel" title="当前方案中的步骤条数（生成用例 / 运行后自动更新）">0</span>
                     </div>
-                    <div class="ai-stat-status" id="aiStatStatus" data-i18n="aitest_stat_ready">就绪 — 点击「运行」或「生成预览」开始</div>
+                    <div class="ai-stat-status" id="aiStatStatus" data-i18n="aitest_stat_ready">就绪 — 点击「运行」或「发送」开始</div>
                     <p class="ai-stat-oneliner" id="aiStatOneLiner" style="margin:4px 0 0;font-size:11px;line-height:1.35;opacity:0.82;color:#64748b;" title="由当前方案与归一化提示自动汇总"></p>
-                    <p class="ai-stat-run-expl" style="margin:8px 0 0;font-size:11px;line-height:1.45;opacity:.88;" data-i18n="aitest_stat_run_expl">「运行」与下方「生成预览」相同：用 AI 根据左侧描述生成步骤，结果在下方「用例预览」。</p>
+                    <p class="ai-stat-run-expl" style="margin:8px 0 0;font-size:11px;line-height:1.45;opacity:.88;" data-i18n="aitest_stat_run_expl">「运行」与下方「发送」相同：用 AI 根据左侧描述生成步骤，结果在下方「用例预览」。</p>
                 </div>
                 <div class="ai-preview-in-rail">
-                    <label class="ai-gen-label" for="aiTargetCaseSelect" data-i18n="aitest_target_case_label">保存方式</label>
-                    <select id="aiTargetCaseSelect" class="ai-gen-select" style="margin-bottom:10px;">
-                        <option value="" data-i18n="aitest_new_case">+ 新建用例（不追加）</option>
-                    </select>
                     <label class="ai-gen-label" for="aiGeneratedPreview" data-i18n="aitest_preview_label">用例预览</label>
                     <textarea id="aiGeneratedPreview" class="ai-gen-textarea--preview" rows="10" readonly data-i18n-placeholder="aitest_preview_ph" placeholder="生成的用例预览将显示在这里…"></textarea>
                     <p class="ai-hint-inline" style="margin-top:10px; font-size:11px;" id="aiEditCaseHint">保存后在项目用例中继续编步骤与定位。<a href="#" id="aiOpenCaseListLink" style="color:#4f46e5;font-weight:600;">打开用例列表</a></p>
@@ -1003,17 +858,8 @@
             </aside>
         </div>
 
-        <div id="aiZenChatDock" class="ai-zen-dock" hidden>
-            <div class="ai-zen-dock__inner">
-                <textarea id="aiZenMessageInput" placeholder="自然语言（与左栏「任务目标」一致，发送优化时复制过去）" rows="2" aria-label="禅模式消息"></textarea>
-                <button type="button" class="btn btn-primary btn-sm" id="aiZenSendBtn">发送优化</button>
-                <button type="button" class="btn btn-secondary btn-sm" id="aiZenExitBtn">退出禅</button>
-            </div>
-        </div>
-
         <footer class="ai-gen-modal__foot">
             <span id="aiTestBuildMarker" class="ai-test-build-marker" title="在开发者工具中搜索 playwright-ui-dedup；Response Headers: X-AI-Test-Template">build: playwright-ui-dedup-2026-04-24</span>
-            <button type="button" class="btn btn-secondary" onclick="window.location.href='/list_projects'" data-i18n="aitest_btn_projects">项目列表</button>
             <button type="button" class="btn btn-primary" id="aiGenerateSaveBtn" onclick="aiGenerateAndSaveCase()" data-i18n="aitest_btn_save">生成并保存</button>
         </footer>
     </div>
@@ -1134,14 +980,17 @@
     let providerCatalog = null;
     let allCasesList = [];
     let aiPlanAbort = null;
+    window.__aiCurrentBgJobId = null;
+    let aiStudioPageLeaving = false;
+    let aiUserRequestedStop = false;
+    let aiAbortFromTimer = false;
+    window.addEventListener('beforeunload', function() { aiStudioPageLeaving = true; });
+    window.addEventListener('pagehide', function() { aiStudioPageLeaving = true; });
+    window.addEventListener('pageshow', function(ev) {
+        if (ev.persisted) aiStudioPageLeaving = false;
+    });
     let aiUndoStack = [];
     let aiRedoStack = [];
-    if (!window.aiRemoteEmbedded) {
-        window.aiRemoteEmbedded = {
-            sessionId: null, ws: null, pingTimer: null, scaleX: 1, scaleY: 1,
-            gatewayEnabled: false, canvasWired: false
-        };
-    }
     const AI_UNDO_MAX = 24;
     const AI_DRAFT_KEY = 'uat_ai_agent_draft_v1';
     var _aiStudioPersistTimer = null;
@@ -1209,8 +1058,8 @@
         var steps = (plan && plan.steps) ? plan.steps : [];
         var sa = document.getElementById('aiStatActions');
         var ss = document.getElementById('aiStatSteps');
-        if (ss) ss.value = String(steps.length);
-        if (sa) sa.value = String(countPlanActions(steps));
+        if (ss) ss.textContent = String(steps.length);
+        if (sa) sa.textContent = String(countPlanActions(steps));
         syncAiOneLinerFromPlan(plan);
     }
 
@@ -1221,12 +1070,6 @@
             var s = HuFirstAiAssistant.formatPlanStatusLine(plan);
             one.textContent = s || '';
         }
-    }
-
-    function syncUrlMirrorFromTarget() {
-        var ta = document.getElementById('aiTargetUrlInput');
-        var m = document.getElementById('aiBrowserUrlMirror');
-        if (ta && m) m.value = ta.value;
     }
 
     function getDraftState() {
@@ -1299,7 +1142,7 @@
         var b = document.getElementById('aiCodeModalBackdrop');
         if (pre) {
             try {
-                pre.textContent = latestAiPlan ? JSON.stringify(latestAiPlan, null, 2) : '// 尚无计划，请先生成预览';
+                pre.textContent = latestAiPlan ? JSON.stringify(latestAiPlan, null, 2) : '// 尚无计划，请先生成用例';
             } catch (e) {
                 pre.textContent = String(e);
             }
@@ -1372,7 +1215,6 @@
             try {
                 const ta = document.getElementById('aiTargetUrlInput');
                 if (ta) ta.value = href;
-                syncUrlMirrorFromTarget();
             } catch (e2) {}
         });
     }
@@ -1391,19 +1233,12 @@
     function wireAiBrowserUrlSync() {
         const a = document.getElementById('aiTargetUrlInput');
         if (!a) return;
-        syncUrlMirrorFromTarget();
-        a.addEventListener('input', function() { syncUrlMirrorFromTarget(); syncAiSendButtons(); });
+        a.addEventListener('input', function() { syncAiSendButtons(); });
     }
 
     async function updateBrowserStatusLine() {
         const el = document.getElementById('aiBrowserMeta');
         if (!el) return;
-        if (aiRemoteSessionLive()) {
-            var ru = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || el.title || '';
-            el.textContent = '远程 Chromium（CDP）：' + (ru.trim() || '已连接 — 点击画布可键盘输入');
-            el.title = ru.trim();
-            return;
-        }
         const prefix = '自动化(Playwright)：';
         try {
             const resp = await fetch('/api/browser/status', { credentials: 'same-origin' });
@@ -1425,18 +1260,9 @@
     async function openInternalBrowserPage(silent) {
         const a = document.getElementById('aiTargetUrlInput');
         const u = normalizeUrlForEmbed(a && a.value || '');
-        if (!u) { if (!silent) alert('请先在上方「目标页面 URL」填写地址'); return; }
-        syncUrlMirrorFromTarget();
+        if (!u) { if (!silent) alert('请先在内置浏览器上方地址栏填写 URL'); return; }
         const btn = document.getElementById('aiBrowserOpenBtn');
         if (btn) { btn.disabled = true; }
-        if (window.aiRemoteEmbedded && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1) {
-            window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'navigate', url: u }));
-            const ph = document.getElementById('aiBrowserPlaceholder');
-            if (ph) { ph.classList.add('is-hidden'); }
-            if (btn) { btn.disabled = false; }
-            aiSetRemoteBrowserMeta(u);
-            return;
-        }
         const iframe = document.getElementById('aiBrowserEmbed');
         if (iframe) { iframe.src = u; }
         const ph = document.getElementById('aiBrowserPlaceholder');
@@ -1449,7 +1275,7 @@
             if (silent) {
                 setAgentStatusLine('内嵌区未与后台完全同步: ' + (e && e.message ? e.message : e));
             } else {
-                alert('后台自动化会话未同步: ' + (e && e.message ? e.message : e) + '。内嵌区若已显示页面，「拉取结构/诊断」等可能仍失败，请检查服务。');
+                alert('后台自动化会话未同步: ' + (e && e.message ? e.message : e) + '。内嵌区若已显示页面，「运行」拉取结构可能仍失败，请检查服务。');
             }
         } finally {
             if (btn) { btn.disabled = false; }
@@ -1471,7 +1297,7 @@
     function openEmbedInNewSystemWindow() {
         const a = document.getElementById('aiTargetUrlInput');
         const u = normalizeUrlForEmbed(a && a.value || '');
-        if (!u) { alert('请先在上方「目标页面 URL」填写地址'); return; }
+        if (!u) { alert('请先在内置浏览器上方地址栏填写 URL'); return; }
         window.open(u, '_blank', 'noopener,noreferrer');
     }
 
@@ -1490,174 +1316,25 @@
     }
 
     async function aiBrowserHistory(action) {
-        if (window.aiRemoteEmbedded && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1) {
-            const ws = window.aiRemoteEmbedded.ws;
-            if (action === 'reload') ws.send(JSON.stringify({ t: 'reload' }));
-            else if (action === 'back') ws.send(JSON.stringify({ t: 'go_back' }));
-            else if (action === 'forward') ws.send(JSON.stringify({ t: 'go_forward' }));
-            return;
-        }
+        if (action !== 'reload') return;
         const iframe = document.getElementById('aiBrowserEmbed');
-        if (action === 'reload') {
-            if (iframe) {
-                try {
-                    if (iframe.contentWindow) iframe.contentWindow.location.reload();
-                } catch (e) {
-                    var ta = document.getElementById('aiTargetUrlInput');
-                    var uu = ta && ta.value && normalizeUrlForEmbed(ta.value);
-                    if (uu && iframe) {
-                        var sep = uu.indexOf('?') >= 0 ? '&' : '?';
-                        iframe.src = uu + sep + '_r=' + Date.now();
-                    }
+        if (iframe) {
+            try {
+                if (iframe.contentWindow) iframe.contentWindow.location.reload();
+            } catch (e) {
+                var ta = document.getElementById('aiTargetUrlInput');
+                var uu = ta && ta.value && normalizeUrlForEmbed(ta.value);
+                if (uu && iframe) {
+                    var sep = uu.indexOf('?') >= 0 ? '&' : '?';
+                    iframe.src = uu + sep + '_r=' + Date.now();
                 }
             }
-            try {
-                const resp = await fetch('/api/browser/reload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}), credentials: 'same-origin' });
-                await resp.json().catch(function() { return {}; });
-            } catch (e) {}
-            await updateBrowserStatusLine();
-            return;
         }
-        if (!iframe || !iframe.contentWindow) return;
-        if (action === 'back' || action === 'forward') {
-            try {
-                if (action === 'back') iframe.contentWindow.history.back();
-                else iframe.contentWindow.history.forward();
-            } catch (e) {
-                alert('无法从外框控制该页历史（多因跨域限制），请使用网站内的「返回/前进」链接。');
-            }
-        }
-    }
-
-    function wireBrowserToolTabs() {
-        const tabs = document.querySelectorAll('.ai-browser-tool-tab');
-        const panels = { dev: document.getElementById('aiBrowserTabDev'), pick: document.getElementById('aiBrowserTabPick'), ai: document.getElementById('aiBrowserTabAi') };
-        tabs.forEach(function(tab) {
-            tab.addEventListener('click', function() {
-                const id = tab.getAttribute('data-aitab');
-                tabs.forEach(function(t) {
-                    t.classList.toggle('is-active', t === tab);
-                    t.setAttribute('aria-selected', t === tab ? 'true' : 'false');
-                });
-                Object.keys(panels).forEach(function(k) {
-                    var p = panels[k];
-                    if (p) p.hidden = (k !== id);
-                });
-            });
-        });
-    }
-
-    async function aiRunBrowserPageAi() {
-        if (aiProfiles && aiProfiles.length > 0 && !getSelectedAiModel()) {
-            appendAiChat('assistant', '请先在「推理引擎」或设置中选择模型。');
-            return;
-        }
-        pushUndoSnapshot();
-        const hintEl = document.getElementById('aiBrowserAiHint');
-        const hint = (hintEl && hintEl.value || '').trim();
-        const btn = document.getElementById('aiBrowserAiRunBtn');
-        if (btn) { btn.disabled = true; }
-        if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
-        aiPlanAbort = new AbortController();
-        setAgentBusy(true, '分析页面…');
-        setAgentStatusLine('结合当前页 DOM 生成步骤…');
         try {
-            const payload = { hint: hint, project_name: currentProjectName, model: getSelectedAiModel() };
-            if (aiRemoteSessionLive() && window.aiRemoteEmbedded.sessionId) {
-                payload.embedded_session_id = window.aiRemoteEmbedded.sessionId;
-            }
-            const resp = await fetch('/api/browser/ai-analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                credentials: 'same-origin',
-                signal: aiPlanAbort.signal,
-            });
-            const data = await resp.json().catch(function() { return {}; });
-            if (!resp.ok || !data.success) throw new Error((data && data.error) || '生成失败');
-            latestAiPlan = data.plan;
-            renderAiPreview(latestAiPlan);
-            var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
-            appendAiChat('assistant', '已根据当前页结构生成用例《' + ((latestAiPlan && latestAiPlan.case_name) || '未命名') + '》，共 ' + n + ' 步。');
-            setAgentStatusLine('页面分析完成 — ' + n + ' 步');
-        } catch (e) {
-            if (e && e.name === 'AbortError') {
-                appendAiChat('assistant', '页面分析已取消。');
-                setAgentStatusLine('已取消分析');
-            } else {
-                appendAiChat('assistant', '页面 AI 分析失败: ' + (e && e.message ? e.message : e));
-                setAgentStatusLine('页面分析失败');
-            }
-        } finally {
-            setAgentBusy(false);
-            aiPlanAbort = null;
-            if (btn) { btn.disabled = false; }
-            syncUndoRedoButtons();
-        }
-    }
-
-    async function aiLoadPageInspect() {
-        const out = document.getElementById('aiPageInspectOut');
-        const btn = document.getElementById('aiPageInspectBtn');
-        if (!out) return;
-        if (btn) { btn.disabled = true; }
-        out.textContent = '加载中…';
-        try {
-            var sid = window.aiRemoteEmbedded && window.aiRemoteEmbedded.sessionId;
-            var useRemote = sid && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1;
-            var url = useRemote ? ('/api/embedded-browser/session/' + sid + '/inspect') : '/api/browser/inspect';
-            const resp = await fetch(url, { credentials: 'same-origin' });
-            const raw = await resp.text();
-            var data;
-            try { data = JSON.parse(raw); } catch (e) { throw new Error(raw.slice(0, 200)); }
-            if (!resp.ok || !data.success) throw new Error((data && data.error) || ('HTTP ' + resp.status));
-            out.textContent = JSON.stringify(data.data, null, 2);
-        } catch (e) {
-            out.textContent = '失败: ' + (e && e.message ? e.message : e);
-        } finally {
-            if (btn) { btn.disabled = false; }
-        }
-    }
-
-    async function aiLoadPageDiagnostics() {
-        const out = document.getElementById('aiPageDiagnosticsOut');
-        const btn = document.getElementById('aiPageDiagnosticsBtn');
-        if (!out) return;
-        if (btn) { btn.disabled = true; }
-        out.textContent = '加载中…';
-        try {
-            var sid = window.aiRemoteEmbedded && window.aiRemoteEmbedded.sessionId;
-            var useRemote = sid && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1;
-            var url = useRemote ? ('/api/embedded-browser/session/' + sid + '/diagnostics') : '/api/browser/diagnostics';
-            const resp = await fetch(url, { credentials: 'same-origin' });
-            const data = await resp.json().catch(function() { return {}; });
-            if (!resp.ok || !data.success) throw new Error((data && data.error) || ('HTTP ' + resp.status));
-            out.textContent = JSON.stringify(data.data, null, 2);
-        } catch (e) {
-            out.textContent = '失败: ' + (e && e.message ? e.message : e);
-        } finally {
-            if (btn) { btn.disabled = false; }
-        }
-    }
-
-    function aiRemoteSessionLive() {
-        return !!(window.aiRemoteEmbedded && window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1);
-    }
-
-    function aiSetRemoteBrowserMeta(url) {
-        var el = document.getElementById('aiBrowserMeta');
-        if (el) {
-            el.textContent = '远程 Chromium（CDP）：' + (url || '已连接');
-            el.title = url || '';
-        }
-    }
-
-    function aiSyncRemoteCanvasScale() {
-        var canvas = document.getElementById('aiRemoteBrowserCanvas');
-        if (!canvas || canvas.style.display === 'none') return;
-        var rect = canvas.getBoundingClientRect();
-        window.aiRemoteEmbedded.scaleX = canvas.width / Math.max(rect.width, 1);
-        window.aiRemoteEmbedded.scaleY = canvas.height / Math.max(rect.height, 1);
+            const resp = await fetch('/api/browser/reload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}), credentials: 'same-origin' });
+            await resp.json().catch(function() { return {}; });
+        } catch (e) {}
+        await updateBrowserStatusLine();
     }
 
     function pwBrowserSelectEls() {
@@ -1685,7 +1362,7 @@
                     var d2 = await r2.json().catch(function() { return {}; });
                     if (r2.ok && d2.success) {
                         var label = (t.options[t.selectedIndex] && t.options[t.selectedIndex].text) || v;
-                        appendAiChat('assistant', '已切换自动化浏览器为「' + label + '」。请再次点「打开」或重连远程画布以使用新引擎。');
+                        appendAiChat('assistant', '已切换自动化浏览器为「' + label + '」。请再次点「打开」以同步后台会话。');
                     } else {
                         alert((d2 && d2.error) || '保存失败');
                     }
@@ -1733,172 +1410,6 @@
                 sel.value = 'chromium';
             }
         });
-    }
-
-    async function aiRefreshEmbeddedGatewayHint() {
-        var btn = document.getElementById('aiRemoteEmbedStartBtn');
-        try {
-            var r = await fetch('/api/embedded-browser/status', { credentials: 'same-origin' });
-            var d = await r.json().catch(function() { return {}; });
-            window.aiRemoteEmbedded.gatewayEnabled = !!(d && d.enabled && d.ws_base_configured);
-            if (btn) {
-                btn.disabled = !window.aiRemoteEmbedded.gatewayEnabled;
-                btn.title = window.aiRemoteEmbedded.gatewayEnabled
-                    ? '启动服务端 Chromium 远程画布（独立进程：python -m embedded_browser_gateway）'
-                    : '未就绪：请配置 EMBEDDED_BROWSER_GATEWAY_URL、SECRET、PUBLIC_WS_BASE 并启动网关';
-            }
-        } catch (e) {
-            if (btn) { btn.disabled = true; }
-        }
-    }
-
-    function aiWireRemoteEmbeddedCanvas() {
-        if (window.aiRemoteEmbedded.canvasWired) return;
-        var canvas = document.getElementById('aiRemoteBrowserCanvas');
-        if (!canvas) return;
-        window.aiRemoteEmbedded.canvasWired = true;
-        canvas.addEventListener('click', function(e) {
-            if (!aiRemoteSessionLive()) return;
-            try { canvas.focus(); } catch (e0) {}
-            aiSyncRemoteCanvasScale();
-            var rect = canvas.getBoundingClientRect();
-            var x = (e.clientX - rect.left) * window.aiRemoteEmbedded.scaleX;
-            var y = (e.clientY - rect.top) * window.aiRemoteEmbedded.scaleY;
-            window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'click', x: x, y: y }));
-        });
-        canvas.addEventListener('wheel', function(e) {
-            if (!aiRemoteSessionLive()) return;
-            e.preventDefault();
-            window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'wheel', dx: e.deltaX, dy: e.deltaY }));
-        }, { passive: false });
-        canvas.addEventListener('keydown', function(e) {
-            if (!aiRemoteSessionLive()) return;
-            try {
-                window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'keydown', key: e.key }));
-            } catch (err) {}
-        });
-        canvas.addEventListener('keyup', function(e) {
-            if (!aiRemoteSessionLive()) return;
-            try {
-                window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'keyup', key: e.key }));
-            } catch (err) {}
-        });
-        window.addEventListener('resize', function() { aiSyncRemoteCanvasScale(); });
-    }
-
-    async function aiStartRemoteEmbedded() {
-        if (aiRemoteSessionLive()) { alert('远程画布已连接'); return; }
-        if (!window.aiRemoteEmbedded.gatewayEnabled) {
-            alert('远程网关未配置或未就绪，请检查环境变量与 embedded_browser_gateway 进程。');
-            return;
-        }
-        var startBtn = document.getElementById('aiRemoteEmbedStartBtn');
-        var stopBtn = document.getElementById('aiRemoteEmbedStopBtn');
-        var u = normalizeUrlForEmbed((document.getElementById('aiTargetUrlInput') || {}).value || '');
-        var body = {};
-        if (u) body.initial_url = u;
-        var pbs = document.querySelector('select.ai-pw-browser-select');
-        if (pbs && pbs.value) body.browser = pbs.value;
-        if (startBtn) { startBtn.disabled = true; }
-        try {
-            var resp = await fetch('/api/embedded-browser/session', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify(body)
-            });
-            var data = await resp.json().catch(function() { return {}; });
-            if (!resp.ok || !data.success) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
-            var canvas = document.getElementById('aiRemoteBrowserCanvas');
-            var iframe = document.getElementById('aiBrowserEmbed');
-            var ph = document.getElementById('aiBrowserPlaceholder');
-            if (iframe) iframe.style.display = 'none';
-            if (ph) ph.classList.add('is-hidden');
-            if (canvas) canvas.style.display = 'block';
-            window.aiRemoteEmbedded.sessionId = data.session_id;
-            var ws = new WebSocket(data.ws_url);
-            window.aiRemoteEmbedded.ws = ws;
-            ws.onmessage = function(ev) {
-                var msg = JSON.parse(ev.data);
-                if (msg.t === 'frame' && msg.data && canvas) {
-                    var img = new Image();
-                    img.onload = function() {
-                        canvas.width = img.width;
-                        canvas.height = img.height;
-                        var ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                        aiSyncRemoteCanvasScale();
-                    };
-                    img.src = 'data:image/jpeg;base64,' + msg.data;
-                } else if (msg.t === 'navigated' && msg.url) {
-                    var ta = document.getElementById('aiTargetUrlInput');
-                    if (ta) ta.value = msg.url;
-                    syncUrlMirrorFromTarget();
-                    aiSetRemoteBrowserMeta(msg.url);
-                    updateBrowserStatusLine();
-                }
-            };
-            ws.onopen = function() {
-                if (startBtn) startBtn.style.display = 'none';
-                if (stopBtn) stopBtn.style.display = '';
-                if (window.aiRemoteEmbedded.pingTimer) clearInterval(window.aiRemoteEmbedded.pingTimer);
-                window.aiRemoteEmbedded.pingTimer = setInterval(function() {
-                    if (window.aiRemoteEmbedded.ws && window.aiRemoteEmbedded.ws.readyState === 1) {
-                        try { window.aiRemoteEmbedded.ws.send(JSON.stringify({ t: 'ping' })); } catch (e) {}
-                    }
-                }, 25000);
-                aiSetRemoteBrowserMeta(u || '');
-                try { canvas.focus(); } catch (e2) {}
-                appendAiChat('assistant', '远程 Chromium 已连接：画面来自服务端 CDP；点击画布可键鼠操作。「分析当前页并生成用例」将使用本远程页 DOM。');
-            };
-            ws.onclose = function() {
-                if (window.aiRemoteEmbedded.pingTimer) clearInterval(window.aiRemoteEmbedded.pingTimer);
-                window.aiRemoteEmbedded.pingTimer = null;
-                window.aiRemoteEmbedded.ws = null;
-                var c = document.getElementById('aiRemoteBrowserCanvas');
-                var ifr = document.getElementById('aiBrowserEmbed');
-                if (c) { c.style.display = 'none'; try { var cx = c.getContext('2d'); if (cx) cx.clearRect(0, 0, c.width, c.height); } catch (e2) {} }
-                if (ifr) ifr.style.display = '';
-                if (startBtn) { startBtn.style.display = ''; startBtn.disabled = !window.aiRemoteEmbedded.gatewayEnabled; }
-                if (stopBtn) stopBtn.style.display = 'none';
-                window.aiRemoteEmbedded.sessionId = null;
-                updateBrowserStatusLine();
-            };
-            ws.onerror = function() {
-                try { ws.close(); } catch (e) {}
-            };
-        } catch (e) {
-            alert('远程画布启动失败: ' + (e && e.message ? e.message : e));
-            if (startBtn) startBtn.disabled = !window.aiRemoteEmbedded.gatewayEnabled;
-        }
-    }
-
-    async function aiStopRemoteEmbedded() {
-        if (window.aiRemoteEmbedded.pingTimer) { clearInterval(window.aiRemoteEmbedded.pingTimer); }
-        window.aiRemoteEmbedded.pingTimer = null;
-        var sid = window.aiRemoteEmbedded.sessionId;
-        if (window.aiRemoteEmbedded.ws) {
-            try { window.aiRemoteEmbedded.ws.close(); } catch (e) {}
-            window.aiRemoteEmbedded.ws = null;
-        }
-        window.aiRemoteEmbedded.sessionId = null;
-        if (sid) {
-            try {
-                await fetch('/api/embedded-browser/session/' + sid, { method: 'DELETE', credentials: 'same-origin' });
-            } catch (e) {}
-        }
-        var canvas = document.getElementById('aiRemoteBrowserCanvas');
-        var iframe = document.getElementById('aiBrowserEmbed');
-        if (canvas) {
-            canvas.style.display = 'none';
-            try { var ctx = canvas.getContext('2d'); if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height); } catch (e) {}
-        }
-        if (iframe) iframe.style.display = '';
-        var sb = document.getElementById('aiRemoteEmbedStartBtn');
-        var st = document.getElementById('aiRemoteEmbedStopBtn');
-        if (sb) { sb.style.display = ''; sb.disabled = !window.aiRemoteEmbedded.gatewayEnabled; }
-        if (st) st.style.display = 'none';
-        updateBrowserStatusLine();
     }
 
     function composeAiGoal() {
@@ -2017,6 +1528,29 @@
         if (chip) chip.title = p ? ('当前: ' + profileLabel(p)) : '';
     }
 
+    function syncAiStopButton() {
+        var stopBtn = document.getElementById('aiStopBtn');
+        if (!stopBtn) return;
+        var ctl = aiPlanAbort;
+        var active = !!(ctl && ctl.signal && !ctl.signal.aborted);
+        stopBtn.disabled = !active;
+        stopBtn.classList.toggle('ai-send-btn--empty', !active);
+        stopBtn.classList.toggle('ai-send-btn--ready', active);
+    }
+
+    function aiStopAgentWork() {
+        if (aiPlanAbort && !aiPlanAbort.signal.aborted) {
+            aiUserRequestedStop = true;
+            try { aiPlanAbort.abort(); } catch (e) {}
+        }
+        var jid = window.__aiCurrentBgJobId;
+        if (jid) {
+            window.__aiCurrentBgJobId = null;
+            fetch('/api/ai/task/job/' + encodeURIComponent(jid) + '/cancel', { method: 'POST', credentials: 'same-origin' }).catch(function() {});
+            if (typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jid);
+        }
+    }
+
     function syncAiSendButtons() {
         const input = document.getElementById('aiMessageInput');
         const genBtn = document.getElementById('aiGenerateBtn');
@@ -2028,6 +1562,7 @@
         genBtn.classList.toggle('ai-send-btn--ready', hasGen);
         contBtn.classList.toggle('ai-send-btn--empty', !hasRef);
         contBtn.classList.toggle('ai-send-btn--ready', hasRef);
+        syncAiStopButton();
     }
 
     window.toggleAiSettings = function(open) {
@@ -2081,7 +1616,7 @@
     async function loadAiTargetCases() {
         const select = document.getElementById('aiTargetCaseSelect');
         if (!currentProjectId) {
-            select.innerHTML = '<option value="">+ 新建用例</option>';
+            select.innerHTML = '<option value="">+ 新建用例（不追加）</option>';
             allCasesList = [];
             return;
         }
@@ -2345,6 +1880,177 @@
         return fallback;
     }
 
+    function aiTryClaimBgJobResult(jobId) {
+        if (!jobId) return true;
+        try {
+            var k = 'uat_ai_consumed_' + jobId;
+            if (sessionStorage.getItem(k)) return false;
+            sessionStorage.setItem(k, '1');
+            return true;
+        } catch (e) { return true; }
+    }
+
+    function mergeAiTaskResultIntoStudio(data) {
+        if (!data) return;
+        latestAiPlan = data.plan || latestAiPlan;
+        if (latestAiPlan && data.warnings && data.warnings.length) latestAiPlan.warnings = data.warnings;
+        if (data.warnings && data.warnings.length) appendAiChatWarningsFoldable(data.warnings);
+        if (data.execution) {
+            var ex = data.execution;
+            if (ex.skipped_reason) {
+                appendAiChat('assistant', String(ex.skipped_reason));
+            } else if (ex.ran) {
+                if (ex.error) {
+                    appendAiChat('assistant', '步骤执行阶段异常：' + ex.error);
+                } else {
+                    var rs = ex.results || [];
+                    var ok = 0;
+                    for (var i = 0; i < rs.length; i++) {
+                        if (rs[i] && rs[i].status === 'success') ok++;
+                    }
+                    appendAiChat('assistant', '已在主 Playwright 会话中按生成步骤尝试执行：成功 ' + ok + ' / ' + rs.length + '（详情见服务端日志）。');
+                }
+            }
+        }
+        try {
+            if (window.HuFirstAiAssistant && typeof HuFirstAiAssistant.saveStudioSession === 'function') {
+                HuFirstAiAssistant.saveStudioSession({
+                    plan: latestAiPlan, history: aiChatMessages, projectId: currentProjectId, projectName: currentProjectName,
+                    targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || ''
+                });
+            }
+        } catch (e) {}
+        renderAiPreview(latestAiPlan);
+    }
+
+    function aiSleepInterruptible(ms, signal) {
+        return new Promise(function(resolve, reject) {
+            var finished = false;
+            var tid = null;
+            function cleanup() {
+                try { if (signal) signal.removeEventListener('abort', onAbort); } catch (e) {}
+            }
+            function onAbort() {
+                if (finished) return;
+                finished = true;
+                if (tid) clearTimeout(tid);
+                cleanup();
+                reject(Object.assign(new Error('已停止'), { name: 'AbortError' }));
+            }
+            tid = setTimeout(function() {
+                if (finished) return;
+                finished = true;
+                cleanup();
+                resolve();
+            }, ms);
+            if (signal) {
+                if (signal.aborted) {
+                    clearTimeout(tid);
+                    cleanup();
+                    reject(Object.assign(new Error('已停止'), { name: 'AbortError' }));
+                    return;
+                }
+                signal.addEventListener('abort', onAbort);
+            }
+        });
+    }
+
+    async function aiPostAiTaskAsyncStart(url, payload, signal) {
+        var resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            credentials: 'same-origin',
+            signal: signal,
+        });
+        var raw = await resp.text();
+        var data;
+        try { data = JSON.parse(raw); } catch (pe) {
+            throw new Error('服务器返回非 JSON（HTTP ' + resp.status + '）：' + (raw || '').slice(0, 160));
+        }
+        if (!resp.ok || !data.success) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
+        if (!data.job_id) throw new Error('未返回 job_id');
+        return data.job_id;
+    }
+
+    function sanitizeAiChatHistoryForApi(msgs) {
+        var out = [];
+        var arr = Array.isArray(msgs) ? msgs : [];
+        for (var i = 0; i < arr.length; i++) {
+            var m = arr[i];
+            if (!m || typeof m !== 'object') continue;
+            var role = String(m.role || 'user').toLowerCase();
+            if (role !== 'user' && role !== 'assistant' && role !== 'system') role = 'user';
+            var content = String(m.content || '').trim();
+            if (!content) continue;
+            if (content.length > 12000) content = content.slice(0, 11999) + '…';
+            out.push({ role: role, content: content });
+        }
+        return out.slice(-24);
+    }
+
+    async function aiPollAiJobUntilDone(jobId, signal) {
+        var polls = 0;
+        while (true) {
+            if (signal && signal.aborted) {
+                if (aiUserRequestedStop) { aiUserRequestedStop = false; throw new Error('已停止'); }
+                throw Object.assign(new Error('已停止'), { name: 'AbortError' });
+            }
+            var resp = await fetch('/api/ai/task/job/' + encodeURIComponent(jobId), { credentials: 'same-origin', signal: signal });
+            var j = {};
+            try { j = await resp.json(); } catch (e) {}
+            if (resp.status === 404) throw new Error('任务不存在');
+            if (!j.success) throw new Error(j.error || '查询任务失败');
+            if (j.status === 'running') {
+                polls++;
+                await aiSleepInterruptible(polls <= 24 ? 400 : 1000, signal);
+                continue;
+            }
+            if (j.status === 'cancelled') throw new Error('已停止');
+            if (j.status === 'error') {
+                var r = j.result || {};
+                throw new Error(j.error || r.error || '生成失败');
+            }
+            if (j.status === 'done') {
+                var result = j.result;
+                if (!result || !result.success) throw new Error((result && result.error) || '生成失败');
+                return result;
+            }
+            polls++;
+            await aiSleepInterruptible(polls <= 24 ? 400 : 1000, signal);
+        }
+    }
+
+    function drainUatAiBackgroundInbox() {
+        try {
+            var raw = sessionStorage.getItem('uat_ai_inbox');
+            if (!raw) return;
+            var inbox = JSON.parse(raw);
+            if (!Array.isArray(inbox) || !inbox.length) return;
+            var kept = [];
+            for (var i = 0; i < inbox.length; i++) {
+                var entry = inbox[i];
+                var jid = entry && entry.id;
+                if (!jid) continue;
+                try { if (sessionStorage.getItem('uat_ai_consumed_' + jid)) { continue; } } catch (e) {}
+                if (!entry.result || !entry.result.success) { kept.push(entry); continue; }
+                if (!aiTryClaimBgJobResult(jid)) continue;
+                mergeAiTaskResultIntoStudio(entry.result);
+                var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
+                if (entry.kind === 'chat') {
+                    appendAiChat('assistant', '您离开页面期间，AI 已在后台完成优化（当前 ' + n + ' 步）。');
+                    setAgentStatusLine('已优化 — ' + n + ' 步（后台）');
+                } else {
+                    appendAiChat('assistant', '您离开页面期间，AI 已在后台完成规划《' + (latestAiPlan && latestAiPlan.case_name || '未命名') + '》，共 ' + n + ' 步。');
+                    setAgentStatusLine('已完成规划 — ' + n + ' 步（后台）');
+                }
+                syncUndoRedoButtons();
+            }
+            if (kept.length) sessionStorage.setItem('uat_ai_inbox', JSON.stringify(kept));
+            else sessionStorage.removeItem('uat_ai_inbox');
+        } catch (e) { console.warn(e); }
+    }
+
     async function aiPostJsonWithTimeout(url, payload, options) {
         var opts = options || {};
         var minModel = opts.requireModel !== false;
@@ -2357,7 +2063,14 @@
         }
         var ctl = opts.signal ? null : new AbortController();
         var sig = opts.signal || (ctl && ctl.signal);
-        var timer = opts.signal ? null : setTimeout(function() { try { if (ctl) ctl.abort(); } catch (e) {} }, (opts.timeoutMs != null) ? opts.timeoutMs : 300000);
+        var timer = opts.signal ? null : setTimeout(function() {
+            try {
+                if (ctl) {
+                    aiAbortFromTimer = true;
+                    ctl.abort();
+                }
+            } catch (e) {}
+        }, (opts.timeoutMs != null) ? opts.timeoutMs : 300000);
         try {
             var resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: sig, credentials: 'same-origin' });
             if (timer) clearTimeout(timer);
@@ -2373,17 +2086,36 @@
         } catch (e) {
             if (timer) clearTimeout(timer);
             if (e && e.name === 'AbortError') {
-                throw new Error(opts.userAbortMessage || '请求已取消（人工接管或超时）。');
+                if (aiAbortFromTimer) {
+                    aiAbortFromTimer = false;
+                    throw new Error('请求超时已取消。');
+                }
+                if (aiUserRequestedStop) {
+                    aiUserRequestedStop = false;
+                    throw new Error('已停止');
+                }
+                throw new Error(opts.userAbortMessage || '请求已取消。');
+            }
+            if (aiStudioPageLeaving) {
+                var navErr = new Error('AI_PAGE_NAVIGATION_ABORT');
+                navErr.aiNavSilent = true;
+                throw navErr;
             }
             throw e;
         }
     }
 
-    async function aiGeneratePreview() {
+    async function aiGeneratePreview(opts) {
+        opts = opts || {};
+        var executionMode = opts.executionMode || 'plan_only';
         const goal = composeAiGoal();
         if (!goal) {
             const input = document.getElementById('aiMessageInput');
             if (input) { input.style.borderColor = '#ef4444'; setTimeout(() => { input.style.borderColor = ''; }, 2000); }
+            return;
+        }
+        if (typeof aiProfiles !== 'undefined' && aiProfiles.length > 0 && !getSelectedAiModel()) {
+            appendAiChat('assistant', '请先在右上角「AI 设置」中注册并选择推理模型，然后再试。');
             return;
         }
         pushUndoSnapshot();
@@ -2391,43 +2123,51 @@
         appendAiChat('user', goal);
         const genBtn = document.getElementById('aiGenerateBtn');
         if (genBtn) { genBtn.disabled = true; genBtn.textContent = '…'; }
+        aiUserRequestedStop = false;
         if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
         aiPlanAbort = new AbortController();
-        setAgentBusy(true, '特工正在工作');
+        syncAiStopButton();
+        setAgentBusy(true, 'AI正在工作');
         setAgentStatusLine('制定行动…');
+        var jobId = null;
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            const planPayload = { task_type: 'test_case_generation', goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl };
-            if (aiRemoteSessionLive() && window.aiRemoteEmbedded.sessionId) {
-                planPayload.embedded_session_id = window.aiRemoteEmbedded.sessionId;
-            }
-            const data = await aiPostJsonWithTimeout('/api/ai/task/plan', planPayload, { loadingHint: false, signal: aiPlanAbort.signal, userAbortMessage: '已取消规划（掌控局面）' });
-            if (!data) return;
-            latestAiPlan = data.plan;
-            if (latestAiPlan && data.warnings && data.warnings.length) latestAiPlan.warnings = data.warnings;
-            if (data.warnings && data.warnings.length) {
-                appendAiChatWarningsFoldable(data.warnings);
-            }
-            try {
-                if (window.HuFirstAiAssistant && typeof HuFirstAiAssistant.saveStudioSession === 'function') {
-                    HuFirstAiAssistant.saveStudioSession({
-                        plan: latestAiPlan, history: aiChatMessages, projectId: currentProjectId, projectName: currentProjectName,
-                        targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || ''
-                    });
-                }
-            } catch (e) {}
-            renderAiPreview(latestAiPlan);
+            const planPayload = { task_type: 'test_case_generation', execution_mode: executionMode, goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl };
+            jobId = await aiPostAiTaskAsyncStart('/api/ai/task/plan-async', planPayload, aiPlanAbort.signal);
+            window.__aiCurrentBgJobId = jobId;
+            if (typeof window.uatAiRegisterPendingJob === 'function') window.uatAiRegisterPendingJob(jobId, 'plan');
+            const data = await aiPollAiJobUntilDone(jobId, aiPlanAbort.signal);
+            if (typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
+            if (!aiTryClaimBgJobResult(jobId)) return;
+            mergeAiTaskResultIntoStudio(data);
             var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
-            var remoteHint = aiRemoteSessionLive() ? ' 已结合远程 Chromium 当前页的控件摘要（probe）。' : '';
-            appendAiChat('assistant', '已生成《' + (latestAiPlan && latestAiPlan.case_name || '未命名') + '》，共 ' + n + ' 步。' + remoteHint);
-            setAgentStatusLine('已完成规划 — ' + n + ' 步');
+            appendAiChat('assistant', '已生成《' + (latestAiPlan && latestAiPlan.case_name || '未命名') + '》，共 ' + n + ' 步。');
+            setAgentStatusLine((executionMode !== 'plan_only' ? '运行完成 — ' : '已完成规划 — ') + n + ' 步');
         } catch (e) {
-            appendAiChat('assistant', '生成失败: ' + (e && e.message ? e.message : e));
-            setAgentStatusLine('规划失败 — ' + (e && e.message ? e.message : '错误'));
+            if (e && e.aiNavSilent) {
+                setAgentStatusLine('请求已中断');
+            } else {
+                var em = e && e.message ? e.message : String(e);
+                if (em === '已停止') {
+                    appendAiChat('assistant', '已停止。');
+                    setAgentStatusLine('已停止');
+                    if (jobId && typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
+                } else if ((e && e.name === 'AbortError') || aiStudioPageLeaving) {
+                    if (!aiUserRequestedStop) {
+                        appendAiChat('assistant', '页面已切换，当前任务仍在服务器后台执行；稍后返回「AI测试」将自动载入结果。');
+                        setAgentStatusLine('后台处理中…');
+                    }
+                } else {
+                    appendAiChat('assistant', '生成失败: ' + em);
+                    setAgentStatusLine('规划失败 — ' + em);
+                    if (jobId && typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
+                }
+            }
         } finally {
             setAgentBusy(false);
+            window.__aiCurrentBgJobId = null;
             aiPlanAbort = null;
-            if (genBtn) { genBtn.disabled = false; genBtn.textContent = tBtn('aitest_btn_preview', '生成预览'); }
+            if (genBtn) { genBtn.disabled = false; genBtn.textContent = tBtn('aitest_btn_preview', '生成用例'); }
             syncAiSendButtons();
             syncUndoRedoButtons();
         }
@@ -2436,60 +2176,72 @@
     async function aiContinueRefine() {
         const message = (document.getElementById('aiMessageInput').value || '').trim();
         if (!message) return;
+        if (typeof aiProfiles !== 'undefined' && aiProfiles.length > 0 && !getSelectedAiModel()) {
+            appendAiChat('assistant', '请先在右上角「AI 设置」中注册并选择推理模型，然后再试。');
+            return;
+        }
         pushUndoSnapshot();
         if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
         appendAiChat('user', message);
         document.getElementById('aiMessageInput').value = '';
         const btn = document.getElementById('aiContinueBtn');
         if (btn) { btn.disabled = true; btn.textContent = '…'; }
+        aiUserRequestedStop = false;
         if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
         aiPlanAbort = new AbortController();
-        setAgentBusy(true, '特工正在工作');
+        syncAiStopButton();
+        setAgentBusy(true, 'AI正在工作');
         setAgentStatusLine('优化方案中…');
+        var jobId = null;
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            var chatPayload = { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: aiChatMessages, model: getSelectedAiModel(), target_page_url: targetPageUrl };
-            if (aiRemoteSessionLive() && window.aiRemoteEmbedded.sessionId) {
-                chatPayload.embedded_session_id = window.aiRemoteEmbedded.sessionId;
-            }
+            var chatPayload = { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: sanitizeAiChatHistoryForApi(aiChatMessages), model: getSelectedAiModel(), target_page_url: targetPageUrl };
             if (window.HuFirstAiAssistant && typeof HuFirstAiAssistant.appendInteractionToPayload === 'function') {
                 var ix = HuFirstAiAssistant.getInteractionContextFromForm('aiIx');
                 chatPayload = HuFirstAiAssistant.appendInteractionToPayload(chatPayload, ix);
             }
-            const data = await aiPostJsonWithTimeout('/api/ai/task/chat', chatPayload, { loadingHint: false, signal: aiPlanAbort.signal, userAbortMessage: '已取消优化（掌控局面）' });
-            if (!data) return;
-            latestAiPlan = data.plan || latestAiPlan;
-            if (latestAiPlan && data.warnings && data.warnings.length) latestAiPlan.warnings = data.warnings;
-            if (data.warnings && data.warnings.length) {
-                appendAiChatWarningsFoldable(data.warnings);
-            }
-            try {
-                if (window.HuFirstAiAssistant && typeof HuFirstAiAssistant.saveStudioSession === 'function') {
-                    HuFirstAiAssistant.saveStudioSession({
-                        plan: latestAiPlan, history: aiChatMessages, projectId: currentProjectId, projectName: currentProjectName,
-                        targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || ''
-                    });
-                }
-            } catch (e) {}
-            renderAiPreview(latestAiPlan);
+            jobId = await aiPostAiTaskAsyncStart('/api/ai/task/chat-async', chatPayload, aiPlanAbort.signal);
+            window.__aiCurrentBgJobId = jobId;
+            if (typeof window.uatAiRegisterPendingJob === 'function') window.uatAiRegisterPendingJob(jobId, 'chat');
+            const data = await aiPollAiJobUntilDone(jobId, aiPlanAbort.signal);
+            if (typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
+            if (!aiTryClaimBgJobResult(jobId)) return;
+            mergeAiTaskResultIntoStudio(data);
             var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
-            var refineHint = aiRemoteSessionLive() ? '（已参考远程页控件摘要）' : '';
-            appendAiChat('assistant', '已优化，当前 ' + n + ' 步。' + refineHint);
+            appendAiChat('assistant', '已优化，当前 ' + n + ' 步。');
             setAgentStatusLine('已优化 — ' + n + ' 步');
         } catch (e) {
-            appendAiChat('assistant', '优化失败: ' + (e && e.message ? e.message : e));
-            setAgentStatusLine('优化失败');
+            if (e && e.aiNavSilent) {
+                setAgentStatusLine('请求已中断');
+            } else {
+                var em2 = e && e.message ? e.message : String(e);
+                if (em2 === '已停止') {
+                    appendAiChat('assistant', '已停止。');
+                    setAgentStatusLine('已停止');
+                    if (jobId && typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
+                } else if ((e && e.name === 'AbortError') || aiStudioPageLeaving) {
+                    if (!aiUserRequestedStop) {
+                        appendAiChat('assistant', '页面已切换，当前任务仍在服务器后台执行；稍后返回「AI测试」将自动载入结果。');
+                        setAgentStatusLine('后台处理中…');
+                    }
+                } else {
+                    appendAiChat('assistant', '优化失败: ' + em2);
+                    setAgentStatusLine('优化失败');
+                    if (jobId && typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
+                }
+            }
         } finally {
             setAgentBusy(false);
+            window.__aiCurrentBgJobId = null;
             aiPlanAbort = null;
-            if (btn) { btn.disabled = false; btn.textContent = tBtn('aitest_btn_refine', '发送优化'); }
+            if (btn) { btn.disabled = false; btn.textContent = tBtn('aitest_btn_refine', '优化'); }
             syncAiSendButtons();
             syncUndoRedoButtons();
         }
     }
 
     async function aiRunAgentWorkflow() {
-        await aiGeneratePreview();
+        await aiGeneratePreview({ executionMode: 'run_and_record' });
     }
 
     function aiUndo() {
@@ -2536,7 +2288,7 @@
             + '• LOCAL_LLM_TIMEOUT — 本地模型请求超时（秒）\n'
             + '• AI_SELECTOR_FALLBACK — 步骤执行失败时是否启用 LLM+DOM 兜底（1/0）\n'
             + '• LOCAL_AI_PROBE_* — 页面探测节点数、超时等\n'
-            + '• EMBEDDED_BROWSER_GATEWAY_URL / SECRET / PUBLIC_WS_BASE — 远程 Chromium 画布（需 python -m embedded_browser_gateway）\n'
+            + '• EMBEDDED_BROWSER_* — 可选远程 Chromium 网关（高级部署；本页不再展示入口）\n'
             + '• PLAYWRIGHT_BROWSER — 默认引擎 chromium/chrome/edge/firefox/webkit（界面选择会写入会话并覆盖）\n\n'
             + '详情见部署文档或 docker-compose 环境变量注释。');
     }
@@ -2544,7 +2296,7 @@
     async function aiGenerateAndSaveCase() {
         if (!currentProjectId) { alert('请先选择项目'); return; }
         const goal = composeAiGoal();
-        if (!goal && (!latestAiPlan || !latestAiPlan.steps || !latestAiPlan.steps.length)) { alert('请填写目标或生成预览'); return; }
+        if (!goal && (!latestAiPlan || !latestAiPlan.steps || !latestAiPlan.steps.length)) { alert('请填写目标或先生成用例'); return; }
         const targetCaseId = (document.getElementById('aiTargetCaseSelect').value || '').trim();
         const saveBtn = document.getElementById('aiGenerateSaveBtn');
         if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '…'; }
@@ -2579,6 +2331,7 @@
 
     window.aiGeneratePreview = aiGeneratePreview;
     window.aiContinueRefine = aiContinueRefine;
+    window.aiStopAgentWork = aiStopAgentWork;
     window.aiGenerateAndSaveCase = aiGenerateAndSaveCase;
     window.aiRunAgentWorkflow = aiRunAgentWorkflow;
     window.aiUndo = aiUndo;
@@ -2590,7 +2343,7 @@
     window.saveActiveAiModel = saveActiveAiModel;
 
     async function applyInitialAiStudioFromStorage() {
-        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页已按「智能体工作室」布局：<strong>左栏</strong>自然语言任务与推理引擎，<strong>中栏</strong>内嵌真实页面 + Playwright 会话，<strong>右栏</strong>行动/步数统计与用例预览。顶栏「运行」与「生成预览」相同：生成步骤草案；「掌控局面」可中断 AI 并全屏手动操作页面。草稿可「保存」到本机浏览器。</div></div>';
+        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页为「智能体工作室」：<strong>左栏</strong>用自然语言描述任务；点<strong>生成用例</strong>仅由模型生成可保存的步骤，点顶栏<strong>运行</strong>会在主 Playwright 浏览器打开 URL 后生成并尝试执行这些步骤。<strong>中栏</strong>输入 URL 点「打开」可预览页面；<strong>右栏</strong>查看统计与用例预览。草稿可「保存」到本机浏览器。</div></div>';
         var s = (window.HuFirstAiAssistant && HuFirstAiAssistant.loadStudioSession) ? HuFirstAiAssistant.loadStudioSession() : null;
         var d = null;
         try {
@@ -2615,7 +2368,7 @@
             latestAiPlan = s.plan;
             if (s.target_page_url) {
                 var ta = document.getElementById('aiTargetUrlInput');
-                if (ta) { ta.value = s.target_page_url; if (typeof syncUrlMirrorFromTarget === 'function') syncUrlMirrorFromTarget(); }
+                if (ta) ta.value = s.target_page_url;
             }
             if (s.project_id) {
                 var sp = document.getElementById('aiProjectSelect');
@@ -2637,7 +2390,7 @@
             renderAiChatFromMessages(s.history);
             if (s.target_page_url) {
                 var ta2 = document.getElementById('aiTargetUrlInput');
-                if (ta2) { ta2.value = s.target_page_url; if (typeof syncUrlMirrorFromTarget === 'function') syncUrlMirrorFromTarget(); }
+                if (ta2) ta2.value = s.target_page_url;
             }
             if (s.project_id) {
                 var sp2 = document.getElementById('aiProjectSelect');
@@ -2686,29 +2439,10 @@
         syncUndoRedoButtons();
         wireAiBrowserUrlSync();
         wireEmbedFrame();
-        wireBrowserToolTabs();
-        await aiRefreshEmbeddedGatewayHint();
-        aiWireRemoteEmbeddedCanvas();
-        document.getElementById('aiRemoteEmbedStartBtn') && document.getElementById('aiRemoteEmbedStartBtn').addEventListener('click', function(e) { e.preventDefault(); aiStartRemoteEmbedded(); });
-        document.getElementById('aiRemoteEmbedStopBtn') && document.getElementById('aiRemoteEmbedStopBtn').addEventListener('click', function(e) { e.preventDefault(); aiStopRemoteEmbedded(); });
         document.getElementById('aiBrowserOpenBtn') && document.getElementById('aiBrowserOpenBtn').addEventListener('click', function(e) { e.preventDefault(); openInternalBrowserPage(); });
         document.getElementById('aiBrowserNewTabBtn') && document.getElementById('aiBrowserNewTabBtn').addEventListener('click', function(e) { e.preventDefault(); openEmbedInNewSystemWindow(); });
         document.getElementById('aiBrowserFullscreenBtn') && document.getElementById('aiBrowserFullscreenBtn').addEventListener('click', function(e) { e.preventDefault(); toggleAiBrowserFullscreen(); });
-        document.getElementById('aiBrowserBackBtn') && document.getElementById('aiBrowserBackBtn').addEventListener('click', function() { aiBrowserHistory('back'); });
-        document.getElementById('aiBrowserForwardBtn') && document.getElementById('aiBrowserForwardBtn').addEventListener('click', function() { aiBrowserHistory('forward'); });
         document.getElementById('aiBrowserReloadBtn') && document.getElementById('aiBrowserReloadBtn').addEventListener('click', function() { aiBrowserHistory('reload'); });
-        document.getElementById('aiPageInspectBtn') && document.getElementById('aiPageInspectBtn').addEventListener('click', function() { aiLoadPageInspect(); });
-        document.getElementById('aiPageDiagnosticsBtn') && document.getElementById('aiPageDiagnosticsBtn').addEventListener('click', function() { aiLoadPageDiagnostics(); });
-        var tcol = document.getElementById('aiBrowserToolsCollapseBtn');
-        var tas = document.getElementById('aiBrowserToolsAside');
-        if (tcol && tas) {
-            tcol.addEventListener('click', function() {
-                var collapsed = tas.classList.toggle('is-collapsed');
-                tcol.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-                tcol.textContent = collapsed ? '⟨' : '⟩';
-            });
-        }
-        document.getElementById('aiBrowserAiRunBtn') && document.getElementById('aiBrowserAiRunBtn').addEventListener('click', function() { aiRunBrowserPageAi(); });
         const ps = document.getElementById('aiProjectSelect');
         if (ps) ps.addEventListener('change', async function() {
             currentProjectId = parseInt(this.value, 10) || null;
@@ -2718,10 +2452,26 @@
             await loadAiTargetCases();
         });
         const msg = document.getElementById('aiMessageInput');
-        const urlI = document.getElementById('aiTargetUrlInput');
         if (msg) msg.addEventListener('input', syncAiSendButtons);
-        if (urlI) urlI.addEventListener('input', syncAiSendButtons);
         syncAiSendButtons();
+        drainUatAiBackgroundInbox();
+        window.addEventListener('uat-ai-bg-job-finished', function(ev) {
+            try {
+                var d = ev.detail;
+                if (!d || !d.result || !d.result.success || !d.id) return;
+                if (!aiTryClaimBgJobResult(d.id)) return;
+                mergeAiTaskResultIntoStudio(d.result);
+                var n2 = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
+                if (d.kind === 'chat') {
+                    appendAiChat('assistant', '后台已完成优化（当前 ' + n2 + ' 步）。');
+                    setAgentStatusLine('已优化 — ' + n2 + ' 步');
+                } else {
+                    appendAiChat('assistant', '后台已完成规划《' + (latestAiPlan && latestAiPlan.case_name || '未命名') + '》，共 ' + n2 + ' 步。');
+                    setAgentStatusLine('已完成规划 — ' + n2 + ' 步');
+                }
+                syncUndoRedoButtons();
+            } catch (err) { console.warn(err); }
+        });
         updateBrowserStatusLine();
         if (typeof applyUiLang === 'function') applyUiLang();
         var bCode = document.getElementById('aiBtnViewCode');
@@ -2734,39 +2484,17 @@
         if (bRe) bRe.addEventListener('click', function() { aiRedo(); });
         var bPa = document.getElementById('aiBtnParams');
         if (bPa) bPa.addEventListener('click', function() { aiShowParamsHelp(); });
-        var _zenKey = 'hufirst_pref_zen_studio';
-        function setAiStudioZen(on) {
-            var v = !!on;
-            document.body.classList.toggle('ai-studio-zen', v);
-            var d = document.getElementById('aiZenChatDock');
-            if (d) d.hidden = !v;
-            try { localStorage.setItem(_zenKey, v ? '1' : '0'); } catch (e) {}
-        }
-        window.setAiStudioZen = setAiStudioZen;
-        try { if (localStorage.getItem(_zenKey) === '1') setAiStudioZen(true); } catch (e) {}
-        var bZen = document.getElementById('aiBtnZen');
-        if (bZen) bZen.addEventListener('click', function() { setAiStudioZen(!document.body.classList.contains('ai-studio-zen')); });
-        var zSend = document.getElementById('aiZenSendBtn');
-        if (zSend) zSend.addEventListener('click', function() {
-            var z = document.getElementById('aiZenMessageInput');
-            var m = document.getElementById('aiMessageInput');
-            if (m && z) m.value = (z.value || '').trim();
-            if (typeof aiContinueRefine === 'function') aiContinueRefine();
-            if (z) z.value = '';
-        });
-        var zEx = document.getElementById('aiZenExitBtn');
-        if (zEx) zEx.addEventListener('click', function() { setAiStudioZen(false); });
         function restoreAiSessionFromStorage() {
             if (!window.HuFirstAiAssistant || !HuFirstAiAssistant.loadStudioSession) return;
             var s = HuFirstAiAssistant.loadStudioSession();
-            if (!s || !s.plan) { alert('无可用会话。请先在本页成功「生成预览」或「发送优化」一次（会话存在未关闭标签的 sessionStorage 中）。'); return; }
+            if (!s || !s.plan) { alert('无可用会话。请先在本页成功「生成用例」或「优化」一次（会话存在未关闭标签的 sessionStorage 中）。'); return; }
             try { if (typeof pushUndoSnapshot === 'function') pushUndoSnapshot(); } catch (e) {}
             latestAiPlan = s.plan;
             if (s.history && s.history.length) renderAiChatFromMessages(s.history);
             renderAiPreview(latestAiPlan);
             if (s.target_page_url) {
                 var ta = document.getElementById('aiTargetUrlInput');
-                if (ta) { ta.value = s.target_page_url; if (typeof syncUrlMirrorFromTarget === 'function') syncUrlMirrorFromTarget(); }
+                if (ta) ta.value = s.target_page_url;
             }
             if (s.project_id) {
                 var sp = document.getElementById('aiProjectSelect');
@@ -2784,14 +2512,6 @@
         if (bRss) bRss.addEventListener('click', function() { restoreAiSessionFromStorage(); });
         var bRun = document.getElementById('aiBtnRunAgent');
         if (bRun) bRun.addEventListener('click', function() { aiRunAgentWorkflow(); });
-        var hitl = document.getElementById('aiTakeControlBtn');
-        if (hitl) hitl.addEventListener('click', function() {
-            if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} aiPlanAbort = null; }
-            setAgentBusy(false);
-            setAgentStatusLine('人工接管 — 可直接操作内嵌页');
-            try { toggleAiBrowserFullscreen(true); } catch (e) {}
-            appendAiChat('assistant', '已「掌控局面」：已尝试中断进行中的 AI 请求。浏览器已全屏，您可手动操作；按 Esc 退出全屏。');
-        });
         if (msg) msg.addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
@@ -2800,10 +2520,6 @@
         });
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') window.closeAiCodeModal();
-            if (e.altKey && (e.key === 'z' || e.key === 'Z') && !e.ctrlKey && !e.metaKey) {
-                e.preventDefault();
-                setAiStudioZen(!document.body.classList.contains('ai-studio-zen'));
-            }
         });
         var ap = document.getElementById('aiAddProvider');
         if (ap) ap.addEventListener('change', syncAiAddProviderFields);

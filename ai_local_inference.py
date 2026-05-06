@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,11 +13,198 @@ from ai_page_probe import (
     validate_plan_locators,
 )
 
+_log = logging.getLogger(__name__)
+
 
 def _norm_str(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _strip_markdown_code_fence(text: str) -> str:
+    """Remove leading/trailing ``` or ```json fences often added by chat models."""
+    s = (text or "").strip()
+    if not s.startswith("```"):
+        return s
+    lines = s.split("\n")
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _strip_llm_noise(text: str) -> str:
+    """去掉零宽字符与部分模型包裹的推理块（避免在源码中写入易被工具误处理的长标签名）。"""
+    s = (text or "").strip().replace("\ufeff", "")
+    if not s:
+        return s
+    # 常见推理标签（拆成 chr 拼接，避免静态扫描误伤）
+    _ot = chr(60) + chr(116) + chr(104) + chr(105) + chr(110) + chr(107) + chr(62)
+    _ct = chr(60) + chr(47) + chr(116) + chr(104) + chr(105) + chr(110) + chr(107) + chr(62)
+    pat_think = re.escape(_ot) + r"[\s\S]*?" + re.escape(_ct)
+    noise_patterns = (
+        pat_think,
+        r"<reasoning\b[^>]*>[\s\S]*?</reasoning>",
+    )
+    for _ in range(6):
+        prev = s
+        for pat in noise_patterns:
+            s = re.sub(pat, "", s, flags=re.IGNORECASE)
+        if s == prev:
+            break
+    return s.strip()
+
+
+def _normalize_smart_quotes_for_json(text: str) -> str:
+    """部分中文模型会输出弯引号，尝试替换为 ASCII 引号后再解析。"""
+    s = text or ""
+    return (
+        s.replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
+
+
+def _extract_balanced_json_object(text: str) -> Optional[str]:
+    """First top-level `{ ... }` span; respects double-quoted JSON strings."""
+    start = text.find("{")
+    while start >= 0:
+        depth = 0
+        in_string = False
+        escape = False
+        i = start
+        while i < len(text):
+            c = text[i]
+            if escape:
+                escape = False
+                i += 1
+                continue
+            if in_string:
+                if c == "\\":
+                    escape = True
+                elif c == '"':
+                    in_string = False
+                i += 1
+                continue
+            if c == '"':
+                in_string = True
+                i += 1
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+            i += 1
+        start = text.find("{", start + 1)
+    return None
+
+
+def _trim_leading_until_first_brace(text: str) -> str:
+    s = (text or "").strip()
+    i = s.find("{")
+    return s[i:] if i >= 0 else s
+
+
+def _repair_json_trailing_commas(text: str) -> str:
+    s = text or ""
+    for _ in range(32):
+        s2 = re.sub(r",(\s*[}\]])", r"\1", s)
+        if s2 == s:
+            break
+        s = s2
+    return s
+
+
+def _fence_extract_blocks(text: str) -> List[str]:
+    if not (text or "").strip():
+        return []
+    out: List[str] = []
+    for m in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", text, re.I):
+        inner = (m.group(1) or "").strip()
+        if inner:
+            out.append(inner)
+    return out
+
+
+def _deep_json_parse_string(val: Any) -> Any:
+    """若值为可被 json.loads 的字符串（含多重字符串包裹），尽量剥到 dict/list。"""
+    cur: Any = val
+    for _ in range(5):
+        if not isinstance(cur, str):
+            return cur
+        s = cur.strip()
+        if not s:
+            return cur
+        try:
+            cur = json.loads(s)
+        except json.JSONDecodeError:
+            return cur
+    return cur
+
+
+def _coerce_plan_root(val: Any) -> Optional[Dict[str, Any]]:
+    val = _deep_json_parse_string(val)
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, list):
+        if not val:
+            return None
+        if not all(isinstance(x, dict) for x in val):
+            return None
+        if val and _norm_str(val[0].get("action")):
+            return {
+                "case_name": "",
+                "case_url": "",
+                "description": "",
+                "precondition": "",
+                "expected_result": "",
+                "steps": val,
+            }
+        for x in val:
+            if isinstance(x, dict) and isinstance(x.get("steps"), list):
+                return x
+    return None
+
+
+def _collect_json_try_strings(raw: str) -> List[str]:
+    """生成一组待尝试解析的子串。"""
+    s = (raw or "").strip()
+    out: List[str] = []
+    seen = set()
+
+    def push(x: str) -> None:
+        t = (x or "").strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+
+    push(s)
+    for blk in _fence_extract_blocks(s):
+        push(blk)
+    trimmed = _trim_leading_until_first_brace(s)
+    push(trimmed)
+    push(_strip_markdown_code_fence(trimmed))
+    push(_strip_markdown_code_fence(s))
+
+    pos = 0
+    while pos < len(s):
+        j = s.find("{", pos)
+        if j < 0:
+            break
+        frag = _extract_balanced_json_object(s[j:])
+        if frag:
+            push(frag)
+            pos = j + max(len(frag), 1)
+        else:
+            pos = j + 1
+    return out
 
 
 def _infer_input_value_for_input_action(description: str, goal: str) -> str:
@@ -120,7 +308,11 @@ def _extract_selector_from_description(description: str) -> Tuple[str, str]:
         return "", ""
     m = re.search(r"(?:css|CSS)[:：]\s*([^\s|，。\n]+)", desc)
     if m:
-        return "css", m.group(1).strip()
+        cap = m.group(1).strip()
+        # 模型常把快照行号误写成 css:12；纯数字不是合法 CSS，忽略以免污染 selector_value
+        if cap.isdigit():
+            return "", ""
+        return "css", cap
     m = re.search(r"(?:xpath|XPath)[:：]\s*([^\n]+)", desc)
     if m:
         return "xpath", m.group(1).strip()[:800]
@@ -303,7 +495,7 @@ class LocalAIService:
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
         )
-        parsed = self._parse_json_response(content)
+        parsed = self._parse_plan_with_plain_retry(content, prompt=prompt, model=model, profile=profile)
         out = self._normalize_output(
             parsed, goal, project_name, using_model, probe_registry=pr if pr else None
         )
@@ -322,7 +514,7 @@ class LocalAIService:
         user_message: str,
         project_name: str = "",
         current_plan: Dict[str, Any] = None,
-        history: List[Dict[str, str]] = None,
+        history: Optional[List[Dict[str, Any]]] = None,
         model: str = "",
         profile: Optional[Dict[str, Any]] = None,
         page_snapshot: Optional[str] = None,
@@ -351,7 +543,7 @@ class LocalAIService:
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
         )
-        parsed = self._parse_json_response(content)
+        parsed = self._parse_plan_with_plain_retry(content, prompt=prompt, model=model, profile=profile)
         out = self._normalize_output(
             parsed, user_message, project_name, using_model, probe_registry=pr if pr else None
         )
@@ -384,14 +576,47 @@ class LocalAIService:
         content = self._chat_completion(prompt, using_model)
         return using_model, content
 
+    def _parse_plan_with_plain_retry(
+        self,
+        content: str,
+        *,
+        prompt: str,
+        model: str,
+        profile: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        try:
+            return self._parse_json_response(content)
+        except ValueError as first_err:
+            if profile or os.environ.get("LOCAL_LLM_JSON_RETRY_PLAIN", "1").strip().lower() in (
+                "0",
+                "false",
+                "no",
+                "off",
+            ):
+                raise
+            mid = (model or "").strip() or self.model_mid
+            _log.warning("AI 用例 JSON 解析失败，将在不使用 Ollama format=json 的情况下重试一次（model=%s）", mid)
+            try:
+                content2 = self._chat_completion(prompt, mid, json_format=False)
+                return self._parse_json_response(content2)
+            except Exception:
+                raise first_err
+
     def chat_ollama(self, prompt: str, model: str, base_url: Optional[str] = None) -> str:
         root = (base_url or "").strip().rstrip("/") or self.base_url
         return self._chat_completion_at(prompt, model, root)
 
-    def _chat_completion(self, prompt: str, model: str) -> str:
-        return self._chat_completion_at(prompt, model, self.base_url)
+    def _chat_completion(self, prompt: str, model: str, *, json_format: Optional[bool] = None) -> str:
+        return self._chat_completion_at(prompt, model, self.base_url, json_format=json_format)
 
-    def _chat_completion_at(self, prompt: str, model: str, base_url: str) -> str:
+    def _chat_completion_at(
+        self,
+        prompt: str,
+        model: str,
+        base_url: str,
+        *,
+        json_format: Optional[bool] = None,
+    ) -> str:
         url = f"{base_url.rstrip('/')}/api/chat"
         payload = {
             "model": model,
@@ -399,9 +624,10 @@ class LocalAIService:
                 {
                     "role": "system",
                     "content": (
-                        "You are a senior QA engineer. "
-                        "Return only JSON, no markdown. "
-                        "Use web UI actions compatible with a test runner."
+                        "You are a senior QA engineer. Output must be exactly one JSON object—nothing else. "
+                        "No markdown fences, no commentary, no trailing text. "
+                        "First non-whitespace character must be '{'; last must be '}'. "
+                        "Schema: UI test plan with case_name, case_url, description, precondition, expected_result, steps[]."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -409,6 +635,16 @@ class LocalAIService:
             "stream": False,
             "options": self._ollama_options(),
         }
+        use_json_format = json_format
+        if use_json_format is None:
+            use_json_format = os.environ.get("LOCAL_LLM_JSON_FORMAT", "1").strip().lower() not in (
+                "0",
+                "false",
+                "no",
+                "off",
+            )
+        if use_json_format:
+            payload["format"] = "json"
         try:
             resp = requests.post(url, json=payload, timeout=self.timeout)
             resp.raise_for_status()
@@ -565,9 +801,10 @@ class LocalAIService:
             "You are the reasoning brain; when a LIVE page snapshot is included below, the server already used "
             "Playwright headless to list real interactive elements—your locators MUST prefer those lines "
             "(id/css/placeholder/aria-label) and MUST NOT invent class names absent from the snapshot.\n"
-            "Each line starts with [n] (probe_index). When a step targets a listed control, set probe_index to that "
-            "integer n AND still fill selector_type/selector_value from that line (or use recommended=(type)…); "
-            "the server may override selectors using probe_index for stability.\n"
+            "Each snapshot line starts with [n] — that integer is ONLY for the JSON field probe_index. "
+            "NEVER put the line number in selector_value (e.g. selector_value must NOT be \"1\" or \"12\" alone). "
+            "Copy the real locator from that line into selector_type/selector_value (e.g. css #kw, [name=\\\"wd\\\"], xpath …). "
+            "If you use probe_index=n, still prefer selectors shown on that same line; the server maps probe_index to stable locators.\n"
             "Generate one executable UI test case with steps from this natural language goal.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"Goal: {goal}\n"
@@ -597,11 +834,13 @@ class LocalAIService:
             "- wait: input_value MUST be a non-empty integer duration — SECONDS 1–120, OR milliseconds if value > 120 (e.g. 1500); never leave empty.\n"
             "- input: input_value MUST be the exact characters to type into the field (never empty). Put the typed text in input_value, not only in description (e.g. to search for X, input_value must be X).\n"
             "- verify: when asserting visible text, put the expected substring in input_value when applicable.\n"
-            "- click: input_value usually empty; selector_value MUST be a real css/xpath/text (never empty unless probe_index is set).\n"
+            "- click: input_value usually empty; selector_value MUST be a real css/xpath/text from the snapshot (never a lone digit). "
+            "Use probe_index for [n], not selector_value.\n"
             "- navigate: input_value MUST be the full http(s) URL (never empty when a URL is known from the goal).\n"
             "- input/verify/extract_text: selector_value must be concrete when probe_index is empty.\n"
             "- At least 4 steps when possible; start with navigate if URL is known.\n"
-            "- Never omit JSON keys; use \"\" only where the rules above allow empty."
+            "- Never omit JSON keys; use \"\" only where the rules above allow empty.\n"
+            "OUTPUT FORMAT: respond with that single JSON object only—no markdown, no prose."
         )
 
     @staticmethod
@@ -647,19 +886,40 @@ class LocalAIService:
             f"- {p}" for p in parts
         ) + "\n\n"
 
+    @staticmethod
+    def _sanitize_chat_history_for_prompt(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+        """Drop UI-only keys (warningsList, etc.), cap size — keeps refine requests small and on-topic."""
+        out: List[Dict[str, str]] = []
+        if not history:
+            return out
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            role = _norm_str(item.get("role")).lower() or "user"
+            if role not in ("user", "assistant", "system"):
+                role = "user"
+            content = _norm_str(item.get("content"))
+            if not content:
+                continue
+            if len(content) > 12000:
+                content = content[:11999] + "…"
+            out.append({"role": role, "content": content})
+        return out[-12:]
+
     def _build_refine_prompt(
         self,
         user_message: str,
         project_name: str,
         current_plan: Dict[str, Any],
-        history: List[Dict[str, str]],
+        history: Optional[List[Dict[str, Any]]],
         page_snapshot: str = "",
         memory_context: Optional[str] = None,
         dom_context_pack: Optional[str] = None,
         interaction_context: Optional[Dict[str, Any]] = None,
     ) -> str:
+        hist_clean = self._sanitize_chat_history_for_prompt(history)[-6:]
         history_text = "\n".join(
-            [f"- {item.get('role', 'user')}: {item.get('content', '')}" for item in history[-6:]]
+            [f"- {item.get('role', 'user')}: {item.get('content', '')}" for item in hist_clean]
         )
         plan_text = json.dumps(current_plan or {}, ensure_ascii=False)
         iact = self._format_interaction_context(interaction_context)
@@ -708,25 +968,53 @@ class LocalAIService:
             "navigate step: URL only in input_value; empty selector fields. "
             "wait: seconds 1-120 OR milliseconds if >120. "
             "input: input_value must contain the exact text to type (never empty). "
-            "click: selector_value must be non-empty unless probe_index is set. "
+            "click: selector_value must be a real locator from the snapshot, never a lone digit; use probe_index for line [n]. "
             "verify: put expected substring in input_value when checking text. "
-            "Do not return markdown."
+            "Do not return markdown. OUTPUT FORMAT: one JSON object only—no fences, no prose."
         )
 
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
-        if not content:
+        raw = _strip_llm_noise((content or "").strip())
+        if not raw:
             raise ValueError("本地模型返回为空")
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            pass
 
-        start = content.find("{")
-        end = content.rfind("}")
-        if start >= 0 and end > start:
-            snippet = content[start : end + 1]
-            return json.loads(snippet)
-        raise ValueError("本地模型返回非JSON格式，无法解析")
+        bases = _collect_json_try_strings(raw)
+        variants: List[str] = []
+        seen = set()
+        for b in bases:
+            for v in (
+                b,
+                _normalize_smart_quotes_for_json(b),
+                _repair_json_trailing_commas(b),
+                _repair_json_trailing_commas(_normalize_smart_quotes_for_json(b)),
+            ):
+                t = (v or "").strip()
+                if t and t not in seen:
+                    seen.add(t)
+                    variants.append(t)
+
+        last_err: Optional[Exception] = None
+        for cand in variants:
+            try:
+                val = json.loads(cand)
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                last_err = e
+                continue
+            root = _coerce_plan_root(val)
+            if isinstance(root, dict):
+                return root
+            last_err = ValueError("JSON 已解析但不是预期的用例对象或步骤列表")
+
+        preview = raw.replace("\r", " ").replace("\n", " ").strip()[:220]
+        msg = (
+            "无法将模型应答解析为用例 JSON（已尝试：markdown 代码块、截取首个对象、修复尾随逗号、弯引号等）。"
+            "建议：① 重启本 Web 服务（避免加载旧的 .pyc）；② 升级 Ollama；③ 设置环境变量 LOCAL_LLM_JSON_FORMAT=0 关闭 JSON 约束；"
+            "④ 设置 LOCAL_LLM_JSON_RETRY_PLAIN=0 可禁用「无 format 重试」；⑤ 换用 qwen2.5、llama3.1 等指令模型。"
+            f" 应答摘要：{preview!r}"
+        )
+        if last_err is not None:
+            raise ValueError(msg) from last_err
+        raise ValueError(msg)
 
     def _normalize_output(
         self,
@@ -781,6 +1069,18 @@ class LocalAIService:
                     pi = int(float(str(pi_raw).strip()))
                 except (TypeError, ValueError):
                     pi = None
+            if (
+                pi is None
+                and action in ("click", "input", "verify", "extract_text")
+                and selector_value.isdigit()
+            ):
+                try:
+                    cand_pi = int(selector_value)
+                    if probe_by_index and cand_pi in probe_by_index:
+                        pi = cand_pi
+                    selector_value = ""
+                except ValueError:
+                    selector_value = ""
             if pi is not None and pi in probe_by_index:
                 ent = probe_by_index[pi]
                 rec = _norm_str(ent.get("recommended_selector"))

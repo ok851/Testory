@@ -12,6 +12,7 @@ import uuid
 import json
 import re
 import functools
+import threading
 import io
 import tempfile
 import subprocess
@@ -60,15 +61,14 @@ from playwright_automation import (
     sync_get_page_title,
     sync_get_selected_element,
     sync_hover_element,
+    sync_execute_script_steps,
     sync_navigate_to,
     sync_right_click_element,
     sync_scroll_by_delta,
     sync_scroll_page,
+    sync_start_browser,
     sync_select_date,
     sync_select_option,
-    single_step_action_supported,
-    sync_execute_single_db_step,
-    sync_start_browser,
     sync_swipe_element,
     sync_take_screenshot,
     sync_take_screenshot_bytes,
@@ -90,7 +90,11 @@ from logger import uat_logger
 from license_manager import license_manager, LicenseType
 from cloud_llm_gateway import CloudLLMGateway
 from ai_local_inference import local_ai_service
-from ai_step_normalization import apply_step_normalization_to_plan, dedupe_and_validate_ai_steps
+from ai_step_normalization import (
+    ai_plan_steps_to_playwright_script_steps,
+    apply_step_normalization_to_plan,
+    dedupe_and_validate_ai_steps,
+)
 from ai_platform_audit import log_ai_plan_to_audit
 import asyncio
 import threading
@@ -1310,6 +1314,10 @@ def api_delete_test_case(case_id):
     success = db.delete_test_case(case_id)
     
     if success:
+        try:
+            db.prune_orphan_run_history()
+        except Exception:
+            pass
         return jsonify({'success': True})
     else:
         return jsonify({'success': False, 'error': '删除测试用例失败'}), 400
@@ -1949,15 +1957,30 @@ def api_delete_ai_model():
     })
 
 
-@app.route('/api/ai/task/plan', methods=['POST'])
-@login_required
-@api_error_handler
-@log_api_request
-def api_ai_task_plan():
-    """
-    AI任务规划入口（本地模型真实推理）。
-    """
-    data = request.get_json(silent=True) or {}
+# --- AI 后台任务：用户离开 AI 测试页后推理在服务端继续（适用于单进程/单 Gunicorn worker；多 worker 需外存队列） ---
+_AI_BG_JOBS: dict = {}
+_AI_BG_LOCK = threading.Lock()
+
+
+def _ai_bg_prune_locked():
+    now = time.time()
+    dead = []
+    for jid, rec in list(_AI_BG_JOBS.items()):
+        st = rec.get('status')
+        t_done = rec.get('t_done')
+        if st in ('done', 'error', 'cancelled') and t_done and (now - t_done) > 3600:
+            dead.append(jid)
+        if len(dead) > 500:
+            break
+    for jid in dead:
+        _AI_BG_JOBS.pop(jid, None)
+
+
+def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
+    """规划逻辑（供同步 API 与后台线程共用）。返回体可含 _http 表示建议 HTTP 状态码。"""
+    from ai_page_probe import probe_registry_from_interactive_snapshot
+
+    data = data or {}
     task_type = (data.get('task_type') or 'test_case_generation').strip()
     goal = (data.get('goal') or '').strip()
     project_name = (data.get('project_name') or '').strip()
@@ -1965,19 +1988,21 @@ def api_ai_task_plan():
     profile, legacy_model = _resolve_inference_profile(selected_model)
 
     if not goal:
-        return jsonify({'success': False, 'error': 'goal不能为空'}), 400
+        return {'success': False, 'error': 'goal不能为空', '_http': 400}
 
     route = _route_ai_model(task_type)
     if route['provider'] != 'local':
-        return jsonify({
+        return {
             'success': False,
-            'error': '该任务需走云端分析接口，请调用 /api/ai/task/cloud-analyze'
-        }), 400
-
-    from ai_page_probe import probe_registry_from_interactive_snapshot
+            'error': '该任务需走云端分析接口，请调用 /api/ai/task/cloud-analyze',
+            '_http': 400,
+        }
 
     embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
     target_page_url = (data.get('target_page_url') or '').strip()
+    execution_mode = (data.get('execution_mode') or '').strip().lower()
+    run_execute = execution_mode in ('run', 'run_and_record', 'execute')
+
     page_snapshot = None
     probe_registry = None
     probe_url = (target_page_url or None) if not embedded_sid else None
@@ -1985,19 +2010,50 @@ def api_ai_task_plan():
 
     if embedded_sid:
         if not embedded_gateway_enabled():
-            return jsonify({'success': False, 'error': '远程 Chromium 网关未配置'}), 503
+            return {'success': False, 'error': '远程 Chromium 网关未配置', '_http': 503}
         j, err = embedded_gateway_json(
             'GET',
             f'/internal/session/{embedded_sid}/inspect',
-            user_id=current_user.id,
+            user_id=user_id,
         )
         if not j or not j.get('success'):
             detail = (j or {}).get('detail')
-            return jsonify({
+            return {
                 'success': False,
                 'error': str(err or detail or '无法获取远程页结构，请确认远程画布已连接'),
-            }), 502
+                '_http': 502,
+            }
         snap = j.get('data') or {}
+        snap_data = snap
+        ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
+        page_snapshot = ps or None
+        probe_registry = pr if pr else None
+        probe_url = (pu or target_page_url).strip() or None
+    elif run_execute:
+        if not target_page_url:
+            return {
+                'success': False,
+                'error': '「运行」模式需要填写目标页面 URL，以便在主 Playwright 会话中打开页面并执行步骤。',
+                '_http': 400,
+            }
+        try:
+            sync_start_browser(headless=True)
+        except Exception:
+            pass
+        if not sync_automation_session_usable():
+            return {
+                'success': False,
+                'error': '主浏览器未就绪，无法执行「运行」。请确认 Playwright 可用，或先在 AI 测试页点击「打开」后再试。',
+                '_http': 400,
+            }
+        try:
+            sync_navigate_to(target_page_url)
+        except Exception as e:
+            return {'success': False, 'error': f'导航到目标 URL 失败：{e}', '_http': 500}
+        try:
+            snap = sync_get_interactive_page_snapshot(150)
+        except Exception as e:
+            return {'success': False, 'error': f'获取页面可交互结构失败：{e}', '_http': 500}
         snap_data = snap
         ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
         page_snapshot = ps or None
@@ -2006,7 +2062,7 @@ def api_ai_task_plan():
 
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
     mem_ctx = _ai_memory_context_block(
-        current_user.id, goal, probe_url=probe_url or target_page_url or "", project_name=project_name
+        user_id, goal, probe_url=probe_url or target_page_url or "", project_name=project_name
     )
     try:
         generated = local_ai_service.generate_case_and_steps(
@@ -2021,26 +2077,212 @@ def api_ai_task_plan():
             dom_context_pack=dpack or None,
         )
     except ValueError as e:
-        return jsonify({
+        return {
             'success': False,
             'error': str(e),
-            'hint': '可先执行: ollama serve，并确认模型已拉取。'
-        }), 503
+            'hint': '可先执行: ollama serve，并确认模型已拉取。',
+            '_http': 503,
+        }
+    except Exception as e:
+        uat_logger.exception('ai plan execute failed')
+        return {'success': False, 'error': str(e), '_http': 500}
+
     generated, norm_warnings = apply_step_normalization_to_plan(generated)
     log_ai_plan_to_audit(
-        current_user.id,
-        current_user.username,
+        user_id,
+        username,
         'AI_PLAN_GENERATE',
         generated,
-        request.remote_addr,
+        remote_addr,
     )
-    return jsonify({
+    out: dict = {
         'success': True,
         'provider': route['provider'],
         'model': generated.get('meta', {}).get('model') or route['model'],
         'plan': generated,
         'warnings': norm_warnings,
-    })
+    }
+    if run_execute:
+        if embedded_sid:
+            out['execution'] = {
+                'ran': False,
+                'skipped_reason': (
+                    '已连接远程画布时，不在服务端主会话中自动执行步骤；'
+                    '已根据远程页结构生成用例。若需「边执行边记录」，请断开远程并在主浏览器中打开同一 URL 后使用「运行」。'
+                ),
+            }
+        else:
+            try:
+                script_steps = ai_plan_steps_to_playwright_script_steps(generated.get('steps') or [])
+                exec_results = sync_execute_script_steps(script_steps)
+                out['execution'] = {'ran': True, 'results': exec_results}
+            except Exception as e:
+                uat_logger.exception('ai run-and-record execution')
+                out['execution'] = {'ran': True, 'error': str(e), 'results': []}
+    return out
+
+
+def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
+    """多轮优化逻辑（供同步 API 与后台线程共用）。"""
+    from ai_page_probe import probe_registry_from_interactive_snapshot
+
+    data = data or {}
+    message = (data.get('message') or '').strip()
+    project_name = (data.get('project_name') or '').strip()
+    current_plan = data.get('current_plan') or {}
+    history = data.get('history') or []
+    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    profile, legacy_model = _resolve_inference_profile(selected_model)
+    if not message:
+        return {'success': False, 'error': 'message不能为空', '_http': 400}
+
+    route = _route_ai_model('test_case_generation')
+    if route['provider'] != 'local':
+        return {'success': False, 'error': '当前仅支持本地模型对话', '_http': 400}
+
+    embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
+    target_page_url = (data.get('target_page_url') or '').strip()
+    page_snapshot = None
+    probe_registry = None
+    probe_url = (target_page_url or None) if not embedded_sid else None
+    snap_data = None
+
+    if embedded_sid:
+        if not embedded_gateway_enabled():
+            return {'success': False, 'error': '远程 Chromium 网关未配置', '_http': 503}
+        j, err = embedded_gateway_json(
+            'GET',
+            f'/internal/session/{embedded_sid}/inspect',
+            user_id=user_id,
+        )
+        if not j or not j.get('success'):
+            detail = (j or {}).get('detail')
+            return {
+                'success': False,
+                'error': str(err or detail or '无法获取远程页结构'),
+                '_http': 502,
+            }
+        snap = j.get('data') or {}
+        snap_data = snap
+        ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
+        page_snapshot = ps or None
+        probe_registry = pr if pr else None
+        probe_url = (pu or target_page_url).strip() or None
+
+    dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
+    mem_ctx = _ai_memory_context_block(
+        user_id, message, probe_url=probe_url or target_page_url or "", project_name=project_name
+    )
+    interaction_context = None
+    _ic: dict = {}
+    if data.get('focus_step_index') is not None and str(data.get('focus_step_index', '')).strip() != '':
+        _ic['focus_step_index'] = data.get('focus_step_index')
+    _fi = data.get('focus_step_indices')
+    if isinstance(_fi, list) and _fi:
+        _ic['focus_step_indices'] = _fi
+    _sel = (data.get('browser_selection_text') or data.get('selection_text') or '').strip()
+    if _sel:
+        _ic['browser_selection_text'] = _sel
+    _kind = (data.get('action_kind') or data.get('intent') or '').strip()
+    if _kind:
+        _ic['action_kind'] = _kind
+    if _ic:
+        interaction_context = _ic
+    try:
+        generated = local_ai_service.refine_case_and_steps(
+            user_message=message,
+            project_name=project_name,
+            current_plan=current_plan if isinstance(current_plan, dict) else {},
+            history=history if isinstance(history, list) else [],
+            model=legacy_model,
+            profile=profile,
+            page_snapshot=page_snapshot,
+            probe_registry=probe_registry,
+            probe_url=probe_url,
+            memory_context=mem_ctx or None,
+            dom_context_pack=dpack or None,
+            interaction_context=interaction_context,
+        )
+    except ValueError as e:
+        return {
+            'success': False,
+            'error': str(e),
+            'hint': '可先执行: ollama serve，并确认模型已拉取。',
+            '_http': 503,
+        }
+    except Exception as e:
+        uat_logger.exception('ai chat execute failed')
+        return {'success': False, 'error': str(e), '_http': 500}
+
+    generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    log_ai_plan_to_audit(
+        user_id,
+        username,
+        'AI_PLAN_REFINE',
+        generated,
+        remote_addr,
+    )
+    return {
+        'success': True,
+        'provider': 'local',
+        'model': generated.get('meta', {}).get('model') or route['model'],
+        'plan': generated,
+        'warnings': norm_warnings,
+    }
+
+
+def _start_ai_bg_job_thread(job_id: str, kind: str, data: dict, user_id: int, username: str, remote_addr):
+    data_copy = dict(data)
+
+    def _runner():
+        out = {'success': False, 'error': 'unknown', '_http': 500}
+        try:
+            if kind == 'plan':
+                out = _execute_ai_task_plan(data_copy, user_id, username, remote_addr)
+            elif kind == 'chat':
+                out = _execute_ai_task_chat(data_copy, user_id, username, remote_addr)
+            else:
+                out = {'success': False, 'error': 'unknown job kind', '_http': 400}
+        except Exception as ex:
+            uat_logger.exception('ai bg job %s', job_id)
+            out = {'success': False, 'error': str(ex), '_http': 500}
+        with _AI_BG_LOCK:
+            rec = _AI_BG_JOBS.get(job_id)
+            if not rec:
+                return
+            if rec.get('cancelled'):
+                rec['status'] = 'cancelled'
+                rec['t_done'] = time.time()
+                return
+            body = {k: v for k, v in out.items() if k != '_http'}
+            rec['http_status'] = int(out.get('_http', 200))
+            rec['result'] = body
+            rec['status'] = 'done' if body.get('success') else 'error'
+            if not body.get('success'):
+                rec['error'] = body.get('error') or 'error'
+            rec['t_done'] = time.time()
+
+    threading.Thread(target=_runner, daemon=True, name='ai-bg-' + job_id[:8]).start()
+
+
+@app.route('/api/ai/task/plan', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_task_plan():
+    """
+    AI任务规划入口（本地模型真实推理）。
+    """
+    data = request.get_json(silent=True) or {}
+    out = _execute_ai_task_plan(
+        data,
+        current_user.id,
+        current_user.username,
+        request.remote_addr,
+    )
+    code = int(out.get('_http', 200))
+    body = {k: v for k, v in out.items() if k != '_http'}
+    return jsonify(body), code
 
 
 @app.route('/api/ai/task/cloud-analyze', methods=['POST'])
@@ -2263,104 +2505,124 @@ def api_ai_task_chat():
     - action_kind / intent: 如 optimize_step、merge_steps、assert_from_selection
     """
     data = request.get_json(silent=True) or {}
+    out = _execute_ai_task_chat(
+        data,
+        current_user.id,
+        current_user.username,
+        request.remote_addr,
+    )
+    code = int(out.get('_http', 200))
+    body = {k: v for k, v in out.items() if k != '_http'}
+    return jsonify(body), code
+
+
+@app.route('/api/ai/task/plan-async', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_task_plan_async():
+    """提交规划任务，立即返回 job_id；推理在后台线程继续（见 GET /api/ai/task/job/<id>）。"""
+    data = request.get_json(silent=True) or {}
+    goal = (data.get('goal') or '').strip()
+    if not goal:
+        return jsonify({'success': False, 'error': 'goal不能为空'}), 400
+    task_type = (data.get('task_type') or 'test_case_generation').strip()
+    route = _route_ai_model(task_type)
+    if route['provider'] != 'local':
+        return jsonify({
+            'success': False,
+            'error': '该任务需走云端分析接口，请调用 /api/ai/task/cloud-analyze',
+        }), 400
+    job_id = str(uuid.uuid4())
+    with _AI_BG_LOCK:
+        _ai_bg_prune_locked()
+        _AI_BG_JOBS[job_id] = {
+            'user_id': current_user.id,
+            'kind': 'plan',
+            'status': 'running',
+            't0': time.time(),
+            'cancelled': False,
+        }
+    _start_ai_bg_job_thread(
+        job_id,
+        'plan',
+        data,
+        current_user.id,
+        current_user.username,
+        request.remote_addr,
+    )
+    return jsonify({'success': True, 'job_id': job_id}), 202
+
+
+@app.route('/api/ai/task/chat-async', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_task_chat_async():
+    """提交优化任务，立即返回 job_id；推理在后台线程继续。"""
+    data = request.get_json(silent=True) or {}
     message = (data.get('message') or '').strip()
-    project_name = (data.get('project_name') or '').strip()
-    current_plan = data.get('current_plan') or {}
-    history = data.get('history') or []
-    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
-    profile, legacy_model = _resolve_inference_profile(selected_model)
     if not message:
         return jsonify({'success': False, 'error': 'message不能为空'}), 400
-
     route = _route_ai_model('test_case_generation')
     if route['provider'] != 'local':
         return jsonify({'success': False, 'error': '当前仅支持本地模型对话'}), 400
-
-    from ai_page_probe import probe_registry_from_interactive_snapshot
-
-    embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
-    target_page_url = (data.get('target_page_url') or '').strip()
-    page_snapshot = None
-    probe_registry = None
-    probe_url = (target_page_url or None) if not embedded_sid else None
-    snap_data = None
-
-    if embedded_sid:
-        if not embedded_gateway_enabled():
-            return jsonify({'success': False, 'error': '远程 Chromium 网关未配置'}), 503
-        j, err = embedded_gateway_json(
-            'GET',
-            f'/internal/session/{embedded_sid}/inspect',
-            user_id=current_user.id,
-        )
-        if not j or not j.get('success'):
-            detail = (j or {}).get('detail')
-            return jsonify({
-                'success': False,
-                'error': str(err or detail or '无法获取远程页结构'),
-            }), 502
-        snap = j.get('data') or {}
-        snap_data = snap
-        ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
-        page_snapshot = ps or None
-        probe_registry = pr if pr else None
-        probe_url = (pu or target_page_url).strip() or None
-
-    dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
-    mem_ctx = _ai_memory_context_block(
-        current_user.id, message, probe_url=probe_url or target_page_url or "", project_name=project_name
-    )
-    interaction_context = None
-    _ic: dict = {}
-    if data.get("focus_step_index") is not None and str(data.get("focus_step_index", "")).strip() != "":
-        _ic["focus_step_index"] = data.get("focus_step_index")
-    _fi = data.get("focus_step_indices")
-    if isinstance(_fi, list) and _fi:
-        _ic["focus_step_indices"] = _fi
-    _sel = (data.get("browser_selection_text") or data.get("selection_text") or "").strip()
-    if _sel:
-        _ic["browser_selection_text"] = _sel
-    _kind = (data.get("action_kind") or data.get("intent") or "").strip()
-    if _kind:
-        _ic["action_kind"] = _kind
-    if _ic:
-        interaction_context = _ic
-    try:
-        generated = local_ai_service.refine_case_and_steps(
-            user_message=message,
-            project_name=project_name,
-            current_plan=current_plan if isinstance(current_plan, dict) else {},
-            history=history if isinstance(history, list) else [],
-            model=legacy_model,
-            profile=profile,
-            page_snapshot=page_snapshot,
-            probe_registry=probe_registry,
-            probe_url=probe_url,
-            memory_context=mem_ctx or None,
-            dom_context_pack=dpack or None,
-            interaction_context=interaction_context,
-        )
-    except ValueError as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'hint': '可先执行: ollama serve，并确认模型已拉取。'
-        }), 503
-    generated, norm_warnings = apply_step_normalization_to_plan(generated)
-    log_ai_plan_to_audit(
+    job_id = str(uuid.uuid4())
+    with _AI_BG_LOCK:
+        _ai_bg_prune_locked()
+        _AI_BG_JOBS[job_id] = {
+            'user_id': current_user.id,
+            'kind': 'chat',
+            'status': 'running',
+            't0': time.time(),
+            'cancelled': False,
+        }
+    _start_ai_bg_job_thread(
+        job_id,
+        'chat',
+        data,
         current_user.id,
         current_user.username,
-        'AI_PLAN_REFINE',
-        generated,
         request.remote_addr,
     )
-    return jsonify({
-        'success': True,
-        'provider': 'local',
-        'model': generated.get('meta', {}).get('model') or route['model'],
-        'plan': generated,
-        'warnings': norm_warnings,
-    })
+    return jsonify({'success': True, 'job_id': job_id}), 202
+
+
+@app.route('/api/ai/task/job/<job_id>', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_task_job_status(job_id):
+    """查询后台 AI 任务状态；完成后 result 与同步接口 JSON 一致。"""
+    with _AI_BG_LOCK:
+        rec = _AI_BG_JOBS.get(job_id)
+    if not rec or rec.get('user_id') != current_user.id:
+        return jsonify({'success': False, 'error': '任务不存在'}), 404
+    st = rec.get('status', 'running')
+    if st == 'running':
+        return jsonify({'success': True, 'status': 'running'})
+    if st == 'cancelled':
+        return jsonify({'success': True, 'status': 'cancelled'})
+    if st == 'error':
+        return jsonify({
+            'success': True,
+            'status': 'error',
+            'error': rec.get('error'),
+            'result': rec.get('result'),
+        })
+    return jsonify({'success': True, 'status': 'done', 'result': rec.get('result')})
+
+
+@app.route('/api/ai/task/job/<job_id>/cancel', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_task_job_cancel(job_id):
+    """标记取消：后台线程结束后不写入结果（无法中断已在进行的模型推理）。"""
+    with _AI_BG_LOCK:
+        rec = _AI_BG_JOBS.get(job_id)
+        if not rec or rec.get('user_id') != current_user.id:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        rec['cancelled'] = True
+    return jsonify({'success': True})
 
 
 @app.route('/api/ai/cases/append-steps', methods=['POST'])
@@ -3155,6 +3417,10 @@ def api_delete_project(project_id):
     success = db.delete_project(project_id)
 
     if success:
+        try:
+            db.prune_orphan_run_history()
+        except Exception:
+            pass
         return jsonify({'success': True})
     else:
         return jsonify({'success': False, 'error': '删除项目失败'}), 400
@@ -3291,6 +3557,10 @@ def api_delete_case_v2(case_id):
     success = db.delete_test_case_v2(case_id)
     
     if success:
+        try:
+            db.prune_orphan_run_history()
+        except Exception:
+            pass
         return jsonify({'success': True})
     else:
         return jsonify({'success': False, 'error': '删除测试用例失败'}), 400
@@ -4597,141 +4867,6 @@ def api_run_case(case_id):
                 job['active'] = False
                 job['finished_at'] = time.time()
                 job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
-
-
-def _simplify_single_step_api_results(raw):
-    out = []
-    for r in raw or []:
-        if not isinstance(r, dict):
-            continue
-        o = {"status": r.get("status")}
-        if r.get("error"):
-            o["error"] = str(r.get("error"))
-        if r.get("extracted_text") is not None:
-            o["extracted_text"] = r.get("extracted_text")
-        if r.get("screenshot_path"):
-            o["screenshot_path"] = r.get("screenshot_path")
-        out.append(o)
-    return out
-
-
-@app.route("/api/cases/<int:case_id>/run-one-step", methods=["POST"])
-@login_required
-@role_required("admin", "tester", "project_manager", "test_lead")
-@api_error_handler
-@log_api_request
-def api_run_one_step(case_id):
-    """单条步骤试跑（与完整用例使用同一 Playwright 会话，便于调试导航/点击等）。"""
-    data = request.get_json(silent=True) or {}
-    step_id = data.get("step_id")
-    step_order = data.get("step_order")
-    navigate_first = bool(data.get("navigate_first"))
-    if step_id is None and step_order is None:
-        return jsonify({"success": False, "error": "需要 step_id 或 step_order"}), 400
-
-    db = Database()
-    case = db.get_test_case_v2(case_id)
-    if not case:
-        return jsonify({"success": False, "error": "测试用例不存在"}), 404
-    if case.get("project_id") and not db.check_project_access(
-        current_user.id, case["project_id"], "viewer"
-    ):
-        return jsonify({"success": False, "error": "无权限访问此用例"}), 403
-
-    user_id = current_user.id
-    with _case_run_lock:
-        j = _case_run_jobs.get(user_id)
-        if j and j.get("active"):
-            return jsonify(
-                {
-                    "success": False,
-                    "error": "当前有进行中的用例整例执行，请先停止或等待完成后再单步试跑",
-                    "code": "case_run_in_progress",
-                }
-            ), 409
-
-    step = None
-    if step_id:
-        st = db.get_test_step(int(step_id))
-        if not st or int(st.get("case_id") or 0) != case_id:
-            return jsonify({"success": False, "error": "步骤不存在或不属于该用例"}), 400
-        step = st
-    else:
-        all_steps, _tot = db.get_case_steps_paginated(case_id, 1, 5000)
-        for st in all_steps:
-            if int(st.get("step_order") or 0) == int(step_order):
-                step = st
-                break
-        if not step:
-            return jsonify({"success": False, "error": "未找到该序号的步骤"}), 400
-
-    act = (step.get("action") or "").strip().lower()
-    if not single_step_action_supported(act):
-        return jsonify(
-            {
-                "success": False,
-                "error": f"单步试跑暂不支持操作「{act}」；请用「运行用例」全量执行。",
-            }
-        ), 400
-
-    if bool(getattr(automation, "_selection_mode_active", False)):
-        try:
-            sync_disable_element_selection()
-        except Exception:
-            pass
-        try:
-            automation._selection_mode_active = False
-        except Exception:
-            pass
-
-    project_id = case.get("project_id")
-    selector_value = db.resolve_variables(
-        step.get("selector_value", ""), project_id=project_id, case_id=case_id
-    )
-    input_value = db.resolve_variables(
-        step.get("input_value", ""), project_id=project_id, case_id=case_id
-    )
-    st2 = dict(step)
-    st2["selector_value"] = selector_value
-    st2["input_value"] = input_value
-
-    t0 = time.time()
-    try:
-        sync_start_browser()
-    except Exception as e:
-        uat_logger.warning("单步: sync_start_browser: %s", e)
-
-    case_url = (case.get("url") or "").strip()
-    if navigate_first and case_url and act != "navigate":
-        try:
-            sync_navigate_to(case_url)
-        except Exception as e:
-            return jsonify({"success": False, "error": f"按用例 URL 预导航失败: {e}"}), 200
-
-    try:
-        results = sync_execute_single_db_step(st2)
-    except Exception as e:
-        duration_ms = int((time.time() - t0) * 1000)
-        uat_logger.exception("单步执行失败 case=%s step=%s", case_id, step.get("id"))
-        return jsonify(
-            {
-                "success": False,
-                "error": str(e),
-                "duration_ms": duration_ms,
-                "action": act,
-            }
-        )
-    duration_ms = int((time.time() - t0) * 1000)
-    return jsonify(
-        {
-            "success": True,
-            "action": act,
-            "step_id": step.get("id"),
-            "step_order": step.get("step_order"),
-            "duration_ms": duration_ms,
-            "results": _simplify_single_step_api_results(results),
-        }
-    )
 
 
 @app.route('/api/cases/current-run/status', methods=['GET'])

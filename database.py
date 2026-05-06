@@ -508,6 +508,14 @@ class Database:
         
         # 创建缺陷管理相关表
         self._create_defect_tables(cursor)
+
+        # 清理「用例已删除但运行历史仍在」的遗留数据，避免测试报表统计偏高
+        try:
+            n_orphan = self._cleanup_orphan_run_history(cursor)
+            if n_orphan:
+                _db_log.info("已清理孤立运行历史记录 %s 条（关联用例已不存在）", n_orphan)
+        except Exception as e:
+            _db_log.warning("清理孤立运行历史失败: %s", e)
         
         conn.commit()
         conn.close()
@@ -855,27 +863,20 @@ class Database:
         
         return success
     
-    def _delete_case_cascade(self, cursor, case_id: int) -> None:
-        """在同一 cursor/事务内删除用例及依赖行（SQLite 外键顺序：缺陷 → 步骤结果 → 运行历史 → … → 用例）。"""
-        cursor.execute("SELECT id FROM run_history WHERE case_id = ?", (case_id,))
-        rh_ids = [row[0] for row in cursor.fetchall()]
-
-        sr_ids = []
-        if rh_ids:
-            ph = ",".join("?" * len(rh_ids))
-            cursor.execute(
-                f"SELECT id FROM step_results WHERE run_history_id IN ({ph})",
-                rh_ids,
-            )
-            sr_ids = [row[0] for row in cursor.fetchall()]
+    def _delete_run_histories_bundle(self, cursor, rh_ids: List[int]) -> None:
+        """删除给定 run_history 主键及其 step_results、关联缺陷（不按 case_id 删缺陷）。"""
+        if not rh_ids:
+            return
+        ph = ",".join("?" * len(rh_ids))
+        cursor.execute(
+            f"SELECT id FROM step_results WHERE run_history_id IN ({ph})",
+            rh_ids,
+        )
+        sr_ids = [row[0] for row in cursor.fetchall()]
 
         defect_ids = set()
-        cursor.execute("SELECT id FROM defects WHERE case_id = ?", (case_id,))
+        cursor.execute(f"SELECT id FROM defects WHERE run_history_id IN ({ph})", rh_ids)
         defect_ids.update(row[0] for row in cursor.fetchall())
-        if rh_ids:
-            ph = ",".join("?" * len(rh_ids))
-            cursor.execute(f"SELECT id FROM defects WHERE run_history_id IN ({ph})", rh_ids)
-            defect_ids.update(row[0] for row in cursor.fetchall())
         if sr_ids:
             sph = ",".join("?" * len(sr_ids))
             cursor.execute(
@@ -891,10 +892,52 @@ class Database:
             cursor.execute(f"DELETE FROM defect_history WHERE defect_id IN ({dph})", ids_list)
             cursor.execute(f"DELETE FROM defects WHERE id IN ({dph})", ids_list)
 
-        if rh_ids:
-            ph = ",".join("?" * len(rh_ids))
-            cursor.execute(f"DELETE FROM step_results WHERE run_history_id IN ({ph})", rh_ids)
-            cursor.execute(f"DELETE FROM run_history WHERE id IN ({ph})", rh_ids)
+        cursor.execute(f"DELETE FROM step_results WHERE run_history_id IN ({ph})", rh_ids)
+        cursor.execute(f"DELETE FROM run_history WHERE id IN ({ph})", rh_ids)
+
+    def _cleanup_orphan_run_history(self, cursor) -> int:
+        """删除 case_id 为空或对应 test_cases 行已不存在的运行历史。返回删除的 run_history 条数。"""
+        cursor.execute(
+            """
+            SELECT rh.id FROM run_history rh
+            WHERE rh.case_id IS NULL
+               OR NOT EXISTS (SELECT 1 FROM test_cases tc WHERE tc.id = rh.case_id)
+            """
+        )
+        orphan_ids = [row[0] for row in cursor.fetchall()]
+        self._delete_run_histories_bundle(cursor, orphan_ids)
+        return len(orphan_ids)
+
+    def prune_orphan_run_history(self) -> int:
+        """删除孤立运行历史（独立事务）。删除项目/用例后调用可使报表立即与库一致。"""
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            n = self._cleanup_orphan_run_history(cursor)
+            conn.commit()
+            return n
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _delete_case_cascade(self, cursor, case_id: int) -> None:
+        """在同一 cursor/事务内删除用例及依赖行（SQLite 外键顺序：缺陷 → 步骤结果 → 运行历史 → … → 用例）。"""
+        cursor.execute("SELECT id FROM run_history WHERE case_id = ?", (case_id,))
+        rh_ids = [row[0] for row in cursor.fetchall()]
+        self._delete_run_histories_bundle(cursor, rh_ids)
+
+        defect_ids = set()
+        cursor.execute("SELECT id FROM defects WHERE case_id = ?", (case_id,))
+        defect_ids.update(row[0] for row in cursor.fetchall())
+
+        if defect_ids:
+            ids_list = list(defect_ids)
+            dph = ",".join("?" * len(ids_list))
+            cursor.execute(f"DELETE FROM defect_comments WHERE defect_id IN ({dph})", ids_list)
+            cursor.execute(f"DELETE FROM defect_history WHERE defect_id IN ({dph})", ids_list)
+            cursor.execute(f"DELETE FROM defects WHERE id IN ({dph})", ids_list)
 
         cursor.execute("DELETE FROM test_scripts WHERE case_id = ?", (case_id,))
         cursor.execute("DELETE FROM variables WHERE case_id = ?", (case_id,))
@@ -1730,46 +1773,44 @@ class Database:
         return history
     
     def delete_run_history(self, history_id: int) -> bool:
-        """删除运行历史记录"""
+        """删除运行历史记录（含步骤结果与关联缺陷）"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM run_history WHERE id = ?", (history_id,))
-        
-        success = cursor.rowcount > 0
-        
-        conn.commit()
-        conn.close()
-        
-        return success
+        try:
+            cursor.execute("SELECT 1 FROM run_history WHERE id = ?", (history_id,))
+            if not cursor.fetchone():
+                return False
+            self._delete_run_histories_bundle(cursor, [history_id])
+            conn.commit()
+            return True
+        finally:
+            conn.close()
     
     def delete_case_run_history(self, case_id: int) -> bool:
         """删除指定测试用例的所有运行历史记录"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM run_history WHERE case_id = ?", (case_id,))
-        
-        success = cursor.rowcount > 0
-        
-        conn.commit()
-        conn.close()
-        
-        return success
+        try:
+            cursor.execute("SELECT id FROM run_history WHERE case_id = ?", (case_id,))
+            rh_ids = [row[0] for row in cursor.fetchall()]
+            self._delete_run_histories_bundle(cursor, rh_ids)
+            conn.commit()
+            return len(rh_ids) > 0
+        finally:
+            conn.close()
     
     def delete_all_run_history(self) -> bool:
         """删除所有运行历史记录"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
-        cursor.execute("DELETE FROM run_history")
-        
-        success = cursor.rowcount > 0
-        
-        conn.commit()
-        conn.close()
-        
-        return success
+        try:
+            cursor.execute("SELECT id FROM run_history")
+            rh_ids = [row[0] for row in cursor.fetchall()]
+            self._delete_run_histories_bundle(cursor, rh_ids)
+            conn.commit()
+            return len(rh_ids) > 0
+        finally:
+            conn.close()
     
     def get_run_history_detail(self, record_id: int) -> Dict[str, Any]:
         """获取运行历史记录详情"""

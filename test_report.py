@@ -46,7 +46,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT COUNT(*) 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE {where_clause}
         """, params)
         total_runs = cursor.fetchone()[0]
@@ -55,7 +55,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT COUNT(*) 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE (rh.status = 'passed' OR rh.status = 'success') AND {where_clause}
         """, params)
         passed_runs = cursor.fetchone()[0]
@@ -64,7 +64,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT COUNT(*) 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE (rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail') AND {where_clause}
         """, params)
         failed_runs = cursor.fetchone()[0]
@@ -73,7 +73,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT COUNT(*) 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE rh.status NOT IN ('passed', 'failed', 'success', 'error', 'fail') AND {where_clause}
         """, params)
         other_runs = cursor.fetchone()[0]
@@ -85,7 +85,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT AVG(rh.duration) 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE rh.duration IS NOT NULL AND {where_clause}
         """, params)
         avg_duration = cursor.fetchone()[0] or 0
@@ -94,7 +94,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT SUM(rh.duration) 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE rh.duration IS NOT NULL AND {where_clause}
         """, params)
         total_duration = cursor.fetchone()[0] or 0
@@ -103,7 +103,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT COUNT(DISTINCT rh.case_id) 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE {where_clause}
         """, params)
         total_cases = cursor.fetchone()[0]
@@ -157,7 +157,7 @@ class TestReportGenerator:
         cursor.execute(f"""
             SELECT rh.status, COUNT(*) as count 
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE {where_clause}
             GROUP BY rh.status
             ORDER BY count DESC
@@ -224,14 +224,14 @@ class TestReportGenerator:
                 cursor.execute(f"""
                     SELECT COUNT(*) 
                     FROM run_history rh 
-                    LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+                    INNER JOIN test_cases tc ON rh.case_id = tc.id 
                     WHERE rh.duration >= ? AND {where_clause}
                 """, [range_info['min']] + params)
             else:
                 cursor.execute(f"""
                     SELECT COUNT(*) 
                     FROM run_history rh 
-                    LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+                    INNER JOIN test_cases tc ON rh.case_id = tc.id 
                     WHERE rh.duration >= ? AND rh.duration < ? AND {where_clause}
                 """, [range_info['min'], range_info['max']] + params)
             
@@ -280,7 +280,7 @@ class TestReportGenerator:
                 SUM(CASE WHEN rh.status = 'passed' OR rh.status = 'success' THEN 1 ELSE 0 END) as passed,
                 SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail' THEN 1 ELSE 0 END) as failed
             FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+            INNER JOIN test_cases tc ON rh.case_id = tc.id 
             WHERE {where_clause}
             GROUP BY DATE(rh.created_at)
             ORDER BY date ASC
@@ -311,8 +311,10 @@ class TestReportGenerator:
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        # 构建查询条件
-        where_conditions = []
+        # 构建查询条件（排除 project_id 指向已删项目的脏数据）
+        where_conditions = [
+            "(tc.project_id IS NULL OR EXISTS (SELECT 1 FROM projects pr WHERE pr.id = tc.project_id))"
+        ]
         params = []
         
         if project_id:
@@ -329,7 +331,7 @@ class TestReportGenerator:
         
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
-        # 按用例统计
+        # 从运行记录聚合：已删除用例的运行历史会一并删除，不会出现在报表；孤立 run_history 无对应 tc 也会被 INNER JOIN 排除
         cursor.execute(f"""
             SELECT 
                 tc.id as case_id,
@@ -339,8 +341,8 @@ class TestReportGenerator:
                 SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail' THEN 1 ELSE 0 END) as failed_runs,
                 AVG(rh.duration) as avg_duration,
                 MAX(rh.created_at) as last_run_time
-            FROM test_cases tc
-            LEFT JOIN run_history rh ON tc.id = rh.case_id
+            FROM run_history rh
+            INNER JOIN test_cases tc ON tc.id = rh.case_id
             WHERE {where_clause}
             GROUP BY tc.id, tc.name
             ORDER BY total_runs DESC

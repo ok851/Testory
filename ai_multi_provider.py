@@ -44,8 +44,9 @@ def openai_compatible_chat(
             {
                 "role": "system",
                 "content": (
-                    "You are a senior QA engineer. Return only JSON, no markdown. "
-                    "Use web UI actions compatible with a test runner."
+                    "You are a senior QA engineer. Reply with exactly one JSON object only—no markdown fences, "
+                    "no commentary. First non-whitespace character must be '{'. "
+                    "Schema: UI test plan with case_name, case_url, description, precondition, expected_result, steps[]."
                 ),
             },
             {"role": "user", "content": prompt},

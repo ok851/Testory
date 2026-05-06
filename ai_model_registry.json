@@ -1,14 +1,14 @@
 {
   "version": 2,
-  "active_profile_id": "a1b2c3d4-e5f6-47a8-9abc-def012345678",
+  "active_profile_id": "f860bc23-30a0-402d-8591-0b29c770b7ff",
   "profiles": [
     {
-      "id": "a1b2c3d4-e5f6-47a8-9abc-def012345678",
+      "id": "f860bc23-30a0-402d-8591-0b29c770b7ff",
       "provider": "ollama",
       "api_style": "ollama",
       "model_type": "test_case_generation",
-      "model_id": "qwen2:7b",
-      "label": "qwen2:7b",
+      "model_id": "qwen3-vl:8b",
+      "label": "qwen3-vl:8b",
       "api_key": "",
       "base_url": ""
     }
