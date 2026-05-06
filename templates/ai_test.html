@@ -251,6 +251,47 @@
         z-index: 2;
         background: #fff;
     }
+    .ai-browser-remote-canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 4;
+        background: #0f172a;
+        object-fit: contain;
+        cursor: default;
+        outline: none;
+    }
+    .ai-browser-remote-canvas[hidden] { display: none !important; }
+    .ai-browser-embed-col.mode-remote-canvas .ai-browser-embed {
+        visibility: hidden;
+        pointer-events: none;
+    }
+    .ai-browser-iframe-banner {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 8;
+        padding: 10px 12px 12px;
+        background: linear-gradient(180deg, rgba(254,252,232,0.3), rgba(254,243,199,0.97));
+        border-top: 1px solid #f59e0b;
+        font-size: 12px;
+        line-height: 1.55;
+        color: #78350f;
+        box-shadow: 0 -6px 24px rgba(0,0,0,0.12);
+    }
+    html.dark .ai-browser-iframe-banner {
+        background: linear-gradient(180deg, rgba(15,23,42,0.2), rgba(30,27,75,0.96));
+        border-top-color: #a855f7;
+        color: #e9d5ff;
+    }
+    .ai-browser-iframe-banner[hidden] { display: none !important; }
+    .ai-browser-iframe-banner__inner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+    .ai-browser-iframe-banner__inner strong { flex: 0 0 auto; }
+    .ai-browser-iframe-banner__inner span { flex: 1 1 220px; min-width: 0; }
+    .ai-browser-iframe-banner__actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .ai-browser-placeholder {
         position: relative;
         z-index: 3;
@@ -802,6 +843,8 @@
                 <div class="ai-browser-panel__head">
                     <span>内置浏览器 <span style="font-weight:500;opacity:.85;font-size:12px;">(本区域为 <strong>内嵌真实页面</strong>；部分站禁止嵌入或会长时间「读取中…」，为站点防护非本平台遮罩，请用「全屏内嵌 / 新窗口」尝试)</span></span>
                     <div class="ai-browser-panel__head-actions">
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserRemoteCanvasBtn" title="使用网关远程画布（需配置 EMBEDDED_BROWSER_*）" hidden>远程画布</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserBackToIframeBtn" title="关闭远程串流，恢复 iframe 预览" hidden>切回 iframe</button>
                         <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserFullscreenBtn" title="全屏本区域，便于大画面浏览">全屏内嵌</button>
                     </div>
                 </div>
@@ -820,14 +863,29 @@
                 <div class="ai-browser-viewport-col">
                 <div class="ai-browser-viewport ai--nav-mode" id="aiBrowserViewport">
                 <div class="ai-browser-embed-col">
+                    <canvas id="aiBrowserRemoteCanvas" class="ai-browser-remote-canvas" hidden tabindex="0" aria-label="远程浏览器画面"></canvas>
                     <iframe id="aiBrowserEmbed" class="ai-browser-embed" title="内嵌页面"
                         sandbox="allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
                         referrerpolicy="no-referrer-when-downgrade"
                         src="about:blank"></iframe>
                     <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请先在上方地址栏填写 https 地址，再点「打开」。此处为真实网页；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。</div>
+                    <div id="aiBrowserIframeBlockedBanner" class="ai-browser-iframe-banner" hidden role="alert">
+                        <div class="ai-browser-iframe-banner__inner">
+                            <strong>内嵌预览受限</strong>
+                            <span>当前页在 iframe 中无法正常显示（常见于站点禁止嵌入、网络被拒或 X-Frame 策略）。若已配置远程网关，平台会<strong>自动尝试画布串流</strong>；亦可手动点「连接远程画布」。<strong>自动化仍可在后台 Playwright 会话中执行</strong>。</span>
+                            <div class="ai-browser-iframe-banner__actions">
+                                <button type="button" class="btn btn-primary btn-sm" id="aiBrowserBannerRemoteCanvas">连接远程画布</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="aiBrowserBannerOpenNew">新窗口打开</button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserBannerDismiss">收起说明</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 </div>
-                <div class="ai-browser-viewport-hint">若页面长时间「读取中…」，多为站点在 iframe 下的策略，可用「新窗口」打开。跨域时无法在顶部代替站内前进/后退。</div>
+                <div class="ai-browser-viewport-hint">若页面长时间「读取中…」或提示「拒绝连接」，多为站点禁止在第三方页面内嵌（非本平台故障）。请点「新窗口」或使用下方「显示内嵌说明」。跨域时无法在顶部代替站内前进/后退。</div>
+                <div style="font-size:11px;color:#64748b;margin-top:4px;">
+                    <button type="button" class="btn btn-link btn-sm" id="aiBrowserToggleEmbedHelp" style="padding:0;font-size:11px;text-decoration:underline;">显示内嵌说明 / 故障排查</button>
+                </div>
                 <div class="ai-browser-toolbar">
                     <div class="ai-browser-meta" id="aiBrowserMeta" title="">自动化(Playwright)：未同步</div>
                 </div>
@@ -991,6 +1049,16 @@
     });
     let aiUndoStack = [];
     let aiRedoStack = [];
+    let aiEmbeddedGatewayStatus = { enabled: false, wsConfigured: false };
+    let aiRemoteCanvasState = {
+        ws: null,
+        sessionId: null,
+        pingTimer: null,
+        frameW: 1280,
+        frameH: 720,
+        connecting: false,
+        autoFallbackLock: false
+    };
     const AI_UNDO_MAX = 24;
     const AI_DRAFT_KEY = 'uat_ai_agent_draft_v1';
     var _aiStudioPersistTimer = null;
@@ -1184,11 +1252,219 @@
         return u;
     }
 
+    function setAiBrowserIframeBlockedBanner(show) {
+        var b = document.getElementById('aiBrowserIframeBlockedBanner');
+        if (b) b.hidden = !show;
+    }
+
+    async function refreshEmbeddedGatewayStatus() {
+        try {
+            var r = await fetch('/api/embedded-browser/status', { credentials: 'same-origin' });
+            var d = await r.json().catch(function() { return {}; });
+            aiEmbeddedGatewayStatus.enabled = !!(d && d.success && d.enabled);
+            aiEmbeddedGatewayStatus.wsConfigured = !!(d && d.success && d.ws_base_configured);
+        } catch (e) {
+            aiEmbeddedGatewayStatus.enabled = false;
+            aiEmbeddedGatewayStatus.wsConfigured = false;
+        }
+        syncEmbeddedGatewayToolbarButtons();
+    }
+
+    function syncEmbeddedGatewayToolbarButtons() {
+        var rcBtn = document.getElementById('aiBrowserRemoteCanvasBtn');
+        var backBtn = document.getElementById('aiBrowserBackToIframeBtn');
+        var ok = aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured;
+        var live = !!(aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1);
+        if (rcBtn) {
+            rcBtn.hidden = !ok;
+            rcBtn.disabled = !ok || aiRemoteCanvasState.connecting || live;
+        }
+        if (backBtn) {
+            backBtn.hidden = !live;
+        }
+    }
+
+    function remoteCanvasCoordsFromEvent(e, canvas) {
+        var rect = canvas.getBoundingClientRect();
+        var st = aiRemoteCanvasState;
+        var rw = st.frameW || 1280;
+        var rh = st.frameH || 720;
+        var nx = (e.clientX - rect.left) / Math.max(rect.width, 1) * rw;
+        var ny = (e.clientY - rect.top) / Math.max(rect.height, 1) * rh;
+        return { x: nx, y: ny };
+    }
+
+    function wireRemoteCanvasWebSocket(wsUrl) {
+        var st = aiRemoteCanvasState;
+        if (st.ws) {
+            try { st.ws.close(); } catch (e) {}
+            st.ws = null;
+        }
+        var ws = new WebSocket(wsUrl);
+        st.ws = ws;
+        var canvas = document.getElementById('aiBrowserRemoteCanvas');
+        var ctx = canvas ? canvas.getContext('2d') : null;
+        ws.onmessage = function(ev) {
+            try {
+                var msg = JSON.parse(ev.data);
+                if (msg.t === 'frame' && msg.data && canvas && ctx) {
+                    var img = new Image();
+                    img.onload = function() {
+                        st.frameW = img.naturalWidth || st.frameW;
+                        st.frameH = img.naturalHeight || st.frameH;
+                        if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+                            canvas.width = img.naturalWidth;
+                            canvas.height = img.naturalHeight;
+                        }
+                        ctx.drawImage(img, 0, 0);
+                    };
+                    img.src = 'data:image/jpeg;base64,' + msg.data;
+                }
+            } catch (e) {}
+        };
+        ws.onopen = function() {
+            if (st.pingTimer) clearInterval(st.pingTimer);
+            st.pingTimer = setInterval(function() {
+                if (ws.readyState === 1) {
+                    try { ws.send(JSON.stringify({ t: 'ping' })); } catch (e) {}
+                }
+            }, 25000);
+            syncEmbeddedGatewayToolbarButtons();
+            updateBrowserStatusLine();
+        };
+        ws.onclose = function() {
+            if (st.pingTimer) {
+                try { clearInterval(st.pingTimer); } catch (e) {}
+                st.pingTimer = null;
+            }
+            st.ws = null;
+            syncEmbeddedGatewayToolbarButtons();
+            updateBrowserStatusLine();
+        };
+        ws.onerror = function() {
+            try { ws.close(); } catch (e) {}
+        };
+    }
+
+    function wireRemoteCanvasInputOnce() {
+        var cv = document.getElementById('aiBrowserRemoteCanvas');
+        if (!cv || cv.dataset.wiredRemoteInput === '1') return;
+        cv.dataset.wiredRemoteInput = '1';
+        cv.addEventListener('click', function(e) {
+            var ws = aiRemoteCanvasState.ws;
+            if (!ws || ws.readyState !== 1) return;
+            var p = remoteCanvasCoordsFromEvent(e, cv);
+            try { ws.send(JSON.stringify({ t: 'click', x: p.x, y: p.y })); } catch (err) {}
+        });
+        cv.addEventListener('wheel', function(e) {
+            var ws = aiRemoteCanvasState.ws;
+            if (!ws || ws.readyState !== 1) return;
+            e.preventDefault();
+            try { ws.send(JSON.stringify({ t: 'wheel', dx: e.deltaX || 0, dy: e.deltaY || 0 })); } catch (err) {}
+        }, { passive: false });
+    }
+
+    async function stopRemoteCanvasSession() {
+        var st = aiRemoteCanvasState;
+        var sid = st.sessionId;
+        if (st.pingTimer) {
+            try { clearInterval(st.pingTimer); } catch (e) {}
+            st.pingTimer = null;
+        }
+        if (st.ws) {
+            try { st.ws.close(); } catch (e) {}
+            st.ws = null;
+        }
+        st.sessionId = null;
+        var cv = document.getElementById('aiBrowserRemoteCanvas');
+        if (cv) cv.hidden = true;
+        var col = document.querySelector('.ai-browser-embed-col');
+        if (col) col.classList.remove('mode-remote-canvas');
+        var ifr = document.getElementById('aiBrowserEmbed');
+        if (ifr) ifr.style.visibility = '';
+        syncEmbeddedGatewayToolbarButtons();
+        if (sid) {
+            try {
+                await fetch('/api/embedded-browser/session/' + encodeURIComponent(sid), { method: 'DELETE', credentials: 'same-origin' });
+            } catch (e) {}
+        }
+        updateBrowserStatusLine();
+    }
+
+    async function startRemoteCanvasSession(opts) {
+        opts = opts || {};
+        var u = normalizeUrlForEmbed((document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || '');
+        if (!u) {
+            if (!opts.auto) alert('请先填写目标页面 URL');
+            return false;
+        }
+        if (!aiEmbeddedGatewayStatus.enabled || !aiEmbeddedGatewayStatus.wsConfigured) {
+            if (!opts.auto) alert('远程画布未配置：请在服务端设置 EMBEDDED_BROWSER_GATEWAY_URL、EMBEDDED_BROWSER_GATEWAY_SECRET 与 EMBEDDED_BROWSER_PUBLIC_WS_BASE，并运行 embedded_browser_gateway。');
+            else setAgentStatusLine('远程画布未配置，无法自动兜底');
+            return false;
+        }
+        if (aiRemoteCanvasState.connecting) return false;
+        aiRemoteCanvasState.connecting = true;
+        try {
+            await stopRemoteCanvasSession();
+            var brEl = document.querySelector('select.ai-pw-browser-select');
+            var br = brEl && brEl.value ? brEl.value : '';
+            var resp = await fetch('/api/embedded-browser/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ initial_url: u, browser: br })
+            });
+            var data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok || !data.success) throw new Error(data.error || '创建远程会话失败');
+            aiRemoteCanvasState.sessionId = data.session_id;
+            wireRemoteCanvasWebSocket(data.ws_url);
+            var col = document.querySelector('.ai-browser-embed-col');
+            if (col) col.classList.add('mode-remote-canvas');
+            var ifr = document.getElementById('aiBrowserEmbed');
+            if (ifr) ifr.style.visibility = 'hidden';
+            var cvs = document.getElementById('aiBrowserRemoteCanvas');
+            if (cvs) cvs.hidden = false;
+            setAiBrowserIframeBlockedBanner(false);
+            setAgentStatusLine(opts.auto ? 'iframe 无法嵌入，已自动切换远程画布' : '已连接远程画布');
+            syncEmbeddedGatewayToolbarButtons();
+            return true;
+        } catch (e) {
+            var msg = e && e.message ? e.message : String(e);
+            if (!opts.auto) alert(msg);
+            else setAgentStatusLine('自动远程画布失败: ' + msg);
+            return false;
+        } finally {
+            aiRemoteCanvasState.connecting = false;
+            syncEmbeddedGatewayToolbarButtons();
+        }
+    }
+
+    async function tryAutoRemoteCanvasAfterIframeFail() {
+        var st = aiRemoteCanvasState;
+        if (st.autoFallbackLock) return;
+        if (st.sessionId && st.ws && st.ws.readyState === 1) return;
+        st.autoFallbackLock = true;
+        try {
+            var ok = await startRemoteCanvasSession({ auto: true });
+            if (!ok) setAiBrowserIframeBlockedBanner(true);
+        } finally {
+            st.autoFallbackLock = false;
+        }
+    }
+
     function wireEmbedFrame() {
         const iframe = document.getElementById('aiBrowserEmbed');
         if (!iframe) return;
         iframe.addEventListener('load', function() {
             const ph = document.getElementById('aiBrowserPlaceholder');
+            var srcAttr = '';
+            try { srcAttr = String(iframe.getAttribute('src') || ''); } catch (e) {}
+            if (!srcAttr || srcAttr === 'about:blank') {
+                setAiBrowserIframeBlockedBanner(false);
+                if (ph) ph.classList.remove('is-hidden');
+                return;
+            }
             var href = '';
             var couldRead = false;
             try {
@@ -1199,16 +1475,19 @@
             } catch (e) {
                 href = '';
             }
+            if (couldRead && href.indexOf('chrome-error://') === 0) {
+                if (ph) ph.classList.add('is-hidden');
+                setAiBrowserIframeBlockedBanner(false);
+                void tryAutoRemoteCanvasAfterIframeFail();
+                return;
+            }
+            setAiBrowserIframeBlockedBanner(false);
             if (!couldRead) {
                 if (ph) ph.classList.add('is-hidden');
                 return;
             }
             if (href === 'about:blank' || !href) {
                 if (ph) ph.classList.remove('is-hidden');
-                return;
-            }
-            if (href.indexOf('chrome-error://') === 0) {
-                if (ph) ph.classList.add('is-hidden');
                 return;
             }
             if (ph) ph.classList.add('is-hidden');
@@ -1239,6 +1518,12 @@
     async function updateBrowserStatusLine() {
         const el = document.getElementById('aiBrowserMeta');
         if (!el) return;
+        if (aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1) {
+            var ru = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
+            el.textContent = '远程画布：已连接 — ' + (ru || '网关会话');
+            el.title = ru || '';
+            return;
+        }
         const prefix = '自动化(Playwright)：';
         try {
             const resp = await fetch('/api/browser/status', { credentials: 'same-origin' });
@@ -1261,6 +1546,28 @@
         const a = document.getElementById('aiTargetUrlInput');
         const u = normalizeUrlForEmbed(a && a.value || '');
         if (!u) { if (!silent) alert('请先在内置浏览器上方地址栏填写 URL'); return; }
+        var rw = aiRemoteCanvasState.ws;
+        if (rw && rw.readyState === 1 && aiRemoteCanvasState.sessionId) {
+            setAiBrowserIframeBlockedBanner(false);
+            const btnR = document.getElementById('aiBrowserOpenBtn');
+            if (btnR) btnR.disabled = true;
+            try {
+                rw.send(JSON.stringify({ t: 'navigate', url: u }));
+                if (!silent) setAgentStatusLine('远程画布：正在打开…');
+            } catch (e) {
+                if (!silent) setAgentStatusLine('远程画布导航失败: ' + (e && e.message ? e.message : e));
+            } finally {
+                if (btnR) btnR.disabled = false;
+            }
+            try {
+                const resp = await fetch('/api/navigate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u }), credentials: 'same-origin' });
+                await resp.json().catch(function() { return {}; });
+            } catch (e) {}
+            await updateBrowserStatusLine();
+            return;
+        }
+        await stopRemoteCanvasSession();
+        setAiBrowserIframeBlockedBanner(false);
         const btn = document.getElementById('aiBrowserOpenBtn');
         if (btn) { btn.disabled = true; }
         const iframe = document.getElementById('aiBrowserEmbed');
@@ -1317,6 +1624,12 @@
 
     async function aiBrowserHistory(action) {
         if (action !== 'reload') return;
+        var rw = aiRemoteCanvasState.ws;
+        if (rw && rw.readyState === 1) {
+            try { rw.send(JSON.stringify({ t: 'reload' })); } catch (e) {}
+            await updateBrowserStatusLine();
+            return;
+        }
         const iframe = document.getElementById('aiBrowserEmbed');
         if (iframe) {
             try {
@@ -2133,6 +2446,7 @@
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
             const planPayload = { task_type: 'test_case_generation', execution_mode: executionMode, goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl };
+            if (aiRemoteCanvasState.sessionId) planPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
             jobId = await aiPostAiTaskAsyncStart('/api/ai/task/plan-async', planPayload, aiPlanAbort.signal);
             window.__aiCurrentBgJobId = jobId;
             if (typeof window.uatAiRegisterPendingJob === 'function') window.uatAiRegisterPendingJob(jobId, 'plan');
@@ -2196,6 +2510,7 @@
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
             var chatPayload = { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: sanitizeAiChatHistoryForApi(aiChatMessages), model: getSelectedAiModel(), target_page_url: targetPageUrl };
+            if (aiRemoteCanvasState.sessionId) chatPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
             if (window.HuFirstAiAssistant && typeof HuFirstAiAssistant.appendInteractionToPayload === 'function') {
                 var ix = HuFirstAiAssistant.getInteractionContextFromForm('aiIx');
                 chatPayload = HuFirstAiAssistant.appendInteractionToPayload(chatPayload, ix);
@@ -2438,9 +2753,44 @@
         await applyInitialAiStudioFromStorage();
         syncUndoRedoButtons();
         wireAiBrowserUrlSync();
+        await refreshEmbeddedGatewayStatus();
+        wireRemoteCanvasInputOnce();
         wireEmbedFrame();
+        document.getElementById('aiBrowserRemoteCanvasBtn') && document.getElementById('aiBrowserRemoteCanvasBtn').addEventListener('click', function(e) {
+            e.preventDefault();
+            void startRemoteCanvasSession({ auto: false });
+        });
+        document.getElementById('aiBrowserBackToIframeBtn') && document.getElementById('aiBrowserBackToIframeBtn').addEventListener('click', function(e) {
+            e.preventDefault();
+            void stopRemoteCanvasSession().then(function() {
+                var ta = document.getElementById('aiTargetUrlInput');
+                var u = ta && normalizeUrlForEmbed(ta.value || '');
+                var iframe = document.getElementById('aiBrowserEmbed');
+                if (u && iframe) iframe.src = u;
+                setAgentStatusLine('已切回 iframe；若站点禁止嵌入仍可能无法预览');
+            });
+        });
+        document.getElementById('aiBrowserBannerRemoteCanvas') && document.getElementById('aiBrowserBannerRemoteCanvas').addEventListener('click', function(e) {
+            e.preventDefault();
+            void startRemoteCanvasSession({ auto: false });
+        });
         document.getElementById('aiBrowserOpenBtn') && document.getElementById('aiBrowserOpenBtn').addEventListener('click', function(e) { e.preventDefault(); openInternalBrowserPage(); });
         document.getElementById('aiBrowserNewTabBtn') && document.getElementById('aiBrowserNewTabBtn').addEventListener('click', function(e) { e.preventDefault(); openEmbedInNewSystemWindow(); });
+        document.getElementById('aiBrowserBannerOpenNew') && document.getElementById('aiBrowserBannerOpenNew').addEventListener('click', function(e) {
+            e.preventDefault();
+            openEmbedInNewSystemWindow();
+        });
+        document.getElementById('aiBrowserBannerDismiss') && document.getElementById('aiBrowserBannerDismiss').addEventListener('click', function(e) {
+            e.preventDefault();
+            setAiBrowserIframeBlockedBanner(false);
+        });
+        document.getElementById('aiBrowserToggleEmbedHelp') && document.getElementById('aiBrowserToggleEmbedHelp').addEventListener('click', function(e) {
+            e.preventDefault();
+            var b = document.getElementById('aiBrowserIframeBlockedBanner');
+            if (!b) return;
+            b.hidden = !b.hidden;
+            this.textContent = b.hidden ? '显示内嵌说明 / 故障排查' : '隐藏内嵌说明';
+        });
         document.getElementById('aiBrowserFullscreenBtn') && document.getElementById('aiBrowserFullscreenBtn').addEventListener('click', function(e) { e.preventDefault(); toggleAiBrowserFullscreen(); });
         document.getElementById('aiBrowserReloadBtn') && document.getElementById('aiBrowserReloadBtn').addEventListener('click', function() { aiBrowserHistory('reload'); });
         const ps = document.getElementById('aiProjectSelect');
