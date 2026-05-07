@@ -22,6 +22,42 @@ def _norm_str(value: Any) -> str:
     return str(value).strip()
 
 
+def _ollama_request_user_message(detail: str, *, tools: bool = False) -> str:
+    """
+    将底层 HTTP 异常转成面向用户的说明。
+    「能列出模型」只调用轻量接口；改步骤会走 /api/chat，耗时可差 orders of magnitude。
+    """
+    d = (detail or "").strip() or "请求异常（无详细文本）"
+    head = "本地模型推理失败（带工具调用）。" if tools else "本地模型推理失败。"
+    low = d.lower()
+    timed_out = "read timed out" in low or "timed out" in low
+    parts = [
+        head,
+        f"底层信息：{d}",
+        "",
+        "说明：平台「刷新模型列表」只访问 Ollama 的轻量接口；真正生成/改写步骤会 POST /api/chat，负载大得多，耗时可从几秒到十几分钟（取决于模型体积、是否 GPU、是否首次加载权重）。",
+        "",
+    ]
+    if timed_out:
+        parts.extend(
+            [
+                "本次表现为等待超时（已超过当前 LOCAL_LLM_TIMEOUT，单位：秒）。建议：",
+                "1）若模型名含「-vl」等多模态后缀，多为视觉模型，在本场景只做文字 JSON 时往往极慢，建议在「AI测试」(/ai-test) 换成纯文本 instruct（如 qwen2.5、llama3 等）；",
+                "2）在本机终端执行：ollama run <模型名>，随意对话一行，确认首次拉权重与速度正常；",
+                "3）机器较慢时增大运行 HuFirst 的环境变量 LOCAL_LLM_TIMEOUT，并重启 HuFirst；",
+                "4）确认 LOCAL_LLM_BASE_URL 指向正在跑推理的地址（默认 http://127.0.0.1:11434）。",
+            ]
+        )
+    else:
+        parts.extend(
+            [
+                "请确认：ollama serve 已运行；ollama list 包含所选模型；模型名称与配置一致；",
+                "必要时检查 LOCAL_LLM_BASE_URL；若是 HTTP 4xx/5xx，可看上述底层信息中的状态码与返回摘要。",
+            ]
+        )
+    return "\n".join(parts)
+
+
 def _strip_markdown_code_fence(text: str) -> str:
     """Remove leading/trailing ``` or ```json fences often added by chat models."""
     s = (text or "").strip()
@@ -657,13 +693,7 @@ class LocalAIService:
                     detail = f"HTTP {response.status_code}" + (f": {body}" if body else "")
                 except Exception:
                     detail = f"HTTP {response.status_code}: {detail}"
-            raise ValueError(
-                "本地AI服务不可用："
-                f"{detail}。"
-                "列表能连但生成失败时，常见为超时、模型未加载或模型名错误；"
-                "请确认 ollama serve 正常、执行 ollama list 能看到所选模型，"
-                "必要时增大环境变量 LOCAL_LLM_TIMEOUT，并检查 LOCAL_LLM_BASE_URL。"
-            ) from e
+            raise ValueError(_ollama_request_user_message(detail, tools=False)) from e
         data = resp.json() if resp.content else {}
         return ((data.get("message") or {}).get("content") or "").strip()
 
@@ -700,11 +730,8 @@ class LocalAIService:
                     detail = f"HTTP {response.status_code}" + (f": {body}" if body else "")
                 except Exception:
                     detail = f"HTTP {response.status_code}: {detail}"
-            raise ValueError(
-                "本地AI服务不可用（tools）："
-                f"{detail}。"
-                "请确认模型支持 tool calling，必要时关闭 AI_CHAT_TOOLS_ENABLE 或换用云端 OpenAI 兼容模型。"
-            ) from e
+            base = _ollama_request_user_message(detail, tools=True)
+            raise ValueError(base + "\n\n若持续失败：请确认模型支持 tool calling，或关闭环境变量 AI_CHAT_TOOLS_ENABLE 后重试。") from e
         data = resp.json() if resp.content else {}
         msg = data.get("message") or {}
         out: Dict[str, Any] = {

@@ -209,7 +209,11 @@
       return resp.text().then(function (raw) {
         var data;
         try { data = JSON.parse(raw); } catch (e) { throw new Error('非 JSON: ' + (raw || '').slice(0, 120)); }
-        if (!resp.ok || !data.success) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
+        if (!resp.ok || !data.success) {
+          var em = (data && data.error) ? String(data.error) : ('HTTP ' + resp.status);
+          if (data && data.hint) em += '\n\n——\n' + String(data.hint);
+          throw new Error(em);
+        }
         return data;
       });
     });
@@ -280,51 +284,67 @@
       '.hufirst-ai-srow input,.hufirst-ai-srow select,.hufirst-ai-srow textarea{width:100%;box-sizing:border-box;border-radius:8px;border:1px solid #cbd5e1;padding:6px 8px;font-size:12px;}',
       '.hufirst-ai-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}',
       '.hufirst-ai-btns button{font-size:11px;padding:4px 8px;border-radius:6px;border:1px solid #c7d2fe;background:#eef2ff;cursor:pointer;}',
-      '#hufirst-steps-zen{position:fixed;left:12px;bottom:24px;z-index:10019;padding:6px 10px;border-radius:8px;border:1px solid #cbd5e1;background:rgba(255,255,255,.9);font-size:12px;cursor:pointer;}'
+      '#hufirst-ai-status{font-size:12px;color:#64748b;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;}',
+      'html.dark #hufirst-ai-status{color:#94a3b8;}',
+      '.hufirst-ai-help{font-size:12px;color:#475569;background:#f1f5f9;padding:8px 10px;border-radius:8px;margin-bottom:10px;line-height:1.5;}',
+      '.hufirst-ai-help summary{cursor:pointer;font-weight:600;}',
+      '.hufirst-ai-help ol{margin:8px 0 0 18px;padding:0;}',
+      '.hufirst-ai-help code{font-size:11px;background:#e2e8f0;padding:1px 4px;border-radius:4px;}',
+      '.hufirst-ai-help a{color:#4f46e5;}',
+      'html.dark .hufirst-ai-help{color:#cbd5e1;background:#1e293b;}',
+      'html.dark .hufirst-ai-help code{background:#334155;}',
+      'html.dark .hufirst-ai-help a{color:#a5b4fc;}'
     ].join('');
     document.head.appendChild(style);
 
     var root = document.createElement('div');
     root.id = 'hufirst-ai-steps-assistant';
     root.innerHTML = [
-      '<button type="button" id="hufirst-ai-fab" title="AI 助手" aria-label="打开 AI 助手">💬</button>',
-      '<div id="hufirst-ai-spanel" aria-label="AI 助手面板">',
+      '<button type="button" id="hufirst-ai-fab" title="步骤 AI 助手" aria-label="打开步骤 AI 助手">💬</button>',
+      '<div id="hufirst-ai-spanel" aria-label="步骤 AI 助手">',
       '  <div id="hufirst-ai-shead">',
-      '    <span>AI 助手</span>',
+      '    <span>步骤 AI 助手</span>',
       '    <span><button type="button" id="hufirst-ai-sclose" style="background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:6px;cursor:pointer;padding:2px 8px">✕</button></span>',
       '  </div>',
       '  <div id="hufirst-ai-sbody">',
-      '    <div class="hufirst-ai-srow" id="hufirst-ai-status" style="font-size:12px;color:#64748b;">与当前用例步骤对话；先「同步用例到上下文」或发送消息。</div>',
-      '    <div class="hufirst-ai-srow"><label>情境</label><select id="hufirst-s-ctx-kind"><option value="">（默认优化）</option>',
-      '    <option value="optimize_step">优化单步 (optimize_step)</option>',
-      '    <option value="merge_steps">合并步骤 (merge_steps)</option>',
-      '    <option value="assert_from_selection">划词断言 (assert_from_selection)</option></select></div>',
-      '    <div class="hufirst-ai-srow"><label>聚焦第几步 (1 起，可选)</label><input type="number" id="hufirst-s-focus" min="1" placeholder="如 2" /></div>',
-      '    <div class="hufirst-ai-srow"><label>多步索引 (如 2,3 合并，可选)</label><input type="text" id="hufirst-s-idx" placeholder="2,3" /></div>',
-      '    <div class="hufirst-ai-srow"><label>划词 / 子串 (可选)</label><textarea id="hufirst-s-selection" rows="2" placeholder="页面上划选后点「读选区」"></textarea></div>',
+      '    <details class="hufirst-ai-help"><summary>怎么用？（必读）</summary>',
+      '      <ol>',
+      '        <li>助手会把<strong>当前用例的全部步骤</strong>发给<strong>本机 Ollama</strong>（网址默认 <code>http://127.0.0.1:11434</code>）。这和「能不能列出模型」不是一回事：列表很快，真正改写可能要<strong>几分钟</strong>。</li>',
+      '        <li>打开面板后会自动<strong>同步步骤</strong>；你在网页里改过步骤后，请再点<strong>刷新同步</strong>。</li>',
+      '        <li>流程：写清楚需求 → 点<strong>发送</strong> → 等状态变为「已更新」→ 需要时再点<strong>追加到用例</strong>（会把 AI 给出的步骤<strong>接到现有步骤后面</strong>，不会自动替换原步骤）。</li>',
+      '        <li>模型、超时请在 <a href="/ai-test" target="_blank" rel="noopener">AI测试</a> 配置。若总是卡住或超时，优先换成<strong>纯文字对话模型</strong>（名称里带 <code>-vl</code> 的多半是视觉模型，在本页往往很慢）。</li>',
+      '      </ol>',
+      '    </details>',
+      '    <div class="hufirst-ai-srow" id="hufirst-ai-status">正在同步步骤…</div>',
+      '    <div class="hufirst-ai-srow"><label>任务类型（可选）</label><select id="hufirst-s-ctx-kind"><option value="">自动理解你的描述</option>',
+      '    <option value="optimize_step">优化某一步</option>',
+      '    <option value="merge_steps">把多步合并成一步</option>',
+      '    <option value="assert_from_selection">根据划词做断言</option></select></div>',
+      '    <div class="hufirst-ai-srow"><label>针对第几步（从 1 开始，可选）</label><input type="number" id="hufirst-s-focus" min="1" placeholder="例如 2" /></div>',
+      '    <div class="hufirst-ai-srow"><label>涉及哪些步（合并时填，如 2,3）</label><input type="text" id="hufirst-s-idx" placeholder="2,3" /></div>',
+      '    <div class="hufirst-ai-srow"><label>页面划选的文案（可选）</label><textarea id="hufirst-s-selection" rows="2" placeholder="在页面上选中文字后，点下方「填入划词」"></textarea></div>',
       '    <div class="hufirst-ai-btns">',
-      '      <button type="button" id="hufirst-s-sync">同步用例到上下文</button>',
-      '      <button type="button" id="hufirst-s-btn-pick">读选区</button>',
-      '      <button type="button" id="hufirst-tpl-opt">模板：优化本步</button>',
-      '      <button type="button" id="hufirst-tpl-merge">模板：合并所选步</button>',
-      '      <button type="button" id="hufirst-tpl-assert">模板：断言选区</button>',
-      '      <button type="button" id="hufirst-s-clear-hist" title="清空本用例在浏览器中的短期对话记录">清空对话</button>',
+      '      <button type="button" id="hufirst-s-sync">刷新同步步骤</button>',
+      '      <button type="button" id="hufirst-s-btn-pick">填入划词</button>',
+      '      <button type="button" id="hufirst-tpl-opt">一键：优化这一步</button>',
+      '      <button type="button" id="hufirst-tpl-merge">一键：合并多步</button>',
+      '      <button type="button" id="hufirst-tpl-assert">一键：断言划词</button>',
+      '      <button type="button" id="hufirst-s-clear-hist" title="只清空本浏览器里记录的对话摘要，不会删用例步骤">清空对话记录</button>',
       '    </div>',
       '    <div id="hufirst-ai-slog" style="margin-top:8px;"></div>',
       '  </div>',
       '  <div id="hufirst-ai-sfoot">',
-      '    <textarea id="hufirst-s-msg" rows="3" style="width:100%;box-sizing:border-box;border-radius:8px;border:1px solid #cbd5e1;padding:8px" placeholder="输入说明… 例如：为第2步增加等待"></textarea>',
-      '    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">',
-      '      <button type="button" class="btn btn-primary" id="hufirst-s-send" style="padding:6px 14px;cursor:pointer;">发送</button>',
-      '      <button type="button" id="hufirst-s-apply" style="padding:6px 10px;cursor:pointer;" disabled>追加 AI 步骤到用例</button>',
+      '    <textarea id="hufirst-s-msg" rows="3" style="width:100%;box-sizing:border-box;border-radius:8px;border:1px solid #cbd5e1;padding:8px" placeholder="用一句话说明你想怎么改，例如：把第 2 步的选择器改稳一点并加 3 秒等待"></textarea>',
+      '    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">',
+      '      <button type="button" class="btn btn-primary" id="hufirst-s-send" style="padding:6px 14px;cursor:pointer;">发送给 AI</button>',
+      '      <button type="button" id="hufirst-s-apply" style="padding:6px 10px;cursor:pointer;" disabled>追加到用例末尾</button>',
       '    </div>',
       '  </div>',
-      '</div>',
-      '<button type="button" id="hufirst-steps-zen" title="禅模式：隐藏主布局仅留本面板">禅</button>'
+      '</div>'
     ].join('');
     document.body.appendChild(root);
 
-    var state = { current_plan: { steps: [] }, history: [], lastPlan: null, projectName: '' };
+    var state = { current_plan: { steps: [] }, history: [], lastPlan: null, projectName: '', model: '' };
 
     function setStatus(s) {
       var el = document.getElementById('hufirst-ai-status');
@@ -340,14 +360,17 @@
     function getCaseSync() {
       return Promise.resolve()
         .then(function () { return getActiveProfileId(); })
-        .then(function (mid) { state.model = mid; return getProjectName(opt.getProjectId && opt.getProjectId()); })
+        .then(function (mid) {
+          state.model = (mid != null && String(mid).trim() !== '') ? String(mid).trim() : '';
+          return getProjectName(opt.getProjectId && opt.getProjectId());
+        })
         .then(function (pn) { state.projectName = pn; return fetchAllCaseSteps(opt.getCaseId()); })
         .then(function (stepRows) {
           return fetch('/api/cases/' + opt.getCaseId(), { credentials: 'same-origin' }).then(function (r) { return r.json(); })
             .then(function (cdata) {
               var tc = (cdata && cdata.test_case) || {};
               state.current_plan = buildCurrentPlanFromCase(tc, stepRows);
-              setStatus('已同步 ' + (stepRows.length || 0) + ' 步到 current_plan。');
+              setStatus('已同步 ' + (stepRows.length || 0) + ' 条步骤，可以输入需求并点「发送给 AI」。');
             });
         })
         .catch(function (e) { setStatus('同步失败: ' + (e.message || e)); });
@@ -355,10 +378,7 @@
 
     function send() {
       var msg = (document.getElementById('hufirst-s-msg') && document.getElementById('hufirst-s-msg').value || '').trim();
-      if (!msg) { if (global.alert) global.alert('请输入说明'); return; }
-      if (!state.model) {
-        return getActiveProfileId().then(function (m) { state.model = m; if (!m) { throw new Error('未配置 AI 模型'); } return send(); });
-      }
+      if (!msg) { if (global.alert) global.alert('请先在下框里写清楚想怎么改，再发送。'); return; }
       var ctx = {
         focus_step_index: (document.getElementById('hufirst-s-focus') || {}).value,
         focus_step_indices: (document.getElementById('hufirst-s-idx') || {}).value,
@@ -366,9 +386,10 @@
       };
       var k = (document.getElementById('hufirst-s-ctx-kind') || {}).value;
       if (k) ctx.action_kind = k;
-      setStatus('正在请求…');
+      setStatus('已向本机模型发送请求，若步骤多或模型较慢，可能需要等待较长时间（请勿重复狂点发送）…');
       logLine('user', msg);
-      var body = { message: msg, project_name: state.projectName || '', current_plan: state.current_plan, history: state.history, model: state.model, target_page_url: (opt.getTargetUrl && opt.getTargetUrl()) || '' };
+      var body = { message: msg, project_name: state.projectName || '', current_plan: state.current_plan, history: state.history, target_page_url: (opt.getTargetUrl && opt.getTargetUrl()) || '' };
+      if (state.model) body.model = state.model;
       body = appendInteractionToPayload(body, ctx);
       return postJson('/api/ai/task/chat', body)
         .then(function (data) {
@@ -379,12 +400,12 @@
           state.history.push({ role: 'assistant', content: '已更新方案（' + ((data.plan && data.plan.steps) ? data.plan.steps.length : 0) + ' 步）' });
           if (state.history.length > 40) state.history = state.history.slice(-40);
           saveCaseChatHistory(opt.getCaseId(), state.history);
-          setStatus('已更新。可将步骤追加到用例。');
+          setStatus('模型已返回方案。若满意，可点「追加到用例末尾」把新步骤接到当前用例后面。');
           logLine('assistant', '已返回 ' + (data.plan && data.plan.steps ? data.plan.steps.length : 0) + ' 步。');
           var ap = document.getElementById('hufirst-s-apply');
           if (ap) ap.disabled = !(data.plan && data.plan.steps && data.plan.steps.length);
         })
-        .catch(function (e) { setStatus('错误: ' + (e.message || e)); logLine('assistant', '失败: ' + (e.message || e)); });
+        .catch(function (e) { setStatus('出错：\n' + (e.message || e)); logLine('assistant', '失败: ' + (e.message || e)); });
     }
 
     function applyAppend() {
@@ -409,7 +430,7 @@
       var t = ''; try { t = (global.getSelection() && global.getSelection().toString()) || ''; } catch (e) {}
       t = t.trim();
       if (t) { var e = document.getElementById('hufirst-s-selection'); if (e) e.value = t; }
-      else { if (global.alert) global.alert('未选中文本。'); }
+      else { if (global.alert) global.alert('请先在页面上用鼠标划选一段文字，再点「填入划词」。'); }
     });
     document.getElementById('hufirst-tpl-opt').addEventListener('click', function () {
       var n = (document.getElementById('hufirst-s-focus') || {}).value;
@@ -431,15 +452,8 @@
       saveCaseChatHistory(opt.getCaseId(), state.history);
       var log = document.getElementById('hufirst-ai-slog');
       if (log) log.textContent = '';
-      setStatus('已清空本页对话记录（不影响用例内步骤）');
+      setStatus('已清空对话摘要（不会删除用例里的步骤）。');
     });
-    var zen = document.getElementById('hufirst-steps-zen');
-    if (zen) {
-      zen.addEventListener('click', function () {
-        var box = document.querySelector('.steps-page-root .container');
-        if (box) box.classList.toggle('hufirst-steps-zen');
-      });
-    }
     // drag
     (function () {
       var head = document.getElementById('hufirst-ai-shead');

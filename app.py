@@ -2250,10 +2250,22 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
                 interaction_context=interaction_context,
             )
     except ValueError as e:
+        msg = str(e)
+        low = msg.lower()
+        hint = (
+            '可先执行 ollama serve，并确认 ollama pull 过所选模型。'
+            '若仅在「改步骤」时报错而列表正常，多半是推理接口慢或模型不合适，而非「没启动」。'
+        )
+        if 'read timed out' in low or 'timed out' in low:
+            hint = (
+                '本次为推理超时：界面能列出模型仅代表 Ollama 在线；改写步骤会发送长文本，耗时可远大于列表。'
+                '建议①在 /ai-test 选用纯文本 instruct 模型（尽量避免名称含 -vl 的视觉模型）；'
+                '②终端执行 ollama run <模型名> 预热；③增大 LOCAL_LLM_TIMEOUT 并重启 HuFirst；④确认机器算力与显存足够。'
+            )
         return {
             'success': False,
-            'error': str(e),
-            'hint': '可先执行: ollama serve，并确认模型已拉取。',
+            'error': msg,
+            'hint': hint,
             '_http': 503,
         }
     except Exception as e:
