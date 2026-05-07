@@ -62,6 +62,7 @@ from playwright_automation import (
     sync_get_selected_element,
     sync_hover_element,
     sync_execute_script_steps,
+    sync_run_api_request_step,
     sync_navigate_to,
     sync_right_click_element,
     sync_scroll_by_delta,
@@ -2137,7 +2138,10 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         return {'success': False, 'error': 'message不能为空', '_http': 400}
 
     route = _route_ai_model('test_case_generation')
-    if route['provider'] != 'local':
+    from ai_chat_tool_loop import ai_chat_tools_enabled, profile_supports_ai_chat_tools
+
+    _ai_chat_tools_on = ai_chat_tools_enabled() and profile_supports_ai_chat_tools(profile, legacy_model)
+    if route['provider'] != 'local' and not _ai_chat_tools_on:
         return {'success': False, 'error': '当前仅支持本地模型对话', '_http': 400}
 
     embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
@@ -2188,21 +2192,63 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         _ic['action_kind'] = _kind
     if _ic:
         interaction_context = _ic
+
+    tool_meta_extra = None
     try:
-        generated = local_ai_service.refine_case_and_steps(
-            user_message=message,
-            project_name=project_name,
-            current_plan=current_plan if isinstance(current_plan, dict) else {},
-            history=history if isinstance(history, list) else [],
-            model=legacy_model,
-            profile=profile,
-            page_snapshot=page_snapshot,
-            probe_registry=probe_registry,
-            probe_url=probe_url,
-            memory_context=mem_ctx or None,
-            dom_context_pack=dpack or None,
-            interaction_context=interaction_context,
-        )
+        if _ai_chat_tools_on:
+            from ai_chat_tool_loop import ChatToolLoopParams, run_ai_chat_with_tools
+
+            _ctp = ChatToolLoopParams(
+                message=message,
+                project_name=project_name,
+                current_plan=current_plan if isinstance(current_plan, dict) else {},
+                history=history,
+                profile=profile,
+                legacy_model=legacy_model,
+                page_snapshot=page_snapshot,
+                probe_registry=probe_registry,
+                probe_url=probe_url,
+                memory_context=mem_ctx or None,
+                dom_context_pack=dpack or None,
+                interaction_context=interaction_context,
+            )
+            try:
+                generated, _, tool_meta_extra = run_ai_chat_with_tools(
+                    local_ai_service=local_ai_service,
+                    params=_ctp,
+                )
+            except (ValueError, TypeError, RuntimeError) as loop_err:
+                uat_logger.warning('AI chat tool loop failed, fallback to refine: %s', loop_err)
+                tool_meta_extra = {'fallback': 'refine_after_loop_error', 'error': str(loop_err)}
+                generated = local_ai_service.refine_case_and_steps(
+                    user_message=message,
+                    project_name=project_name,
+                    current_plan=current_plan if isinstance(current_plan, dict) else {},
+                    history=history if isinstance(history, list) else [],
+                    model=legacy_model,
+                    profile=profile,
+                    page_snapshot=page_snapshot,
+                    probe_registry=probe_registry,
+                    probe_url=probe_url,
+                    memory_context=mem_ctx or None,
+                    dom_context_pack=dpack or None,
+                    interaction_context=interaction_context,
+                )
+        else:
+            generated = local_ai_service.refine_case_and_steps(
+                user_message=message,
+                project_name=project_name,
+                current_plan=current_plan if isinstance(current_plan, dict) else {},
+                history=history if isinstance(history, list) else [],
+                model=legacy_model,
+                profile=profile,
+                page_snapshot=page_snapshot,
+                probe_registry=probe_registry,
+                probe_url=probe_url,
+                memory_context=mem_ctx or None,
+                dom_context_pack=dpack or None,
+                interaction_context=interaction_context,
+            )
     except ValueError as e:
         return {
             'success': False,
@@ -2222,13 +2268,16 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         generated,
         remote_addr,
     )
-    return {
+    out = {
         'success': True,
         'provider': 'local',
         'model': generated.get('meta', {}).get('model') or route['model'],
         'plan': generated,
         'warnings': norm_warnings,
     }
+    if tool_meta_extra:
+        out['chat_tools'] = tool_meta_extra
+    return out
 
 
 def _start_ai_bg_job_thread(job_id: str, kind: str, data: dict, user_id: int, username: str, remote_addr):
@@ -3623,6 +3672,9 @@ def api_create_step():
     if locator_candidates is not None and not isinstance(locator_candidates, str):
         locator_candidates = json.dumps(locator_candidates, ensure_ascii=False)
     click_repeat_count = _norm_click_repeat_count(data.get('click_repeat_count')) if action == 'click' else 1
+    api_spec = data.get('api_spec', '')
+    if api_spec is not None and not isinstance(api_spec, str):
+        api_spec = json.dumps(api_spec, ensure_ascii=False)
     
     if not case_id:
         return jsonify({'error': '用例ID不能为空'}), 400
@@ -3632,7 +3684,8 @@ def api_create_step():
     step_id = db.create_test_step(case_id, action, selector_type, selector_value, 
                                   input_value, description, step_order, page_name,
                                   swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
-                                  locator_candidates or '', click_repeat_count=click_repeat_count)
+                                  locator_candidates or '', click_repeat_count=click_repeat_count,
+                                  api_spec=api_spec or '')
     return jsonify({'success': True, 'step_id': step_id})
 
 # API: 更新测试步骤
@@ -3663,9 +3716,13 @@ def api_update_step(step_id):
     else:
         click_repeat_count = None
 
+    api_spec = data.get('api_spec')
+    if api_spec is not None and not isinstance(api_spec, str):
+        api_spec = json.dumps(api_spec, ensure_ascii=False)
+
     success = db.update_test_step(step_id, action, selector_type, selector_value,
                                    input_value, description, step_order, enter_iframe, iframe_selector, compare_type,
-                                   locator_candidates, click_repeat_count)
+                                   locator_candidates, click_repeat_count, api_spec=api_spec)
     
     if success:
         return jsonify({'success': True})
@@ -4661,6 +4718,8 @@ def api_run_case(case_id):
                         uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
                         # 直接抛出错误，视为测试用例执行失败
                         raise
+                elif action == 'api_request':
+                    sync_run_api_request_step(step)
 
                 # 🔥 修复：步骤执行到这里说明成功，更新状态为 success
                 step_status = 'success'
@@ -5831,10 +5890,12 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 raise Exception('进入 iframe 步骤缺少选择器')
                         elif action == 'exit_iframe':
                             sync_exit_iframe()
+                        elif action == 'api_request':
+                            sync_run_api_request_step(step)
                         elif action:
                             raise Exception(
                                 f"数据驱动执行不支持的操作类型「{action}」。"
-                                "支持的类型：navigate, click, input, batch_input, hover, double_click, right_click, wait, select, date, scroll, swipe, verify, extract_text, text_compare, extract_json, assert, enter_iframe, exit_iframe。"
+                                "支持的类型：navigate, click, input, batch_input, hover, double_click, right_click, wait, select, date, scroll, swipe, verify, extract_text, text_compare, extract_json, assert, enter_iframe, exit_iframe, api_request。"
                             )
                     except Exception as e:
                         step_status = 'failed'

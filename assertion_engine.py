@@ -6,7 +6,7 @@ import re
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
-import requests
+from api_http_helper import execute_api_spec_sync, get_json_path_value
 
 
 class AssertionType(Enum):
@@ -390,30 +390,33 @@ class AssertionEngine:
 
     def _assert_api_status(self, params: Dict[str, Any]) -> AssertionResult:
         """API状态码断言"""
-        url = params.get('url', '')
-        method = params.get('method', 'GET')
-        headers = params.get('headers', {})
         body = params.get('body')
-        expected_status = params.get('expected_status', 200)
-        timeout = params.get('timeout', 30)
-
+        spec = {
+            "method": params.get('method', 'GET'),
+            "url": params.get('url', ''),
+            "headers": params.get('headers') or {},
+            "body_type": "json" if body is not None else "none",
+            "body_json": body,
+            "expected_status": params.get('expected_status', 200),
+            "timeout": params.get('timeout', 30),
+        }
         try:
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                json=body if body else None,
-                timeout=timeout
-            )
-
-            success = response.status_code == expected_status
-
+            out = execute_api_spec_sync(spec, resolve_text=None, browser_cookie_jar=None)
+            if out.get("error") and out.get("status_code") is None:
+                return AssertionResult(
+                    success=False,
+                    message=out.get("assert_message") or out.get("error") or "API请求失败",
+                    assertion_type="api_status",
+                )
+            code = out.get("status_code")
+            exp = spec["expected_status"]
+            success = bool(out.get("ok_assert"))
             return AssertionResult(
                 success=success,
-                message=f"HTTP状态码 {response.status_code} {'符合预期' if success else '不符合预期'}",
-                actual_value=response.status_code,
-                expected_value=expected_status,
-                assertion_type="api_status"
+                message=out.get("assert_message") or f"HTTP {code}（期望 {exp}）",
+                actual_value=code,
+                expected_value=exp,
+                assertion_type="api_status",
             )
         except Exception as e:
             return AssertionResult(
@@ -424,45 +427,40 @@ class AssertionEngine:
 
     def _assert_api_json(self, params: Dict[str, Any]) -> AssertionResult:
         """API JSON响应断言"""
-        url = params.get('url', '')
-        method = params.get('method', 'GET')
-        headers = params.get('headers', {})
         body = params.get('body')
         json_path = params.get('json_path', '')  # 如: data.user.name
         expected_value = params.get('expected_value', '')
-        timeout = params.get('timeout', 30)
-
+        spec = {
+            "method": params.get('method', 'GET'),
+            "url": params.get('url', ''),
+            "headers": params.get('headers') or {},
+            "body_type": "json" if body is not None else "none",
+            "body_json": body,
+            "timeout": params.get('timeout', 30),
+            "expected_status": params.get('expected_status', 200),
+            "json_path": json_path,
+            "expected_json_value": expected_value,
+        }
         try:
-            response = requests.request(
-                method=method,
-                url=url,
-                headers=headers,
-                json=body if body else None,
-                timeout=timeout
-            )
-
-            data = response.json()
-
-            # 解析JSON Path
-            actual_value = data
-            for key in json_path.split('.'):
-                if key:
-                    if isinstance(actual_value, dict):
-                        actual_value = actual_value.get(key)
-                    elif isinstance(actual_value, list) and key.isdigit():
-                        actual_value = actual_value[int(key)]
-                    else:
-                        actual_value = None
-                        break
-
-            success = actual_value == expected_value
-
+            out = execute_api_spec_sync(spec, resolve_text=None, browser_cookie_jar=None)
+            if out.get("error") and out.get("status_code") is None:
+                return AssertionResult(
+                    success=False,
+                    message=out.get("assert_message") or out.get("error") or "API请求失败",
+                    assertion_type="api_json",
+                )
+            pj = out.get("response_json")
+            actual_value = None
+            if pj is not None:
+                actual_value = get_json_path_value(pj, json_path)
+            success = bool(out.get("ok_assert"))
             return AssertionResult(
                 success=success,
-                message=f"JSON路径 {json_path} 的值 {'符合预期' if success else '不符合预期'}",
+                message=out.get("assert_message")
+                or f"JSON路径 {json_path} 的值 {'符合预期' if success else '不符合预期'}",
                 actual_value=actual_value,
                 expected_value=expected_value,
-                assertion_type="api_json"
+                assertion_type="api_json",
             )
         except Exception as e:
             return AssertionResult(

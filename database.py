@@ -243,6 +243,12 @@ class Database:
             cursor.execute("ALTER TABLE test_steps ADD COLUMN click_repeat_count INTEGER DEFAULT 1")
         except sqlite3.OperationalError:
             pass
+
+        # 接口测试步骤：JSON 规格（method/url/headers/body/断言等）
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN api_spec TEXT")
+        except sqlite3.OperationalError:
+            pass
         
         # 创建运行历史记录表
         cursor.execute('''
@@ -1267,7 +1273,8 @@ class Database:
                          description: str = "", step_order: int = None, page_name: str = "",
                          swipe_x: str = "", swipe_y: str = "", url: str = "",
                          enter_iframe: bool = False, iframe_selector: str = "", compare_type: str = "equals",
-                         locator_candidates: str = "", click_repeat_count: int = 1) -> int:
+                         locator_candidates: str = "", click_repeat_count: int = 1,
+                         api_spec: str = "") -> int:
         """创建测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1288,9 +1295,9 @@ class Database:
             
         cursor.execute(
             """INSERT INTO test_steps 
-               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc)
+               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc, api_spec or '')
         )
         step_id = cursor.lastrowid
             
@@ -1400,6 +1407,7 @@ class Database:
                 'compare_type': row[15] if len(row) > 15 else 'equals',
                 'locator_candidates': row[16] if len(row) > 16 else '',
                 'click_repeat_count': int(row[17]) if len(row) > 17 and row[17] is not None else 1,
+                'api_spec': row[18] if len(row) > 18 else '',
             }
         
         conn.close()
@@ -1433,7 +1441,8 @@ class Database:
             'iframe_selector': row[14] if len(row) > 14 else '',
             'compare_type': row[15] if len(row) > 15 else 'equals',
             'locator_candidates': row[16] if len(row) > 16 else '',
-            'click_repeat_count': crc
+            'click_repeat_count': crc,
+            'api_spec': row[18] if len(row) > 18 else '',
         }
 
     def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:
@@ -1450,7 +1459,7 @@ class Database:
         cursor.execute(
             """
             SELECT id, case_id, action, selector_type, selector_value, input_value, description,
-                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count,
+                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec,
                    COUNT(*) OVER() AS __total
             FROM test_steps
             WHERE case_id = ?
@@ -1483,7 +1492,8 @@ class Database:
                         selector_value: str = None, input_value: str = None,
                         description: str = None, step_order: int = None,
                         enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None,
-                        locator_candidates: str = None, click_repeat_count: int = None) -> bool:
+                        locator_candidates: str = None, click_repeat_count: int = None,
+                        api_spec: str = None) -> bool:
         """更新测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1542,6 +1552,10 @@ class Database:
                 crc = 99
             updates.append("click_repeat_count = ?")
             params.append(crc)
+
+        if api_spec is not None:
+            updates.append("api_spec = ?")
+            params.append(api_spec)
         
         if not updates:
             conn.close()

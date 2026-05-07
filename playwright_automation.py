@@ -29,6 +29,11 @@ from playwright_codegen_import import (
 )
 from batch_input_parse import parse_batch_input_lines
 from ai_selector_recovery import try_recover_selector_with_llm
+from api_http_helper import (
+    execute_api_spec_sync,
+    playwright_cookies_to_requests_cookiejar,
+    substitute_env_placeholders,
+)
 
 # 🔥 添加全局执行锁，防止并发执行多个测试用例集
 _execution_lock = threading.Lock()
@@ -7947,6 +7952,69 @@ class PlaywrightAutomation:
         }"""
         )
     
+    async def _run_api_request_step(self, step: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """执行 HTTP 接口步骤（api_request），与 assertion_engine / api_http_helper 共用请求逻辑。"""
+        import functools
+
+        from database import Database
+
+        raw = step.get("api_spec") or step.get("input_value") or ""
+        if isinstance(raw, dict):
+            spec = dict(raw)
+        else:
+            if not str(raw).strip():
+                raise Exception("api_request 步骤缺少 api_spec（JSON）")
+            try:
+                spec = json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise Exception(f"api_spec JSON 无效: {e}")
+
+        _db = Database()
+        case_id = step.get("case_id")
+
+        def resolve_chain(s: str) -> str:
+            if s is None:
+                return ""
+            t = _db.resolve_variables(str(s), project_id=None, case_id=case_id)
+            return substitute_env_placeholders(t)
+
+        use_cookies = bool(spec.get("use_browser_cookies"))
+        if use_cookies and self.page is None:
+            await self.start_browser()
+
+        jar = None
+        if use_cookies and self.context:
+            try:
+                resolved_url = resolve_chain((spec.get("url") or "").strip())
+                if resolved_url.startswith("http"):
+                    cookies = await self.context.cookies([resolved_url])
+                else:
+                    cookies = await self.context.cookies()
+                jar = playwright_cookies_to_requests_cookiejar(
+                    cookies, resolved_url or ""
+                )
+            except Exception as e:
+                uat_logger.warning("读取浏览器 Cookie 失败: %s", e)
+
+        loop = asyncio.get_event_loop()
+        out = await loop.run_in_executor(
+            None,
+            functools.partial(execute_api_spec_sync, spec, resolve_chain, jar),
+        )
+
+        if not out.get("ok_assert"):
+            raise Exception(out.get("error") or out.get("assert_message") or "API 步骤失败")
+
+        preview = out.get("response_text") or ""
+        return [
+            {
+                "status": "success",
+                "step": step,
+                "api_status_code": out.get("status_code"),
+                "api_response_preview": preview[:1500],
+            }
+        ]
+
     async def execute_script_steps(self, steps: List[Dict[str, Any]]):
         """执行脚本步骤（严格按顺序串行执行，禁用所有并行逻辑）"""
         # 强制使用主页面，禁用所有多标签页和并行执行逻辑
@@ -8447,6 +8515,10 @@ class PlaywrightAutomation:
                 elif action == "screenshot":
                     # 截取页面截图
                     await self.take_screenshot(page=target_page)
+                elif action == "api_request":
+                    sub = await self._run_api_request_step(step)
+                    results.extend(sub)
+                    continue
                 elif action == "extract_text":
                     selector = step.get("selector")
                     uat_logger.info(f"🔍 [EXTRACT_TEXT_DEBUG] 开始执行提取文本操作,选择器: {selector}")
@@ -9087,12 +9159,21 @@ class PlaywrightAutomation:
         Returns:
             步骤执行结果列表
         """
+        action = step.get("action", "")
+        uat_logger.info(f"🎯 [SINGLE_STEP] 开始执行单步操作: {action}")
+
+        if action == "api_request":
+            try:
+                out = await self._run_api_request_step(step)
+                uat_logger.info(f"✅ [SINGLE_STEP] 单步操作执行成功: {action}")
+                return out
+            except Exception as e:
+                uat_logger.error(f"❌ [SINGLE_STEP] 单步操作执行失败: {action}, 错误: {str(e)}")
+                raise
+
         target_page = self.page
         if target_page is None:
             raise Exception("浏览器未启动")
-        
-        action = step.get("action", "")
-        uat_logger.info(f"🎯 [SINGLE_STEP] 开始执行单步操作: {action}")
         
         results = []
         
@@ -10628,6 +10709,15 @@ def sync_extract_element_json(selector: str, selector_type: str = "css"):
 def sync_execute_script_steps(steps: List[Dict[str, Any]]):
     async def run():
         return await automation.execute_script_steps(steps)
+    return worker.execute(run)
+
+
+def sync_run_api_request_step(step: Dict[str, Any]):
+    """同步执行 api_request 步骤（与 async 用例执行共用 _run_api_request_step）。"""
+
+    async def run():
+        return await automation._run_api_request_step(step)
+
     return worker.execute(run)
 
 def sync_close_browser():

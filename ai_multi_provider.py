@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import quote
 
 import requests
@@ -69,6 +69,96 @@ def openai_compatible_chat(
     if isinstance(err, dict):
         raise ValueError("云端模型错误: " + _norm(err.get("message") or json.dumps(err, ensure_ascii=False)))
     raise ValueError("云端模型返回为空或无法解析")
+
+
+def openai_compatible_chat_completion(
+    base_url: str,
+    api_key: str,
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    *,
+    temperature: float = 0.2,
+    timeout: int = 240,
+) -> Dict[str, Any]:
+    """POST /v1/chat/completions; returns assistant message dict (content, tool_calls optional)."""
+    b = _norm(base_url)
+    if not b:
+        raise ValueError("云端模型需配置 base_url")
+    if "/chat/completions" in b:
+        url = b
+    else:
+        url = b.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {_norm(api_key)}",
+        "Content-Type": "application/json",
+    }
+    payload: Dict[str, Any] = {
+        "model": _norm(model_id),
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if tools:
+        payload["tools"] = tools
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+    except RequestException as e:
+        _raise_http("OpenAI 兼容接口", e)
+    data = resp.json() if resp.content else {}
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") or {}
+        out: Dict[str, Any] = {
+            "role": msg.get("role") or "assistant",
+            "content": msg.get("content"),
+        }
+        if msg.get("tool_calls"):
+            out["tool_calls"] = msg["tool_calls"]
+        return out
+    err = data.get("error")
+    if isinstance(err, dict):
+        raise ValueError("云端模型错误: " + _norm(err.get("message") or json.dumps(err, ensure_ascii=False)))
+    raise ValueError("云端模型返回为空或无法解析")
+
+
+def dispatch_chat_completion_messages(
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+    profile: Dict[str, Any],
+    local_service: "LocalAIService",
+    *,
+    temperature: float = 0.2,
+    timeout: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Multi-turn chat completion with optional tools (Ollama or OpenAI-compatible profiles).
+    """
+    style = _norm(profile.get("api_style"))
+    provider = _norm(profile.get("provider"))
+    model_id = _norm(profile.get("model_id"))
+    api_key = profile.get("api_key")
+    base_url = _norm(profile.get("base_url"))
+    to = timeout if timeout is not None else int(os.environ.get("LOCAL_LLM_TIMEOUT", "240"))
+
+    if not model_id:
+        raise ValueError("模型配置缺少 model_id")
+
+    if style == "ollama" or provider == "ollama":
+        obase = base_url or local_service.base_url
+        return local_service.chat_ollama_messages(messages, model_id, tools, obase)
+
+    if style == "anthropic_messages" or provider == "anthropic":
+        raise ValueError("Anthropic 当前不支持 AI 对话工具循环，请改用 Ollama 或 OpenAI 兼容模型")
+
+    if style == "google_gemini" or provider == "google_gemini":
+        raise ValueError("Gemini 当前不支持 AI 对话工具循环，请改用 Ollama 或 OpenAI 兼容模型")
+
+    if not _norm(api_key):
+        raise ValueError("该提供商需要 API 密钥")
+    return openai_compatible_chat_completion(
+        base_url, str(api_key), model_id, messages, tools, temperature=temperature, timeout=to
+    )
 
 
 def anthropic_messages_chat(

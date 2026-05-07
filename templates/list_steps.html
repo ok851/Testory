@@ -348,6 +348,295 @@
             max-height: 90vh;
             overflow-y: auto;
         }
+
+        .modal-content.modal-content--steps {
+            width: min(720px, 96vw);
+            max-width: 96vw;
+        }
+
+        .steps-api-urlbar {
+            display: flex;
+            align-items: stretch;
+            gap: 0;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+            margin-bottom: 8px;
+        }
+
+        .steps-api-method-select {
+            flex: 0 0 auto;
+            min-width: 108px;
+            max-width: 120px;
+            border: none !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+            padding: 10px 8px !important;
+            font-weight: 600;
+            font-size: 13px;
+            background: #f3f4f6;
+            color: #374151;
+            cursor: pointer;
+        }
+
+        .steps-api-url-input {
+            flex: 1;
+            min-width: 0;
+            border: none !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+            padding: 10px 12px !important;
+            font-size: 13px;
+        }
+
+        .steps-api-hint {
+            font-size: 12px;
+            color: #6b7280;
+            margin: 0 0 12px;
+            line-height: 1.45;
+        }
+
+        .steps-api-mini-hint {
+            font-size: 12px;
+            color: #6b7280;
+            margin: 0 0 10px;
+        }
+
+        .steps-api-tabs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            border-bottom: 1px solid #e5e7eb;
+            margin-bottom: 14px;
+        }
+
+        .steps-api-tab {
+            padding: 8px 12px;
+            font-size: 13px;
+            border: none;
+            background: transparent;
+            color: #6b7280;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            border-radius: 6px 6px 0 0;
+        }
+
+        .steps-api-tab:hover {
+            color: #4b5563;
+            background: rgba(102, 126, 234, 0.06);
+        }
+
+        .steps-api-tab.active {
+            color: #5b21b6;
+            font-weight: 600;
+            border-bottom-color: #667eea;
+        }
+
+        .steps-api-tab-panel {
+            display: none;
+            padding-bottom: 4px;
+        }
+
+        .steps-api-tab-panel.active {
+            display: block;
+        }
+
+        .steps-api-kv-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .steps-api-kv-table th {
+            text-align: left;
+            padding: 8px 10px;
+            background: #f9fafb;
+            color: #4b5563;
+            font-weight: 600;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .steps-api-kv-table td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #f3f4f6;
+            vertical-align: middle;
+        }
+
+        .steps-api-kv-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .steps-api-kv-table input.steps-api-kv-key,
+        .steps-api-kv-table input.steps-api-kv-val {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #e5e7eb;
+            border-radius: 4px;
+            padding: 6px 8px;
+            font-size: 13px;
+        }
+
+        .steps-api-kv-actions {
+            width: 44px;
+            text-align: center;
+        }
+
+        .steps-api-kv-actions .btn-sm {
+            padding: 4px 8px;
+            font-size: 14px;
+            line-height: 1;
+        }
+
+        html.dark .steps-page-root .steps-api-urlbar {
+            background: #1f2937;
+            border-color: #4b5563;
+        }
+
+        html.dark .steps-page-root .steps-api-method-select {
+            background: #374151;
+            color: #e5e7eb;
+        }
+
+        html.dark .steps-page-root .steps-api-url-input {
+            background: #111827 !important;
+            color: #e5e7eb !important;
+        }
+
+        html.dark .steps-page-root .steps-api-tabs {
+            border-bottom-color: #374151;
+        }
+
+        html.dark .steps-page-root .steps-api-kv-table {
+            border-color: #374151;
+            background: #111827;
+        }
+
+        html.dark .steps-page-root .steps-api-kv-table th {
+            background: #1f2937;
+            color: #d1d5db;
+            border-bottom-color: #374151;
+        }
+
+        html.dark .steps-page-root .steps-api-kv-table td {
+            border-bottom-color: #374151;
+        }
+
+        html.dark .steps-page-root .steps-api-kv-table input.steps-api-kv-key,
+        html.dark .steps-page-root .steps-api-kv-table input.steps-api-kv-val {
+            background: #111827 !important;
+            border-color: #4b5563 !important;
+            color: #e5e7eb !important;
+        }
+
+        .steps-api-panel {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 14px 16px 6px;
+            margin-top: 4px;
+        }
+
+        .steps-api-section {
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .steps-api-section:last-of-type {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .steps-api-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #5b21b6;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin: 0 0 10px;
+        }
+
+        .steps-api-stack {
+            margin-bottom: 12px;
+        }
+
+        .steps-api-stack:last-child {
+            margin-bottom: 0;
+        }
+
+        .steps-api-stack > label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 5px;
+        }
+
+        .steps-api-stack input[type="text"],
+        .steps-api-stack input[type="number"],
+        .steps-api-stack select,
+        .steps-api-stack textarea {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 13px;
+        }
+
+        .steps-api-stack textarea {
+            font-family: ui-monospace, Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            resize: vertical;
+            min-height: 52px;
+        }
+
+        .steps-api-inline-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .steps-api-checks {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 22px;
+            font-size: 13px;
+            color: #4b5563;
+        }
+
+        .steps-api-checks label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            font-weight: 400;
+        }
+
+        html.dark .steps-page-root .steps-api-panel {
+            background: #111827;
+            border-color: #374151;
+        }
+
+        html.dark .steps-page-root .steps-api-section {
+            border-bottom-color: #374151;
+        }
+
+        html.dark .steps-page-root .steps-api-section-title {
+            color: #c4b5fd;
+        }
+
+        html.dark .steps-page-root .steps-api-stack > label {
+            color: #d1d5db;
+        }
         
         .modal-header {
             margin-bottom: 20px;
@@ -600,7 +889,7 @@
     
     <!-- 创建步骤模态框 -->
     <div id="createStepModal" class="modal">
-        <div class="modal-content">
+        <div class="modal-content modal-content--steps">
             <div class="modal-header">
                 <h3 data-i18n="steps_modal_add">添加测试步骤</h3>
             </div>
@@ -624,6 +913,7 @@
                     <option value="select" data-i18n-opt="steps_act_select">下拉框选择</option>
                     <option value="date" data-i18n-opt="steps_act_date">日期选择</option>
                     <option value="assert" data-i18n-opt="steps_act_assert">断言操作</option>
+                    <option value="api_request" data-i18n-opt="steps_act_api_request">接口测试</option>
                 </select>
             </div>
             <div class="form-group">
@@ -759,6 +1049,128 @@
                 <label for="stepSwipeDistance" data-i18n="steps_swipe_dist">滑动距离 (px)</label>
                 <input type="number" id="stepSwipeDistance" placeholder="100" min="1" value="100">
             </div>
+            <div class="form-group" id="stepApiRequestGroup" style="display: none;">
+                <div class="steps-api-panel steps-api-panel--composer">
+                    <div class="steps-api-urlbar">
+                        <select id="stepApiMethod" class="steps-api-method-select" aria-label="HTTP 方法">
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="PATCH">PATCH</option>
+                            <option value="DELETE">DELETE</option>
+                            <option value="HEAD">HEAD</option>
+                            <option value="OPTIONS">OPTIONS</option>
+                        </select>
+                        <input type="text" id="stepApiUrl" class="steps-api-url-input" placeholder="https://… 支持 {% raw %}{{变量}} 与 {{ENV:NAME}}{% endraw %}" autocomplete="off">
+                    </div>
+                    <p class="steps-api-hint">{% raw %}Params / Headers 为键值表（类似 Postman）；URL 与表格值均支持 {{变量}}、{{ENV:NAME}}。{% endraw %}</p>
+                    <div class="steps-api-tabs" role="tablist">
+                        <button type="button" class="steps-api-tab active" id="stepApiTabBtn-params" onclick="switchApiTab(false,'params')" role="tab">Params</button>
+                        <button type="button" class="steps-api-tab" id="stepApiTabBtn-headers" onclick="switchApiTab(false,'headers')" role="tab">Headers</button>
+                        <button type="button" class="steps-api-tab" id="stepApiTabBtn-body" onclick="switchApiTab(false,'body')" role="tab">Body</button>
+                        <button type="button" class="steps-api-tab" id="stepApiTabBtn-auth" onclick="switchApiTab(false,'auth')" role="tab">认证</button>
+                        <button type="button" class="steps-api-tab" id="stepApiTabBtn-settings" onclick="switchApiTab(false,'settings')" role="tab">校验与选项</button>
+                    </div>
+                    <div id="stepApiTabPanel-params" class="steps-api-tab-panel active" role="tabpanel">
+                        <p class="steps-api-mini-hint">Query 参数（拼接到 URL 查询串）</p>
+                        <table class="steps-api-kv-table">
+                            <thead><tr><th>参数名</th><th>值</th><th class="steps-api-kv-actions"></th></tr></thead>
+                            <tbody id="stepApiParamsKvBody"></tbody>
+                        </table>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="addApiKvRow(false,'params')" style="margin-top:8px;">+ 添加参数</button>
+                    </div>
+                    <div id="stepApiTabPanel-headers" class="steps-api-tab-panel" role="tabpanel">
+                        <p class="steps-api-mini-hint">请求头（Authorization 可在「认证」页配置，将覆盖此处同名项）</p>
+                        <table class="steps-api-kv-table">
+                            <thead><tr><th>Header</th><th>值</th><th class="steps-api-kv-actions"></th></tr></thead>
+                            <tbody id="stepApiHeadersKvBody"></tbody>
+                        </table>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="addApiKvRow(false,'headers')" style="margin-top:8px;">+ 添加 Header</button>
+                    </div>
+                    <div id="stepApiTabPanel-body" class="steps-api-tab-panel" role="tabpanel">
+                        <div class="steps-api-stack">
+                            <label for="stepApiBodyType">Body 类型</label>
+                            <select id="stepApiBodyType" onchange="toggleApiBodyFields(false)">
+                                <option value="none">无</option>
+                                <option value="json">JSON</option>
+                                <option value="form">表单（URL 编码，JSON 编辑）</option>
+                                <option value="raw">原始文本（raw）</option>
+                            </select>
+                        </div>
+                        <div id="stepApiBodyJsonWrap" style="display:none;" class="steps-api-stack">
+                            <label for="stepApiBodyJson">JSON</label>
+                            <textarea id="stepApiBodyJson" rows="8"></textarea>
+                        </div>
+                        <div id="stepApiBodyFormWrap" style="display:none;" class="steps-api-stack">
+                            <label for="stepApiBodyForm">表单字段（JSON 对象）</label>
+                            <textarea id="stepApiBodyForm" rows="5"></textarea>
+                        </div>
+                        <div id="stepApiBodyRawWrap" style="display:none;" class="steps-api-stack">
+                            <div id="stepApiRawMimeWrap" class="steps-api-stack" style="display:none;">
+                                <label for="stepApiRawMime">Content-Type</label>
+                                <select id="stepApiRawMime">
+                                    <option value="application/json">application/json</option>
+                                    <option value="text/plain">text/plain</option>
+                                    <option value="application/xml">application/xml</option>
+                                    <option value="text/xml">text/xml</option>
+                                    <option value="text/html">text/html</option>
+                                </select>
+                            </div>
+                            <label for="stepApiBodyRaw">Raw 正文</label>
+                            <textarea id="stepApiBodyRaw" rows="8"></textarea>
+                        </div>
+                    </div>
+                    <div id="stepApiTabPanel-auth" class="steps-api-tab-panel" role="tabpanel">
+                        <div class="steps-api-stack">
+                            <label for="stepApiAuthType">认证方式</label>
+                            <select id="stepApiAuthType" onchange="toggleApiAuthFields(false)">
+                                <option value="none">无认证</option>
+                                <option value="bearer">Bearer Token</option>
+                                <option value="basic">Basic Auth</option>
+                            </select>
+                        </div>
+                        <div id="stepApiAuthBearerFields" style="display:none;" class="steps-api-stack">
+                            <label for="stepApiBearerToken">Token</label>
+                            <input type="text" id="stepApiBearerToken" placeholder="支持变量" autocomplete="off">
+                        </div>
+                        <div id="stepApiAuthBasicFields" style="display:none;">
+                            <div class="steps-api-stack">
+                                <label for="stepApiBasicUser">用户名</label>
+                                <input type="text" id="stepApiBasicUser" autocomplete="off">
+                            </div>
+                            <div class="steps-api-stack">
+                                <label for="stepApiBasicPass">密码</label>
+                                <input type="password" id="stepApiBasicPass" autocomplete="new-password">
+                            </div>
+                        </div>
+                    </div>
+                    <div id="stepApiTabPanel-settings" class="steps-api-tab-panel" role="tabpanel">
+                        <div class="steps-api-inline-2">
+                            <div class="steps-api-stack">
+                                <label for="stepApiExpectedStatus">期望状态码</label>
+                                <input type="number" id="stepApiExpectedStatus" value="200" min="100" max="599">
+                            </div>
+                            <div class="steps-api-stack">
+                                <label for="stepApiTimeout">超时（秒）</label>
+                                <input type="number" id="stepApiTimeout" value="30" min="1">
+                            </div>
+                        </div>
+                        <div class="steps-api-stack">
+                            <label for="stepApiJsonPath">JSON 路径（可选）</label>
+                            <input type="text" id="stepApiJsonPath" placeholder="例如 data.token">
+                        </div>
+                        <div class="steps-api-stack">
+                            <label for="stepApiExpectedJson">期望 JSON 片段（可选）</label>
+                            <input type="text" id="stepApiExpectedJson" placeholder='留空仅校验状态码；例如 "ok"'>
+                        </div>
+                        <div class="steps-api-checks" style="margin-top:12px;">
+                            <label><input type="checkbox" id="stepApiFollowRedirects" checked> 跟随重定向</label>
+                            <label><input type="checkbox" id="stepApiUseCookies"> 使用浏览器 Cookie</label>
+                            <label><input type="checkbox" id="stepApiVerifySsl" checked> 校验 SSL</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div class="form-group">
                 <label for="stepDescription" data-i18n="steps_label_desc">步骤描述</label>
                 <textarea id="stepDescription" data-i18n-placeholder="steps_ph_desc" placeholder=""></textarea>
@@ -772,7 +1184,7 @@
     
     <!-- 编辑步骤模态框 -->
     <div id="editStepModal" class="modal">
-        <div class="modal-content">
+        <div class="modal-content modal-content--steps">
             <div class="modal-header">
                 <h3 data-i18n="steps_modal_edit">编辑测试步骤</h3>
             </div>
@@ -796,6 +1208,7 @@
                     <option value="select" data-i18n-opt="steps_act_select">下拉框选择</option>
                     <option value="date" data-i18n-opt="steps_act_date">日期选择</option>
                     <option value="assert" data-i18n-opt="steps_act_assert">断言操作</option>
+                    <option value="api_request" data-i18n-opt="steps_act_api_request">接口测试</option>
                 </select>
             </div>
             <div class="form-group">
@@ -930,6 +1343,128 @@
             <div class="form-group" id="editSwipeDistance" style="display: none;">
                 <label for="editStepSwipeDistance" data-i18n="steps_swipe_dist">滑动距离 (px)</label>
                 <input type="number" id="editStepSwipeDistance" placeholder="100" min="1" value="100">
+            </div>
+            <div class="form-group" id="editStepApiRequestGroup" style="display: none;">
+                <div class="steps-api-panel steps-api-panel--composer">
+                    <div class="steps-api-urlbar">
+                        <select id="editStepApiMethod" class="steps-api-method-select" aria-label="HTTP 方法">
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="PATCH">PATCH</option>
+                            <option value="DELETE">DELETE</option>
+                            <option value="HEAD">HEAD</option>
+                            <option value="OPTIONS">OPTIONS</option>
+                        </select>
+                        <input type="text" id="editStepApiUrl" class="steps-api-url-input" placeholder="https://… 支持 {% raw %}{{变量}} 与 {{ENV:NAME}}{% endraw %}" autocomplete="off">
+                    </div>
+                    <p class="steps-api-hint">{% raw %}Params / Headers 为键值表（类似 Postman）；URL 与表格值均支持 {{变量}}、{{ENV:NAME}}。{% endraw %}</p>
+                    <div class="steps-api-tabs" role="tablist">
+                        <button type="button" class="steps-api-tab active" id="editStepApiTabBtn-params" onclick="switchApiTab(true,'params')" role="tab">Params</button>
+                        <button type="button" class="steps-api-tab" id="editStepApiTabBtn-headers" onclick="switchApiTab(true,'headers')" role="tab">Headers</button>
+                        <button type="button" class="steps-api-tab" id="editStepApiTabBtn-body" onclick="switchApiTab(true,'body')" role="tab">Body</button>
+                        <button type="button" class="steps-api-tab" id="editStepApiTabBtn-auth" onclick="switchApiTab(true,'auth')" role="tab">认证</button>
+                        <button type="button" class="steps-api-tab" id="editStepApiTabBtn-settings" onclick="switchApiTab(true,'settings')" role="tab">校验与选项</button>
+                    </div>
+                    <div id="editStepApiTabPanel-params" class="steps-api-tab-panel active" role="tabpanel">
+                        <p class="steps-api-mini-hint">Query 参数（拼接到 URL 查询串）</p>
+                        <table class="steps-api-kv-table">
+                            <thead><tr><th>参数名</th><th>值</th><th class="steps-api-kv-actions"></th></tr></thead>
+                            <tbody id="editStepApiParamsKvBody"></tbody>
+                        </table>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="addApiKvRow(true,'params')" style="margin-top:8px;">+ 添加参数</button>
+                    </div>
+                    <div id="editStepApiTabPanel-headers" class="steps-api-tab-panel" role="tabpanel">
+                        <p class="steps-api-mini-hint">请求头（Authorization 可在「认证」页配置，将覆盖此处同名项）</p>
+                        <table class="steps-api-kv-table">
+                            <thead><tr><th>Header</th><th>值</th><th class="steps-api-kv-actions"></th></tr></thead>
+                            <tbody id="editStepApiHeadersKvBody"></tbody>
+                        </table>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="addApiKvRow(true,'headers')" style="margin-top:8px;">+ 添加 Header</button>
+                    </div>
+                    <div id="editStepApiTabPanel-body" class="steps-api-tab-panel" role="tabpanel">
+                        <div class="steps-api-stack">
+                            <label for="editStepApiBodyType">Body 类型</label>
+                            <select id="editStepApiBodyType" onchange="toggleApiBodyFields(true)">
+                                <option value="none">无</option>
+                                <option value="json">JSON</option>
+                                <option value="form">表单（URL 编码，JSON 编辑）</option>
+                                <option value="raw">原始文本（raw）</option>
+                            </select>
+                        </div>
+                        <div id="editStepApiBodyJsonWrap" style="display:none;" class="steps-api-stack">
+                            <label for="editStepApiBodyJson">JSON</label>
+                            <textarea id="editStepApiBodyJson" rows="8"></textarea>
+                        </div>
+                        <div id="editStepApiBodyFormWrap" style="display:none;" class="steps-api-stack">
+                            <label for="editStepApiBodyForm">表单字段（JSON 对象）</label>
+                            <textarea id="editStepApiBodyForm" rows="5"></textarea>
+                        </div>
+                        <div id="editStepApiBodyRawWrap" style="display:none;" class="steps-api-stack">
+                            <div id="editStepApiRawMimeWrap" class="steps-api-stack" style="display:none;">
+                                <label for="editStepApiRawMime">Content-Type</label>
+                                <select id="editStepApiRawMime">
+                                    <option value="application/json">application/json</option>
+                                    <option value="text/plain">text/plain</option>
+                                    <option value="application/xml">application/xml</option>
+                                    <option value="text/xml">text/xml</option>
+                                    <option value="text/html">text/html</option>
+                                </select>
+                            </div>
+                            <label for="editStepApiBodyRaw">Raw 正文</label>
+                            <textarea id="editStepApiBodyRaw" rows="8"></textarea>
+                        </div>
+                    </div>
+                    <div id="editStepApiTabPanel-auth" class="steps-api-tab-panel" role="tabpanel">
+                        <div class="steps-api-stack">
+                            <label for="editStepApiAuthType">认证方式</label>
+                            <select id="editStepApiAuthType" onchange="toggleApiAuthFields(true)">
+                                <option value="none">无认证</option>
+                                <option value="bearer">Bearer Token</option>
+                                <option value="basic">Basic Auth</option>
+                            </select>
+                        </div>
+                        <div id="editStepApiAuthBearerFields" style="display:none;" class="steps-api-stack">
+                            <label for="editStepApiBearerToken">Token</label>
+                            <input type="text" id="editStepApiBearerToken" placeholder="支持变量" autocomplete="off">
+                        </div>
+                        <div id="editStepApiAuthBasicFields" style="display:none;">
+                            <div class="steps-api-stack">
+                                <label for="editStepApiBasicUser">用户名</label>
+                                <input type="text" id="editStepApiBasicUser" autocomplete="off">
+                            </div>
+                            <div class="steps-api-stack">
+                                <label for="editStepApiBasicPass">密码</label>
+                                <input type="password" id="editStepApiBasicPass" autocomplete="new-password">
+                            </div>
+                        </div>
+                    </div>
+                    <div id="editStepApiTabPanel-settings" class="steps-api-tab-panel" role="tabpanel">
+                        <div class="steps-api-inline-2">
+                            <div class="steps-api-stack">
+                                <label for="editStepApiExpectedStatus">期望状态码</label>
+                                <input type="number" id="editStepApiExpectedStatus" value="200" min="100" max="599">
+                            </div>
+                            <div class="steps-api-stack">
+                                <label for="editStepApiTimeout">超时（秒）</label>
+                                <input type="number" id="editStepApiTimeout" value="30" min="1">
+                            </div>
+                        </div>
+                        <div class="steps-api-stack">
+                            <label for="editStepApiJsonPath">JSON 路径（可选）</label>
+                            <input type="text" id="editStepApiJsonPath" placeholder="例如 data.token">
+                        </div>
+                        <div class="steps-api-stack">
+                            <label for="editStepApiExpectedJson">期望 JSON 片段（可选）</label>
+                            <input type="text" id="editStepApiExpectedJson" placeholder='留空仅校验状态码；例如 "ok"'>
+                        </div>
+                        <div class="steps-api-checks" style="margin-top:12px;">
+                            <label><input type="checkbox" id="editStepApiFollowRedirects" checked> 跟随重定向</label>
+                            <label><input type="checkbox" id="editStepApiUseCookies"> 使用浏览器 Cookie</label>
+                            <label><input type="checkbox" id="editStepApiVerifySsl" checked> 校验 SSL</label>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="form-group">
                 <label for="editStepDescription" data-i18n="steps_label_desc">步骤描述</label>
@@ -1206,7 +1741,8 @@
                 exit_iframe: 'steps_act_exit_iframe',
                 select: 'steps_act_select',
                 date: 'steps_act_date',
-                assert: 'steps_act_assert'
+                assert: 'steps_act_assert',
+                api_request: 'steps_act_api_request'
             };
             var key = map[action];
             return key ? t(key) : (action || '');
@@ -1217,6 +1753,242 @@
             document.querySelectorAll('.steps-page-root select option[data-i18n-opt]').forEach(function (opt) {
                 var k = opt.getAttribute('data-i18n-opt');
                 if (k && typeof t === 'function') opt.textContent = t(k);
+            });
+        }
+
+        function switchApiTab(isEdit, name) {
+            var p = isEdit ? 'editStep' : 'step';
+            ['params', 'headers', 'body', 'auth', 'settings'].forEach(function (tab) {
+                var btn = document.getElementById(p + 'ApiTabBtn-' + tab);
+                var panel = document.getElementById(p + 'ApiTabPanel-' + tab);
+                if (btn) btn.classList.toggle('active', tab === name);
+                if (panel) panel.classList.toggle('active', tab === name);
+            });
+        }
+
+        function addApiKvRow(isEdit, kind) {
+            var p = isEdit ? 'editStep' : 'step';
+            var tid = p + 'Api' + (kind === 'params' ? 'Params' : 'Headers') + 'KvBody';
+            var tb = document.getElementById(tid);
+            if (!tb) return;
+            var tr = document.createElement('tr');
+            var phKey = kind === 'params' ? '参数名' : 'Header 名';
+            tr.innerHTML = '<td><input type="text" class="steps-api-kv-key" placeholder="' + phKey + '" autocomplete="off"></td>' +
+                '<td><input type="text" class="steps-api-kv-val" placeholder="值" autocomplete="off"></td>' +
+                '<td class="steps-api-kv-actions"><button type="button" class="btn btn-sm btn-secondary" onclick="removeApiKvRow(this)" title="删除">×</button></td>';
+            tb.appendChild(tr);
+        }
+
+        function removeApiKvRow(btn) {
+            var tr = btn.closest('tr');
+            var tb = tr && tr.parentElement;
+            if (!tr || !tb || tb.tagName !== 'TBODY') return;
+            tr.remove();
+            if (!tb.querySelectorAll('tr').length) {
+                var isEdit = tb.id.indexOf('editStep') === 0;
+                var kind = tb.id.indexOf('Params') >= 0 ? 'params' : 'headers';
+                addApiKvRow(isEdit, kind);
+            }
+        }
+
+        function kvTbodyToObject(tb) {
+            var o = {};
+            if (!tb) return o;
+            tb.querySelectorAll('tr').forEach(function (tr) {
+                var ki = tr.querySelector('.steps-api-kv-key');
+                var vi = tr.querySelector('.steps-api-kv-val');
+                var k = ki && (ki.value || '').trim();
+                if (k) o[k] = vi ? String(vi.value) : '';
+            });
+            return o;
+        }
+
+        function fillApiKvTbody(tb, obj) {
+            if (!tb) return;
+            tb.innerHTML = '';
+            var isEdit = tb.id.indexOf('editStep') === 0;
+            var kind = tb.id.indexOf('Params') >= 0 ? 'params' : 'headers';
+            var o = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+            var keys = Object.keys(o);
+            if (!keys.length) {
+                addApiKvRow(isEdit, kind);
+                addApiKvRow(isEdit, kind);
+                return;
+            }
+            keys.forEach(function (k) {
+                addApiKvRow(isEdit, kind);
+                var rows = tb.querySelectorAll('tr');
+                var last = rows[rows.length - 1];
+                var ki = last.querySelector('.steps-api-kv-key');
+                var vi = last.querySelector('.steps-api-kv-val');
+                if (ki) ki.value = k;
+                if (vi) vi.value = o[k] != null ? String(o[k]) : '';
+            });
+            addApiKvRow(isEdit, kind);
+        }
+
+        function _apiSpecPlainObject(v) {
+            if (!v) return {};
+            if (typeof v === 'string') {
+                try { var x = JSON.parse(v); return (x && typeof x === 'object' && !Array.isArray(x)) ? x : {}; } catch (e) { return {}; }
+            }
+            if (typeof v === 'object' && !Array.isArray(v)) return v;
+            return {};
+        }
+
+        function toggleApiAuthFields(isEdit) {
+            var p = isEdit ? 'editStep' : 'step';
+            var sel = document.getElementById(p + 'ApiAuthType');
+            var v = sel ? sel.value : 'none';
+            var b = document.getElementById(p + 'ApiAuthBearerFields');
+            var ba = document.getElementById(p + 'ApiAuthBasicFields');
+            if (b) b.style.display = v === 'bearer' ? 'block' : 'none';
+            if (ba) ba.style.display = v === 'basic' ? 'block' : 'none';
+        }
+
+        function ensureApiKvRowsInitialized(isEdit) {
+            var p = isEdit ? 'editStep' : 'step';
+            var pb = document.getElementById(p + 'ApiParamsKvBody');
+            var hb = document.getElementById(p + 'ApiHeadersKvBody');
+            if (pb && !pb.querySelectorAll('tr').length) fillApiKvTbody(pb, {});
+            if (hb && !hb.querySelectorAll('tr').length) fillApiKvTbody(hb, {});
+        }
+
+        function toggleApiBodyFields(isEdit) {
+            var p = isEdit ? 'editStep' : 'step';
+            var tEl = document.getElementById(p + 'ApiBodyType');
+            if (!tEl) return;
+            var t = tEl.value;
+            [['ApiBodyJsonWrap', 'json'], ['ApiBodyFormWrap', 'form'], ['ApiBodyRawWrap', 'raw']].forEach(function (pair) {
+                var el = document.getElementById(p + pair[0]);
+                if (el) el.style.display = t === pair[1] ? 'block' : 'none';
+            });
+            var rw = document.getElementById(p + 'ApiRawMimeWrap');
+            if (rw) rw.style.display = t === 'raw' ? 'block' : 'none';
+        }
+
+        function _parseJsonField(raw, fallback) {
+            var s = (raw || '').trim();
+            if (!s) return fallback;
+            try { return JSON.parse(s); } catch (e) {
+                throw new Error('JSON 格式无效: ' + e.message);
+            }
+        }
+
+        function collectApiSpecFromForm(isEdit) {
+            var p = isEdit ? 'editStep' : 'step';
+            function gv(suffix) {
+                var el = document.getElementById(p + suffix);
+                return el ? el.value : '';
+            }
+            var url = (gv('ApiUrl') || '').trim();
+            if (!url) throw new Error('请填写接口 URL');
+            var paramsBody = document.getElementById(p + 'ApiParamsKvBody');
+            var headersBody = document.getElementById(p + 'ApiHeadersKvBody');
+            var params = kvTbodyToObject(paramsBody);
+            var headers = kvTbodyToObject(headersBody);
+            var bodyType = gv('ApiBodyType') || 'none';
+            var spec = {
+                method: gv('ApiMethod') || 'GET',
+                url: url,
+                headers: headers,
+                params: params,
+                body_type: bodyType,
+                auth_type: gv('ApiAuthType') || 'none',
+                bearer_token: gv('ApiBearerToken'),
+                basic_username: gv('ApiBasicUser'),
+                basic_password: gv('ApiBasicPass'),
+                expected_status: parseInt(gv('ApiExpectedStatus') || '200', 10) || 200,
+                timeout: parseFloat(gv('ApiTimeout') || '30') || 30,
+                verify_ssl: !!(document.getElementById(p + 'ApiVerifySsl') || {}).checked,
+                use_browser_cookies: !!(document.getElementById(p + 'ApiUseCookies') || {}).checked,
+                follow_redirects: !!(document.getElementById(p + 'ApiFollowRedirects') || {}).checked
+            };
+            if (spec.auth_type === 'none') {
+                delete spec.auth_type;
+                delete spec.bearer_token;
+                delete spec.basic_username;
+                delete spec.basic_password;
+            } else if (spec.auth_type === 'bearer') {
+                delete spec.basic_username;
+                delete spec.basic_password;
+            } else if (spec.auth_type === 'basic') {
+                delete spec.bearer_token;
+            }
+            if (bodyType === 'json') {
+                var br = (gv('ApiBodyJson') || '').trim();
+                if (br) spec.body_json = _parseJsonField(br, null);
+            } else if (bodyType === 'form') {
+                var fr = (gv('ApiBodyForm') || '').trim();
+                if (fr) spec.body_form = _parseJsonField(fr, {});
+            } else if (bodyType === 'raw') {
+                spec.body_raw = gv('ApiBodyRaw') || '';
+                var rm = (gv('ApiRawMime') || '').trim();
+                if (rm) spec.raw_content_type = rm;
+            }
+            var jp = (gv('ApiJsonPath') || '').trim();
+            var ejRaw = (gv('ApiExpectedJson') || '').trim();
+            if (ejRaw) {
+                try { spec.expected_json_value = JSON.parse(ejRaw); } catch (e) { spec.expected_json_value = ejRaw; }
+                spec.json_path = jp;
+            }
+            return JSON.stringify(spec);
+        }
+
+        function fillApiFormFromSpec(isEdit, rawSpec) {
+            var p = isEdit ? 'editStep' : 'step';
+            var spec = {};
+            try {
+                spec = typeof rawSpec === 'string' ? JSON.parse(rawSpec || '{}') : (rawSpec || {});
+            } catch (e) { spec = {}; }
+            function set(suffix, v) {
+                var el = document.getElementById(p + suffix);
+                if (el) el.value = v != null ? v : '';
+            }
+            set('ApiMethod', spec.method || 'GET');
+            set('ApiUrl', spec.url || '');
+            fillApiKvTbody(document.getElementById(p + 'ApiParamsKvBody'), _apiSpecPlainObject(spec.params || spec.query));
+            fillApiKvTbody(document.getElementById(p + 'ApiHeadersKvBody'), _apiSpecPlainObject(spec.headers));
+            var bt = spec.body_type || 'none';
+            set('ApiBodyType', bt);
+            if (spec.body_json != null && typeof spec.body_json !== 'string') {
+                set('ApiBodyJson', JSON.stringify(spec.body_json, null, 2));
+            } else {
+                set('ApiBodyJson', spec.body_json || '');
+            }
+            set('ApiBodyForm', spec.body_form ? JSON.stringify(spec.body_form, null, 2) : '');
+            set('ApiBodyRaw', spec.body_raw || '');
+            set('ApiRawMime', spec.raw_content_type || 'application/json');
+            set('ApiExpectedStatus', String(spec.expected_status != null ? spec.expected_status : 200));
+            set('ApiTimeout', String(spec.timeout != null ? spec.timeout : 30));
+            set('ApiJsonPath', spec.json_path || '');
+            if (spec.expected_json_value !== undefined && spec.expected_json_value !== null) {
+                var ev = spec.expected_json_value;
+                set('ApiExpectedJson', typeof ev === 'string' ? JSON.stringify(ev) : JSON.stringify(ev));
+            } else {
+                set('ApiExpectedJson', '');
+            }
+            set('ApiAuthType', spec.auth_type || 'none');
+            set('ApiBearerToken', spec.bearer_token || '');
+            set('ApiBasicUser', spec.basic_username || '');
+            set('ApiBasicPass', spec.basic_password || '');
+            var uc = document.getElementById(p + 'ApiUseCookies');
+            if (uc) uc.checked = !!spec.use_browser_cookies;
+            var vs = document.getElementById(p + 'ApiVerifySsl');
+            if (vs) vs.checked = spec.verify_ssl !== false;
+            var fr = document.getElementById(p + 'ApiFollowRedirects');
+            if (fr) fr.checked = spec.follow_redirects !== false;
+            toggleApiAuthFields(isEdit);
+            toggleApiBodyFields(isEdit);
+            switchApiTab(isEdit, 'params');
+        }
+
+        function resetApiForm(isEdit) {
+            fillApiFormFromSpec(isEdit, {
+                method: 'GET', url: '', headers: {}, params: {}, body_type: 'none',
+                expected_status: 200, timeout: 30, verify_ssl: true, use_browser_cookies: false,
+                follow_redirects: true, auth_type: 'none', bearer_token: '', basic_username: '', basic_password: '',
+                raw_content_type: 'application/json'
             });
         }
 
@@ -1292,6 +2064,16 @@
                         const clickRepBadge = (step.action === 'click' && Number.isFinite(_crc) && _crc > 1)
                             ? ` <span style="color:#6b7280;font-weight:600;">×${_crc}</span>` : '';
                         const showBatchLoc = step.action === 'batch_input' && step.selector_type;
+                        let apiCardRow = '';
+                        if (step.action === 'api_request' && step.api_spec) {
+                            try {
+                                const spec = typeof step.api_spec === 'string' ? JSON.parse(step.api_spec) : step.api_spec;
+                                const mu = (spec.method || 'GET') + ' ' + (spec.url || '');
+                                apiCardRow = `<div class="step-nav-url"><strong>HTTP</strong> <span title="${escapeHtml(mu)}">${escapeHtml(truncateMiddle(mu, 88))}</span></div>`;
+                            } catch (e) {
+                                apiCardRow = '<div class="step-nav-url"><strong>HTTP</strong> <span>（配置 JSON 无效）</span></div>';
+                            }
+                        }
                         stepItem.innerHTML = `
                             <div class="step-number">${actualStepNumber}</div>
                             <div class="step-content">
@@ -1300,6 +2082,7 @@
                                     ${(step.selector_value || showBatchLoc) ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
                                     ${step.selector_value ? `<div><strong>${lblSel}</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
                                     ${navigateUrlRow}
+                                    ${apiCardRow}
                                     ${showInputRow ? `<div><strong>${lblInp}</strong> ${step.action === 'batch_input' ? '<pre style="margin:4px 0 0;font-size:12px;white-space:pre-wrap;max-height:120px;overflow:auto;">' + escapeHtml(truncateMiddle(step.input_value, 400)) + '</pre>' : escapeHtml(step.input_value)}</div>` : ''}
                                 </div>
                             </div>
@@ -1586,6 +2369,7 @@ function changePage(page) {
             // 更新选择器帮助文本
             updateSelectorHelp();
             
+            resetApiForm(false);
             toggleActionFields();
             refreshStepsFormSelectOptions();
         }
@@ -1657,6 +2441,10 @@ function changePage(page) {
                 // 处理验证操作的验证类型选择
                 const verifyType = step.input_value || 'auto';
                 document.getElementById('editStepVerifyTypeSelect').value = verifyType;
+            } else if (step.action === 'api_request') {
+                fillApiFormFromSpec(true, step.api_spec || '');
+            } else {
+                resetApiForm(true);
             }
             let crc = step.click_repeat_count;
             if (crc == null || crc === '') crc = 1;
@@ -1713,6 +2501,8 @@ function changePage(page) {
             document.querySelector('label[for="stepInputValue"]').textContent = t('steps_label_in_val');
             
             const scrollFields = document.getElementById('scrollFields');
+            const apiReqGroup = document.getElementById('stepApiRequestGroup');
+            if (apiReqGroup) apiReqGroup.style.display = 'none';
             const compareTypeField = document.getElementById('stepCompareType');
             const swipeDirectionField = document.getElementById('swipeDirection');
             const swipeDistanceField = document.getElementById('swipeDistance');
@@ -1813,6 +2603,14 @@ function changePage(page) {
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'none';
                 scrollFields.style.display = 'none';
+            } else if (action === 'api_request') {
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
+                scrollFields.style.display = 'none';
+                if (pickCreateBtn) pickCreateBtn.style.display = 'none';
+                if (apiReqGroup) apiReqGroup.style.display = 'block';
+                ensureApiKvRowsInitialized(false);
             } else if (action === 'select') {
                 // 下拉框选择操作需要选择器和选择值
                 inputValueField.style.display = 'block';
@@ -1925,6 +2723,8 @@ function changePage(page) {
             const editAssertAttrField = document.getElementById('editStepAssertAttr');
             const editAssertOperatorField = document.getElementById('editStepAssertOperator');
             const editVerifyTypeField = document.getElementById('editStepVerifyType');
+            const editApiReqGroup = document.getElementById('editStepApiRequestGroup');
+            if (editApiReqGroup) editApiReqGroup.style.display = 'none';
             const editStepClickRepeatGroup = document.getElementById('editStepClickRepeatGroup');
             if (editStepClickRepeatGroup) editStepClickRepeatGroup.style.display = 'none';
             const editStepBatchInputGroup = document.getElementById('editStepBatchInputGroup');
@@ -2014,6 +2814,14 @@ function changePage(page) {
                 selectorTypeField.style.display = 'none';
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'none';
+            } else if (action === 'api_request') {
+                selectorTypeField.style.display = 'none';
+                selectorValueField.style.display = 'none';
+                inputValueField.style.display = 'none';
+                editScrollFields.style.display = 'none';
+                if (pickEditBtn) pickEditBtn.style.display = 'none';
+                if (editApiReqGroup) editApiReqGroup.style.display = 'block';
+                ensureApiKvRowsInitialized(true);
             } else if (action === 'select') {
                 // 下拉框选择操作需要选择器和选择值
                 inputValueField.style.display = 'block';
@@ -2285,6 +3093,16 @@ function changePage(page) {
                 inputValue = verifyType;
             }
             
+            let apiSpecStr = '';
+            if (action === 'api_request') {
+                try {
+                    apiSpecStr = collectApiSpecFromForm(false);
+                } catch (e) {
+                    alert(e.message || String(e));
+                    return;
+                }
+            }
+            
             try {
                 // 显示加载状态
                 showLoading(t('steps_add_loading'));
@@ -2293,13 +3111,7 @@ function changePage(page) {
                     const r = parseInt(document.getElementById('stepClickRepeat').value, 10);
                     clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
                 }
-                const response = await fetch('/api/steps', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Cache-Control': 'no-cache'
-                    },
-                    body: JSON.stringify({
+                const postBody = {
                         case_id: currentCaseId,
                         action: action,
                         selector_type: selectorType,
@@ -2309,7 +3121,20 @@ function changePage(page) {
                         description: description,
                         compare_type: compareType,
                         click_repeat_count: clickRepeatCount
-                    })
+                };
+                if (action === 'api_request') {
+                    postBody.selector_type = '';
+                    postBody.selector_value = '';
+                    postBody.input_value = '';
+                    postBody.api_spec = apiSpecStr;
+                }
+                const response = await fetch('/api/steps', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    },
+                    body: JSON.stringify(postBody)
                 });
                         
                 const data = await response.json();
@@ -2390,6 +3215,16 @@ function changePage(page) {
                 inputValue = verifyType;
             }
             
+            let editApiSpecStr = null;
+            if (action === 'api_request') {
+                try {
+                    editApiSpecStr = collectApiSpecFromForm(true);
+                } catch (e) {
+                    alert(e.message || String(e));
+                    return;
+                }
+            }
+            
             try {
                 // 显示加载状态
                 showLoading(t('steps_upd_loading'));
@@ -2398,13 +3233,7 @@ function changePage(page) {
                     const r = parseInt(document.getElementById('editStepClickRepeat').value, 10);
                     clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
                 }
-                const response = await fetch(`/api/steps/${currentEditingStepId}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Cache-Control': 'no-cache'
-                    },
-                    body: JSON.stringify({
+                const putBody = {
                         action: action,
                         selector_type: selectorType,
                         selector_value: selectorValue,
@@ -2413,7 +3242,22 @@ function changePage(page) {
                         description: description,
                         compare_type: compareType,
                         click_repeat_count: clickRepeatCount
-                    })
+                };
+                if (action === 'api_request') {
+                    putBody.selector_type = '';
+                    putBody.selector_value = '';
+                    putBody.input_value = '';
+                    putBody.api_spec = editApiSpecStr;
+                } else {
+                    putBody.api_spec = '';
+                }
+                const response = await fetch(`/api/steps/${currentEditingStepId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    },
+                    body: JSON.stringify(putBody)
                 });
                         
                 const data = await response.json();

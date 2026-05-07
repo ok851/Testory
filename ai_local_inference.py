@@ -667,6 +667,54 @@ class LocalAIService:
         data = resp.json() if resp.content else {}
         return ((data.get("message") or {}).get("content") or "").strip()
 
+    def chat_ollama_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Multi-turn Ollama /api/chat with optional tool definitions (OpenAI-compatible tool schema).
+        Returns assistant message dict: content (optional), tool_calls (optional).
+        """
+        root = (base_url or "").strip().rstrip("/") or self.base_url
+        url = f"{root}/api/chat"
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": self._ollama_options(),
+        }
+        if tools:
+            payload["tools"] = tools
+        try:
+            resp = requests.post(url, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+        except RequestException as e:
+            detail = str(e).strip() or type(e).__name__
+            response = getattr(e, "response", None)
+            if response is not None:
+                try:
+                    body = (response.text or "").strip().replace("\n", " ")[:480]
+                    detail = f"HTTP {response.status_code}" + (f": {body}" if body else "")
+                except Exception:
+                    detail = f"HTTP {response.status_code}: {detail}"
+            raise ValueError(
+                "本地AI服务不可用（tools）："
+                f"{detail}。"
+                "请确认模型支持 tool calling，必要时关闭 AI_CHAT_TOOLS_ENABLE 或换用云端 OpenAI 兼容模型。"
+            ) from e
+        data = resp.json() if resp.content else {}
+        msg = data.get("message") or {}
+        out: Dict[str, Any] = {
+            "role": msg.get("role") or "assistant",
+            "content": msg.get("content"),
+        }
+        if msg.get("tool_calls"):
+            out["tool_calls"] = msg["tool_calls"]
+        return out
+
     def _ollama_options(self) -> Dict[str, Any]:
         opts: Dict[str, Any] = {"temperature": 0.2}
         np = (os.environ.get("LOCAL_LLM_NUM_PREDICT") or "").strip()
