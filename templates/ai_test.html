@@ -767,11 +767,48 @@
     .ai-add-modal .hint-link a:hover { text-decoration: underline; }
     .ai-add-model-hint { font-size: 11px; color: #94a3b8; margin-top: 6px; line-height: 1.4; }
     html.dark .ai-add-model-hint { color: #64748b; }
+    .ai-cap-banner {
+        font-size: 12px;
+        line-height: 1.45;
+        margin: 8px 0 10px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #c7d2fe;
+        background: #eef2ff;
+        color: #3730a3;
+    }
+    html.dark .ai-cap-banner {
+        border-color: #4338ca;
+        background: #1e1b4b;
+        color: #e0e7ff;
+    }
+    .ai-cap-banner--warn {
+        border-color: #fcd34d;
+        background: #fffbeb;
+        color: #92400e;
+    }
+    html.dark .ai-cap-banner--warn {
+        border-color: #d97706;
+        background: #422006;
+        color: #fef3c7;
+    }
+    .ai-cap-banner code { font-size: 11px; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.08); }
+    html.dark .ai-cap-banner code { background: rgba(255,255,255,.12); }
 </style>
 {% endblock %}
 {% block content %}
 <!-- ai-test template build: playwright-ui-dedup 2026-04-24 -->
 <div class="ai-test-page">
+    <script id="__aiTestCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, openclaw=openclaw_gateway_configured)|tojson }}</script>
+    <script>
+    (function () {
+        window.__aiTestCaps = {};
+        try {
+            var el = document.getElementById('__aiTestCapsJson');
+            if (el && el.textContent.trim()) window.__aiTestCaps = JSON.parse(el.textContent);
+        } catch (e) {}
+    })();
+    </script>
     <div class="ai-test-shell" style="display:flex;flex-direction:column;min-height:calc(100vh - 64px);">
         <header class="ai-studio-header">
             <div class="ai-studio-header__row1">
@@ -820,6 +857,17 @@
                     </div>
                     <label class="ai-gen-label" for="aiAgentEngineSelect">推理引擎</label>
                     <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"></select>
+                    {% if ai_chat_tools_env_enabled %}
+                    {% if openclaw_gateway_configured %}
+                    <div class="ai-cap-banner" role="status">
+                        已启用 <strong>AI 工具循环</strong>（<code>AI_CHAT_TOOLS_ENABLE</code>），且 <strong>OpenClaw Gateway</strong> 已配置。使用「<strong>优化</strong>」多轮对话时，模型可将浏览器/自动化类指令交给 Gateway 执行后再整理步骤；是否触发工具仍取决于模型与会话内容。所选推理引擎须支持 function calling（详见服务端日志）。
+                    </div>
+                    {% else %}
+                    <div class="ai-cap-banner ai-cap-banner--warn" role="alert">
+                        已启用 <strong>AI 工具循环</strong>，但未检测到 OpenClaw Gateway 凭证（请配置环境变量 <code>OPENCLAW_GATEWAY_URL</code> 与 <code>OPENCLAW_GATEWAY_TOKEN</code> 后重启服务）。在未配置前，执行类工具调用将返回错误；可参考仓库根目录 <code>.env.example</code>。
+                    </div>
+                    {% endif %}
+                    {% endif %}
                     <div id="aiChatHistory" class="ai-chat-log ai-chat-log--rail" role="log" aria-live="polite"></div>
                     <label class="ai-gen-label" for="aiMessageInput" data-i18n="aitest_label_goal">任务目标（自然语言）</label>
                     <div class="ai-input-row">
@@ -2658,7 +2706,16 @@
     window.saveActiveAiModel = saveActiveAiModel;
 
     async function applyInitialAiStudioFromStorage() {
-        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页为「智能体工作室」：<strong>左栏</strong>用自然语言描述任务；点<strong>生成用例</strong>仅由模型生成可保存的步骤，点顶栏<strong>运行</strong>会在主 Playwright 浏览器打开 URL 后生成并尝试执行这些步骤。<strong>中栏</strong>输入 URL 点「打开」可预览页面；<strong>右栏</strong>查看统计与用例预览。草稿可「保存」到本机浏览器。</div></div>';
+        var welcomeExtra = '';
+        try {
+            var caps = window.__aiTestCaps || {};
+            if (caps.chat_tools && caps.openclaw) {
+                welcomeExtra = ' 说明：若已通过环境变量启用工具循环并连接 OpenClaw，可在「优化」对话中让模型通过 Gateway 执行具体操作（见上方提示条）。';
+            } else if (caps.chat_tools && !caps.openclaw) {
+                welcomeExtra = ' 说明：工具循环已启用但未连接 OpenClaw 时请尽快配置 Gateway（见上方黄色提示）。';
+            }
+        } catch (e) {}
+        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页为「智能体工作室」：<strong>左栏</strong>用自然语言描述任务；点<strong>生成用例</strong>仅由模型生成可保存的步骤，点顶栏<strong>运行</strong>会在主 Playwright 浏览器打开 URL 后生成并尝试执行这些步骤。<strong>中栏</strong>输入 URL 点「打开」可预览页面；<strong>右栏</strong>查看统计与用例预览。草稿可「保存」到本机浏览器。' + welcomeExtra + '</div></div>';
         var s = (window.HuFirstAiAssistant && HuFirstAiAssistant.loadStudioSession) ? HuFirstAiAssistant.loadStudioSession() : null;
         var d = null;
         try {

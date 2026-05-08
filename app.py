@@ -1077,7 +1077,17 @@ def create_case_v2():
 @login_required
 def ai_test_page():
     """AI 生成测试步骤；与内置浏览器共用 Playwright 会话。"""
-    resp = make_response(render_template('ai_test.html'))
+    from ai_chat_tool_loop import ai_chat_tools_enabled
+    from openclaw_gateway_client import OpenClawGatewayClient
+
+    _oc = OpenClawGatewayClient()
+    resp = make_response(
+        render_template(
+            'ai_test.html',
+            ai_chat_tools_env_enabled=ai_chat_tools_enabled(),
+            openclaw_gateway_configured=_oc.is_configured(),
+        )
+    )
     # 用于核对浏览器是否命中本仓库模板（与页内 #aiTestBuildMarker 文案一致）
     resp.headers['X-AI-Test-Template'] = 'playwright-ui-dedup-2026-04-24'
     return resp
