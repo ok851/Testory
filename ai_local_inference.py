@@ -41,10 +41,11 @@ def _ollama_request_user_message(detail: str, *, tools: bool = False) -> str:
     if timed_out:
         parts.extend(
             [
-                "本次表现为等待超时（已超过当前 LOCAL_LLM_TIMEOUT，单位：秒）。建议：",
+                "本次表现为等待超时（读超时由 LOCAL_LLM_TIMEOUT_CHAT 或 LOCAL_LLM_TIMEOUT 控制，单位：秒；"
+                "未设置任一变量时，/api/chat 默认 600 秒）。建议：",
                 "1）若模型名含「-vl」等多模态后缀，多为视觉模型，在本场景只做文字 JSON 时往往极慢，建议在「AI测试」(/ai-test) 换成纯文本 instruct（如 qwen2.5、llama3 等）；",
                 "2）在本机终端执行：ollama run <模型名>，随意对话一行，确认首次拉权重与速度正常；",
-                "3）机器较慢时增大运行 HuFirst 的环境变量 LOCAL_LLM_TIMEOUT，并重启 HuFirst；",
+                "3）机器较慢时设置 LOCAL_LLM_TIMEOUT_CHAT（仅影响生成/对话类 POST）或 LOCAL_LLM_TIMEOUT 后重启 HuFirst；",
                 "4）确认 LOCAL_LLM_BASE_URL 指向正在跑推理的地址（默认 http://127.0.0.1:11434）。",
             ]
         )
@@ -93,6 +94,57 @@ def _strip_llm_noise(text: str) -> str:
         if s == prev:
             break
     return s.strip()
+
+
+def _ollama_api_chat_assistant_text(data: Any) -> str:
+    """
+    将 Ollama POST /api/chat 的非流式 JSON 中的 assistant 文本规整为单字符串。
+    兼容 content 为 str、多段 list、以及仅填充 message.thinking 的推理模型。
+    若存在顶层 error 字段则抛出说明。
+    """
+    if not isinstance(data, dict):
+        return ""
+    err = data.get("error")
+    if err is not None and err != "" and err != False:
+        if isinstance(err, dict):
+            em = _norm_str(err.get("message")) or json.dumps(err, ensure_ascii=False)[:400]
+            raise ValueError(f"Ollama 返回错误：{em}")
+        raise ValueError(f"Ollama 返回错误：{err!r}")
+
+    msg = data.get("message")
+    if not isinstance(msg, dict):
+        return ""
+
+    def _chunk_to_str(raw: Any) -> str:
+        if raw is None:
+            return ""
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, list):
+            parts: List[str] = []
+            for item in raw:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    tx = item.get("text")
+                    if isinstance(tx, str):
+                        parts.append(tx)
+                    else:
+                        c = item.get("content")
+                        if isinstance(c, str):
+                            parts.append(c)
+                        elif isinstance(c, list):
+                            parts.append(_chunk_to_str(c))
+            return "".join(parts)
+        return str(raw)
+
+    main = _chunk_to_str(msg.get("content")).strip()
+    if main:
+        return main
+    think = msg.get("thinking")
+    if isinstance(think, str) and think.strip():
+        return think.strip()
+    return ""
 
 
 def _normalize_smart_quotes_for_json(text: str) -> str:
@@ -308,8 +360,42 @@ def _first_http_url(*parts: str) -> str:
     return ""
 
 
+def _placeholder_template_case_url(case_url: str) -> bool:
+    """模型常误填的占位站点，与中文「百度搜索」等目标冲突时应丢弃。"""
+    cu = (case_url or "").lower()
+    if not cu:
+        return False
+    return (
+        "example.com" in cu
+        or "example.org" in cu
+        or "example.net" in cu
+        or "testpages.adobe.com" in cu
+        or "saucedemo.com" in cu
+    )
+
+
+def _goal_suggests_seed_url(goal: str) -> str:
+    """
+    当目标里未出现可解析的 http(s) 链接时，用常见门户补全 navigate/case_url，
+    以便站点级选择器回退（如百度 #kw）能生效。
+    """
+    raw = _norm_str(goal)
+    if not raw:
+        return ""
+    g = raw.lower()
+    if "百度" in raw or "baidu" in g:
+        if any(x in g for x in ("搜索", "搜一下", "检索", "query", "search")):
+            return "https://www.baidu.com/"
+        if any(k in raw for k in ("百度首页", "打开百度", "百度网站", "上百度")):
+            return "https://www.baidu.com/"
+    return ""
+
+
 def _infer_navigate_url(goal: str, description: str, case_url: str) -> str:
-    return _first_http_url(case_url, goal, description)
+    u = _first_http_url(case_url, goal, description)
+    if u:
+        return u
+    return _goal_suggests_seed_url(goal)
 
 
 def _infer_wait_input_value(description: str) -> str:
@@ -444,9 +530,12 @@ def _probe_pick_selector(
     return "", ""
 
 
-def _fallback_site_selectors(case_url: str, description: str, action: str) -> Tuple[str, str]:
+def _fallback_site_selectors(case_url: str, description: str, action: str, goal: str = "") -> Tuple[str, str]:
     """Known baidu.com layouts when model omits selectors."""
+    seed = _goal_suggests_seed_url(goal or "")
     u = (case_url or "").lower()
+    if "baidu.com" not in u and seed and "baidu.com" in seed.lower():
+        u = "https://www.baidu.com/"
     d = _norm_str(description)
     if "baidu.com" not in u or not d:
         return "", ""
@@ -455,6 +544,9 @@ def _fallback_site_selectors(case_url: str, description: str, action: str) -> Tu
             return "css", "#chat-textarea"
         return "css", "#kw"
     if action == "click" and any(k in d for k in ("搜索", "提交", "百度一下")):
+        # 「在搜索框输入…」类描述更像 input(#kw)，勿误匹配「百度一下」按钮
+        if any(k in d for k in ("搜索框", "输入框", "输入关键词", "键入", "填入")):
+            return "", ""
         if any(k in d for k in ("对话", "chat", "AI")):
             return "css", "#chat-submit-button"
         return "css", "#su"
@@ -474,7 +566,34 @@ class LocalAIService:
         self.base_url = os.environ.get("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
         self.model_light = os.environ.get("LOCAL_LLM_MODEL_LIGHT", "qwen2:1.5b")
         self.model_mid = os.environ.get("LOCAL_LLM_MODEL_MID", "llama3:8b-instruct")
-        self.timeout = int(os.environ.get("LOCAL_LLM_TIMEOUT", "240"))
+        try:
+            self.connect_timeout = max(
+                5,
+                int((os.environ.get("LOCAL_LLM_CONNECT_TIMEOUT") or "30").strip() or "30"),
+            )
+        except ValueError:
+            self.connect_timeout = 30
+
+        def _read_timeout_seconds() -> int:
+            """Ollama /api/chat 读超时：CHAT 优先，否则通用 TIMEOUT；都未设时默认 600。"""
+            chat_raw = (os.environ.get("LOCAL_LLM_TIMEOUT_CHAT") or "").strip()
+            base_raw = (os.environ.get("LOCAL_LLM_TIMEOUT") or "").strip()
+            for raw in (chat_raw, base_raw):
+                if not raw:
+                    continue
+                try:
+                    return max(30, int(raw))
+                except ValueError:
+                    continue
+            return 600
+
+        self.chat_read_timeout = _read_timeout_seconds()
+        # 与历史代码兼容：外部若读取 .timeout，视为当前 chat 读超时
+        self.timeout = self.chat_read_timeout
+
+    def _ollama_http_timeout(self) -> Tuple[int, int]:
+        """(connect, read) for requests — 连接失败尽快报错，生成允许长时间读。"""
+        return (self.connect_timeout, self.chat_read_timeout)
 
     def list_installed_models(self, timeout: int = 8) -> Tuple[List[str], Optional[str]]:
         """
@@ -682,7 +801,7 @@ class LocalAIService:
         if use_json_format:
             payload["format"] = "json"
         try:
-            resp = requests.post(url, json=payload, timeout=self.timeout)
+            resp = requests.post(url, json=payload, timeout=self._ollama_http_timeout())
             resp.raise_for_status()
         except RequestException as e:
             detail = str(e).strip() or type(e).__name__
@@ -695,7 +814,21 @@ class LocalAIService:
                     detail = f"HTTP {response.status_code}: {detail}"
             raise ValueError(_ollama_request_user_message(detail, tools=False)) from e
         data = resp.json() if resp.content else {}
-        return ((data.get("message") or {}).get("content") or "").strip()
+        if not isinstance(data, dict):
+            raise ValueError("本地模型返回非 JSON 或结构异常")
+        text = _ollama_api_chat_assistant_text(data)
+        if not text:
+            preview = ""
+            try:
+                preview = json.dumps(data, ensure_ascii=False)[:500]
+            except Exception:
+                preview = str(data)[:500]
+            raise ValueError(
+                "本地模型返回为空（assistant 无文本）。可尝试：① 换用 qwen2.5、llama3.1 等 instruct 模型；"
+                "② 设置环境变量 LOCAL_LLM_JSON_FORMAT=0 后重试；③ 执行 ollama ps 确认无卡死、显存足够。"
+                f" 响应摘要：{preview!r}"
+            )
+        return text.strip()
 
     def chat_ollama_messages(
         self,
@@ -719,7 +852,7 @@ class LocalAIService:
         if tools:
             payload["tools"] = tools
         try:
-            resp = requests.post(url, json=payload, timeout=self.timeout)
+            resp = requests.post(url, json=payload, timeout=self._ollama_http_timeout())
             resp.raise_for_status()
         except RequestException as e:
             detail = str(e).strip() or type(e).__name__
@@ -733,10 +866,13 @@ class LocalAIService:
             base = _ollama_request_user_message(detail, tools=True)
             raise ValueError(base + "\n\n若持续失败：请确认模型支持 tool calling，或关闭环境变量 AI_CHAT_TOOLS_ENABLE 后重试。") from e
         data = resp.json() if resp.content else {}
-        msg = data.get("message") or {}
+        if not isinstance(data, dict):
+            data = {}
+        msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+        text_plain = _ollama_api_chat_assistant_text(data)
         out: Dict[str, Any] = {
             "role": msg.get("role") or "assistant",
-            "content": msg.get("content"),
+            "content": text_plain if text_plain else None,
         }
         if msg.get("tool_calls"):
             out["tool_calls"] = msg["tool_calls"]
@@ -796,7 +932,7 @@ class LocalAIService:
                 if not sv2 and probe_registry:
                     st2, sv2 = _probe_pick_selector(desc, probe_registry, action)
                 if not sv2:
-                    st2, sv2 = _fallback_site_selectors(cu, desc, action)
+                    st2, sv2 = _fallback_site_selectors(cu, desc, action, g)
                 if sv2:
                     step["selector_type"] = st2 or "css"
                     step["selector_value"] = sv2
@@ -915,6 +1051,8 @@ class LocalAIService:
             "- input/verify/extract_text: selector_value must be concrete when probe_index is empty.\n"
             "- At least 4 steps when possible; start with navigate if URL is known.\n"
             "- Never omit JSON keys; use \"\" only where the rules above allow empty.\n"
+            "- Never invent placeholder hosts like example.com / example.org unless the goal explicitly names them; "
+            "use the real site implied by the goal (e.g. Baidu search → https://www.baidu.com/ ).\n"
             "OUTPUT FORMAT: respond with that single JSON object only—no markdown, no prose."
         )
 
@@ -1044,12 +1182,20 @@ class LocalAIService:
             "wait: seconds 1-120 OR milliseconds if >120. "
             "input: input_value must contain the exact text to type (never empty). "
             "click: selector_value must be a real locator from the snapshot, never a lone digit; use probe_index for line [n]. "
+            "Optional per-step \"locator_candidates\": JSON array of {selector_type, selector_value, score}. "
+            "Execution order is DOM strategies first, then selector_type \"visual_template\" (selector_value: base64 PNG or JSON with png_b64), "
+            "then \"viewport_coord\" (selector_value: JSON {\"fx\":0..1,\"fy\":0..1} for click center in viewport). "
+            "Use viewport_coord when snapshot provides stable geometry but CSS is volatile; avoid huge base64. "
             "verify: put expected substring in input_value when checking text. "
             "Do not return markdown. OUTPUT FORMAT: one JSON object only—no fences, no prose."
         )
 
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
-        raw = _strip_llm_noise((content or "").strip())
+        raw0 = (content or "").strip()
+        raw = _strip_llm_noise(raw0)
+        # 部分模型把整段 JSON 放在 <think>…</think> 内，去标签后为空，需回退到原文再抽 JSON
+        if not raw:
+            raw = raw0
         if not raw:
             raise ValueError("本地模型返回为空")
 
@@ -1102,6 +1248,9 @@ class LocalAIService:
         goal_s = _norm_str(goal)
         case_name = _norm_str(data.get("case_name")) or f"AI生成用例-{goal_s[:30]}"
         case_url = _norm_str(data.get("case_url") or data.get("caseUrl"))
+        seed_url = _goal_suggests_seed_url(goal_s)
+        if seed_url and (not case_url or _placeholder_template_case_url(case_url)):
+            case_url = seed_url
         description = _norm_str(data.get("description"))
         precondition = _norm_str(data.get("precondition"))
         expected_result = _norm_str(data.get("expected_result"))
@@ -1169,6 +1318,11 @@ class LocalAIService:
                 url_guess = _norm_str(input_value or selector_value or case_url)
                 if url_guess.startswith("//"):
                     url_guess = "https:" + url_guess
+                if _placeholder_template_case_url(url_guess):
+                    if case_url and not _placeholder_template_case_url(case_url):
+                        url_guess = case_url
+                    elif seed_url:
+                        url_guess = seed_url
                 steps.append(
                     {
                         "action": "navigate",
@@ -1196,6 +1350,22 @@ class LocalAIService:
                     if lc:
                         row_step["locator_candidates"] = lc
             steps.append(row_step)
+
+        if (
+            seed_url
+            and steps
+            and all(str(s.get("action") or "").lower() != "navigate" for s in steps)
+        ):
+            steps.insert(
+                0,
+                {
+                    "action": "navigate",
+                    "selector_type": "",
+                    "selector_value": "",
+                    "input_value": seed_url,
+                    "description": "打开目标站点",
+                },
+            )
 
         if case_url and steps and steps[0].get("action") == "navigate":
             if not _norm_str(steps[0].get("input_value")):

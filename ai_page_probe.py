@@ -12,6 +12,8 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from locator_tier_utils import clamp01
+
 _URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.I)
 
 # 在单帧内收集可见可交互元素（含 open Shadow DOM 内节点）
@@ -225,6 +227,28 @@ def build_locator_candidates_from_probe_entry(entry: Dict[str, Any]) -> str:
     if txt and 2 <= len(txt) <= 48 and "\n" not in txt and '"' not in txt and "'" not in txt:
         add("partial_text", txt, 82)
         add("xpath", f'//*[contains(normalize-space(.),"{txt[:40]}")]', 74)
+
+    # Tier3：探测项含 box + viewport 时写入视口比例坐标（与 playwright 三层降级一致）
+    box = entry.get("box")
+    vp = entry.get("viewport") or {}
+    if isinstance(box, dict) and isinstance(vp, dict):
+        try:
+            vw = int(vp.get("width") or 0)
+            vh = int(vp.get("height") or 0)
+            x = float(box.get("x", 0))
+            y = float(box.get("y", 0))
+            w = float(box.get("w", 0) or 0)
+            h = float(box.get("h", 0) or 0)
+            if vw > 0 and vh > 0 and w > 0 and h > 0:
+                fx = clamp01((x + w / 2.0) / float(vw))
+                fy = clamp01((y + h / 2.0) / float(vh))
+                add(
+                    "viewport_coord",
+                    json.dumps({"fx": round(fx, 6), "fy": round(fy, 6)}, ensure_ascii=False),
+                    30,
+                )
+        except (TypeError, ValueError):
+            pass
 
     if not cands:
         return ""
@@ -525,6 +549,18 @@ def probe_registry_from_interactive_snapshot(snap: Dict[str, Any]) -> Tuple[str,
             "recommended_selector": sel,
             "recommended_selector_type": rty,
         }
+        vp = snap.get("viewport") if isinstance(snap.get("viewport"), dict) else {}
+        if vp:
+            try:
+                row["viewport"] = {
+                    "width": int(vp.get("width") or 0),
+                    "height": int(vp.get("height") or 0),
+                }
+            except (TypeError, ValueError):
+                pass
+        bx = it.get("box")
+        if isinstance(bx, dict):
+            row["box"] = bx
         eid = row["id"]
         if eid and re.match(r"^[\w-]+$", eid):
             row["css"] = f"#{eid}"

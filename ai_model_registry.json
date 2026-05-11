@@ -1,9 +1,19 @@
 {
   "version": 2,
-  "active_profile_id": "f860bc23-30a0-402d-8591-0b29c770b7ff",
+  "active_profile_id": "e22cc140-2004-41d0-b1d5-3c655f5623fa",
   "profiles": [
     {
-      "id": "f860bc23-30a0-402d-8591-0b29c770b7ff",
+      "id": "e22cc140-2004-41d0-b1d5-3c655f5623fa",
+      "provider": "ollama",
+      "api_style": "ollama",
+      "model_type": "test_case_generation",
+      "model_id": "qwen3.5:4b",
+      "label": "qwen3.5:4b",
+      "api_key": "",
+      "base_url": ""
+    },
+    {
+      "id": "8bcbd08e-5b10-4b00-8248-e45f3741615f",
       "provider": "ollama",
       "api_style": "ollama",
       "model_type": "test_case_generation",

@@ -2054,6 +2054,8 @@
                         const clickRepBadge = (step.action === 'click' && Number.isFinite(_crc) && _crc > 1)
                             ? ` <span style="color:#6b7280;font-weight:600;">×${_crc}</span>` : '';
                         const showBatchLoc = step.action === 'batch_input' && step.selector_type;
+                        const needsCardLocator = ['click', 'input', 'verify', 'extract_text'].includes(step.action);
+                        const selectorMissingOnCard = needsCardLocator && !((step.selector_value || '').trim()) && !showBatchLoc;
                         let apiCardRow = '';
                         if (step.action === 'api_request' && step.api_spec) {
                             try {
@@ -2069,6 +2071,7 @@
                             <div class="step-content">
                                 <h4>${escapeHtml(step.description || actionText)}${clickRepBadge}</h4>
                                 <div class="step-details">
+                                    ${selectorMissingOnCard ? `<div style="color:#b45309;font-size:13px;"><strong>${lblSel}</strong> ${escapeHtml(t('steps_card_selector_missing'))}</div>` : ''}
                                     ${(step.selector_value || showBatchLoc) ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
                                     ${step.selector_value ? `<div><strong>${lblSel}</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
                                     ${navigateUrlRow}
