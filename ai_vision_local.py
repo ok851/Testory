@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 import requests
 from requests.exceptions import RequestException
 
+from ai_local_inference import _ollama_api_chat_assistant_text
 from logger import uat_logger
 
 
@@ -111,7 +112,8 @@ def vision_describe(image_bytes: bytes, instruction: str, model: Optional[str] =
             f"本地视觉模型请求失败（确认 ollama pull {m} 且支持 /api/chat 图片）: {e}"
         ) from e
     data = resp.json() if resp.content else {}
-    return ((data.get("message") or {}).get("content") or "").strip()
+    text = _ollama_api_chat_assistant_text(data) if isinstance(data, dict) else ""
+    return (text or "").strip()
 
 
 def text_visible_in_screenshot(

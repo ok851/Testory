@@ -876,6 +876,7 @@
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGenerateBtn" onclick="aiGeneratePreview()" data-i18n="aitest_btn_preview">生成用例</button>
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiContinueBtn" onclick="aiContinueRefine()" data-i18n="aitest_btn_refine">优化</button>
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty ai-send-btn--stop" id="aiStopBtn" onclick="aiStopAgentWork()" data-i18n="aitest_btn_stop" disabled data-i18n-title="aitest_btn_stop_title" title="停止当前 AI 请求">停止</button>
+                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGatewayExecuteBtn" onclick="aiGatewayStreamExecute()" title="识别左栏指令并在主 Playwright 浏览器中逐步执行（内置预览会同步变化）。例：「执行当前预览」「打开 https://example.com」">识别并执行</button>
                         </div>
                     </div>
                     <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;">「生成用例」仅调用模型生成步骤；「运行」会先在<strong>主 Playwright</strong>打开上方 URL、拉取页面结构再生成并<strong>尝试执行</strong>步骤。<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 等同于「生成用例」。顶栏标题在「生成并保存」时作为用例名称。</p>
@@ -2603,6 +2604,92 @@
         }
     }
 
+    async function aiGatewayStreamExecute() {
+        var msg = (document.getElementById('aiMessageInput') && document.getElementById('aiMessageInput').value || '').trim();
+        var hasSteps = !!(latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length);
+        var forceEx = false;
+        if (!msg && hasSteps) {
+            msg = '执行当前预览';
+            forceEx = true;
+        }
+        if (!msg) {
+            alert('请填写指令（或先生成用例后再点「识别并执行」将默认执行当前预览）。');
+            return;
+        }
+        if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
+        appendAiChat('user', msg + (forceEx ? '（一键执行）' : ''));
+        setAgentBusy(true, '网关执行中…');
+        setAgentStatusLine('识别意图并连接主浏览器…');
+        var btn = document.getElementById('aiGatewayExecuteBtn');
+        if (btn) { btn.disabled = true; }
+        try {
+            var resp = await fetch('/api/ai/agent/gateway-stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    message: msg,
+                    plan: latestAiPlan || {},
+                    force_execute: forceEx
+                })
+            });
+            if (!resp.ok) {
+                var errText = await resp.text();
+                appendAiChat('assistant', '网关请求失败: HTTP ' + resp.status + ' ' + errText.slice(0, 200));
+                setAgentStatusLine('网关失败');
+                return;
+            }
+            var reader = resp.body.getReader();
+            var dec = new TextDecoder();
+            var buf = '';
+            while (true) {
+                var chunk = await reader.read();
+                if (chunk.done) break;
+                buf += dec.decode(chunk.value, { stream: true });
+                var sep;
+                while ((sep = buf.indexOf('\n\n')) >= 0) {
+                    var block = buf.slice(0, sep);
+                    buf = buf.slice(sep + 2);
+                    var lines = block.split('\n');
+                    for (var li = 0; li < lines.length; li++) {
+                        var line = lines[li];
+                        if (line.indexOf('data: ') !== 0) continue;
+                        try {
+                            var ev = JSON.parse(line.slice(6));
+                        } catch (e) { continue; }
+                        if (ev.t === 'intent') {
+                            appendAiChat('assistant', '「网关」识别意图: ' + ev.kind + (ev.meta && ev.meta.url ? ' → ' + ev.meta.url : ''));
+                            setAgentStatusLine('意图: ' + ev.kind);
+                        } else if (ev.t === 'log') {
+                            appendAiChat('assistant', ev.message || '');
+                            setAgentStatusLine(ev.message || '');
+                        } else if (ev.t === 'step_begin') {
+                            setAgentStatusLine('执行 ' + ev.index + '/' + ev.total + ': ' + (ev.action || ''));
+                        } else if (ev.t === 'step_ok') {
+                            setAgentStatusLine('第 ' + ev.index + '/' + ev.total + ' 步完成');
+                        } else if (ev.t === 'step_err') {
+                            appendAiChat('assistant', '第 ' + ev.index + ' 步失败: ' + (ev.error || ''));
+                            setAgentStatusLine('步骤失败');
+                        } else if (ev.t === 'error') {
+                            appendAiChat('assistant', '网关: ' + (ev.message || '错误'));
+                            setAgentStatusLine('网关错误');
+                        } else if (ev.t === 'done') {
+                            appendAiChat('assistant', ev.message || '完成');
+                            setAgentStatusLine(ev.message || '完成');
+                        }
+                    }
+                }
+            }
+            try { if (typeof syncAiBrowserMeta === 'function') syncAiBrowserMeta(); } catch (e2) {}
+        } catch (e) {
+            appendAiChat('assistant', '网关流异常: ' + (e && e.message ? e.message : String(e)));
+            setAgentStatusLine('网关异常');
+        } finally {
+            setAgentBusy(false);
+            if (btn) { btn.disabled = false; }
+        }
+    }
+
     async function aiRunAgentWorkflow() {
         await aiGeneratePreview({ executionMode: 'run_and_record' });
     }
@@ -2648,7 +2735,9 @@
 
     function aiShowParamsHelp() {
         alert('运行参数（由服务端环境变量控制，此处仅说明）\n\n'
-            + '• LOCAL_LLM_TIMEOUT — 本地模型请求超时（秒）\n'
+            + '• LOCAL_LLM_TIMEOUT_CHAT — Ollama /api/chat 读超时（秒），优先于 LOCAL_LLM_TIMEOUT；均未设置时默认 600\n'
+            + '• LOCAL_LLM_CONNECT_TIMEOUT — 连接 Ollama 超时（秒），默认 30\n'
+            + '• LOCAL_LLM_TIMEOUT — 通用超时（秒）；未单独设置 CHAT 时亦用于 /api/chat\n'
             + '• AI_SELECTOR_FALLBACK — 步骤执行失败时是否启用 LLM+DOM 兜底（1/0）\n'
             + '• LOCAL_AI_PROBE_* — 页面探测节点数、超时等\n'
             + '• EMBEDDED_BROWSER_* — 可选远程 Chromium 网关（高级部署；本页不再展示入口）\n'

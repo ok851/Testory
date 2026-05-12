@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for, Response
+from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for, Response, stream_with_context
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -68,6 +68,7 @@ from playwright_automation import (
     sync_scroll_by_delta,
     sync_scroll_page,
     sync_start_browser,
+    resolve_playwright_headless,
     sync_select_date,
     sync_select_option,
     sync_swipe_element,
@@ -2270,7 +2271,8 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
             hint = (
                 '本次为推理超时：界面能列出模型仅代表 Ollama 在线；改写步骤会发送长文本，耗时可远大于列表。'
                 '建议①在 /ai-test 选用纯文本 instruct 模型（尽量避免名称含 -vl 的视觉模型）；'
-                '②终端执行 ollama run <模型名> 预热；③增大 LOCAL_LLM_TIMEOUT 并重启 HuFirst；④确认机器算力与显存足够。'
+                '②终端执行 ollama run <模型名> 预热；③设置环境变量 LOCAL_LLM_TIMEOUT_CHAT（仅影响生成/对话 POST）'
+                '或 LOCAL_LLM_TIMEOUT 后重启 HuFirst（未设置时 /api/chat 默认读超时 600 秒）；④确认机器算力与显存足够。'
             )
         return {
             'success': False,
@@ -2585,6 +2587,177 @@ def api_ai_task_chat():
     code = int(out.get('_http', 200))
     body = {k: v for k, v in out.items() if k != '_http'}
     return jsonify(body), code
+
+
+@app.route('/api/ai/studio/steps-assist', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_studio_steps_assist():
+    """
+    编排入口：若请求体未带 current_plan 但含 case_id，则从数据库装载步骤后再调用本地模型 chat；
+    append_after_chat 为真且 chat 成功时，将返回的 plan.steps 追加到该用例末尾（权限与 /api/ai/cases/append-steps 一致）。
+    """
+    from assistant_gateway import merge_case_into_chat_payload
+
+    data = request.get_json(silent=True) or {}
+    err = merge_case_into_chat_payload(db, data)
+    if err:
+        return jsonify({
+            'success': False,
+            'error': err,
+            'hint': '请提供有效的 case_id，或自行传入完整 current_plan（与步骤页 AI 浮层一致）。',
+        }), 400
+    out = _execute_ai_task_chat(
+        data,
+        current_user.id,
+        current_user.username,
+        request.remote_addr,
+    )
+    code = int(out.get('_http', 200))
+    body = {k: v for k, v in out.items() if k != '_http'}
+    if data.get('append_after_chat') and body.get('success'):
+        plan = body.get('plan') or {}
+        steps = plan.get('steps') or []
+        cid = data.get('case_id')
+        if isinstance(steps, list) and steps and cid is not None:
+            try:
+                case_id_int = int(cid)
+            except (TypeError, ValueError):
+                case_id_int = 0
+            if case_id_int > 0:
+                case = db.get_test_case_v2(case_id_int)
+                if case:
+                    _db = Database()
+                    if case.get('project_id') and not _db.check_project_access(
+                        current_user.id, case['project_id'], 'editor'
+                    ):
+                        body['append'] = {'success': False, 'error': '无权限修改此用例'}
+                    else:
+                        old_steps, _total = db.get_case_steps_paginated(case_id_int, 1, 1000)
+                        max_order = 0
+                        if old_steps:
+                            max_order = max(int(s.get('step_order') or 0) for s in old_steps)
+                        goal_hint = _ai_str(data.get('goal')) or _ai_str(case.get('name')) or _ai_str(
+                            case.get('description')
+                        )
+                        local_ai_service._fill_missing_step_payloads(
+                            steps,
+                            goal_hint,
+                            _ai_str(case.get('url')),
+                            None,
+                        )
+                        clean_steps, append_warnings = dedupe_and_validate_ai_steps(steps)
+                        created_steps = 0
+                        for idx, step in enumerate(clean_steps, start=1):
+                            db.create_test_step(
+                                **_ai_step_to_db_kwargs(step, case_id_int, max_order + idx)
+                            )
+                            created_steps += 1
+                        body['append'] = {
+                            'success': True,
+                            'steps_created': created_steps,
+                            'warnings': append_warnings,
+                        }
+    return jsonify(body), code
+
+
+def _agent_gateway_sse_line(obj: dict) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+@app.route('/api/ai/agent/gateway-stream', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@log_api_request
+def api_ai_agent_gateway_stream():
+    """
+    对话式网关（MVP）：解析左栏自然语言中的「安全子集」意图，按步在主 Playwright 会话中执行，
+    并通过 text/event-stream 推送进度（内置浏览器与主会话同步时可直接看到页面变化）。
+    意图：「执行当前预览」类 → 逐步执行 latestAiPlan.steps；「打开/导航 https://…」→ 仅导航。
+    复杂规划仍请用「生成用例 / 优化」或 /api/ai/task/chat。
+    """
+    from agent_intent import parse_agent_intent
+
+    data = request.get_json(silent=True) or {}
+    message = (data.get('message') or '').strip()
+    plan = data.get('plan') if isinstance(data.get('plan'), dict) else {}
+    steps = plan.get('steps') if isinstance(plan.get('steps'), list) else []
+    has_steps = len(steps) > 0
+
+    if (not message) and bool(data.get('force_execute')) and has_steps:
+        kind, meta = 'execute_plan', {}
+    else:
+        kind, meta = parse_agent_intent(message, has_steps)
+
+    def generate():
+        yield _agent_gateway_sse_line({"t": "intent", "kind": kind, "meta": meta})
+        if kind == "none":
+            yield _agent_gateway_sse_line(
+                {
+                    "t": "error",
+                    "message": "未识别为可执行命令。示例：「执行当前预览」「打开 https://example.com」",
+                }
+            )
+            yield _agent_gateway_sse_line({"t": "end"})
+            return
+        try:
+            headless = resolve_playwright_headless(True)
+            sync_start_browser(headless=headless)
+        except Exception as e:
+            yield _agent_gateway_sse_line({"t": "error", "message": f"启动浏览器失败: {e}"})
+            yield _agent_gateway_sse_line({"t": "end"})
+            return
+
+        if kind == "navigate_url":
+            url = (meta.get("url") or "").strip()
+            if not url.startswith(("http://", "https://")):
+                yield _agent_gateway_sse_line({"t": "error", "message": "仅支持 http(s) URL"})
+                yield _agent_gateway_sse_line({"t": "end"})
+                return
+            yield _agent_gateway_sse_line({"t": "log", "message": f"导航 → {url}"})
+            try:
+                sync_navigate_to(url)
+                yield _agent_gateway_sse_line({"t": "done", "message": "导航完成", "url": url})
+            except Exception as e:
+                yield _agent_gateway_sse_line({"t": "error", "message": str(e)})
+            yield _agent_gateway_sse_line({"t": "end"})
+            return
+
+        # execute_plan
+        script_steps = ai_plan_steps_to_playwright_script_steps(steps)
+        if not script_steps:
+            yield _agent_gateway_sse_line({"t": "error", "message": "当前预览无可执行步骤（请先生成用例）"})
+            yield _agent_gateway_sse_line({"t": "end"})
+            return
+        max_n = int(os.environ.get("AI_AGENT_GATEWAY_MAX_STEPS", "40") or 40)
+        script_steps = script_steps[: max(1, max_n)]
+        total = len(script_steps)
+        yield _agent_gateway_sse_line({"t": "log", "message": f"共 {total} 步，开始逐步执行…"})
+        for i, st in enumerate(script_steps, start=1):
+            yield _agent_gateway_sse_line(
+                {"t": "step_begin", "index": i, "total": total, "action": st.get("action"), "step": st}
+            )
+            try:
+                sync_execute_script_steps([st])
+                yield _agent_gateway_sse_line({"t": "step_ok", "index": i, "total": total})
+            except Exception as e:
+                yield _agent_gateway_sse_line({"t": "step_err", "index": i, "total": total, "error": str(e)})
+                break
+        yield _agent_gateway_sse_line({"t": "done", "message": "执行序列结束"})
+        yield _agent_gateway_sse_line({"t": "end"})
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers=headers,
+    )
 
 
 @app.route('/api/ai/task/plan-async', methods=['POST'])

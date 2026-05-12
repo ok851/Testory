@@ -29,6 +29,16 @@ from playwright_codegen_import import (
 )
 from batch_input_parse import parse_batch_input_lines
 from ai_selector_recovery import try_recover_selector_with_llm
+from locator_tier_utils import (
+    split_locator_candidates,
+    parse_viewport_coord_value,
+    clamp01,
+    merge_candidates_json,
+    build_visual_candidate_png_b64,
+    build_viewport_coord_candidate,
+)
+from locator_visual_fallback import prepare_template_png_bytes_for_storage
+from locator_visual_fallback import match_template_in_viewport_png
 from api_http_helper import (
     execute_api_spec_sync,
     playwright_cookies_to_requests_cookiejar,
@@ -445,7 +455,9 @@ def _collapse_consecutive_fill_events(events: List[Dict[str, Any]]) -> List[Dict
 
 
 def _fallback_locator_tuples(primary_selector: str, primary_type: str, locator_candidates_raw: Any) -> List[tuple]:
-    cands = _normalize_locator_candidate_list(locator_candidates_raw)
+    """仅 DOM 类候选；visual_template / viewport_coord 由 Tier2/Tier3 单独处理。"""
+    dom_cands, _vis, _coord = split_locator_candidates(locator_candidates_raw)
+    cands = _normalize_locator_candidate_list(dom_cands)
     cands.sort(key=lambda x: -int(x.get("score") or 0))
     seen = {(str(primary_type).lower(), str(primary_selector or ""))}
     out: List[tuple] = []
@@ -2364,6 +2376,96 @@ class PlaywrightAutomation:
             await page.wait_for_timeout(1000)
             await self._click_by_direct_date_selector(page, year, month, day)
 
+    def _locator_tier_visual_enabled(self) -> bool:
+        v = (os.environ.get("LOCATOR_TIER_VISUAL_ENABLE", "1") or "1").strip().lower()
+        return v not in ("0", "false", "no", "off")
+
+    def _locator_tier_coord_enabled(self) -> bool:
+        v = (os.environ.get("LOCATOR_TIER_COORD_ENABLE", "1") or "1").strip().lower()
+        return v not in ("0", "false", "no", "off")
+
+    async def _try_click_visual_locator_tiers(self, target_page, locator_candidates_raw: Any) -> bool:
+        """Tier2：视口截图 + 模板匹配 + mouse.click（仅顶层页面，iframe 内未启用）。"""
+        if not self._locator_tier_visual_enabled():
+            return False
+        _, vis_list, _ = split_locator_candidates(locator_candidates_raw)
+        if not vis_list:
+            return False
+        try:
+            vp_png = await target_page.screenshot(type="png")
+        except Exception as e:
+            uat_logger.warning(f"[TIER2_VISUAL] 视口截图失败: {e}")
+            return False
+        for item in vis_list:
+            val = item.get("selector_value") or ""
+            hit = match_template_in_viewport_png(vp_png, val)
+            if not hit:
+                continue
+            cx, cy, mv = hit
+            try:
+                await target_page.mouse.click(int(cx), int(cy), delay=30)
+                uat_logger.info(f"[TIER2_VISUAL] 模板匹配点击成功 score={mv:.3f} @({int(cx)},{int(cy)})")
+                return True
+            except Exception as ce:
+                uat_logger.warning(f"[TIER2_VISUAL] mouse.click 失败: {ce}")
+        return False
+
+    async def _try_click_viewport_coord_tiers(self, target_page, locator_candidates_raw: Any) -> bool:
+        """Tier3：视口比例坐标点击（弱定位，带像素抖动）。"""
+        if not self._locator_tier_coord_enabled():
+            return False
+        _, _, coords = split_locator_candidates(locator_candidates_raw)
+        if not coords:
+            return False
+        try:
+            vs = target_page.viewport_size or {}
+            vw = int(vs.get("width") or 1280)
+            vh = int(vs.get("height") or 720)
+        except Exception:
+            vw, vh = 1280, 720
+        vw = max(1, vw)
+        vh = max(1, vh)
+        jitters = [(0, 0), (-4, 0), (4, 0), (0, -4), (0, 4)]
+        for item in coords:
+            parsed = parse_viewport_coord_value(item.get("selector_value") or "")
+            if not parsed:
+                continue
+            fx, fy = clamp01(parsed[0]), clamp01(parsed[1])
+            base_x = int(fx * vw)
+            base_y = int(fy * vh)
+            for jx, jy in jitters:
+                cx = max(0, min(vw - 1, base_x + jx))
+                cy = max(0, min(vh - 1, base_y + jy))
+                try:
+                    await target_page.mouse.click(cx, cy, delay=25)
+                    uat_logger.info(f"[TIER3_COORD] 视口比例点击 fx={fx:.4f} fy={fy:.4f} -> ({cx},{cy})")
+                    return True
+                except Exception as ce:
+                    uat_logger.warning(f"[TIER3_COORD] mouse.click 失败: {ce}")
+        return False
+
+    async def _try_fill_after_visual_or_coord_click(
+        self, target_page, text: str, locator_candidates_raw: Any
+    ) -> bool:
+        """DOM 与 locator_pack 均失败后：先 Tier2 再 Tier3 点击聚焦，再键盘输入。"""
+        if await self._try_click_visual_locator_tiers(target_page, locator_candidates_raw):
+            try:
+                await asyncio.sleep(0.12)
+                await target_page.keyboard.type(str(text or ""), delay=18)
+                uat_logger.info("[TIER_FILL] 视觉降级后已键入文本")
+                return True
+            except Exception as ex:
+                uat_logger.warning(f"[TIER_FILL] 视觉降级键入失败: {ex}")
+        if await self._try_click_viewport_coord_tiers(target_page, locator_candidates_raw):
+            try:
+                await asyncio.sleep(0.12)
+                await target_page.keyboard.type(str(text or ""), delay=18)
+                uat_logger.info("[TIER_FILL] 坐标降级后已键入文本")
+                return True
+            except Exception as ex:
+                uat_logger.warning(f"[TIER_FILL] 坐标降级键入失败: {ex}")
+        return False
+
     async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None):
         """点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）。
         locator_candidates: 录制器生成的 JSON 或列表，主选择器失败时按 score 降级重试。"""
@@ -2873,7 +2975,21 @@ class PlaywrightAutomation:
                         uat_logger.warning(
                             f"⚠️ [LOCATOR_PACK] 备选点击失败 ({extra_type}={extra_sel[:80]!s}): {_fb_e}"
                         )
-            raise Exception(f"无法点击元素: {selector}, 选择器类型: {selector_type}, 所有点击方式均失败")
+            tier_source = merged_candidates if merged_candidates else locator_candidates
+            if not (iframe_selector or iframe_context):
+                if await self._try_click_visual_locator_tiers(target_page, tier_source):
+                    element_clicked = True
+                if not element_clicked:
+                    if await self._try_click_viewport_coord_tiers(target_page, tier_source):
+                        element_clicked = True
+            else:
+                _d, _v, _c = split_locator_candidates(tier_source)
+                if _v or _c:
+                    uat_logger.info(
+                        "[TIER2/3] 当前为 iframe 内步骤，跳过视觉/坐标降级（模板与比例基于顶层视口）"
+                    )
+            if not element_clicked:
+                raise Exception(f"无法点击元素: {selector}, 选择器类型: {selector_type}, 所有点击方式均失败")
         
         # 检查点击后的页面状态
         try:
@@ -3681,6 +3797,9 @@ class PlaywrightAutomation:
                         uat_logger.warning(
                             f"⚠️ [LOCATOR_PACK] 备选填充失败 ({extra_type}={extra_sel[:80]!s}): {_fb_fe}"
                         )
+            if not fill_success and not (iframe_selector or iframe_context) and locator_candidates:
+                if await self._try_fill_after_visual_or_coord_click(target_page, text, locator_candidates):
+                    return
             raise Exception(f"无法填充元素: {selector}, 选择器类型: {selector_type}, 所有填充方式均失败")
         
 
@@ -10352,6 +10471,35 @@ class PlaywrightAutomation:
                 locator_candidates = _picker_locator_candidates(
                     css_selector, text_content, class_name, element_id
                 )
+                try:
+                    if css_selector and self.page and not self.page.is_closed():
+                        loc = self.page.locator(css_selector).first
+                        await loc.wait_for(state="attached", timeout=2800)
+                        png_raw = await loc.screenshot(type="png")
+                        png_small = prepare_template_png_bytes_for_storage(png_raw)
+                        frac = await self.page.evaluate(
+                            """(sel) => {
+                            const el = document.querySelector(sel);
+                            if (!el) return null;
+                            const r = el.getBoundingClientRect();
+                            const vw = window.innerWidth || 1, vh = window.innerHeight || 1;
+                            return { fx: (r.left + r.width/2) / vw, fy: (r.top + r.height/2) / vh };
+                        }""",
+                            css_selector,
+                        )
+                        extras = []
+                        if png_small and len(png_small) >= 80:
+                            extras.append(build_visual_candidate_png_b64(png_small, score=48))
+                        if isinstance(frac, dict) and frac.get("fx") is not None and frac.get("fy") is not None:
+                            extras.append(
+                                build_viewport_coord_candidate(
+                                    float(frac["fx"]), float(frac["fy"]), score=24
+                                )
+                            )
+                        if extras:
+                            locator_candidates = merge_candidates_json(locator_candidates or "[]", extras)
+                except Exception as _tier_e:
+                    uat_logger.debug(f"[PICKER] Tier2/3 附加 locator 跳过: {_tier_e}")
 
                 # 构造前端期望的返回格式
                 formatted_element_info = {
