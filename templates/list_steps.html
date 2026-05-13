@@ -2040,7 +2040,7 @@
                             step.action === 'input' || step.action === 'fill' || step.action === 'wait' ||
                             step.action === 'scroll' || step.action === 'swipe' || step.action === 'extract_text' ||
                             step.action === 'verify' || step.action === 'text_compare' || step.action === 'select' ||
-                            step.action === 'batch_input'
+                            step.action === 'batch_input' || step.action === 'assert'
                         );
                         const navigateUrlRow = isNavigate && step.input_value && step.input_value.trim()
                             ? `<div class="step-nav-url"><strong>${escapeHtml(t('steps_card_full_url'))}</strong> <span title="${escapeHtml(step.input_value)}">${escapeHtml(truncateMiddle(step.input_value, 72))}</span></div>`
@@ -2048,6 +2048,12 @@
                         const lblLoc = escapeHtml(t('steps_card_locator'));
                         const lblSel = escapeHtml(t('steps_card_selector'));
                         const lblInp = escapeHtml(t('steps_card_input_value'));
+                        const ct = (step.compare_type || '').toLowerCase();
+                        const lblSecondary = step.action === 'wait'
+                            ? escapeHtml(t('steps_card_wait_label'))
+                            : (step.action === 'assert' && (ct === 'url_contains' || ct === 'url_equals')
+                                ? escapeHtml(t('steps_card_url_expect'))
+                                : lblInp);
                         const btnEd = escapeHtml(t('steps_btn_edit'));
                         const btnDel = escapeHtml(t('steps_btn_del'));
                         const _crc = parseInt(step.click_repeat_count, 10);
@@ -2076,7 +2082,7 @@
                                     ${step.selector_value ? `<div><strong>${lblSel}</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
                                     ${navigateUrlRow}
                                     ${apiCardRow}
-                                    ${showInputRow ? `<div><strong>${lblInp}</strong> ${step.action === 'batch_input' ? '<pre style="margin:4px 0 0;font-size:12px;white-space:pre-wrap;max-height:120px;overflow:auto;">' + escapeHtml(truncateMiddle(step.input_value, 400)) + '</pre>' : escapeHtml(step.input_value)}</div>` : ''}
+                                    ${showInputRow ? `<div><strong>${lblSecondary}</strong> ${step.action === 'batch_input' ? '<pre style="margin:4px 0 0;font-size:12px;white-space:pre-wrap;max-height:120px;overflow:auto;">' + escapeHtml(truncateMiddle(step.input_value, 400)) + '</pre>' : escapeHtml(step.input_value)}</div>` : ''}
                                 </div>
                             </div>
                             <div class="step-actions">

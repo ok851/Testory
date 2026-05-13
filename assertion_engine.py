@@ -9,6 +9,28 @@ from enum import Enum
 from api_http_helper import execute_api_spec_sync, get_json_path_value
 
 
+def _url_assert_match_variants(actual_url: str, expected: str, equals: bool) -> bool:
+    """与 playwright_automation._url_assert_matches_pa 语义一致（编码/解码交叉比对）。"""
+    from urllib.parse import unquote
+
+    def variants(s: str):
+        s = (s or "").strip()
+        if not s:
+            return ("",)
+        u = unquote(s)
+        out = []
+        for x in (s, u):
+            if x not in out:
+                out.append(x)
+        return tuple(out)
+
+    av = variants(actual_url)
+    ev = variants(expected)
+    if equals:
+        return any(a == e for a in av for e in ev)
+    return any(e and e in a for a in av for e in ev)
+
+
 class AssertionType(Enum):
     """断言类型"""
     TEXT_EQUALS = "text_equals"           # 文本相等
@@ -343,7 +365,7 @@ class AssertionEngine:
 
         try:
             actual_url = self.page.url
-            success = actual_url == expected_url
+            success = _url_assert_match_variants(actual_url, expected_url, True)
 
             return AssertionResult(
                 success=success,
@@ -372,7 +394,7 @@ class AssertionEngine:
 
         try:
             actual_url = self.page.url
-            success = expected_text in actual_url
+            success = _url_assert_match_variants(actual_url, expected_text, False)
 
             return AssertionResult(
                 success=success,

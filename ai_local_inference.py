@@ -12,6 +12,7 @@ from ai_page_probe import (
     extract_http_urls,
     validate_plan_locators,
 )
+from ai_step_normalization import is_overly_broad_css_selector, repair_raw_ai_steps_for_platform
 
 _log = logging.getLogger(__name__)
 
@@ -334,20 +335,26 @@ def _infer_input_value_for_input_action(description: str, goal: str) -> str:
     return ""
 
 
-def _infer_input_value_for_verify_action(description: str) -> str:
-    """When verify expects text but input_value is empty, try description."""
-    desc = _norm_str(description)
-    if not desc:
-        return ""
-    m = re.search(
-        r"(?:预期|应|验证|断言|检查).{0,20}?(?:包含|含有|出现|显示|为)\s*[「」]?([^」\n。]{1,120})",
-        desc,
-    )
-    if m:
-        return _norm_str(m.group(1)).strip("「」\"'")
-    m = re.search(r"包含\s*[「」]?([^」\n。]{1,120})", desc)
-    if m:
-        return _norm_str(m.group(1)).strip("「」\"'")
+def _infer_verify_type_for_captcha_action(description: str, goal: str = "") -> str:
+    """
+    平台「验证操作」步骤的 input_value 表示验证码/人机校验类型（auto|slider|image|visible|exist|clickable），
+    不是页面文案断言；文案类校验应使用 action assert + compare_type。
+    仅在描述/目标明显涉及验证码时推断，否则返回空字符串（运行时默认 auto）。
+    """
+    blob = (_norm_str(description) + " " + _norm_str(goal)).lower()
+    zh = _norm_str(description) + _norm_str(goal)
+    if any(k in zh for k in ("滑块", "拖动验证")) or "slider" in blob:
+        return "slider"
+    if any(k in zh for k in ("拼图", "点选验证", "图片验证码", "图形验证")) or "image captcha" in blob:
+        return "image"
+    if any(k in zh for k in ("验证码", "人机验证", "智能验证", "安全验证")) or "captcha" in blob:
+        return "auto"
+    if "可见" in zh or re.search(r"\bvisible\b", blob):
+        return "visible"
+    if "可点击" in zh or "clickable" in blob:
+        return "clickable"
+    if "存在" in zh and "验证码" not in zh and "人机" not in zh:
+        return "exist"
     return ""
 
 
@@ -472,9 +479,10 @@ def _probe_pick_selector(
         return "", ""
     prefer_in = action == "input"
     prefer_click = action in ("click", "extract_text")
-    prefer_verify = action == "verify"
+    prefer_captcha = action == "verify"
+    prefer_assert = action == "assert"
     best: Tuple[int, str, str] = (-1, "", "")
-    threshold = 8 if prefer_verify else 5
+    threshold = 8 if (prefer_captcha or prefer_assert) else 5
 
     for ent in registry:
         if not isinstance(ent, dict):
@@ -491,8 +499,15 @@ def _probe_pick_selector(
         rid = _norm_str(ent.get("rid")).lower()
         blob = f"{txt} {al} {ph}".lower()
         score = 0
-        if prefer_verify:
-            if any(k in desc for k in ("标题", "结果", "页面", "包含", "验证")):
+        if prefer_captcha:
+            if any(k in desc for k in ("验证码", "人机", "滑块", "拼图", "点选", "安全验证")):
+                rl = rec.lower()
+                if any(x in rl for x in ("verify", "captcha", "geetest", "tcaptcha", "slider", "seccode")):
+                    score += 14
+                if "iframe" in rl or "shadow" in rl:
+                    score += 3
+        elif prefer_assert:
+            if any(k in desc for k in ("标题", "结果", "页面", "包含", "预期", "断言")):
                 rl = rec.lower()
                 if any(x in rl for x in ("result", "title", "c-container", "content_left")):
                     score += 12
@@ -552,9 +567,173 @@ def _fallback_site_selectors(case_url: str, description: str, action: str, goal:
         return "css", "#su"
     if action == "extract_text" and "结果" in d:
         return "css", ".result"
-    if action == "verify" and any(k in d for k in ("结果", "标题", "搜索")):
+    if action == "assert" and any(k in d for k in ("结果", "标题", "搜索", "断言", "预期")):
         return "css", ".result-title"
     return "", ""
+
+
+_VERIFY_INPUT_TYPES = frozenset({"auto", "slider", "image", "visible", "exist", "clickable"})
+
+
+def _coerce_misused_verify_to_assert(step: Dict[str, Any]) -> None:
+    """若 verify 的 input_value 不是合法 verify_type，视为误用；改为 assert（文案/元素断言）。"""
+    action = _norm_str(step.get("action")).lower()
+    if action != "verify":
+        return
+    iv = _norm_str(step.get("input_value"))
+    if not iv:
+        return
+    if iv.lower() in _VERIFY_INPUT_TYPES:
+        return
+    step["action"] = "assert"
+    desc = _norm_str(step.get("description"))
+    ct = "text_contains"
+    if any(x in desc for x in ("等于", "完全一致", "精确匹配")) or "equals" in desc.lower():
+        ct = "text_equals"
+    if "正则" in desc or "regex" in desc.lower():
+        ct = "text_regex"
+    step["compare_type"] = ct
+
+
+def clamp_plan_steps_to_probe_registry(
+    steps: List[Dict[str, Any]],
+    probe_registry: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """
+    当存在页面探测注册表时，将步骤中的 selector 约束在「真实 DOM 探测」结果内：
+    - 若填了 probe_index，则强制使用该行的 recommended_selector（覆盖模型乱写的值）；
+    - 若未填 probe_index 但 selector 与任一行均不一致，则尝试按步骤描述从注册表重选，否则仅记录告警。
+    可通过 LOCAL_AI_SELECTOR_CLAMP=0 关闭。
+    """
+    warnings: List[str] = []
+    if not probe_registry or not isinstance(probe_registry, list):
+        return warnings
+    if os.environ.get("LOCAL_AI_SELECTOR_CLAMP", "1").strip().lower() in ("0", "false", "no", "off"):
+        return warnings
+
+    probe_by_index: Dict[int, Dict[str, Any]] = {}
+    for ent in probe_registry:
+        if not isinstance(ent, dict):
+            continue
+        try:
+            ii = int(ent.get("i"))
+        except (TypeError, ValueError):
+            continue
+        probe_by_index[ii] = ent
+
+    def _step_skip_clamp(step: Dict[str, Any]) -> bool:
+        st = _norm_str(step.get("selector_type")).lower()
+        if st in ("viewport_coord", "visual_template"):
+            return True
+        sv = _norm_str(step.get("selector_value"))
+        if sv.startswith("{") and ("fx" in sv or "fy" in sv or "png_b64" in sv):
+            return True
+        return False
+
+    def _selector_authorized(sv: str, st: str, ent: Dict[str, Any]) -> bool:
+        if not sv:
+            return False
+        st = (st or "css").lower()
+        rec = _norm_str(ent.get("recommended_selector"))
+        if rec:
+            if sv == rec:
+                return True
+            rx = rec.strip()
+            sx = sv.strip()
+            if sx.lower().startswith("xpath:"):
+                sx = sx[6:].strip()
+            if rx.lower().startswith("xpath:"):
+                rx = rx[6:].strip()
+            if sx == rx:
+                return True
+        css = _norm_str(ent.get("css"))
+        if css and sv == css:
+            return True
+        tid = _norm_str(ent.get("id"))
+        if tid and re.match(r"^[\w-]+$", tid) and sv in (f"#{tid}", f"#{tid.lower()}"):
+            return True
+        if st == "text":
+            for k in ("ph", "al", "txt"):
+                v = _norm_str(ent.get(k))
+                if v and sv == v:
+                    return True
+        return False
+
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict) or _step_skip_clamp(step):
+            continue
+        action = _norm_str(step.get("action")).lower()
+        if action in ("navigate", "wait", ""):
+            continue
+        if action not in ("click", "input", "verify", "extract_text", "assert"):
+            continue
+        if action == "assert":
+            ct = _norm_str(step.get("compare_type")).lower()
+            if ct in ("url_equals", "url_contains") and not _norm_str(step.get("selector_value")):
+                continue
+
+        desc = _norm_str(step.get("description"))
+        st = _norm_str(step.get("selector_type")).lower() or "css"
+        sv = _norm_str(step.get("selector_value"))
+
+        pi: Optional[int] = None
+        raw_pi = step.get("probe_index")
+        if raw_pi is not None and _norm_str(raw_pi) != "":
+            try:
+                pi = int(float(str(raw_pi).strip()))
+            except (TypeError, ValueError):
+                pi = None
+
+        if pi is not None and pi in probe_by_index:
+            ent = probe_by_index[pi]
+            rec = _norm_str(ent.get("recommended_selector"))
+            rty = _map_probe_selector_type(_norm_str(ent.get("recommended_selector_type")))
+            if rec:
+                if sv and sv != rec and not _selector_authorized(sv, st, ent):
+                    warnings.append(
+                        f"第{idx + 1}步 probe_index={pi} 与 selector_value 不一致，已强制改为该行 recommended：{rec}"
+                    )
+                step["selector_value"] = rec
+                step["selector_type"] = rty if rty in ("css", "xpath", "text") else "css"
+                try:
+                    lc = build_locator_candidates_from_probe_entry(ent)
+                    if lc:
+                        step["locator_candidates"] = lc
+                except Exception:
+                    pass
+            continue
+
+        if not sv:
+            st2, sv2 = _probe_pick_selector(desc, probe_registry, action)
+            if sv2:
+                step["selector_type"] = st2 or "css"
+                step["selector_value"] = sv2
+                warnings.append(f"第{idx + 1}步缺少选择器，已按描述从 LIVE 注册表补全：{sv2}")
+            continue
+
+        ok = False
+        for ent in probe_registry:
+            if isinstance(ent, dict) and _selector_authorized(sv, st, ent):
+                ok = True
+                break
+        if ok and action in ("click", "input") and is_overly_broad_css_selector(sv):
+            ok = False
+        if ok:
+            continue
+
+        st2, sv2 = _probe_pick_selector(desc, probe_registry, action)
+        if sv2:
+            warnings.append(
+                f"第{idx + 1}步 selector {sv!r} 未出现在 LIVE 探测结果中，已按描述改为注册表内定位：{sv2}"
+            )
+            step["selector_type"] = st2 or "css"
+            step["selector_value"] = sv2
+        else:
+            warnings.append(
+                f"第{idx + 1}步 selector {sv!r} 与 LIVE 列表均不匹配且无法自动重选，"
+                f"请使用 probe_index 绑定 [n] 或人工修改（描述：{desc[:60]!r}…）。"
+            )
+    return warnings
 
 
 class LocalAIService:
@@ -921,13 +1100,13 @@ class LocalAIService:
                     step["input_value"] = inferred
 
             elif action == "verify" and not iv:
-                inferred = _infer_input_value_for_verify_action(desc)
+                inferred = _infer_verify_type_for_captcha_action(desc, g)
                 if inferred:
                     step["input_value"] = inferred
 
             sv = _norm_str(step.get("selector_value"))
 
-            if action in ("click", "extract_text", "verify", "input") and not sv:
+            if action in ("click", "extract_text", "verify", "input", "assert") and not sv:
                 st2, sv2 = _extract_selector_from_description(desc)
                 if not sv2 and probe_registry:
                     st2, sv2 = _probe_pick_selector(desc, probe_registry, action)
@@ -936,6 +1115,10 @@ class LocalAIService:
                 if sv2:
                     step["selector_type"] = st2 or "css"
                     step["selector_value"] = sv2
+
+        for step in steps:
+            if isinstance(step, dict):
+                _coerce_misused_verify_to_assert(step)
 
     def _maybe_compress_dom_pack(
         self,
@@ -1012,6 +1195,9 @@ class LocalAIService:
             "You are the reasoning brain; when a LIVE page snapshot is included below, the server already used "
             "Playwright headless to list real interactive elements—your locators MUST prefer those lines "
             "(id/css/placeholder/aria-label) and MUST NOT invent class names absent from the snapshot.\n"
+            "When a LIVE snapshot exists: STRONGLY prefer setting probe_index to the line number [n] for each step, "
+            "and set selector_value to the EXACT substring shown as recommended=(type)… on that SAME line "
+            "(copy-paste; do not paraphrase or guess CSS classes).\n"
             "Each snapshot line starts with [n] — that integer is ONLY for the JSON field probe_index. "
             "NEVER put the line number in selector_value (e.g. selector_value must NOT be \"1\" or \"12\" alone). "
             "Copy the real locator from that line into selector_type/selector_value (e.g. css #kw, [name=\\\"wd\\\"], xpath …). "
@@ -1031,11 +1217,12 @@ class LocalAIService:
             '  "expected_result": "string",\n'
             '  "steps": [\n'
             "    {\n"
-            '      "action": "navigate|click|input|wait|verify|extract_text",\n'
+            '      "action": "navigate|click|input|wait|verify|assert|extract_text",\n'
             '      "selector_type": "css|xpath|text",\n'
             '      "selector_value": "string",\n'
             '      "input_value": "string",\n'
             '      "description": "string",\n'
+            '      "compare_type": "string (only when action is assert; e.g. text_equals|text_contains|text_regex|element_visible|element_exists|url_contains|url_equals)",\n'
             '      "probe_index": "integer or empty string if not tied to a snapshot line"\n'
             "    }\n"
             "  ]\n"
@@ -1044,12 +1231,21 @@ class LocalAIService:
             "- navigate: put the full URL ONLY in input_value; selector_type and selector_value MUST be empty strings; probe_index empty.\n"
             "- wait: input_value MUST be a non-empty integer duration — SECONDS 1–120, OR milliseconds if value > 120 (e.g. 1500); never leave empty.\n"
             "- input: input_value MUST be the exact characters to type into the field (never empty). Put the typed text in input_value, not only in description (e.g. to search for X, input_value must be X).\n"
-            "- verify: when asserting visible text, put the expected substring in input_value when applicable.\n"
+            "- verify: RESERVED for captcha / human-verification widgets only. input_value MUST be one of: "
+            "auto, slider, image (captcha kinds), or visible/exist/clickable for element state — NOT natural-language expected text.\n"
+            "- assert: use ONLY when the goal explicitly needs a check. Prefer fewer steps; do NOT add a trailing "
+            "assert \"just in case\" if the user did not ask for verification.\n"
+            "  For checks against the browser address bar / current page URL / query string (e.g. wd=…, http…, percent-encoded), "
+            "MUST use compare_type url_contains or url_equals, put the expected substring in input_value, and set "
+            "selector_type and selector_value to empty strings (never bind a random <a> CSS for URL checks).\n"
+            "  For element text checks, use compare_type text_contains|text_equals|… and a real selector from the snapshot; "
+            "put the expected substring or pattern in input_value.\n"
             "- click: input_value usually empty; selector_value MUST be a real css/xpath/text from the snapshot (never a lone digit). "
+            "Never use a bare tag-only selector like \"button\" or \"input\" — use id/css from the snapshot or probe_index.\n"
             "Use probe_index for [n], not selector_value.\n"
             "- navigate: input_value MUST be the full http(s) URL (never empty when a URL is known from the goal).\n"
-            "- input/verify/extract_text: selector_value must be concrete when probe_index is empty.\n"
-            "- At least 4 steps when possible; start with navigate if URL is known.\n"
+            "- input/assert/extract_text: selector_value must be concrete when probe_index is empty (assert url_* types may omit selector).\n"
+            "- Usually 3–8 steps; start with navigate if URL is known. Do not pad with redundant wait/assert steps.\n"
             "- Never omit JSON keys; use \"\" only where the rules above allow empty.\n"
             "- Never invent placeholder hosts like example.com / example.org unless the goal explicitly names them; "
             "use the real site implied by the goal (e.g. Baidu search → https://www.baidu.com/ ).\n"
@@ -1090,8 +1286,9 @@ class LocalAIService:
         if kind:
             parts.append(
                 f"UI intent hint: {kind}. If merge_steps: merge the indicated steps into one atomic step while "
-                "keeping probe_index valid. If assert_from_selection: add a verify (or assert visible text) using "
-                "the highlighted text. If optimize_step: adjust only the focused step (retry, wait, selectors)."
+                "keeping probe_index valid. If assert_from_selection: add an assert step (compare_type text_contains or text_equals) using "
+                "the highlighted text as input_value, with a selector from the LIVE snapshot. "
+                "If optimize_step: adjust only the focused step (retry, wait, selectors)."
             )
         if not parts:
             return ""
@@ -1150,7 +1347,8 @@ class LocalAIService:
             dom_block = "\nDOM structure hint (grouped):\n" + dom_context_pack.strip() + "\n\n"
         return (
             "You refine plans using the same rules: if a LIVE snapshot is present, selectors must align with "
-            "those real elements only.\n"
+            "those real elements only. Prefer probe_index=[n] plus the exact recommended=() string from that line; "
+            "never invent selectors not shown in the snapshot.\n"
             "You are refining an existing UI test case plan.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"{iact}"
@@ -1169,11 +1367,12 @@ class LocalAIService:
             '  "expected_result": "string",\n'
             '  "steps": [\n'
             "    {\n"
-            '      "action": "navigate|click|input|wait|verify|extract_text",\n'
+            '      "action": "navigate|click|input|wait|verify|assert|extract_text",\n'
             '      "selector_type": "css|xpath|text",\n'
             '      "selector_value": "string",\n'
             '      "input_value": "string",\n'
             '      "description": "string",\n'
+            '      "compare_type": "string (only for assert; e.g. text_equals|text_contains|text_regex|element_visible|element_exists|url_contains|url_equals)",\n'
             '      "probe_index": "integer or empty"\n'
             "    }\n"
             "  ]\n"
@@ -1186,7 +1385,10 @@ class LocalAIService:
             "Execution order is DOM strategies first, then selector_type \"visual_template\" (selector_value: base64 PNG or JSON with png_b64), "
             "then \"viewport_coord\" (selector_value: JSON {\"fx\":0..1,\"fy\":0..1} for click center in viewport). "
             "Use viewport_coord when snapshot provides stable geometry but CSS is volatile; avoid huge base64. "
-            "verify: put expected substring in input_value when checking text. "
+            "verify: captcha/human-check only — input_value one of auto|slider|image|visible|exist|clickable, never a sentence. "
+            "assert: optional — only if the user asks for verification. For URL/address-bar/query checks use compare_type "
+            "url_contains|url_equals with input_value as substring and EMPTY selector fields; for element text use text_* "
+            "with a real snapshot selector. Never use bare tag-only CSS like \"button\" for named controls. "
             "Do not return markdown. OUTPUT FORMAT: one JSON object only—no fences, no prose."
         )
 
@@ -1258,6 +1460,8 @@ class LocalAIService:
         if not isinstance(raw_steps, list):
             raw_steps = []
 
+        step_repair_warnings = repair_raw_ai_steps_for_platform(raw_steps)
+
         probe_by_index: Dict[int, Dict[str, Any]] = {}
         if probe_registry:
             for ent in probe_registry:
@@ -1270,7 +1474,7 @@ class LocalAIService:
                 probe_by_index[ii] = ent
 
         steps: List[Dict[str, Any]] = []
-        allowed_actions = {"navigate", "click", "input", "wait", "verify", "extract_text"}
+        allowed_actions = {"navigate", "click", "input", "wait", "verify", "extract_text", "assert"}
         allowed_selector_types = {"css", "xpath", "text", ""}
 
         for i, step in enumerate(raw_steps, start=1):
@@ -1295,7 +1499,7 @@ class LocalAIService:
                     pi = None
             if (
                 pi is None
-                and action in ("click", "input", "verify", "extract_text")
+                and action in ("click", "input", "verify", "extract_text", "assert")
                 and selector_value.isdigit()
             ):
                 try:
@@ -1306,13 +1510,15 @@ class LocalAIService:
                 except ValueError:
                     selector_value = ""
             if pi is not None and pi in probe_by_index:
-                ent = probe_by_index[pi]
-                rec = _norm_str(ent.get("recommended_selector"))
-                rty = _norm_str(ent.get("recommended_selector_type")).lower()
-                if rec:
-                    selector_value = rec
-                    if rty in ("css", "xpath", "text"):
-                        selector_type = rty
+                ct_for_probe = _norm_str(step.get("compare_type")).lower()
+                if not (action == "assert" and ct_for_probe in ("url_equals", "url_contains")):
+                    ent = probe_by_index[pi]
+                    rec = _norm_str(ent.get("recommended_selector"))
+                    rty = _norm_str(ent.get("recommended_selector_type")).lower()
+                    if rec:
+                        selector_value = rec
+                        if rty in ("css", "xpath", "text"):
+                            selector_type = rty
 
             if action == "navigate":
                 url_guess = _norm_str(input_value or selector_value or case_url)
@@ -1343,9 +1549,14 @@ class LocalAIService:
                 "input_value": input_value,
                 "description": description_step,
             }
+            if action == "assert":
+                ct_a = _norm_str(step.get("compare_type"))
+                if ct_a:
+                    row_step["compare_type"] = ct_a
             if pi is not None:
                 row_step["probe_index"] = str(pi)
-                if pi in probe_by_index:
+                ct_row = _norm_str(row_step.get("compare_type")).lower()
+                if pi in probe_by_index and not (action == "assert" and ct_row in ("url_equals", "url_contains")):
                     lc = build_locator_candidates_from_probe_entry(probe_by_index[pi])
                     if lc:
                         row_step["locator_candidates"] = lc
@@ -1390,11 +1601,22 @@ class LocalAIService:
             ]
 
         self._fill_missing_step_payloads(steps, goal_s, case_url, probe_registry)
+        clamp_warnings = clamp_plan_steps_to_probe_registry(steps, probe_registry)
 
         if steps and str(steps[0].get("action") or "").lower() == "navigate":
             u0 = _norm_str(steps[0].get("input_value"))
             if u0 and not case_url:
                 case_url = u0
+
+        meta_out: Dict[str, Any] = {
+            "provider": "local",
+            "model": using_model,
+            "project_name": project_name or "",
+        }
+        if step_repair_warnings:
+            meta_out["step_repair_warnings"] = step_repair_warnings
+        if clamp_warnings:
+            meta_out["selector_clamp_warnings"] = clamp_warnings
 
         return {
             "case_name": case_name,
@@ -1403,11 +1625,7 @@ class LocalAIService:
             "precondition": precondition,
             "expected_result": expected_result,
             "steps": steps,
-            "meta": {
-                "provider": "local",
-                "model": using_model,
-                "project_name": project_name or "",
-            },
+            "meta": meta_out,
         }
 
 

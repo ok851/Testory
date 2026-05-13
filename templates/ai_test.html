@@ -368,10 +368,23 @@
         cursor: pointer; font-size: 13px; font-weight: 600;
     }
     .ai-rail-left .ai-input-actions .btn { min-width: 0; }
-    .ai-send-btn { transition: background 0.2s, opacity 0.2s; }
-    .ai-send-btn--empty { background: #94a3b8 !important; color: #fff !important; }
-    .ai-send-btn--ready { background: #4f46e5 !important; color: #fff !important; box-shadow: 0 2px 8px rgba(79, 70, 229, 0.35); }
-    .ai-send-btn--stop.ai-send-btn--ready { background: #dc2626 !important; box-shadow: 0 2px 8px rgba(220, 38, 38, 0.35); }
+    .ai-send-btn { transition: background 0.2s, opacity 0.2s, box-shadow 0.2s, transform 0.15s; }
+    .ai-send-btn--empty { background: #cbd5e1 !important; color: #64748b !important; box-shadow: none !important; cursor: not-allowed !important; }
+    .ai-send-btn--ready { background: linear-gradient(135deg, #4f46e5, #6366f1) !important; color: #fff !important; box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4); }
+    .ai-send-btn--ready:not(:disabled):hover { filter: brightness(1.06); transform: translateY(-1px); }
+    .ai-send-btn--refine-ready {
+        background: linear-gradient(135deg, #7c3aed, #a855f7) !important;
+        color: #fff !important;
+        box-shadow: 0 4px 14px rgba(124, 58, 237, 0.35);
+    }
+    .ai-send-btn--refine-ready:not(:disabled):hover { filter: brightness(1.06); transform: translateY(-1px); }
+    .ai-send-btn--gateway-ready {
+        background: linear-gradient(135deg, #059669, #10b981) !important;
+        color: #fff !important;
+        box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35);
+    }
+    .ai-send-btn--gateway-ready:not(:disabled):hover { filter: brightness(1.06); transform: translateY(-1px); }
+    .ai-send-btn--stop.ai-send-btn--ready { background: linear-gradient(135deg, #b91c1c, #dc2626) !important; box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4); }
     .ai-hint-inline {
         margin-top: 12px; font-size: 12px; color: #64748b; line-height: 1.5;
         padding: 10px 12px; background: #eff6ff; border-radius: 10px; border-left: 3px solid #6366f1;
@@ -535,20 +548,11 @@
     }
     .ai-session-title::placeholder { color: rgba(255,255,255,0.55); }
     .ai-studio-header__tools {
-        display: flex; flex-wrap: nowrap; align-items: center; gap: 8px;
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
         flex: 1 1 auto;
         min-width: 0;
-        overflow-x: auto;
-        overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: thin;
-        padding-bottom: 2px;
+        overflow: visible;
         justify-content: flex-end;
-    }
-    .ai-studio-header__tools::-webkit-scrollbar { height: 6px; }
-    .ai-studio-header__tools::-webkit-scrollbar-thumb {
-        background: rgba(255,255,255,0.35);
-        border-radius: 999px;
     }
     .ai-studio-header__tools .ai-toolbar-btn,
     .ai-studio-header__tools .ai-model-chip,
@@ -633,12 +637,21 @@
     .ai-rail-left .ai-input-row textarea { min-height: 140px; max-height: 320px; }
     .ai-rail-left .ai-input-actions {
         flex-direction: row;
-        flex-wrap: nowrap;
+        flex-wrap: wrap;
         justify-content: stretch;
         width: 100%;
-        gap: 8px;
+        gap: 10px;
     }
-    .ai-rail-left .ai-input-actions .btn { flex: 1 1 0; }
+    .ai-rail-left .ai-input-actions .btn {
+        flex: 1 1 calc(50% - 6px);
+        min-width: 0;
+        min-height: 42px;
+        border-radius: 12px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }
     .ai-chat-log--rail { min-height: 100px; max-height: 200px; margin: 0 0 12px; }
     .ai-stage-center {
         display: flex; flex-direction: column;
@@ -650,12 +663,12 @@
     html.dark .ai-stage-center { background: #020617; }
     .ai-stage-center .ai-browser-panel { border-radius: 0; border-left: none; border-right: none; }
     .ai-agent-overlay {
-        position: absolute; left: 12px; top: 52px; z-index: 20;
+        position: absolute; right: 12px; bottom: 12px; left: auto; top: auto; z-index: 30;
         display: flex; align-items: center; gap: 10px;
         padding: 10px 16px; border-radius: 12px;
         background: rgba(15, 23, 42, 0.88); color: #e2e8f0; font-size: 13px; font-weight: 600;
         pointer-events: none; box-shadow: 0 4px 20px rgba(0,0,0,0.25);
-        max-width: min(90%, 360px);
+        max-width: min(92%, 320px);
     }
     .ai-agent-overlay.is-hidden { display: none !important; }
     .ai-agent-overlay .ai-pulse {
@@ -696,20 +709,6 @@
     }
     html.dark .ai-stat-status { background: #312e81; color: #c7d2fe; }
     .ai-preview-in-rail .ai-gen-textarea--preview { min-height: 200px; max-height: 40vh; }
-    .ai-code-modal-backdrop {
-        display: none; position: fixed; inset: 0; z-index: 10070;
-        background: rgba(15,23,42,0.5); align-items: center; justify-content: center; padding: 20px;
-    }
-    .ai-code-modal-backdrop.is-open { display: flex; }
-    .ai-code-modal {
-        width: min(900px, 100%); max-height: 85vh; display: flex; flex-direction: column;
-        background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 25px 50px rgba(0,0,0,0.3);
-    }
-    html.dark .ai-code-modal { background: #0f172a; border: 1px solid #334155; }
-    .ai-code-modal__head { padding: 14px 18px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
-    .ai-code-modal__body { padding: 14px; flex: 1; overflow: auto; }
-    .ai-code-modal__body pre { margin: 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-
     /* 添加模型弹窗 */
     .ai-add-modal-backdrop {
         display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55);
@@ -767,6 +766,26 @@
     .ai-add-modal .hint-link a:hover { text-decoration: underline; }
     .ai-add-model-hint { font-size: 11px; color: #94a3b8; margin-top: 6px; line-height: 1.4; }
     html.dark .ai-add-model-hint { color: #64748b; }
+    .ai-add-modal--ollama-edit .ai-add-modal__body { padding-top: 12px; }
+    .ai-add-modal--ollama-edit .form-row { margin-bottom: 12px; }
+    .ai-add-modal--ollama-edit .ai-add-modal__foot {
+        padding-top: 12px;
+        border-top-color: #e2e8f0;
+        gap: 12px;
+    }
+    html.dark .ai-add-modal--ollama-edit .ai-add-modal__foot { border-top-color: #334155; }
+    .ai-add-modal--ollama-edit .btn-primary-solid {
+        background: linear-gradient(135deg, #4f46e5, #6366f1);
+        color: #fff;
+        box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+    }
+    .ai-add-modal--ollama-edit .btn-primary-solid:hover { filter: brightness(1.05); }
+    html.dark .ai-add-modal--ollama-edit .btn-primary-solid {
+        background: linear-gradient(135deg, #6366f1, #818cf8);
+        color: #fff;
+    }
+    .ai-add-apikey-saved-hint { color: #047857; }
+    html.dark .ai-add-apikey-saved-hint { color: #34d399; }
     .ai-cap-banner {
         font-size: 12px;
         line-height: 1.45;
@@ -815,13 +834,9 @@
                 <a href="/list_projects" class="ai-test-back" title="返回项目" data-i18n-title="aitest_back_projects">←</a>
                 <input type="text" class="ai-session-title" id="aiSessionTitle" value="AI 自动化任务" maxlength="120" autocomplete="off" aria-label="任务标题" data-i18n-placeholder="aitest_session_title_ph" placeholder="任务标题（如：提取购物车商品数量）">
                 <div class="ai-studio-header__tools">
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnViewCode" title="查看当前计划的 JSON">代码</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnSaveDraft" title="将草稿存到浏览器本地">保存</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnRestoreSession" title="从 sessionStorage 再次强制恢复（进入本页时通常已自动恢复；若异常可点此）">恢复会话</button>
                     <button type="button" class="ai-toolbar-btn" id="aiBtnUndo" disabled title="在「生成用例」「优化」或页面 AI 分析成功后，可撤销对计划草稿的最近一次变更">撤销</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnRedo" disabled title="在撤销之后，可恢复被撤销的状态">重做</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnParams" title="运行参数说明">参数</button>
-                    <button type="button" class="ai-toolbar-btn ai-btn-run" id="aiBtnRunAgent" data-i18n="aitest_btn_run" data-i18n-title="aitest_btn_run_title" title="根据任务描述生成步骤，并在主 Playwright 浏览器中按步骤执行（需填写 URL）" aria-label="运行：生成并在主浏览器中执行步骤">运行</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnClearChat" data-i18n="aitest_clear_chat" data-i18n-title="aitest_clear_chat_title" title="清空左栏与 AI 的对话记录（不影响用例预览与计划草案）">清空</button>
+                    <button type="button" class="ai-toolbar-btn ai-btn-run" id="aiBtnRunAgent" data-i18n="aitest_btn_run" data-i18n-title="aitest_btn_run_title" title="" aria-label="运行">运行</button>
                     <div class="ai-model-chip" id="aiActiveModelChip" title="">
                         <span data-i18n="aitest_model_chip">模型</span>
                         <code id="aiActiveModelName">—</code>
@@ -876,19 +891,15 @@
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGenerateBtn" onclick="aiGeneratePreview()" data-i18n="aitest_btn_preview">生成用例</button>
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiContinueBtn" onclick="aiContinueRefine()" data-i18n="aitest_btn_refine">优化</button>
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty ai-send-btn--stop" id="aiStopBtn" onclick="aiStopAgentWork()" data-i18n="aitest_btn_stop" disabled data-i18n-title="aitest_btn_stop_title" title="停止当前 AI 请求">停止</button>
-                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGatewayExecuteBtn" onclick="aiGatewayStreamExecute()" title="识别左栏指令并在主 Playwright 浏览器中逐步执行（内置预览会同步变化）。例：「执行当前预览」「打开 https://example.com」">识别并执行</button>
+                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGatewayExecuteBtn" onclick="aiGatewayStreamExecute()" title="填写左栏指令并执行；若已有用例预览步骤，可不填内容直接执行当前预览">识别并执行</button>
                         </div>
                     </div>
-                    <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;">「生成用例」仅调用模型生成步骤；「运行」会先在<strong>主 Playwright</strong>打开上方 URL、拉取页面结构再生成并<strong>尝试执行</strong>步骤。<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 等同于「生成用例」。顶栏标题在「生成并保存」时作为用例名称。</p>
+                    <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;">「生成用例」仅调用模型生成步骤；「运行」在<strong>已配置远程网关</strong>时会自动连接中栏<strong>远程画布</strong>并在<strong>同一 Chromium</strong>中生成并执行（可边看边跑），否则在<strong>主 Playwright</strong>中打开 URL 并执行。<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 等同于「生成用例」。顶栏标题在「生成并保存」时作为用例名称。</p>
                 </div>
             </aside>
 
             <section id="aiStageCenter" class="ai-stage-center" aria-label="浏览器舞台">
             <div class="ai-browser-panel" aria-label="内置浏览器" style="flex:1;min-height:0;">
-                <div id="aiAgentWorkingOverlay" class="ai-agent-overlay is-hidden" aria-live="polite">
-                    <span class="ai-pulse" aria-hidden="true"></span>
-                    <span id="aiAgentOverlayText">AI正在工作</span>
-                </div>
                 <div class="ai-browser-panel__head">
                     <span>内置浏览器 <span style="font-weight:500;opacity:.85;font-size:12px;">(本区域为 <strong>内嵌真实页面</strong>；部分站禁止嵌入或会长时间「读取中…」，为站点防护非本平台遮罩，请用「全屏内嵌 / 新窗口」尝试)</span></span>
                     <div class="ai-browser-panel__head-actions">
@@ -928,6 +939,10 @@
                                 <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserBannerDismiss">收起说明</button>
                             </div>
                         </div>
+                    </div>
+                    <div id="aiAgentWorkingOverlay" class="ai-agent-overlay is-hidden" aria-live="polite">
+                        <span class="ai-pulse" aria-hidden="true"></span>
+                        <span id="aiAgentOverlayText">AI正在工作</span>
                     </div>
                 </div>
                 </div>
@@ -972,21 +987,6 @@
     </div>
 </div>
 
-<div class="ai-code-modal-backdrop" id="aiCodeModalBackdrop" onclick="window.closeAiCodeModal()" aria-hidden="true">
-    <div class="ai-code-modal" onclick="event.stopPropagation()">
-        <div class="ai-code-modal__head">
-            <strong>当前计划 JSON</strong>
-            <div style="display:flex;gap:8px;align-items:center;">
-                <button type="button" class="btn btn-secondary btn-sm" id="aiCodeModalCopyBtn" onclick="window.copyAiPlanJson()">复制</button>
-                <button type="button" class="ai-settings-close" onclick="window.closeAiCodeModal()" aria-label="关闭">&times;</button>
-            </div>
-        </div>
-        <div class="ai-code-modal__body">
-            <pre id="aiCodeModalPre">{}</pre>
-        </div>
-    </div>
-</div>
-
 <div class="ai-settings-backdrop" id="aiSettingsBackdrop" onclick="window.toggleAiSettings(false)" aria-hidden="true"></div>
 <aside class="ai-settings-panel" id="aiSettingsPanel" role="dialog" aria-modal="true" aria-labelledby="aiSettingsTitle" aria-hidden="true">
     <div class="ai-settings-panel__head">
@@ -1027,19 +1027,15 @@
 </aside>
 
 <div class="ai-add-modal-backdrop" id="aiAddModelBackdrop" role="dialog" aria-modal="true" aria-labelledby="aiAddModelTitle" onclick="window.openAiAddModelModal(false)">
-    <div class="ai-add-modal" onclick="event.stopPropagation()">
+    <div class="ai-add-modal" id="aiAddModalRoot" onclick="event.stopPropagation()">
         <div class="ai-add-modal__head">
-            <h4 id="aiAddModelTitle" data-i18n="aitest_add_model_title">添加模型</h4>
+            <h4 id="aiAddModelTitle">添加模型</h4>
             <button type="button" class="ai-settings-close" onclick="window.openAiAddModelModal(false)" aria-label="关闭">&times;</button>
         </div>
         <div class="ai-add-modal__body">
             <div class="form-row">
                 <label><span class="req">*</span> <span data-i18n="aitest_field_provider">提供商</span></label>
                 <select id="aiAddProvider"></select>
-            </div>
-            <div class="form-row">
-                <label><span class="req">*</span> <span data-i18n="aitest_field_type">类型</span></label>
-                <select id="aiAddModelType"></select>
             </div>
             <div class="form-row">
                 <label><span class="req">*</span> <span data-i18n="aitest_field_model">模型</span></label>
@@ -1057,17 +1053,12 @@
                     <button type="button" onclick="window.toggleAiAddApiKeyVis()" aria-label="toggle"><i class="fas fa-eye" id="aiAddApiKeyEye"></i></button>
                 </div>
                 <div class="hint-link" id="aiAddDocsLink"></div>
-            </div>
-            <div class="form-row" id="aiAddVerifyRow">
-                <label class="ai-chk-label" style="margin:0;">
-                    <input type="checkbox" id="aiAddVerifyOllama" checked>
-                    <span data-i18n="aitest_verify">添加前校验（Ollama 已安装模型）</span>
-                </label>
+                <p id="aiAddApiKeySavedHint" class="ai-add-model-hint ai-add-apikey-saved-hint" style="display:none;margin-top:8px;" role="status"></p>
             </div>
         </div>
         <div class="ai-add-modal__foot">
             <button type="button" class="btn-ghost" onclick="window.openAiAddModelModal(false)" data-i18n="aitest_cancel">取消</button>
-            <button type="button" class="btn-primary-solid" onclick="window.submitAiAddModel()" data-i18n="aitest_add">添加</button>
+            <button type="button" class="btn-primary-solid" id="aiAddModalSubmitBtn">添加</button>
         </div>
     </div>
 </div>
@@ -1088,6 +1079,7 @@
     let allCasesList = [];
     let aiPlanAbort = null;
     window.__aiCurrentBgJobId = null;
+    let aiGatewayBusy = false;
     let aiStudioPageLeaving = false;
     let aiUserRequestedStop = false;
     let aiAbortFromTimer = false;
@@ -1097,8 +1089,7 @@
         if (ev.persisted) aiStudioPageLeaving = false;
     });
     let aiUndoStack = [];
-    let aiRedoStack = [];
-    let aiEmbeddedGatewayStatus = { enabled: false, wsConfigured: false };
+    let aiEmbeddedGatewayStatus = { enabled: false, wsConfigured: false, lastError: '' };
     let aiRemoteCanvasState = {
         ws: null,
         sessionId: null,
@@ -1229,15 +1220,12 @@
     function pushUndoSnapshot() {
         aiUndoStack.push(getDraftState());
         if (aiUndoStack.length > AI_UNDO_MAX) aiUndoStack.shift();
-        aiRedoStack = [];
         syncUndoRedoButtons();
     }
 
     function syncUndoRedoButtons() {
         var u = document.getElementById('aiBtnUndo');
-        var r = document.getElementById('aiBtnRedo');
         if (u) u.disabled = aiUndoStack.length === 0;
-        if (r) r.disabled = aiRedoStack.length === 0;
     }
 
     function syncAgentEngineSelect() {
@@ -1248,51 +1236,6 @@
         a.value = m.value || '';
         if (!a.value && a.options.length) a.selectedIndex = 0;
     }
-
-    window.closeAiCodeModal = function() {
-        var b = document.getElementById('aiCodeModalBackdrop');
-        if (b) { b.classList.remove('is-open'); b.setAttribute('aria-hidden', 'true'); }
-    };
-
-    window.openAiCodeModal = function() {
-        var pre = document.getElementById('aiCodeModalPre');
-        var b = document.getElementById('aiCodeModalBackdrop');
-        if (pre) {
-            try {
-                pre.textContent = latestAiPlan ? JSON.stringify(latestAiPlan, null, 2) : '// 尚无计划，请先生成用例';
-            } catch (e) {
-                pre.textContent = String(e);
-            }
-        }
-        if (b) { b.classList.add('is-open'); b.setAttribute('aria-hidden', 'false'); }
-    };
-
-    window.copyAiPlanJson = async function() {
-        var text = '';
-        try {
-            text = latestAiPlan ? JSON.stringify(latestAiPlan, null, 2) : '';
-        } catch (e) {
-            alert('无法序列化: ' + e.message);
-            return;
-        }
-        if (!text) { alert('当前无计划可复制'); return; }
-        try {
-            await navigator.clipboard.writeText(text);
-            setAgentStatusLine('已复制计划 JSON 到剪贴板');
-        } catch (e) {
-            try {
-                var ta = document.createElement('textarea');
-                ta.value = text;
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                document.body.removeChild(ta);
-                setAgentStatusLine('已复制计划 JSON');
-            } catch (e2) {
-                alert('复制失败，请手动全选复制');
-            }
-        }
-    };
 
     function normalizeUrlForEmbed(u) {
         u = (u || '').trim();
@@ -1310,11 +1253,28 @@
         try {
             var r = await fetch('/api/embedded-browser/status', { credentials: 'same-origin' });
             var d = await r.json().catch(function() { return {}; });
-            aiEmbeddedGatewayStatus.enabled = !!(d && d.success && d.enabled);
-            aiEmbeddedGatewayStatus.wsConfigured = !!(d && d.success && d.ws_base_configured);
+            aiEmbeddedGatewayStatus.lastError = '';
+            if (!r.ok) {
+                aiEmbeddedGatewayStatus.enabled = false;
+                aiEmbeddedGatewayStatus.wsConfigured = false;
+                aiEmbeddedGatewayStatus.lastError = (d && d.error) ? String(d.error) : ('HTTP ' + r.status);
+            } else if (d && d.success) {
+                aiEmbeddedGatewayStatus.enabled = !!d.enabled;
+                aiEmbeddedGatewayStatus.wsConfigured = !!d.ws_base_configured;
+                if (!d.enabled) {
+                    aiEmbeddedGatewayStatus.lastError = '未设置 EMBEDDED_BROWSER_GATEWAY_URL 或 EMBEDDED_BROWSER_GATEWAY_SECRET（或 .env 未被加载）';
+                } else if (!d.ws_base_configured) {
+                    aiEmbeddedGatewayStatus.lastError = '未设置 EMBEDDED_BROWSER_PUBLIC_WS_BASE（浏览器需能访问该 ws(s) 地址）';
+                }
+            } else {
+                aiEmbeddedGatewayStatus.enabled = false;
+                aiEmbeddedGatewayStatus.wsConfigured = false;
+                aiEmbeddedGatewayStatus.lastError = (d && d.error) ? String(d.error) : '状态接口返回异常';
+            }
         } catch (e) {
             aiEmbeddedGatewayStatus.enabled = false;
             aiEmbeddedGatewayStatus.wsConfigured = false;
+            aiEmbeddedGatewayStatus.lastError = e && e.message ? e.message : String(e);
         }
         syncEmbeddedGatewayToolbarButtons();
     }
@@ -1448,8 +1408,20 @@
             return false;
         }
         if (!aiEmbeddedGatewayStatus.enabled || !aiEmbeddedGatewayStatus.wsConfigured) {
-            if (!opts.auto) alert('远程画布未配置：请在服务端设置 EMBEDDED_BROWSER_GATEWAY_URL、EMBEDDED_BROWSER_GATEWAY_SECRET 与 EMBEDDED_BROWSER_PUBLIC_WS_BASE，并运行 embedded_browser_gateway。');
-            else setAgentStatusLine('远程画布未配置，无法自动兜底');
+            var le = (aiEmbeddedGatewayStatus.lastError || '').trim();
+            var msg;
+            if (!opts.auto) {
+                if (le.indexOf('权限') >= 0 || le.indexOf('403') >= 0) {
+                    msg = '远程画布接口权限不足（' + le + '）。若需使用请联系管理员调整账号角色。';
+                } else if (le) {
+                    msg = '远程画布当前不可用：' + le + '。请确认已配置 .env 中 EMBEDDED_BROWSER_* 并已启动 python -m embedded_browser_gateway。';
+                } else {
+                    msg = '远程画布未配置：请在服务端设置 EMBEDDED_BROWSER_GATEWAY_URL、EMBEDDED_BROWSER_GATEWAY_SECRET 与 EMBEDDED_BROWSER_PUBLIC_WS_BASE，并运行 embedded_browser_gateway。';
+                }
+                alert(msg);
+            } else {
+                setAgentStatusLine(le ? ('远程画布不可用：' + le) : '远程画布未配置，无法自动兜底');
+            }
             return false;
         }
         if (aiRemoteCanvasState.connecting) return false;
@@ -1917,13 +1889,29 @@
         const input = document.getElementById('aiMessageInput');
         const genBtn = document.getElementById('aiGenerateBtn');
         const contBtn = document.getElementById('aiContinueBtn');
+        const gwBtn = document.getElementById('aiGatewayExecuteBtn');
         if (!input || !genBtn || !contBtn) return;
+        const planBusy = !!(aiPlanAbort && aiPlanAbort.signal && !aiPlanAbort.signal.aborted);
         const hasGen = composeAiGoal().length > 0;
         const hasRef = (input.value || '').trim().length > 0;
-        genBtn.classList.toggle('ai-send-btn--empty', !hasGen);
-        genBtn.classList.toggle('ai-send-btn--ready', hasGen);
-        contBtn.classList.toggle('ai-send-btn--empty', !hasRef);
-        contBtn.classList.toggle('ai-send-btn--ready', hasRef);
+        const hasGwSteps = !!(latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length);
+        const hasGw = hasRef || hasGwSteps;
+        const blockGenCont = planBusy || aiGatewayBusy;
+
+        genBtn.classList.remove('ai-send-btn--refine-ready', 'ai-send-btn--gateway-ready');
+        contBtn.classList.remove('ai-send-btn--ready', 'ai-send-btn--gateway-ready');
+        genBtn.classList.toggle('ai-send-btn--empty', !hasGen || blockGenCont);
+        genBtn.classList.toggle('ai-send-btn--ready', hasGen && !blockGenCont);
+        contBtn.classList.toggle('ai-send-btn--empty', !hasRef || blockGenCont);
+        contBtn.classList.toggle('ai-send-btn--refine-ready', hasRef && !blockGenCont);
+
+        if (gwBtn) {
+            const gwOk = hasGw && !planBusy && !aiGatewayBusy;
+            gwBtn.disabled = !gwOk;
+            gwBtn.classList.toggle('ai-send-btn--empty', !gwOk);
+            gwBtn.classList.toggle('ai-send-btn--gateway-ready', gwOk);
+            gwBtn.classList.remove('ai-send-btn--ready', 'ai-send-btn--refine-ready');
+        }
         syncAiStopButton();
     }
 
@@ -1997,10 +1985,11 @@
         return aiProfiles.filter(function(p) { return p.provider === 'ollama'; }).map(function(p) { return p.model_id; });
     }
 
+    const AI_PROFILE_DEFAULT_MODEL_TYPE = 'test_case_generation';
+
     function fillProviderCatalogSelects() {
         const cat = providerCatalog;
         const provSel = document.getElementById('aiAddProvider');
-        const typeSel = document.getElementById('aiAddModelType');
         if (!provSel || !cat || !cat.providers) return;
         const order = { local: 0, cn: 1, intl: 2 };
         const providers = cat.providers.slice().sort(function(a, b) {
@@ -2011,11 +2000,12 @@
             const lab = isEn ? (z.name_en || z.id) : (z.name_zh || z.id);
             return '<option value="' + escapeHtml(z.id) + '">' + escapeHtml(lab) + '</option>';
         }).join('');
-        if (typeSel && cat.model_types) {
-            typeSel.innerHTML = cat.model_types.map(function(mt) {
-                const lab = isEn ? (mt.name_en || mt.id) : (mt.name_zh || mt.id);
-                return '<option value="' + escapeHtml(mt.id) + '">' + escapeHtml(lab) + '</option>';
-            }).join('');
+        var editEp = null;
+        if (window.__aiAddModalEditId) {
+            editEp = aiProfiles.find(function(x) { return x.id === window.__aiAddModalEditId; });
+            if (editEp && editEp.provider && providers.some(function(z) { return z.id === editEp.provider; })) {
+                provSel.value = editEp.provider;
+            }
         }
         syncAiAddProviderFields();
     }
@@ -2026,8 +2016,8 @@
         const popSel = document.getElementById('aiAddPopularModel');
         const keyRow = document.getElementById('aiAddApiKeyRow');
         const star = document.getElementById('aiAddApiKeyStar');
-        const verifyRow = document.getElementById('aiAddVerifyRow');
         const baseRow = document.getElementById('aiAddBaseUrlRow');
+        const baseIn = document.getElementById('aiAddBaseUrl');
         const docs = document.getElementById('aiAddDocsLink');
         if (!provSel || !cat || !cat.providers) return;
         const z = cat.providers.find(function(p) { return p.id === provSel.value; });
@@ -2041,30 +2031,123 @@
         const isOllama = provSel.value === 'ollama';
         if (keyRow) keyRow.style.display = isOllama ? 'none' : 'block';
         if (star) star.style.display = needKey ? 'inline' : 'none';
-        if (verifyRow) verifyRow.style.display = isOllama ? 'block' : 'none';
         if (baseRow) baseRow.style.display = isOllama ? 'none' : 'block';
         if (docs && z && z.docs_url) {
             docs.innerHTML = '<a href="' + escapeHtml(z.docs_url) + '" target="_blank" rel="noopener">' + (typeof t === 'function' ? t('aitest_get_api_key') : '获取 API 密钥 / 文档') + '</a>';
         } else if (docs) docs.innerHTML = '';
+        if (baseIn && z) {
+            var editId = window.__aiAddModalEditId;
+            var def = (z.default_base_url && String(z.default_base_url).trim()) ? String(z.default_base_url).trim() : '';
+            if (editId) {
+                var ep = aiProfiles.find(function(x) { return x.id === editId; });
+                if (ep && ep.provider === provSel.value) {
+                    var bu = (ep.base_url != null && String(ep.base_url).trim()) ? String(ep.base_url).trim() : '';
+                    baseIn.value = bu || def;
+                } else {
+                    baseIn.value = def;
+                }
+            } else {
+                baseIn.value = def;
+            }
+        }
     }
 
-    window.openAiAddModelModal = function(show) {
+    window.__aiAddModalEditId = null;
+
+    window.openAiAddModelModal = function(show, editProfileId) {
         const el = document.getElementById('aiAddModelBackdrop');
         if (!el) return;
         const open = show === undefined ? !el.classList.contains('is-open') : !!show;
-        el.classList.toggle('is-open', open);
-        if (open) {
+        if (!open) {
+            window.__aiAddModalEditId = null;
+            el.classList.remove('is-open');
+            var provClose = document.getElementById('aiAddProvider');
+            if (provClose) provClose.disabled = false;
+            var rootClose = document.getElementById('aiAddModalRoot');
+            if (rootClose) rootClose.classList.remove('ai-add-modal--ollama-edit');
+            var hintClose = document.getElementById('aiAddApiKeySavedHint');
+            if (hintClose) { hintClose.style.display = 'none'; hintClose.textContent = ''; }
+            return;
+        }
+        window.__aiAddModalEditId = (editProfileId && String(editProfileId).trim()) || null;
+        var pk = document.getElementById('aiAddApiKey');
+        if (pk) {
+            pk.value = '';
+            pk.placeholder = window.__aiAddModalEditId
+                ? (typeof t === 'function' ? t('aitest_api_key_keep_ph') : '留空则不修改已保存的密钥')
+                : (typeof t === 'function' ? t('aitest_field_api_key_ph') : 'API 密钥');
+        }
+        if (!window.__aiAddModalEditId) {
+            var bu0 = document.getElementById('aiAddBaseUrl');
+            if (bu0) bu0.value = '';
+        }
+        function applyAddModalChrome() {
+            var title = document.getElementById('aiAddModelTitle');
+            var footBtn = document.getElementById('aiAddModalSubmitBtn');
+            var eid = window.__aiAddModalEditId;
+            var root0 = document.getElementById('aiAddModalRoot');
+            if (!eid) {
+                if (title) title.textContent = typeof t === 'function' ? t('aitest_add_model_title') : '添加模型';
+                if (footBtn) footBtn.textContent = typeof t === 'function' ? t('aitest_add') : '添加';
+                if (root0) root0.classList.remove('ai-add-modal--ollama-edit');
+                return;
+            }
+            var p = aiProfiles.find(function(x) { return x.id === eid; });
+            if (!p) {
+                window.__aiAddModalEditId = null;
+                if (title) title.textContent = typeof t === 'function' ? t('aitest_add_model_title') : '添加模型';
+                if (footBtn) footBtn.textContent = typeof t === 'function' ? t('aitest_add') : '添加';
+                if (root0) root0.classList.remove('ai-add-modal--ollama-edit');
+                return;
+            }
+            if (title) title.textContent = typeof t === 'function' ? t('aitest_edit_model_title') : '编辑模型';
+            if (footBtn) footBtn.textContent = typeof t === 'function' ? t('aitest_save_profile') : '保存';
+            var prov = document.getElementById('aiAddProvider');
+            if (prov) {
+                prov.value = p.provider || '';
+                prov.disabled = true;
+            }
+            syncAiAddProviderFields();
+            var pop = document.getElementById('aiAddPopularModel');
+            if (pop && p.model_id) {
+                var mid = String(p.model_id).trim();
+                var has = Array.prototype.some.call(pop.options, function(o) { return o.value === mid; });
+                if (!has && mid) {
+                    var opt = document.createElement('option');
+                    opt.value = mid;
+                    opt.textContent = mid;
+                    pop.appendChild(opt);
+                }
+                pop.value = mid;
+            }
+            if (root0) root0.classList.toggle('ai-add-modal--ollama-edit', p.provider === 'ollama');
+        }
+        function afterFill() {
+            fillProviderCatalogSelects();
+            applyAddModalChrome();
+            if (typeof applyUiLang === 'function') applyUiLang();
+            var eid = window.__aiAddModalEditId;
             var pk = document.getElementById('aiAddApiKey');
-            if (pk) pk.value = '';
-            function afterFill() {
-                fillProviderCatalogSelects();
-                if (typeof applyUiLang === 'function') applyUiLang();
+            if (eid && pk) {
+                pk.placeholder = typeof t === 'function' ? t('aitest_api_key_keep_ph') : '留空则不修改已保存的密钥';
             }
-            if (!providerCatalog || !providerCatalog.providers) {
-                loadAiModels().then(afterFill).catch(function() { afterFill(); });
-            } else {
-                afterFill();
+            var hint = document.getElementById('aiAddApiKeySavedHint');
+            var ep = eid ? aiProfiles.find(function(x) { return x.id === eid; }) : null;
+            if (hint) {
+                if (eid && ep && ep.provider !== 'ollama' && ep.has_api_key) {
+                    hint.style.display = 'block';
+                    hint.textContent = typeof t === 'function' ? t('aitest_has_api_key_hint') : '已保存过密钥：留空不修改，填写则覆盖为新密钥（页面不回显原文）。';
+                } else {
+                    hint.style.display = 'none';
+                    hint.textContent = '';
+                }
             }
+        }
+        el.classList.add('is-open');
+        if (!providerCatalog || !providerCatalog.providers) {
+            loadAiModels().then(afterFill).catch(function() { afterFill(); });
+        } else {
+            afterFill();
         }
     };
 
@@ -2074,36 +2157,93 @@
         inp.type = inp.type === 'password' ? 'text' : 'password';
     };
 
+    async function parseApiJsonResponse(resp) {
+        var text = await resp.text();
+        var ct = (resp.headers.get('content-type') || '').toLowerCase();
+        var looksJson = text && (text.charAt(0) === '{' || text.charAt(0) === '[');
+        if (ct.indexOf('application/json') < 0 && !looksJson) {
+            var msg = typeof t === 'function' ? t('aitest_not_json_response') : '服务器返回了非 JSON 页面';
+            if (resp.status === 401 || resp.status === 403) msg += '（可能未登录或权限不足）';
+            else if (resp.status === 404) msg += '（接口不存在，请确认服务已更新并重启）';
+            else msg += '（HTTP ' + resp.status + '）';
+            throw new Error(msg);
+        }
+        var data;
+        try {
+            data = JSON.parse(text);
+        } catch (pe) {
+            throw new Error((typeof t === 'function' ? t('aitest_bad_json') : '响应 JSON 解析失败') + ': ' + String(text).slice(0, 160));
+        }
+        if (!data || typeof data !== 'object') throw new Error('无效的 JSON');
+        return data;
+    }
+
     window.submitAiAddModel = async function() {
         const prov = document.getElementById('aiAddProvider');
-        const mtype = document.getElementById('aiAddModelType');
         const pop = document.getElementById('aiAddPopularModel');
         const apiKey = document.getElementById('aiAddApiKey');
         const baseUrl = document.getElementById('aiAddBaseUrl');
-        const verify = document.getElementById('aiAddVerifyOllama');
+        const footBtn = document.getElementById('aiAddModalSubmitBtn');
         const modelId = (pop && pop.value) ? pop.value.trim() : '';
         if (!modelId) { alert(typeof t === 'function' ? t('aitest_need_model_pick') : '请从列表中选择模型'); return; }
-        const body = {
-            provider: prov && prov.value,
-            model_type: mtype && mtype.value,
-            model_id: modelId,
-            api_key: apiKey ? apiKey.value : '',
-            base_url: baseUrl ? baseUrl.value.trim() : '',
-            verify_ollama: !!(verify && verify.checked),
-        };
+        const editId = window.__aiAddModalEditId;
+        const keyTrim = apiKey ? String(apiKey.value || '').trim() : '';
+        var prevTxt = footBtn ? footBtn.textContent : '';
+        if (footBtn) {
+            if (footBtn.dataset.submitting === '1') return;
+            footBtn.dataset.submitting = '1';
+            footBtn.disabled = true;
+        }
         try {
-            const resp = await fetch('/api/ai/models', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-            const data = await resp.json();
-            if (!resp.ok || !data.success) throw new Error(data.error);
+            if (editId) {
+                const body = {
+                    profile_id: editId,
+                    model_id: modelId,
+                    base_url: baseUrl ? baseUrl.value.trim() : '',
+                };
+                if (keyTrim) body.api_key = keyTrim;
+                const resp = await fetch('/api/ai/models/profile', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await parseApiJsonResponse(resp);
+                if (!resp.ok || !data.success) throw new Error(data.error || ('HTTP ' + resp.status));
+            } else {
+                const body = {
+                    provider: prov && prov.value,
+                    model_type: AI_PROFILE_DEFAULT_MODEL_TYPE,
+                    model_id: modelId,
+                    api_key: apiKey ? apiKey.value : '',
+                    base_url: baseUrl ? baseUrl.value.trim() : '',
+                    verify_ollama: !!(prov && prov.value === 'ollama'),
+                };
+                const resp = await fetch('/api/ai/models', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await parseApiJsonResponse(resp);
+                if (!resp.ok || !data.success) throw new Error(data.error || ('HTTP ' + resp.status));
+            }
             openAiAddModelModal(false);
             await loadAiModels();
+            try {
+                alert(typeof t === 'function' ? t('aitest_profile_saved_ok') : '模型配置已保存。');
+            } catch (al) {}
         } catch (e) {
-            alert((typeof t === 'function' ? t('aitest_add_fail') : '添加失败: ') + e.message);
+            var prefix = editId
+                ? (typeof t === 'function' ? t('aitest_update_fail') : '保存失败：')
+                : (typeof t === 'function' ? t('aitest_add_fail') : '添加失败：');
+            alert(prefix + e.message);
+        } finally {
+            if (footBtn) {
+                footBtn.disabled = false;
+                footBtn.dataset.submitting = '0';
+                if (prevTxt) footBtn.textContent = prevTxt;
+            }
         }
     };
 
@@ -2153,7 +2293,10 @@
             const registryBox = document.getElementById('aiRegistryList');
             if (registryBox) registryBox.innerHTML = aiProfiles.length ? aiProfiles.map(function(p) {
                 var badge = (p.id === activeProfileId) ? ' <span class="ai-registry-badge">默认</span>' : '';
-                return '<div class="ai-registry-row"><span class="ai-registry-name">' + escapeHtml(profileLabel(p)) + badge + '</span><button type="button" class="btn btn-danger btn-sm" onclick="window.__aiDeleteProfile(\'' + escapeHtml(p.id) + '\')">删除</button></div>';
+                var editLab = typeof t === 'function' ? t('aitest_edit_profile') : '编辑';
+                return '<div class="ai-registry-row"><span class="ai-registry-name">' + escapeHtml(profileLabel(p)) + badge + '</span><span style="display:flex;gap:6px;flex-shrink:0;">' +
+                    '<button type="button" class="btn btn-secondary btn-sm" data-ai-edit-profile="' + escapeHtml(p.id) + '">' + escapeHtml(editLab) + '</button>' +
+                    '<button type="button" class="btn btn-danger btn-sm" onclick="window.__aiDeleteProfile(\'' + escapeHtml(p.id) + '\')">删除</button></span></div>';
             }).join('') : '<div class="ai-registry-empty">暂无注册模型</div>';
             const verifyChk = document.getElementById('aiVerifyOllamaChk');
             if (verifyChk) { verifyChk.disabled = !!ollamaError; verifyChk.checked = !ollamaError; }
@@ -2224,9 +2367,16 @@
         var st = (document.getElementById('aiSessionTitle') && document.getElementById('aiSessionTitle').value || '').trim();
         const fmtStep = (s, idx) => {
             const a = (s.action || '').toLowerCase();
+            const ct = ((s.compare_type) || '').toLowerCase();
             if (a === 'navigate') {
                 const u = (s.input_value || s.selector_value || '').trim();
                 return (idx + 1) + '. [navigate] ' + (s.description || '') + ' | URL: ' + u;
+            }
+            if (a === 'wait') {
+                return (idx + 1) + '. [wait] ' + (s.description || '') + ' | 等待(秒或毫秒): ' + (s.input_value || '');
+            }
+            if (a === 'assert' && (ct === 'url_contains' || ct === 'url_equals')) {
+                return (idx + 1) + '. [assert ' + ct + '] ' + (s.description || '') + ' | 地址栏预期: ' + (s.input_value || '');
             }
             return (idx + 1) + '. [' + s.action + '] ' + (s.description || '') + ' | ' + (s.selector_type || '') + ':' + (s.selector_value || '') + ' | 输入:' + (s.input_value || '');
         };
@@ -2270,7 +2420,11 @@
                     for (var i = 0; i < rs.length; i++) {
                         if (rs[i] && rs[i].status === 'success') ok++;
                     }
-                    appendAiChat('assistant', '已在主 Playwright 会话中按生成步骤尝试执行：成功 ' + ok + ' / ' + rs.length + '（详情见服务端日志）。');
+                    var via = ex.via || '';
+                    var runMsg = via === 'embedded'
+                        ? '已在远程画布（中栏）会话中按步骤执行：成功 '
+                        : '已在主 Playwright 会话中按生成步骤尝试执行：成功 ';
+                    appendAiChat('assistant', runMsg + ok + ' / ' + rs.length + '（详情见服务端日志）。');
                 }
             }
         }
@@ -2283,6 +2437,7 @@
             }
         } catch (e) {}
         renderAiPreview(latestAiPlan);
+        try { syncAiSendButtons(); } catch (e2) {}
     }
 
     function aiSleepInterruptible(ms, signal) {
@@ -2483,6 +2638,8 @@
         pushUndoSnapshot();
         if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
         appendAiChat('user', goal);
+        var goalInput = document.getElementById('aiMessageInput');
+        if (goalInput) goalInput.value = '';
         const genBtn = document.getElementById('aiGenerateBtn');
         if (genBtn) { genBtn.disabled = true; genBtn.textContent = '…'; }
         aiUserRequestedStop = false;
@@ -2618,10 +2775,12 @@
         }
         if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
         appendAiChat('user', msg + (forceEx ? '（一键执行）' : ''));
+        var gwInput = document.getElementById('aiMessageInput');
+        if (gwInput && !forceEx) gwInput.value = '';
+        aiGatewayBusy = true;
+        syncAiSendButtons();
         setAgentBusy(true, '网关执行中…');
-        setAgentStatusLine('识别意图并连接主浏览器…');
-        var btn = document.getElementById('aiGatewayExecuteBtn');
-        if (btn) { btn.disabled = true; }
+        setAgentStatusLine('识别意图并连接后台自动化会话…');
         try {
             var resp = await fetch('/api/ai/agent/gateway-stream', {
                 method: 'POST',
@@ -2630,7 +2789,9 @@
                 body: JSON.stringify({
                     message: msg,
                     plan: latestAiPlan || {},
-                    force_execute: forceEx
+                    force_execute: forceEx,
+                    target_page_url: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim(),
+                    embedded_session_id: (aiRemoteCanvasState && aiRemoteCanvasState.sessionId) ? aiRemoteCanvasState.sessionId : ''
                 })
             });
             if (!resp.ok) {
@@ -2639,13 +2800,14 @@
                 setAgentStatusLine('网关失败');
                 return;
             }
+            setAgentStatusLine('网关流已连接，接收事件中…');
             var reader = resp.body.getReader();
             var dec = new TextDecoder();
             var buf = '';
             while (true) {
                 var chunk = await reader.read();
                 if (chunk.done) break;
-                buf += dec.decode(chunk.value, { stream: true });
+                buf += dec.decode(chunk.value, { stream: true }).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                 var sep;
                 while ((sep = buf.indexOf('\n\n')) >= 0) {
                     var block = buf.slice(0, sep);
@@ -2686,42 +2848,47 @@
             setAgentStatusLine('网关异常');
         } finally {
             setAgentBusy(false);
-            if (btn) { btn.disabled = false; }
+            aiGatewayBusy = false;
+            syncAiSendButtons();
         }
     }
 
     async function aiRunAgentWorkflow() {
+        if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
+        try {
+            await refreshEmbeddedGatewayStatus();
+            var okGw = aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured;
+            var live = !!(aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1);
+            if (okGw && !live) {
+                var started = await startRemoteCanvasSession({ auto: false });
+                if (!started) {
+                    appendAiChat('assistant', '未能连接远程画布，本次将在主 Playwright 中执行（中栏 iframe 无法同步自动化画面）。若需边看边跑，请填写 URL 并完成网关配置后重试。');
+                }
+            }
+        } catch (e) {
+            try {
+                appendAiChat('assistant', '尝试连接远程画布时出错，将回退到主 Playwright：' + (e && e.message ? e.message : String(e)));
+            } catch (e2) {}
+        }
         await aiGeneratePreview({ executionMode: 'run_and_record' });
     }
 
     function aiUndo() {
         if (!aiUndoStack.length) return;
-        aiRedoStack.push(getDraftState());
         var prev = aiUndoStack.pop();
         applyDraftState(prev);
         syncUndoRedoButtons();
         appendAiChat('assistant', '已撤销上一步编辑。');
     }
 
-    function aiRedo() {
-        if (!aiRedoStack.length) return;
-        aiUndoStack.push(getDraftState());
-        var next = aiRedoStack.pop();
-        applyDraftState(next);
-        syncUndoRedoButtons();
-        appendAiChat('assistant', '已重做。');
-    }
-
-    function aiSaveDraftLocal() {
-        try {
-            var st = getDraftState();
-            st.draftSavedAt = Date.now();
-            localStorage.setItem(AI_DRAFT_KEY, JSON.stringify(st));
-            setAgentStatusLine('草稿已保存到本机浏览器');
-            appendAiChat('assistant', '任务标题、版本、目标与预览计划已写入本地草稿。');
-        } catch (e) {
-            alert('保存失败: ' + (e && e.message));
-        }
+    function aiClearChatHistory() {
+        var q = typeof t === 'function' ? t('aitest_clear_chat_confirm') : '确定清空与 AI 的对话记录？（不影响用例预览与计划草案）';
+        if (!confirm(q)) return;
+        aiChatMessages = [];
+        var ch = document.getElementById('aiChatHistory');
+        if (ch) ch.innerHTML = '';
+        flushPersistAiStudioToSession();
+        setAgentStatusLine(typeof t === 'function' ? t('aitest_cleared_chat_status') : '对话记录已清空');
     }
 
     function aiLoadDraftLocal() {
@@ -2731,18 +2898,6 @@
             applyDraftState(JSON.parse(raw));
             syncUndoRedoButtons();
         } catch (e) { console.warn(e); }
-    }
-
-    function aiShowParamsHelp() {
-        alert('运行参数（由服务端环境变量控制，此处仅说明）\n\n'
-            + '• LOCAL_LLM_TIMEOUT_CHAT — Ollama /api/chat 读超时（秒），优先于 LOCAL_LLM_TIMEOUT；均未设置时默认 600\n'
-            + '• LOCAL_LLM_CONNECT_TIMEOUT — 连接 Ollama 超时（秒），默认 30\n'
-            + '• LOCAL_LLM_TIMEOUT — 通用超时（秒）；未单独设置 CHAT 时亦用于 /api/chat\n'
-            + '• AI_SELECTOR_FALLBACK — 步骤执行失败时是否启用 LLM+DOM 兜底（1/0）\n'
-            + '• LOCAL_AI_PROBE_* — 页面探测节点数、超时等\n'
-            + '• EMBEDDED_BROWSER_* — 可选远程 Chromium 网关（高级部署；本页不再展示入口）\n'
-            + '• PLAYWRIGHT_BROWSER — 默认引擎 chromium/chrome/edge/firefox/webkit（界面选择会写入会话并覆盖）\n\n'
-            + '详情见部署文档或 docker-compose 环境变量注释。');
     }
 
     async function aiGenerateAndSaveCase() {
@@ -2787,9 +2942,7 @@
     window.aiGenerateAndSaveCase = aiGenerateAndSaveCase;
     window.aiRunAgentWorkflow = aiRunAgentWorkflow;
     window.aiUndo = aiUndo;
-    window.aiRedo = aiRedo;
-    window.aiSaveDraftLocal = aiSaveDraftLocal;
-    window.aiShowParamsHelp = aiShowParamsHelp;
+    window.aiClearChatHistory = aiClearChatHistory;
     window.refreshOllamaModels = refreshOllamaModels;
     window.quickAddOllamaFromList = quickAddOllamaFromList;
     window.saveActiveAiModel = saveActiveAiModel;
@@ -2804,7 +2957,7 @@
                 welcomeExtra = ' 说明：工具循环已启用但未连接 OpenClaw 时请尽快配置 Gateway（见上方黄色提示）。';
             }
         } catch (e) {}
-        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页为「智能体工作室」：<strong>左栏</strong>用自然语言描述任务；点<strong>生成用例</strong>仅由模型生成可保存的步骤，点顶栏<strong>运行</strong>会在主 Playwright 浏览器打开 URL 后生成并尝试执行这些步骤。<strong>中栏</strong>输入 URL 点「打开」可预览页面；<strong>右栏</strong>查看统计与用例预览。草稿可「保存」到本机浏览器。' + welcomeExtra + '</div></div>';
+        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页为「智能体工作室」：<strong>左栏</strong>用自然语言描述任务；点<strong>生成用例</strong>仅由模型生成可保存的步骤，点顶栏<strong>运行</strong>会在主 Playwright 浏览器打开 URL 后生成并尝试执行这些步骤。<strong>中栏</strong>输入 URL 点「打开」可预览页面；<strong>右栏</strong>查看统计与用例预览。本会话内容会在本标签页内自动保存。' + welcomeExtra + '</div></div>';
         var s = (window.HuFirstAiAssistant && HuFirstAiAssistant.loadStudioSession) ? HuFirstAiAssistant.loadStudioSession() : null;
         var d = null;
         try {
@@ -2869,6 +3022,7 @@
         var ch = document.getElementById('aiChatHistory');
         if (ch) ch.innerHTML = WELCOME_HTML;
         aiLoadDraftLocal();
+        try { syncAiSendButtons(); } catch (e) {}
     }
 
     (function bindAiTestSettingsUi() {
@@ -2878,6 +3032,15 @@
                 e.preventDefault();
                 e.stopPropagation();
                 if (typeof window.toggleAiSettings === 'function') window.toggleAiSettings(true);
+            });
+        }
+        var spanel = document.getElementById('aiSettingsPanel');
+        if (spanel) {
+            spanel.addEventListener('click', function(ev) {
+                var tgt = ev.target && ev.target.closest('[data-ai-edit-profile]');
+                if (!tgt || !spanel.contains(tgt)) return;
+                var pid = tgt.getAttribute('data-ai-edit-profile');
+                if (pid && typeof window.openAiAddModelModal === 'function') window.openAiAddModelModal(true, pid);
             });
         }
         document.addEventListener('keydown', function(e) {
@@ -2970,42 +3133,10 @@
         });
         updateBrowserStatusLine();
         if (typeof applyUiLang === 'function') applyUiLang();
-        var bCode = document.getElementById('aiBtnViewCode');
-        if (bCode) bCode.addEventListener('click', function() { window.openAiCodeModal(); });
-        var bSav = document.getElementById('aiBtnSaveDraft');
-        if (bSav) bSav.addEventListener('click', function() { aiSaveDraftLocal(); });
         var bUn = document.getElementById('aiBtnUndo');
         if (bUn) bUn.addEventListener('click', function() { aiUndo(); });
-        var bRe = document.getElementById('aiBtnRedo');
-        if (bRe) bRe.addEventListener('click', function() { aiRedo(); });
-        var bPa = document.getElementById('aiBtnParams');
-        if (bPa) bPa.addEventListener('click', function() { aiShowParamsHelp(); });
-        function restoreAiSessionFromStorage() {
-            if (!window.HuFirstAiAssistant || !HuFirstAiAssistant.loadStudioSession) return;
-            var s = HuFirstAiAssistant.loadStudioSession();
-            if (!s || !s.plan) { alert('无可用会话。请先在本页成功「生成用例」或「优化」一次（会话存在未关闭标签的 sessionStorage 中）。'); return; }
-            try { if (typeof pushUndoSnapshot === 'function') pushUndoSnapshot(); } catch (e) {}
-            latestAiPlan = s.plan;
-            if (s.history && s.history.length) renderAiChatFromMessages(s.history);
-            renderAiPreview(latestAiPlan);
-            if (s.target_page_url) {
-                var ta = document.getElementById('aiTargetUrlInput');
-                if (ta) ta.value = s.target_page_url;
-            }
-            if (s.project_id) {
-                var sp = document.getElementById('aiProjectSelect');
-                if (sp) {
-                    sp.value = String(s.project_id);
-                    currentProjectId = s.project_id;
-                    var o = sp.options[sp.selectedIndex];
-                    currentProjectName = o ? o.text : '';
-                }
-            }
-            appendAiChat('assistant', '已从本标签的 sessionStorage 恢复计划与对话。');
-            setAgentStatusLine('已恢复会话草稿');
-        }
-        var bRss = document.getElementById('aiBtnRestoreSession');
-        if (bRss) bRss.addEventListener('click', function() { restoreAiSessionFromStorage(); });
+        var bClrChat = document.getElementById('aiBtnClearChat');
+        if (bClrChat) bClrChat.addEventListener('click', function() { if (typeof window.aiClearChatHistory === 'function') window.aiClearChatHistory(); });
         var bRun = document.getElementById('aiBtnRunAgent');
         if (bRun) bRun.addEventListener('click', function() { aiRunAgentWorkflow(); });
         if (msg) msg.addEventListener('keydown', function(e) {
@@ -3014,11 +3145,19 @@
                 if (typeof aiGeneratePreview === 'function') aiGeneratePreview();
             }
         });
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') window.closeAiCodeModal();
-        });
         var ap = document.getElementById('aiAddProvider');
         if (ap) ap.addEventListener('change', syncAiAddProviderFields);
+        var subAdd = document.getElementById('aiAddModalSubmitBtn');
+        if (subAdd) {
+            subAdd.addEventListener('click', function(ev) {
+                ev.preventDefault();
+                ev.stopPropagation();
+                if (typeof window.submitAiAddModel === 'function') {
+                    var pr = window.submitAiAddModel();
+                    if (pr && typeof pr.catch === 'function') pr.catch(function(err) { console.error(err); });
+                }
+            });
+        }
         document.addEventListener('pagehide', function() { flushPersistAiStudioToSession(); });
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) flushPersistAiStudioToSession();

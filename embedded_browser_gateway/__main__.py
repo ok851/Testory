@@ -5,8 +5,18 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 import uvicorn
+
+try:
+    from dotenv import load_dotenv
+
+    _env = Path(__file__).resolve().parent.parent / ".env"
+    if _env.is_file():
+        load_dotenv(_env, encoding="utf-8-sig")
+except ImportError:
+    pass
 
 logging.basicConfig(level=os.environ.get("EMBEDDED_BROWSER_LOG_LEVEL", "INFO"))
 

@@ -297,8 +297,8 @@ def _format_summary_lines(
     summary_lines.append(f"探测 URL: {url}")
     summary_lines.append(
         "下列为页面内可见可交互元素（含 iframe / Shadow 内）。"
-        "每行 [n] 为 probe_index；生成步骤时可填 probe_index=n 以绑定该控件；"
-        "selector 请优先使用 id/css/placeholder/aria 中出现的值，勿编造 class。"
+        "每行 [n] 为 probe_index；生成步骤时应优先填 probe_index=n，且 selector_value 必须与该行 recommended=() 内字符串完全一致；"
+        "禁止编造未出现在本列表中的 class 或 xpath。"
     )
     for row in registry[:max_lines]:
         parts = [
@@ -767,6 +767,9 @@ def validate_plan_locators(url: str, steps: List[Dict[str, Any]]) -> Tuple[List[
                         continue
                     action = str(step.get("action") or "").strip().lower()
                     if action in ("navigate", "wait", ""):
+                        continue
+                    ct_assert = str(step.get("compare_type") or "").strip().lower()
+                    if action == "assert" and ct_assert in ("url_equals", "url_contains"):
                         continue
                     stype = str(step.get("selector_type") or "css").strip().lower()
                     sval = str(step.get("selector_value") or "").strip()

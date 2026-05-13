@@ -60,6 +60,40 @@ def _norm_click_repeat_count_pa(raw) -> int:
     return max(1, min(n, 99))
 
 
+def _url_assert_variants_pa(s: str) -> tuple:
+    """地址栏与预期可能一方为百分号编码、一方为明文，比对时同时尝试 decode 形态。"""
+    from urllib.parse import unquote
+
+    s = (s or "").strip()
+    if not s:
+        return ("",)
+    u = unquote(s)
+    out = []
+    for x in (s, u):
+        if x not in out:
+            out.append(x)
+    return tuple(out)
+
+
+def _url_assert_matches_pa(actual_url: str, expected: str, ctype: str) -> bool:
+    ctype = (ctype or "").lower()
+    av = _url_assert_variants_pa(actual_url)
+    ev = _url_assert_variants_pa(expected)
+    if ctype == "url_equals":
+        for a in av:
+            for e in ev:
+                if a == e:
+                    return True
+        return False
+    if ctype == "url_contains":
+        for a in av:
+            for e in ev:
+                if e and e in a:
+                    return True
+        return False
+    return False
+
+
 def is_execution_in_progress():
     """检查是否有测试用例正在执行"""
     global _currently_executing
@@ -8715,7 +8749,8 @@ class PlaywrightAutomation:
                     continue
                 elif action == "verify":
                     selector = step.get("selector")
-                    verify_type = step.get("verify_type", "auto")
+                    vt_raw = step.get("verify_type") or step.get("input_value") or "auto"
+                    verify_type = (str(vt_raw).strip().lower() or "auto") if str(vt_raw).strip() else "auto"
                     expected_text = (step.get("input_value") or step.get("text") or "").strip()
                     uat_logger.info(f"🔍 [VERIFY_DEBUG] 开始执行验证操作,选择器: {selector}, 验证类型: {verify_type}")
                     step_error = None
@@ -8788,6 +8823,51 @@ class PlaywrightAutomation:
                         results.append({"status": "error", "step": step, "error": step_error})
                     
                     # 跳过后续的通用处理
+                    continue
+                elif action == "assert":
+                    selector = (step.get("selector") or "").strip()
+                    ctype = (step.get("compare_type") or "text_contains").strip().lower()
+                    expected = (step.get("input_value") or step.get("text") or "").strip()
+                    uat_logger.info(f"🔍 [ASSERT_DEBUG] assert 步骤 type={ctype} selector={selector!r} expected={expected[:120]!r}")
+                    if ctype in ("url_equals", "url_contains"):
+                        url = target_page.url if target_page else ""
+                        if ctype == "url_equals" and not _url_assert_matches_pa(url, expected, "url_equals"):
+                            raise Exception(f"URL 断言失败: 实际 {url!r} 预期 {expected!r}")
+                        if ctype == "url_contains" and expected and not _url_assert_matches_pa(url, expected, "url_contains"):
+                            raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
+                    elif selector:
+                        actual = await self.extract_element_text(
+                            selector,
+                            step.get("selector_type", "css"),
+                            step.get("iframe_selector") or "",
+                            page=target_page,
+                        )
+                        actual = (actual or "").strip()
+                        if ctype == "text_equals" and actual != expected:
+                            raise Exception(f"文本断言失败: 实际 {actual[:200]!r} 预期 {expected!r}")
+                        if ctype == "text_contains" and expected and expected not in actual:
+                            raise Exception(f"文本断言失败: 实际文本未包含预期 {expected!r}")
+                        if ctype == "text_regex":
+                            if not expected or not re.search(expected, actual):
+                                raise Exception(f"正则断言失败: pattern={expected!r} actual={actual[:200]!r}")
+                        if ctype == "element_exists":
+                            await self.wait_for_selector(
+                                selector, 5000, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page
+                            )
+                        elif ctype == "element_visible":
+                            await self.wait_for_element_visible(selector, 5000, step.get("selector_type", "css"), page=target_page)
+                        elif ctype not in (
+                            "text_equals",
+                            "text_contains",
+                            "text_regex",
+                            "element_exists",
+                            "element_visible",
+                        ):
+                            raise Exception(f"不支持的 assert compare_type: {ctype}")
+                    else:
+                        raise Exception("assert 步骤缺少 selector（url 类断言除外）")
+                    uat_logger.info(f"✅ [ASSERT_DEBUG] 断言步骤成功")
+                    results.append({"status": "success", "step": step})
                     continue
                 if target_page:
                     try:
@@ -8968,9 +9048,16 @@ class PlaywrightAutomation:
                     exec_step["iframe_selector"] = step.get("iframe_selector")
                 elif step["action"] == "verify":
                     exec_step["selector"] = step["selector_value"]
-                    exec_step["verify_type"] = step.get("verify_type", "auto")
+                    vt = step.get("verify_type") or step.get("input_value") or "auto"
+                    exec_step["verify_type"] = (str(vt).strip().lower() or "auto") if str(vt).strip() else "auto"
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
+                elif step["action"] == "assert":
+                    exec_step["selector"] = step["selector_value"]
+                    exec_step["selector_type"] = step.get("selector_type", "css")
+                    exec_step["iframe_selector"] = step.get("iframe_selector")
+                    exec_step["input_value"] = step.get("input_value", "")
+                    exec_step["compare_type"] = step.get("compare_type", "text_contains")
                 if step.get("description"):
                     exec_step["description"] = step["description"]
                 execution_steps.append(exec_step)
@@ -9482,10 +9569,51 @@ class PlaywrightAutomation:
                     
             elif action == "verify":
                 selector = step.get("selector", "")
-                verify_type = step.get("verify_type", "visible")
+                vt_raw = step.get("verify_type") or step.get("input_value") or "auto"
+                verify_type = (str(vt_raw).strip().lower() or "auto") if str(vt_raw).strip() else "auto"
                 selector_type = step.get("selector_type", "css")
                 iframe_selector = step.get("iframe_selector", "")
                 await self.verify_element(selector, verify_type, selector_type, iframe_selector, page=target_page)
+                results.append({"status": "success", "step": step})
+
+            elif action == "assert":
+                selector = (step.get("selector") or "").strip()
+                ctype = (step.get("compare_type") or "text_contains").strip().lower()
+                expected = (step.get("input_value") or step.get("text") or "").strip()
+                selector_type = step.get("selector_type", "css")
+                iframe_selector = step.get("iframe_selector", "")
+                if ctype in ("url_equals", "url_contains"):
+                    url = target_page.url if target_page else ""
+                    if ctype == "url_equals" and not _url_assert_matches_pa(url, expected, "url_equals"):
+                        raise Exception(f"URL 断言失败: 实际 {url!r} 预期 {expected!r}")
+                    if ctype == "url_contains" and expected and not _url_assert_matches_pa(url, expected, "url_contains"):
+                        raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
+                elif selector:
+                    actual = await self.extract_element_text(
+                        selector, selector_type, iframe_selector, page=target_page
+                    )
+                    actual = (actual or "").strip()
+                    if ctype == "text_equals" and actual != expected:
+                        raise Exception(f"文本断言失败: 实际 {actual[:200]!r} 预期 {expected!r}")
+                    if ctype == "text_contains" and expected and expected not in actual:
+                        raise Exception(f"文本断言失败: 实际文本未包含预期 {expected!r}")
+                    if ctype == "text_regex":
+                        if not expected or not re.search(expected, actual):
+                            raise Exception(f"正则断言失败: pattern={expected!r} actual={actual[:200]!r}")
+                    if ctype == "element_exists":
+                        await self.wait_for_selector(selector, 5000, selector_type, iframe_selector, page=target_page)
+                    elif ctype == "element_visible":
+                        await self.wait_for_element_visible(selector, 5000, selector_type, page=target_page)
+                    elif ctype not in (
+                        "text_equals",
+                        "text_contains",
+                        "text_regex",
+                        "element_exists",
+                        "element_visible",
+                    ):
+                        raise Exception(f"不支持的 assert compare_type: {ctype}")
+                else:
+                    raise Exception("assert 步骤缺少 selector（url 类断言除外）")
                 results.append({"status": "success", "step": step})
                 
             elif action == "hover":

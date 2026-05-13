@@ -7,7 +7,7 @@ WebSocket 对话（与 embedded_browser_gateway 的画布 WS 分离）：
   /api/ai/task/chat-async + GET /api/ai/task/job/<id> 轮询，避免与当前 WSGI 部署强耦合。
 
 渐进式「对话→执行」：见 POST /api/ai/agent/gateway-stream（SSE），由 agent_intent 做轻量意图识别，
-在主 Playwright 会话逐步执行；AI 测试页左栏「识别并执行」按钮已对接。
+在 **HuFirst 后台 Playwright 自动化会话** 或（若带 embedded_session_id）**远程画布同一会话**中逐步执行；左栏「识别并执行」已对接。
 """
 from __future__ import annotations
 

@@ -27,6 +27,46 @@ def embedded_gateway_enabled() -> bool:
     return bool(base and secret)
 
 
+def _squash_gateway_http_error_body(raw: str) -> str:
+    """非 JSON 的网关错误体（常为 HTML 500）转成可读说明，避免 UI 只显示 Internal Server Error。"""
+    s = (raw or "").strip()
+    if not s:
+        return "网关返回错误（无正文）"
+    low = s.lower()
+    if s.startswith("<") or "<!doctype" in low[:120] or "<html" in low[:120]:
+        return (
+            "嵌入式网关返回了 HTML 错误页（多为网关内异常）。"
+            "请查看运行 python -m embedded_browser_gateway 的终端中的报错栈。"
+        )
+    if len(s) > 480:
+        return s[:480] + "…"
+    return s
+
+
+def _embedded_gateway_friendly_error(exc_str: str, base_url: str) -> str:
+    """将 urllib 底层异常转为用户可操作的说明（不改变 HTTP 成功路径）。"""
+    s = (exc_str or "").strip()
+    low = s.lower()
+    # Windows: 10061；Linux 常见 111 Connection refused
+    if (
+        "10061" in s
+        or "111" in s
+        or "actively refused" in low
+        or "connection refused" in low
+        or "拒绝" in s
+    ):
+        return (
+            f"无法连接嵌入式浏览器网关（{base_url}）：目标计算机积极拒绝连接。"
+            "请在本机**另开终端**，在项目根目录执行 `python -m embedded_browser_gateway` 启动网关进程，"
+            "并确认 .env 中 EMBEDDED_BROWSER_GATEWAY_URL 与网关监听端口一致（默认 http://127.0.0.1:8765）。"
+        )
+    if "timed out" in low or "timeout" in low:
+        return (
+            f"连接网关超时（{base_url}）。请确认网关进程已启动且未被防火墙拦截。"
+        )
+    return s
+
+
 def embedded_gateway_json(
     method: str,
     path: str,
@@ -78,6 +118,7 @@ def embedded_gateway_json(
                 detail = detail[0].get("msg", raw)
             return j, str(detail or raw or e.code)
         except Exception:
-            return None, raw or str(e.code)
+            return None, _squash_gateway_http_error_body(raw or str(e.code))
     except Exception as e:
-        return None, str(e)
+        raw = str(e)
+        return None, _embedded_gateway_friendly_error(raw, base)

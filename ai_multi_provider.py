@@ -46,7 +46,9 @@ def openai_compatible_chat(
                 "content": (
                     "You are a senior QA engineer. Reply with exactly one JSON object only—no markdown fences, "
                     "no commentary. First non-whitespace character must be '{'. "
-                    "Schema: UI test plan with case_name, case_url, description, precondition, expected_result, steps[]."
+                    "Schema: UI test plan with case_name, case_url, description, precondition, expected_result, steps[]. "
+                    "Steps: use action assert (+compare_type) for text/URL expectations; use verify only for captcha/human checks with input_value auto|slider|image|visible|exist|clickable. "
+                    "Selectors must be real css/xpath from the page, never snapshot line numbers alone."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -244,13 +246,22 @@ def google_gemini_chat(
 def _raise_http(label: str, e: RequestException) -> None:
     detail = str(e).strip() or type(e).__name__
     response = getattr(e, "response", None)
+    hint = ""
     if response is not None:
         try:
             body = (response.text or "").strip().replace("\n", " ")[:480]
             detail = f"HTTP {response.status_code}" + (f": {body}" if body else "")
+            low = body.lower()
+            sc = int(response.status_code or 0)
+            if sc == 402 or (sc in (400, 403) and "insufficient balance" in low):
+                hint = "（服务商提示余额不足或欠费：请到对应平台控制台充值/检查账单后再试。）"
+            elif sc == 401:
+                hint = "（请核对 API Key 是否正确、是否已启用或权限是否足够。）"
+            elif sc == 429:
+                hint = "（触发限流或配额：请稍后重试或升级套餐。）"
         except Exception:
             detail = f"HTTP {response.status_code}: {detail}"
-    raise ValueError(f"{label} 请求失败：{detail}") from e
+    raise ValueError(f"{label} 请求失败：{detail}{hint}") from e
 
 
 def dispatch_chat(

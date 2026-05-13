@@ -5,6 +5,7 @@ AI 用例计划步骤的统一规范化入口：所有来自模型的 steps 在�
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -14,8 +15,146 @@ def _str(value: Any) -> str:
     return str(value).strip()
 
 
+# 单独标签名、无 # . [ 组合符时极易误点多个元素，平台不鼓励作为最终定位
+_OVERLY_BROAD_SINGLE_TAGS = frozenset(
+    {
+        "button",
+        "input",
+        "a",
+        "div",
+        "span",
+        "form",
+        "select",
+        "label",
+        "img",
+        "li",
+        "ul",
+        "ol",
+        "td",
+        "tr",
+        "table",
+        "p",
+        "section",
+        "article",
+        "html",
+        "body",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+    }
+)
+
+
+def is_overly_broad_css_selector(selector_value: str) -> bool:
+    """是否为「仅标签名」等过宽 CSS（易与平台稳定定位要求不符）。"""
+    s = _str(selector_value)
+    if not s:
+        return False
+    low = s.lower()
+    if low.startswith(("xpath:", "//", "xpath=", "text=", "role=")):
+        return False
+    if any(c in s for c in " \t\n>+~"):
+        return False
+    if "#" in s or "[" in s:
+        return False
+    if "." in s:
+        return False
+    return low in _OVERLY_BROAD_SINGLE_TAGS
+
+
+def _looks_like_url_bar_expected_text(iv: str) -> bool:
+    v = _str(iv)
+    if not v:
+        return False
+    if v.startswith(("http://", "https://")):
+        return True
+    if re.search(r"[%][0-9A-Fa-f]{2}", v) and ("=" in v or "&" in v):
+        return True
+    if re.match(r"^[a-z_][a-z0-9_]*=", v, re.I):
+        return True
+    return False
+
+
+def _description_suggests_url_assertion(desc: str) -> bool:
+    d = desc or ""
+    if not d.strip():
+        return False
+    dl = d.lower()
+    if "url" in dl or "网址" in d or "地址栏" in d or "页面地址" in d:
+        if any(k in d for k in ("验证", "检查", "断言", "确认")) or any(
+            k in dl for k in ("verify", "assert", "check")
+        ):
+            return True
+        if any(k in d for k in ("包含", "等于", "一致")):
+            return True
+        if "encoded" in dl or "query" in dl or "address" in dl or "href" in dl:
+            return True
+    return False
+
+
+def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
+    """
+    在归一化/探测 clamp 之前就地修正常见「模型格式」问题：
+    - 校验地址栏 / URL / 查询串却使用 text_equals + CSS → 改为 url_contains 并清空 selector；
+    - url_* 断言若仍带 selector → 清空以符合本平台执行路径。
+    返回人类可读告警列表（可并入 API warnings）。
+    """
+    warns: List[str] = []
+    if not isinstance(steps, list):
+        return warns
+    for idx, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        action = _str(step.get("action")).lower()
+        if action != "assert":
+            continue
+        raw_ct = _str(step.get("compare_type")).lower() or "text_contains"
+        if raw_ct == "equals":
+            ct = "text_equals"
+        elif raw_ct == "contains":
+            ct = "text_contains"
+        else:
+            ct = raw_ct
+        iv = _str(step.get("input_value"))
+        desc = _str(step.get("description"))
+        sv = _str(step.get("selector_value"))
+
+        url_cts = ("url_equals", "url_contains")
+        if ct in url_cts:
+            if sv or _str(step.get("selector_type")):
+                step["selector_value"] = ""
+                step["selector_type"] = ""
+                step.pop("locator_candidates", None)
+                warns.append(f"第{idx}步 URL 断言已清空多余 selector，以符合平台格式")
+            continue
+
+        text_like = ("text_equals", "text_contains", "text_regex", "")
+        if ct not in text_like:
+            continue
+        if not (_description_suggests_url_assertion(desc) or _looks_like_url_bar_expected_text(iv)):
+            continue
+        step["compare_type"] = "url_contains"
+        step["selector_value"] = ""
+        step["selector_type"] = ""
+        step.pop("locator_candidates", None)
+        # wd= 百分号编码 → 解码为可读关键词（执行层仍比对原始/解码 URL 多种形态）
+        try:
+            from urllib.parse import unquote
+
+            m = re.match(r"^(wd|word|query|q)=([^&]+)\s*$", iv, re.I)
+            if m:
+                dec = unquote(m.group(2)).strip()
+                if dec and "%" not in dec:
+                    step["input_value"] = dec
+        except Exception:
+            pass
+        warns.append(f"第{idx}步已改为 URL 断言(compare_type=url_contains)，selector 已清空")
+    return warns
+
+
 def normalize_ai_step(step: dict) -> dict:
-    allowed_actions = {"navigate", "click", "input", "wait", "verify", "extract_text"}
+    allowed_actions = {"navigate", "click", "input", "wait", "verify", "extract_text", "assert"}
     action = _str(step.get("action")).lower()
     if action not in allowed_actions:
         action = "click"
@@ -23,6 +162,7 @@ def normalize_ai_step(step: dict) -> dict:
     selector_value = _str(step.get("selector_value"))
     input_value = _str(step.get("input_value"))
     description = _str(step.get("description"))
+    compare_type = _str(step.get("compare_type"))
     lc = step.get("locator_candidates")
     if lc is not None and not isinstance(lc, str):
         try:
@@ -40,6 +180,8 @@ def normalize_ai_step(step: dict) -> dict:
         "input_value": input_value,
         "description": description,
     }
+    if compare_type and action == "assert":
+        out["compare_type"] = compare_type
     if lc:
         out["locator_candidates"] = lc
     return out
@@ -63,6 +205,7 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
             step["selector_type"],
             step["selector_value"],
             step["input_value"],
+            _str(step.get("compare_type")),
         )
         if key in seen:
             warnings.append(f"检测到重复步骤并已去重: {step['action']} {step['selector_value']}")
@@ -76,8 +219,12 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
             warnings.append("建议首步使用 navigate 进入目标页面，以提升执行稳定性。")
 
     for idx, step in enumerate(clean_steps, start=1):
-        if step["action"] in {"click", "input", "verify", "extract_text"} and not step["selector_value"]:
-            warnings.append(f"第{idx}步缺少 selector_value，运行时可能失败。")
+        if step["action"] in {"click", "input", "verify", "extract_text", "assert"} and not step["selector_value"]:
+            ct = _str(step.get("compare_type")).lower()
+            if step["action"] == "assert" and ct in ("url_equals", "url_contains"):
+                pass
+            else:
+                warnings.append(f"第{idx}步缺少 selector_value，运行时可能失败。")
         if step["action"] == "input" and not step["input_value"]:
             warnings.append(f"第{idx}步 input 未填写输入值，请在步骤编辑中补充或重新生成。")
         if step["action"] == "navigate" and not step["input_value"]:
@@ -103,7 +250,9 @@ def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Op
     steps = plan.get("steps")
     if not isinstance(steps, list):
         return plan, []
+    repair_warns = repair_raw_ai_steps_for_platform(steps)
     clean, warnings = dedupe_and_validate_ai_steps(steps)
+    warnings = list(repair_warns) + list(warnings)
     plan["steps"] = clean
     meta = plan.get("meta")
     if not isinstance(meta, dict):
@@ -111,7 +260,15 @@ def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Op
         plan["meta"] = meta
     if warnings:
         meta["normalization_warnings"] = warnings
-    return plan, warnings
+    extra: List[str] = []
+    sr = meta.get("step_repair_warnings")
+    if isinstance(sr, list):
+        extra.extend(str(x) for x in sr if str(x).strip())
+    cw = meta.get("selector_clamp_warnings")
+    if isinstance(cw, list):
+        extra = [str(x) for x in cw if str(x).strip()]
+    merged_warnings = extra + warnings
+    return plan, merged_warnings
 
 
 def _wait_ms_from_ai_input(input_value: str) -> int:
@@ -204,15 +361,33 @@ def ai_plan_steps_to_playwright_script_steps(steps: Any) -> List[Dict[str, Any]]
         if action == "verify":
             if not sv:
                 continue
+            vt = (iv or "auto").strip().lower()
+            if vt not in ("auto", "slider", "image", "visible", "exist", "clickable"):
+                vt = "auto"
             out.append(
                 {
                     "action": "verify",
                     "selector": sv,
                     "selector_type": st,
                     "iframe_selector": "",
-                    "verify_type": "visible",
+                    "verify_type": vt,
                     "input_value": iv,
                     "text": iv,
+                    "description": desc,
+                }
+            )
+            continue
+        if action == "assert":
+            ct = _str(step.get("compare_type")).lower() or "text_contains"
+            out.append(
+                {
+                    "action": "assert",
+                    "selector": sv,
+                    "selector_type": st,
+                    "iframe_selector": "",
+                    "input_value": iv,
+                    "text": iv,
+                    "compare_type": ct,
                     "description": desc,
                 }
             )

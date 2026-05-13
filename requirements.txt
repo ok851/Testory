@@ -1,3 +1,4 @@
+python-dotenv==1.0.1
 Flask==2.3.3
 fastapi==0.110.0
 uvicorn[standard]==0.27.1
@@ -5,8 +6,9 @@ Flask-CORS==4.0.0
 Flask-Login==0.6.3
 Werkzeug==3.0.1
 playwright==1.40.0
-opencv-python==4.8.1.78
-numpy==1.24.3
+# numpy 1.24.x has no cp312 wheels → pip builds from sdist and hits removed stdlib distutils on Python 3.12.
+opencv-python==4.10.0.84
+numpy==1.26.4
 APScheduler==3.10.4
 openpyxl==3.1.2
 reportlab==4.4.10

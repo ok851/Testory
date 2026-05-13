@@ -1,8 +1,22 @@
+import os
+
+try:
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.is_file():
+        load_dotenv(_env_path, encoding="utf-8-sig")
+    else:
+        load_dotenv(encoding="utf-8-sig")
+except ImportError:
+    pass
+
 from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for, Response, stream_with_context
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-import os
 import sys
 import time
 import shlex
@@ -80,6 +94,7 @@ from playwright_automation import (
     sync_wait_for_selector,
     sync_wait_for_timeout,
     worker,
+    _url_assert_matches_pa,
 )
 from playwright_codegen_import import (
     enrich_steps_with_xpath_priority,
@@ -199,6 +214,23 @@ def api_error_handler(func):
             return jsonify({"success": False, "error": detail}), 500
     return wrapper
 
+
+def _safe_response_payload_for_api_log(rv):
+    """供 log_api_request 使用：勿对 SSE 等流式响应调用 get_json（可能阻塞或抛错）。"""
+    if rv is None:
+        return None
+    try:
+        ct = (rv.headers.get("Content-Type") or getattr(rv, "mimetype", None) or "").lower()
+    except Exception:
+        ct = ""
+    if "event-stream" in ct or "text/event-stream" in ct:
+        return {"_type": "sse"}
+    try:
+        return rv.get_json(silent=True)
+    except Exception:
+        return None
+
+
 # API请求日志装饰器
 def log_api_request(func):
     @functools.wraps(func)
@@ -217,12 +249,21 @@ def log_api_request(func):
         # 记录响应
         try:
             if isinstance(response, tuple):
-                uat_logger.log_api_response(func.__name__, response[1], response[0].get_json())
+                rv, status = response[0], response[1]
+                uat_logger.log_api_response(
+                    func.__name__, status, _safe_response_payload_for_api_log(rv)
+                )
             else:
-                uat_logger.log_api_response(func.__name__, 200, response.get_json())
+                sc = getattr(response, "status_code", None) or 200
+                uat_logger.log_api_response(
+                    func.__name__, sc, _safe_response_payload_for_api_log(response)
+                )
         except Exception:
             # 如果响应无法解析为JSON，记录基本信息
-            status_code = response[1] if isinstance(response, tuple) else 200
+            if isinstance(response, tuple):
+                status_code = response[1]
+            else:
+                status_code = getattr(response, "status_code", None) or 200
             uat_logger.log_api_response(func.__name__, status_code, None)
         return response
     return wrapper
@@ -631,6 +672,9 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
     crc = 1
     if action == "click":
         crc = _norm_click_repeat_count(step.get("click_repeat_count"))
+    cmp_out = "equals"
+    if action == "assert":
+        cmp_out = _ai_str(step.get("compare_type")) or "text_contains"
     return {
         "case_id": case_id,
         "action": action,
@@ -645,7 +689,7 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         "url": url_col,
         "enter_iframe": False,
         "iframe_selector": "",
-        "compare_type": "equals",
+        "compare_type": cmp_out,
         "locator_candidates": lc,
         "click_repeat_count": crc,
     }
@@ -1073,11 +1117,11 @@ def create_case_v2():
     """旧版独立建用例页；模板已移除，跳转到项目列表（从项目进入「用例管理」创建用例）。"""
     return redirect(url_for('list_projects'))
 
-# AI 测试工作台（本地模型 + 内置浏览器与 Playwright 会话）
+# AI 测试工作台（本地模型 + 内嵌预览：与后台 Playwright 自动化会话经 /api/navigate 同步）
 @app.route('/ai-test')
 @login_required
 def ai_test_page():
-    """AI 生成测试步骤；与内置浏览器共用 Playwright 会话。"""
+    """AI 生成测试步骤；内嵌区与后台 Playwright 会话同步（可选远程画布为另一进程）。"""
     from ai_chat_tool_loop import ai_chat_tools_enabled
     from openclaw_gateway_client import OpenClawGatewayClient
 
@@ -1969,6 +2013,70 @@ def api_delete_ai_model():
     })
 
 
+@app.route('/api/ai/models/profile', methods=['PUT', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_update_ai_profile():
+    """更新已有模型配置（换 Key、改 Base URL、同厂商下换模型名等），无需删除后重建。"""
+    data = request.get_json(silent=True) or {}
+    profile_id = (data.get('profile_id') or '').strip()
+    if not profile_id:
+        return jsonify({'success': False, 'error': '缺少 profile_id'}), 400
+    cfg = _load_ai_model_config()
+    profiles = list(cfg.get('profiles') or [])
+    idx = next((i for i, p in enumerate(profiles) if p.get('id') == profile_id), -1)
+    if idx < 0:
+        return jsonify({'success': False, 'error': '未找到该模型配置'}), 404
+    p = dict(profiles[idx])
+    provider = (p.get('provider') or '').strip()
+    cmeta = _catalog_provider_meta(provider)
+    if not cmeta:
+        return jsonify({'success': False, 'error': f'未知提供商: {provider}'}), 400
+
+    if 'label' in data:
+        lab = _ai_str(data.get('label'))
+        if lab:
+            p['label'] = lab
+
+    if 'model_type' in data:
+        mt = _ai_str(data.get('model_type'))
+        if mt:
+            p['model_type'] = mt
+
+    if 'model_id' in data:
+        ok, model_id = _validate_profile_model_id(data.get('model_id') or '')
+        if not ok:
+            return jsonify({'success': False, 'error': model_id}), 400
+        p['model_id'] = model_id
+
+    if 'base_url' in data:
+        bu = data.get('base_url')
+        bu = bu.strip() if isinstance(bu, str) else ''
+        if not bu:
+            bu = (cmeta.get('default_base_url') or '').strip()
+        p['base_url'] = bu
+
+    api_key_in = data.get('api_key')
+    if isinstance(api_key_in, str) and api_key_in.strip():
+        p['api_key'] = api_key_in.strip()
+    elif bool(cmeta.get('requires_api_key')) and provider != 'ollama':
+        existing = (p.get('api_key') or '').strip() if isinstance(p.get('api_key'), str) else ''
+        if not existing:
+            return jsonify({'success': False, 'error': '该提供商需要 API 密钥，请填写新的密钥'}), 400
+
+    profiles[idx] = p
+    cfg['profiles'] = profiles
+    cfg['version'] = 2
+    _save_ai_model_config(cfg)
+    return jsonify({
+        'success': True,
+        'active_profile_id': cfg.get('active_profile_id'),
+        'profiles': [_mask_profile_for_api(x) for x in profiles],
+    })
+
+
 # --- AI 后台任务：用户离开 AI 测试页后推理在服务端继续（适用于单进程/单 Gunicorn worker；多 worker 需外存队列） ---
 _AI_BG_JOBS: dict = {}
 _AI_BG_LOCK = threading.Lock()
@@ -1986,6 +2094,94 @@ def _ai_bg_prune_locked():
             break
     for jid in dead:
         _AI_BG_JOBS.pop(jid, None)
+
+
+def _ai_url_probe_disabled() -> bool:
+    v = (os.environ.get("LOCAL_AI_SKIP_URL_PROBE") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _ai_main_session_dom_pack(target_page_url: str, *, strict: bool):
+    """
+    在主 Playwright 会话中打开 URL 并抓取可交互结构，供本地模型绑定真实 DOM。
+    strict=True：任一步失败则返回 (None,..., error)；strict=False：失败时记录日志并返回错误文案供告警（仍可继续生成）。
+    """
+    from ai_page_probe import probe_registry_from_interactive_snapshot
+
+    url = (target_page_url or "").strip()
+    if not url:
+        e = "目标 URL 为空"
+        return None, None, None, None, (e if strict else "")
+
+    try:
+        sync_start_browser(headless=True)
+    except Exception:
+        pass
+    if not sync_automation_session_usable():
+        e = "主浏览器未就绪，无法打开页面抓取结构。请确认 Playwright 已安装，或先在界面中启动主浏览器。"
+        if strict:
+            return None, None, None, None, e
+        uat_logger.warning("LOCAL_AI url probe skipped: %s", e)
+        return None, None, None, None, e
+
+    try:
+        sync_navigate_to(url)
+    except Exception as ex:
+        e = f"导航失败：{ex}"
+        if strict:
+            return None, None, None, None, e
+        uat_logger.warning("LOCAL_AI url probe: %s", e)
+        return None, None, None, None, e
+
+    try:
+        snap = sync_get_interactive_page_snapshot(150)
+    except Exception as ex:
+        e = f"获取页面可交互结构失败：{ex}"
+        if strict:
+            return None, None, None, None, e
+        uat_logger.warning("LOCAL_AI url probe: %s", e)
+        return None, None, None, None, e
+
+    ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
+    probe_url = (pu or url).strip() or None
+    return snap, ps or None, pr if pr else None, probe_url, ""
+
+
+def _ai_embedded_run_script_steps_sequentially(user_id: int, embedded_sid: str, script_steps: list) -> list:
+    """
+    在远程画布会话中逐步调用网关 run-steps（每步单独请求），与 gateway-stream 一致，
+    便于 CDP screencast 在步骤间隙刷新 JPEG，实现「边看边跑」。
+    """
+    results = []
+    for st in script_steps:
+        j, err = embedded_gateway_json(
+            "POST",
+            f"/internal/session/{embedded_sid}/run-steps",
+            user_id=user_id,
+            body={"steps": [st]},
+            timeout_sec=180.0,
+        )
+        if err or not isinstance(j, dict) or not j.get("success"):
+            results.append(
+                {
+                    "status": "error",
+                    "step": st,
+                    "error": str(err or (j or {}).get("detail") or "远程执行请求失败"),
+                }
+            )
+            break
+        rs0 = (j.get("results") or [{}])[0]
+        if not rs0.get("ok"):
+            results.append(
+                {
+                    "status": "error",
+                    "step": st,
+                    "error": str(rs0.get("error") or "远程步骤失败"),
+                }
+            )
+            break
+        results.append({"status": "success", "step": st})
+    return results
 
 
 def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
@@ -2019,6 +2215,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
     probe_registry = None
     probe_url = (target_page_url or None) if not embedded_sid else None
     snap_data = None
+    dom_probe_warning = ""
 
     if embedded_sid:
         if not embedded_gateway_enabled():
@@ -2048,29 +2245,23 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
                 'error': '「运行」模式需要填写目标页面 URL，以便在主 Playwright 会话中打开页面并执行步骤。',
                 '_http': 400,
             }
-        try:
-            sync_start_browser(headless=True)
-        except Exception:
-            pass
-        if not sync_automation_session_usable():
-            return {
-                'success': False,
-                'error': '主浏览器未就绪，无法执行「运行」。请确认 Playwright 可用，或先在 AI 测试页点击「打开」后再试。',
-                '_http': 400,
-            }
-        try:
-            sync_navigate_to(target_page_url)
-        except Exception as e:
-            return {'success': False, 'error': f'导航到目标 URL 失败：{e}', '_http': 500}
-        try:
-            snap = sync_get_interactive_page_snapshot(150)
-        except Exception as e:
-            return {'success': False, 'error': f'获取页面可交互结构失败：{e}', '_http': 500}
-        snap_data = snap
-        ps, pr, pu = probe_registry_from_interactive_snapshot(snap)
-        page_snapshot = ps or None
-        probe_registry = pr if pr else None
-        probe_url = (pu or target_page_url).strip() or None
+        snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
+            target_page_url, strict=True
+        )
+        if err:
+            code = 400 if ("主浏览器未就绪" in err or "目标 URL 为空" in err) else 500
+            return {'success': False, 'error': err, '_http': code}
+    elif (target_page_url or "").strip() and not embedded_sid and not _ai_url_probe_disabled():
+        # 「仅规划」也抓取 LIVE：只要填写了目标 URL，就为主会话打开该页并探测，避免模型凭空写选择器。
+        snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
+            target_page_url, strict=False
+        )
+        if err:
+            dom_probe_warning = (
+                "未能抓取 LIVE 页面结构，选择器将未经页面探测约束："
+                f"{err} "
+                "（可配置 Playwright / 主浏览器，或使用「运行生成」强制探测。设置 LOCAL_AI_SKIP_URL_PROBE=1 可关闭自动打开浏览器。）"
+            )
 
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
     mem_ctx = _ai_memory_context_block(
@@ -2100,6 +2291,8 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         return {'success': False, 'error': str(e), '_http': 500}
 
     generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    if dom_probe_warning:
+        norm_warnings = [dom_probe_warning] + list(norm_warnings or [])
     log_ai_plan_to_audit(
         user_id,
         username,
@@ -2115,22 +2308,43 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         'warnings': norm_warnings,
     }
     if run_execute:
-        if embedded_sid:
-            out['execution'] = {
-                'ran': False,
-                'skipped_reason': (
-                    '已连接远程画布时，不在服务端主会话中自动执行步骤；'
-                    '已根据远程页结构生成用例。若需「边执行边记录」，请断开远程并在主浏览器中打开同一 URL 后使用「运行」。'
-                ),
-            }
-        else:
-            try:
-                script_steps = ai_plan_steps_to_playwright_script_steps(generated.get('steps') or [])
+        try:
+            script_steps = ai_plan_steps_to_playwright_script_steps(generated.get('steps') or [])
+            gate_url = (target_page_url or "").strip() or (generated.get("case_url") or "").strip()
+            if (
+                gate_url.startswith(("http://", "https://"))
+                and script_steps
+                and script_steps[0].get("action") != "navigate"
+            ):
+                script_steps = [
+                    {"action": "navigate", "url": gate_url, "description": "（运行）先打开目标页"},
+                ] + script_steps
+            max_n = int(os.environ.get("AI_AGENT_GATEWAY_MAX_STEPS", "40") or 40)
+            script_steps = script_steps[: max(1, max_n)]
+            if not script_steps:
+                out["execution"] = {
+                    "ran": False,
+                    "skipped_reason": "无可映射为脚本的原子步骤（请检查 navigate/选择器等）。",
+                    "results": [],
+                }
+            elif embedded_sid:
+                if not embedded_gateway_enabled():
+                    out["execution"] = {
+                        "ran": False,
+                        "skipped_reason": "远程 Chromium 网关未配置，无法在内置画布会话中执行。",
+                        "results": [],
+                    }
+                else:
+                    exec_results = _ai_embedded_run_script_steps_sequentially(
+                        user_id, embedded_sid, script_steps
+                    )
+                    out["execution"] = {"ran": True, "results": exec_results, "via": "embedded"}
+            else:
                 exec_results = sync_execute_script_steps(script_steps)
-                out['execution'] = {'ran': True, 'results': exec_results}
-            except Exception as e:
-                uat_logger.exception('ai run-and-record execution')
-                out['execution'] = {'ran': True, 'error': str(e), 'results': []}
+                out["execution"] = {"ran": True, "results": exec_results, "via": "main_playwright"}
+        except Exception as e:
+            uat_logger.exception("ai run-and-record execution")
+            out["execution"] = {"ran": True, "error": str(e), "results": []}
     return out
 
 
@@ -2161,6 +2375,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
     probe_registry = None
     probe_url = (target_page_url or None) if not embedded_sid else None
     snap_data = None
+    chat_dom_probe_warning = ""
 
     if embedded_sid:
         if not embedded_gateway_enabled():
@@ -2184,9 +2399,23 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         probe_registry = pr if pr else None
         probe_url = (pu or target_page_url).strip() or None
 
+    url_for_probe = (target_page_url or "").strip()
+    if not url_for_probe and isinstance(current_plan, dict):
+        url_for_probe = (current_plan.get("case_url") or "").strip()
+    if snap_data is None and url_for_probe and not embedded_sid and not _ai_url_probe_disabled():
+        snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
+            url_for_probe, strict=False
+        )
+        if err:
+            chat_dom_probe_warning = (
+                "未能抓取 LIVE 页面结构（对话优化）："
+                f"{err} "
+                "（选择器约束可能较弱；请填写目标 URL 或确认主浏览器可用。）"
+            )
+
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
     mem_ctx = _ai_memory_context_block(
-        user_id, message, probe_url=probe_url or target_page_url or "", project_name=project_name
+        user_id, message, probe_url=probe_url or url_for_probe or target_page_url or "", project_name=project_name
     )
     interaction_context = None
     _ic: dict = {}
@@ -2285,6 +2514,8 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         return {'success': False, 'error': str(e), '_http': 500}
 
     generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    if chat_dom_probe_warning:
+        norm_warnings = [chat_dom_probe_warning] + list(norm_warnings or [])
     log_ai_plan_to_audit(
         user_id,
         username,
@@ -2670,12 +2901,14 @@ def _agent_gateway_sse_line(obj: dict) -> str:
 @app.route('/api/ai/agent/gateway-stream', methods=['POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
 @log_api_request
 def api_ai_agent_gateway_stream():
     """
-    对话式网关（MVP）：解析左栏自然语言中的「安全子集」意图，按步在主 Playwright 会话中执行，
-    并通过 text/event-stream 推送进度（内置浏览器与主会话同步时可直接看到页面变化）。
-    意图：「执行当前预览」类 → 逐步执行 latestAiPlan.steps；「打开/导航 https://…」→ 仅导航。
+    对话式网关（MVP）：解析左栏自然语言中的「安全子集」意图，通过 text/event-stream 推送进度。
+    若请求携带有效的 embedded_session_id 且内嵌网关已配置，则在 **远程画布同一会话** 的 Chromium 中逐步执行（与 WebSocket 画面一致）；
+    否则在 HuFirst **后台 Playwright 自动化会话**中执行（与「打开」、/api/navigate、左侧 iframe 同步）。
+    若预览首步不是 navigate 但请求携带了目标 URL（或 plan.case_url），网关会自动插入一步导航再执行。
     复杂规划仍请用「生成用例 / 优化」或 /api/ai/task/chat。
     """
     from agent_intent import parse_agent_intent
@@ -2685,6 +2918,12 @@ def api_ai_agent_gateway_stream():
     plan = data.get('plan') if isinstance(data.get('plan'), dict) else {}
     steps = plan.get('steps') if isinstance(plan.get('steps'), list) else []
     has_steps = len(steps) > 0
+    gate_url = (data.get('target_page_url') or '').strip()
+    if not gate_url:
+        gate_url = (plan.get('case_url') or '').strip()
+    embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
+    use_embedded = bool(embedded_sid and embedded_gateway_enabled())
+    exec_uid = int(current_user.id)
 
     if (not message) and bool(data.get('force_execute')) and has_steps:
         kind, meta = 'execute_plan', {}
@@ -2702,13 +2941,40 @@ def api_ai_agent_gateway_stream():
             )
             yield _agent_gateway_sse_line({"t": "end"})
             return
-        try:
-            headless = resolve_playwright_headless(True)
-            sync_start_browser(headless=headless)
-        except Exception as e:
-            yield _agent_gateway_sse_line({"t": "error", "message": f"启动浏览器失败: {e}"})
-            yield _agent_gateway_sse_line({"t": "end"})
-            return
+
+        embed_exec = use_embedded and kind == "execute_plan"
+        embed_nav = use_embedded and kind == "navigate_url"
+        need_main_playwright = not (embed_exec or embed_nav)
+
+        if need_main_playwright:
+            try:
+                headless = resolve_playwright_headless(True)
+                sync_start_browser(headless=headless)
+            except Exception as e:
+                yield _agent_gateway_sse_line({"t": "error", "message": f"启动浏览器失败: {e}"})
+                yield _agent_gateway_sse_line({"t": "end"})
+                return
+            if not sync_automation_session_usable():
+                yield _agent_gateway_sse_line(
+                    {
+                        "t": "error",
+                        "message": (
+                            "后台 **Playwright 自动化会话** 未就绪。请先在 AI 测试页点击「打开」同步页面，"
+                            "或在部署环境完成 Playwright 内核安装（如：python -m playwright install）。"
+                            "（未连接远程画布时，识别并执行依赖此会话。）"
+                        ),
+                    }
+                )
+                yield _agent_gateway_sse_line({"t": "end"})
+                return
+
+        if embed_exec:
+            yield _agent_gateway_sse_line(
+                {
+                    "t": "log",
+                    "message": "已在远程画布会话中执行步骤（与当前画布 WebSocket 为同一 Chromium）。",
+                }
+            )
 
         if kind == "navigate_url":
             url = (meta.get("url") or "").strip()
@@ -2718,8 +2984,29 @@ def api_ai_agent_gateway_stream():
                 return
             yield _agent_gateway_sse_line({"t": "log", "message": f"导航 → {url}"})
             try:
-                sync_navigate_to(url)
-                yield _agent_gateway_sse_line({"t": "done", "message": "导航完成", "url": url})
+                if embed_nav:
+                    j, err = embedded_gateway_json(
+                        "POST",
+                        f"/internal/session/{embedded_sid}/run-steps",
+                        user_id=exec_uid,
+                        body={"steps": [{"action": "navigate", "url": url, "description": "gateway navigate"}]},
+                        timeout_sec=120.0,
+                    )
+                    if err or not isinstance(j, dict) or not j.get("success"):
+                        yield _agent_gateway_sse_line(
+                            {"t": "error", "message": str(err or (j or {}).get("detail") or "远程导航失败")}
+                        )
+                    else:
+                        rs = (j.get("results") or [{}])[0]
+                        if not rs.get("ok"):
+                            yield _agent_gateway_sse_line(
+                                {"t": "error", "message": str(rs.get("error") or "远程导航失败")}
+                            )
+                        else:
+                            yield _agent_gateway_sse_line({"t": "done", "message": "导航完成", "url": url})
+                else:
+                    sync_navigate_to(url)
+                    yield _agent_gateway_sse_line({"t": "done", "message": "导航完成", "url": url})
             except Exception as e:
                 yield _agent_gateway_sse_line({"t": "error", "message": str(e)})
             yield _agent_gateway_sse_line({"t": "end"})
@@ -2728,10 +3015,26 @@ def api_ai_agent_gateway_stream():
         # execute_plan
         script_steps = ai_plan_steps_to_playwright_script_steps(steps)
         if not script_steps:
-            yield _agent_gateway_sse_line({"t": "error", "message": "当前预览无可执行步骤（请先生成用例）"})
+            msg = '当前预览没有可映射为脚本的原子步骤'
+            if has_steps:
+                msg += '（常见原因：click/input/verify 缺少 selector，或 navigate 缺少 URL）。请检查左栏预览或重新生成。'
+            else:
+                msg += '（预览步骤为空）。'
+            yield _agent_gateway_sse_line({"t": "error", "message": msg})
             yield _agent_gateway_sse_line({"t": "end"})
             return
-        max_n = int(os.environ.get("AI_AGENT_GATEWAY_MAX_STEPS", "40") or 40)
+        if (
+            gate_url.startswith(('http://', 'https://'))
+            and script_steps
+            and script_steps[0].get('action') != 'navigate'
+        ):
+            script_steps = [
+                {'action': 'navigate', 'url': gate_url, 'description': '（网关）先打开目标页'},
+            ] + script_steps
+            yield _agent_gateway_sse_line(
+                {'t': 'log', 'message': f'预览首步非 navigate，已根据目标 URL 插入导航：{gate_url}'}
+            )
+        max_n = int(os.environ.get('AI_AGENT_GATEWAY_MAX_STEPS', '40') or 40)
         script_steps = script_steps[: max(1, max_n)]
         total = len(script_steps)
         yield _agent_gateway_sse_line({"t": "log", "message": f"共 {total} 步，开始逐步执行…"})
@@ -2740,7 +3043,21 @@ def api_ai_agent_gateway_stream():
                 {"t": "step_begin", "index": i, "total": total, "action": st.get("action"), "step": st}
             )
             try:
-                sync_execute_script_steps([st])
+                if embed_exec:
+                    j, err = embedded_gateway_json(
+                        "POST",
+                        f"/internal/session/{embedded_sid}/run-steps",
+                        user_id=exec_uid,
+                        body={"steps": [st]},
+                        timeout_sec=180.0,
+                    )
+                    if err or not isinstance(j, dict) or not j.get("success"):
+                        raise RuntimeError(str(err or (j or {}).get("detail") or "远程执行请求失败"))
+                    rs0 = (j.get("results") or [{}])[0]
+                    if not rs0.get("ok"):
+                        raise RuntimeError(str(rs0.get("error") or "远程步骤失败"))
+                else:
+                    sync_execute_script_steps([st])
                 yield _agent_gateway_sse_line({"t": "step_ok", "index": i, "total": total})
             except Exception as e:
                 yield _agent_gateway_sse_line({"t": "step_err", "index": i, "total": total, "error": str(e)})
@@ -3208,7 +3525,7 @@ def api_playwright_browser():
 
 @app.route('/api/embedded-browser/status', methods=['GET'])
 @login_required
-@role_required('admin', 'tester')
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
 def api_embedded_browser_status():
@@ -3223,7 +3540,7 @@ def api_embedded_browser_status():
 
 @app.route('/api/embedded-browser/session', methods=['POST'])
 @login_required
-@role_required('admin', 'tester')
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
 def api_embedded_browser_session_create():
@@ -3267,7 +3584,7 @@ def api_embedded_browser_session_create():
 
 @app.route('/api/embedded-browser/session/<session_id>', methods=['DELETE'])
 @login_required
-@role_required('admin', 'tester')
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
 def api_embedded_browser_session_delete(session_id: str):
@@ -3285,7 +3602,7 @@ def api_embedded_browser_session_delete(session_id: str):
 
 @app.route('/api/embedded-browser/session/<session_id>/inspect', methods=['GET'])
 @login_required
-@role_required('admin', 'tester')
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
 def api_embedded_browser_session_inspect(session_id: str):
@@ -3304,7 +3621,7 @@ def api_embedded_browser_session_inspect(session_id: str):
 
 @app.route('/api/embedded-browser/session/<session_id>/diagnostics', methods=['GET'])
 @login_required
-@role_required('admin', 'tester')
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
 def api_embedded_browser_session_diagnostics(session_id: str):
@@ -4064,12 +4381,12 @@ def _run_assert_automation_step(
         elif assert_type in ['url_equals', 'url_contains']:
             actual_url = sync_get_current_url()
             if assert_type == 'url_equals':
-                if actual_url != expected_value:
+                if not _url_assert_matches_pa(actual_url, expected_value, 'url_equals'):
                     raise Exception(
                         f"断言失败: 实际URL '{actual_url}' 不等于预期 '{expected_value}'"
                     )
             else:
-                if expected_value not in actual_url:
+                if expected_value and not _url_assert_matches_pa(actual_url, expected_value, 'url_contains'):
                     raise Exception(
                         f"断言失败: 实际URL '{actual_url}' 不包含预期 '{expected_value}'"
                     )
