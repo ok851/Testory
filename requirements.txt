@@ -5,10 +5,15 @@ uvicorn[standard]==0.27.1
 Flask-CORS==4.0.0
 Flask-Login==0.6.3
 Werkzeug==3.0.1
-playwright==1.40.0
-# numpy 1.24.x has no cp312 wheels → pip builds from sdist and hits removed stdlib distutils on Python 3.12.
-opencv-python==4.10.0.84
-numpy==1.26.4
+# playwright 1.40 pins greenlet==3.0.1 — 无 cp313 Windows wheel，会走源码编译（需 MSVC）。3.13 使用带预编译依赖的较新版本。
+playwright>=1.48.0,<2; python_version >= "3.13"
+playwright==1.40.0; python_version < "3.13"
+# numpy 1.26.x has no cp313 wheels on Windows → pip builds from sdist and needs MSVC/GCC.
+# Python 3.13+：使用带官方 wheel 的 numpy 2.x / 较新 opencv（无需本机编译器）。
+numpy>=2.1.0,<3; python_version >= "3.13"
+numpy==1.26.4; python_version < "3.13"
+opencv-python>=4.12.0.88,<5; python_version >= "3.13"
+opencv-python==4.10.0.84; python_version < "3.13"
 APScheduler==3.10.4
 openpyxl==3.1.2
 reportlab==4.4.10

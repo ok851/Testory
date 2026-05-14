@@ -12,7 +12,12 @@ _db_log = logging.getLogger(__name__)
 _PROJECTS_SELECT = "id, name, description, tenant_id, created_at"
 
 # test_cases 当前列（与 CREATE + ALTER 一致）
-_TEST_CASES_SELECT = "id, project_id, name, url, description, created_at, precondition, expected_result"
+_TEST_CASES_SELECT = "id, project_id, name, url, description, created_at, precondition, expected_result, case_type"
+
+
+def _normalize_case_type(raw: Any) -> str:
+    t = (raw or "ui").strip().lower() if isinstance(raw, str) else "ui"
+    return "api" if t == "api" else "ui"
 
 
 def _project_row_to_dict(row: Tuple) -> Dict[str, Any]:
@@ -37,6 +42,7 @@ def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict
         "created_at": row[5],
         "precondition": (row[6] or "") if len(row) > 6 else "",
         "expected_result": (row[7] or "") if len(row) > 7 else "",
+        "case_type": _normalize_case_type(row[8]) if len(row) > 8 else "ui",
     }
     if step_count is not None:
         out["step_count"] = step_count
@@ -190,6 +196,17 @@ class Database:
         
         try:
             cursor.execute("ALTER TABLE test_cases ADD COLUMN expected_result TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE test_cases ADD COLUMN case_type TEXT DEFAULT 'ui'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute(
+                "UPDATE test_cases SET case_type = 'ui' WHERE case_type IS NULL OR TRIM(case_type) = ''"
+            )
         except sqlite3.OperationalError:
             pass
         
@@ -1120,43 +1137,51 @@ class Database:
         finally:
             conn.close()
     
-    def get_project_case_count(self, project_id: int) -> int:
-        """项目下用例数量（仅 COUNT，避免拉全量用例 + JOIN 步骤）。"""
+    def get_project_case_count(self, project_id: int, case_type: Optional[str] = None) -> int:
+        """项目下用例数量。case_type 为 'ui' / 'api' 时只计该类型；None 表示全部。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM test_cases WHERE project_id = ?",
-            (project_id,),
-        )
+        if case_type:
+            ct = _normalize_case_type(case_type)
+            cursor.execute(
+                "SELECT COUNT(*) FROM test_cases WHERE project_id = ? AND COALESCE(case_type, 'ui') = ?",
+                (project_id, ct),
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM test_cases WHERE project_id = ?",
+                (project_id,),
+            )
         n = int(cursor.fetchone()[0])
         conn.close()
         return n
     
-    def get_project_cases(self, project_id: int) -> List[Dict[str, Any]]:
-        """获取项目下的所有测试用例"""
+    def get_project_cases(self, project_id: int, case_type: str = "ui") -> List[Dict[str, Any]]:
+        """获取项目下的测试用例。默认仅 UI 用例（case_type='ui'）；传 case_type='api' 返回接口用例。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
+        ct_filter = _normalize_case_type(case_type)
         
         cursor.execute(
             """
             SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
-                   tc.precondition, tc.expected_result,
+                   tc.precondition, tc.expected_result, COALESCE(tc.case_type, 'ui') AS case_type,
                    COUNT(ts.id) AS step_count
             FROM test_cases tc
             LEFT JOIN test_steps ts ON tc.id = ts.case_id
-            WHERE tc.project_id = ?
+            WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?
             GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
-                     tc.precondition, tc.expected_result
+                     tc.precondition, tc.expected_result, tc.case_type
             ORDER BY tc.created_at DESC
             """,
-            (project_id,),
+            (project_id, ct_filter),
         )
         rows = cursor.fetchall()
         
         cases = []
         for row in rows:
-            base = row[:8]
-            sc = int(row[8] or 0)
+            base = row[:9]
+            sc = int(row[9] or 0)
             cases.append(_test_case_row_to_dict(base, step_count=sc))
         
         conn.close()
@@ -1164,14 +1189,23 @@ class Database:
     
     # ==================== 测试用例管理方法（新版本） ====================
     
-    def create_test_case_v2(self, project_id: int, name: str, url: str = "", description: str = "", precondition: str = "", expected_result: str = "") -> int:
+    def create_test_case_v2(
+        self,
+        project_id: int,
+        name: str,
+        url: str = "",
+        description: str = "",
+        precondition: str = "",
+        expected_result: str = "",
+        case_type: str = "ui",
+    ) -> int:
         """创建测试用例（新版本，关联到项目）"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
+        ct = _normalize_case_type(case_type)
         cursor.execute(
-            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result) VALUES (?, ?, ?, ?, ?, ?)",
-            (project_id, name, url, description, precondition, expected_result)
+            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (project_id, name, url, description, precondition, expected_result, ct),
         )
         case_id = cursor.lastrowid
         
@@ -1185,7 +1219,10 @@ class Database:
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT id, project_id, name, url, description, created_at, precondition, expected_result FROM test_cases WHERE id = ?", (case_id,))
+        cursor.execute(
+            "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, COALESCE(case_type, 'ui') FROM test_cases WHERE id = ?",
+            (case_id,),
+        )
         row = cursor.fetchone()
         
         if row:
@@ -1197,7 +1234,8 @@ class Database:
                 'description': row[4],
                 'created_at': row[5],
                 'precondition': row[6] if len(row) > 6 else '',
-                'expected_result': row[7] if len(row) > 7 else ''
+                'expected_result': row[7] if len(row) > 7 else '',
+                'case_type': _normalize_case_type(row[8]) if len(row) > 8 else 'ui',
             }
             conn.close()
             return out
@@ -1903,6 +1941,206 @@ class Database:
             return False
         finally:
             conn.close()
+
+    def count_steps_with_action(self, case_id: int, action: str) -> int:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM test_steps WHERE case_id = ? AND action = ?",
+            (case_id, action),
+        )
+        n = int(cursor.fetchone()[0])
+        conn.close()
+        return n
+
+    def migrate_api_steps_from_ui_case(
+        self,
+        ui_case_id: int,
+        target_api_case_id: Optional[int] = None,
+        target_api_case_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """将 UI 用例中的 api_request 步骤复制到接口用例并从 UI 用例删除，剩余步骤重排 step_order。"""
+        api_steps = [
+            s
+            for s in self.get_case_steps(ui_case_id)
+            if (s.get("action") or "") == "api_request"
+        ]
+        if not api_steps:
+            return {"success": False, "error": "该 UI 用例没有可迁移的接口步骤（api_request）"}
+
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                "SELECT id, project_id, name, url, description, precondition, expected_result, COALESCE(case_type,'ui') FROM test_cases WHERE id = ?",
+                (ui_case_id,),
+            )
+            urow = cursor.fetchone()
+            if not urow:
+                conn.rollback()
+                return {"success": False, "error": "源用例不存在"}
+            if _normalize_case_type(urow[7]) != "ui":
+                conn.rollback()
+                return {"success": False, "error": "只能从 UI 用例迁移接口步骤"}
+            project_id = int(urow[1])
+
+            if target_api_case_id:
+                tid = int(target_api_case_id)
+                cursor.execute(
+                    "SELECT id, project_id, COALESCE(case_type,'ui') FROM test_cases WHERE id = ?",
+                    (tid,),
+                )
+                trow = cursor.fetchone()
+                if not trow:
+                    conn.rollback()
+                    return {"success": False, "error": "目标接口用例不存在"}
+                if int(trow[1]) != project_id:
+                    conn.rollback()
+                    return {"success": False, "error": "目标用例必须与源用例属于同一项目"}
+                if _normalize_case_type(trow[2]) != "api":
+                    conn.rollback()
+                    return {"success": False, "error": "目标用例必须是接口用例（case_type=api）"}
+                api_case_id = tid
+            else:
+                name = (target_api_case_name or "").strip() or f"{urow[2] or '用例'} (接口)"
+                cursor.execute(
+                    "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type) VALUES (?, ?, ?, ?, ?, ?, 'api')",
+                    (project_id, name, urow[3] or "", urow[4] or "", urow[5] or "", urow[6] or ""),
+                )
+                api_case_id = int(cursor.lastrowid)
+
+            cursor.execute(
+                "SELECT COALESCE(MAX(step_order), 0) FROM test_steps WHERE case_id = ?",
+                (api_case_id,),
+            )
+            next_ord = int(cursor.fetchone()[0] or 0)
+
+            migrated_ids: List[int] = []
+            for st in sorted(api_steps, key=lambda x: int(x.get("step_order") or 0)):
+                next_ord += 1
+                migrated_ids.append(int(st["id"]))
+                cursor.execute(
+                    """INSERT INTO test_steps
+                    (case_id, action, selector_type, selector_value, input_value, description, step_order,
+                     page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
+                     locator_candidates, click_repeat_count, api_spec)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        api_case_id,
+                        st.get("action") or "api_request",
+                        st.get("selector_type") or "",
+                        st.get("selector_value") or "",
+                        st.get("input_value") or "",
+                        st.get("description") or "",
+                        next_ord,
+                        st.get("page_name") or "",
+                        st.get("swipe_x") or "",
+                        st.get("swipe_y") or "",
+                        st.get("url") or "",
+                        1 if st.get("enter_iframe") else 0,
+                        st.get("iframe_selector") or "",
+                        st.get("compare_type") or "equals",
+                        st.get("locator_candidates") or "",
+                        int(st.get("click_repeat_count") or 1),
+                        st.get("api_spec") or "",
+                    ),
+                )
+
+            if migrated_ids:
+                ph = ",".join("?" * len(migrated_ids))
+                cursor.execute(
+                    f"DELETE FROM test_steps WHERE case_id = ? AND id IN ({ph})",
+                    [ui_case_id] + migrated_ids,
+                )
+
+            cursor.execute(
+                "SELECT id FROM test_steps WHERE case_id = ? ORDER BY step_order ASC, id ASC",
+                (ui_case_id,),
+            )
+            rem = [int(r[0]) for r in cursor.fetchall()]
+            for i, sid in enumerate(rem, start=1):
+                cursor.execute(
+                    "UPDATE test_steps SET step_order = ? WHERE id = ? AND case_id = ?",
+                    (i, sid, ui_case_id),
+                )
+
+            conn.commit()
+            return {
+                "success": True,
+                "target_api_case_id": api_case_id,
+                "migrated_count": len(migrated_ids),
+            }
+        except Exception as e:
+            _db_log.warning("migrate_api_steps_from_ui_case: %s", e)
+            conn.rollback()
+            return {"success": False, "error": str(e)}
+        finally:
+            conn.close()
+
+    def duplicate_test_case_with_steps(
+        self, source_case_id: int, new_name: str, case_type: Optional[str] = None
+    ) -> Optional[int]:
+        """复制用例及其全部步骤。case_type 默认沿用源用例（规范化后）。"""
+        src = self.get_test_case_v2(source_case_id)
+        if not src:
+            return None
+        ct = _normalize_case_type(case_type) if case_type else _normalize_case_type(src.get("case_type"))
+        pid = int(src["project_id"])
+        new_id = self.create_test_case_v2(
+            pid,
+            new_name.strip() or f"{src.get('name') or '用例'} 副本",
+            src.get("url") or "",
+            src.get("description") or "",
+            src.get("precondition") or "",
+            src.get("expected_result") or "",
+            case_type=ct,
+        )
+        steps = self.get_case_steps(source_case_id)
+        if not steps:
+            return new_id
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            for st in sorted(steps, key=lambda x: int(x.get("step_order") or 0)):
+                cursor.execute(
+                    """INSERT INTO test_steps
+                    (case_id, action, selector_type, selector_value, input_value, description, step_order,
+                     page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
+                     locator_candidates, click_repeat_count, api_spec)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        new_id,
+                        st.get("action") or "",
+                        st.get("selector_type") or "",
+                        st.get("selector_value") or "",
+                        st.get("input_value") or "",
+                        st.get("description") or "",
+                        int(st.get("step_order") or 0),
+                        st.get("page_name") or "",
+                        st.get("swipe_x") or "",
+                        st.get("swipe_y") or "",
+                        st.get("url") or "",
+                        1 if st.get("enter_iframe") else 0,
+                        st.get("iframe_selector") or "",
+                        st.get("compare_type") or "equals",
+                        st.get("locator_candidates") or "",
+                        int(st.get("click_repeat_count") or 1),
+                        st.get("api_spec") or "",
+                    ),
+                )
+            conn.commit()
+        except Exception as e:
+            _db_log.warning("duplicate_test_case_with_steps: %s", e)
+            conn.rollback()
+            try:
+                self.delete_test_case_v2(new_id)
+            except Exception:
+                pass
+            return None
+        finally:
+            conn.close()
+        return new_id
 
     # ==================== 用户管理方法 ====================
 

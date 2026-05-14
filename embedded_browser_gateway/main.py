@@ -23,6 +23,17 @@ HTTP：POST /internal/session/{session_id}/run-steps
 
 from __future__ import annotations
 
+try:
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    if _env_path.is_file():
+        load_dotenv(_env_path, encoding="utf-8-sig")
+except ImportError:
+    pass
+
 import asyncio
 import base64
 import json

@@ -1060,9 +1060,17 @@ class LocalAIService:
 
     def _ollama_options(self) -> Dict[str, Any]:
         opts: Dict[str, Any] = {"temperature": 0.2}
-        np = (os.environ.get("LOCAL_LLM_NUM_PREDICT") or "").strip()
-        if np.isdigit():
-            opts["num_predict"] = int(np)
+        # 未设置时给足 num_predict：不少模型/Modelfile 默认很小，JSON 用例会在 steps 中途被截断导致解析失败。
+        np_raw = (os.environ.get("LOCAL_LLM_NUM_PREDICT") or "").strip()
+        if np_raw:
+            try:
+                n = int(np_raw, 10)
+                if n != 0:
+                    opts["num_predict"] = n
+            except ValueError:
+                pass
+        else:
+            opts["num_predict"] = 4096
         nt = (os.environ.get("LOCAL_LLM_NUM_THREAD") or "").strip()
         if nt.isdigit():
             opts["num_thread"] = int(nt)
@@ -1440,8 +1448,10 @@ class LocalAIService:
         preview = raw.replace("\r", " ").replace("\n", " ").strip()[:220]
         msg = (
             "无法将模型应答解析为用例 JSON（已尝试：markdown 代码块、截取首个对象、修复尾随逗号、弯引号等）。"
-            "建议：① 重启本 Web 服务（避免加载旧的 .pyc）；② 升级 Ollama；③ 设置环境变量 LOCAL_LLM_JSON_FORMAT=0 关闭 JSON 约束；"
-            "④ 设置 LOCAL_LLM_JSON_RETRY_PLAIN=0 可禁用「无 format 重试」；⑤ 换用 qwen2.5、llama3.1 等指令模型。"
+            "若摘要在引号或数组处突然结束，多为生成长度被截断：在 .env 设置 LOCAL_LLM_NUM_PREDICT=8192（或 -1 不限制），"
+            "并检查 Ollama 模型 Modelfile 的 num_predict。"
+            "其他建议：① 重启本 Web 服务（避免加载旧的 .pyc）；② 升级 Ollama；③ LOCAL_LLM_JSON_FORMAT=0 关闭 JSON 约束；"
+            "④ LOCAL_LLM_JSON_RETRY_PLAIN=0 可禁用「无 format 重试」；⑤ 换用 qwen2.5、llama3.1 等指令模型。"
             f" 应答摘要：{preview!r}"
         )
         if last_err is not None:

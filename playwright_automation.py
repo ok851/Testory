@@ -8366,6 +8366,8 @@ class PlaywrightAutomation:
         except Exception as ex:
             uat_logger.debug("[FAILURE_DIAG] bundle build: %s", ex)
             return {"failure_diag_error": str(ex)[:500]}
+
+    async def _run_api_request_step(self, step: Dict[str, Any]):
         """执行 HTTP 接口步骤（api_request），与 assertion_engine / api_http_helper 共用请求逻辑。"""
         import functools
 
@@ -8384,11 +8386,16 @@ class PlaywrightAutomation:
 
         _db = Database()
         case_id = step.get("case_id")
+        project_id = None
+        if case_id:
+            tc = _db.get_test_case_v2(int(case_id))
+            if tc:
+                project_id = tc.get("project_id")
 
         def resolve_chain(s: str) -> str:
             if s is None:
                 return ""
-            t = _db.resolve_variables(str(s), project_id=None, case_id=case_id)
+            t = _db.resolve_variables(str(s), project_id=project_id, case_id=case_id)
             return substitute_env_placeholders(t)
 
         use_cookies = bool(spec.get("use_browser_cookies"))
@@ -8932,10 +8939,6 @@ class PlaywrightAutomation:
                 elif action == "screenshot":
                     # 截取页面截图
                     await self.take_screenshot(page=target_page)
-                elif action == "api_request":
-                    sub = await self._run_api_request_step(step)
-                    results.extend(sub)
-                    continue
                 elif action == "extract_text":
                     selector = step.get("selector")
                     uat_logger.info(f"🔍 [EXTRACT_TEXT_DEBUG] 开始执行提取文本操作,选择器: {selector}")
@@ -9378,6 +9381,40 @@ class PlaywrightAutomation:
             case_start_time = time.time()
             
             uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 执行用例 {case_number}/{len(case_ids)}, ID: {case_id}")
+
+            case_probe = db.get_test_case_v2(case_id)
+            if not case_probe:
+                process_case_result(
+                    {
+                        "case_id": case_id,
+                        "case_name": "未知",
+                        "status": "error",
+                        "error": f"测试用例不存在,ID: {case_id}",
+                    },
+                    case_id,
+                )
+                self._invoke_on_case_failure(
+                    {
+                        "case_id": case_id,
+                        "case_name": "未知",
+                        "project_id": None,
+                        "status": "error",
+                        "error": f"测试用例不存在,ID: {case_id}",
+                        "run_history_id": None,
+                        "step_results": [],
+                        "execution_time": None,
+                    }
+                )
+                continue
+            if (case_probe.get("case_type") or "ui").strip().lower() == "api":
+                api_res = await asyncio.to_thread(
+                    sync_run_api_case_for_batch,
+                    case_id,
+                    db,
+                    getattr(self, "_execution_context", None),
+                )
+                process_case_result(api_res, case_id)
+                continue
             
             # 🔥 性能优化：轻量级用例环境准备（复用 context，只创建新 page）
             try:
@@ -9726,15 +9763,6 @@ class PlaywrightAutomation:
         """
         action = step.get("action", "")
         uat_logger.info(f"🎯 [SINGLE_STEP] 开始执行单步操作: {action}")
-
-        if action == "api_request":
-            try:
-                out = await self._run_api_request_step(step)
-                uat_logger.info(f"✅ [SINGLE_STEP] 单步操作执行成功: {action}")
-                return out
-            except Exception as e:
-                uat_logger.error(f"❌ [SINGLE_STEP] 单步操作执行失败: {action}, 错误: {str(e)}")
-                raise
 
         target_page = self.page
         if target_page is None:
@@ -11357,6 +11385,150 @@ def sync_run_api_request_step(step: Dict[str, Any]):
         return await automation._run_api_request_step(step)
 
     return worker.execute(run)
+
+
+def sync_run_api_case_for_batch(case_id: int, db, execution_context=None) -> Dict[str, Any]:
+    """无浏览器：执行 case_type=api 的用例（仅 api_request 步骤）。返回结构与 SERIAL_MULTI_CASE 单条结果一致。"""
+    import time as _time
+
+    case_start = _time.time()
+    case_info = db.get_test_case_v2(case_id)
+    if not case_info:
+        return {
+            "case_id": case_id,
+            "case_name": "未知",
+            "status": "error",
+            "error": f"测试用例不存在,ID: {case_id}",
+            "total_steps": 0,
+            "successful_steps": 0,
+            "failed_steps": 1,
+            "extracted_text": "",
+            "step_results": [],
+            "execution_time": 0.0,
+            "run_history_id": None,
+        }
+    ct = (case_info.get("case_type") or "ui").strip().lower()
+    if ct != "api":
+        return {
+            "case_id": case_id,
+            "case_name": case_info.get("name", "未命名用例"),
+            "status": "error",
+            "error": "该用例不是接口用例（case_type=api），请使用 UI 用例批量执行",
+            "total_steps": 0,
+            "successful_steps": 0,
+            "failed_steps": 1,
+            "extracted_text": "",
+            "step_results": [],
+            "execution_time": round(_time.time() - case_start, 2),
+            "run_history_id": None,
+        }
+
+    prev_ctx = getattr(automation, "_execution_context", None)
+    automation._execution_context = execution_context
+    try:
+        steps = db.get_case_steps(case_id, page=1, page_size=9999)
+        if not steps:
+            dur = round(_time.time() - case_start, 2)
+            rh = None
+            try:
+                rh = db.create_run_history(case_id, "warning", dur, "", "", "")
+            except Exception:
+                pass
+            return {
+                "case_id": case_id,
+                "case_name": case_info.get("name", "未命名用例"),
+                "status": "warning",
+                "warning": "测试用例没有步骤",
+                "total_steps": 0,
+                "successful_steps": 0,
+                "failed_steps": 0,
+                "extracted_text": "",
+                "step_results": [],
+                "execution_time": dur,
+                "run_history_id": rh,
+            }
+
+        case_results: List[Dict[str, Any]] = []
+        failed = False
+        for step in steps:
+            action = (step.get("action") or "").strip()
+            if action != "api_request":
+                case_results.append(
+                    {"status": "error", "step": step, "error": f"接口用例存在非 api_request 步骤: {action!r}"}
+                )
+                failed = True
+                break
+            st = dict(step)
+            st["case_id"] = case_id
+            try:
+                sub = sync_run_api_request_step(st)
+                subs = sub if isinstance(sub, list) else [sub]
+                case_results.extend(subs)
+                if any((r or {}).get("status") == "error" for r in subs):
+                    failed = True
+                    break
+            except Exception as e:
+                case_results.append({"status": "error", "step": step, "error": str(e)})
+                failed = True
+                break
+
+        success_count = sum(1 for r in case_results if r.get("status") == "success")
+        error_count = sum(1 for r in case_results if r.get("status") == "error")
+        case_status = "success" if not failed and error_count == 0 else "error"
+        extracted_text = ""
+        for r in case_results:
+            if r.get("api_response_preview"):
+                extracted_text = str(r.get("api_response_preview"))[:2000]
+                break
+        dur = round(_time.time() - case_start, 2)
+        run_history_id = None
+        try:
+            err_s = "" if case_status == "success" else str(case_results)[:4000]
+            run_history_id = db.create_run_history(
+                case_id, case_status, dur, err_s, extracted_text, ""
+            )
+        except Exception as db_e:
+            uat_logger.error("sync_run_api_case_for_batch: 保存运行历史失败: %s", db_e)
+
+        if case_status == "error":
+            first_err = ""
+            for r in case_results:
+                if (r or {}).get("status") == "error" and (r or {}).get("error"):
+                    first_err = str((r or {})["error"])
+                    break
+            if not first_err:
+                first_err = "接口用例执行失败"
+            try:
+                automation._invoke_on_case_failure(
+                    {
+                        "case_id": case_id,
+                        "case_name": case_info.get("name", "未命名用例"),
+                        "project_id": case_info.get("project_id"),
+                        "status": case_status,
+                        "error": first_err,
+                        "run_history_id": run_history_id,
+                        "step_results": case_results,
+                        "execution_time": dur,
+                    }
+                )
+            except Exception:
+                pass
+
+        return {
+            "case_id": case_id,
+            "case_name": case_info.get("name", "未命名用例"),
+            "status": case_status,
+            "total_steps": len(case_results),
+            "successful_steps": success_count,
+            "failed_steps": error_count,
+            "extracted_text": extracted_text,
+            "step_results": case_results,
+            "execution_time": dur,
+            "run_history_id": run_history_id,
+        }
+    finally:
+        automation._execution_context = prev_ctx
+
 
 def sync_close_browser():
     async def run():

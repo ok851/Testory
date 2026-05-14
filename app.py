@@ -77,7 +77,7 @@ from playwright_automation import (
     sync_get_selected_element,
     sync_hover_element,
     sync_execute_script_steps,
-    sync_run_api_request_step,
+    sync_run_api_case_for_batch,
     sync_navigate_to,
     sync_right_click_element,
     sync_scroll_by_delta,
@@ -1383,6 +1383,14 @@ def list_cases_v2(project_id):
 @app.route('/list_steps')
 @login_required
 def list_steps():
+    case_id = request.args.get('case_id', type=int)
+    if case_id:
+        c = db.get_test_case_v2(case_id)
+        if c and _app_case_type(c) == 'api':
+            from flask import redirect, url_for
+            pid = c.get('project_id') or ''
+            q = f"?project_id={pid}" if pid else ""
+            return redirect(url_for('api_case_detail_page', case_id=case_id) + q)
     return render_template('list_steps.html')
 
 # API: 创建测试用例
@@ -3478,6 +3486,17 @@ def api_ai_append_steps_to_case():
         None,
     )
     clean_steps, warnings = dedupe_and_validate_ai_steps(steps)
+    ct_ai = _app_case_type(case)
+    if ct_ai == "ui":
+        clean_steps = [s for s in clean_steps if (s.get("action") or "").strip().lower() != "api_request"]
+    if not clean_steps:
+        return jsonify(
+            {
+                "success": False,
+                "error": "没有可写入的步骤（UI 用例已忽略接口类步骤）",
+                "warnings": warnings,
+            }
+        ), 400
 
     created_steps = 0
     for idx, step in enumerate(clean_steps, start=1):
@@ -4288,6 +4307,26 @@ def api_delete_project(project_id):
     else:
         return jsonify({'success': False, 'error': '删除项目失败'}), 400
 
+def _app_case_type(case_dict) -> str:
+    if not case_dict:
+        return "ui"
+    t = (case_dict.get("case_type") or "ui").strip().lower()
+    return "api" if t == "api" else "ui"
+
+
+def _validate_step_action_for_case(case_dict, action: str):
+    """服务端步骤写入校验：UI 用例禁止 api_request；接口用例仅允许 api_request。"""
+    if not case_dict:
+        return "用例不存在"
+    act = (action or "").strip()
+    ct = _app_case_type(case_dict)
+    if ct == "ui" and act == "api_request":
+        return "UI 用例不允许添加接口步骤，请在「接口测试」模块中维护接口用例"
+    if ct == "api" and act != "api_request":
+        return "接口用例仅允许「接口请求」步骤（api_request）"
+    return None
+
+
 # API: 获取项目下的所有测试用例
 @app.route('/api/projects/<int:project_id>/cases', methods=['GET'])
 @login_required
@@ -4295,7 +4334,9 @@ def api_delete_project(project_id):
 @api_error_handler
 @log_api_request
 def api_get_project_cases(project_id):
-    cases = db.get_project_cases(project_id)
+    raw_ct = (request.args.get("case_type") or "ui").strip().lower()
+    case_type = "api" if raw_ct == "api" else "ui"
+    cases = db.get_project_cases(project_id, case_type=case_type)
     return jsonify({'cases': cases})
 
 # ==================== 测试用例管理API（新版本） ====================
@@ -4315,6 +4356,8 @@ def api_create_case_v2():
     description = data.get('description', '')
     precondition = data.get('precondition', '')
     expected_result = data.get('expected_result', '')
+    case_type_raw = (data.get('case_type') or 'ui').strip().lower()
+    case_type = 'api' if case_type_raw == 'api' else 'ui'
     
     if not project_id:
         return jsonify({'error': '项目ID不能为空'}), 400
@@ -4347,7 +4390,9 @@ def api_create_case_v2():
     if license_info.license_type == LicenseType.FREE.value:
         _db.increment_created_cases(current_user.id)
     
-    case_id = db.create_test_case_v2(project_id, name, url, description, precondition, expected_result)
+    case_id = db.create_test_case_v2(
+        project_id, name, url, description, precondition, expected_result, case_type=case_type
+    )
     return jsonify({'success': True, 'case_id': case_id})
 
 # API: 获取测试用例详情（新版本）
@@ -4464,6 +4509,7 @@ def api_get_step(step_id):
 
 # API: 创建测试步骤
 @app.route('/api/steps', methods=['POST'])
+@login_required
 @api_error_handler
 @log_api_request
 def api_create_step():
@@ -4491,9 +4537,19 @@ def api_create_step():
         api_spec = json.dumps(api_spec, ensure_ascii=False)
     
     if not case_id:
-        return jsonify({'error': '用例ID不能为空'}), 400
+        return jsonify({'success': False, 'error': '用例ID不能为空'}), 400
     if not action:
-        return jsonify({'error': '操作类型不能为空'}), 400
+        return jsonify({'success': False, 'error': '操作类型不能为空'}), 400
+
+    case_row = db.get_test_case_v2(int(case_id))
+    if not case_row:
+        return jsonify({'success': False, 'error': '用例不存在'}), 404
+    pid = case_row.get('project_id')
+    if pid and not db.check_project_access(current_user.id, int(pid), 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+    step_err = _validate_step_action_for_case(case_row, action)
+    if step_err:
+        return jsonify({'success': False, 'error': step_err}), 422
     
     step_id = db.create_test_step(case_id, action, selector_type, selector_value, 
                                   input_value, description, step_order, page_name,
@@ -4508,7 +4564,15 @@ def api_create_step():
 @log_api_request
 def api_update_step(step_id):
     data = request.get_json(silent=True) or {}
+    step_row = db.get_test_step(step_id)
+    if not step_row:
+        return jsonify({'error': '测试步骤不存在'}), 404
+    case_row = db.get_test_case_v2(int(step_row['case_id']))
     action = data.get('action')
+    eff_action = action if action is not None else step_row.get('action')
+    step_err = _validate_step_action_for_case(case_row, eff_action)
+    if step_err:
+        return jsonify({'error': step_err}), 422
     selector_type = data.get('selector_type')
     selector_value = data.get('selector_value')
     input_value = data.get('input_value')
@@ -4545,9 +4609,19 @@ def api_update_step(step_id):
 
 # API: 删除测试步骤
 @app.route('/api/steps/<int:step_id>', methods=['DELETE'])
+@login_required
 @api_error_handler
 @log_api_request
 def api_delete_step(step_id):
+    step_row = db.get_test_step(step_id)
+    if not step_row:
+        return jsonify({'success': False, 'error': '测试步骤不存在'}), 404
+    case_row = db.get_test_case_v2(int(step_row['case_id']))
+    if not case_row:
+        return jsonify({'success': False, 'error': '用例不存在'}), 404
+    pid = case_row.get('project_id')
+    if pid and not db.check_project_access(current_user.id, int(pid), 'editor'):
+        return jsonify({'success': False, 'error': '无权限删除此步骤'}), 403
     success = db.delete_test_step(step_id)
 
     if success:
@@ -4579,6 +4653,228 @@ def api_update_step_order(case_id):
         return jsonify({'success': True})
     else:
         return jsonify({'success': False, 'error': '更新步骤顺序失败'}), 400
+
+
+@app.route('/api-testing')
+@login_required
+def api_testing_page():
+    return render_template('api_testing.html')
+
+
+@app.route('/api-testing/case/<int:case_id>')
+@login_required
+def api_case_detail_page(case_id):
+    case = db.get_test_case_v2(case_id)
+    if not case:
+        return redirect(url_for('api_testing_page', err='case_not_found'))
+    if _app_case_type(case) != 'api':
+        return redirect(url_for('api_testing_page', err='not_api_case'))
+    pid = case.get('project_id')
+    _db = Database()
+    if pid and not _db.check_project_access(current_user.id, int(pid), 'viewer'):
+        return redirect(url_for('api_testing_page', err='no_project_access'))
+    return render_template(
+        'api_case_detail.html',
+        case_id=case_id,
+        project_id=int(pid) if pid else 0,
+        case_name=(case.get('name') or '').strip() or ('#' + str(case_id)),
+    )
+
+
+@app.route('/api/cases/<int:case_id>/migrate-api-steps', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_migrate_api_steps(case_id):
+    case = db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '用例不存在'}), 404
+    _db = Database()
+    pid = case.get('project_id')
+    if pid and not _db.check_project_access(current_user.id, int(pid), 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+    if _app_case_type(case) != 'ui':
+        return jsonify({'success': False, 'error': '仅可从 UI 用例迁移接口步骤'}), 400
+    data = request.get_json(silent=True) or {}
+    tid = data.get('target_api_case_id')
+    if tid is not None:
+        try:
+            tid = int(tid)
+        except (TypeError, ValueError):
+            tid = None
+    tname = (data.get('target_api_case_name') or '').strip() or None
+    r = db.migrate_api_steps_from_ui_case(case_id, target_api_case_id=tid, target_api_case_name=tname)
+    if r.get('success'):
+        return jsonify(r)
+    return jsonify(r), 400
+
+
+@app.route('/api/api-cases/from-ui-case', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_create_api_case_from_ui_case():
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    source_ui_case_id = data.get('source_ui_case_id')
+    migrate_steps = bool(data.get('migrate_api_steps'))
+    name = (data.get('name') or '').strip()
+    if not project_id:
+        return jsonify({'success': False, 'error': 'project_id 不能为空'}), 400
+    _db = Database()
+    if not _db.check_project_access(current_user.id, int(project_id), 'editor'):
+        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+
+    limits = license_manager.get_limits()
+    lic = license_manager.get_current_license()
+    cur_cnt = _db.get_project_case_count(int(project_id))
+    if limits['max_cases_per_project'] != -1 and cur_cnt >= limits['max_cases_per_project']:
+        return jsonify({
+            'success': False,
+            'error': f'已达到项目用例数量限制（{limits["max_cases_per_project"]}个）。',
+            'limit_reached': True,
+        }), 403
+
+    def _bump_free_created():
+        if lic.license_type == LicenseType.FREE.value:
+            _db.increment_created_cases(current_user.id)
+
+    if not source_ui_case_id:
+        if not name:
+            return jsonify({'success': False, 'error': '新建接口用例时 name 不能为空'}), 400
+        case_id = _db.create_test_case_v2(
+            int(project_id),
+            name,
+            data.get('url', ''),
+            data.get('description', ''),
+            data.get('precondition', ''),
+            data.get('expected_result', ''),
+            case_type='api',
+        )
+        _bump_free_created()
+        return jsonify({'success': True, 'case_id': case_id})
+    src = _db.get_test_case_v2(int(source_ui_case_id))
+    if not src:
+        return jsonify({'success': False, 'error': '源 UI 用例不存在'}), 404
+    if int(src.get('project_id') or 0) != int(project_id):
+        return jsonify({'success': False, 'error': '源用例必须属于所选项目'}), 400
+    if _app_case_type(src) != 'ui':
+        return jsonify({'success': False, 'error': '源用例必须是 UI 用例'}), 400
+    new_name = name or f"{src.get('name') or '用例'} (接口)"
+    new_id = _db.create_test_case_v2(
+        int(project_id),
+        new_name,
+        src.get('url') or '',
+        src.get('description') or '',
+        src.get('precondition') or '',
+        src.get('expected_result') or '',
+        case_type='api',
+    )
+    _bump_free_created()
+    if migrate_steps:
+        m = _db.migrate_api_steps_from_ui_case(int(source_ui_case_id), target_api_case_id=new_id)
+        if not m.get('success'):
+            try:
+                _db.delete_test_case_v2(new_id)
+            except Exception:
+                pass
+            return jsonify({'success': False, 'error': m.get('error', '迁移失败')}), 400
+        return jsonify({'success': True, 'case_id': m.get('target_api_case_id', new_id), 'migrated': m})
+    return jsonify({'success': True, 'case_id': new_id})
+
+
+@app.route('/api/api-cases/<int:case_id>/duplicate', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_duplicate_api_case(case_id):
+    src = db.get_test_case_v2(case_id)
+    if not src:
+        return jsonify({'success': False, 'error': '用例不存在'}), 404
+    pid = src.get('project_id')
+    if not pid:
+        return jsonify({'success': False, 'error': '用例无归属项目'}), 400
+    _db = Database()
+    if not _db.check_project_access(current_user.id, int(pid), 'editor'):
+        return jsonify({'success': False, 'error': '无权限'}), 403
+    if _app_case_type(src) != 'api':
+        return jsonify({'success': False, 'error': '仅可复制接口用例'}), 400
+    limits = license_manager.get_limits()
+    lic = license_manager.get_current_license()
+    cur_cnt = _db.get_project_case_count(int(pid))
+    if limits['max_cases_per_project'] != -1 and cur_cnt >= limits['max_cases_per_project']:
+        return jsonify({
+            'success': False,
+            'error': f'已达到项目用例数量限制（{limits["max_cases_per_project"]}个）。',
+            'limit_reached': True,
+        }), 403
+    data = request.get_json(silent=True) or {}
+    new_name = (data.get('name') or '').strip() or f"{src.get('name') or '接口用例'} 副本"
+    nid = _db.duplicate_test_case_with_steps(case_id, new_name, case_type='api')
+    if not nid:
+        return jsonify({'success': False, 'error': '复制失败'}), 500
+    if lic.license_type == LicenseType.FREE.value:
+        _db.increment_created_cases(current_user.id)
+    return jsonify({'success': True, 'case_id': nid})
+
+
+@app.route('/api/api-cases/<int:case_id>/run', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_run_api_case(case_id):
+    start_time = time.time()
+    _db = Database()
+    user_id = current_user.id
+    license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
+    is_free_user = license_info.license_type == LicenseType.FREE.value
+    today_stats = _db.get_user_usage_stats(user_id)
+    current_count = today_stats.get('execution_count', 0) if today_stats else 0
+    daily_limit = limits.get('max_executions_per_day', -1)
+    if is_free_user:
+        DAILY_LIMIT = 10
+        if current_count >= DAILY_LIMIT:
+            return jsonify({
+                'success': False,
+                'error': f'今日执行次数已达上限（{DAILY_LIMIT}次）。请升级至团队版解除限制。',
+                'limit_reached': True,
+            }), 403
+    elif daily_limit > 0 and current_count >= daily_limit:
+        return jsonify({
+            'success': False,
+            'error': f'今日执行次数已达上限（{daily_limit}次）。',
+            'limit_reached': True,
+        }), 403
+    _db.increment_execution_count(user_id)
+    case = _db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'error': '测试用例不存在'}), 404
+    if case.get('project_id') and not _db.check_project_access(user_id, int(case['project_id']), 'viewer'):
+        return jsonify({'success': False, 'error': '无权限执行此用例'}), 403
+    if _app_case_type(case) != 'api':
+        return jsonify({
+            'success': False,
+            'error': '该用例不是接口用例，请使用 UI 用例的「运行」按钮执行浏览器自动化。',
+        }), 400
+    payload = sync_run_api_case_for_batch(case_id, _db, execution_context=None)
+    duration = round(time.time() - start_time, 2)
+    out = {
+        'success': payload.get('status') == 'success',
+        'status': payload.get('status'),
+        'duration': duration,
+        'case_id': case_id,
+        'run_history_id': payload.get('run_history_id'),
+        'step_results': payload.get('step_results'),
+    }
+    if payload.get('status') == 'warning':
+        out['warning'] = payload.get('warning')
+    if payload.get('status') == 'error':
+        out['error'] = payload.get('error') or '接口用例执行失败'
+    return jsonify(out)
 
 
 def _effective_step_iframe_selector(automation, db, step, project_id, case_id, row_resolve_fn=None):
@@ -4989,12 +5285,10 @@ def api_import_playwright_codegen(case_id):
     case = db.get_test_case_v2(case_id)
     if not case:
         return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+    if _app_case_type(case) == 'api':
+        return jsonify({'success': False, 'error': '接口用例不支持 Codegen 导入，请在接口测试页维护 HTTP 步骤。'}), 400
 
     _db = Database()
-    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
-        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
-
-    steps, warnings = parse_playwright_codegen_to_steps(code)
     steps = enrich_steps_with_xpath_priority(steps)
     if not steps:
         return jsonify({
@@ -5036,12 +5330,10 @@ def api_import_selenium_ide(case_id):
     case = db.get_test_case_v2(case_id)
     if not case:
         return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+    if _app_case_type(case) == 'api':
+        return jsonify({'success': False, 'error': '接口用例不支持 Selenium IDE 导入。'}), 400
 
     _db = Database()
-    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
-        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
-
-    steps, warnings = parse_selenium_ide_to_steps(payload)
     if not steps:
         return jsonify({
             'success': False,
@@ -5118,8 +5410,20 @@ def api_run_case(case_id):
     if not case:
         return jsonify({'error': '测试用例不存在'}), 404
 
+    if _app_case_type(case) == 'api':
+        return jsonify({
+            'success': False,
+            'error': '这是接口用例，请在「接口测试」模块中执行，或调用 POST /api/api-cases/<用例ID>/run。',
+        }), 400
+
     # 获取测试步骤
     steps = db.get_case_steps(case_id)
+    if any((s.get('action') or '').strip() == 'api_request' for s in steps):
+        return jsonify({
+            'success': False,
+            'error': '该 UI 用例仍包含接口测试步骤，请先使用「一键迁移」迁移到接口用例后再运行 UI 自动化。',
+        }), 400
+
     if not steps:
         # 用例无步骤，保存一条失败历史并友好提示
         run_id = db.create_run_history(case_id, 'error', 0, '该用例没有步骤，无法执行', '', '')
@@ -5532,8 +5836,6 @@ def api_run_case(case_id):
                         uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
                         # 直接抛出错误，视为测试用例执行失败
                         raise
-                elif action == 'api_request':
-                    sync_run_api_request_step(step)
 
                 # 🔥 修复：步骤执行到这里说明成功，更新状态为 success
                 step_status = 'success'
@@ -6366,7 +6668,7 @@ def api_trigger_project(project_id):
     """CI/CD 触发指定项目的所有用例执行"""
     try:
         _db = Database()
-        cases = _db.get_project_cases(project_id)
+        cases = _db.get_project_cases(project_id, case_type="ui")
         if not cases:
             return jsonify({'success': False, 'error': '项目没有测试用例'}), 400
         case_ids = [c['id'] for c in cases]
@@ -6468,6 +6770,14 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
         case = _db.get_test_case_v2(case_id)
         if not case:
             _dataset_job_update(run_id, finished=True, success=False, error='测试用例不存在')
+            return
+        if _app_case_type(case) == 'api':
+            _dataset_job_update(
+                run_id,
+                finished=True,
+                success=False,
+                error='数据驱动执行仅支持 UI 用例；接口用例请使用接口测试运行入口。',
+            )
             return
         steps = _db.get_case_steps(case_id)
         if not steps:
@@ -6731,12 +7041,10 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                 raise Exception('进入 iframe 步骤缺少选择器')
                         elif action == 'exit_iframe':
                             sync_exit_iframe()
-                        elif action == 'api_request':
-                            sync_run_api_request_step(step)
                         elif action:
                             raise Exception(
                                 f"数据驱动执行不支持的操作类型「{action}」。"
-                                "支持的类型：navigate, click, input, batch_input, hover, double_click, right_click, wait, select, date, scroll, swipe, verify, extract_text, text_compare, extract_json, assert, enter_iframe, exit_iframe, api_request。"
+                                "支持的类型：navigate, click, input, batch_input, hover, double_click, right_click, wait, select, date, scroll, swipe, verify, extract_text, text_compare, extract_json, assert, enter_iframe, exit_iframe。"
                             )
                     except Exception as e:
                         step_status = 'failed'

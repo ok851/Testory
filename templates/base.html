@@ -58,6 +58,9 @@
                 <a href="/ai-test" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-i18n-title="nav_aitest_title" title="AI测试">
                     <i class="fas fa-brain mr-1"></i><span data-i18n="nav_aitest">AI测试</span>
                 </a>
+                <a href="/api-testing" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-teal-600 text-white hover:bg-teal-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-i18n-title="nav_api_test_title" title="接口测试">
+                    <i class="fas fa-plug mr-1"></i><span data-i18n="nav_api_test">接口测试</span>
+                </a>
                 <a href="/run-history" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-feature="basic" data-i18n-title="nav_history_title" title="运行历史">
                     <i class="fas fa-history mr-1"></i><span data-i18n="nav_history">历史</span>
                 </a>
@@ -145,6 +148,8 @@
                 nav_project_title: '项目管理',
                 nav_aitest: 'AI测试',
                 nav_aitest_title: 'AI测试工作台（本地模型 + 内置浏览器）',
+                nav_api_test: '接口测试',
+                nav_api_test_title: '接口用例与 HTTP 步骤链',
                 aitest_title: 'AI 测试工作台',
                 aitest_subtitle: '顶部选择项目、用例与浏览器；左栏与 AI 对话并生成/优化用例；中栏填写 URL 点「打开」查看页面；「运行」为生成并执行。已配置内置浏览器网关时中栏为实时画面。',
                 aitest_back_projects: '返回项目列表',
@@ -230,7 +235,7 @@
                 aitest_hint_flow_short: '填写 URL 与场景：点「生成用例」只出步骤；点顶栏「运行」会执行。模型在右上角设置。',
                 aitest_target_case_label: '保存方式',
                 aitest_preview_label: '用例预览',
-                aitest_env_hint: '服务端环境变量可调整：LOCAL_LLM_BASE_URL、LOCAL_LLM_TIMEOUT_CHAT（/api/chat 读超时）、LOCAL_LLM_CONNECT_TIMEOUT、LOCAL_LLM_TIMEOUT 等。',
+                aitest_env_hint: '服务端环境变量可调整：LOCAL_LLM_BASE_URL、LOCAL_LLM_NUM_PREDICT（生成长度）、LOCAL_LLM_TIMEOUT_CHAT（/api/chat 读超时）、LOCAL_LLM_CONNECT_TIMEOUT、LOCAL_LLM_TIMEOUT 等。',
                 aitest_act_preview_expl: '根据描述调用模型生成步骤（可选 URL），只更新预览与对话，不入库。',
                 aitest_act_refine_expl: '在已有预览结果上，仅根据输入框里的补充说明再跑一轮模型（例如改步骤、加断言）。请先完成一次「生成用例」。',
                 aitest_act_save_expl: '将当前预览中的步骤保存到所选项目：可新建用例，或追加到右侧所选已有用例。',
@@ -899,6 +904,8 @@
                 nav_project_title: 'Project management',
                 nav_aitest: 'AI Test',
                 nav_aitest_title: 'AI test lab (local LLM + embedded browser)',
+                nav_api_test: 'API tests',
+                nav_api_test_title: 'API cases and HTTP step chains',
                 aitest_title: 'AI Test Lab',
                 aitest_subtitle: 'Pick project, case, and browser; chat with AI on the left; enter URL in the center and Open. Run generates and executes. With the embedded gateway configured, the center shows a live browser view.',
                 aitest_back_projects: 'Projects',
@@ -984,7 +991,7 @@
                 aitest_hint_flow_short: 'Fill URL + scenario: Generate Case drafts steps; header Run executes. Model in settings.',
                 aitest_target_case_label: 'Save as',
                 aitest_preview_label: 'Case preview',
-                aitest_env_hint: 'Server env: LOCAL_LLM_BASE_URL, LOCAL_LLM_TIMEOUT_CHAT (/api/chat read), LOCAL_LLM_CONNECT_TIMEOUT, LOCAL_LLM_TIMEOUT, etc.',
+                aitest_env_hint: 'Server env: LOCAL_LLM_BASE_URL, LOCAL_LLM_NUM_PREDICT (max tokens), LOCAL_LLM_TIMEOUT_CHAT (/api/chat read), LOCAL_LLM_CONNECT_TIMEOUT, LOCAL_LLM_TIMEOUT, etc.',
                 aitest_act_preview_expl: 'Calls the model from your description (URL optional); updates preview/chat only—not saved.',
                 aitest_act_refine_expl: 'Runs the model again using only the input box to refine the preview. Generate Case once first.',
                 aitest_act_save_expl: 'Persists the current preview to the project: create a new case or append steps to the case selected on the right.',

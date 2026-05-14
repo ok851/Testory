@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+{% block title %}查看详情 — {{ case_name }} - 接口测试{% endblock %}
+{% block body_class %}bg-slate-100 dark:bg-gray-950 min-h-screen text-gray-900 dark:text-gray-100{% endblock %}
+{% block content %}
+{% set _api_detail_id_marker = 918273645 %}
+<script type="application/json" id="uatDetailRoutes">{{ { 'api_list': url_for('api_testing_page') } | tojson }}</script>
+<div class="min-h-[calc(100vh-5rem)] bg-gradient-to-b from-slate-100 via-slate-100 to-slate-200/80 dark:from-gray-950 dark:via-gray-950 dark:to-gray-900/90 py-6 pb-14">
+    <div class="max-w-5xl mx-auto px-4">
+        <div class="mb-4">
+            <a href="{{ url_for('api_testing_page') }}{% if project_id %}?project_id={{ project_id }}{% endif %}" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">← 返回接口测试</a>
+        </div>
+        <div class="rounded-xl border border-slate-200/80 dark:border-gray-800 bg-white/85 dark:bg-gray-900/75 backdrop-blur-sm shadow-sm overflow-hidden">
+            <div class="px-6 py-5 border-b border-slate-200/90 dark:border-gray-800 bg-slate-50/90 dark:bg-gray-900/90 flex flex-wrap items-start justify-between gap-4">
+                <div>
+                    <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">查看详情 — {{ case_name }}</h1>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">用例 ID：{{ case_id }}{% if project_id %} · 项目 ID：{{ project_id }}{% endif %}</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" id="btnRunCase" class="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">运行</button>
+                    <button type="button" id="btnNewRequest" class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">新建接口</button>
+                    <button type="button" id="btnRefreshReq" class="px-4 py-2 rounded-md text-sm font-medium bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600">刷新</button>
+                    <button type="button" id="btnDeleteCase" class="px-4 py-2 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700">删除用例</button>
+                </div>
+            </div>
+            <div class="px-6 py-5 bg-white/50 dark:bg-gray-900/40">
+                <p class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">HTTP 请求列表</p>
+                <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-gray-800 bg-white/70 dark:bg-gray-900/50">
+                    <table class="w-full text-sm text-left">
+                        <thead class="bg-slate-100/90 dark:bg-gray-800/90 text-gray-700 dark:text-gray-300">
+                            <tr>
+                                <th class="px-4 py-3 font-medium w-16">#</th>
+                                <th class="px-4 py-3 font-medium">方法 / URL</th>
+                                <th class="px-4 py-3 font-medium">说明</th>
+                                <th class="px-4 py-3 font-medium w-24">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reqTableBody" class="divide-y divide-slate-200 dark:divide-gray-800 text-gray-900 dark:text-gray-100"></tbody>
+                    </table>
+                    <p id="reqEmptyHint" class="p-4 text-sm text-gray-500 dark:text-gray-400 hidden">暂无请求，请点击「新建接口」添加。</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 新建接口（弹窗，配置单条 HTTP 请求） -->
+<div id="newRequestModal" class="fixed inset-0 z-[2100] hidden flex items-center justify-center p-4 bg-black/50 dark:bg-black/60" role="dialog" aria-modal="true">
+    <div class="w-full max-w-3xl rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl max-h-[92vh] overflow-y-auto p-6">
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">新建接口</h3>
+        <div class="rounded-lg border border-slate-200 dark:border-gray-700 p-4 bg-slate-50/50 dark:bg-gray-800/30 space-y-3">
+            <div class="flex gap-2">
+                <select id="nrMethod" class="w-28 shrink-0 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-2 py-2 font-mono font-medium">
+                    <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
+                </select>
+                <input id="nrUrl" type="text" class="flex-1 min-w-0 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 font-mono" placeholder="URL *">
+            </div>
+            <div class="grid sm:grid-cols-2 gap-3">
+                <div>
+                    <div class="flex justify-between items-center mb-1"><span class="text-xs text-gray-500 dark:text-gray-400">Query</span><button type="button" class="text-xs text-blue-600 hover:underline nr-add-kv" data-target="nrQueryTbody">+</button></div>
+                    <div class="rounded border border-gray-200 dark:border-gray-700 max-h-28 overflow-y-auto text-xs"><table class="w-full"><thead class="bg-slate-100 dark:bg-gray-800"><tr><th class="px-1 py-0.5">Key</th><th class="px-1 py-0.5">Value</th><th class="w-6"></th></tr></thead><tbody id="nrQueryTbody"></tbody></table></div>
+                </div>
+                <div>
+                    <div class="flex justify-between items-center mb-1"><span class="text-xs text-gray-500 dark:text-gray-400">Headers</span><button type="button" class="text-xs text-blue-600 hover:underline nr-add-kv" data-target="nrHeaderTbody">+</button></div>
+                    <div class="rounded border border-gray-200 dark:border-gray-700 max-h-28 overflow-y-auto text-xs"><table class="w-full"><thead class="bg-slate-100 dark:bg-gray-800"><tr><th class="px-1 py-0.5">Key</th><th class="px-1 py-0.5">Value</th><th class="w-6"></th></tr></thead><tbody id="nrHeaderTbody"></tbody></table></div>
+                </div>
+            </div>
+            <div>
+                <label class="text-xs text-gray-500 dark:text-gray-400">Body</label>
+                <select id="nrBodyType" class="mt-1 w-full sm:w-44 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-2 py-1.5">
+                    <option value="none">无</option><option value="json">JSON</option><option value="form">form</option><option value="raw">Raw</option>
+                </select>
+                <div id="nrBodyJsonWrap" class="hidden mt-2"><textarea id="nrBodyJson" rows="4" class="w-full font-mono text-xs rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 p-2"></textarea></div>
+                <div id="nrBodyFormWrap" class="hidden mt-2"><div class="text-right mb-1"><button type="button" class="text-xs text-blue-600 nr-add-kv" data-target="nrFormTbody">+</button></div><div class="rounded border max-h-24 overflow-y-auto text-xs"><table class="w-full"><tbody id="nrFormTbody"></tbody></table></div></div>
+                <div id="nrBodyRawWrap" class="hidden mt-2"><input id="nrRawCt" class="w-full text-xs rounded border dark:bg-gray-950 px-2 py-1 mb-1" placeholder="Content-Type"><textarea id="nrBodyRaw" rows="3" class="w-full font-mono text-xs rounded-md border p-2 dark:bg-gray-950"></textarea></div>
+            </div>
+            <div class="flex flex-wrap gap-3">
+                <div><label class="text-xs text-gray-500">期望状态码</label><input id="nrExpected" type="number" value="200" class="block w-24 mt-0.5 rounded border dark:bg-gray-950 px-2 py-1 text-sm"></div>
+                <div class="flex-1 min-w-[160px]"><label class="text-xs text-gray-500">请求说明</label><input id="nrDesc" type="text" class="block w-full mt-0.5 rounded border dark:bg-gray-950 px-2 py-1 text-sm" placeholder="可选"></div>
+            </div>
+            <details class="text-xs"><summary class="cursor-pointer text-gray-500 hover:text-gray-700 dark:text-gray-400">高级：直接编辑 api_spec JSON（若填写则优先使用）</summary>
+                <textarea id="nrApiSpecJson" class="w-full mt-2 min-h-[80px] font-mono text-xs rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 p-2" placeholder="留空则使用上方表单生成"></textarea>
+            </details>
+        </div>
+        <div class="mt-6 flex justify-end gap-2">
+            <button type="button" id="nrCancelBtn" class="px-4 py-2 rounded-md text-sm font-medium bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600">取消</button>
+            <button type="button" id="nrSaveBtn" class="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">保存</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    const CASE_ID = {{ case_id|int }};
+    const PROJECT_ID = {{ project_id|int }};
+    const cred = { credentials: 'same-origin' };
+
+    async function parseJsonResponse(r) {
+        const text = await r.text();
+        try {
+            return { ok: r.ok, status: r.status, data: text ? JSON.parse(text) : {} };
+        } catch (e) {
+            return { ok: r.ok, status: r.status, data: { error: text.slice(0, 200) || '响应不是 JSON' } };
+        }
+    }
+
+    function toast(msg, isErr) {
+        if (typeof Swal !== 'undefined') {
+            Swal.fire({ icon: isErr ? 'error' : 'success', title: msg, timer: isErr ? undefined : 2200, showConfirmButton: isErr });
+        } else {
+            alert(msg);
+        }
+    }
+
+    function showModal(el) {
+        el.classList.remove('hidden');
+        el.classList.add('flex');
+    }
+    function hideModal(el) {
+        el.classList.add('hidden');
+        el.classList.remove('flex');
+    }
+
+    function escapeHtml(s) {
+        if (!s) return '';
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function kvTbodyRead(tbody) {
+        const o = {};
+        if (!tbody) return o;
+        tbody.querySelectorAll('tr').forEach(function (tr) {
+            const k = (tr.querySelector('input.k') || {}).value;
+            const v = (tr.querySelector('input.v') || {}).value;
+            if (k && String(k).trim()) o[String(k).trim()] = (v == null ? '' : String(v));
+        });
+        return o;
+    }
+
+    function addKvRow(tbody, k, v) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td class="px-1 py-0.5"><input type="text" class="k w-full text-xs rounded border dark:bg-gray-950 px-1 py-0.5" placeholder="key"></td>' +
+            '<td class="px-1 py-0.5"><input type="text" class="v w-full text-xs rounded border dark:bg-gray-950 px-1 py-0.5" placeholder="value"></td>' +
+            '<td class="px-0.5"><button type="button" class="nr-rm text-red-600 text-xs px-1" title="删除">×</button></td>';
+        tr.querySelector('.k').value = k || '';
+        tr.querySelector('.v').value = v || '';
+        tr.querySelector('.nr-rm').addEventListener('click', function () { tr.remove(); });
+        tbody.appendChild(tr);
+    }
+
+    function clearKVTbody(tbody) {
+        if (tbody) tbody.innerHTML = '';
+    }
+
+    function syncNrBodyPanels() {
+        const t = document.getElementById('nrBodyType').value;
+        document.getElementById('nrBodyJsonWrap').classList.toggle('hidden', t !== 'json');
+        document.getElementById('nrBodyFormWrap').classList.toggle('hidden', t !== 'form');
+        document.getElementById('nrBodyRawWrap').classList.toggle('hidden', t !== 'raw');
+    }
+
+    function buildSpecFromNrForm() {
+        const method = (document.getElementById('nrMethod').value || 'GET').toUpperCase();
+        const url = (document.getElementById('nrUrl').value || '').trim();
+        if (!url) throw new Error('请填写请求 URL');
+        const spec = { method: method, url: url };
+        const exp = parseInt(document.getElementById('nrExpected').value, 10);
+        spec.expected_status = isNaN(exp) ? 200 : exp;
+        const q = kvTbodyRead(document.getElementById('nrQueryTbody'));
+        if (Object.keys(q).length) spec.params = q;
+        const h = kvTbodyRead(document.getElementById('nrHeaderTbody'));
+        if (Object.keys(h).length) spec.headers = h;
+        const bt = document.getElementById('nrBodyType').value;
+        spec.body_type = bt;
+        if (bt === 'json') {
+            const raw = (document.getElementById('nrBodyJson').value || '').trim();
+            if (raw) {
+                try {
+                    spec.body_json = JSON.parse(raw);
+                } catch (e) {
+                    throw new Error('Body JSON 无效：' + e.message);
+                }
+            }
+        } else if (bt === 'form') {
+            const fd = kvTbodyRead(document.getElementById('nrFormTbody'));
+            if (Object.keys(fd).length) spec.body_form = fd;
+        } else if (bt === 'raw') {
+            const rb = document.getElementById('nrBodyRaw').value;
+            if (rb) spec.body_raw = rb;
+            const ct = (document.getElementById('nrRawCt').value || '').trim();
+            if (ct) spec.raw_content_type = ct;
+        }
+        return spec;
+    }
+
+    function resetNrForm() {
+        document.getElementById('nrMethod').value = 'GET';
+        document.getElementById('nrUrl').value = '';
+        document.getElementById('nrExpected').value = '200';
+        document.getElementById('nrBodyType').value = 'none';
+        document.getElementById('nrBodyJson').value = '';
+        document.getElementById('nrBodyRaw').value = '';
+        document.getElementById('nrRawCt').value = '';
+        document.getElementById('nrDesc').value = '';
+        document.getElementById('nrApiSpecJson').value = '';
+        clearKVTbody(document.getElementById('nrQueryTbody'));
+        clearKVTbody(document.getElementById('nrHeaderTbody'));
+        clearKVTbody(document.getElementById('nrFormTbody'));
+        syncNrBodyPanels();
+    }
+
+    async function loadRequestTable() {
+        const tbody = document.getElementById('reqTableBody');
+        const emptyHint = document.getElementById('reqEmptyHint');
+        tbody.innerHTML = '';
+        const r = await fetch('/api/cases/' + CASE_ID + '/steps?page=1&page_size=100', { ...cred });
+        const { ok, data: d } = await parseJsonResponse(r);
+        if (!ok) {
+            emptyHint.textContent = '加载失败';
+            emptyHint.classList.remove('hidden');
+            return;
+        }
+        const steps = d.steps || [];
+        if (!steps.length) {
+            emptyHint.classList.remove('hidden');
+            return;
+        }
+        emptyHint.classList.add('hidden');
+        steps.forEach(function (s) {
+            let method = '—';
+            let url = '';
+            try {
+                const sp = typeof s.api_spec === 'string' ? JSON.parse(s.api_spec || '{}') : (s.api_spec || {});
+                method = (sp.method || 'GET').toUpperCase();
+                url = sp.url || '';
+            } catch (e) {}
+            const tr = document.createElement('tr');
+            tr.className = 'bg-white/80 dark:bg-gray-900/60';
+            const ord = s.step_order != null ? s.step_order : '';
+            const desc = (s.description || '').trim() || '—';
+            tr.innerHTML = '<td class="px-4 py-3 text-gray-500">' + escapeHtml(String(ord)) + '</td>' +
+                '<td class="px-4 py-3 font-mono text-xs"><span class="font-semibold text-teal-700 dark:text-teal-400">' + escapeHtml(method) + '</span> ' +
+                '<span class="text-gray-800 dark:text-gray-200 break-all">' + escapeHtml(url.slice(0, 120)) + (url.length > 120 ? '…' : '') + '</span></td>' +
+                '<td class="px-4 py-3">' + escapeHtml(desc) + '</td><td class="px-4 py-3"></td>';
+            const td = tr.querySelector('td:last-child');
+            const del = document.createElement('button');
+            del.className = 'px-2 py-1 rounded text-xs font-medium bg-red-600 text-white hover:bg-red-700';
+            del.textContent = '删除';
+            del.onclick = function () { deleteRequest(s.id); };
+            td.appendChild(del);
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function deleteRequest(stepId) {
+        if (!confirm('确定删除该 HTTP 请求？')) return;
+        const r = await fetch('/api/steps/' + stepId, { method: 'DELETE', ...cred });
+        const { ok, data: d } = await parseJsonResponse(r);
+        if (!ok || d.success === false) {
+            toast(d.error || '删除失败', true);
+            return;
+        }
+        loadRequestTable();
+    }
+
+    async function runCase() {
+        const r = await fetch('/api/api-cases/' + CASE_ID + '/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            ...cred,
+            body: '{}',
+        });
+        const { ok, data: d } = await parseJsonResponse(r);
+        if (!ok || !d.success) {
+            toast(d.error || '执行失败', true);
+            return;
+        }
+        toast('执行完成：' + (d.status || 'success'), false);
+    }
+
+    async function deleteCase() {
+        if (!confirm('确定删除整个接口用例？其下所有请求将一并删除且不可恢复。')) return;
+        const r = await fetch('/api/cases/' + CASE_ID, { method: 'DELETE', ...cred });
+        const { ok, data: d } = await parseJsonResponse(r);
+        if (!ok) {
+            toast(d.error || '删除失败', true);
+            return;
+        }
+        if (d.success === false) {
+            toast(d.error || '删除失败', true);
+            return;
+        }
+        var routes = {};
+        try {
+            var elR = document.getElementById('uatDetailRoutes');
+            if (elR) routes = JSON.parse(elR.textContent);
+        } catch (e0) {}
+        var back = routes.api_list || '/api-testing';
+        if (PROJECT_ID) back += (back.indexOf('?') >= 0 ? '&' : '?') + 'project_id=' + PROJECT_ID;
+        window.location.href = back;
+    }
+
+    function openNewRequestModal() {
+        resetNrForm();
+        showModal(document.getElementById('newRequestModal'));
+    }
+
+    function closeNewRequestModal() {
+        hideModal(document.getElementById('newRequestModal'));
+    }
+
+    async function saveNewRequest() {
+        const adv = (document.getElementById('nrApiSpecJson').value || '').trim();
+        var spec;
+        if (adv) {
+            try {
+                spec = JSON.parse(adv);
+            } catch (e) {
+                toast('高级 JSON 无效：' + e.message, true);
+                return;
+            }
+        } else {
+            try {
+                spec = buildSpecFromNrForm();
+            } catch (e) {
+                toast(e.message || '请填写完整请求', true);
+                return;
+            }
+        }
+        const r = await fetch('/api/steps', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            ...cred,
+            body: JSON.stringify({
+                case_id: CASE_ID,
+                action: 'api_request',
+                selector_type: '',
+                selector_value: '',
+                input_value: '',
+                description: document.getElementById('nrDesc').value.trim(),
+                api_spec: JSON.stringify(spec),
+            }),
+        });
+        const { ok, data: d } = await parseJsonResponse(r);
+        if (!ok || d.success === false || (d.error && !d.success)) {
+            toast(d.error || '保存失败', true);
+            return;
+        }
+        closeNewRequestModal();
+        loadRequestTable();
+        toast('请求已保存', false);
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        document.getElementById('nrBodyType').addEventListener('change', syncNrBodyPanels);
+        document.getElementById('btnRunCase').addEventListener('click', runCase);
+        document.getElementById('btnNewRequest').addEventListener('click', openNewRequestModal);
+        document.getElementById('btnRefreshReq').addEventListener('click', loadRequestTable);
+        document.getElementById('btnDeleteCase').addEventListener('click', deleteCase);
+        document.getElementById('nrCancelBtn').addEventListener('click', closeNewRequestModal);
+        document.getElementById('nrSaveBtn').addEventListener('click', saveNewRequest);
+        document.querySelectorAll('.nr-add-kv').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                addKvRow(document.getElementById(btn.getAttribute('data-target')), '', '');
+            });
+        });
+        document.getElementById('newRequestModal').addEventListener('click', function (e) {
+            if (e.target.id === 'newRequestModal') closeNewRequestModal();
+        });
+        loadRequestTable();
+    });
+})();
+</script>
+{% endblock %}
