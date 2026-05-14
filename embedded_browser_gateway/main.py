@@ -11,6 +11,10 @@ WebSocket 同步点击/滚动/导航/键盘。
   PLAYWRIGHT_BROWSER               默认 chromium；可选 chrome / edge / firefox / webkit（与主站一致）。
   EMBEDDED_INSPECT_EVAL_RETRIES    inspect 快照遇「导航销毁上下文」时重试次数，默认 6。
   EMBEDDED_INSPECT_DOM_WAIT_MS     每次 evaluate 前 wait_for_load_state(domcontentloaded) 超时毫秒，默认 8000。
+  EMBEDDED_GOTO_TIMEOUT_MS         会话首跳 / run-steps navigate / WS 导航的 goto 超时毫秒，默认 28000（上限 120000）。
+  EMBEDDED_STEP_SETTLE_MS          每步成功后额外等待毫秒，让页面重绘与 CDP 串流跟上（0 关闭），默认 120，上限 3000。
+  EMBEDDED_SNAP_AFTER_STEP         每步成功后向已连接画布 WS 追加一帧 Playwright JPEG 截图（1 开 / 0 关），默认 1，与 CDP screencast 并行可显著对齐「操作点」与画面。
+  EMBEDDED_BROWSER_PUBLIC_CDP_HOST   可选；若设置，将 POST /internal/session 返回的 cdp_browser_ws 中主机替换为该值（保留端口与 path），便于宿主机连接容器内调试端口。
 
 HTTP：POST /internal/session/{session_id}/run-steps
   请求体 JSON：{"steps":[...]}，steps 与主站 ai_plan_steps_to_playwright_script_steps 输出一致（navigate/click/input/wait/assert/verify 等），
@@ -20,19 +24,139 @@ HTTP：POST /internal/session/{session_id}/run-steps
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
+import re
 import secrets
+import socket
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, urlunparse
+from urllib.request import urlopen
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 logger = logging.getLogger(__name__)
+
+
+def _embedded_goto_timeout_ms() -> int:
+    """会话创建、步内 navigate、WS 侧导航共用的 goto 超时（毫秒）。"""
+    v = int(os.environ.get("EMBEDDED_GOTO_TIMEOUT_MS", "28000") or 28000)
+    return max(5000, min(v, 120000))
+
+
+def _embedded_step_settle_ms() -> int:
+    """每步成功后暂停，便于 CDP screencast 与 SPA 状态提交。"""
+    v = int(os.environ.get("EMBEDDED_STEP_SETTLE_MS", "120") or 120)
+    return max(0, min(v, 3000))
+
+
+async def _embedded_settle_after_step(page: Page) -> None:
+    ms = _embedded_step_settle_ms()
+    if ms <= 0:
+        return
+    try:
+        await page.evaluate(
+            "() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))"
+        )
+    except Exception:
+        pass
+    await asyncio.sleep(ms / 1000.0)
+
+
+def _embedded_snap_after_step_enabled() -> bool:
+    v = (os.environ.get("EMBEDDED_SNAP_AFTER_STEP") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def _embedded_snap_jpeg_quality() -> int:
+    q = int(os.environ.get("EMBEDDED_BROWSER_JPEG_QUALITY", "52") or 52)
+    return max(30, min(q, 92))
+
+
+async def _embedded_push_snap_frame_sync(rec: EmbeddedSession, page: Page) -> None:
+    """与 CDP screencast 并行：用同一 Page 的截图在关键步后「钉」一帧，缓解串流滞后。"""
+    if not _embedded_snap_after_step_enabled():
+        return
+    ws = getattr(rec, "viewer_ws", None)
+    if ws is None:
+        return
+    try:
+        b = await page.screenshot(
+            type="jpeg",
+            quality=_embedded_snap_jpeg_quality(),
+            full_page=False,
+            timeout=15000,
+        )
+        b64 = base64.b64encode(b).decode("ascii")
+        async with rec.viewer_send_lock:
+            await ws.send_text(json.dumps({"t": "frame", "format": "jpeg", "data": b64, "sync": 1}))
+    except Exception:
+        pass
+
+
+async def _embedded_fill_input_resilient(page: Page, el, text: str) -> None:
+    """聚焦 + fill；值不一致时用逐键输入（适配 React / Ant Design / Vue 等受控组件）。"""
+    txt = str(text or "")
+    await el.scroll_into_view_if_needed(timeout=15000)
+    try:
+        await el.click(timeout=8000)
+    except Exception:
+        pass
+    try:
+        await el.fill("", timeout=4000)
+    except Exception:
+        pass
+    try:
+        await el.fill(txt, timeout=20000)
+    except Exception:
+        await el.click(timeout=5000)
+        await page.keyboard.type(txt, delay=20)
+        if txt:
+            try:
+                g0 = await el.input_value(timeout=5000)
+            except Exception:
+                g0 = ""
+            if g0 != txt:
+                raise RuntimeError("input 填充失败（异常路径后值仍不匹配）")
+        return
+    if not txt:
+        return
+    try:
+        got = await el.input_value(timeout=5000)
+    except Exception:
+        got = ""
+    if got == txt:
+        return
+    try:
+        await el.fill("", timeout=4000)
+    except Exception:
+        pass
+    press_seq = getattr(el, "press_sequentially", None)
+    if callable(press_seq):
+        try:
+            await press_seq(txt, delay=22, timeout=35000)
+            try:
+                g1 = await el.input_value(timeout=5000)
+            except Exception:
+                g1 = ""
+            if g1 == txt or not txt:
+                return
+        except Exception:
+            pass
+    await el.click(timeout=5000)
+    await page.keyboard.type(txt, delay=22)
+    try:
+        g2 = await el.input_value(timeout=5000)
+    except Exception:
+        g2 = ""
+    if txt and g2 != txt:
+        raise RuntimeError("input 值回读仍不匹配（受控组件、遮挡或选择器命中错误元素）")
 
 
 def _url_assert_variants_embed(s: str) -> tuple:
@@ -84,7 +208,53 @@ def _normalize_embedded_browser(raw: Optional[str]) -> str:
     return "chromium"
 
 
-async def _launch_playwright_browser(p: Playwright, headless: bool, engine: str) -> Browser:
+def _pick_free_loopback_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = int(s.getsockname()[1])
+    s.close()
+    return port
+
+
+def _sync_fetch_chromium_cdp_browser_ws(debug_port: int) -> Optional[str]:
+    url = f"http://127.0.0.1:{debug_port}/json/version"
+    try:
+        with urlopen(url, timeout=3.0) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw)
+        ws = (data.get("webSocketDebuggerUrl") or "").strip()
+        return ws or None
+    except Exception as e:
+        logger.debug("json/version failed port=%s: %s", debug_port, e)
+        return None
+
+
+def _rewrite_cdp_ws_for_public_clients(internal_ws: str) -> str:
+    pub_host = (os.environ.get("EMBEDDED_BROWSER_PUBLIC_CDP_HOST") or "").strip()
+    if not pub_host or not internal_ws:
+        return internal_ws
+    try:
+        u = urlparse(internal_ws)
+        if not u.port:
+            return internal_ws
+        new_netloc = f"{pub_host}:{u.port}"
+        return urlunparse((u.scheme, new_netloc, u.path, u.params, u.query, u.fragment))
+    except Exception:
+        return internal_ws
+
+
+async def _resolve_cdp_ws_after_launch(debug_port: int) -> Optional[str]:
+    for attempt in range(50):
+        ws = await asyncio.to_thread(_sync_fetch_chromium_cdp_browser_ws, debug_port)
+        if ws:
+            return ws
+        await asyncio.sleep(0.05 + 0.02 * min(attempt, 15))
+    return None
+
+
+async def _launch_playwright_browser(
+    p: Playwright, headless: bool, engine: str, *, cdp_debug_port: Optional[int] = None
+) -> Browser:
     base_args = [
         "--no-sandbox",
         "--disable-dev-shm-usage",
@@ -92,6 +262,8 @@ async def _launch_playwright_browser(p: Playwright, headless: bool, engine: str)
         "--no-first-run",
         "--no-default-browser-check",
     ]
+    if cdp_debug_port is not None and cdp_debug_port > 0:
+        base_args = list(base_args) + [f"--remote-debugging-port={cdp_debug_port}"]
     eng = _normalize_embedded_browser(engine)
     if eng == "firefox":
         return await p.firefox.launch(headless=headless)
@@ -217,7 +389,7 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
         url = (step.get("url") or "").strip()
         if not url:
             raise ValueError("navigate 缺少 url")
-        await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=_embedded_goto_timeout_ms())
         return
     if action == "wait":
         ms = int(step.get("time") or 1000)
@@ -231,6 +403,7 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
         st = step.get("selector_type") or "css"
         loc = _embedded_locator(page, sel, st)
         el = loc.first
+        await el.scroll_into_view_if_needed(timeout=15000)
         await el.wait_for(state="visible", timeout=30000)
         await el.click(timeout=20000)
         return
@@ -241,11 +414,7 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
         loc = _embedded_locator(page, sel, st)
         el = loc.first
         await el.wait_for(state="visible", timeout=30000)
-        try:
-            await el.fill(text, timeout=15000)
-        except Exception:
-            await el.click(timeout=5000)
-            await page.keyboard.type(text, delay=15)
+        await _embedded_fill_input_resilient(page, el, text)
         return
     if action == "verify":
         sel = (step.get("selector") or "").strip()
@@ -270,10 +439,30 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
             if ct == "url_contains" and exp and not _url_assert_matches_embed(u, exp, "url_contains"):
                 raise RuntimeError(f"url_contains 期望子串 {exp!r} 不在当前 {u!r}")
             return
+        if ct in ("page_text_contains", "page_text_equals", "page_text_regex"):
+            handle = await page.query_selector("body")
+            body_txt = ""
+            try:
+                if handle:
+                    body_txt = (await handle.inner_text()) or ""
+            finally:
+                if handle:
+                    await handle.dispose()
+            body_txt = body_txt.strip()
+            if ct == "page_text_equals":
+                if body_txt != exp:
+                    raise RuntimeError(f"page_text_equals 长度 实际={len(body_txt)} 预期={len(exp)}")
+            elif ct == "page_text_regex":
+                if not exp or not re.search(exp, body_txt):
+                    raise RuntimeError(f"page_text_regex 未匹配 pattern={exp!r}")
+            else:
+                if exp and exp not in body_txt:
+                    raise RuntimeError(f"page_text_contains 未找到 {exp!r}")
+            return
         sel = (step.get("selector") or "").strip()
         st = step.get("selector_type") or "css"
         if not sel:
-            raise ValueError("assert 需要 selector（url_* 除外）")
+            raise ValueError("assert 需要 selector（url_* / page_text_* 除外）")
         loc = _embedded_locator(page, sel, st)
         el = loc.first
         await el.wait_for(state="visible", timeout=20000)
@@ -330,6 +519,8 @@ class EmbeddedSession:
     created: float = field(default_factory=time.time)
     last_seen: float = field(default_factory=time.time)
     run_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    viewer_ws: Optional[WebSocket] = None
+    viewer_send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 app = FastAPI(title="Embedded Browser Gateway", version="1.0.0")
@@ -444,13 +635,26 @@ async def internal_create_session(request: Request) -> Dict[str, Any]:
     sid = uuid.uuid4().hex
     tok = secrets.token_urlsafe(32)
 
+    eng_norm = _normalize_embedded_browser(browser_hint or "")
+    cdp_port: Optional[int] = None
+    cdp_browser_ws: Optional[str] = None
+    if eng_norm in ("chromium", "chrome", "edge"):
+        try:
+            cdp_port = _pick_free_loopback_port()
+        except OSError as e:
+            logger.warning("cdp port allocation failed: %s", e)
+            cdp_port = None
+
     p = await async_playwright().start()
-    browser = await _launch_playwright_browser(p, headless, browser_hint or "")
+    browser = await _launch_playwright_browser(
+        p, headless, browser_hint or "", cdp_debug_port=cdp_port
+    )
     logger.info(
-        "session %s using engine %s (hint=%s)",
+        "session %s using engine %s (hint=%s) cdp_port=%s",
         sid,
-        _normalize_embedded_browser(browser_hint or ""),
+        eng_norm,
         browser_hint,
+        cdp_port,
     )
     context = await browser.new_context(
         viewport={"width": 1280, "height": 720},
@@ -459,9 +663,16 @@ async def internal_create_session(request: Request) -> Dict[str, Any]:
     page = await context.new_page()
     if initial_url:
         try:
-            await page.goto(initial_url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(initial_url, wait_until="domcontentloaded", timeout=_embedded_goto_timeout_ms())
         except Exception as e:
             logger.warning("initial goto failed: %s", e)
+
+    if cdp_port:
+        internal_ws = await _resolve_cdp_ws_after_launch(cdp_port)
+        if internal_ws:
+            cdp_browser_ws = _rewrite_cdp_ws_for_public_clients(internal_ws)
+        else:
+            logger.warning("session %s: no webSocketDebuggerUrl on port %s", sid, cdp_port)
 
     rec = EmbeddedSession(
         session_id=sid,
@@ -475,7 +686,10 @@ async def internal_create_session(request: Request) -> Dict[str, Any]:
     async with _sessions_lock:
         _sessions[sid] = rec
     logger.info("created session %s user=%s", sid, user_id)
-    return {"session_id": sid, "ws_token": tok}
+    out: Dict[str, Any] = {"session_id": sid, "ws_token": tok}
+    if cdp_browser_ws:
+        out["cdp_browser_ws"] = cdp_browser_ws
+    return out
 
 
 @app.delete("/internal/session/{session_id}")
@@ -601,6 +815,8 @@ async def internal_run_steps(session_id: str, request: Request) -> Dict[str, Any
             try:
                 await _embedded_run_step(page, raw)
                 results.append({"index": i, "ok": True})
+                await _embedded_settle_after_step(page)
+                await _embedded_push_snap_frame_sync(rec, page)
             except Exception as e:
                 results.append({"index": i, "ok": False, "error": str(e)})
                 break
@@ -623,6 +839,7 @@ async def websocket_browser(websocket: WebSocket, session_id: str) -> None:
             await websocket.close(code=4401)
             return
         rec.last_seen = time.time()
+        rec.viewer_ws = websocket
         page = rec.page
         emb_lock = rec.run_lock
 
@@ -664,9 +881,10 @@ async def websocket_browser(websocket: WebSocket, session_id: str) -> None:
                 continue
             try:
                 await cdp.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]})
-                await websocket.send_text(
-                    json.dumps({"t": "frame", "format": "jpeg", "data": params.get("data")})
-                )
+                async with rec.viewer_send_lock:
+                    await websocket.send_text(
+                        json.dumps({"t": "frame", "format": "jpeg", "data": params.get("data")})
+                    )
             except Exception:
                 break
 
@@ -685,17 +903,21 @@ async def websocket_browser(websocket: WebSocket, session_id: str) -> None:
                 elif t == "navigate":
                     url = (msg.get("url") or "").strip()
                     if url:
-                        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                        await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
+                        await page.goto(url, wait_until="domcontentloaded", timeout=_embedded_goto_timeout_ms())
+                        async with rec.viewer_send_lock:
+                            await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
                 elif t == "reload":
-                    await page.reload(wait_until="domcontentloaded", timeout=60000)
-                    await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
+                    await page.reload(wait_until="domcontentloaded", timeout=_embedded_goto_timeout_ms())
+                    async with rec.viewer_send_lock:
+                        await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
                 elif t == "go_back":
                     await page.go_back()
-                    await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
+                    async with rec.viewer_send_lock:
+                        await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
                 elif t == "go_forward":
                     await page.go_forward()
-                    await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
+                    async with rec.viewer_send_lock:
+                        await websocket.send_text(json.dumps({"t": "navigated", "url": page.url}))
                 elif t == "type":
                     await page.keyboard.type(str(msg.get("text") or ""), delay=int(msg.get("delay") or 20))
                 elif t == "keydown":
@@ -703,12 +925,17 @@ async def websocket_browser(websocket: WebSocket, session_id: str) -> None:
                 elif t == "keyup":
                     await page.keyboard.up(str(msg.get("key") or ""))
                 elif t == "ping":
-                    await websocket.send_text(json.dumps({"t": "pong"}))
+                    async with rec.viewer_send_lock:
+                        await websocket.send_text(json.dumps({"t": "pong"}))
     except WebSocketDisconnect:
         pass
     except Exception as e:
         logger.debug("ws loop end: %s", e)
     finally:
+        async with _sessions_lock:
+            r2 = _sessions.get(session_id)
+            if r2 is not None and getattr(r2, "viewer_ws", None) is websocket:
+                r2.viewer_ws = None
         stop.set()
         pump_task.cancel()
         try:

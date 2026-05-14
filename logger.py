@@ -47,17 +47,17 @@ class UATLogger:
         console_handler.setFormatter(formatter)
         self.logger.addHandler(console_handler)
     
-    def debug(self, message: str):
-        """记录调试信息"""
-        self.logger.debug(message)
-    
-    def info(self, message: str):
-        """记录一般信息"""
-        self.logger.info(message)
-    
-    def warning(self, message: str):
-        """记录警告信息"""
-        self.logger.warning(message)
+    def debug(self, msg, *args, **kwargs):
+        """记录调试信息（支持 logging 风格占位符，如 debug("x %s", err)）"""
+        self.logger.debug(msg, *args, **kwargs)
+
+    def info(self, msg, *args, **kwargs):
+        """记录一般信息（支持 logging 风格占位符）"""
+        self.logger.info(msg, *args, **kwargs)
+
+    def warning(self, msg, *args, **kwargs):
+        """记录警告信息（支持 logging 风格占位符）"""
+        self.logger.warning(msg, *args, **kwargs)
     
     def error(self, message: str, exc_info: bool = True):
         """记录错误信息"""

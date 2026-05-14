@@ -97,7 +97,8 @@ def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
     """
     在归一化/探测 clamp 之前就地修正常见「模型格式」问题：
     - 校验地址栏 / URL / 查询串却使用 text_equals + CSS → 改为 url_contains 并清空 selector；
-    - url_* 断言若仍带 selector → 清空以符合本平台执行路径。
+    - url_* 断言若仍带 selector → 清空以符合本平台执行路径；
+    - assert 仅有预期字符串、无 selector 且非 URL 语义 → 改为 page_text_* 整页可见文本断言。
     返回人类可读告警列表（可并入 API warnings）。
     """
     warns: List[str] = []
@@ -132,24 +133,37 @@ def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
         text_like = ("text_equals", "text_contains", "text_regex", "")
         if ct not in text_like:
             continue
-        if not (_description_suggests_url_assertion(desc) or _looks_like_url_bar_expected_text(iv)):
-            continue
-        step["compare_type"] = "url_contains"
-        step["selector_value"] = ""
-        step["selector_type"] = ""
-        step.pop("locator_candidates", None)
-        # wd= 百分号编码 → 解码为可读关键词（执行层仍比对原始/解码 URL 多种形态）
-        try:
-            from urllib.parse import unquote
+        if _description_suggests_url_assertion(desc) or _looks_like_url_bar_expected_text(iv):
+            step["compare_type"] = "url_contains"
+            step["selector_value"] = ""
+            step["selector_type"] = ""
+            step.pop("locator_candidates", None)
+            # wd= 百分号编码 → 解码为可读关键词（执行层仍比对原始/解码 URL 多种形态）
+            try:
+                from urllib.parse import unquote
 
-            m = re.match(r"^(wd|word|query|q)=([^&]+)\s*$", iv, re.I)
-            if m:
-                dec = unquote(m.group(2)).strip()
-                if dec and "%" not in dec:
-                    step["input_value"] = dec
-        except Exception:
-            pass
-        warns.append(f"第{idx}步已改为 URL 断言(compare_type=url_contains)，selector 已清空")
+                m = re.match(r"^(wd|word|query|q)=([^&]+)\s*$", iv, re.I)
+                if m:
+                    dec = unquote(m.group(2)).strip()
+                    if dec and "%" not in dec:
+                        step["input_value"] = dec
+            except Exception:
+                pass
+            warns.append(f"第{idx}步已改为 URL 断言(compare_type=url_contains)，selector 已清空")
+            continue
+
+        # 模型常见：最后一步 assert 只写预期字符串、无 selector——元素级断言无法执行，改为整页可见文本
+        if not sv and iv:
+            if ct == "text_equals":
+                step["compare_type"] = "page_text_equals"
+            elif ct == "text_regex":
+                step["compare_type"] = "page_text_regex"
+            else:
+                step["compare_type"] = "page_text_contains"
+            warns.append(
+                f"第{idx}步无 selector，已改为整页可见文本断言({step['compare_type']})；"
+                "仅检查主文档 body 文本，跨 iframe 内容可能取不到。"
+            )
     return warns
 
 
@@ -221,7 +235,13 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
     for idx, step in enumerate(clean_steps, start=1):
         if step["action"] in {"click", "input", "verify", "extract_text", "assert"} and not step["selector_value"]:
             ct = _str(step.get("compare_type")).lower()
-            if step["action"] == "assert" and ct in ("url_equals", "url_contains"):
+            if step["action"] == "assert" and ct in (
+                "url_equals",
+                "url_contains",
+                "page_text_contains",
+                "page_text_equals",
+                "page_text_regex",
+            ):
                 pass
             else:
                 warnings.append(f"第{idx}步缺少 selector_value，运行时可能失败。")
@@ -266,7 +286,10 @@ def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Op
         extra.extend(str(x) for x in sr if str(x).strip())
     cw = meta.get("selector_clamp_warnings")
     if isinstance(cw, list):
-        extra = [str(x) for x in cw if str(x).strip()]
+        extra.extend(str(x) for x in cw if str(x).strip())
+    lv = meta.get("locator_validation")
+    if isinstance(lv, list):
+        extra.extend(str(x) for x in lv if str(x).strip())
     merged_warnings = extra + warnings
     return plan, merged_warnings
 

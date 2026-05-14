@@ -4,12 +4,14 @@ import cv2
 import numpy as np
 from playwright.async_api import async_playwright
 from typing import List, Dict, Any, Optional
+from collections import deque
 import json
 import time
 import sys
 import os
 import importlib
 from logger import uat_logger
+from execution_context import ExecutionContext
 import threading
 if sys.platform == 'win32':
     import ctypes  # 仅 Windows：获取屏幕尺寸（Linux 无 ctypes.windll）
@@ -527,6 +529,95 @@ class PlaywrightAutomation:
         self._recording_session_clear_cb = None
         self._selection_mode_active = False
         self.current_iframe = None  # {'selector', 'selector_type', 'iframe'} 由 enter_iframe 设置
+        self._failure_diag_ring: Optional[deque] = None  # console / pageerror / requestfailed
+        self._execution_context: Optional[ExecutionContext] = None
+
+    def _invoke_on_case_failure(self, payload: Dict[str, Any]) -> None:
+        ctx = getattr(self, "_execution_context", None)
+        if not isinstance(ctx, ExecutionContext) or not ctx.on_case_failure:
+            return
+        merged: Dict[str, Any] = {
+            "user_id": ctx.user_id,
+            "tenant_id": ctx.tenant_id,
+            "trigger": ctx.trigger,
+        }
+        ex = getattr(ctx, "extra", None) or {}
+        if isinstance(ex, dict):
+            merged.update(ex)
+        merged.update(payload)
+        try:
+            ctx.on_case_failure(merged)
+        except Exception as exc:
+            uat_logger.warning(f"[EXEC_CTX] on_case_failure 回调异常: {exc}")
+
+    def _failure_diag_ring_maxlen(self) -> int:
+        try:
+            n = int(os.environ.get("AI_STEP_FAILURE_DIAG_RING", "80") or "80")
+        except ValueError:
+            n = 80
+        return max(10, min(n, 500))
+
+    def _ensure_failure_diag_ring(self) -> deque:
+        if self._failure_diag_ring is None:
+            self._failure_diag_ring = deque(maxlen=self._failure_diag_ring_maxlen())
+        else:
+            self._failure_diag_ring.clear()
+        return self._failure_diag_ring
+
+    def _wire_step_failure_diag_listeners(self, page) -> None:
+        """采集浏览器事件供步骤失败诊断（不等价于完整 CDP Log，但零配置可用）。"""
+        if page is None:
+            return
+        if os.environ.get("AI_STEP_FAILURE_DIAG", "1").strip().lower() in (
+            "0",
+            "false",
+            "no",
+            "off",
+        ):
+            return
+        ring = self._ensure_failure_diag_ring()
+
+        def push(kind: str, text: str, url: str = "") -> None:
+            try:
+                ring.append(
+                    {
+                        "t": kind,
+                        "text": (text or "")[:800],
+                        "url": (url or "")[:500],
+                    }
+                )
+            except Exception:
+                pass
+
+        try:
+            page.on(
+                "console",
+                lambda msg: push("console", f"{getattr(msg, 'type', '')}: {getattr(msg, 'text', '')}"),
+            )
+        except Exception:
+            pass
+        try:
+            page.on("pageerror", lambda exc: push("pageerror", str(exc)))
+        except Exception:
+            pass
+
+        def _on_req_fail(req) -> None:
+            ft = ""
+            try:
+                fo = getattr(req, "failure", None)
+                if fo is not None:
+                    ft = getattr(fo, "error_text", None) or str(fo)
+            except Exception:
+                ft = ""
+            try:
+                push("requestfailed", ft or "failed", getattr(req, "url", "") or "")
+            except Exception:
+                pass
+
+        try:
+            page.on("requestfailed", _on_req_fail)
+        except Exception:
+            pass
 
     def _is_recorder_panel_page(self, p) -> bool:
         rp = getattr(self, "recorder_panel_page", None)
@@ -1039,7 +1130,8 @@ class PlaywrightAutomation:
                 # 🔥 初始化增强型定位管理器
                 self.locator_manager = create_locator_manager(self.page)
                 await self.locator_manager.setup_tracking()
-                
+                self._wire_step_failure_diag_listeners(self.page)
+
                 uat_logger.info("浏览器启动完成，已准备就绪")
             
             try:
@@ -1081,8 +1173,11 @@ class PlaywrightAutomation:
         """内置录制已移除。"""
         return 0
 
-    async def navigate_to(self, url: str, iframe_selector: str = None, page=None):
-        """导航到指定URL,支持iframe导航。page: 可选，指定在哪个标签页执行（多标签并行时使用）"""
+    async def navigate_to(self, url: str, iframe_selector: str = None, page=None, *, ai_probe: bool = False):
+        """导航到指定URL,支持iframe导航。page: 可选，指定在哪个标签页执行（多标签并行时使用）
+
+        ai_probe=True：用于 AI 抓取 DOM 前的快速探测——仅 domcontentloaded + 较短超时，不等待 networkidle。
+        """
         # 统一校验URL
         fixed_url, err = _pa_validate_url(url)
         if err:
@@ -1099,17 +1194,17 @@ class PlaywrightAutomation:
         
         # 再次检查确保page对象存在
         if target_page is not None:
-            # 导航到URL,对于录制时使用domcontentloaded以提高响应速度
-            # 但在回放时,我们需要确保页面完全加载
-                # 🔥 性能优化：回放模式使用更快的等待策略
-                await target_page.goto(url, wait_until='domcontentloaded')
-                # 快速检查 networkidle（仅等待 3 秒，避免 WebSocket/SSE 长连接导致的长时间阻塞）
+            if ai_probe:
+                probe_ms = int(os.environ.get("AI_PROBE_NAVIGATE_TIMEOUT_MS", "22000") or 22000)
+                probe_ms = max(3000, min(probe_ms, 120000))
+                await target_page.goto(url, wait_until="domcontentloaded", timeout=probe_ms)
+            else:
+                # 导航到URL：domcontentloaded + 短 networkidle，避免长连接页面永远等不到 idle
+                await target_page.goto(url, wait_until="domcontentloaded")
                 try:
-                    await target_page.wait_for_load_state('networkidle', timeout=3000)
+                    await target_page.wait_for_load_state("networkidle", timeout=3000)
                 except Exception:
-                    pass  # 超时即认为网络已足够稳定，继续执行
-                # 🔥 移除固定 1 秒延迟和 DOM 稳定性检测（大幅减少不必要的等待）
-                # 原因：domcontentloaded + 3 秒 networkidle 已足够覆盖绝大多数场景
+                    pass
         else:
             uat_logger.error("页面对象为None,无法导航")
             raise Exception("无法创建页面对象")
@@ -8104,8 +8199,173 @@ class PlaywrightAutomation:
             };
         }"""
         )
-    
-    async def _run_api_request_step(self, step: Dict[str, Any]) -> List[Dict[str, Any]]:
+
+    async def gather_failure_signals(self) -> Dict[str, Any]:
+        """步骤失败时采集页面信号（DOM 错误提示 + 性能摘要），供缺陷草稿与自愈管线。"""
+        if self.page is None:
+            raise Exception("浏览器未启动")
+        diag = await self.get_page_diagnostics()
+        dom_extra = await self.page.evaluate(
+            """() => {
+            const snippets = [];
+            const selectors = [
+              '[role="alert"]','[role="status"]','[aria-invalid="true"]',
+              '.error','.ant-message-error','.el-message--error','.text-danger'
+            ];
+            const seen = new Set();
+            for (const s of selectors) {
+              try {
+                document.querySelectorAll(s).forEach(el => {
+                  const t = (el.innerText || '').trim().replace(/\\s+/g,' ').slice(0, 280);
+                  if (!t || t.length < 2) return;
+                  const key = t.slice(0, 80);
+                  if (seen.has(key)) return;
+                  seen.add(key);
+                  snippets.push({ hint: s, text: t });
+                });
+              } catch (e) {}
+            }
+            let blockingOverlay = false;
+            try {
+              const fixed = document.querySelectorAll('[style*="fixed"], .modal, [role="dialog"]');
+              blockingOverlay = fixed.length > 8;
+            } catch (e2) {}
+            return {
+              readyState: document.readyState,
+              snippets: snippets.slice(0, 14),
+              blockingOverlayGuess: blockingOverlay,
+            };
+          }"""
+        )
+        out: Dict[str, Any] = {"diagnostics": diag, "domSignals": dom_extra}
+        ring = getattr(self, "_failure_diag_ring", None)
+        if ring and len(ring) > 0:
+            tail_n = int(os.environ.get("AI_STEP_FAILURE_DIAG_EVENTS_TAIL", "40") or "40")
+            tail_n = max(5, min(tail_n, 120))
+            out["recent_browser_events"] = list(ring)[-tail_n:]
+        cdp = await self._gather_cdp_hints()
+        if cdp:
+            out["cdp"] = cdp
+        return out
+
+    async def _gather_cdp_hints(self) -> Optional[Dict[str, Any]]:
+        """Chromium CDP：Performance.getMetrics（需 AI_DIAG_CDP_ENABLE=1）。"""
+        if os.environ.get("AI_DIAG_CDP_ENABLE", "0").strip().lower() not in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            return None
+        if self.page is None:
+            return None
+        try:
+            sess = await self.page.context.new_cdp_session(self.page)
+            await sess.send("Performance.enable")
+            metrics = await sess.send("Performance.getMetrics")
+            try:
+                await sess.send("Performance.disable")
+            except Exception:
+                pass
+            rows = metrics.get("metrics") if isinstance(metrics, dict) else []
+            if not isinstance(rows, list):
+                rows = []
+            return {"performance_metrics": rows[:32]}
+        except Exception as e:
+            return {"cdp_error": str(e)[:240]}
+
+    @staticmethod
+    def _slim_step_for_failure_diag(step: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(step, dict):
+            return {}
+        keys = (
+            "action",
+            "description",
+            "selector",
+            "selector_value",
+            "selector_type",
+            "url",
+            "iframe_selector",
+            "step_order",
+            "compare_type",
+            "verify_type",
+            "input_value",
+        )
+        return {k: step[k] for k in keys if k in step and step[k] is not None}
+
+    async def _assert_page_visible_text(self, target_page, ctype: str, expected: str) -> None:
+        """主框架 document.body 的 innerText 断言（page_text_*）；不包含子 iframe 内 DOM。"""
+        if target_page is None:
+            raise Exception("浏览器未启动")
+        exp = (expected or "").strip()
+        ctype = (ctype or "").strip().lower()
+        try:
+            handle = await target_page.query_selector("body")
+            if handle:
+                try:
+                    actual = (await handle.inner_text()) or ""
+                finally:
+                    await handle.dispose()
+            else:
+                actual = ""
+        except Exception as e:
+            raise Exception(f"读取页面文本失败: {e}") from e
+        actual = actual.strip()
+        if ctype == "page_text_equals":
+            if actual != exp:
+                raise Exception(f"整页文本断言失败(equals): 实际长度={len(actual)} 预期长度={len(exp)}")
+        elif ctype == "page_text_contains":
+            if exp and exp not in actual:
+                raise Exception(
+                    f"整页文本断言失败(contains): 页面未包含 {exp[:160]!r}（实际文本长度 {len(actual)}）"
+                )
+        elif ctype == "page_text_regex":
+            if not exp or not re.search(exp, actual):
+                raise Exception(f"整页正则断言失败: pattern={exp!r} 实际文本长度={len(actual)}")
+        else:
+            raise Exception(f"不支持的整页断言类型: {ctype}")
+
+    async def capture_step_failure_bundle(
+        self,
+        failed_step: Optional[Dict[str, Any]],
+        exception_message: str,
+    ) -> Optional[Dict[str, Any]]:
+        """供步骤结果 JSON、日志与 /api/ai/diagnostics/failure-bundle 同源结构。"""
+        if os.environ.get("AI_STEP_FAILURE_DIAG", "1").strip().lower() in (
+            "0",
+            "false",
+            "no",
+            "off",
+        ):
+            return None
+        if self.page is None:
+            return None
+        try:
+            signals = await self.gather_failure_signals()
+        except Exception as e:
+            uat_logger.debug("[FAILURE_DIAG] gather_failure_signals: %s", e)
+            return {"failure_diag_error": str(e)[:500]}
+
+        try:
+            from execution_diag_bundle import build_failure_bundle, classify_failure_with_llm
+
+            slim = self._slim_step_for_failure_diag(failed_step)
+            bundle = build_failure_bundle(slim, exception_message, signals)
+            if os.environ.get("AI_STEP_FAILURE_DIAG_LLM", "0").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                draft, _warns = await asyncio.to_thread(
+                    lambda b=bundle: classify_failure_with_llm(b, force=True)
+                )
+                if draft:
+                    bundle["llm_defect_draft"] = draft
+            return bundle
+        except Exception as ex:
+            uat_logger.debug("[FAILURE_DIAG] bundle build: %s", ex)
+            return {"failure_diag_error": str(ex)[:500]}
         """执行 HTTP 接口步骤（api_request），与 assertion_engine / api_http_helper 共用请求逻辑。"""
         import functools
 
@@ -8232,11 +8492,15 @@ class PlaywrightAutomation:
                     # 检查当前页面是否已经在目标URL上,避免重复导航
                     if target_page and target_page.url != url:
                         await self.navigate_to(url, page=target_page)
-                        # 确保页面完全加载完成
                         if target_page:
-                            uat_logger.info("导航后等待页面完全加载")
-                            await target_page.wait_for_load_state('domcontentloaded', timeout=30000)
-                            await target_page.wait_for_load_state('load', timeout=30000)
+                            load_ms = int(os.environ.get("AI_SCRIPT_POST_NAV_LOAD_TIMEOUT_MS", "12000") or 12000)
+                            load_ms = max(0, min(load_ms, 60000))
+                            if load_ms > 0:
+                                uat_logger.info("导航后轻量等待 load（超时 %sms，可设 AI_SCRIPT_POST_NAV_LOAD_TIMEOUT_MS=0 关闭）", load_ms)
+                                try:
+                                    await target_page.wait_for_load_state("load", timeout=load_ms)
+                                except Exception:
+                                    pass
                     else:
                         uat_logger.info(f"页面已在目标URL上,跳过导航: {url}")
                 elif action == "click":
@@ -8743,7 +9007,12 @@ class PlaywrightAutomation:
                             result["extracted_text"] = step_extracted_text
                         results.append(result)
                     else:
-                        results.append({"status": "error", "step": step, "error": step_error})
+                        err_txt = step_error or ""
+                        err_row = {"status": "error", "step": step, "error": err_txt}
+                        fb = await self.capture_step_failure_bundle(step, err_txt)
+                        if fb:
+                            err_row["failure_diag"] = fb
+                        results.append(err_row)
                     
                     # 跳过后续的通用处理
                     continue
@@ -8820,7 +9089,12 @@ class PlaywrightAutomation:
                     if step_status == "success":
                         results.append({"status": "success", "step": step})
                     else:
-                        results.append({"status": "error", "step": step, "error": step_error})
+                        err_txt = step_error or ""
+                        err_row = {"status": "error", "step": step, "error": err_txt}
+                        fb = await self.capture_step_failure_bundle(step, err_txt)
+                        if fb:
+                            err_row["failure_diag"] = fb
+                        results.append(err_row)
                     
                     # 跳过后续的通用处理
                     continue
@@ -8835,6 +9109,8 @@ class PlaywrightAutomation:
                             raise Exception(f"URL 断言失败: 实际 {url!r} 预期 {expected!r}")
                         if ctype == "url_contains" and expected and not _url_assert_matches_pa(url, expected, "url_contains"):
                             raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
+                    elif ctype in ("page_text_contains", "page_text_equals", "page_text_regex"):
+                        await self._assert_page_visible_text(target_page, ctype, expected)
                     elif selector:
                         actual = await self.extract_element_text(
                             selector,
@@ -8865,7 +9141,7 @@ class PlaywrightAutomation:
                         ):
                             raise Exception(f"不支持的 assert compare_type: {ctype}")
                     else:
-                        raise Exception("assert 步骤缺少 selector（url 类断言除外）")
+                        raise Exception("assert 步骤缺少 selector（url / 整页文本类断言除外）")
                     uat_logger.info(f"✅ [ASSERT_DEBUG] 断言步骤成功")
                     results.append({"status": "success", "step": step})
                     continue
@@ -8918,7 +9194,11 @@ class PlaywrightAutomation:
             except Exception as e:
                 uat_logger.error(f"❌ [STEP_DEBUG] ========== 步骤 {step_index}/{len(steps)} 执行失败 ==========")
                 uat_logger.error(f"❌ [STEP_DEBUG] 错误详情: {str(e)}")
-                results.append({"status": "error", "step": step, "error": str(e)})
+                err_row = {"status": "error", "step": step, "error": str(e)}
+                fb = await self.capture_step_failure_bundle(step, str(e))
+                if fb:
+                    err_row["failure_diag"] = fb
+                results.append(err_row)
                 # 🔥 修复：异常捕获后添加 break 语句，终止当前用例的步骤循环
                 uat_logger.error(f"❌ [STEP_DEBUG] 步骤执行失败，终止用例执行: {e}")
                 break
@@ -9127,6 +9407,16 @@ class PlaywrightAutomation:
                             "case_id": case_id, "case_name": "未知",
                             "status": "error", "error": f"浏览器重启失败: {str(restart_error)}"
                         }, case_id)
+                        self._invoke_on_case_failure({
+                            "case_id": case_id,
+                            "case_name": "未知",
+                            "project_id": None,
+                            "status": "error",
+                            "error": f"浏览器重启失败: {str(restart_error)}",
+                            "run_history_id": None,
+                            "step_results": [],
+                            "execution_time": None,
+                        })
                         continue
                 else:
                     # 🔥 性能优化：复用 context，避免每个用例都重建上下文
@@ -9145,10 +9435,21 @@ class PlaywrightAutomation:
                                 "case_id": case_id, "case_name": "未知",
                                 "status": "error", "error": f"创建浏览器上下文失败: {str(ctx_error)}"
                             }, case_id)
+                            self._invoke_on_case_failure({
+                                "case_id": case_id,
+                                "case_name": "未知",
+                                "project_id": None,
+                                "status": "error",
+                                "error": f"创建浏览器上下文失败: {str(ctx_error)}",
+                                "run_history_id": None,
+                                "step_results": [],
+                                "execution_time": None,
+                            })
                             continue
 
                 # 在复用的 context 中创建新页面
                 self.page = await self.context.new_page()
+                self._wire_step_failure_diag_listeners(self.page)
                 uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_id} 新页面就绪")
             except Exception as e:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 环境准备失败: {str(e)}")
@@ -9156,6 +9457,16 @@ class PlaywrightAutomation:
                     "case_id": case_id, "case_name": "未知",
                     "status": "error", "error": f"准备执行环境失败: {str(e)}"
                 }, case_id)
+                self._invoke_on_case_failure({
+                    "case_id": case_id,
+                    "case_name": "未知",
+                    "project_id": None,
+                    "status": "error",
+                    "error": f"准备执行环境失败: {str(e)}",
+                    "run_history_id": None,
+                    "step_results": [],
+                    "execution_time": None,
+                })
                 continue
             
             try:
@@ -9168,6 +9479,16 @@ class PlaywrightAutomation:
                         "status": "error",
                         "error": f"测试用例不存在,ID: {case_id}"
                     }, case_id)
+                    self._invoke_on_case_failure({
+                        "case_id": case_id,
+                        "case_name": "未知",
+                        "project_id": None,
+                        "status": "error",
+                        "error": f"测试用例不存在,ID: {case_id}",
+                        "run_history_id": None,
+                        "step_results": [],
+                        "execution_time": None,
+                    })
                     continue
                 case_name = case_info.get("name", "未命名用例")
                 # 🔥 修复：获取所有步骤而不是分页的10个步骤
@@ -9229,8 +9550,9 @@ class PlaywrightAutomation:
                             extracted_text = r.get("extracted_text")
                     
                     case_status = "success" if error_count == 0 else "error"
+                run_history_id = None
                 try:
-                    db.create_run_history(
+                    run_history_id = db.create_run_history(
                        case_id,
                        case_status,
                        round(case_duration, 2),  # 使用实际计算的执行时间
@@ -9240,6 +9562,25 @@ class PlaywrightAutomation:
                     )
                 except Exception as db_error:
                     uat_logger.error(f"❌ [MULTI_CASE] 保存测试结果到数据库失败: {db_error}")
+                stopped_run = any((r or {}).get("status") == "stopped" for r in case_results)
+                if case_status == "error" and not stopped_run:
+                    first_err_msg = ""
+                    for r in case_results:
+                        if (r or {}).get("status") == "error" and (r or {}).get("error"):
+                            first_err_msg = str((r or {})["error"])
+                            break
+                    if not first_err_msg:
+                        first_err_msg = str(case_results)[:4000]
+                    self._invoke_on_case_failure({
+                        "case_id": case_id,
+                        "case_name": case_name,
+                        "project_id": case_info.get("project_id"),
+                        "status": case_status,
+                        "error": first_err_msg,
+                        "run_history_id": run_history_id,
+                        "step_results": case_results,
+                        "execution_time": round(case_duration, 2),
+                    })
                 result = {
                     "case_id": case_id,
                     "case_name": case_name,
@@ -9256,12 +9597,24 @@ class PlaywrightAutomation:
                 uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_id} 完成，状态: {case_status}，耗时: {result['execution_time']:.2f}s")
             except Exception as e:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 异常: {str(e)}")
+                _cname = case_info.get("name", "未命名用例") if "case_info" in locals() and case_info else "未知"
+                _cpid = case_info.get("project_id") if "case_info" in locals() and case_info else None
                 process_case_result({
                     "case_id": case_id,
-                    "case_name": case_info.get("name", "未命名用例") if 'case_info' in locals() else "未知",
+                    "case_name": _cname,
                     "status": "error",
                     "error": str(e)
                 }, case_id)
+                self._invoke_on_case_failure({
+                    "case_id": case_id,
+                    "case_name": _cname,
+                    "project_id": _cpid,
+                    "status": "error",
+                    "error": str(e),
+                    "run_history_id": None,
+                    "step_results": [],
+                    "execution_time": None,
+                })
                 uat_logger.info(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_id} 执行失败，继续下一个")
             finally:
                 # 🔥 性能优化：不关闭 context，只关闭 page（context 复用给下一个用例）
@@ -9336,6 +9689,9 @@ class PlaywrightAutomation:
                         "step": step.get('action', 'unknown'),
                         "error": f"执行失败：{timeout_error}"
                     }
+                fb = await self.capture_step_failure_bundle(step, error_result.get("error") or "")
+                if fb:
+                    error_result["failure_diag"] = fb
                 case_results.append(error_result)
                 
                 uat_logger.error(f"🛑 [CASE_STEP] 步骤 {i+1} 执行失败，立即终止当前用例执行")
@@ -9351,6 +9707,9 @@ class PlaywrightAutomation:
                     "step": step.get('action', 'unknown'), 
                     "error": str(step_error)
                 }
+                fb = await self.capture_step_failure_bundle(step, error_result.get("error") or "")
+                if fb:
+                    error_result["failure_diag"] = fb
                 case_results.append(error_result)
                 break
         
@@ -9588,6 +9947,8 @@ class PlaywrightAutomation:
                         raise Exception(f"URL 断言失败: 实际 {url!r} 预期 {expected!r}")
                     if ctype == "url_contains" and expected and not _url_assert_matches_pa(url, expected, "url_contains"):
                         raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
+                elif ctype in ("page_text_contains", "page_text_equals", "page_text_regex"):
+                    await self._assert_page_visible_text(target_page, ctype, expected)
                 elif selector:
                     actual = await self.extract_element_text(
                         selector, selector_type, iframe_selector, page=target_page
@@ -9613,7 +9974,7 @@ class PlaywrightAutomation:
                     ):
                         raise Exception(f"不支持的 assert compare_type: {ctype}")
                 else:
-                    raise Exception("assert 步骤缺少 selector（url 类断言除外）")
+                    raise Exception("assert 步骤缺少 selector（url / 整页文本类断言除外）")
                 results.append({"status": "success", "step": step})
                 
             elif action == "hover":
@@ -10864,9 +11225,10 @@ def sync_start_browser(headless: bool = True):
         return await automation.start_browser(headless)
     return worker.execute(run)
 
-def sync_navigate_to(url: str, iframe_selector: str = None):
+def sync_navigate_to(url: str, iframe_selector: str = None, *, ai_probe: bool = False):
     async def run():
-        return await automation.navigate_to(url, iframe_selector=iframe_selector)
+        return await automation.navigate_to(url, iframe_selector=iframe_selector, ai_probe=ai_probe)
+
     return worker.execute(run)
 
 def sync_click_element(selector: str, selector_type: str = "css", iframe_selector: str = None, locator_candidates=None):
@@ -11094,6 +11456,13 @@ def sync_element_info_at_point(x: float, y: float):
     return worker.execute(run)
 
 
+def sync_gather_failure_signals():
+    async def run():
+        return await automation.gather_failure_signals()
+
+    return worker.execute(run)
+
+
 def sync_get_interactive_page_snapshot(max_items: int = 100):
     async def run():
         return await automation.get_interactive_page_snapshot(max_items=max_items)
@@ -11221,8 +11590,11 @@ def sync_extract_json_from_selected_element():
         return await automation.extract_json_from_selected_element()
     return worker.execute(run)
 
-def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None):
-    """同步执行多个测试用例（带执行锁，防止并发执行）"""
+def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, execution_context=None):
+    """同步执行多个测试用例（带执行锁，防止并发执行）
+
+    execution_context: 可选 execution_context.ExecutionContext，含 user_id/tenant_id 与 on_case_failure 回调。
+    """
     # 🔥 增强: 首先检测浏览器状态，如果已断连则强制重置所有状态
     try:
         browser_disconnected = False
@@ -11267,6 +11639,7 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None):
     
     try:
         automation._external_stop_checker = should_stop
+        automation._execution_context = execution_context
         async def run():
             return await automation.execute_multiple_test_cases(case_ids, db)
         return worker.execute(run)
@@ -11289,6 +11662,7 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None):
     finally:
         try:
             automation._external_stop_checker = None
+            automation._execution_context = None
         except Exception:
             pass
         # 🔥 释放执行锁

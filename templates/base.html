@@ -107,6 +107,9 @@
                             <a href="/user-management" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="userManagementLink" style="display: none;">
                                 <i class="fas fa-users-cog mr-2 text-gray-400"></i><span data-i18n="menu_users">用户管理</span>
                             </a>
+                            <a href="/audit-logs" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="auditLogsLink" style="display: none;">
+                                <i class="fas fa-clipboard-list mr-2 text-gray-400"></i><span data-i18n="menu_audit_logs">审计日志</span>
+                            </a>
                             <div class="border-t border-gray-100 dark:border-gray-700 my-1"></div>
                             <button type="button" onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800">
                                 <i class="fas fa-sign-out-alt mr-2"></i><span data-i18n="menu_logout">注销</span>
@@ -143,7 +146,7 @@
                 nav_aitest: 'AI测试',
                 nav_aitest_title: 'AI测试工作台（本地模型 + 内置浏览器）',
                 aitest_title: 'AI 测试工作台',
-                aitest_subtitle: '左栏描述任务；「生成用例」只生成步骤；「运行」在已配置远程网关时会自动连接中栏远程画布并边执行边刷新画面，否则在主 Playwright 中执行。中栏填 URL 点「打开」；右栏预览。',
+                aitest_subtitle: '顶部选择项目、用例与浏览器；左栏与 AI 对话并生成/优化用例；中栏填写 URL 点「打开」查看页面；「运行」为生成并执行。已配置内置浏览器网关时中栏为实时画面。',
                 aitest_back_projects: '返回项目列表',
                 aitest_label_project: '保存到项目',
                 aitest_label_save_case: '保存到用例',
@@ -157,11 +160,11 @@
                 aitest_btn_stop: '停止',
                 aitest_btn_stop_title: '停止当前 AI 请求',
                 aitest_btn_run: '运行',
-                aitest_btn_run_title: '生成并执行步骤；若已配置远程网关，将自动连接「远程画布」并在中栏同步画面（边看边跑），否则在主 Playwright 中执行',
+                aitest_btn_run_title: '生成并执行步骤；已配置内置浏览器网关时优先在同一 Chromium 实时画面中执行，否则使用主 Playwright',
                 aitest_label_browser: '自动化浏览器',
                 aitest_browser_select_title: '主 Playwright 自动化浏览器；Chrome/Edge 需本机已安装（playwright install chrome / msedge）',
                 aitest_stat_ready: '就绪 — 「生成用例」仅规划；「运行」将尝试在主浏览器执行',
-                aitest_stat_run_expl: '「生成用例」只生成步骤草案。「运行」需填写 URL：服务端导航并拉取页面结构后生成，再在主 Playwright 中串行执行。',
+                aitest_stat_run_expl: '「生成用例」只生成步骤草案。「运行」需填写 URL：服务端拉取页面后生成并执行；已配置网关时中栏可同步实时画面。',
                 aitest_hint_flow: '先填 URL，在下方打开页面，再描述场景并生成。',
                 aitest_probe_label: '',
                 aitest_ollama_title: '本地模型 (Ollama)',
@@ -193,9 +196,9 @@
                 aitest_has_api_key_hint: '当前配置已保存过 API 密钥（页面不会显示原文）。留空表示不修改；填写则替换为新密钥。',
                 aitest_profile_saved_ok: '模型配置已保存。',
                 aitest_clear_chat: '清空',
-                aitest_clear_chat_title: '清空与 AI 的对话记录（不影响用例预览与计划草案）',
-                aitest_clear_chat_confirm: '确定清空与 AI 的对话记录？（不影响用例预览与计划草案）',
-                aitest_cleared_chat_status: '对话记录已清空',
+                aitest_clear_chat_title: '清空对话与预览；停止任务并关闭内置浏览器与中栏画面（保留顶栏标题与左栏目标）',
+                aitest_clear_chat_confirm: '确定清空？将停止进行中的 AI 任务，关闭内置浏览器网关会话并清空中栏画面；左栏对话、右侧预览与计划草稿会清空。（顶栏标题与左栏目标文本保留）',
+                aitest_cleared_chat_status: '已清空对话与预览，并关闭内置浏览器会话',
                 aitest_not_json_response: '服务器返回了非 JSON 页面',
                 aitest_bad_json: '响应 JSON 解析失败',
                 aitest_no_profiles: '暂无已注册模型',
@@ -250,6 +253,7 @@
                 menu_orders: '我的订单',
                 menu_sso: 'SSO 设置',
                 menu_users: '用户管理',
+                menu_audit_logs: '审计日志',
                 menu_logout: '注销',
                 banner_running: '任务执行中',
                 banner_stop: '停止',
@@ -896,7 +900,7 @@
                 nav_aitest: 'AI Test',
                 nav_aitest_title: 'AI test lab (local LLM + embedded browser)',
                 aitest_title: 'AI Test Lab',
-                aitest_subtitle: 'Left: describe the task. Generate Case drafts steps only; Run uses remote canvas (live view) when the embedded gateway is configured, else main Playwright. Center: URL + Open; right: preview.',
+                aitest_subtitle: 'Pick project, case, and browser; chat with AI on the left; enter URL in the center and Open. Run generates and executes. With the embedded gateway configured, the center shows a live browser view.',
                 aitest_back_projects: 'Projects',
                 aitest_label_project: 'Save to project',
                 aitest_label_save_case: 'Save to case',
@@ -910,11 +914,11 @@
                 aitest_btn_stop: 'Stop',
                 aitest_btn_stop_title: 'Stop the current AI request',
                 aitest_btn_run: 'Run',
-                aitest_btn_run_title: 'Generate and run steps; with embedded gateway configured, auto-connects remote canvas for live view, else runs in main Playwright',
+                aitest_btn_run_title: 'Generate and run steps; with embedded browser gateway, prefers the same Chromium live view, else main Playwright',
                 aitest_label_browser: 'Automation browser',
                 aitest_browser_select_title: 'Main Playwright automation browser; Chrome/Edge need install (playwright install chrome / msedge)',
                 aitest_stat_ready: 'Ready — Generate Case plans only; Run tries execution in the main browser',
-                aitest_stat_run_expl: 'Generate Case only produces steps. Run requires a URL: the server navigates, snapshots the page, generates, then runs steps in Playwright.',
+                aitest_stat_run_expl: 'Generate Case only drafts steps. Run needs a URL: the server snapshots the page, generates, and runs; with gateway configured the center can show a live view.',
                 aitest_hint_flow: 'Enter URL, open the page below, then describe the scenario and generate.',
                 aitest_probe_label: '',
                 aitest_ollama_title: 'Local models (Ollama)',
@@ -946,9 +950,9 @@
                 aitest_has_api_key_hint: 'An API key is already stored (never shown in full on this page). Leave blank to keep it; enter a new key to replace it.',
                 aitest_profile_saved_ok: 'Model profile saved.',
                 aitest_clear_chat: 'Clear chat',
-                aitest_clear_chat_title: 'Clear the conversation with AI (does not change case preview or plan draft)',
-                aitest_clear_chat_confirm: 'Clear all messages in this chat? (Case preview and plan draft are not affected.)',
-                aitest_cleared_chat_status: 'Chat cleared',
+                aitest_clear_chat_title: 'Clear chat & preview; stop jobs and close embedded browser / center view (keep title & goal)',
+                aitest_clear_chat_confirm: 'Clear everything listed? In-flight AI work will be cancelled, the embedded browser session closed, and the center panel reset. Title and goal text are kept.',
+                aitest_cleared_chat_status: 'Chat and preview cleared; embedded browser session closed',
                 aitest_not_json_response: 'The server returned a non-JSON page',
                 aitest_bad_json: 'Failed to parse JSON response',
                 aitest_no_profiles: 'No registered models',
@@ -1003,6 +1007,7 @@
                 menu_orders: 'My orders',
                 menu_sso: 'SSO settings',
                 menu_users: 'User management',
+                menu_audit_logs: 'Audit logs',
                 menu_logout: 'Log out',
                 banner_running: 'Task running',
                 banner_stop: 'Stop',
@@ -1735,6 +1740,8 @@
                         if (userManagementLink) userManagementLink.style.display = 'block';
                         const ssoSettingsLink = document.getElementById('ssoSettingsLink');
                         if (ssoSettingsLink) ssoSettingsLink.style.display = 'block';
+                        const auditLogsLink = document.getElementById('auditLogsLink');
+                        if (auditLogsLink) auditLogsLink.style.display = 'block';
                     }
                     
                     // 根据 License 和角色显示/隐藏导航按钮

@@ -2804,7 +2804,7 @@ class Database:
         return log_id
 
     def get_audit_logs(self, user_id: int = None, target_type: str = None,
-                       page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
+                       username: str = None, page: int = 1, page_size: int = 50) -> List[Dict[str, Any]]:
         """获取审计日志"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -2819,6 +2819,12 @@ class Database:
         if target_type:
             where_clause = (where_clause + " AND " if where_clause else "WHERE ") + "target_type = ?"
             params.append(target_type)
+        if username and str(username).strip():
+            u = str(username).strip()
+            u_esc = u.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like_pat = "%" + u_esc + "%"
+            where_clause = (where_clause + " AND " if where_clause else "WHERE ") + "username LIKE ? ESCAPE '\\'"
+            params.append(like_pat)
 
         cursor.execute(f"""
             SELECT * FROM audit_logs {where_clause}
@@ -2835,7 +2841,7 @@ class Database:
             'ip_address': r[7], 'created_at': r[8]
         } for r in rows]
 
-    def get_audit_logs_count(self, user_id: int = None, target_type: str = None) -> int:
+    def get_audit_logs_count(self, user_id: int = None, target_type: str = None, username: str = None) -> int:
         """获取审计日志总数"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -2849,6 +2855,12 @@ class Database:
         if target_type:
             where_clause = (where_clause + " AND " if where_clause else "WHERE ") + "target_type = ?"
             params.append(target_type)
+        if username and str(username).strip():
+            u = str(username).strip()
+            u_esc = u.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like_pat = "%" + u_esc + "%"
+            where_clause = (where_clause + " AND " if where_clause else "WHERE ") + "username LIKE ? ESCAPE '\\'"
+            params.append(like_pat)
 
         cursor.execute(f"SELECT COUNT(*) FROM audit_logs {where_clause}", params)
         count = cursor.fetchone()[0]

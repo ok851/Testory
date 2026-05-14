@@ -1,5 +1,21 @@
 
 services:
+  # OpenClaw Gateway（AI 测试「优化」多轮工具 openclaw_execute）。需设置 OPENCLAW_GATEWAY_TOKEN（与 uat-platform 相同）。
+  # 首次使用若容器无法就绪，请参考 https://documentation.openclaw.ai/install/docker 完成 onboarding 或调整环境变量。
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    ports:
+      - "${OPENCLAW_HOST_PORT:-18789}:18789"
+    environment:
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-change-openclaw-gateway-token}
+      - OPENCLAW_SKIP_ONBOARDING=${OPENCLAW_SKIP_ONBOARDING:-1}
+    volumes:
+      - openclaw_config:/home/node/.openclaw
+      - openclaw_workspace:/home/node/.openclaw/workspace
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
   uat-platform:
     build:
       context: .
@@ -44,12 +60,18 @@ services:
       - PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-1}
       # 默认自动化引擎：chromium | chrome | edge | firefox | webkit（用户可在 AI 测试页覆盖并写入会话）
       - PLAYWRIGHT_BROWSER=${PLAYWRIGHT_BROWSER:-chromium}
-      # 可选：远程内嵌 Chromium（独立网关进程）；与本变量同时配置后 AI 测试页显示「远程画布」
+      # 可选：远程内嵌 Chromium（独立网关进程）；画布 WebSocket 与 CDP 调试 URL 见 AI 测试页
       - EMBEDDED_BROWSER_GATEWAY_URL=${EMBEDDED_BROWSER_GATEWAY_URL:-http://embedded-browser-gateway:8765}
       - EMBEDDED_BROWSER_GATEWAY_SECRET=${EMBEDDED_BROWSER_GATEWAY_SECRET:-change-embedded-browser-secret}
       # 浏览器侧 WebSocket 基址（宿主机访问 Docker 时一般为 ws://127.0.0.1:8765）
       - EMBEDDED_BROWSER_PUBLIC_WS_BASE=${EMBEDDED_BROWSER_PUBLIC_WS_BASE:-ws://127.0.0.1:8765}
-    restart: unless-stopped
+      # 可选：将 CDP WebSocket URL 中的主机改为宿主机可达地址（如 192.168.x.x），端口与网关内分配一致，需自行映射端口或同机访问
+      - EMBEDDED_BROWSER_PUBLIC_CDP_HOST=${EMBEDDED_BROWSER_PUBLIC_CDP_HOST:-}
+      # OpenClaw（与 openclaw-gateway 服务共用 OPENCLAW_GATEWAY_TOKEN）
+      - OPENCLAW_GATEWAY_URL=${OPENCLAW_GATEWAY_URL:-http://openclaw-gateway:18789}
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-change-openclaw-gateway-token}
+      - OPENCLAW_GATEWAY_TIMEOUT=${OPENCLAW_GATEWAY_TIMEOUT:-120}
+      - AI_LOCATOR_RESOLVE_ENABLE=${AI_LOCATOR_RESOLVE_ENABLE:-0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health/ready"]
       interval: 30s
@@ -69,6 +91,7 @@ services:
       - EMBEDDED_BROWSER_GATEWAY_SECRET=${EMBEDDED_BROWSER_GATEWAY_SECRET:-change-embedded-browser-secret}
       - EMBEDDED_BROWSER_GATE_LISTEN=0.0.0.0
       - EMBEDDED_BROWSER_GATE_PORT=8765
+      - EMBEDDED_BROWSER_PUBLIC_CDP_HOST=${EMBEDDED_BROWSER_PUBLIC_CDP_HOST:-}
       - PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-1}
       - PLAYWRIGHT_BROWSER=${PLAYWRIGHT_BROWSER:-chromium}
     healthcheck:
@@ -111,3 +134,5 @@ services:
 
 volumes:
   postgres_data:
+  openclaw_config:
+  openclaw_workspace:

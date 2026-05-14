@@ -835,7 +835,7 @@
                 <input type="text" class="ai-session-title" id="aiSessionTitle" value="AI 自动化任务" maxlength="120" autocomplete="off" aria-label="任务标题" data-i18n-placeholder="aitest_session_title_ph" placeholder="任务标题（如：提取购物车商品数量）">
                 <div class="ai-studio-header__tools">
                     <button type="button" class="ai-toolbar-btn" id="aiBtnUndo" disabled title="在「生成用例」「优化」或页面 AI 分析成功后，可撤销对计划草稿的最近一次变更">撤销</button>
-                    <button type="button" class="ai-toolbar-btn" id="aiBtnClearChat" data-i18n="aitest_clear_chat" data-i18n-title="aitest_clear_chat_title" title="清空左栏与 AI 的对话记录（不影响用例预览与计划草案）">清空</button>
+                    <button type="button" class="ai-toolbar-btn" id="aiBtnClearChat" data-i18n="aitest_clear_chat" data-i18n-title="aitest_clear_chat_title" title="清空对话与预览，并停止任务、关闭内置浏览器会话与中栏画面（保留顶栏标题与左栏目标）">清空</button>
                     <button type="button" class="ai-toolbar-btn ai-btn-run" id="aiBtnRunAgent" data-i18n="aitest_btn_run" data-i18n-title="aitest_btn_run_title" title="" aria-label="运行">运行</button>
                     <div class="ai-model-chip" id="aiActiveModelChip" title="">
                         <span data-i18n="aitest_model_chip">模型</span>
@@ -846,7 +846,7 @@
                     </button>
                 </div>
             </div>
-            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">左栏：任务与推理；中栏填 URL 点「打开」同步内嵌与主 Playwright；右栏预览用例。下方「生成用例」只出步骤；顶栏「运行」会导航到 URL、结合页面结构生成并在主浏览器中尝试执行步骤。</p>
+            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">顶部选择项目、用例与浏览器；左栏与 AI 对话并<strong>生成用例</strong> / <strong>优化</strong>；中栏填写 URL 点「打开」查看页面；顶栏<strong>运行</strong>为生成并执行。已配置内置浏览器网关时中栏为实时画面，否则为简化预览。</p>
         </header>
 
         <div class="ai-studio-context-row" aria-label="context">
@@ -875,11 +875,11 @@
                     {% if ai_chat_tools_env_enabled %}
                     {% if openclaw_gateway_configured %}
                     <div class="ai-cap-banner" role="status">
-                        已启用 <strong>AI 工具循环</strong>（<code>AI_CHAT_TOOLS_ENABLE</code>），且 <strong>OpenClaw Gateway</strong> 已配置。使用「<strong>优化</strong>」多轮对话时，模型可将浏览器/自动化类指令交给 Gateway 执行后再整理步骤；是否触发工具仍取决于模型与会话内容。所选推理引擎须支持 function calling（详见服务端日志）。
+                        已启用 <strong>AI 工具循环</strong> 且 <strong>OpenClaw Gateway</strong> 已配置；「<strong>优化</strong>」时模型可按需调用工具（须模型支持 function calling）。
                     </div>
                     {% else %}
                     <div class="ai-cap-banner ai-cap-banner--warn" role="alert">
-                        已启用 <strong>AI 工具循环</strong>，但未检测到 OpenClaw Gateway 凭证（请配置环境变量 <code>OPENCLAW_GATEWAY_URL</code> 与 <code>OPENCLAW_GATEWAY_TOKEN</code> 后重启服务）。在未配置前，执行类工具调用将返回错误；可参考仓库根目录 <code>.env.example</code>。
+                        工具循环已开，但未配置 OpenClaw（<code>OPENCLAW_GATEWAY_URL</code> / <code>OPENCLAW_GATEWAY_TOKEN</code>）。见 <code>.env.example</code>。
                     </div>
                     {% endif %}
                     {% endif %}
@@ -891,21 +891,24 @@
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGenerateBtn" onclick="aiGeneratePreview()" data-i18n="aitest_btn_preview">生成用例</button>
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiContinueBtn" onclick="aiContinueRefine()" data-i18n="aitest_btn_refine">优化</button>
                             <button type="button" class="btn ai-send-btn ai-send-btn--empty ai-send-btn--stop" id="aiStopBtn" onclick="aiStopAgentWork()" data-i18n="aitest_btn_stop" disabled data-i18n-title="aitest_btn_stop_title" title="停止当前 AI 请求">停止</button>
-                            <button type="button" class="btn ai-send-btn ai-send-btn--empty" id="aiGatewayExecuteBtn" onclick="aiGatewayStreamExecute()" title="填写左栏指令并执行；若已有用例预览步骤，可不填内容直接执行当前预览">识别并执行</button>
                         </div>
                     </div>
-                    <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;">「生成用例」仅调用模型生成步骤；「运行」在<strong>已配置远程网关</strong>时会自动连接中栏<strong>远程画布</strong>并在<strong>同一 Chromium</strong>中生成并执行（可边看边跑），否则在<strong>主 Playwright</strong>中打开 URL 并执行。<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 等同于「生成用例」。顶栏标题在「生成并保存」时作为用例名称。</p>
+                    <details class="ai-advanced-actions" style="margin-top:8px;font-size:12px;color:#475569;">
+                        <summary style="cursor:pointer;user-select:none;">高级：仅执行预览（网关流式，不重新规划整份用例）</summary>
+                        <div style="margin-top:8px;">
+                            <button type="button" class="btn btn-secondary btn-sm" id="aiGatewayExecuteBtn" onclick="aiGatewayStreamExecute()" title="按左栏自然语言在网关/主浏览器中逐步执行；若已有预览步骤可留空指令则执行当前预览">执行预览（网关）</button>
+                        </div>
+                    </details>
+                    <p class="ai-hint-inline" style="font-size:11px;margin-top:8px;"><kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Ctrl</kbd>+<kbd style="font-size:10px;padding:1px 4px;border-radius:4px;background:rgba(0,0,0,.08);">Enter</kbd> 等同「生成用例」。</p>
                 </div>
             </aside>
 
             <section id="aiStageCenter" class="ai-stage-center" aria-label="浏览器舞台">
             <div class="ai-browser-panel" aria-label="内置浏览器" style="flex:1;min-height:0;">
                 <div class="ai-browser-panel__head">
-                    <span>内置浏览器 <span style="font-weight:500;opacity:.85;font-size:12px;">(本区域为 <strong>内嵌真实页面</strong>；部分站禁止嵌入或会长时间「读取中…」，为站点防护非本平台遮罩，请用「全屏内嵌 / 新窗口」尝试)</span></span>
+                    <span>内置浏览器</span>
                     <div class="ai-browser-panel__head-actions">
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserRemoteCanvasBtn" title="使用网关远程画布（需配置 EMBEDDED_BROWSER_*）" hidden>远程画布</button>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserBackToIframeBtn" title="关闭远程串流，恢复 iframe 预览" hidden>切回 iframe</button>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserFullscreenBtn" title="全屏本区域，便于大画面浏览">全屏内嵌</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserFullscreenBtn" title="全屏本区域">全屏</button>
                     </div>
                 </div>
                 <div class="ai-browser-chrome">
@@ -916,27 +919,32 @@
                         <span class="ai-browser-target-url-label" data-i18n="aitest_label_url">目标页面 URL</span>
                         <input type="url" id="aiTargetUrlInput" placeholder="https://example.com" data-i18n-placeholder="aitest_ph_url" autocomplete="url" title="">
                         <button type="button" class="ai-browser-chrome__go" id="aiBrowserOpenBtn">打开</button>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserNewTabBtn" style="white-space:nowrap;" title="在系统默认浏览器中打开">新窗口</button>
                     </div>
                 </div>
+                <details id="aiEmbeddedCdpDetails" class="ai-embedded-cdp-details" hidden style="font-size:11px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+                    <summary style="cursor:pointer;padding:8px 12px;font-weight:600;color:#334155;user-select:none;">高级：CDP 调试连接</summary>
+                    <div class="ai-embedded-cdp-strip-inner" style="padding:0 12px 10px;line-height:1.45;color:#334155;">
+                        <p style="margin:0 0 8px;opacity:.95;">Chromium <code>webSocketDebuggerUrl</code>，勿外泄。可在 Chrome <code>chrome://inspect</code> 中配置连接。</p>
+                        <input type="text" readonly id="aiEmbeddedCdpWsInput" class="form-control form-control-sm" style="font-size:11px;margin-bottom:6px;max-width:100%;" value="" aria-label="CDP WebSocket URL" />
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiEmbeddedCdpCopyBtn">复制 WebSocket URL</button>
+                    </div>
+                </details>
                 <div class="ai-browser-stage">
                 <div class="ai-browser-viewport-col">
                 <div class="ai-browser-viewport ai--nav-mode" id="aiBrowserViewport">
                 <div class="ai-browser-embed-col">
-                    <canvas id="aiBrowserRemoteCanvas" class="ai-browser-remote-canvas" hidden tabindex="0" aria-label="远程浏览器画面"></canvas>
-                    <iframe id="aiBrowserEmbed" class="ai-browser-embed" title="内嵌页面"
+                    <canvas id="aiBrowserRemoteCanvas" class="ai-browser-remote-canvas" hidden tabindex="0" aria-label="内置浏览器画面"></canvas>
+                    <iframe id="aiBrowserEmbed" class="ai-browser-embed" title="页面预览"
                         sandbox="allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
                         referrerpolicy="no-referrer-when-downgrade"
                         src="about:blank"></iframe>
-                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请先在上方地址栏填写 https 地址，再点「打开」。此处为真实网页；若只显示空白，说明目标站禁止被嵌入，请用「新窗口」打开。</div>
+                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请填写 URL 后点「打开」。已配置内置浏览器网关时此处为实时画面；未配置时为本地预览（部分站点可能无法显示）。</div>
                     <div id="aiBrowserIframeBlockedBanner" class="ai-browser-iframe-banner" hidden role="alert">
                         <div class="ai-browser-iframe-banner__inner">
-                            <strong>内嵌预览受限</strong>
-                            <span>当前页在 iframe 中无法正常显示（常见于站点禁止嵌入、网络被拒或 X-Frame 策略）。若已配置远程网关，平台会<strong>自动尝试画布串流</strong>；亦可手动点「连接远程画布」。<strong>自动化仍可在后台 Playwright 会话中执行</strong>。</span>
+                            <strong>预览受限</strong>
+                            <span>该地址无法在当前预览区显示。若已配置内置浏览器网关，将尝试自动切换实时画面；否则后台自动化仍会尽量执行（见下方状态）。</span>
                             <div class="ai-browser-iframe-banner__actions">
-                                <button type="button" class="btn btn-primary btn-sm" id="aiBrowserBannerRemoteCanvas">连接远程画布</button>
-                                <button type="button" class="btn btn-primary btn-sm" id="aiBrowserBannerOpenNew">新窗口打开</button>
-                                <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserBannerDismiss">收起说明</button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserBannerDismiss">知道了</button>
                             </div>
                         </div>
                     </div>
@@ -945,10 +953,6 @@
                         <span id="aiAgentOverlayText">AI正在工作</span>
                     </div>
                 </div>
-                </div>
-                <div class="ai-browser-viewport-hint">若页面长时间「读取中…」或提示「拒绝连接」，多为站点禁止在第三方页面内嵌（非本平台故障）。请点「新窗口」或使用下方「显示内嵌说明」。跨域时无法在顶部代替站内前进/后退。</div>
-                <div style="font-size:11px;color:#64748b;margin-top:4px;">
-                    <button type="button" class="btn btn-link btn-sm" id="aiBrowserToggleEmbedHelp" style="padding:0;font-size:11px;text-decoration:underline;">显示内嵌说明 / 故障排查</button>
                 </div>
                 <div class="ai-browser-toolbar">
                     <div class="ai-browser-meta" id="aiBrowserMeta" title="">自动化(Playwright)：未同步</div>
@@ -968,9 +972,9 @@
                         <label id="aiStatStepsLabel">步数</label>
                         <span class="ai-stat-value" id="aiStatSteps" role="status" aria-labelledby="aiStatStepsLabel" title="当前方案中的步骤条数（生成用例 / 运行后自动更新）">0</span>
                     </div>
-                    <div class="ai-stat-status" id="aiStatStatus" data-i18n="aitest_stat_ready">就绪 — 点击「运行」或「发送」开始</div>
+                    <div class="ai-stat-status" id="aiStatStatus" data-i18n="aitest_stat_ready">就绪 — 顶栏「运行」或左栏「生成」</div>
                     <p class="ai-stat-oneliner" id="aiStatOneLiner" style="margin:4px 0 0;font-size:11px;line-height:1.35;opacity:0.82;color:#64748b;" title="由当前方案与归一化提示自动汇总"></p>
-                    <p class="ai-stat-run-expl" style="margin:8px 0 0;font-size:11px;line-height:1.45;opacity:.88;" data-i18n="aitest_stat_run_expl">「运行」与下方「发送」相同：用 AI 根据左侧描述生成步骤，结果在下方「用例预览」。</p>
+                    <p class="ai-stat-run-expl" style="margin:8px 0 0;font-size:11px;line-height:1.45;opacity:.88;" data-i18n="aitest_stat_run_expl">顶栏「运行」= 生成并执行；左栏「生成用例」= 仅更新下方预览。</p>
                 </div>
                 <div class="ai-preview-in-rail">
                     <label class="ai-gen-label" for="aiGeneratedPreview" data-i18n="aitest_preview_label">用例预览</label>
@@ -1080,16 +1084,32 @@
     let aiPlanAbort = null;
     window.__aiCurrentBgJobId = null;
     let aiGatewayBusy = false;
+    let aiGatewayStreamAbort = null;
+
+    function abortAiGatewayStream(reason) {
+        var c = aiGatewayStreamAbort;
+        if (!c) return;
+        try {
+            if (reason !== undefined && reason !== null) c.abort(reason);
+            else c.abort();
+        } catch (e) {}
+        aiGatewayStreamAbort = null;
+    }
+
     let aiStudioPageLeaving = false;
     let aiUserRequestedStop = false;
     let aiAbortFromTimer = false;
-    window.addEventListener('beforeunload', function() { aiStudioPageLeaving = true; });
+    window.addEventListener('beforeunload', function() {
+        aiStudioPageLeaving = true;
+        try { abortAiGatewayStream(); } catch (e) {}
+    });
     window.addEventListener('pagehide', function() { aiStudioPageLeaving = true; });
     window.addEventListener('pageshow', function(ev) {
         if (ev.persisted) aiStudioPageLeaving = false;
     });
     let aiUndoStack = [];
     let aiEmbeddedGatewayStatus = { enabled: false, wsConfigured: false, lastError: '' };
+    const AI_EMBED_PLACEHOLDER_DEFAULT = '请填写 URL 后点「打开」。未配置内置浏览器网关时，部分站点可能无法在此预览。';
     let aiRemoteCanvasState = {
         ws: null,
         sessionId: null,
@@ -1097,7 +1117,10 @@
         frameW: 1280,
         frameH: 720,
         connecting: false,
-        autoFallbackLock: false
+        autoFallbackLock: false,
+        cdpWsUrl: null,
+        wsUrl: null,
+        gatewaySessionOnly: false
     };
     const AI_UNDO_MAX = 24;
     const AI_DRAFT_KEY = 'uat_ai_agent_draft_v1';
@@ -1279,19 +1302,7 @@
         syncEmbeddedGatewayToolbarButtons();
     }
 
-    function syncEmbeddedGatewayToolbarButtons() {
-        var rcBtn = document.getElementById('aiBrowserRemoteCanvasBtn');
-        var backBtn = document.getElementById('aiBrowserBackToIframeBtn');
-        var ok = aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured;
-        var live = !!(aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1);
-        if (rcBtn) {
-            rcBtn.hidden = !ok;
-            rcBtn.disabled = !ok || aiRemoteCanvasState.connecting || live;
-        }
-        if (backBtn) {
-            backBtn.hidden = !live;
-        }
-    }
+    function syncEmbeddedGatewayToolbarButtons() {}
 
     function remoteCanvasCoordsFromEvent(e, canvas) {
         var rect = canvas.getBoundingClientRect();
@@ -1301,6 +1312,41 @@
         var nx = (e.clientX - rect.left) / Math.max(rect.width, 1) * rw;
         var ny = (e.clientY - rect.top) / Math.max(rect.height, 1) * rh;
         return { x: nx, y: ny };
+    }
+
+    function syncEmbeddedCdpStrip() {
+        var details = document.getElementById('aiEmbeddedCdpDetails');
+        var inp = document.getElementById('aiEmbeddedCdpWsInput');
+        var u = (aiRemoteCanvasState && aiRemoteCanvasState.cdpWsUrl) ? String(aiRemoteCanvasState.cdpWsUrl) : '';
+        if (!inp) return;
+        if (details) details.hidden = !u;
+        inp.value = u || '';
+    }
+
+    /** 网关会话创建/导航成功后：连接 JPEG 串流，使中栏即为「内置浏览器」画面（不再依赖单独按钮）。 */
+    function ensureEmbeddedLiveViewConnected(opts) {
+        opts = opts || {};
+        var st = aiRemoteCanvasState;
+        if (!st.sessionId || !st.wsUrl) return false;
+        var col = document.querySelector('.ai-browser-embed-col');
+        if (col) col.classList.add('mode-remote-canvas');
+        var ifr = document.getElementById('aiBrowserEmbed');
+        if (ifr) {
+            ifr.style.visibility = 'hidden';
+            try { ifr.src = 'about:blank'; } catch (e) {}
+        }
+        var cvs = document.getElementById('aiBrowserRemoteCanvas');
+        if (cvs) cvs.hidden = false;
+        setAiBrowserIframeBlockedBanner(false);
+        var ph = document.getElementById('aiBrowserPlaceholder');
+        if (ph) ph.classList.add('is-hidden');
+        wireRemoteCanvasInputOnce();
+        if (!st.ws || st.ws.readyState !== 1) {
+            wireRemoteCanvasWebSocket(st.wsUrl);
+        }
+        if (!opts.silent) setAgentStatusLine('正在连接实时画面…');
+        syncEmbeddedGatewayToolbarButtons();
+        return true;
     }
 
     function wireRemoteCanvasWebSocket(wsUrl) {
@@ -1332,6 +1378,7 @@
             } catch (e) {}
         };
         ws.onopen = function() {
+            st.gatewaySessionOnly = false;
             if (st.pingTimer) clearInterval(st.pingTimer);
             st.pingTimer = setInterval(function() {
                 if (ws.readyState === 1) {
@@ -1339,6 +1386,7 @@
                 }
             }, 25000);
             syncEmbeddedGatewayToolbarButtons();
+            try { setAgentStatusLine('实时画面已就绪'); } catch (e) {}
             updateBrowserStatusLine();
         };
         ws.onclose = function() {
@@ -1385,18 +1433,39 @@
             st.ws = null;
         }
         st.sessionId = null;
+        st.wsUrl = null;
+        st.gatewaySessionOnly = false;
         var cv = document.getElementById('aiBrowserRemoteCanvas');
         if (cv) cv.hidden = true;
         var col = document.querySelector('.ai-browser-embed-col');
         if (col) col.classList.remove('mode-remote-canvas');
         var ifr = document.getElementById('aiBrowserEmbed');
         if (ifr) ifr.style.visibility = '';
+        var ph = document.getElementById('aiBrowserPlaceholder');
+        if (ph) {
+            ph.textContent = AI_EMBED_PLACEHOLDER_DEFAULT;
+            ph.classList.remove('is-hidden');
+        }
         syncEmbeddedGatewayToolbarButtons();
         if (sid) {
             try {
                 await fetch('/api/embedded-browser/session/' + encodeURIComponent(sid), { method: 'DELETE', credentials: 'same-origin' });
             } catch (e) {}
         }
+        aiRemoteCanvasState.cdpWsUrl = null;
+        aiRemoteCanvasState.connecting = false;
+        var ifr2 = document.getElementById('aiBrowserEmbed');
+        if (ifr2) {
+            try { ifr2.src = 'about:blank'; } catch (e) {}
+        }
+        var cv2 = document.getElementById('aiBrowserRemoteCanvas');
+        if (cv2 && cv2.getContext) {
+            try {
+                var cx = cv2.getContext('2d');
+                if (cx && cv2.width && cv2.height) cx.clearRect(0, 0, cv2.width, cv2.height);
+            } catch (e2) {}
+        }
+        syncEmbeddedCdpStrip();
         updateBrowserStatusLine();
     }
 
@@ -1412,21 +1481,34 @@
             var msg;
             if (!opts.auto) {
                 if (le.indexOf('权限') >= 0 || le.indexOf('403') >= 0) {
-                    msg = '远程画布接口权限不足（' + le + '）。若需使用请联系管理员调整账号角色。';
+                    msg = '内置浏览器网关权限不足（' + le + '）。若需使用请联系管理员。';
                 } else if (le) {
-                    msg = '远程画布当前不可用：' + le + '。请确认已配置 .env 中 EMBEDDED_BROWSER_* 并已启动 python -m embedded_browser_gateway。';
+                    msg = '内置浏览器网关不可用：' + le + '。请确认 .env 中 EMBEDDED_BROWSER_* 并已启动 embedded_browser_gateway。';
                 } else {
-                    msg = '远程画布未配置：请在服务端设置 EMBEDDED_BROWSER_GATEWAY_URL、EMBEDDED_BROWSER_GATEWAY_SECRET 与 EMBEDDED_BROWSER_PUBLIC_WS_BASE，并运行 embedded_browser_gateway。';
+                    msg = '未配置内置浏览器网关：请设置 EMBEDDED_BROWSER_GATEWAY_URL、EMBEDDED_BROWSER_GATEWAY_SECRET、EMBEDDED_BROWSER_PUBLIC_WS_BASE。';
                 }
                 alert(msg);
             } else {
-                setAgentStatusLine(le ? ('远程画布不可用：' + le) : '远程画布未配置，无法自动兜底');
+                setAgentStatusLine(le ? ('内置浏览器网关不可用：' + le) : '未配置内置浏览器网关，无法自动连接画面');
             }
             return false;
         }
         if (aiRemoteCanvasState.connecting) return false;
         aiRemoteCanvasState.connecting = true;
         try {
+            if (aiRemoteCanvasState.sessionId && aiRemoteCanvasState.wsUrl && !(aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1)) {
+                wireRemoteCanvasWebSocket(aiRemoteCanvasState.wsUrl);
+                var colA = document.querySelector('.ai-browser-embed-col');
+                if (colA) colA.classList.add('mode-remote-canvas');
+                var ifrA = document.getElementById('aiBrowserEmbed');
+                if (ifrA) ifrA.style.visibility = 'hidden';
+                var cvsA = document.getElementById('aiBrowserRemoteCanvas');
+                if (cvsA) cvsA.hidden = false;
+                setAiBrowserIframeBlockedBanner(false);
+                setAgentStatusLine(opts.auto ? '已恢复实时画面（沿用当前会话）' : '实时画面已连接');
+                syncEmbeddedGatewayToolbarButtons();
+                return true;
+            }
             await stopRemoteCanvasSession();
             var brEl = document.querySelector('select.ai-pw-browser-select');
             var br = brEl && brEl.value ? brEl.value : '';
@@ -1439,6 +1521,9 @@
             var data = await resp.json().catch(function() { return {}; });
             if (!resp.ok || !data.success) throw new Error(data.error || '创建远程会话失败');
             aiRemoteCanvasState.sessionId = data.session_id;
+            aiRemoteCanvasState.wsUrl = data.ws_url || null;
+            aiRemoteCanvasState.cdpWsUrl = data.cdp_ws_url || null;
+            syncEmbeddedCdpStrip();
             wireRemoteCanvasWebSocket(data.ws_url);
             var col = document.querySelector('.ai-browser-embed-col');
             if (col) col.classList.add('mode-remote-canvas');
@@ -1447,13 +1532,13 @@
             var cvs = document.getElementById('aiBrowserRemoteCanvas');
             if (cvs) cvs.hidden = false;
             setAiBrowserIframeBlockedBanner(false);
-            setAgentStatusLine(opts.auto ? 'iframe 无法嵌入，已自动切换远程画布' : '已连接远程画布');
+            setAgentStatusLine(opts.auto ? '已自动切换为实时画面' : '实时画面已连接');
             syncEmbeddedGatewayToolbarButtons();
             return true;
         } catch (e) {
             var msg = e && e.message ? e.message : String(e);
             if (!opts.auto) alert(msg);
-            else setAgentStatusLine('自动远程画布失败: ' + msg);
+            else setAgentStatusLine('自动连接实时画面失败: ' + msg);
             return false;
         } finally {
             aiRemoteCanvasState.connecting = false;
@@ -1539,9 +1624,14 @@
     async function updateBrowserStatusLine() {
         const el = document.getElementById('aiBrowserMeta');
         if (!el) return;
+        var ru = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
+        if (aiRemoteCanvasState.sessionId && aiRemoteCanvasState.gatewaySessionOnly) {
+            el.textContent = '内置浏览器：已打开会话 — ' + (ru || '网关');
+            el.title = ru || '';
+            return;
+        }
         if (aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1) {
-            var ru = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            el.textContent = '远程画布：已连接 — ' + (ru || '网关会话');
+            el.textContent = '内置浏览器：实时画面已连接 — ' + (ru || '网关');
             el.title = ru || '';
             return;
         }
@@ -1574,9 +1664,9 @@
             if (btnR) btnR.disabled = true;
             try {
                 rw.send(JSON.stringify({ t: 'navigate', url: u }));
-                if (!silent) setAgentStatusLine('远程画布：正在打开…');
+                if (!silent) setAgentStatusLine('正在打开页面…');
             } catch (e) {
-                if (!silent) setAgentStatusLine('远程画布导航失败: ' + (e && e.message ? e.message : e));
+                if (!silent) setAgentStatusLine('导航失败: ' + (e && e.message ? e.message : e));
             } finally {
                 if (btnR) btnR.disabled = false;
             }
@@ -1587,6 +1677,49 @@
             await updateBrowserStatusLine();
             return;
         }
+        if (aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured) {
+            const btnG = document.getElementById('aiBrowserOpenBtn');
+            if (btnG) btnG.disabled = true;
+            try {
+                var brEl2 = document.querySelector('select.ai-pw-browser-select');
+                var br2 = brEl2 && brEl2.value ? brEl2.value : '';
+                if (aiRemoteCanvasState.sessionId) {
+                    var respN = await fetch('/api/embedded-browser/session/' + encodeURIComponent(aiRemoteCanvasState.sessionId) + '/navigate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ url: u })
+                    });
+                    var dataN = await respN.json().catch(function() { return {}; });
+                    if (!respN.ok || !dataN.success) throw new Error(dataN.error || '远程 Chromium 导航失败');
+                } else {
+                    var respC = await fetch('/api/embedded-browser/session', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ initial_url: u, browser: br2 })
+                    });
+                    var dataC = await respC.json().catch(function() { return {}; });
+                    if (!respC.ok || !dataC.success) throw new Error(dataC.error || '创建远程 Chromium 会话失败');
+                    aiRemoteCanvasState.sessionId = dataC.session_id;
+                    aiRemoteCanvasState.wsUrl = dataC.ws_url || null;
+                    aiRemoteCanvasState.cdpWsUrl = dataC.cdp_ws_url || null;
+                }
+                aiRemoteCanvasState.gatewaySessionOnly = true;
+                syncEmbeddedCdpStrip();
+                ensureEmbeddedLiveViewConnected({ silent: !!silent });
+                if (!silent) setAgentStatusLine('内置浏览器已打开');
+            } catch (e) {
+                var msgG = e && e.message ? e.message : String(e);
+                if (!silent) alert(msgG);
+                else setAgentStatusLine('打开失败: ' + msgG);
+            } finally {
+                if (btnG) btnG.disabled = false;
+            }
+            syncEmbeddedGatewayToolbarButtons();
+            await updateBrowserStatusLine();
+            return;
+        }
         await stopRemoteCanvasSession();
         setAiBrowserIframeBlockedBanner(false);
         const btn = document.getElementById('aiBrowserOpenBtn');
@@ -1594,16 +1727,19 @@
         const iframe = document.getElementById('aiBrowserEmbed');
         if (iframe) { iframe.src = u; }
         const ph = document.getElementById('aiBrowserPlaceholder');
-        if (ph) { ph.classList.add('is-hidden'); }
+        if (ph) {
+            ph.textContent = AI_EMBED_PLACEHOLDER_DEFAULT;
+            ph.classList.add('is-hidden');
+        }
         try {
             const resp = await fetch('/api/navigate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u }), credentials: 'same-origin' });
             const data = await resp.json().catch(function() { return {}; });
             if (!resp.ok || (data && data.error)) throw new Error((data && data.error) ? data.error : ('HTTP ' + resp.status));
         } catch (e) {
             if (silent) {
-                setAgentStatusLine('内嵌区未与后台完全同步: ' + (e && e.message ? e.message : e));
+                setAgentStatusLine('预览区未与后台完全同步: ' + (e && e.message ? e.message : e));
             } else {
-                alert('后台自动化会话未同步: ' + (e && e.message ? e.message : e) + '。内嵌区若已显示页面，「运行」拉取结构可能仍失败，请检查服务。');
+                alert('后台自动化会话未同步: ' + (e && e.message ? e.message : e) + '。请检查服务或 URL。');
             }
         } finally {
             if (btn) { btn.disabled = false; }
@@ -1622,13 +1758,6 @@
         }
     }
 
-    function openEmbedInNewSystemWindow() {
-        const a = document.getElementById('aiTargetUrlInput');
-        const u = normalizeUrlForEmbed(a && a.value || '');
-        if (!u) { alert('请先在内置浏览器上方地址栏填写 URL'); return; }
-        window.open(u, '_blank', 'noopener,noreferrer');
-    }
-
     function toggleAiBrowserFullscreen(force) {
         const panel = document.querySelector('.ai-browser-panel');
         const btn = document.getElementById('aiBrowserFullscreenBtn');
@@ -1638,8 +1767,8 @@
         document.body.classList.toggle('ai-browser-fullscreen-active', next);
         document.body.style.overflow = next ? 'hidden' : '';
         if (btn) {
-            btn.textContent = next ? '退出全屏' : '全屏内嵌';
-            btn.setAttribute('title', next ? '恢复为页面内嵌布局' : '全屏本区域，便于大画面浏览');
+            btn.textContent = next ? '退出全屏' : '全屏';
+            btn.setAttribute('title', next ? '恢复页面内布局' : '全屏本区域');
         }
     }
 
@@ -1649,6 +1778,10 @@
         if (rw && rw.readyState === 1) {
             try { rw.send(JSON.stringify({ t: 'reload' })); } catch (e) {}
             await updateBrowserStatusLine();
+            return;
+        }
+        if (aiRemoteCanvasState.sessionId && aiRemoteCanvasState.gatewaySessionOnly) {
+            void openInternalBrowserPage(true);
             return;
         }
         const iframe = document.getElementById('aiBrowserEmbed');
@@ -1873,6 +2006,7 @@
     }
 
     function aiStopAgentWork() {
+        abortAiGatewayStream();
         if (aiPlanAbort && !aiPlanAbort.signal.aborted) {
             aiUserRequestedStop = true;
             try { aiPlanAbort.abort(); } catch (e) {}
@@ -2378,6 +2512,9 @@
             if (a === 'assert' && (ct === 'url_contains' || ct === 'url_equals')) {
                 return (idx + 1) + '. [assert ' + ct + '] ' + (s.description || '') + ' | 地址栏预期: ' + (s.input_value || '');
             }
+            if (a === 'assert' && (ct === 'page_text_contains' || ct === 'page_text_equals' || ct === 'page_text_regex')) {
+                return (idx + 1) + '. [assert ' + ct + '] ' + (s.description || '') + ' | 整页文本: ' + (s.input_value || '');
+            }
             return (idx + 1) + '. [' + s.action + '] ' + (s.description || '') + ' | ' + (s.selector_type || '') + ':' + (s.selector_value || '') + ' | 输入:' + (s.input_value || '');
         };
         const steps = (plan.steps || []).map((s, idx) => fmtStep(s, idx));
@@ -2402,6 +2539,17 @@
         } catch (e) { return true; }
     }
 
+    /** 脚本层执行摘要：仅表示自动化指令未抛错，不等于业务/UI 已验收通过。 */
+    function aiSummarizeScriptExecution(ex) {
+        if (!ex || !ex.ran || ex.error || ex.skipped_reason) return null;
+        var rs = ex.results || [];
+        var ok = 0;
+        for (var i = 0; i < rs.length; i++) {
+            if (rs[i] && rs[i].status === 'success') ok++;
+        }
+        return { ok: ok, total: rs.length };
+    }
+
     function mergeAiTaskResultIntoStudio(data) {
         if (!data) return;
         latestAiPlan = data.plan || latestAiPlan;
@@ -2415,16 +2563,19 @@
                 if (ex.error) {
                     appendAiChat('assistant', '步骤执行阶段异常：' + ex.error);
                 } else {
-                    var rs = ex.results || [];
-                    var ok = 0;
-                    for (var i = 0; i < rs.length; i++) {
-                        if (rs[i] && rs[i].status === 'success') ok++;
-                    }
+                    var sum = aiSummarizeScriptExecution(ex);
                     var via = ex.via || '';
-                    var runMsg = via === 'embedded'
-                        ? '已在远程画布（中栏）会话中按步骤执行：成功 '
-                        : '已在主 Playwright 会话中按生成步骤尝试执行：成功 ';
-                    appendAiChat('assistant', runMsg + ok + ' / ' + rs.length + '（详情见服务端日志）。');
+                    var where = via === 'embedded' ? '内置浏览器（网关）' : '主 Playwright';
+                    var caveat = '（以上仅为「自动化指令未报错」；登录、跳转、错误提示等是否满足目标，必须以中间画面与用例中的断言/预期结果为准。）';
+                    if (sum && sum.total > 0) {
+                        if (sum.ok === sum.total) {
+                            appendAiChat('assistant', '已在' + where + '会话执行脚本步骤：' + sum.ok + '/' + sum.total + ' 步未抛异常。详情见服务端日志。' + caveat);
+                        } else {
+                            appendAiChat('assistant', '已在' + where + '会话执行脚本步骤：仅 ' + sum.ok + '/' + sum.total + ' 步未抛异常，其余失败或已中断；请查日志与画面。' + caveat);
+                        }
+                    } else {
+                        appendAiChat('assistant', '执行阶段未返回逐步结果（若已跑脚本，请见服务端日志）。' + caveat);
+                    }
                 }
             }
         }
@@ -2644,7 +2795,8 @@
         if (genBtn) { genBtn.disabled = true; genBtn.textContent = '…'; }
         aiUserRequestedStop = false;
         if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
-        aiPlanAbort = new AbortController();
+        const planCtl = new AbortController();
+        aiPlanAbort = planCtl;
         syncAiStopButton();
         setAgentBusy(true, 'AI正在工作');
         setAgentStatusLine('制定行动…');
@@ -2653,16 +2805,34 @@
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
             const planPayload = { task_type: 'test_case_generation', execution_mode: executionMode, goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl };
             if (aiRemoteCanvasState.sessionId) planPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
-            jobId = await aiPostAiTaskAsyncStart('/api/ai/task/plan-async', planPayload, aiPlanAbort.signal);
+            jobId = await aiPostAiTaskAsyncStart('/api/ai/task/plan-async', planPayload, planCtl.signal);
             window.__aiCurrentBgJobId = jobId;
             if (typeof window.uatAiRegisterPendingJob === 'function') window.uatAiRegisterPendingJob(jobId, 'plan');
-            const data = await aiPollAiJobUntilDone(jobId, aiPlanAbort.signal);
+            const data = await aiPollAiJobUntilDone(jobId, planCtl.signal);
             if (typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
             if (!aiTryClaimBgJobResult(jobId)) return;
             mergeAiTaskResultIntoStudio(data);
             var n = (latestAiPlan && latestAiPlan.steps && latestAiPlan.steps.length) || 0;
             appendAiChat('assistant', '已生成《' + (latestAiPlan && latestAiPlan.case_name || '未命名') + '》，共 ' + n + ' 步。');
-            setAgentStatusLine((executionMode !== 'plan_only' ? '运行完成 — ' : '已完成规划 — ') + n + ' 步');
+            var ex0 = data.execution;
+            var sum0 = (executionMode !== 'plan_only') ? aiSummarizeScriptExecution(ex0) : null;
+            var statusLine;
+            if (executionMode === 'plan_only') {
+                statusLine = '已完成规划 — ' + n + ' 步';
+            } else if (ex0 && ex0.error) {
+                statusLine = '运行结束 — 执行异常（规划 ' + n + ' 步）';
+            } else if (ex0 && ex0.skipped_reason) {
+                statusLine = '运行结束 — 未跑脚本（规划 ' + n + ' 步）';
+            } else if (sum0 && sum0.total > 0) {
+                if (sum0.ok === sum0.total) {
+                    statusLine = '运行结束 — 脚本 ' + sum0.ok + '/' + sum0.total + ' 步未抛异常；规划共 ' + n + ' 步（请核对画面与预期）';
+                } else {
+                    statusLine = '运行结束 — 脚本仅 ' + sum0.ok + '/' + sum0.total + ' 步未抛异常；规划共 ' + n + ' 步';
+                }
+            } else {
+                statusLine = '运行结束 — 规划 ' + n + ' 步（未见脚本逐步结果，请查日志）';
+            }
+            setAgentStatusLine(statusLine);
         } catch (e) {
             if (e && e.aiNavSilent) {
                 setAgentStatusLine('请求已中断');
@@ -2686,7 +2856,7 @@
         } finally {
             setAgentBusy(false);
             window.__aiCurrentBgJobId = null;
-            aiPlanAbort = null;
+            if (aiPlanAbort === planCtl) aiPlanAbort = null;
             if (genBtn) { genBtn.disabled = false; genBtn.textContent = tBtn('aitest_btn_preview', '生成用例'); }
             syncAiSendButtons();
             syncUndoRedoButtons();
@@ -2708,7 +2878,8 @@
         if (btn) { btn.disabled = true; btn.textContent = '…'; }
         aiUserRequestedStop = false;
         if (aiPlanAbort) { try { aiPlanAbort.abort(); } catch (e) {} }
-        aiPlanAbort = new AbortController();
+        const chatCtl = new AbortController();
+        aiPlanAbort = chatCtl;
         syncAiStopButton();
         setAgentBusy(true, 'AI正在工作');
         setAgentStatusLine('优化方案中…');
@@ -2721,10 +2892,10 @@
                 var ix = HuFirstAiAssistant.getInteractionContextFromForm('aiIx');
                 chatPayload = HuFirstAiAssistant.appendInteractionToPayload(chatPayload, ix);
             }
-            jobId = await aiPostAiTaskAsyncStart('/api/ai/task/chat-async', chatPayload, aiPlanAbort.signal);
+            jobId = await aiPostAiTaskAsyncStart('/api/ai/task/chat-async', chatPayload, chatCtl.signal);
             window.__aiCurrentBgJobId = jobId;
             if (typeof window.uatAiRegisterPendingJob === 'function') window.uatAiRegisterPendingJob(jobId, 'chat');
-            const data = await aiPollAiJobUntilDone(jobId, aiPlanAbort.signal);
+            const data = await aiPollAiJobUntilDone(jobId, chatCtl.signal);
             if (typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jobId);
             if (!aiTryClaimBgJobResult(jobId)) return;
             mergeAiTaskResultIntoStudio(data);
@@ -2754,7 +2925,7 @@
         } finally {
             setAgentBusy(false);
             window.__aiCurrentBgJobId = null;
-            aiPlanAbort = null;
+            if (aiPlanAbort === chatCtl) aiPlanAbort = null;
             if (btn) { btn.disabled = false; btn.textContent = tBtn('aitest_btn_refine', '优化'); }
             syncAiSendButtons();
             syncUndoRedoButtons();
@@ -2770,7 +2941,7 @@
             forceEx = true;
         }
         if (!msg) {
-            alert('请填写指令（或先生成用例后再点「识别并执行」将默认执行当前预览）。');
+            alert('请填写指令；或先在左栏「生成用例」得到预览后，展开「高级」使用「执行预览（网关）」且可留空指令。');
             return;
         }
         if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
@@ -2781,11 +2952,33 @@
         syncAiSendButtons();
         setAgentBusy(true, '网关执行中…');
         setAgentStatusLine('识别意图并连接后台自动化会话…');
+
+        // 若有 plan 但实时画面未连接，尝试自动连接网关（提升「识别并执行」成功率）
+        try {
+            if (hasSteps && (!aiRemoteCanvasState || !aiRemoteCanvasState.sessionId)) {
+                var gwStatus = (typeof aiEmbeddedGatewayStatus !== 'undefined') ? aiEmbeddedGatewayStatus : null;
+                if (gwStatus && gwStatus.enabled && gwStatus.wsConfigured) {
+                    setAgentStatusLine('正在连接内置浏览器…');
+                    if (typeof startRemoteCanvasSession === 'function') {
+                        var ok = await startRemoteCanvasSession({ auto: true });
+                        if (ok) {
+                            appendAiChat('assistant', '已连接内置浏览器，将在同一 Chromium 中执行。');
+                        }
+                    }
+                }
+            }
+        } catch (eAuto) {
+            appendAiChat('assistant', '自动连接内置浏览器失败，将在后台继续执行。');
+        }
+        abortAiGatewayStream();
+        var gwStreamCtl = new AbortController();
+        aiGatewayStreamAbort = gwStreamCtl;
         try {
             var resp = await fetch('/api/ai/agent/gateway-stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
+                signal: gwStreamCtl.signal,
                 body: JSON.stringify({
                     message: msg,
                     plan: latestAiPlan || {},
@@ -2843,10 +3036,28 @@
                 }
             }
             try { if (typeof syncAiBrowserMeta === 'function') syncAiBrowserMeta(); } catch (e2) {}
+            // 执行完成后尝试刷新可见画布
+            try {
+                if (typeof refreshEmbeddedGatewayStatus === 'function') await refreshEmbeddedGatewayStatus();
+                if (typeof syncAiBrowserMeta === 'function') syncAiBrowserMeta();
+                // 若当前为实时画面，尝试触发一次重绘
+                var canvas = document.getElementById('aiBrowserRemoteCanvas');
+                if (canvas && !canvas.hidden && typeof aiRemoteCanvasState !== 'undefined' && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1) {
+                    // 发送一个轻量 ping 让网关刷新画面
+                    try { aiRemoteCanvasState.ws.send(JSON.stringify({ type: 'ping', ts: Date.now() })); } catch (_) {}
+                }
+            } catch (e3) {}
         } catch (e) {
-            appendAiChat('assistant', '网关流异常: ' + (e && e.message ? e.message : String(e)));
-            setAgentStatusLine('网关异常');
+            var aborted = e && (e.name === 'AbortError' || (e.constructor && e.constructor.name === 'AbortError'));
+            if (aborted) {
+                appendAiChat('assistant', '网关流已取消（已停止或已清空会话）。');
+                setAgentStatusLine('网关已取消');
+            } else {
+                appendAiChat('assistant', '网关流异常: ' + (e && e.message ? e.message : String(e)));
+                setAgentStatusLine('网关异常');
+            }
         } finally {
+            if (aiGatewayStreamAbort === gwStreamCtl) aiGatewayStreamAbort = null;
             setAgentBusy(false);
             aiGatewayBusy = false;
             syncAiSendButtons();
@@ -2859,15 +3070,18 @@
             await refreshEmbeddedGatewayStatus();
             var okGw = aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured;
             var live = !!(aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1);
-            if (okGw && !live) {
-                var started = await startRemoteCanvasSession({ auto: false });
+            var hasEmb = !!(aiRemoteCanvasState && aiRemoteCanvasState.sessionId);
+            if (okGw && !live && hasEmb && aiRemoteCanvasState.wsUrl) {
+                ensureEmbeddedLiveViewConnected({ silent: true });
+            } else if (okGw && !live && !hasEmb) {
+                var started = await startRemoteCanvasSession({ auto: true });
                 if (!started) {
-                    appendAiChat('assistant', '未能连接远程画布，本次将在主 Playwright 中执行（中栏 iframe 无法同步自动化画面）。若需边看边跑，请填写 URL 并完成网关配置后重试。');
+                    appendAiChat('assistant', '未能连接内置浏览器网关，本次将在主 Playwright 中执行（中栏可能不同步）。请填写 URL 并配置 EMBEDDED_BROWSER_* 后重试。');
                 }
             }
         } catch (e) {
             try {
-                appendAiChat('assistant', '尝试连接远程画布时出错，将回退到主 Playwright：' + (e && e.message ? e.message : String(e)));
+                appendAiChat('assistant', '连接内置浏览器时出错，将使用主 Playwright：' + (e && e.message ? e.message : String(e)));
             } catch (e2) {}
         }
         await aiGeneratePreview({ executionMode: 'run_and_record' });
@@ -2881,14 +3095,27 @@
         appendAiChat('assistant', '已撤销上一步编辑。');
     }
 
-    function aiClearChatHistory() {
-        var q = typeof t === 'function' ? t('aitest_clear_chat_confirm') : '确定清空与 AI 的对话记录？（不影响用例预览与计划草案）';
+    async function aiClearChatHistory() {
+        var q = typeof t === 'function' ? t('aitest_clear_chat_confirm') : '确定清空左栏对话、右侧用例预览与当前计划草稿？将停止进行中的 AI 任务并关闭内置浏览器会话与中栏画面。（顶栏标题与左栏目标文本保留）';
         if (!confirm(q)) return;
+        abortAiGatewayStream();
+        aiStopAgentWork();
+        try { aiGatewayBusy = false; } catch (e0) {}
+        try {
+            await stopRemoteCanvasSession();
+        } catch (eStop) {}
         aiChatMessages = [];
         var ch = document.getElementById('aiChatHistory');
         if (ch) ch.innerHTML = '';
+        latestAiPlan = null;
+        var pv = document.getElementById('aiGeneratedPreview');
+        if (pv) pv.value = '';
+        updateStatsFromPlan(null);
+        aiUndoStack = [];
+        syncUndoRedoButtons();
         flushPersistAiStudioToSession();
-        setAgentStatusLine(typeof t === 'function' ? t('aitest_cleared_chat_status') : '对话记录已清空');
+        setAgentStatusLine(typeof t === 'function' ? t('aitest_cleared_chat_status') : '已清空对话与预览，并关闭内置浏览器会话');
+        try { syncAiSendButtons(); } catch (e1) {}
     }
 
     function aiLoadDraftLocal() {
@@ -2957,7 +3184,7 @@
                 welcomeExtra = ' 说明：工具循环已启用但未连接 OpenClaw 时请尽快配置 Gateway（见上方黄色提示）。';
             }
         } catch (e) {}
-        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。本页为「智能体工作室」：<strong>左栏</strong>用自然语言描述任务；点<strong>生成用例</strong>仅由模型生成可保存的步骤，点顶栏<strong>运行</strong>会在主 Playwright 浏览器打开 URL 后生成并尝试执行这些步骤。<strong>中栏</strong>输入 URL 点「打开」可预览页面；<strong>右栏</strong>查看统计与用例预览。本会话内容会在本标签页内自动保存。' + welcomeExtra + '</div></div>';
+        var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。选好项目、用例与浏览器后，在<strong>左栏</strong>描述任务；<strong>生成用例</strong>更新右侧预览；<strong>优化</strong>多轮改步骤；顶栏<strong>运行</strong>会生成并执行。中栏填写 URL 点「打开」查看页面。会话在本页自动保存。' + welcomeExtra + '</div></div>';
         var s = (window.HuFirstAiAssistant && HuFirstAiAssistant.loadStudioSession) ? HuFirstAiAssistant.loadStudioSession() : null;
         var d = null;
         try {
@@ -3064,41 +3291,25 @@
         wireAiBrowserUrlSync();
         await refreshEmbeddedGatewayStatus();
         wireRemoteCanvasInputOnce();
+        document.getElementById('aiEmbeddedCdpCopyBtn') && document.getElementById('aiEmbeddedCdpCopyBtn').addEventListener('click', function(e) {
+            e.preventDefault();
+            var inp = document.getElementById('aiEmbeddedCdpWsInput');
+            if (!inp || !inp.value) return;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                void navigator.clipboard.writeText(inp.value).then(function() {
+                    setAgentStatusLine('已复制 CDP WebSocket URL');
+                }).catch(function() {
+                    try { inp.select(); document.execCommand('copy'); setAgentStatusLine('已尝试复制 CDP URL'); } catch (err) {}
+                });
+            } else {
+                try { inp.select(); document.execCommand('copy'); setAgentStatusLine('已尝试复制 CDP URL'); } catch (err) {}
+            }
+        });
         wireEmbedFrame();
-        document.getElementById('aiBrowserRemoteCanvasBtn') && document.getElementById('aiBrowserRemoteCanvasBtn').addEventListener('click', function(e) {
-            e.preventDefault();
-            void startRemoteCanvasSession({ auto: false });
-        });
-        document.getElementById('aiBrowserBackToIframeBtn') && document.getElementById('aiBrowserBackToIframeBtn').addEventListener('click', function(e) {
-            e.preventDefault();
-            void stopRemoteCanvasSession().then(function() {
-                var ta = document.getElementById('aiTargetUrlInput');
-                var u = ta && normalizeUrlForEmbed(ta.value || '');
-                var iframe = document.getElementById('aiBrowserEmbed');
-                if (u && iframe) iframe.src = u;
-                setAgentStatusLine('已切回 iframe；若站点禁止嵌入仍可能无法预览');
-            });
-        });
-        document.getElementById('aiBrowserBannerRemoteCanvas') && document.getElementById('aiBrowserBannerRemoteCanvas').addEventListener('click', function(e) {
-            e.preventDefault();
-            void startRemoteCanvasSession({ auto: false });
-        });
         document.getElementById('aiBrowserOpenBtn') && document.getElementById('aiBrowserOpenBtn').addEventListener('click', function(e) { e.preventDefault(); openInternalBrowserPage(); });
-        document.getElementById('aiBrowserNewTabBtn') && document.getElementById('aiBrowserNewTabBtn').addEventListener('click', function(e) { e.preventDefault(); openEmbedInNewSystemWindow(); });
-        document.getElementById('aiBrowserBannerOpenNew') && document.getElementById('aiBrowserBannerOpenNew').addEventListener('click', function(e) {
-            e.preventDefault();
-            openEmbedInNewSystemWindow();
-        });
         document.getElementById('aiBrowserBannerDismiss') && document.getElementById('aiBrowserBannerDismiss').addEventListener('click', function(e) {
             e.preventDefault();
             setAiBrowserIframeBlockedBanner(false);
-        });
-        document.getElementById('aiBrowserToggleEmbedHelp') && document.getElementById('aiBrowserToggleEmbedHelp').addEventListener('click', function(e) {
-            e.preventDefault();
-            var b = document.getElementById('aiBrowserIframeBlockedBanner');
-            if (!b) return;
-            b.hidden = !b.hidden;
-            this.textContent = b.hidden ? '显示内嵌说明 / 故障排查' : '隐藏内嵌说明';
         });
         document.getElementById('aiBrowserFullscreenBtn') && document.getElementById('aiBrowserFullscreenBtn').addEventListener('click', function(e) { e.preventDefault(); toggleAiBrowserFullscreen(); });
         document.getElementById('aiBrowserReloadBtn') && document.getElementById('aiBrowserReloadBtn').addEventListener('click', function() { aiBrowserHistory('reload'); });
@@ -3136,7 +3347,7 @@
         var bUn = document.getElementById('aiBtnUndo');
         if (bUn) bUn.addEventListener('click', function() { aiUndo(); });
         var bClrChat = document.getElementById('aiBtnClearChat');
-        if (bClrChat) bClrChat.addEventListener('click', function() { if (typeof window.aiClearChatHistory === 'function') window.aiClearChatHistory(); });
+        if (bClrChat) bClrChat.addEventListener('click', function() { if (typeof window.aiClearChatHistory === 'function') void window.aiClearChatHistory(); });
         var bRun = document.getElementById('aiBtnRunAgent');
         if (bRun) bRun.addEventListener('click', function() { aiRunAgentWorkflow(); });
         if (msg) msg.addEventListener('keydown', function(e) {

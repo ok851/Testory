@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 from ai_page_probe import (
     build_locator_candidates_from_probe_entry,
     extract_http_urls,
+    registry_step_selector_warnings,
     validate_plan_locators,
 )
 from ai_step_normalization import is_overly_broad_css_selector, repair_raw_ai_steps_for_platform
@@ -840,7 +841,7 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        self._attach_locator_validation(meta, pu, out.get("steps") or [])
+        self._attach_locator_validation(meta, pu, out.get("steps") or [], probe_registry=pr if pr else None)
         return out
 
     def refine_case_and_steps(
@@ -888,7 +889,7 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        self._attach_locator_validation(meta, pu, out.get("steps") or [])
+        self._attach_locator_validation(meta, pu, out.get("steps") or [], probe_registry=pr if pr else None)
         return out
 
     def _complete_for_model(
@@ -1153,17 +1154,23 @@ class LocalAIService:
         meta: Dict[str, Any],
         probe_url: Optional[str],
         steps: List[Dict[str, Any]],
+        probe_registry: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        if (os.environ.get("LOCAL_AI_PROBE_VALIDATE", "1").strip().lower() in ("0", "false", "no")):
-            return
         u = _norm_str(probe_url)
-        if not u or not steps:
-            return
-        warnings, verr = validate_plan_locators(u, steps)
-        if verr:
-            meta["locator_validation_error"] = verr
-        if warnings:
-            meta["locator_validation"] = warnings
+        all_warns: List[str] = []
+        if probe_registry and steps:
+            snap_warns = registry_step_selector_warnings(probe_registry, steps)
+            if snap_warns:
+                all_warns.extend(snap_warns)
+        probe_ok = (os.environ.get("LOCAL_AI_PROBE_VALIDATE", "1").strip().lower() not in ("0", "false", "no"))
+        if probe_ok and u and steps:
+            warnings, verr = validate_plan_locators(u, steps)
+            if verr:
+                meta["locator_validation_error"] = verr
+            if warnings:
+                all_warns.extend(warnings)
+        if all_warns:
+            meta["locator_validation"] = all_warns
 
     def _build_prompt(
         self,
@@ -1198,6 +1205,8 @@ class LocalAIService:
             "When a LIVE snapshot exists: STRONGLY prefer setting probe_index to the line number [n] for each step, "
             "and set selector_value to the EXACT substring shown as recommended=(type)… on that SAME line "
             "(copy-paste; do not paraphrase or guess CSS classes).\n"
+            "NEVER assume conventional English field names (e.g. name=password) if the snapshot line shows a different "
+            "name= value (many Chinese admin UIs use name=pwd or vendor-specific names)—copy the name= from the snapshot row.\n"
             "Each snapshot line starts with [n] — that integer is ONLY for the JSON field probe_index. "
             "NEVER put the line number in selector_value (e.g. selector_value must NOT be \"1\" or \"12\" alone). "
             "Copy the real locator from that line into selector_type/selector_value (e.g. css #kw, [name=\\\"wd\\\"], xpath …). "
@@ -1243,9 +1252,9 @@ class LocalAIService:
             "- click: input_value usually empty; selector_value MUST be a real css/xpath/text from the snapshot (never a lone digit). "
             "Never use a bare tag-only selector like \"button\" or \"input\" — use id/css from the snapshot or probe_index.\n"
             "Use probe_index for [n], not selector_value.\n"
-            "- navigate: input_value MUST be the full http(s) URL (never empty when a URL is known from the goal).\n"
+            "- navigate: input_value MUST be the full http(s) URL (never empty when a URL is known from the goal). For search goals (Baidu/Google/etc.), ALWAYS start with navigate to the HOME page (e.g. https://www.baidu.com/), then use input on common selectors (#kw, [name=wd], input[title*='搜索'], etc.) + click on search button (#su, [value*='百度一下'], button[type=submit], etc.). ONLY fall back to direct /s?wd=... URL param as LAST RESORT when input+click has failed twice in previous attempts.\n"
             "- input/assert/extract_text: selector_value must be concrete when probe_index is empty (assert url_* types may omit selector).\n"
-            "- Usually 3–8 steps; start with navigate if URL is known. Do not pad with redundant wait/assert steps.\n"
+            "- Usually 3–8 steps; start with navigate to base URL if known. Prefer realistic user flow (navigate → input → click → wait → assert) over clever URL shortcuts. Do not pad with redundant wait/assert steps.\n"
             "- Never omit JSON keys; use \"\" only where the rules above allow empty.\n"
             "- Never invent placeholder hosts like example.com / example.org unless the goal explicitly names them; "
             "use the real site implied by the goal (e.g. Baidu search → https://www.baidu.com/ ).\n"

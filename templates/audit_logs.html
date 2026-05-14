@@ -34,33 +34,41 @@
         <div class="card mb-6">
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">操作类型</label>
-                    <select id="filterTargetType" class="form-select" onchange="loadLogs()">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">目标类型</label>
+                    <select id="filterTargetType" class="form-select" onchange="loadLogs(true)">
                         <option value="">全部类型</option>
-                        <option value="case">用例操作</option>
-                        <option value="project">项目操作</option>
-                        <option value="project_member">成员操作</option>
+                        <option value="case">用例</option>
+                        <option value="project">项目</option>
+                        <option value="project_member">项目成员</option>
+                        <option value="execution">执行</option>
                         <option value="schedule">定时任务</option>
                         <option value="notification">通知配置</option>
                         <option value="sso_config">SSO配置</option>
                         <option value="order">订单</option>
+                        <option value="defect">缺陷</option>
                     </select>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">用户名</label>
-                    <input type="text" id="filterUsername" class="form-input" placeholder="输入用户名" onchange="loadLogs()">
+                    <div class="flex gap-2">
+                        <input type="text" id="filterUsername" class="form-input flex-1" placeholder="模糊匹配用户名" onkeydown="if(event.key==='Enter'){event.preventDefault();loadLogs(true);}">
+                        <button type="button" onclick="loadLogs(true)" class="btn btn-sm btn-primary whitespace-nowrap">查询</button>
+                    </div>
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">每页显示</label>
-                    <select id="filterPageSize" class="form-select" onchange="loadLogs()">
+                    <select id="filterPageSize" class="form-select" onchange="loadLogs(true)">
                         <option value="20">20条</option>
                         <option value="50" selected>50条</option>
                         <option value="100">100条</option>
                     </select>
                 </div>
-                <div class="flex items-end">
-                    <button onclick="exportLogs()" class="btn btn-outline w-full">
-                        <i class="fas fa-download mr-1"></i>导出
+                <div class="flex flex-row flex-nowrap gap-2 justify-end items-end w-full min-w-0">
+                    <button type="button" onclick="exportLogs('xlsx')" id="exportXlsxBtn" class="btn btn-primary flex-1 min-w-0 text-sm px-2 py-2 sm:px-3">
+                        <i class="fas fa-file-excel mr-1 shrink-0"></i><span class="truncate">导出 Excel</span>
+                    </button>
+                    <button type="button" onclick="exportLogs('csv')" id="exportCsvBtn" class="btn btn-outline flex-1 min-w-0 text-sm px-2 py-2 sm:px-3">
+                        <i class="fas fa-file-csv mr-1 shrink-0"></i><span class="truncate">导出 CSV</span>
                     </button>
                 </div>
             </div>
@@ -92,27 +100,36 @@
             </div>
 
             <!-- 分页 -->
-            <div class="mt-4 flex items-center justify-between border-t border-gray-200 pt-4">
+            <div class="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-gray-200 pt-4">
                 <div class="text-sm text-gray-500">
-                    共 <span id="totalCount">0</span> 条记录
+                    共 <span id="totalCount">0</span> 条记录，<span id="totalPagesLabel">1</span> 页
                 </div>
-                <div class="flex space-x-2">
-                    <button id="prevPageBtn" onclick="changePage(-1)" class="btn btn-sm btn-outline" disabled>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" id="firstPageBtn" onclick="goFirstPage()" class="btn btn-sm btn-outline" title="首页">
+                        <i class="fas fa-angle-double-left"></i>
+                    </button>
+                    <button type="button" id="prevPageBtn" onclick="changePage(-1)" class="btn btn-sm btn-outline" disabled title="上一页">
                         <i class="fas fa-chevron-left"></i>
                     </button>
-                    <span class="px-3 py-1.5 text-sm text-gray-700">
-                        第 <span id="currentPage">1</span> 页
+                    <span class="px-2 py-1 text-sm text-gray-700 whitespace-nowrap">
+                        第 <span id="currentPage">1</span> / <span id="totalPagesDisplay">1</span> 页
                     </span>
-                    <button id="nextPageBtn" onclick="changePage(1)" class="btn btn-sm btn-outline">
+                    <button type="button" id="nextPageBtn" onclick="changePage(1)" class="btn btn-sm btn-outline" title="下一页">
                         <i class="fas fa-chevron-right"></i>
                     </button>
+                    <button type="button" id="lastPageBtn" onclick="goLastPage()" class="btn btn-sm btn-outline" title="末页">
+                        <i class="fas fa-angle-double-right"></i>
+                    </button>
+                    <span class="text-sm text-gray-500 hidden sm:inline">跳转</span>
+                    <input type="number" min="1" id="jumpPageInput" class="form-input w-20 py-1.5 text-sm" placeholder="页码" title="输入页码后点击跳转">
+                    <button type="button" onclick="jumpToPage()" class="btn btn-sm btn-primary">跳转</button>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- 详情模态框 -->
-    <div id="detailModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center backdrop-blur-sm">
+    <div id="detailModal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-[100] flex items-center justify-center backdrop-blur-sm">
         <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
             <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
                 <h3 class="text-lg font-semibold text-gray-900">操作详情</h3>
@@ -130,6 +147,9 @@
     <script>
         let currentPage = 1;
         let totalPages = 1;
+        let lastTotal = 0;
+        /** 当前表格渲染的日志行（供详情按钮委托读取，避免 onclick 内嵌 JSON 破坏属性） */
+        let auditLogsPageRows = [];
 
         // 操作名称映射
         const actionNames = {
@@ -149,10 +169,19 @@
             'CREATE_NOTIFICATION': '创建通知配置',
             'UPDATE_NOTIFICATION': '更新通知配置',
             'DELETE_NOTIFICATION': '删除通知配置',
+            'CREATE_NOTIFICATION_CONFIG': '创建通知配置',
+            'UPDATE_NOTIFICATION_CONFIG': '更新通知配置',
+            'DELETE_NOTIFICATION_CONFIG': '删除通知配置',
             'CREATE_SSO_CONFIG': '创建SSO配置',
             'UPDATE_SSO_CONFIG': '更新SSO配置',
             'DELETE_SSO_CONFIG': '删除SSO配置',
-            'CREATE_ORDER': '创建订单'
+            'CREATE_ORDER': '创建订单',
+            'CREATE_DEFECT': '创建缺陷',
+            'UPDATE_DEFECT': '更新缺陷',
+            'DELETE_DEFECT': '删除缺陷',
+            'UPDATE_DEFECT_STATUS': '更新缺陷状态',
+            'CREATE_DEFECT_FROM_FAILURE': '从失败创建缺陷',
+            'IMPORT_CASES': '导入用例'
         };
 
         // 目标类型映射
@@ -160,41 +189,78 @@
             'case': '用例',
             'project': '项目',
             'project_member': '项目成员',
+            'execution': '执行',
             'schedule': '定时任务',
             'notification': '通知配置',
             'sso_config': 'SSO配置',
-            'order': '订单'
+            'order': '订单',
+            'defect': '缺陷'
         };
 
-        async function loadLogs() {
+        function syncJumpInputMax() {
+            const el = document.getElementById('jumpPageInput');
+            if (!el) return;
+            el.max = String(Math.max(1, totalPages));
+        }
+
+        /**
+         * @param {boolean} [resetPage] 为 true 时回到第 1 页（筛选变更时使用）
+         */
+        async function loadLogs(resetPage) {
+            if (resetPage) currentPage = 1;
             const targetType = document.getElementById('filterTargetType').value;
-            const pageSize = document.getElementById('filterPageSize').value;
+            const pageSize = parseInt(document.getElementById('filterPageSize').value, 10) || 50;
+            const username = document.getElementById('filterUsername').value.trim();
 
             try {
                 const params = new URLSearchParams({
-                    page: currentPage,
-                    page_size: pageSize
+                    page: String(currentPage),
+                    page_size: String(pageSize)
                 });
                 if (targetType) params.append('target_type', targetType);
+                if (username) params.append('username', username);
 
-                const response = await fetch(`/api/audit-logs?${params}`);
+                const response = await fetch('/api/audit-logs?' + params.toString(), { credentials: 'same-origin' });
                 const result = await response.json();
 
+                if (response.status === 403) {
+                    auditLogsPageRows = [];
+                    document.getElementById('logsTableBody').innerHTML = '<tr><td colspan="7" class="text-center py-8 text-red-600">无权限查看审计日志（需要管理员）</td></tr>';
+                    return;
+                }
+
                 if (result.success) {
+                    lastTotal = result.total || 0;
                     renderLogs(result.logs);
-                    document.getElementById('totalCount').textContent = result.total;
-                    totalPages = Math.ceil(result.total / parseInt(pageSize));
+                    document.getElementById('totalCount').textContent = lastTotal;
+                    totalPages = lastTotal === 0 ? 1 : Math.ceil(lastTotal / pageSize);
+                    if (currentPage > totalPages) {
+                        currentPage = totalPages;
+                        await loadLogs(false);
+                        return;
+                    }
+                    document.getElementById('totalPagesDisplay').textContent = totalPages;
+                    document.getElementById('totalPagesLabel').textContent = totalPages;
+                    syncJumpInputMax();
                     updatePagination();
+                } else {
+                    auditLogsPageRows = [];
+                    document.getElementById('logsTableBody').innerHTML =
+                        '<tr><td colspan="7" class="text-center py-8 text-red-600">' + (result.error || '加载失败') + '</td></tr>';
                 }
             } catch (error) {
                 console.error('加载审计日志失败:', error);
+                auditLogsPageRows = [];
+                document.getElementById('logsTableBody').innerHTML =
+                    '<tr><td colspan="7" class="text-center py-8 text-red-600">加载失败，请稍后重试</td></tr>';
             }
         }
 
         function renderLogs(logs) {
             const tbody = document.getElementById('logsTableBody');
-            
+
             if (!logs || logs.length === 0) {
+                auditLogsPageRows = [];
                 tbody.innerHTML = `
                     <tr>
                         <td colspan="7" class="text-center py-8 text-gray-500">
@@ -205,32 +271,39 @@
                 return;
             }
 
-            tbody.innerHTML = logs.map(log => `
-                <tr class="hover:bg-gray-50">
-                    <td class="text-gray-500">${formatTime(log.created_at)}</td>
-                    <td>
-                        <span class="font-medium text-gray-900">${log.username || '-'}</span>
-                    </td>
-                    <td>
-                        <span class="badge ${getActionBadgeClass(log.action)}">
-                            ${actionNames[log.action] || log.action}
-                        </span>
-                    </td>
-                    <td>${targetTypeNames[log.target_type] || log.target_type}</td>
-                    <td class="font-mono text-gray-500">${log.target_id || '-'}</td>
-                    <td class="text-gray-500">${log.ip_address || '-'}</td>
-                    <td>
-                        ${log.details ? `
-                            <button onclick='showDetail(${JSON.stringify(log.details).replace(/'/g, "&apos;")})' class="text-blue-600 hover:text-blue-800">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                        ` : '-'}
-                    </td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = logs.map(function (log, idx) {
+                var detailBtn = '-';
+                if (log.details !== undefined && log.details !== null && log.details !== '') {
+                    detailBtn = '<button type="button" class="audit-detail-btn text-blue-600 hover:text-blue-800 p-1 rounded focus:outline-none focus:ring-2 focus:ring-blue-400" data-detail-index="' + idx + '" title="查看详情"><i class="fas fa-eye"></i></button>';
+                }
+                return (
+                    '<tr class="hover:bg-gray-50">' +
+                    '<td class="text-gray-500">' + formatTime(log.created_at) + '</td>' +
+                    '<td><span class="font-medium text-gray-900">' + escapeHtml(log.username || '-') + '</span></td>' +
+                    '<td><span class="badge ' + getActionBadgeClass(log.action) + '">' +
+                    escapeHtml(actionNames[log.action] || log.action || '-') + '</span></td>' +
+                    '<td>' + escapeHtml(targetTypeNames[log.target_type] || log.target_type || '-') + '</td>' +
+                    '<td class="font-mono text-gray-500">' + escapeHtml(log.target_id != null ? String(log.target_id) : '-') + '</td>' +
+                    '<td class="text-gray-500">' + escapeHtml(log.ip_address || '-') + '</td>' +
+                    '<td>' + detailBtn + '</td>' +
+                    '</tr>'
+                );
+            }).join('');
+
+            auditLogsPageRows = logs;
+        }
+
+        function escapeHtml(s) {
+            if (s == null) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
         }
 
         function getActionBadgeClass(action) {
+            if (!action) return 'bg-gray-100 text-gray-800';
             if (action.startsWith('CREATE')) return 'bg-green-100 text-green-800';
             if (action.startsWith('UPDATE')) return 'bg-blue-100 text-blue-800';
             if (action.startsWith('DELETE') || action.startsWith('REMOVE')) return 'bg-red-100 text-red-800';
@@ -242,6 +315,7 @@
             if (!timeStr) return '-';
             const date = new Date(timeStr);
             return date.toLocaleString('zh-CN', {
+                year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
                 hour: '2-digit',
@@ -254,8 +328,8 @@
             try {
                 const parsed = typeof details === 'string' ? JSON.parse(details) : details;
                 document.getElementById('detailContent').textContent = JSON.stringify(parsed, null, 2);
-            } catch {
-                document.getElementById('detailContent').textContent = details;
+            } catch (e) {
+                document.getElementById('detailContent').textContent = typeof details === 'string' ? details : String(details);
             }
             document.getElementById('detailModal').classList.remove('hidden');
         }
@@ -268,25 +342,155 @@
             currentPage += delta;
             if (currentPage < 1) currentPage = 1;
             if (currentPage > totalPages) currentPage = totalPages;
-            loadLogs();
+            loadLogs(false);
+        }
+
+        function goFirstPage() {
+            currentPage = 1;
+            loadLogs(false);
+        }
+
+        function goLastPage() {
+            currentPage = totalPages;
+            loadLogs(false);
+        }
+
+        function jumpToPage() {
+            const input = document.getElementById('jumpPageInput');
+            let p = parseInt(input.value, 10);
+            if (isNaN(p) || p < 1) {
+                alert('请输入有效的页码（≥1）');
+                return;
+            }
+            if (p > totalPages) p = totalPages;
+            currentPage = p;
+            input.value = String(p);
+            loadLogs(false);
         }
 
         function updatePagination() {
             document.getElementById('currentPage').textContent = currentPage;
-            document.getElementById('prevPageBtn').disabled = currentPage <= 1;
-            document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+            document.getElementById('totalPagesDisplay').textContent = totalPages;
+            document.getElementById('totalPagesLabel').textContent = totalPages;
+            const noData = lastTotal === 0;
+            document.getElementById('prevPageBtn').disabled = noData || currentPage <= 1;
+            document.getElementById('nextPageBtn').disabled = noData || currentPage >= totalPages;
+            const firstBtn = document.getElementById('firstPageBtn');
+            const lastBtn = document.getElementById('lastPageBtn');
+            if (firstBtn) firstBtn.disabled = noData || currentPage <= 1;
+            if (lastBtn) lastBtn.disabled = noData || currentPage >= totalPages;
         }
 
-        async function exportLogs() {
-            alert('导出功能开发中...');
+        async function exportLogs(format) {
+            const fmt = format === 'xlsx' ? 'xlsx' : 'csv';
+            const targetType = document.getElementById('filterTargetType').value;
+            const username = document.getElementById('filterUsername').value.trim();
+            const params = new URLSearchParams();
+            params.set('format', fmt);
+            if (targetType) params.set('target_type', targetType);
+            if (username) params.set('username', username);
+
+            const xlsxBtn = document.getElementById('exportXlsxBtn');
+            const csvBtn = document.getElementById('exportCsvBtn');
+            const busyLabel = fmt === 'xlsx' ? '<i class="fas fa-spinner fa-spin mr-1"></i>导出中…' : '<i class="fas fa-spinner fa-spin mr-1"></i>导出中…';
+            const origX = xlsxBtn ? xlsxBtn.innerHTML : '';
+            const origC = csvBtn ? csvBtn.innerHTML : '';
+            if (xlsxBtn) {
+                xlsxBtn.disabled = true;
+                if (fmt === 'xlsx') xlsxBtn.innerHTML = busyLabel;
+            }
+            if (csvBtn) {
+                csvBtn.disabled = true;
+                if (fmt === 'csv') csvBtn.innerHTML = busyLabel;
+            }
+            try {
+                const res = await fetch('/api/audit-logs?' + params.toString(), { credentials: 'same-origin' });
+                const ct = (res.headers.get('Content-Type') || '').toLowerCase();
+
+                if (!res.ok) {
+                    let msg = 'HTTP ' + res.status;
+                    try {
+                        if (ct.indexOf('application/json') !== -1) {
+                            const j = await res.json();
+                            msg = (j && j.error) ? j.error : msg;
+                        } else {
+                            const text = await res.text();
+                            msg = text.slice(0, 400);
+                        }
+                    } catch (e1) {
+                        msg = res.status === 403 ? '无权限导出' : msg;
+                    }
+                    alert('导出失败：' + msg);
+                    return;
+                }
+
+                if (ct.indexOf('json') !== -1) {
+                    const j = await res.json();
+                    alert('导出失败：' + ((j && j.error) ? j.error : '服务器返回了非文件内容'));
+                    return;
+                }
+
+                const blob = await res.blob();
+                let fn = fmt === 'xlsx' ? 'audit_logs.xlsx' : 'audit_logs.csv';
+                const cd = res.headers.get('Content-Disposition');
+                if (cd) {
+                    let m = /filename\*=UTF-8''([^;\s]+)/i.exec(cd);
+                    if (m) {
+                        try {
+                            fn = decodeURIComponent(m[1].replace(/^"+|"+$/g, ''));
+                        } catch (e2) {
+                            fn = m[1];
+                        }
+                    } else {
+                        m = /filename="([^"]+)"/i.exec(cd);
+                        if (m) fn = m[1];
+                    }
+                }
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fn;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                console.error(e);
+                alert('导出失败：' + (e.message || e));
+            } finally {
+                if (xlsxBtn) {
+                    xlsxBtn.disabled = false;
+                    xlsxBtn.innerHTML = origX;
+                }
+                if (csvBtn) {
+                    csvBtn.disabled = false;
+                    csvBtn.innerHTML = origC;
+                }
+            }
         }
 
-        // 页面加载
-        document.addEventListener('DOMContentLoaded', loadLogs);
-
-        // 点击模态框外部关闭
-        document.getElementById('detailModal').addEventListener('click', function(e) {
-            if (e.target === this) closeDetailModal();
+        document.addEventListener('DOMContentLoaded', function () {
+            var tbody = document.getElementById('logsTableBody');
+            if (tbody) {
+                tbody.addEventListener('click', function (e) {
+                    var btn = e.target.closest('.audit-detail-btn');
+                    if (!btn) return;
+                    var idx = parseInt(btn.getAttribute('data-detail-index'), 10);
+                    if (isNaN(idx)) return;
+                    var row = auditLogsPageRows[idx];
+                    if (!row) return;
+                    var d = row.details;
+                    if (d === undefined || d === null || d === '') return;
+                    showDetail(d);
+                });
+            }
+            var dm = document.getElementById('detailModal');
+            if (dm) {
+                dm.addEventListener('click', function (e) {
+                    if (e.target === this) closeDetailModal();
+                });
+            }
+            loadLogs(true);
         });
     </script>
 {% endblock %}

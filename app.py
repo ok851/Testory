@@ -31,6 +31,7 @@ import io
 import tempfile
 import subprocess
 from database import Database
+from execution_context import ExecutionContext
 from embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled, embedded_gateway_json
 from batch_input_parse import parse_batch_input_lines
 from playwright_automation import (
@@ -183,6 +184,90 @@ def _case_job_update(user_id: int, **kwargs):
     with _case_run_lock:
         if user_id in _case_run_jobs:
             _case_run_jobs[user_id].update(kwargs)
+
+
+def _env_flag_true(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _on_case_execution_failure(payload: dict) -> None:
+    """执行线程内调用：可选本地向量记忆与自动缺陷（不依赖 Flask 上下文）。"""
+    uid = payload.get("user_id")
+    tid = payload.get("tenant_id")
+    case_id = payload.get("case_id")
+    case_name = (payload.get("case_name") or "").strip() or "未命名用例"
+    project_id = payload.get("project_id")
+    err = (payload.get("error") or "").strip()
+    trigger = (payload.get("trigger") or "").strip() or "unknown"
+
+    try:
+        import ai_memory_store
+
+        if uid is not None and ai_memory_store.memory_enabled():
+            lines = [f"[{trigger}] 用例执行失败: {case_name}", f"case_id={case_id}"]
+            if err:
+                lines.append(f"error: {err[:3500]}")
+            text = "\n".join(lines)
+            meta = {
+                "case_id": case_id,
+                "project_id": project_id,
+                "run_history_id": payload.get("run_history_id"),
+                "trigger": trigger,
+            }
+            if payload.get("schedule_id") is not None:
+                meta["schedule_id"] = payload.get("schedule_id")
+            ai_memory_store.ingest(
+                int(uid),
+                "case_failure",
+                text,
+                tenant_id=tid if isinstance(tid, int) else None,
+                meta=meta,
+            )
+    except Exception as exc:
+        uat_logger.warning(f"[FAILURE_HOOK] 向量记忆写入跳过: {exc}")
+
+    if not _env_flag_true("AUTO_DEFECT_ON_CASE_FAILURE"):
+        return
+    if uid is None or project_id is None:
+        return
+    try:
+        db = Database()
+        title = f"[自动-{trigger}] {case_name} 执行失败"
+        desc_parts = [f"触发来源: {trigger}", f"case_id: {case_id}"]
+        if err:
+            desc_parts.append(f"错误摘要: {err[:2000]}")
+        desc = "\n".join(desc_parts)
+        db.create_defect(
+            int(project_id),
+            title[:200],
+            int(uid),
+            description=desc[:8000],
+            severity="medium",
+            priority="medium",
+            case_id=int(case_id) if case_id is not None else None,
+            run_history_id=payload.get("run_history_id"),
+            error_message=(err or "")[:4000],
+            status="open",
+        )
+    except Exception as exc:
+        uat_logger.warning(f"[FAILURE_HOOK] 自动创建缺陷失败: {exc}")
+
+
+def _make_execution_context(trigger: str, extra: dict | None = None) -> ExecutionContext:
+    uid = current_user.id if current_user.is_authenticated else None
+    tid = None
+    if uid is not None:
+        try:
+            tid = Database().get_user_tenant_id(int(uid))
+        except Exception:
+            tid = None
+    return ExecutionContext(
+        user_id=uid,
+        tenant_id=tid,
+        trigger=trigger,
+        on_case_failure=_on_case_execution_failure,
+        extra=dict(extra or {}),
+    )
 
 
 def _force_stop_browser_async():
@@ -1491,7 +1576,12 @@ def api_execute_multiple_cases():
                 with _case_run_lock:
                     return bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
 
-            results = sync_execute_multiple_test_cases(case_ids, thread_db, should_stop=_should_stop_batch)
+            results = sync_execute_multiple_test_cases(
+                case_ids,
+                thread_db,
+                should_stop=_should_stop_batch,
+                execution_context=_make_execution_context("ui"),
+            )
             uat_logger.info(f"✅ [API] 多个测试用例同步执行完成")
         except Exception as e:
             uat_logger.error(f"❌ [API] 执行测试用例时发生异常: {str(e)}")
@@ -2125,7 +2215,7 @@ def _ai_main_session_dom_pack(target_page_url: str, *, strict: bool):
         return None, None, None, None, e
 
     try:
-        sync_navigate_to(url)
+        sync_navigate_to(url, ai_probe=True)
     except Exception as ex:
         e = f"导航失败：{ex}"
         if strict:
@@ -2182,6 +2272,35 @@ def _ai_embedded_run_script_steps_sequentially(user_id: int, embedded_sid: str, 
             break
         results.append({"status": "success", "step": st})
     return results
+
+
+def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
+    """有页面快照时：先做启发式选择器修复（默认开），再可选做 LLM 定位解析。"""
+    if (
+        not snap_data
+        or not isinstance(plan_dict, dict)
+        or not isinstance(plan_dict.get("steps"), list)
+    ):
+        return plan_dict, norm_warnings
+    try:
+        from ai_locator_resolution import ai_locator_resolve_enabled, resolve_plan_steps_locators_with_snapshot
+        from ai_page_probe import heuristic_repair_plan_selectors_from_registry, probe_registry_from_interactive_snapshot
+
+        _, registry, _ = probe_registry_from_interactive_snapshot(snap_data)
+        if registry:
+            repaired, hw = heuristic_repair_plan_selectors_from_registry(plan_dict["steps"], registry)
+            plan_dict["steps"] = repaired
+            if hw:
+                norm_warnings = list(norm_warnings or []) + list(hw)
+
+        if ai_locator_resolve_enabled():
+            new_steps, lw = resolve_plan_steps_locators_with_snapshot(plan_dict["steps"], snap_data)
+            plan_dict["steps"] = new_steps
+            if lw:
+                norm_warnings = list(norm_warnings or []) + list(lw)
+    except Exception as e:
+        uat_logger.warning("AI locator merge skipped: %s", e)
+    return plan_dict, norm_warnings
 
 
 def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
@@ -2291,6 +2410,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         return {'success': False, 'error': str(e), '_http': 500}
 
     generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    generated, norm_warnings = _merge_ai_locator_resolution(generated, snap_data, norm_warnings)
     if dom_probe_warning:
         norm_warnings = [dom_probe_warning] + list(norm_warnings or [])
     log_ai_plan_to_audit(
@@ -2514,6 +2634,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         return {'success': False, 'error': str(e), '_http': 500}
 
     generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    generated, norm_warnings = _merge_ai_locator_resolution(generated, snap_data, norm_warnings)
     if chat_dom_probe_warning:
         norm_warnings = [chat_dom_probe_warning] + list(norm_warnings or [])
     log_ai_plan_to_audit(
@@ -2679,6 +2800,137 @@ def api_ai_memory_ingest():
         return jsonify({'success': True, 'id': mid})
     except ValueError as e:
         return jsonify({'success': False, 'error': str(e)}), 502
+
+
+@app.route('/api/ai/scenarios/from-requirements', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_structured_scenarios():
+    """
+    从需求说明书文本生成半结构化测试场景（无 UI 定位），便于评审后再生成自动化步骤。
+    支持 JSON body：requirements_text / extra_context / model；
+    或 multipart：字段 file=说明书文本文件。
+    """
+    requirements_text = ''
+    extra_context = ''
+    selected_model = ''
+
+    if request.files and request.files.get('file'):
+        f = request.files['file']
+        requirements_text = (f.read() or b'').decode('utf-8', errors='replace').strip()
+    else:
+        data = request.get_json(silent=True) or {}
+        requirements_text = (data.get('requirements_text') or data.get('text') or '').strip()
+        extra_context = (data.get('extra_context') or '').strip()
+        selected_model = (data.get('model') or '').strip()
+
+    if not requirements_text:
+        return jsonify({'success': False, 'error': 'requirements_text 为空或未上传文件'}), 400
+
+    route = _route_ai_model('test_case_generation')
+    if route['provider'] != 'local':
+        return jsonify({'success': False, 'error': '结构化场景生成仅支持本地推理链路'}), 400
+
+    mid = selected_model or _get_active_local_model()
+    profile, _legacy = _resolve_inference_profile(mid)
+    try:
+        from ai_structured_scenarios import generate_structured_scenarios_from_requirements
+
+        doc, warns = generate_structured_scenarios_from_requirements(
+            requirements_text, profile, extra_context=extra_context
+        )
+    except Exception as e:
+        uat_logger.exception('structured scenarios failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify(
+        {
+            'success': True,
+            'provider': route['provider'],
+            'model': route['model'],
+            'document': doc,
+            'warnings': warns,
+        }
+    )
+
+
+@app.route('/api/ai/locator/resolve-preview', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_locator_resolve_preview():
+    """打开 URL、抓取交互快照并对 steps 执行「执行前定位解析」（不写入数据库）。"""
+    data = request.get_json(silent=True) or {}
+    url = (data.get('url') or '').strip()
+    steps = data.get('steps')
+    if not url:
+        return jsonify({'success': False, 'error': 'url 不能为空'}), 400
+    if not isinstance(steps, list):
+        return jsonify({'success': False, 'error': 'steps 须为数组'}), 400
+
+    snap_data, _ps, _pr, _pu, err = _ai_main_session_dom_pack(url, strict=True)
+    if err:
+        code = 400 if ('目标 URL' in err or '主浏览器未就绪' in err) else 502
+        return jsonify({'success': False, 'error': err}), code
+
+    try:
+        from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+
+        resolved, warns = resolve_plan_steps_locators_with_snapshot(steps, snap_data, force=True)
+    except Exception as e:
+        uat_logger.exception('locator resolve-preview failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    meta = {}
+    if isinstance(snap_data, dict):
+        meta = {
+            'title': snap_data.get('title'),
+            'url': snap_data.get('url'),
+            'item_count': len(snap_data.get('items') or []),
+        }
+
+    return jsonify({'success': True, 'steps': resolved, 'warnings': warns, 'snapshot_meta': meta})
+
+
+@app.route('/api/ai/diagnostics/failure-bundle', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_failure_diag_bundle():
+    """
+    在当前主 Playwright 页面采集失败诊断包，并可选生成结构化缺陷草稿（LLM）。
+    Body: { "failed_step": {...}, "exception_message": "..." }
+    """
+    data = request.get_json(silent=True) or {}
+    failed_step = data.get('failed_step') if isinstance(data.get('failed_step'), dict) else {}
+    exception_message = (data.get('exception_message') or data.get('error') or '').strip()
+
+    try:
+        from playwright_automation import sync_automation_session_usable, sync_gather_failure_signals
+
+        if not sync_automation_session_usable():
+            return jsonify({'success': False, 'error': '主浏览器未就绪，无法采集页面信号'}), 503
+        signals = sync_gather_failure_signals()
+    except Exception as e:
+        uat_logger.warning('failure-bundle signals: %s', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    try:
+        from execution_diag_bundle import (
+            build_failure_bundle,
+            classify_failure_with_llm,
+            merge_bundle_and_draft,
+        )
+
+        bundle = build_failure_bundle(failed_step, exception_message, signals)
+        draft, dwarns = classify_failure_with_llm(bundle, force=False)
+        out = merge_bundle_and_draft(bundle, draft)
+        out['warnings'] = dwarns
+        return jsonify({'success': True, 'bundle': out})
+    except Exception as e:
+        uat_logger.exception('failure-bundle compose failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/ai/cases/generate-and-save', methods=['POST'])
@@ -3005,7 +3257,7 @@ def api_ai_agent_gateway_stream():
                         else:
                             yield _agent_gateway_sse_line({"t": "done", "message": "导航完成", "url": url})
                 else:
-                    sync_navigate_to(url)
+                    sync_navigate_to(url, ai_probe=True)
                     yield _agent_gateway_sse_line({"t": "done", "message": "导航完成", "url": url})
             except Exception as e:
                 yield _agent_gateway_sse_line({"t": "error", "message": str(e)})
@@ -3579,7 +3831,56 @@ def api_embedded_browser_session_create():
         detail = j.get('detail')
         return jsonify({'success': False, 'error': str(detail or err or '网关返回无效')}), 502
     ws_url = f"{pub}/ws/{sid}?token={tok}"
-    return jsonify({'success': True, 'session_id': sid, 'ws_url': ws_url})
+    cdp_ws = (j.get("cdp_browser_ws") or "").strip() or None
+    if cdp_ws:
+        uat_logger.info(f"embedded session {sid} cdp_ws prefix={cdp_ws[:48]}…")
+    return jsonify(
+        {
+            "success": True,
+            "session_id": sid,
+            "ws_url": ws_url,
+            "cdp_ws_url": cdp_ws,
+        }
+    )
+
+
+@app.route("/api/embedded-browser/session/<session_id>/navigate", methods=["POST"])
+@login_required
+@role_required("admin", "tester", "project_manager", "test_lead")
+@api_error_handler
+@log_api_request
+def api_embedded_browser_session_navigate(session_id: str):
+    """在已有网关会话中导航（供 AI 测试页「打开」走远程 Chromium，无需 iframe / 画布 WS）。"""
+    if not embedded_gateway_enabled():
+        return jsonify({"success": False, "error": "内嵌网关未配置"}), 503
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return jsonify({"success": False, "error": "url 需为 http(s) 完整地址"}), 400
+    j, err = embedded_gateway_json(
+        "POST",
+        f"/internal/session/{session_id}/run-steps",
+        user_id=current_user.id,
+        body={
+            "steps": [
+                {"action": "navigate", "url": url, "description": "AI test page open"},
+            ],
+        },
+        timeout_sec=120.0,
+    )
+    if err or not isinstance(j, dict) or not j.get("success"):
+        return jsonify(
+            {
+                "success": False,
+                "error": str(err or (j or {}).get("detail") or "远程导航失败"),
+            }
+        ), 502
+    rs0 = (j.get("results") or [{}])[0]
+    if not rs0.get("ok"):
+        return jsonify(
+            {"success": False, "error": str(rs0.get("error") or "远程导航步骤失败")}
+        ), 502
+    return jsonify({"success": True})
 
 
 @app.route('/api/embedded-browser/session/<session_id>', methods=['DELETE'])
@@ -3835,6 +4136,7 @@ def api_browser_ai_analyze():
             'hint': '可先执行: ollama serve，并确认模型已拉取。',
         }), 503
     generated, norm_warnings = apply_step_normalization_to_plan(generated)
+    generated, norm_warnings = _merge_ai_locator_resolution(generated, snap, norm_warnings)
     log_ai_plan_to_audit(
         current_user.id,
         current_user.username,
@@ -6069,7 +6371,21 @@ def api_trigger_project(project_id):
             return jsonify({'success': False, 'error': '项目没有测试用例'}), 400
         case_ids = [c['id'] for c in cases]
         uat_logger.info(f"CI/CD 触发项目 #{project_id} 执行，共 {len(case_ids)} 个用例")
-        results = sync_execute_multiple_test_cases(case_ids, _db)
+        uid = current_user.id if current_user.is_authenticated else None
+        tid = None
+        if uid is not None:
+            try:
+                tid = _db.get_user_tenant_id(int(uid))
+            except Exception:
+                tid = None
+        _exec_ctx = ExecutionContext(
+            user_id=uid,
+            tenant_id=tid,
+            trigger="ci",
+            on_case_failure=_on_case_execution_failure,
+            extra={"project_id": project_id},
+        )
+        results = sync_execute_multiple_test_cases(case_ids, _db, execution_context=_exec_ctx)
         try:
             sync_close_browser()
         except Exception:
@@ -6090,7 +6406,20 @@ def api_trigger_cases():
             return jsonify({'success': False, 'error': '缺少 case_ids 参数'}), 400
         _db = Database()
         uat_logger.info(f"CI/CD 触发用例列表执行: {case_ids}")
-        results = sync_execute_multiple_test_cases(case_ids, _db)
+        uid = current_user.id if current_user.is_authenticated else None
+        tid = None
+        if uid is not None:
+            try:
+                tid = _db.get_user_tenant_id(int(uid))
+            except Exception:
+                tid = None
+        _exec_ctx = ExecutionContext(
+            user_id=uid,
+            tenant_id=tid,
+            trigger="ci",
+            on_case_failure=_on_case_execution_failure,
+        )
+        results = sync_execute_multiple_test_cases(case_ids, _db, execution_context=_exec_ctx)
         try:
             sync_close_browser()
         except Exception:
@@ -6887,7 +7216,15 @@ try:
         uat_logger.info(f"⏰ 定时任务 #{schedule_id} 开始执行（第{retry_count + 1}次尝试），用例: {case_ids}")
 
         try:
-            results = sync_execute_multiple_test_cases(case_ids, _db)
+            _spid = schedule.get("project_id") if schedule else None
+            _exec_ctx = ExecutionContext(
+                user_id=None,
+                tenant_id=None,
+                trigger="schedule",
+                on_case_failure=_on_case_execution_failure,
+                extra={"schedule_id": schedule_id, "project_id": _spid},
+            )
+            results = sync_execute_multiple_test_cases(case_ids, _db, execution_context=_exec_ctx)
             successful = results.get('successful_cases', 0)
             failed = results.get('failed_cases', 0)
             duration = time.time() - start_time
@@ -7200,18 +7537,138 @@ def api_upload_license():
 
 # ==================== 审计日志 API ====================
 
+def _collect_audit_export_rows(target_type=None, username=None, max_rows=50000):
+    """分页拉取审计日志，用于导出（最多 max_rows 条）。"""
+    _db = Database()
+    rows_out = []
+    page = 1
+    page_size = 2000
+    while len(rows_out) < max_rows:
+        logs = _db.get_audit_logs(
+            target_type=target_type,
+            username=username,
+            page=page,
+            page_size=page_size,
+        )
+        if not logs:
+            break
+        for log in logs:
+            details = log.get('details') or ''
+            if details is not None and not isinstance(details, str):
+                details = str(details)
+            if isinstance(details, str) and len(details) > 8000:
+                details = details[:8000] + '...'
+            created = log.get('created_at') or ''
+            rows_out.append([
+                created,
+                log.get('username') or '',
+                log.get('action') or '',
+                log.get('target_type') or '',
+                log.get('target_id') if log.get('target_id') is not None else '',
+                log.get('ip_address') or '',
+                details,
+            ])
+            if len(rows_out) >= max_rows:
+                return rows_out
+        if len(logs) < page_size:
+            break
+        page += 1
+    return rows_out
+
+
+def _audit_logs_export_response(fmt: str):
+    """生成审计日志导出响应，fmt 为 csv 或 xlsx。"""
+    import io
+    import csv
+    from datetime import datetime
+
+    fmt = (fmt or '').lower()
+    target_type = (request.args.get('target_type') or '').strip() or None
+    username = (request.args.get('username') or '').strip() or None
+
+    header = ['时间', '用户', '操作', '目标类型', '目标ID', 'IP', '详情']
+    data_rows = _collect_audit_export_rows(target_type=target_type, username=username)
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    if fmt == 'csv':
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(header)
+        writer.writerows(data_rows)
+        filename = f'audit_logs_{ts}.csv'
+        payload = output.getvalue().encode('utf-8-sig')
+        return Response(
+            payload,
+            mimetype='text/csv; charset=utf-8',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Cache-Control': 'no-store',
+            },
+        )
+
+    if fmt in ('xlsx', 'excel'):
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            return jsonify({'success': False, 'error': '请先安装 openpyxl: pip install openpyxl'}), 500
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'audit_logs'
+        ws.append(header)
+        for row in data_rows:
+            ws.append(row)
+        bold = Font(bold=True)
+        for c in range(1, len(header) + 1):
+            ws.cell(row=1, column=c).font = bold
+        ws.freeze_panes = 'A2'
+        widths = (22, 14, 28, 14, 12, 18, 72)
+        for i, w in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+        bio = io.BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+        filename = f'audit_logs_{ts}.xlsx'
+        return Response(
+            bio.getvalue(),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Cache-Control': 'no-store',
+            },
+        )
+
+    return jsonify({'success': False, 'error': '不支持的导出格式'}), 400
+
+
 @app.route('/api/audit-logs', methods=['GET'])
 @login_required
 @role_required('admin')
 def api_get_audit_logs():
-    """获取审计日志（仅管理员）"""
-    page = request.args.get('page', 1, type=int)
-    page_size = request.args.get('page_size', 50, type=int)
-    target_type = request.args.get('target_type')
+    """获取审计日志（仅管理员）。指定 format=csv 或 format=xlsx 时导出文件（与列表筛选一致）。"""
+    fmt = (request.args.get('format') or '').strip().lower()
+    if fmt in ('csv', 'xlsx', 'excel'):
+        if fmt == 'excel':
+            fmt = 'xlsx'
+        return _audit_logs_export_response(fmt)
+
+    page = max(1, request.args.get('page', 1, type=int) or 1)
+    page_size = request.args.get('page_size', 50, type=int) or 50
+    page_size = min(200, max(1, page_size))
+    target_type = (request.args.get('target_type') or '').strip() or None
+    username = (request.args.get('username') or '').strip() or None
 
     _db = Database()
-    logs = _db.get_audit_logs(target_type=target_type, page=page, page_size=page_size)
-    total = _db.get_audit_logs_count(target_type=target_type)
+    logs = _db.get_audit_logs(
+        target_type=target_type,
+        username=username,
+        page=page,
+        page_size=page_size,
+    )
+    total = _db.get_audit_logs_count(target_type=target_type, username=username)
 
     return jsonify({
         'success': True,
@@ -7220,6 +7677,14 @@ def api_get_audit_logs():
         'page': page,
         'page_size': page_size
     })
+
+
+@app.route('/api/audit-logs/export', methods=['GET'])
+@login_required
+@role_required('admin')
+def api_export_audit_logs():
+    """兼容旧版前端路径：等同于 format=csv。"""
+    return _audit_logs_export_response('csv')
 
 
 # ==================== 项目成员管理 API ====================

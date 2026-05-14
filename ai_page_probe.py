@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import copy
 from typing import Any, Dict, List, Optional, Tuple
 
 from locator_tier_utils import clamp01
@@ -706,6 +707,303 @@ def fetch_page_controls_summary(url: str) -> Tuple[str, Optional[str]]:
     """兼容旧接口：仅返回摘要与错误。"""
     text, err, _ = fetch_page_controls_bundle(url)
     return text, err
+
+
+def registry_step_selector_warnings(
+    registry: Optional[List[Dict[str, Any]]],
+    steps: List[Dict[str, Any]],
+) -> List[str]:
+    """
+    对照 probe 注册表（与 LIVE inspect 同源）检查步骤里 CSS 常见属性是否与快照一致。
+    典型问题：模型臆造 input[name='password']，而真实表单为 name=pwd（Element UI 等）。
+    """
+    if not registry or not isinstance(registry, list) or not steps:
+        return []
+    if (os.environ.get("LOCAL_AI_SNAPSHOT_SELECTOR_CHECK", "1").strip().lower() in ("0", "false", "no")):
+        return []
+    names: set = set()
+    ids: set = set()
+    rec_lines: List[str] = []
+    types_by_name: Dict[str, str] = {}
+    for row in registry:
+        if not isinstance(row, dict):
+            continue
+        n = (row.get("name") or "").strip()
+        if n:
+            names.add(n)
+            t = (row.get("typ") or "").strip().lower()
+            if t and n not in types_by_name:
+                types_by_name[n] = t
+        i = (row.get("id") or "").strip()
+        if i:
+            ids.add(i)
+        rs = (row.get("recommended_selector") or "").strip()
+        if rs:
+            rec_lines.append(rs)
+    blob = "\n".join(rec_lines)
+    warns: List[str] = []
+    seen: set = set()
+    name_pat = re.compile(r"""\[name\s*=\s*['\"]([^'\"]+)['\"]\]""", re.I)
+    name_pat2 = re.compile(r"""\[name\s*=\s*([^\]'\"\s]+)\]""", re.I)
+    id_pat = re.compile(r"""#([\w-]{1,80})\b""")
+    for idx, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        action = str(step.get("action") or "").strip().lower()
+        if action in ("navigate", "wait", ""):
+            continue
+        ct = str(step.get("compare_type") or "").strip().lower()
+        if action == "assert" and ct in ("url_equals", "url_contains", "page_text_contains", "page_text_equals", "page_text_regex"):
+            continue
+        st = str(step.get("selector_type") or "css").strip().lower()
+        sv = str(step.get("selector_value") or "").strip()
+        if not sv or st != "css":
+            continue
+        found_names = set(name_pat.findall(sv)) | set(name_pat2.findall(sv))
+        for nm in found_names:
+            nm = (nm or "").strip()
+            if not nm:
+                continue
+            key = (idx, "name", nm.lower())
+            if key in seen:
+                continue
+            if nm in names or nm in blob:
+                seen.add(key)
+                continue
+            seen.add(key)
+            hint = ""
+            low = nm.lower()
+            pwd_names = [x for x in names if types_by_name.get(x, "").lower() == "password" or "pwd" in x.lower() or "pass" in x.lower()]
+            if low in ("password", "passwd", "pwd") and pwd_names:
+                hint = f" 提示：快照中密码类输入框 name 为 {pwd_names[0]!r}，请勿使用未在快照出现的 name={nm!r}。"
+            elif low == "username" and names:
+                unames = [x for x in names if x and x != nm and ("user" in x.lower() or "login" in x.lower() or "account" in x.lower())]
+                if unames:
+                    hint = f" 提示：快照中的 name 示例含 {unames[0]!r}，请核对是否与 {nm!r} 一致。"
+            sample = ", ".join(sorted(names)[:8])
+            warns.append(
+                f"第{idx}步({action})选择器含 [name={nm!r}]，但当前 LIVE 控件注册表中未登记该 name。"
+                + (f" 已登记 name 示例: {sample}" if sample else "（注册表无 name 字段）")
+                + hint
+            )
+        if "#" in sv:
+            for mid in id_pat.findall(sv):
+                key2 = (idx, "id", mid.lower())
+                if key2 in seen:
+                    continue
+                if mid in ids or mid in blob:
+                    seen.add(key2)
+                    continue
+                seen.add(key2)
+                warns.append(
+                    f"第{idx}步({action})选择器含 #{mid}，但当前 LIVE 控件注册表中未登记该 id。"
+                )
+    return warns
+
+
+_CSS_NAME_IN_SELECTOR_RE = re.compile(r"""\[name\s*=\s*['\"]([^'\"]+)['\"]\]""", re.I)
+_CSS_NAME_IN_SELECTOR_RE2 = re.compile(r"""\[name\s*=\s*([^\]'\"\s]+)\]""", re.I)
+
+
+def _css_extract_name_attributes(selector_value: str) -> List[str]:
+    s = selector_value or ""
+    found = list(_CSS_NAME_IN_SELECTOR_RE.findall(s)) + list(_CSS_NAME_IN_SELECTOR_RE2.findall(s))
+    return [(x or "").strip() for x in found if (x or "").strip()]
+
+
+def _heuristic_selector_repair_enabled() -> bool:
+    return os.environ.get("LOCAL_AI_HEURISTIC_SELECTOR_REPAIR", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _registry_password_rows(registry: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for r in registry:
+        if not isinstance(r, dict):
+            continue
+        if (r.get("typ") or "").lower() == "password":
+            rows.append(r)
+    if rows:
+        return rows
+    # 部分站点未暴露 type=password；唯一「占位符含 密码」的 input 视为密码框
+    ph_matches: List[Dict[str, Any]] = []
+    for r in registry:
+        if not isinstance(r, dict):
+            continue
+        if (r.get("tag") or "").lower() != "input":
+            continue
+        if "密码" in (r.get("ph") or ""):
+            ph_matches.append(r)
+    if len(ph_matches) == 1:
+        return ph_matches
+    return []
+
+
+def _pick_password_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    for r in rows:
+        blob = f'{r.get("ph") or ""}{r.get("al") or ""}{r.get("txt") or ""}'
+        if "密码" in blob:
+            return r
+    return rows[0]
+
+
+def _selector_for_registry_row(r: Dict[str, Any]) -> Tuple[str, str]:
+    rec = (r.get("recommended_selector") or "").strip()
+    stype = (r.get("recommended_selector_type") or "css").strip().lower()
+    if stype not in ("css", "xpath", "text"):
+        stype = "css"
+    if rec:
+        if stype == "xpath":
+            return rec, "xpath"
+        if stype == "text":
+            return rec, "text"
+        return rec, "css"
+    name = (r.get("name") or "").strip()
+    if name:
+        return f'input[name="{name}"]', "css"
+    eid = (r.get("id") or "").strip()
+    if eid and re.match(r"^[\w.-]+$", eid):
+        return f"#{eid}", "css"
+    return "", "css"
+
+
+def _is_password_input_step(step: Dict[str, Any]) -> bool:
+    if (step.get("action") or "").strip().lower() != "input":
+        return False
+    desc = step.get("description") or ""
+    if "密码" in desc:
+        return True
+    sv = (step.get("selector_value") or "").lower()
+    if "password" in sv and "name" in sv:
+        return True
+    return False
+
+
+def _registry_login_button_rows(registry: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in registry:
+        if not isinstance(r, dict):
+            continue
+        raw_txt = (r.get("txt") or "").strip()
+        compact = re.sub(r"\s+", "", raw_txt)
+        if "登录" not in compact:
+            continue
+        tag = (r.get("tag") or "").lower()
+        typ = (r.get("typ") or "").lower()
+        rid = (r.get("rid") or "").lower()
+        if tag in ("button", "a") or typ == "submit" or rid == "button":
+            out.append(r)
+        elif tag == "span" and "登录" in compact:
+            out.append(r)
+    return out
+
+
+def _pick_login_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not rows:
+        return None
+    buttons = [r for r in rows if (r.get("tag") or "").lower() == "button"]
+    pool = buttons if buttons else rows
+    if len(pool) == 1:
+        return pool[0]
+    for r in pool:
+        if (r.get("typ") or "").lower() == "submit":
+            return r
+    return pool[0]
+
+
+def _selector_for_login_click_row(r: Dict[str, Any]) -> Tuple[str, str]:
+    """登录按钮：Element UI 常在快照里是 span 内文案，优先用 text=登录。"""
+    tag = (r.get("tag") or "").lower()
+    if tag == "span":
+        return "登录", "text"
+    ideal, st = _selector_for_registry_row(r)
+    if ideal and st == "css" and (len(ideal) < 4 or ideal in ("span", "button")):
+        return "登录", "text"
+    return ideal, st
+
+
+def _is_login_click_step(step: Dict[str, Any]) -> bool:
+    if (step.get("action") or "").strip().lower() != "click":
+        return False
+    desc = step.get("description") or ""
+    sv = step.get("selector_value") or ""
+    return "登录" in desc or "登录" in sv
+
+
+def heuristic_repair_plan_selectors_from_registry(
+    steps: List[Dict[str, Any]],
+    registry: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    不依赖 LLM：对照 probe 注册表修正常见错误（如 Element UI 密码框 name=pwd 被写成 password；
+    XPath //button[contains(text(),'登录')] 因文本在子节点而 0 匹配 → 改为 text 登录）。
+    """
+    if not _heuristic_selector_repair_enabled() or not steps or not registry:
+        return steps, []
+    out = copy.deepcopy(steps)
+    hints: List[str] = []
+
+    pw_rows = _registry_password_rows(registry)
+    pw_row = _pick_password_row(pw_rows)
+    for i, step in enumerate(out):
+        if not isinstance(step, dict):
+            continue
+        if not (_is_password_input_step(step) and pw_row):
+            continue
+        ideal, st = _selector_for_registry_row(pw_row)
+        if not ideal:
+            continue
+        cur = (step.get("selector_value") or "").strip()
+        reg_name = (pw_row.get("name") or "").strip()
+        cur_typ = (step.get("selector_type") or "css").strip().lower()
+        if cur == ideal and cur_typ == st:
+            continue
+        hints.append(
+            f"第{i+1}步(input)：已按 LIVE 快照将密码框定位改为 {ideal!r}（原: {cur[:120]!r}）；"
+            f"常见误判为 name=password，实际为 name={reg_name!r}。"
+        )
+        step["selector_value"] = ideal
+        step["selector_type"] = st
+
+    login_rows_all = _registry_login_button_rows(registry)
+    login_row = _pick_login_row(login_rows_all) if login_rows_all else None
+
+    for i, step in enumerate(out):
+        if not isinstance(step, dict):
+            continue
+        if not _is_login_click_step(step):
+            continue
+        cur_st = (step.get("selector_type") or "css").strip().lower()
+        cur_sv = (step.get("selector_value") or "").strip()
+
+        if login_row is not None and len(login_rows_all) == 1:
+            ideal, st = _selector_for_login_click_row(login_row)
+            if ideal and (cur_sv != ideal or cur_st != st):
+                hints.append(
+                    f"第{i+1}步(click)：已按 LIVE 快照将「登录」改为 {st}={ideal!r}（原: {cur_st}={cur_sv[:100]!r}）。"
+                )
+                step["selector_type"] = st
+                step["selector_value"] = ideal
+            continue
+
+        if cur_st == "xpath" and "登录" in cur_sv and (
+            "text()" in cur_sv or "contains" in cur_sv.lower()
+        ):
+            hints.append(
+                f"第{i+1}步(click)：XPath 对「登录」按钮常因文本在子节点而匹配失败，已改为 text 定位「登录」。"
+            )
+            step["selector_type"] = "text"
+            step["selector_value"] = "登录"
+
+    return out, hints
 
 
 def _frame_locator(frame: Any, selector_type: str, selector_value: str) -> Optional[Any]:

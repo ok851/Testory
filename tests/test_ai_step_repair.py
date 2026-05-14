@@ -41,3 +41,17 @@ def test_repair_clears_selector_on_url_compare() -> None:
     ]
     repair_raw_ai_steps_for_platform(steps)
     assert steps[0]["selector_value"] == ""
+
+
+def test_repair_assert_no_selector_to_page_text() -> None:
+    steps = [
+        {
+            "action": "assert",
+            "compare_type": "text_contains",
+            "input_value": "支付成功",
+            "description": "结果页提示",
+        }
+    ]
+    w = repair_raw_ai_steps_for_platform(steps)
+    assert steps[0]["compare_type"] == "page_text_contains"
+    assert w
