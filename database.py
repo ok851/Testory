@@ -6,7 +6,26 @@ import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
+from time_utils import utc_now_sqlite_str as _utc_now_sql, to_beijing_iso as _bj_iso
+
 _db_log = logging.getLogger(__name__)
+
+# API 返回前统一转为北京时间 ISO（与 time_utils 约定：库内 naive 为 UTC）
+_API_TS_KEYS = frozenset({
+    "created_at", "updated_at", "last_login", "started_at", "completed_at",
+    "last_run", "next_run", "resolved_at", "closed_at", "paid_at", "expires_at",
+    "bind_time", "login_time",
+})
+
+
+def _api_ts_dict(d: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if d is None:
+        return None
+    out = dict(d)
+    for k in _API_TS_KEYS:
+        if k in out:
+            out[k] = _bj_iso(out[k])
+    return out
 
 # projects 表列（勿用 SELECT * + 固定下标：迁移后 tenant_id 与 created_at 顺序因建表/ALTER 而异）
 _PROJECTS_SELECT = "id, name, description, tenant_id, created_at"
@@ -26,7 +45,7 @@ def _project_row_to_dict(row: Tuple) -> Dict[str, Any]:
         "name": row[1],
         "description": row[2] or "",
         "tenant_id": row[3],
-        "created_at": row[4],
+        "created_at": _bj_iso(row[4]),
     }
 
 
@@ -39,7 +58,7 @@ def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict
         "url": u,
         "target_url": u,
         "description": row[4] or "",
-        "created_at": row[5],
+        "created_at": _bj_iso(row[5]),
         "precondition": (row[6] or "") if len(row) > 6 else "",
         "expected_result": (row[7] or "") if len(row) > 7 else "",
         "case_type": _normalize_case_type(row[8]) if len(row) > 8 else "ui",
@@ -1157,7 +1176,7 @@ class Database:
         return n
     
     def get_project_cases(self, project_id: int, case_type: str = "ui") -> List[Dict[str, Any]]:
-        """获取项目下的测试用例。默认仅 UI 用例（case_type='ui'）；传 case_type='api' 返回接口用例。"""
+        """获取项目下的测试用例。默认仅 Web 用例（case_type='ui'）；传 case_type='api' 返回接口用例。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         ct_filter = _normalize_case_type(case_type)
@@ -1232,7 +1251,7 @@ class Database:
                 'name': row[2],
                 'url': row[3],
                 'description': row[4],
-                'created_at': row[5],
+                'created_at': _bj_iso(row[5]),
                 'precondition': row[6] if len(row) > 6 else '',
                 'expected_result': row[7] if len(row) > 7 else '',
                 'case_type': _normalize_case_type(row[8]) if len(row) > 8 else 'ui',
@@ -1435,7 +1454,7 @@ class Database:
                 'input_value': row[5],
                 'description': row[6],
                 'step_order': row[7],
-                'created_at': row[8],
+                'created_at': _bj_iso(row[8]),
                 'page_name': row[9] if len(row) > 9 else '',
                 'swipe_x': row[10] if len(row) > 10 else '',
                 'swipe_y': row[11] if len(row) > 11 else '',
@@ -1470,7 +1489,7 @@ class Database:
             'input_value': row[5],
             'description': row[6],
             'step_order': row[7],
-            'created_at': row[8],
+            'created_at': _bj_iso(row[8]),
             'page_name': row[9] if len(row) > 9 else '',
             'swipe_x': row[10] if len(row) > 10 else '',
             'swipe_y': row[11] if len(row) > 11 else '',
@@ -1531,7 +1550,7 @@ class Database:
                         description: str = None, step_order: int = None,
                         enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None,
                         locator_candidates: str = None, click_repeat_count: int = None,
-                        api_spec: str = None) -> bool:
+                        api_spec: str = None, url: str = None) -> bool:
         """更新测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1594,6 +1613,10 @@ class Database:
         if api_spec is not None:
             updates.append("api_spec = ?")
             params.append(api_spec)
+
+        if url is not None:
+            updates.append("url = ?")
+            params.append(url)
         
         if not updates:
             conn.close()
@@ -1631,9 +1654,8 @@ class Database:
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        # 获取本地时间，而不是使用 UTC 时间
-        import datetime
-        local_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # 与 SQLite CURRENT_TIMESTAMP 一致：写入 UTC，展示由 API 层转北京时间
+        local_time = _utc_now_sql()
         
         cursor.execute(
             "INSERT INTO run_history (case_id, status, duration, error, extracted_text, expected_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1729,7 +1751,7 @@ class Database:
                 'duration': row[3],
                 'error': row[4],
                 'extracted_text': row[5],
-                'created_at': row[6],
+                'created_at': _bj_iso(row[6]),
                 'expected_text': row[7] if len(row) > 7 else '',
                 'screenshots': row[8] if len(row) > 8 else None,
                 'case_name': row[9] if len(row) > 9 else '未知用例'
@@ -1817,7 +1839,7 @@ class Database:
                 'duration': row[3],
                 'error': row[4],
                 'extracted_text': row[5],
-                'created_at': row[6],
+                'created_at': _bj_iso(row[6]),
                 'expected_text': row[7] if len(row) > 7 else ''
             })
         
@@ -1887,7 +1909,7 @@ class Database:
                 'duration': row[3],
                 'error': row[4],
                 'extracted_text': row[5],
-                'created_at': row[6],
+                'created_at': _bj_iso(row[6]),
                 'expected_text': row[7] if len(row) > 7 else '',
                 'screenshots': row[8] if len(row) > 8 else None,
                 'case_name': row[9] if len(row) > 9 else '未知用例'
@@ -1959,14 +1981,14 @@ class Database:
         target_api_case_id: Optional[int] = None,
         target_api_case_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """将 UI 用例中的 api_request 步骤复制到接口用例并从 UI 用例删除，剩余步骤重排 step_order。"""
+        """将 Web 用例中的 api_request 步骤复制到接口用例并从 Web 用例删除，剩余步骤重排 step_order。"""
         api_steps = [
             s
             for s in self.get_case_steps(ui_case_id)
             if (s.get("action") or "") == "api_request"
         ]
         if not api_steps:
-            return {"success": False, "error": "该 UI 用例没有可迁移的接口步骤（api_request）"}
+            return {"success": False, "error": "该 Web 用例没有可迁移的接口步骤（api_request）"}
 
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1982,7 +2004,7 @@ class Database:
                 return {"success": False, "error": "源用例不存在"}
             if _normalize_case_type(urow[7]) != "ui":
                 conn.rollback()
-                return {"success": False, "error": "只能从 UI 用例迁移接口步骤"}
+                return {"success": False, "error": "只能从 Web 用例迁移接口步骤"}
             project_id = int(urow[1])
 
             if target_api_case_id:
@@ -2171,7 +2193,7 @@ class Database:
         if row:
             return {'id': row[0], 'username': row[1], 'password_hash': row[2],
                     'email': row[3], 'role': row[4], 'is_active': row[5],
-                    'created_at': row[6], 'last_login': row[7]}
+                    'created_at': _bj_iso(row[6]), 'last_login': _bj_iso(row[7])}
         return None
 
     def get_user_by_id(self, user_id: int) -> Dict[str, Any]:
@@ -2184,7 +2206,7 @@ class Database:
         if row:
             return {'id': row[0], 'username': row[1], 'password_hash': row[2],
                     'email': row[3], 'role': row[4], 'is_active': row[5],
-                    'created_at': row[6], 'last_login': row[7]}
+                    'created_at': _bj_iso(row[6]), 'last_login': _bj_iso(row[7])}
         return None
 
     def get_user_tenant_id(self, user_id: int) -> Optional[int]:
@@ -2283,50 +2305,107 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [{'id': r[0], 'username': r[1], 'email': r[2], 'role': r[3],
-                 'is_active': r[4], 'created_at': r[5], 'last_login': r[6]} for r in rows]
+                 'is_active': r[4], 'created_at': _bj_iso(r[5]), 'last_login': _bj_iso(r[6])} for r in rows]
 
     def update_user_last_login(self, user_id: int):
         """更新用户最后登录时间"""
-        import datetime
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET last_login = ? WHERE id = ?",
-                       (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id))
+                       (_utc_now_sql(), user_id))
         conn.commit()
         conn.close()
 
-    def update_user(self, user_id: int, email: str = None, role: str = None, is_active: int = None, password_hash: str = None) -> bool:
-        """更新用户信息"""
+    def update_user(
+        self,
+        user_id: int,
+        email: str = None,
+        role: str = None,
+        is_active: int = None,
+        password_hash: str = None,
+        username: str = None,
+    ) -> bool:
+        """更新用户信息（不以 rowcount 判定成功：部分 SQLite/驱动在值未变时 rowcount 为 0）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        updates, params = [], []
-        if email is not None:
-            updates.append("email = ?"); params.append(email)
-        if role is not None:
-            updates.append("role = ?"); params.append(role)
-        if is_active is not None:
-            updates.append("is_active = ?"); params.append(is_active)
-        if password_hash is not None:
-            updates.append("password_hash = ?"); params.append(password_hash)
-        if not updates:
-            conn.close()
+        try:
+            cursor.execute("SELECT 1 FROM users WHERE id = ?", (user_id,))
+            if not cursor.fetchone():
+                return False
+            updates, params = [], []
+            if username is not None:
+                updates.append("username = ?")
+                params.append(username)
+            if email is not None:
+                updates.append("email = ?"); params.append(email)
+            if role is not None:
+                updates.append("role = ?"); params.append(role)
+            if is_active is not None:
+                updates.append("is_active = ?"); params.append(is_active)
+            if password_hash is not None:
+                updates.append("password_hash = ?"); params.append(password_hash)
+            if not updates:
+                return False
+            params.append(user_id)
+            cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            conn.rollback()
             return False
-        params.append(user_id)
-        cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+        finally:
+            conn.close()
 
     def delete_user(self, user_id: int) -> bool:
-        """删除用户"""
+        """删除用户（清理引用该用户的外键行；project_members 等对 users 为 ON DELETE CASCADE）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
-        success = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return success
+        try:
+            cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+            if not cursor.fetchone():
+                return False
+            cursor.execute("SELECT id FROM users WHERE id != ? ORDER BY id LIMIT 1", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            replacement_id = int(row[0])
+
+            cursor.execute("DELETE FROM defect_comments WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM defect_history WHERE user_id = ?", (user_id,))
+            cursor.execute("UPDATE defects SET assignee_id = NULL WHERE assignee_id = ?", (user_id,))
+            cursor.execute(
+                "UPDATE defects SET reporter_id = ? WHERE reporter_id = ?",
+                (replacement_id, user_id),
+            )
+
+            cursor.execute("SELECT id FROM orders WHERE user_id = ?", (user_id,))
+            order_ids = [int(r[0]) for r in cursor.fetchall()]
+            if order_ids:
+                ph = ",".join("?" * len(order_ids))
+                cursor.execute(f"DELETE FROM payment_records WHERE order_id IN ({ph})", order_ids)
+                cursor.execute(f"DELETE FROM orders WHERE id IN ({ph})", order_ids)
+            cursor.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+
+            cursor.execute("UPDATE audit_logs SET user_id = NULL WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM user_usage_stats WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM ai_context_memory WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM sso_login_records WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM user_sso_bindings WHERE user_id = ?", (user_id,))
+
+            cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            success = cursor.rowcount > 0
+            conn.commit()
+            return success
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            _db_log.warning("delete_user: integrity error for user_id=%s: %s", user_id, e)
+            return False
+        except Exception as e:
+            conn.rollback()
+            _db_log.warning("delete_user: failed for user_id=%s: %s", user_id, e)
+            return False
+        finally:
+            conn.close()
 
     def count_users(self) -> int:
         """获取用户总数（用于判断是否需要初始化管理员）"""
@@ -2347,7 +2426,7 @@ class Database:
         import datetime
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        local_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        local_time = _utc_now_sql()
         cursor.execute(
             """INSERT INTO step_results
                (run_history_id, step_id, step_order, action, selector_value, input_value,
@@ -2374,7 +2453,7 @@ class Database:
         return [{'id': r[0], 'run_history_id': r[1], 'step_id': r[2], 'step_order': r[3],
                  'action': r[4], 'selector_value': r[5], 'input_value': r[6],
                  'description': r[7], 'status': r[8], 'error': r[9],
-                 'screenshot': r[10], 'duration': r[11], 'created_at': r[12]} for r in rows]
+                 'screenshot': r[10], 'duration': r[11], 'created_at': _bj_iso(r[12])} for r in rows]
 
     # ==================== 变量管理方法 ====================
 
@@ -2407,7 +2486,7 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [{'id': r[0], 'name': r[1], 'value': r[2], 'scope': r[3],
-                 'project_id': r[4], 'case_id': r[5], 'description': r[6], 'created_at': r[7]} for r in rows]
+                 'project_id': r[4], 'case_id': r[5], 'description': r[6], 'created_at': _bj_iso(r[7])} for r in rows]
 
     def update_variable(self, var_id: int, name: str = None, value: str = None, description: str = None) -> bool:
         """更新变量"""
@@ -2440,18 +2519,55 @@ class Database:
         conn.close()
         return success
 
-    def resolve_variables(self, text: str, project_id: int = None, case_id: int = None) -> str:
-        """将文本中的 {{变量名}} 替换为实际值"""
+    def resolve_variables(
+        self,
+        text: str,
+        project_id: int = None,
+        case_id: int = None,
+        runtime_overlay: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """将文本中的 {{变量名}} 替换为实际值。runtime_overlay 为本次执行中的临时变量（优先级高于库内同名变量）。"""
         if not text or '{{' not in text:
             return text
         import re
         variables = self.get_variables(scope='case' if case_id else ('project' if project_id else 'global'),
                                        project_id=project_id, case_id=case_id)
         var_map = {v['name']: v['value'] for v in variables}
+        if runtime_overlay:
+            for rk, rv in runtime_overlay.items():
+                if rk is None:
+                    continue
+                var_map[str(rk)] = '' if rv is None else str(rv)
         def replace_var(match):
             var_name = match.group(1).strip()
             return var_map.get(var_name, match.group(0))
         return re.sub(r'\{\{(.+?)\}\}', replace_var, text)
+
+    def upsert_case_scoped_variable(
+        self, name: str, value: str, project_id: Optional[int], case_id: int
+    ) -> None:
+        """用例作用域变量：同名则更新，否则插入。"""
+        if not name or not case_id:
+            return
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT id FROM variables WHERE scope = 'case' AND case_id = ? AND name = ?",
+                (case_id, name),
+            )
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("UPDATE variables SET value = ? WHERE id = ?", (value, row[0]))
+            else:
+                cursor.execute(
+                    """INSERT INTO variables (name, value, scope, project_id, case_id, description)
+                       VALUES (?, ?, 'case', ?, ?, '')""",
+                    (name, value, project_id, case_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
 
     # ==================== 定时调度方法 ====================
 
@@ -2557,7 +2673,7 @@ class Database:
                  'case_ids': json.loads(r[3]) if r[3] else [],
                  'cron_expr': r[4], 'is_active': r[5],
                  'retry_count': r[6], 'retry_interval': r[7],
-                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10],
+                 'last_run': _bj_iso(r[8]), 'next_run': _bj_iso(r[9]), 'created_at': _bj_iso(r[10]),
                  'execution_count': r[11] if len(r) > 11 else 0} for r in rows]
 
     def get_active_schedules(self) -> List[Dict[str, Any]]:
@@ -2571,7 +2687,7 @@ class Database:
                  'case_ids': json.loads(r[3]) if r[3] else [],
                  'cron_expr': r[4], 'is_active': r[5],
                  'retry_count': r[6], 'retry_interval': r[7],
-                 'last_run': r[8], 'next_run': r[9], 'created_at': r[10],
+                 'last_run': _bj_iso(r[8]), 'next_run': _bj_iso(r[9]), 'created_at': _bj_iso(r[10]),
                  'execution_count': r[11] if len(r) > 11 else 0} for r in rows]
 
     def update_schedule(self, schedule_id: int, name: str = None, cron_expr: str = None,
@@ -2662,7 +2778,7 @@ class Database:
         return [{'id': r[0], 'schedule_id': r[1],
                  'case_ids': json.loads(r[2]) if r[2] else [],
                  'status': r[3], 'retry_count': r[4], 'max_retries': r[5],
-                 'error_message': r[6], 'started_at': r[7], 'completed_at': r[8]} for r in rows]
+                 'error_message': r[6], 'started_at': _bj_iso(r[7]), 'completed_at': _bj_iso(r[8])} for r in rows]
 
     # ==================== 通知配置管理方法 ====================
 
@@ -2689,7 +2805,7 @@ class Database:
         return [{'id': r[0], 'name': r[1], 'type': r[2],
                  'config': json.loads(r[3]) if r[3] else {},
                  'events': json.loads(r[4]) if r[4] else [],
-                 'is_active': r[5], 'created_at': r[6]} for r in rows]
+                 'is_active': r[5], 'created_at': _bj_iso(r[6])} for r in rows]
 
     def get_active_notification_configs(self, event_type: str = None) -> List[Dict[str, Any]]:
         """获取激活的通知配置"""
@@ -2702,7 +2818,7 @@ class Database:
             configs = [{'id': r[0], 'name': r[1], 'type': r[2],
                        'config': json.loads(r[3]) if r[3] else {},
                        'events': json.loads(r[4]) if r[4] else [],
-                       'is_active': r[5], 'created_at': r[6]} for r in rows]
+                       'is_active': r[5], 'created_at': _bj_iso(r[6])} for r in rows]
             # 过滤包含指定事件的配置
             return [c for c in configs if event_type in c['events']]
         else:
@@ -2712,7 +2828,7 @@ class Database:
             return [{'id': r[0], 'name': r[1], 'type': r[2],
                      'config': json.loads(r[3]) if r[3] else {},
                      'events': json.loads(r[4]) if r[4] else [],
-                     'is_active': r[5], 'created_at': r[6]} for r in rows]
+                     'is_active': r[5], 'created_at': _bj_iso(r[6])} for r in rows]
 
     def update_notification_config(self, config_id: int, name: str = None, type: str = None,
                                    config: dict = None, events: list = None, is_active: int = None) -> bool:
@@ -2779,7 +2895,7 @@ class Database:
         conn.close()
         if row:
             return {'id': row[0], 'name': row[1], 'token': row[2], 'project_id': row[3],
-                    'is_active': row[4], 'expires_at': row[5], 'created_at': row[6]}
+                    'is_active': row[4], 'expires_at': _bj_iso(row[5]), 'created_at': _bj_iso(row[6])}
         return None
 
     def get_all_tokens(self) -> List[Dict[str, Any]]:
@@ -2790,7 +2906,7 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [{'id': r[0], 'name': r[1], 'project_id': r[2], 'is_active': r[3],
-                 'expires_at': r[4], 'created_at': r[5]} for r in rows]
+                 'expires_at': _bj_iso(r[4]), 'created_at': _bj_iso(r[5])} for r in rows]
 
     def revoke_token(self, token_id: int) -> bool:
         """撤销令牌"""
@@ -2838,7 +2954,7 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [{'id': r[0], 'name': r[1], 'case_id': r[2], 'project_id': r[3],
-                 'description': r[4], 'created_at': r[5], 'row_count': r[6]} for r in rows]
+                 'description': r[4], 'created_at': _bj_iso(r[5]), 'row_count': r[6]} for r in rows]
 
     def get_dataset(self, dataset_id: int) -> Dict[str, Any]:
         """获取单个数据集"""
@@ -2849,7 +2965,7 @@ class Database:
         conn.close()
         if row:
             return {'id': row[0], 'name': row[1], 'case_id': row[2], 'project_id': row[3],
-                    'description': row[4], 'created_at': row[5]}
+                    'description': row[4], 'created_at': _bj_iso(row[5])}
         return None
 
     def delete_dataset(self, dataset_id: int) -> bool:
@@ -2955,7 +3071,7 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [{
-            'id': r[0], 'user_id': r[1], 'role': r[2], 'created_at': r[3],
+            'id': r[0], 'user_id': r[1], 'role': r[2], 'created_at': _bj_iso(r[3]),
             'username': r[4], 'email': r[5]
         } for r in rows]
 
@@ -3032,9 +3148,9 @@ class Database:
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO audit_logs (user_id, username, action, target_type, target_id, details, ip_address)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, username, action, target_type, target_id, details, ip_address)
+            """INSERT INTO audit_logs (user_id, username, action, target_type, target_id, details, ip_address, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, username, action, target_type, target_id, details, ip_address, _utc_now_sql()),
         )
         log_id = cursor.lastrowid
         conn.commit()
@@ -3076,7 +3192,7 @@ class Database:
         return [{
             'id': r[0], 'user_id': r[1], 'username': r[2], 'action': r[3],
             'target_type': r[4], 'target_id': r[5], 'details': r[6],
-            'ip_address': r[7], 'created_at': r[8]
+            'ip_address': r[7], 'created_at': _bj_iso(r[8])
         } for r in rows]
 
     def get_audit_logs_count(self, user_id: int = None, target_type: str = None, username: str = None) -> int:
@@ -3365,7 +3481,7 @@ class Database:
         conn.close()
         
         if row:
-            return dict(row)
+            return _api_ts_dict(dict(row))
         return None
 
     def get_defects(self, project_id: int = None, status: str = None,
@@ -3423,7 +3539,7 @@ class Database:
         conn.close()
         
         return {
-            'defects': [dict(row) for row in rows],
+            'defects': [_api_ts_dict(dict(row)) for row in rows],
             'total': total,
             'page': page,
             'page_size': page_size,
@@ -3451,41 +3567,37 @@ class Database:
         old_defect = dict(old_defect)
         updates = []
         params = []
-        has_changes = False
-        
-        import datetime
-        
+
         for field, value in kwargs.items():
             if field in allowed_fields:
                 old_value = old_defect.get(field)
                 # 处理 None 和空字符串的情况
                 if old_value != value:
-                    has_changes = True
                     updates.append(f"{field} = ?")
                     params.append(value)
-                    
+
                     # 记录历史
                     cursor.execute('''
                         INSERT INTO defect_history (defect_id, user_id, field_name, old_value, new_value)
                         VALUES (?, ?, ?, ?, ?)
                     ''', (defect_id, user_id, field, str(old_value if old_value is not None else ''), str(value if value is not None else '')))
-        
+
         if updates:
             updates.append("updated_at = ?")
-            params.append(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            
+            params.append(_utc_now_sql())
+
             # 处理特殊状态时间戳
             if 'status' in kwargs:
                 if kwargs['status'] == 'resolved':
                     updates.append("resolved_at = ?")
-                    params.append(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    params.append(_utc_now_sql())
                 elif kwargs['status'] == 'closed':
                     updates.append("closed_at = ?")
-                    params.append(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-            
+                    params.append(_utc_now_sql())
+
             params.append(defect_id)
             cursor.execute(f"UPDATE defects SET {', '.join(updates)} WHERE id = ?", params)
-        
+
         conn.commit()
         conn.close()
         return True
@@ -3537,7 +3649,7 @@ class Database:
         
         rows = cursor.fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+        return [_api_ts_dict(dict(row)) for row in rows]
 
     def get_defect_history(self, defect_id: int) -> List[Dict[str, Any]]:
         """获取缺陷状态变更历史"""
@@ -3555,7 +3667,7 @@ class Database:
         
         rows = cursor.fetchall()
         conn.close()
-        return [dict(row) for row in rows]
+        return [_api_ts_dict(dict(row)) for row in rows]
 
     def get_defect_statistics(self, project_id: int = None) -> Dict[str, Any]:
         """获取缺陷统计数据"""

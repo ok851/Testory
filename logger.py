@@ -6,7 +6,7 @@ import traceback
 from typing import Optional, Dict, Any
 
 class UATLogger:
-    """UI自动化测试平台日志记录器"""
+    """AI自动化测试平台日志记录器"""
     
     def __init__(self, name: str = "UATPlatform", log_dir: str = "logs"):
         self.logger = logging.getLogger(name)

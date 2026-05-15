@@ -1,5 +1,5 @@
 """
-HTTP client for OpenClaw Gateway from the UITest platform backend.
+HTTP client for OpenClaw Gateway from the AI automation testing platform backend.
 
 Supports:
 - OPENCLAW_EXECUTE_MODE=chat_completions (default): POST /v1/chat/completions with model openclaw/default
@@ -8,17 +8,20 @@ Supports:
 Environment:
 - OPENCLAW_GATEWAY_URL — base URL without trailing slash, e.g. http://127.0.0.1:18789
 - OPENCLAW_GATEWAY_TOKEN — Bearer token for HTTP API
-- OPENCLAW_GATEWAY_TIMEOUT — seconds (default 120)
+- OPENCLAW_GATEWAY_TIMEOUT — seconds (default 180；整系统探索可设 300–900)
+- OPENCLAW_TOOL_RESULT_MAX_CHARS — 回传给 LLM 的最大字符（默认 48000，上限约 200000）
 - OPENCLAW_TOOLS_INVOKE_PATH — default /tools/invoke
 - OPENCLAW_EXECUTE_TOOL_NAME — required for tools_invoke when using named tools
 - OPENCLAW_GATEWAY_SESSION_KEY — optional sessionKey for tools.invoke
 - OPENCLAW_CHAT_COMPLETIONS_MODEL — override model id (default openclaw/default)
+- OPENCLAW_EXECUTE_SYSTEM_PROMPT — 可选；非空时作为 chat_completions 的 system 消息，引导网关侧做长链路/模块化探索
+- OPENCLAW_CHAT_MAX_TOKENS — 可选；>0 时写入请求 max_tokens，便于长探索输出
 """
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 from requests.exceptions import RequestException
@@ -30,11 +33,25 @@ def _norm(s: Any) -> str:
     return (str(s) if s is not None else "").strip()
 
 
+def _tool_result_max_chars() -> int:
+    """回传给平台 LLM 的 OpenClaw 结果最大长度（与网关超时一样可随任务调大）。"""
+    try:
+        v = int(os.environ.get("OPENCLAW_TOOL_RESULT_MAX_CHARS", "48000") or 48000)
+    except ValueError:
+        v = 48000
+    return max(4000, min(v, 200000))
+
+
 class OpenClawGatewayClient:
     def __init__(self) -> None:
         self.base_url = _norm(os.environ.get("OPENCLAW_GATEWAY_URL", "")).rstrip("/")
         self.token = _norm(os.environ.get("OPENCLAW_GATEWAY_TOKEN", ""))
-        self.timeout = int(os.environ.get("OPENCLAW_GATEWAY_TIMEOUT", "120") or "120")
+        try:
+            raw_to = int(os.environ.get("OPENCLAW_GATEWAY_TIMEOUT", "180") or "180")
+        except ValueError:
+            raw_to = 180
+        # 允许长链路探索（整模块 / 多页）；仍设上限避免挂死 worker
+        self.timeout = max(30, min(raw_to, 1200))
         self.invoke_path = _norm(os.environ.get("OPENCLAW_TOOLS_INVOKE_PATH", "/tools/invoke")) or "/tools/invoke"
         if not self.invoke_path.startswith("/"):
             self.invoke_path = "/" + self.invoke_path
@@ -80,7 +97,7 @@ class OpenClawGatewayClient:
         except ValueError as e:
             return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
 
-        return _clip_tool_result(out)
+        return _clip_tool_result(out, max_chars=_tool_result_max_chars())
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -104,11 +121,22 @@ class OpenClawGatewayClient:
 
     def _chat_completions(self, instruction: str) -> str:
         url = f"{self.base_url}/v1/chat/completions"
+        messages: List[Dict[str, str]] = []
+        sys_p = _norm(os.environ.get("OPENCLAW_EXECUTE_SYSTEM_PROMPT", ""))
+        if sys_p:
+            messages.append({"role": "system", "content": sys_p})
+        messages.append({"role": "user", "content": instruction})
         payload: Dict[str, Any] = {
             "model": self.chat_model,
-            "messages": [{"role": "user", "content": instruction}],
+            "messages": messages,
             "temperature": 0.2,
         }
+        try:
+            mt = int(os.environ.get("OPENCLAW_CHAT_MAX_TOKENS", "0") or 0)
+            if mt > 0:
+                payload["max_tokens"] = min(mt, 128000)
+        except ValueError:
+            pass
         resp = requests.post(url, json=payload, headers=self._headers(), timeout=self.timeout)
         if not resp.ok:
             raise ValueError(_http_error_detail(resp))
@@ -133,7 +161,9 @@ def _http_error_detail(resp: requests.Response) -> str:
         return f"HTTP {resp.status_code}"
 
 
-def _clip_tool_result(text: str, max_chars: int = 24000) -> str:
-    if len(text) <= max_chars:
+def _clip_tool_result(text: str, *, max_chars: Optional[int] = None) -> str:
+    cap = int(max_chars) if max_chars is not None else _tool_result_max_chars()
+    cap = max(4000, min(cap, 200000))
+    if len(text) <= cap:
         return text
-    return text[: max_chars - 80] + "\n…(truncated for context limit)…"
+    return text[: cap - 80] + "\n…(truncated for context limit)…"

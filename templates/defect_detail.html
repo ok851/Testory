@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}缺陷详情 - UI自动化测试平台{% endblock %}
+{% block title %}缺陷详情 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -435,7 +435,7 @@
         function formatDate(dateStr) {
             if (!dateStr) return '-';
             const d = new Date(dateStr);
-            return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+            return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
     </script>
 {% endblock %}

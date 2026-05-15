@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from database import Database
 from license_manager import license_manager, LicenseType
+from time_utils import utc_now_sqlite_str, to_beijing_iso, utc_sqlite_str_plus_days
 
 
 class PaymentMethod(Enum):
@@ -154,9 +155,9 @@ class PaymentManager:
         
         # 计算过期时间
         if period == 'yearly':
-            expires_at = datetime.now() + timedelta(days=365)
+            expires_at_sql = utc_sqlite_str_plus_days(365)
         else:
-            expires_at = datetime.now() + timedelta(days=30)
+            expires_at_sql = utc_sqlite_str_plus_days(30)
         
         order_no = self.generate_order_no()
         
@@ -166,7 +167,7 @@ class PaymentManager:
         cursor.execute('''
             INSERT INTO orders (order_no, user_id, tenant_id, plan_type, amount, status, expires_at)
             VALUES (?, ?, ?, ?, ?, 'pending', ?)
-        ''', (order_no, user_id, tenant_id, plan_type, total_amount, expires_at.isoformat()))
+        ''', (order_no, user_id, tenant_id, plan_type, total_amount, expires_at_sql))
         
         order_id = cursor.lastrowid
         conn.commit()
@@ -181,7 +182,7 @@ class PaymentManager:
             'amount_yuan': total_amount / 100,
             'period': period,
             'quantity': quantity,
-            'expires_at': expires_at.isoformat()
+            'expires_at': to_beijing_iso(expires_at_sql),
         }
     
     def get_order(self, order_id: int = None, order_no: str = None) -> Optional[Dict[str, Any]]:
@@ -218,9 +219,9 @@ class PaymentManager:
             'payment_method': row[8],
             'payment_channel': row[9],
             'transaction_id': row[10],
-            'paid_at': row[11],
-            'expires_at': row[12],
-            'created_at': row[13]
+            'paid_at': to_beijing_iso(row[11]),
+            'expires_at': to_beijing_iso(row[12]),
+            'created_at': to_beijing_iso(row[13])
         }
     
     def get_user_orders(self, user_id: int, page: int = 1, page_size: int = 20) -> Tuple[list, int]:
@@ -256,9 +257,9 @@ class PaymentManager:
                 'amount_yuan': row[5] / 100,
                 'status': row[7],
                 'payment_method': row[8],
-                'paid_at': row[11],
-                'expires_at': row[12],
-                'created_at': row[13]
+                'paid_at': to_beijing_iso(row[11]),
+                'expires_at': to_beijing_iso(row[12]),
+                'created_at': to_beijing_iso(row[13])
             })
         
         return orders, total
@@ -270,7 +271,7 @@ class PaymentManager:
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        paid_at = datetime.now().isoformat() if status == PaymentStatus.PAID.value else None
+        paid_at = utc_now_sqlite_str() if status == PaymentStatus.PAID.value else None
         
         cursor.execute('''
             UPDATE orders 
@@ -405,7 +406,7 @@ class PaymentManager:
             raise ValueError(f"订单状态异常: {order['status']}")
         
         plan_info = PLAN_PRICES.get(order['plan_type'], {})
-        subject = f"UI自动化测试平台 - {plan_info.get('name', '套餐升级')}"
+        subject = f"AI自动化测试平台 - {plan_info.get('name', '套餐升级')}"
         
         # 构建支付宝请求参数
         biz_content = {
@@ -470,7 +471,7 @@ class PaymentManager:
             raise ValueError(f"订单状态异常: {order['status']}")
         
         plan_info = PLAN_PRICES.get(order['plan_type'], {})
-        body = f"UI自动化测试平台 - {plan_info.get('name', '套餐升级')}"
+        body = f"AI自动化测试平台 - {plan_info.get('name', '套餐升级')}"
         
         # 构建微信支付请求参数
         # 实际应用中需要调用微信支付API

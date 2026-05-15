@@ -46,7 +46,7 @@ def openai_compatible_chat(
                 "content": (
                     "You are a senior QA engineer. Reply with exactly one JSON object only—no markdown fences, "
                     "no commentary. First non-whitespace character must be '{'. "
-                    "Schema: UI test plan with case_name, case_url, description, precondition, expected_result, steps[]. "
+                    "Schema: AI-assisted web test plan with case_name, case_url, description, precondition, expected_result, steps[]. "
                     "Steps: use action assert (+compare_type) for text/URL expectations; use verify only for captcha/human checks with input_value auto|slider|image|visible|exist|clickable. "
                     "Selectors must be real css/xpath from the page, never snapshot line numbers alone."
                 ),

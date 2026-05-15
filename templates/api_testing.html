@@ -1,5 +1,64 @@
 {% extends "base.html" %}
-{% block title %}接口测试 - UI自动化测试平台{% endblock %}
+{% block title %}接口测试 - AI自动化测试平台{% endblock %}
+{% block head %}
+<style>
+/* 与 list_cases_v2 一致的弹窗与按钮 */
+.api-tc-modal-scope .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; }
+.api-tc-modal-scope .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+.api-tc-modal-scope .btn-primary { background: #667eea; color: white; }
+.api-tc-modal-scope .btn-primary:hover { background: #5568d3; }
+.api-tc-modal-scope .btn-secondary { background: #6c757d; color: white; }
+.api-tc-modal-scope .btn-secondary:hover { background: #545b62; }
+.api-tc-modal-scope .modal-panel { background: white; padding: 24px 28px; border-radius: 12px; width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.18); }
+.api-tc-modal-scope .modal-panel h3 { color: #333; font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+.api-tc-modal-scope .form-group { margin-bottom: 16px; }
+.api-tc-modal-scope .form-group label { display: block; margin-bottom: 6px; font-weight: 500; color: #555; font-size: 13px; }
+.api-tc-modal-scope .form-group input, .api-tc-modal-scope .form-group select { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+.api-tc-modal-scope .form-group input:focus, .api-tc-modal-scope .form-group select:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12); }
+.api-tc-modal-scope .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e9ecef; }
+html.dark .api-tc-modal-scope .modal-panel { background: #1f2937; color: #e5e7eb; }
+html.dark .api-tc-modal-scope .modal-panel h3 { color: #f9fafb; }
+html.dark .api-tc-modal-scope .form-group label { color: #d1d5db; }
+html.dark .api-tc-modal-scope .form-group input, html.dark .api-tc-modal-scope .form-group select { background: #111827; border-color: #4b5563; color: #e5e7eb; }
+html.dark .api-tc-modal-scope .modal-footer { border-color: #374151; }
+/* 导入弹窗：文件选择与预览区（补全原先未覆盖的样式） */
+.api-tc-modal-scope .form-group input[type="file"] {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    box-sizing: border-box;
+    background: #fafafa;
+    cursor: pointer;
+}
+.api-tc-modal-scope .form-group input[type="file"]:focus { outline: none; border-color: #667eea; }
+html.dark .api-tc-modal-scope .form-group input[type="file"] {
+    background: #111827;
+    border-color: #4b5563;
+    color: #e5e7eb;
+}
+#importApiPreviewBox {
+    border-color: #e9ecef !important;
+    background: #fafbff;
+}
+html.dark #importApiPreviewBox {
+    border-color: #374151 !important;
+    background: #111827;
+    color: #e5e7eb;
+}
+#importApiPreviewTable th { padding: 6px 8px; font-weight: 600; color: #555; border-bottom: 1px solid #e9ecef; }
+#importApiPreviewTable td { padding: 5px 8px; border-bottom: 1px solid #eee; color: #333; }
+html.dark #importApiPreviewTable th { color: #d1d5db; border-color: #374151; }
+html.dark #importApiPreviewTable td { color: #e5e7eb; border-color: #374151; }
+.api-tc-modal-scope .btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+</style>
+{% endblock %}
 {% block body_class %}bg-slate-100 dark:bg-gray-950 min-h-screen text-gray-900 dark:text-gray-100{% endblock %}
 {% block content %}
 {% set _api_detail_id_marker = 918273645 %}
@@ -16,6 +75,7 @@
                     <select id="apiProjectSelect" class="rounded-md border border-gray-300 dark:border-gray-600 bg-white/95 dark:bg-gray-950 text-gray-900 dark:text-gray-100 text-sm px-3 py-2 min-w-[220px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></select>
                 </div>
                 <div class="flex flex-wrap gap-2">
+                    <button type="button" id="btnImportApiSpec" class="px-4 py-2 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 dark:focus:ring-offset-gray-900">导入 OpenAPI/Postman</button>
                     <button type="button" id="btnAddCase" class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 dark:focus:ring-offset-gray-900">新建用例</button>
                     <button type="button" id="btnRefreshCases" class="px-4 py-2 rounded-md text-sm font-medium bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 dark:focus:ring-offset-gray-900">刷新</button>
                 </div>
@@ -39,31 +99,70 @@
     </div>
 </div>
 
-<!-- 新建用例 -->
-<div id="addCaseModal" class="fixed inset-0 z-[2100] hidden flex items-center justify-center p-4 bg-black/50 dark:bg-black/60" role="dialog" aria-modal="true">
-    <div class="w-full max-w-md rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl p-6 max-h-[90vh] overflow-y-auto">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">新建用例</h3>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">先在此创建用例；创建后在列表中点「查看接口」进入详情页，再使用「新建接口」弹窗添加 HTTP 请求。</p>
+<!-- 导入 OpenAPI / Postman -->
+<div id="importApiModal" class="api-tc-modal-scope fixed inset-0 z-[2100] hidden flex items-center justify-center p-4 bg-black/50 dark:bg-black/60" role="dialog" aria-modal="true">
+    <div class="modal-panel" style="max-width:640px;">
+        <h3>导入 OpenAPI / Postman</h3>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3" style="line-height:1.5">上传 JSON 文件（OpenAPI 2/3 或 Postman Collection v2.1），预览后写入<strong>一个</strong>新接口用例（多条 api_request 步骤）。</p>
+        <div class="form-group">
+            <label for="importApiFile">JSON 文件</label>
+            <input type="file" id="importApiFile" accept=".json,application/json" />
+        </div>
+        <div class="form-group">
+            <label for="importApiBaseUrl">Base URL（可选，OpenAPI 无 servers 时填写）</label>
+            <input type="text" id="importApiBaseUrl" placeholder="https://api.example.com" />
+        </div>
+        <div class="form-group">
+            <label for="importApiCaseName">新用例名称 *</label>
+            <input type="text" id="importApiCaseName" placeholder="例如：用户服务-OpenAPI导入" />
+        </div>
+        <div class="form-group">
+            <button type="button" id="importApiPreviewBtn" class="btn btn-secondary">解析预览</button>
+            <span id="importApiPreviewHint" class="text-xs text-gray-500 ml-2"></span>
+        </div>
+        <div class="form-group" style="max-height:200px;overflow:auto;border:1px solid #e9ecef;border-radius:8px;padding:8px;font-size:11px;display:none;" id="importApiPreviewBox">
+            <table class="w-full text-left" id="importApiPreviewTable"></table>
+        </div>
+        <div class="modal-footer">
+            <button type="button" id="importApiCancelBtn" class="btn btn-secondary">取消</button>
+            <button type="button" id="importApiCommitBtn" class="btn btn-primary" disabled>确认导入</button>
+        </div>
+    </div>
+</div>
+
+<!-- 新建用例（样式对齐 AI 自动化测试用例管理页） -->
+<div id="addCaseModal" class="api-tc-modal-scope fixed inset-0 z-[2100] hidden flex items-center justify-center p-4 bg-black/50 dark:bg-black/60" role="dialog" aria-modal="true">
+    <div class="modal-panel">
+        <h3>新建用例</h3>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4" style="line-height:1.5">先在此创建用例；创建后在列表中点「查看接口」进入详情页，再添加 HTTP 请求。</p>
         <div class="flex gap-1 p-1 rounded-lg bg-slate-100 dark:bg-gray-800 w-full mb-4">
             <button type="button" id="addTabBlank" class="flex-1 py-2 rounded-md text-sm font-medium bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm">空白 / 复用</button>
             <button type="button" id="addTabFromUi" class="flex-1 py-2 rounded-md text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">从 UI 导入</button>
         </div>
         <div id="addPanelBlank">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">新用例名称 *</label>
-            <input id="addCaseName" type="text" class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 mb-4" placeholder="例如：订单接口-回归副本">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">复用来源</label>
-            <select id="addCaseSource" class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 mb-2"></select>
+            <div class="form-group">
+                <label for="addCaseName">新用例名称 *</label>
+                <input id="addCaseName" type="text" placeholder="例如：订单接口-回归副本">
+            </div>
+            <div class="form-group">
+                <label for="addCaseSource">复用来源</label>
+                <select id="addCaseSource"></select>
+            </div>
             <p id="addCaseSourceHint" class="text-xs text-gray-500 dark:text-gray-400 mb-4">选择项目后，将列出当前项目下的接口用例供复用。</p>
         </div>
         <div id="addPanelFromUi" class="hidden">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">源 UI 用例 *</label>
-            <select id="addModalWizUiCaseId" class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 mb-3"></select>
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">新用例名称（可选）</label>
-            <input id="addUiOverrideName" type="text" class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 mb-2" placeholder="不填则按服务器规则生成接口用例名称">
+            <div class="form-group">
+                <label for="addModalWizUiCaseId">源 Web 用例 *</label>
+                <select id="addModalWizUiCaseId"></select>
+            </div>
+            <div class="form-group">
+                <label for="addUiOverrideName">新用例名称（可选）</label>
+                <input id="addUiOverrideName" type="text" placeholder="不填则按服务器规则生成接口用例名称">
+            </div>
         </div>
-        <div class="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-gray-800">
-            <button type="button" id="addCaseCancelBtn" class="px-4 py-2 rounded-md text-sm font-medium bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600">取消</button>
-            <button type="button" id="addCaseSubmitBtn" class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">确定</button>
+        <div class="modal-footer">
+            <button type="button" id="addCaseCancelBtn" class="btn btn-secondary">取消</button>
+            <button type="button" id="addCaseSubmitBtn" class="btn btn-primary">确定</button>
         </div>
     </div>
 </div>
@@ -131,14 +230,6 @@
         }
     }
 
-    function toast(msg, isErr) {
-        if (typeof Swal !== 'undefined') {
-            Swal.fire({ icon: isErr ? 'error' : 'success', title: msg, timer: isErr ? undefined : 2200, showConfirmButton: isErr });
-        } else {
-            alert(msg);
-        }
-    }
-
     function showModal(el) {
         el.classList.remove('hidden');
         el.classList.add('flex');
@@ -175,7 +266,7 @@
         const { ok, data: d } = await parseJsonResponse(r);
         if (!ok) {
             sel.innerHTML = '<option value="">加载项目失败</option>';
-            toast(d.error || '加载项目失败', true);
+            alert(d.error || '加载项目失败');
             return;
         }
         const list = d.projects || [];
@@ -243,7 +334,7 @@
             }));
             td.appendChild(mk('bg-blue-600 text-white hover:bg-blue-700', '运行', function () { runApiCase(c.id); }));
             td.appendChild(mk('bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600', '复制', function () { duplicateCase(c.id); }));
-            td.appendChild(mk('bg-red-600 text-white hover:bg-red-700', '删除', function () { deleteApiCase(c.id, c.name); }));
+            td.appendChild(mk('bg-[#dc3545] text-white hover:bg-[#c82333]', '删除', function () { deleteApiCase(c.id, c.name); }));
             body.appendChild(tr);
         });
     }
@@ -283,7 +374,7 @@
             sel.innerHTML = '<option value="">加载失败</option>';
             return;
         }
-        sel.innerHTML = '<option value="">-- 选择 UI 用例 --</option>';
+        sel.innerHTML = '<option value="">-- 选择 Web 用例 --</option>';
         (d.cases || []).forEach(function (c) {
             const o = document.createElement('option');
             o.value = c.id;
@@ -294,7 +385,7 @@
 
     async function openAddCaseModal() {
         if (!projectId) {
-            toast('请先选择项目', true);
+            alert('请先选择项目');
             return;
         }
         document.getElementById('addCaseName').value = '';
@@ -313,7 +404,7 @@
         if (addCaseUiMode) {
             const src = parseInt(document.getElementById('addModalWizUiCaseId').value, 10);
             if (!src) {
-                toast('请选择源 UI 用例', true);
+                alert('请选择源 Web 用例');
                 return;
             }
             const nm = document.getElementById('addUiOverrideName').value.trim();
@@ -327,17 +418,17 @@
             });
             const { ok, data: d } = await parseJsonResponse(r);
             if (!ok || !d.success) {
-                toast(d.error || '创建失败', true);
+                alert(d.error || '创建失败');
                 return;
             }
             closeAddCaseModal();
             loadApiCases();
-            toast('已从 UI 用例新建接口用例', false);
+            alert('已从 Web 用例新建接口用例');
             return;
         }
         const name = document.getElementById('addCaseName').value.trim();
         if (!name) {
-            toast('请填写新用例名称', true);
+            alert('请填写新用例名称');
             return;
         }
         const src = (document.getElementById('addCaseSource').value || '').trim();
@@ -350,12 +441,12 @@
             });
             const { ok, data: d } = await parseJsonResponse(r);
             if (!ok || !d.success) {
-                toast(d.error || '创建失败', true);
+                alert(d.error || '创建失败');
                 return;
             }
             closeAddCaseModal();
             loadApiCases();
-            toast('已新建用例（请在「查看接口」中补充请求）', false);
+            alert('已新建用例（请在「查看接口」中补充请求）');
             return;
         }
         const r = await fetch('/api/api-cases/' + encodeURIComponent(src) + '/duplicate', {
@@ -366,12 +457,12 @@
         });
         const { ok, data: d } = await parseJsonResponse(r);
         if (!ok || !d.success) {
-            toast(d.error || '复用失败', true);
+            alert(d.error || '复用失败');
             return;
         }
         closeAddCaseModal();
         loadApiCases();
-        toast('已新建用例（已复用所选用例的全部请求）', false);
+        alert('已新建用例（已复用所选用例的全部请求）');
     }
 
     async function duplicateCase(caseId) {
@@ -383,26 +474,25 @@
         });
         const { ok, data: d } = await parseJsonResponse(r);
         if (!ok || !d.success) {
-            toast(d.error || '复制失败', true);
+            alert(d.error || '复制失败');
             return;
         }
         loadApiCases();
+        alert('已复制');
     }
 
     async function deleteApiCase(caseId, caseName) {
-        const label = caseName || ('#' + caseId);
-        if (!confirm('确定删除接口用例「' + label + '」？将同时删除其下所有 HTTP 请求及相关数据，且不可恢复。')) return;
+        if (!confirm('确认删除？')) return;
         const r = await fetch('/api/cases/' + caseId, { method: 'DELETE', ...cred });
         const { ok, data: d } = await parseJsonResponse(r);
         if (!ok) {
-            toast(d.error || ('删除失败 (' + r.status + ')'), true);
+            alert(d.error || ('删除失败 (' + r.status + ')'));
             return;
         }
         if (d.success === false) {
-            toast(d.error || '删除失败', true);
+            alert(d.error || '删除失败');
             return;
         }
-        toast('已删除', false);
         loadApiCases();
     }
 
@@ -415,13 +505,129 @@
         });
         const { ok, data: d } = await parseJsonResponse(r);
         if (!ok || !d.success) {
-            toast(d.error || '执行失败', true);
+            alert(d.error || '执行失败');
             return;
         }
-        toast('执行完成：' + (d.status || 'success'), false);
+        alert('执行完成：' + (d.status || 'success'));
+    }
+
+    let importApiPreviewItems = null;
+
+    function openImportApiModal() {
+        if (!projectId) {
+            alert('请先选择项目');
+            return;
+        }
+        importApiPreviewItems = null;
+        const box = document.getElementById('importApiPreviewBox');
+        const tbl = document.getElementById('importApiPreviewTable');
+        const hint = document.getElementById('importApiPreviewHint');
+        const commit = document.getElementById('importApiCommitBtn');
+        if (box) box.style.display = 'none';
+        if (tbl) tbl.innerHTML = '';
+        if (hint) hint.textContent = '';
+        if (commit) commit.disabled = true;
+        const fi = document.getElementById('importApiFile');
+        if (fi) fi.value = '';
+        const bu = document.getElementById('importApiBaseUrl');
+        if (bu) bu.value = '';
+        const nm = document.getElementById('importApiCaseName');
+        if (nm) nm.value = '';
+        showModal(document.getElementById('importApiModal'));
+    }
+
+    function closeImportApiModal() {
+        hideModal(document.getElementById('importApiModal'));
+    }
+
+    async function importApiPreview() {
+        const fi = document.getElementById('importApiFile');
+        const hint = document.getElementById('importApiPreviewHint');
+        const box = document.getElementById('importApiPreviewBox');
+        const tbl = document.getElementById('importApiPreviewTable');
+        const commit = document.getElementById('importApiCommitBtn');
+        importApiPreviewItems = null;
+        if (commit) commit.disabled = true;
+        if (hint) hint.textContent = '';
+        if (box) box.style.display = 'none';
+        if (tbl) tbl.innerHTML = '';
+        if (!fi || !fi.files || !fi.files[0]) {
+            alert('请选择 JSON 文件');
+            return;
+        }
+        if (hint) hint.textContent = '解析中…';
+        try {
+            const text = await fi.files[0].text();
+            const baseUrl = (document.getElementById('importApiBaseUrl') && document.getElementById('importApiBaseUrl').value || '').trim();
+            const r = await fetch('/api/ai/import/api-spec/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                ...cred,
+                body: JSON.stringify({ content: text, base_url: baseUrl }),
+            });
+            const { ok, data: d } = await parseJsonResponse(r);
+            if (!ok || !d.success) {
+                if (hint) hint.textContent = '';
+                alert(d.error || '预览失败');
+                return;
+            }
+            importApiPreviewItems = d.items || [];
+            if (hint) hint.textContent = '共 ' + importApiPreviewItems.length + ' 条（' + (d.kind || '') + '）';
+            if (box) box.style.display = 'block';
+            if (tbl) {
+                let html = '<thead><tr><th class="px-2 py-1">方法</th><th class="px-2 py-1">名称</th><th class="px-2 py-1">路径/URL</th></tr></thead><tbody>';
+                importApiPreviewItems.slice(0, 80).forEach(function (it) {
+                    const sp = it.api_spec || {};
+                    html += '<tr><td class="px-2 py-1">' + escapeHtml(sp.method || '') + '</td><td class="px-2 py-1">' + escapeHtml(it.name || '') + '</td><td class="px-2 py-1">' + escapeHtml((it.path || sp.url || '').slice(0, 120)) + '</td></tr>';
+                });
+                html += '</tbody>';
+                tbl.innerHTML = html;
+            }
+            if (commit) commit.disabled = importApiPreviewItems.length === 0;
+        } catch (e) {
+            if (hint) hint.textContent = '';
+            alert(e && e.message ? e.message : '预览异常');
+        } finally {
+            if (hint && hint.textContent === '解析中…') hint.textContent = '';
+        }
+    }
+
+    async function importApiCommit() {
+        if (!projectId || !importApiPreviewItems || !importApiPreviewItems.length) return;
+        const name = (document.getElementById('importApiCaseName') && document.getElementById('importApiCaseName').value || '').trim();
+        if (!name) {
+            alert('请填写新用例名称');
+            return;
+        }
+        const r = await fetch('/api/ai/import/api-spec/commit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            ...cred,
+            body: JSON.stringify({ project_id: projectId, case_name: name, items: importApiPreviewItems }),
+        });
+        const { ok, data: d } = await parseJsonResponse(r);
+        if (!ok || !d.success) {
+            alert(d.error || '导入失败');
+            return;
+        }
+        closeImportApiModal();
+        loadApiCases();
+        alert('已创建接口用例 #' + d.case_id + '，共 ' + (d.steps_created || 0) + ' 个请求');
     }
 
     document.addEventListener('DOMContentLoaded', function () {
+        var bImp = document.getElementById('btnImportApiSpec');
+        if (bImp) bImp.addEventListener('click', openImportApiModal);
+        var ic = document.getElementById('importApiCancelBtn');
+        if (ic) ic.addEventListener('click', closeImportApiModal);
+        var ip = document.getElementById('importApiPreviewBtn');
+        if (ip) ip.addEventListener('click', function () { void importApiPreview(); });
+        var ico = document.getElementById('importApiCommitBtn');
+        if (ico) ico.addEventListener('click', function () { void importApiCommit(); });
+        var im = document.getElementById('importApiModal');
+        if (im) im.addEventListener('click', function (e) {
+            if (e.target.id === 'importApiModal') closeImportApiModal();
+        });
         document.getElementById('btnAddCase').addEventListener('click', openAddCaseModal);
         document.getElementById('btnRefreshCases').addEventListener('click', loadApiCases);
         document.getElementById('addTabBlank').addEventListener('click', function () { setAddCaseTab(false); });
@@ -439,7 +645,7 @@
                 not_api_case: '该用例不是接口用例，已返回列表。',
                 no_project_access: '您没有权限查看该用例所属项目。',
             }[err] || ('无法打开详情：' + err);
-            toast(msg, true);
+            alert(msg);
             try {
                 var clean = new URL(window.location.href);
                 clean.searchParams.delete('err');

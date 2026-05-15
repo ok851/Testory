@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}AI测试 - UI自动化测试平台{% endblock %}
+{% block title %}AI测试 - AI自动化测试平台{% endblock %}
 {% block head %}
 <style>
     .ai-test-page {
@@ -574,6 +574,49 @@
     .ai-studio-header__hint {
         margin: 10px 0 0; font-size: 12px; opacity: 0.9; line-height: 1.45; max-width: 72ch;
     }
+    .ai-closure-strip {
+        margin-top: 12px; padding: 10px 12px; border-radius: 12px;
+        background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.28);
+        display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font-size: 12px;
+    }
+    .ai-closure-strip[hidden] { display: none !important; }
+    .ai-closure-strip__label { font-weight: 700; opacity: 0.95; }
+    .ai-closure-strip .btn-closure {
+        padding: 7px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.45);
+        background: rgba(255,255,255,0.2); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .ai-closure-strip .btn-closure:hover { background: rgba(255,255,255,0.32); }
+    .ai-closure-strip .btn-closure:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ai-closure-strip a.btn-closure { text-decoration: none; display: inline-block; }
+    .ai-closure-strip__meta { font-size: 10px; opacity: 0.82; max-width: 100%; }
+    @media (max-width: 640px) {
+        .ai-closure-strip { flex-direction: column; align-items: stretch; }
+        .ai-closure-strip .btn-closure, .ai-closure-strip a.btn-closure { text-align: center; justify-content: center; }
+    }
+    .ai-req-scenarios { margin-top: 10px; padding: 10px; border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; }
+    .ai-req-scenarios summary { cursor: pointer; font-weight: 600; color: #4338ca; }
+    html.dark .ai-req-scenarios { background: #0f172a; border-color: #334155; }
+    html.dark .ai-req-scenarios summary { color: #a5b4fc; }
+    /* 右侧栏：需求/导入区按钮与文件控件（原先仅有 .btn-primary 等颜色，无盒模型，易看起来像「无效」） */
+    .ai-preview-in-rail .ai-req-scenarios { box-sizing: border-box; }
+    .ai-preview-in-rail .ai-req-scenarios .btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        box-sizing: border-box; min-height: 36px; padding: 8px 14px; margin-top: 6px; margin-right: 8px;
+        border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+        transition: filter 0.15s ease, transform 0.12s ease;
+    }
+    .ai-preview-in-rail .ai-req-scenarios .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .ai-preview-in-rail .ai-req-scenarios .btn-sm { min-height: 32px; padding: 6px 12px; font-size: 12px; }
+    .ai-preview-in-rail .ai-req-scenarios input[type="file"] {
+        width: 100%; max-width: 100%; padding: 8px 10px; margin-top: 4px;
+        border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font-size: 12px; box-sizing: border-box;
+    }
+    .ai-preview-in-rail .ai-req-scenarios input[type="file"]:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
+    html.dark .ai-preview-in-rail .ai-req-scenarios input[type="file"] {
+        background: #111827; border-color: #475569; color: #e5e7eb;
+    }
+    html.dark .ai-preview-in-rail .ai-req-scenarios .btn-secondary { background: #475569; }
+    html.dark .ai-preview-in-rail .ai-req-scenarios .btn-secondary:hover { background: #64748b; }
     .ai-studio-context-row {
         display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-end;
         padding: 12px 22px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
@@ -847,6 +890,14 @@
                 </div>
             </div>
             <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">顶部选择项目、用例与浏览器；左栏与 AI 对话并<strong>生成用例</strong> / <strong>优化</strong>；中栏填写 URL 点「打开」查看页面；顶栏<strong>运行</strong>为生成并执行。已配置内置浏览器网关时中栏为实时画面，否则为简化预览。</p>
+            <div class="ai-closure-strip" id="aiClosureStrip" hidden>
+                <span class="ai-closure-strip__label" id="aiClosureStripLabel">已保存用例</span>
+                <button type="button" class="btn-closure" id="aiBtnResolveLocatorsSave">解析定位并写库</button>
+                <button type="button" class="btn-closure" id="aiBtnRunSavedCase">执行该用例</button>
+                <a class="btn-closure" id="aiLinkRunHistory" href="#" target="_blank" rel="noopener">运行历史</a>
+                <a class="btn-closure" href="/defects" id="aiLinkDefectsNav" target="_blank" rel="noopener">缺陷管理</a>
+                <span class="ai-closure-strip__meta" title="需在服务器环境变量中开启 AUTO_DEFECT_ON_CASE_FAILURE=1">自动建缺陷需环境变量（悬停查看）</span>
+            </div>
         </header>
 
         <div class="ai-studio-context-row" aria-label="context">
@@ -980,6 +1031,22 @@
                     <label class="ai-gen-label" for="aiGeneratedPreview" data-i18n="aitest_preview_label">用例预览</label>
                     <textarea id="aiGeneratedPreview" class="ai-gen-textarea--preview" rows="10" readonly data-i18n-placeholder="aitest_preview_ph" placeholder="生成的用例预览将显示在这里…"></textarea>
                     <p class="ai-hint-inline" style="margin-top:10px; font-size:11px;" id="aiEditCaseHint">保存后在项目用例中继续编步骤与定位。<a href="#" id="aiOpenCaseListLink" style="color:#4f46e5;font-weight:600;">打开用例列表</a></p>
+                    <details class="ai-req-scenarios" style="margin-top:10px;">
+                        <summary>需求说明书 → 场景 → 批量 Web 用例</summary>
+                        <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">
+                            <input type="file" id="aiReqFile" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" style="font-size:12px;" />
+                            <button type="button" class="btn btn-secondary btn-sm" id="aiReqScenariosBtn" style="align-self:flex-start;">生成结构化场景</button>
+                            <button type="button" class="btn btn-primary btn-sm" id="aiReqBatchUiBtn" disabled style="align-self:flex-start;">为全部场景生成 Web 用例</button>
+                            <pre id="aiReqScenariosOut" class="ai-inspect-pre" style="max-height:140px;">（上传文件或仅用左栏自然语言目标后点「生成结构化场景」）</pre>
+                        </div>
+                    </details>
+                    <details class="ai-req-scenarios" style="margin-top:10px;">
+                        <summary>高级：导入 UI 步骤 JSON（OpenClaw / 工具循环）</summary>
+                        <p style="margin:6px 0;font-size:11px;opacity:0.85;">目标用例：优先「保存到用例」所选；否则使用最近一次保存的用例 ID。</p>
+                        <textarea id="aiImportPlanJson" class="ai-gen-textarea--preview" style="min-height:120px;" placeholder='[{"action":"navigate","input_value":"https://..."},...]'></textarea>
+                        <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:12px;"><input type="checkbox" id="aiImportPlanReplace" /> 导入前清空该用例原有步骤</label>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiImportPlanBtn">导入到用例</button>
+                    </details>
                 </div>
             </aside>
         </div>
@@ -1083,6 +1150,8 @@
     let allCasesList = [];
     let aiPlanAbort = null;
     window.__aiCurrentBgJobId = null;
+    let __aiWizardCaseId = null;
+    window.__aiLastScenarioDoc = null;
     let aiGatewayBusy = false;
     let aiGatewayStreamAbort = null;
 
@@ -3127,6 +3196,162 @@
         } catch (e) { console.warn(e); }
     }
 
+    function showAiClosureStrip(caseId) {
+        __aiWizardCaseId = caseId;
+        var strip = document.getElementById('aiClosureStrip');
+        var lab = document.getElementById('aiClosureStripLabel');
+        var rh = document.getElementById('aiLinkRunHistory');
+        if (lab) lab.textContent = '已保存用例 ID ' + caseId;
+        if (rh) rh.href = '/run-history?case_id=' + encodeURIComponent(String(caseId)) + (currentProjectId ? '&project_id=' + encodeURIComponent(String(currentProjectId)) : '');
+        if (strip) strip.removeAttribute('hidden');
+        appendAiChat('assistant', '可在顶栏下方使用「解析定位并写库」「执行该用例」继续闭环；也可稍后在用例列表中编辑。');
+    }
+
+    async function aiResolveLocatorsSaveClick() {
+        if (!__aiWizardCaseId) { alert('请先保存用例'); return; }
+        var b = document.getElementById('aiBtnResolveLocatorsSave');
+        if (b) { b.disabled = true; }
+        try {
+            var resp = await fetch('/api/cases/' + __aiWizardCaseId + '/ai/locator-resolve-save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: '{}' });
+            var data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok) throw new Error(data.error || ('请求失败 HTTP ' + resp.status));
+            if (!data.success) throw new Error(data.error || '请求失败');
+            appendAiChat('assistant', '定位解析已写库，更新步骤数: ' + (data.updated_steps != null ? data.updated_steps : '—'));
+            if (data.warnings && data.warnings.length) appendAiChat('assistant', '提示: ' + data.warnings.join('；'));
+        } catch (e) {
+            appendAiChat('assistant', '写库失败: ' + (e && e.message ? e.message : String(e)));
+        } finally {
+            if (b) { b.disabled = false; }
+        }
+    }
+
+    async function aiRunSavedCaseClick() {
+        if (!__aiWizardCaseId) { alert('请先保存用例'); return; }
+        var b = document.getElementById('aiBtnRunSavedCase');
+        if (b) { b.disabled = true; }
+        try {
+            var resp = await fetch('/api/cases/' + __aiWizardCaseId + '/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: '{}' });
+            var data = await resp.json().catch(function() { return {}; });
+            if (!resp.ok) throw new Error(data.error || ('请求失败 HTTP ' + resp.status));
+            if (data.success) appendAiChat('assistant', '执行完成: ' + (data.status || 'success'));
+            else appendAiChat('assistant', '执行结束: ' + (data.error || data.status || '见运行历史'));
+        } catch (e) {
+            appendAiChat('assistant', '执行请求失败: ' + (e && e.message ? e.message : String(e)));
+        } finally {
+            if (b) { b.disabled = false; }
+        }
+    }
+
+    async function aiReqScenariosBtnClick() {
+        var fd = new FormData();
+        var f = document.getElementById('aiReqFile');
+        var out = document.getElementById('aiReqScenariosOut');
+        var batchBtn = document.getElementById('aiReqBatchUiBtn');
+        window.__aiLastScenarioDoc = null;
+        if (batchBtn) batchBtn.disabled = true;
+        try {
+            if (f && f.files && f.files[0]) {
+                fd.append('file', f.files[0]);
+                var resp = await fetch('/api/ai/scenarios/from-requirements', { method: 'POST', body: fd, credentials: 'same-origin' });
+                var data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.error || '失败');
+                window.__aiLastScenarioDoc = data.document || {};
+                if (out) out.textContent = JSON.stringify(data.document || {}, null, 2).slice(0, 12000);
+                var nsc = ((data.document && data.document.scenarios) || []).length;
+                appendAiChat('assistant', '已生成结构化场景，共 ' + nsc + ' 条。');
+                if (data.warnings && data.warnings.length) appendAiChat('assistant', '提示: ' + data.warnings.join('；'));
+            } else {
+                var g = composeAiGoal();
+                if (!g) {
+                    alert('请选择需求文件，或在左栏填写自然语言目标后重试');
+                    return;
+                }
+                var r = await fetch('/api/ai/scenarios/from-requirements', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ requirements_text: g, extra_context: '', model: getSelectedAiModel() }) });
+                var d = await r.json();
+                if (!r.ok || !d.success) throw new Error(d.error || '失败');
+                window.__aiLastScenarioDoc = d.document || {};
+                if (out) out.textContent = JSON.stringify(d.document || {}, null, 2).slice(0, 12000);
+                appendAiChat('assistant', '已生成结构化场景（来自左栏目标文本）。');
+                if (d.warnings && d.warnings.length) appendAiChat('assistant', '提示: ' + d.warnings.join('；'));
+            }
+        } catch (e) {
+            if (out) out.textContent = String(e && e.message ? e.message : e);
+            appendAiChat('assistant', '场景生成失败: ' + (e && e.message ? e.message : String(e)));
+        } finally {
+            if (batchBtn) {
+                var doc = window.__aiLastScenarioDoc;
+                var n = (doc && doc.scenarios && doc.scenarios.length) ? doc.scenarios.length : 0;
+                batchBtn.disabled = n === 0;
+            }
+        }
+    }
+
+    async function aiReqBatchUiBtnClick() {
+        if (!currentProjectId) { alert('请先选择项目'); return; }
+        if (!window.__aiLastScenarioDoc || !window.__aiLastScenarioDoc.scenarios || !window.__aiLastScenarioDoc.scenarios.length) { alert('请先生成结构化场景'); return; }
+        var baseUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
+        var b = document.getElementById('aiReqBatchUiBtn');
+        if (b) b.disabled = true;
+        try {
+            var resp = await fetch('/api/ai/cases/from-scenarios-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    project_id: currentProjectId,
+                    project_name: currentProjectName,
+                    document: window.__aiLastScenarioDoc,
+                    model: getSelectedAiModel(),
+                    base_url: baseUrl,
+                    max_scenarios: 20
+                })
+            });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error || '失败');
+            appendAiChat('assistant', '已批量创建 Web 用例 ' + (data.count || 0) + ' 个，ID: ' + (data.created_case_ids || []).join(', '));
+            if (data.warnings && data.warnings.length) appendAiChat('assistant', data.warnings.join('；'));
+        } catch (e) {
+            appendAiChat('assistant', '批量生成失败: ' + (e && e.message ? e.message : String(e)));
+        } finally {
+            if (b) b.disabled = false;
+        }
+    }
+
+    async function aiImportPlanBtnClick() {
+        var sel = (document.getElementById('aiTargetCaseSelect') && document.getElementById('aiTargetCaseSelect').value || '').trim();
+        var caseId = sel ? parseInt(sel, 10) : (__aiWizardCaseId || 0);
+        if (!caseId) {
+            alert('请选择「保存到用例」或先执行一次「生成并保存」');
+            return;
+        }
+        var raw = (document.getElementById('aiImportPlanJson') && document.getElementById('aiImportPlanJson').value || '').trim();
+        if (!raw) { alert('请粘贴步骤 JSON 数组'); return; }
+        var steps;
+        try { steps = JSON.parse(raw); } catch (e) { alert('JSON 无效'); return; }
+        if (!Array.isArray(steps)) { alert('步骤须为 JSON 数组'); return; }
+        var rep = document.getElementById('aiImportPlanReplace') && document.getElementById('aiImportPlanReplace').checked;
+        var btn = document.getElementById('aiImportPlanBtn');
+        if (btn) btn.disabled = true;
+        try {
+            var resp = await fetch('/api/ai/cases/import-ui-plan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ case_id: caseId, steps: steps, replace: rep, goal: composeAiGoal() })
+            });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error || '导入失败');
+            appendAiChat('assistant', '已导入 ' + (data.steps_created || 0) + ' 步到用例 ' + caseId);
+            if (data.warnings && data.warnings.length) appendAiChat('assistant', data.warnings.join('；'));
+            __aiWizardCaseId = caseId;
+            showAiClosureStrip(caseId);
+        } catch (e) {
+            appendAiChat('assistant', '导入失败: ' + (e && e.message ? e.message : String(e)));
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
     async function aiGenerateAndSaveCase() {
         if (!currentProjectId) { alert('请先选择项目'); return; }
         const goal = composeAiGoal();
@@ -3152,7 +3377,7 @@
             if (!resp.ok || !data.success) throw new Error(data.error);
             var savedTitle = (data.case_name && String(data.case_name).trim()) || '';
             appendAiChat('assistant', '已保存。用例 ID ' + data.case_id + (savedTitle ? ' 《' + savedTitle + '》' : ''));
-            setTimeout(function() { window.location.href = '/list_cases_v2/' + currentProjectId; }, 1200);
+            if (data.case_id) showAiClosureStrip(data.case_id);
         } catch (e) {
             appendAiChat('assistant', '保存失败: ' + e.message);
         } finally {
@@ -3350,6 +3575,16 @@
         if (bClrChat) bClrChat.addEventListener('click', function() { if (typeof window.aiClearChatHistory === 'function') void window.aiClearChatHistory(); });
         var bRun = document.getElementById('aiBtnRunAgent');
         if (bRun) bRun.addEventListener('click', function() { aiRunAgentWorkflow(); });
+        var brs = document.getElementById('aiBtnResolveLocatorsSave');
+        if (brs) brs.addEventListener('click', function() { void aiResolveLocatorsSaveClick(); });
+        var brun = document.getElementById('aiBtnRunSavedCase');
+        if (brun) brun.addEventListener('click', function() { void aiRunSavedCaseClick(); });
+        var rsb = document.getElementById('aiReqScenariosBtn');
+        if (rsb) rsb.addEventListener('click', function() { void aiReqScenariosBtnClick(); });
+        var rbb = document.getElementById('aiReqBatchUiBtn');
+        if (rbb) rbb.addEventListener('click', function() { void aiReqBatchUiBtnClick(); });
+        var ipb = document.getElementById('aiImportPlanBtn');
+        if (ipb) ipb.addEventListener('click', function() { void aiImportPlanBtnClick(); });
         if (msg) msg.addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();

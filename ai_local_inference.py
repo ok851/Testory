@@ -538,6 +538,24 @@ def _probe_pick_selector(
                 score += 7
             if "按钮" in desc and tag == "button":
                 score += 4
+            # 描述中的具体文案与控件可见文本/aria 对齐（导出、订单列表等），避免只匹配到首个 primary 按钮
+            dlow = desc.lower()
+            if txt and len(txt) >= 2 and txt.lower() in dlow:
+                score += 22
+            if al and len(al) >= 2 and al.lower() in dlow:
+                score += 20
+            if ph and len(ph) >= 2 and ph.lower() in dlow:
+                score += 16
+            for pat in (
+                r"「([^」]{2,40})」",
+                "\u201c([^\u201d]{2,40})\u201d",
+                r'"([^"]{2,40})"',
+                r"'([^']{2,40})'",
+            ):
+                for qm in re.finditer(pat, desc):
+                    qn = (qm.group(1) or "").strip()
+                    if len(qn) >= 2 and qn.lower() in blob:
+                        score += 26
         if score > best[0]:
             best = (score, rty, rec)
 
@@ -962,7 +980,7 @@ class LocalAIService:
                         "You are a senior QA engineer. Output must be exactly one JSON object—nothing else. "
                         "No markdown fences, no commentary, no trailing text. "
                         "First non-whitespace character must be '{'; last must be '}'. "
-                        "Schema: UI test plan with case_name, case_url, description, precondition, expected_result, steps[]."
+                        "Schema: AI-assisted web test plan with case_name, case_url, description, precondition, expected_result, steps[]."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -1219,7 +1237,7 @@ class LocalAIService:
             "NEVER put the line number in selector_value (e.g. selector_value must NOT be \"1\" or \"12\" alone). "
             "Copy the real locator from that line into selector_type/selector_value (e.g. css #kw, [name=\\\"wd\\\"], xpath …). "
             "If you use probe_index=n, still prefer selectors shown on that same line; the server maps probe_index to stable locators.\n"
-            "Generate one executable UI test case with steps from this natural language goal.\n"
+            "Generate one executable AI-assisted web test case with steps from this natural language goal.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"Goal: {goal}\n"
             f"{mem_block}"
@@ -1366,7 +1384,7 @@ class LocalAIService:
             "You refine plans using the same rules: if a LIVE snapshot is present, selectors must align with "
             "those real elements only. Prefer probe_index=[n] plus the exact recommended=() string from that line; "
             "never invent selectors not shown in the snapshot.\n"
-            "You are refining an existing UI test case plan.\n"
+            "You are refining an existing AI-assisted web test case plan.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"{iact}"
             f"User latest instruction: {user_message}\n"

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}测试用例管理 - UI自动化测试平台{% endblock %}
+{% block title %}测试用例管理 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style>
         * {
@@ -787,8 +787,9 @@
         function showMarkDefectModal(){ if(selectedCaseIdsOrdered.length===0){ alert('请先勾选用例'); return; } const names=selectedCaseIdsOrdered.map(id=>caseNamesById[id]).join(', '); document.getElementById('defectCaseNames').innerHTML=names; document.getElementById('markDefectModal').classList.add('active'); }
         function closeMarkDefectModal(){ document.getElementById('markDefectModal').classList.remove('active'); }
         async function submitMarkDefects(){ const payload={case_ids:selectedCaseIdsOrdered, project_id:parseInt(currentProjectId), title_template:document.getElementById('defectTitleTemplate').value, description:document.getElementById('defectDescription').value, severity:document.getElementById('defectSeverity').value, priority:document.getElementById('defectPriority').value, actual_result:document.getElementById('defectActualResult').value, environment:document.getElementById('defectEnvironment').value}; const resp=await fetch('/api/defects/batch_from_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert(`创建缺陷${data.created_count}个`); closeMarkDefectModal(); } else alert('标记缺陷失败'); }
-        async function syncCaseRunButtonState(){ const resp=await fetch('/api/cases/current-run/status'); const data=await resp.json(); const active=!!(resp.ok&&data.success&&data.active)||localCaseExecutionRunning; document.getElementById('stopCaseRunBtn').disabled=!active; }
-        document.addEventListener('DOMContentLoaded',async()=>{ currentProjectId=getProjectIdFromUrl(); if(!currentProjectId){ alert('无效项目'); window.location.href='/list_projects'; return; } await loadProjectInfo(); await loadTestCases(); setInterval(syncCaseRunButtonState,1000); });
+        async function syncCaseRunButtonState(){ const { ok, pack } = await window.uatFetchCurrentRunsPack(); const c=(pack||{}).case||{}; const active=!!(ok&&c.success&&c.active)||localCaseExecutionRunning; document.getElementById('stopCaseRunBtn').disabled=!active; }
+        document.addEventListener('visibilitychange',function(){ if(!document.hidden) syncCaseRunButtonState(); });
+        document.addEventListener('DOMContentLoaded',async()=>{ currentProjectId=getProjectIdFromUrl(); if(!currentProjectId){ alert('无效项目'); window.location.href='/list_projects'; return; } await loadProjectInfo(); await loadTestCases(); void syncCaseRunButtonState(); setInterval(syncCaseRunButtonState,3500); });
         window.addEventListener('ui-preferences-updated',()=>{ loadProjectInfo(); loadTestCases(); });
     </script>
 {% endblock %}

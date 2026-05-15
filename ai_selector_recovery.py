@@ -201,7 +201,7 @@ async def try_recover_selector_with_vision(
         uat_logger.warning(f"[AI_RECOVERY_VISION] screenshot failed: {e}")
         return None
     prompt = (
-        "You see a full-page screenshot of a web application. The UI automation could not use this "
+        "You see a full-page screenshot of a web application. The automation could not use this "
         f"selector: {failed_selector!s}\n"
         f"Step goal (may be Chinese): {desc}\n"
         f"Action type: {action}\n\n"

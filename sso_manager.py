@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 from database import Database
+from time_utils import to_beijing_iso
 
 
 class SSOProviderType(Enum):
@@ -115,7 +116,7 @@ class SSOManager:
                 'ldap_port': row[11],
                 'wecom_corp_id': row[16],
                 'is_active': bool(row[19]),
-                'created_at': row[20]
+                'created_at': to_beijing_iso(row[20])
             })
         return configs
     

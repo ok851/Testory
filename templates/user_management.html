@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}用户管理 - UI自动化测试平台{% endblock %}
+{% block title %}用户管理 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style type="text/tailwindcss">
         @layer utilities {
@@ -94,6 +94,10 @@
             <input type="hidden" id="editUserId">
             <div class="space-y-4">
                 <div>
+                    <label class="form-label" data-i18n="um_lbl_user">用户名</label>
+                    <input type="text" id="editUsername" class="form-input" data-i18n-placeholder="um_ph_user" placeholder="" autocomplete="username">
+                </div>
+                <div>
                     <label class="form-label" data-i18n="um_lbl_email">邮箱</label>
                     <input type="email" id="editEmail" class="form-input" data-i18n-placeholder="um_ph_email" placeholder="">
                 </div>
@@ -137,9 +141,16 @@
 
         async function loadUsers() {
             try {
-                const res = await fetch('/api/users');
-                const data = await res.json();
-                if (data.success) {
+                const res = await fetch('/api/users', { credentials: 'same-origin' });
+                let data;
+                try {
+                    data = await res.json();
+                } catch (je) {
+                    console.error('加载用户: 响应非 JSON', je);
+                    alert(typeof t === 'function' ? t('um_load_fail') : '');
+                    return;
+                }
+                if (res.ok && data.success) {
                     renderUsers(data.users);
                 } else {
                     alert((typeof t === 'function' ? t('um_load_fail') : '') + ': ' + (data.error || (typeof t === 'function' ? t('um_err_unknown') : '')));
@@ -155,6 +166,15 @@
             return typeof t === 'function' ? t(k) : role;
         }
 
+        /** HTML 文本转义（表格单元格） */
+        function umEscHtml(s) {
+            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+        /** 属性值转义（用于 data-*，避免引号破坏 DOM） */
+        function umEscAttr(s) {
+            return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+        }
+
         function renderUsers(users) {
             const tbody = document.getElementById('userTableBody');
             const on = typeof t === 'function' ? t('um_st_on') : '';
@@ -162,17 +182,16 @@
             const bEdit = typeof t === 'function' ? t('um_btn_edit') : '';
             const bDel = typeof t === 'function' ? t('um_btn_del') : '';
             tbody.innerHTML = users.map(u => {
-                const esc = (s) => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
                 return (
                     '<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">' +
                     '<td>' + u.id + '</td>' +
-                    '<td class="font-medium">' + esc(u.username) + '</td>' +
-                    '<td>' + esc(u.email || '-') + '</td>' +
-                    '<td><span class="badge badge-' + esc(u.role) + '">' + roleName(u.role) + '</span></td>' +
+                    '<td class="font-medium">' + umEscHtml(u.username) + '</td>' +
+                    '<td>' + umEscHtml(u.email || '-') + '</td>' +
+                    '<td><span class="badge badge-' + umEscHtml(u.role) + '">' + roleName(u.role) + '</span></td>' +
                     '<td>' + (u.is_active ? '<span class="text-green-600 dark:text-green-400">' + on + '</span>' : '<span class="text-gray-500 dark:text-gray-400">' + off + '</span>') + '</td>' +
-                    '<td class="text-gray-600 dark:text-gray-400">' + new Date(u.created_at).toLocaleString(umLocale()) + '</td>' +
-                    '<td><button type="button" class="btn btn-sm btn-primary" onclick="showEditModal(' + u.id + ', \'' + esc(u.email || '').replace(/'/g, "\\'") + '\', \'' + esc(u.role) + '\')"><i class="fas fa-edit mr-1"></i>' + bEdit + '</button> ' +
-                    '<button type="button" class="btn btn-sm btn-danger" onclick="deleteUser(' + u.id + ', \'' + esc(u.username).replace(/'/g, "\\'") + '\')"><i class="fas fa-trash mr-1"></i>' + bDel + '</button></td>' +
+                    '<td class="text-gray-600 dark:text-gray-400">' + new Date(u.created_at).toLocaleString(umLocale(), { timeZone: 'Asia/Shanghai' }) + '</td>' +
+                    '<td><button type="button" class="btn btn-sm btn-primary um-open-edit" data-user-id="' + u.id + '" data-username="' + umEscAttr(u.username) + '" data-email="' + umEscAttr(u.email || '') + '" data-role="' + umEscAttr(u.role) + '"><i class="fas fa-edit mr-1"></i>' + bEdit + '</button> ' +
+                    '<button type="button" class="btn btn-sm btn-danger um-open-del" data-user-id="' + u.id + '" data-username="' + umEscAttr(u.username) + '"><i class="fas fa-trash mr-1"></i>' + bDel + '</button></td>' +
                     '</tr>'
                 );
             }).join('');
@@ -183,9 +202,10 @@
             document.getElementById('createModal').classList.add('flex');
         }
 
-        function showEditModal(id, email, role) {
+        function showEditModal(id, username, email, role) {
             refreshUmSelectOptions();
             document.getElementById('editUserId').value = id;
+            document.getElementById('editUsername').value = username || '';
             document.getElementById('editEmail').value = email || '';
             document.getElementById('editRole').value = role;
             document.getElementById('editPassword').value = '';
@@ -210,11 +230,19 @@
             try {
                 const res = await fetch('/api/users', {
                     method: 'POST',
+                    credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password, email, role })
                 });
-                const data = await res.json();
-                if (data.success) {
+                let data;
+                try {
+                    data = await res.json();
+                } catch (je) {
+                    console.error('创建用户: 响应非 JSON', je);
+                    alert(typeof t === 'function' ? t('um_net_create') : '');
+                    return;
+                }
+                if (res.ok && data.success) {
                     alert(typeof t === 'function' ? t('um_create_ok') : '');
                     closeModal('createModal');
                     loadUsers();
@@ -230,23 +258,71 @@
             }
         }
 
+        /** 用户更新/删除：优先走标准 REST（PUT/DELETE），与旧部署兼容；404/405 时再试 POST 别名（新代码 + 部分代理环境）。 */
+        async function umFetchJson(url, options) {
+            const res = await fetch(url, Object.assign({ credentials: 'same-origin' }, options || {}));
+            const text = await res.text();
+            let data = null;
+            if (text) {
+                try {
+                    data = JSON.parse(text);
+                } catch (je) {
+                    console.error('用户管理接口返回非 JSON', url, res.status, text.slice(0, 300));
+                }
+            }
+            return { res, data };
+        }
+
+        async function umUserUpdate(id, body) {
+            let out = await umFetchJson('/api/users/' + id, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (out.res.status === 404 || out.res.status === 405) {
+                out = await umFetchJson('/api/users/' + id + '/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+            }
+            return out;
+        }
+
+        async function umUserDelete(id) {
+            let out = await umFetchJson('/api/users/' + id, { method: 'DELETE' });
+            if (out.res.status === 404 || out.res.status === 405) {
+                out = await umFetchJson('/api/users/' + id + '/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+            }
+            return out;
+        }
+
         async function updateUser() {
             const id = document.getElementById('editUserId').value;
+            const username = document.getElementById('editUsername').value.trim();
             const email = document.getElementById('editEmail').value.trim();
             const role = document.getElementById('editRole').value;
             const password = document.getElementById('editPassword').value;
 
-            const body = { email, role };
+            if (!username) {
+                alert(typeof t === 'function' ? t('um_need_username') : '');
+                return;
+            }
+
+            const body = { username, email, role };
             if (password) body.password = password;
 
             try {
-                const res = await fetch('/api/users/' + id, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const data = await res.json();
-                if (data.success) {
+                const { res, data } = await umUserUpdate(id, body);
+                if (!data) {
+                    alert(typeof t === 'function' ? t('um_net_update') : '');
+                    return;
+                }
+                if (res.ok && data.success) {
                     alert(typeof t === 'function' ? t('um_update_ok') : '');
                     closeModal('editModal');
                     loadUsers();
@@ -263,9 +339,12 @@
             if (!confirm(typeof t === 'function' ? umSub(t('um_del_confirm'), { name: username }) : '')) return;
 
             try {
-                const res = await fetch('/api/users/' + id, { method: 'DELETE' });
-                const data = await res.json();
-                if (data.success) {
+                const { res, data } = await umUserDelete(id);
+                if (!data) {
+                    alert(typeof t === 'function' ? t('um_net_del') : '');
+                    return;
+                }
+                if (res.ok && data.success) {
                     alert(typeof t === 'function' ? t('um_del_ok') : '');
                     loadUsers();
                 } else {
@@ -283,10 +362,34 @@
             }
         });
 
+        var umTableActionsBound = false;
+        function bindUmTableActions() {
+            if (umTableActionsBound) return;
+            var tbody = document.getElementById('userTableBody');
+            if (!tbody) return;
+            umTableActionsBound = true;
+            tbody.addEventListener('click', function (ev) {
+                var editBtn = ev.target.closest && ev.target.closest('.um-open-edit');
+                if (editBtn) {
+                    var eid = parseInt(editBtn.getAttribute('data-user-id'), 10);
+                    var euser = editBtn.getAttribute('data-username') || '';
+                    var eem = editBtn.getAttribute('data-email') || '';
+                    var erole = editBtn.getAttribute('data-role') || 'tester';
+                    showEditModal(eid, euser, eem, erole);
+                    return;
+                }
+                var delBtn = ev.target.closest && ev.target.closest('.um-open-del');
+                if (delBtn) {
+                    deleteUser(parseInt(delBtn.getAttribute('data-user-id'), 10), delBtn.getAttribute('data-username') || '');
+                }
+            });
+        }
+
         function initUmPage() {
             try { document.title = typeof t === 'function' ? t('um_doc_title') : ''; } catch (e) {}
             if (typeof applyUiLang === 'function') applyUiLang();
             refreshUmSelectOptions();
+            bindUmTableActions();
             loadUsers();
         }
 

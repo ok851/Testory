@@ -281,7 +281,7 @@ class NotificationManager:
                 </div>
                 <hr style="margin-top: 20px;">
                 <p style="color: #999; font-size: 12px;">
-                    本邮件由 UI自动化测试平台 自动发送
+                    本邮件由 AI自动化测试平台 自动发送
                 </p>
             </body>
             </html>

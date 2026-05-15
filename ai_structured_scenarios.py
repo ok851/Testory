@@ -39,6 +39,106 @@ def structured_scenarios_max_chars() -> int:
     return max(2000, min(n, 200000))
 
 
+def structured_scenarios_chunk_size() -> int:
+    try:
+        n = int(os.environ.get("AI_SCENARIO_CHUNK_CHARS", "12000") or "12000")
+    except ValueError:
+        n = 12000
+    return max(4000, min(n, 60000))
+
+
+def _merge_scenario_documents(parts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge multiple partial JSON documents from chunked LLM calls."""
+    out: Dict[str, Any] = {
+        "system_under_test": "",
+        "scope_notes": [],
+        "features": [],
+        "scenarios": [],
+        "traceability": [],
+        "risks_and_unknowns": [],
+    }
+    seen_sid = set()
+    seen_fid = set()
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        if not out["system_under_test"] and p.get("system_under_test"):
+            out["system_under_test"] = str(p.get("system_under_test") or "")
+        for k in ("scope_notes", "risks_and_unknowns"):
+            for x in p.get(k) or []:
+                if isinstance(x, str) and x.strip() and x not in out[k]:  # type: ignore[index]
+                    out[k].append(x.strip())  # type: ignore[index]
+        for f in p.get("features") or []:
+            if not isinstance(f, dict):
+                continue
+            fid = str(f.get("id") or "").strip() or str(f.get("name") or "")
+            if fid and fid not in seen_fid:
+                seen_fid.add(fid)
+                out["features"].append(f)
+        for s in p.get("scenarios") or []:
+            if not isinstance(s, dict):
+                continue
+            sid = str(s.get("id") or "").strip() or str(s.get("title") or "")
+            key = sid or json.dumps(s, ensure_ascii=False)[:120]
+            if key in seen_sid:
+                continue
+            seen_sid.add(key)
+            out["scenarios"].append(s)
+        for t in p.get("traceability") or []:
+            if isinstance(t, dict):
+                out["traceability"].append(t)
+    return out
+
+
+def generate_structured_scenarios_from_requirements_chunked(
+    requirements_text: str,
+    profile: Dict[str, Any],
+    *,
+    extra_context: str = "",
+) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Split very long requirements into chunks, call generate_structured_scenarios_from_requirements
+    per chunk, then merge scenarios (dedupe by id).
+    """
+    warns: List[str] = []
+    body = (requirements_text or "").strip()
+    if not body:
+        return {}, ["需求正文为空"]
+
+    cap = structured_scenarios_max_chars()
+    chunk_sz = structured_scenarios_chunk_size()
+    if len(body) <= cap and len(body) <= chunk_sz * 1.25:
+        return generate_structured_scenarios_from_requirements(
+            body, profile, extra_context=extra_context
+        )
+
+    warns.append(f"长文档分块处理：每块约 {chunk_sz} 字符")
+    parts: List[Dict[str, Any]] = []
+    n_chunks = 0
+    for i in range(0, min(len(body), cap), chunk_sz):
+        chunk = body[i : i + chunk_sz]
+        n_chunks += 1
+        ctx = (extra_context or "").strip()
+        if n_chunks > 1:
+            ctx = (ctx + "\n" if ctx else "") + f"（第 {n_chunks} 段续篇，避免与已输出场景 id 重复）"
+        doc, w = generate_structured_scenarios_from_requirements(
+            chunk, profile, extra_context=ctx[:4000]
+        )
+        warns.extend(w)
+        if doc:
+            parts.append(doc)
+        if n_chunks >= 24:
+            warns.append("已达分块上限（24），后续内容未处理")
+            break
+
+    if not parts:
+        return {}, warns
+    merged = _merge_scenario_documents(parts)
+    if not merged.get("scenarios"):
+        warns.append("分块合并后 scenarios 为空")
+    return merged, warns
+
+
 def generate_structured_scenarios_from_requirements(
     requirements_text: str,
     profile: Dict[str, Any],
@@ -59,7 +159,7 @@ def generate_structured_scenarios_from_requirements(
     ctx = (extra_context or "").strip()
     prompt = (
         "你是资深测试架构师。根据下面的需求片段生成测试场景规划。\n"
-        "约束：不要编写 UI 自动化步骤（禁止 css/xpath）；只输出高层次场景。\n"
+        "约束：不要编写页面选择器级自动化步骤（禁止 css/xpath）；只输出高层次场景。\n"
         "必须使用 ONLY JSON（不要 markdown），且结构与示例字段一致：\n"
         + SCENARIO_SCHEMA_HINT
         + "\n\n需求正文：\n"

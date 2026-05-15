@@ -4,6 +4,7 @@
 
 增强：主文档 + iframe、Shadow DOM 浅层遍历、可配置等待与 settle；
      返回控件注册表用于 probe_index 映射与生成后选择器校验。
+     与 INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS（主会话 / 远程网关 inspect）共用同一套组件选择器与排序策略。
 """
 from __future__ import annotations
 
@@ -21,16 +22,96 @@ _URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.I)
 _COLLECT_INTERACTIVE_JS = """
 (maxNodes) => {
   const sel = [
-    'a[href]','button','input:not([type=hidden])','textarea','select',
-    '[role=button]','[role=link]','[role=textbox]','[role=searchbox]',
-    '[role=combobox]','[contenteditable=true]'
+    'a[href]','a[role="button"]','button','input:not([type=hidden])','textarea','select','summary',
+    '[role=button]','[role=link]','[role=menuitem]','[role=tab]',
+    '[role=textbox]','[role=searchbox]','[role=combobox]','[role=switch]','[role=checkbox]','[role=radio]','[role=option]','[role=gridcell]',
+    '[contenteditable=true]',
+    '.el-menu-item','.el-submenu__title','.el-link',
+    '.ant-btn','.ant-menu-item','.ant-menu-submenu-title','.ant-tabs-tab','.ant-tabs-tab-btn',
+    '.arco-btn','.arco-menu-item','.arco-menu-inline-header','.arco-tabs-header-title','.arco-link',
+    '.n-button','.n-menu-item-content','.n-tabs-tab',
+    '.MuiButton-root','.MuiTab-root','.MuiIconButton-root','.MuiLink-root',
+    '.v-btn','.v-tab',
+    '.t-button','.t-menu__item','.t-tabs__nav-item',
+    '.layui-btn','.layui-nav-item','.layui-tab-title > li',
+    '.ivu-btn','.ivu-menu-item','.ivu-tabs-tab',
+    '.semi-button','.semi-tabs-tab','.semi-navigation-item',
+    '.chakra-button','.q-btn',
+    '.p-button','.p-menuitem-link','.p-tabview-nav-link','.p-menuitem',
+    '.cds--btn','.cds--tabs__nav-link','.bx--btn','.bx--tabs__nav-link',
+    '.mantine-Button-root','.mantine-Tabs-tab','.mantine-NavLink-root',
+    '.btn.btn-primary','.btn.btn-secondary','.btn.btn-success','.btn.btn-info','.btn.btn-warning','.btn.btn-danger','.btn.btn-default','.btn.btn-outline-primary','.btn.btn-light','.btn.btn-dark',
+    '.fui-Button'
   ].join(',');
   function visible(el) {
     const r = el.getBoundingClientRect();
     if (r.width < 2 && r.height < 2) return false;
     const st = window.getComputedStyle(el);
-    if (st.visibility === 'hidden' || st.display === 'none') return false;
+    if (st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') return false;
     return true;
+  }
+  function inDataTableRow(el) {
+    try {
+      if (!el.closest) return false;
+      const row = el.closest('tr, [role=row], .n-data-table-tr');
+      if (!row) return false;
+      const hosts = [
+        '.el-table__body tbody', '.el-table__body-wrapper tbody',
+        '.ant-table-tbody', '.ant-table-body tbody',
+        '.arco-table-body tbody', '.arco-table-content tbody',
+        '.n-data-table-tbody', '.n-data-table-base-table-body',
+        '.layui-table-body tbody', '.layui-table-view tbody',
+        '.ivu-table-tbody',
+        '.semi-table-body',
+        '.p-datatable-tbody', '.p-treetable-tbody',
+        '.cds--data-table-content tbody', '.bx--data-table tbody',
+        '.mantine-Table tbody',
+        'table tbody'
+      ];
+      return hosts.some((s) => el.closest(s));
+    } catch (e) { return false; }
+  }
+  function scoreEl(el) {
+    const tx = ((el.innerText || '') + '').trim().replace(/\\s+/g, ' ').slice(0, 72);
+    let s = 0;
+    if (/^(导出|下载|导入|查询|搜索|重置|刷新|新增|添加|编辑|删除|提交|确定|取消|保存|上传|预览|打印|筛选|批量)/.test(tx)) s += 38;
+    if (tx === '导出' || tx === '下载' || tx === '查询' || tx === '搜索' || tx === '重置') s += 28;
+    if (tx.length >= 2 && tx.length <= 24) s += 2;
+    if (inDataTableRow(el)) s -= 22;
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'button' || el.getAttribute('role') === 'button') s += 5;
+    try {
+      if (el.classList) {
+        if (el.classList.contains('el-menu-item') || el.classList.contains('ant-menu-item')
+            || el.classList.contains('arco-menu-item') || el.classList.contains('n-menu-item-content')
+            || el.classList.contains('t-menu__item') || el.classList.contains('layui-nav-item')
+            || el.classList.contains('ivu-menu-item') || el.classList.contains('semi-navigation-item')
+            || el.classList.contains('p-menuitem') || el.classList.contains('p-menuitem-link')
+            || el.classList.contains('mantine-NavLink-root')) s += 8;
+        if (el.classList.contains('ant-tabs-tab') || el.classList.contains('arco-tabs-header-title')
+            || el.classList.contains('n-tabs-tab') || el.classList.contains('MuiTab-root')
+            || el.classList.contains('v-tab') || el.classList.contains('t-tabs__nav-item')
+            || el.classList.contains('ant-tabs-tab-btn') || el.classList.contains('ivu-tabs-tab')
+            || el.classList.contains('semi-tabs-tab')
+            || el.classList.contains('p-tabview-nav-link')
+            || el.classList.contains('cds--tabs__nav-link') || el.classList.contains('bx--tabs__nav-link')
+            || el.classList.contains('mantine-Tabs-tab')) s += 6;
+        try {
+          const p = el.parentElement;
+          const tn = (el.tagName || '').toUpperCase();
+          if (tn === 'LI' && p && p.classList && p.classList.contains('layui-tab-title')) s += 6;
+        } catch (e3) {}
+        const cn = (el.className && typeof el.className === 'string') ? el.className : '';
+        if (/\\b(?:ant-btn|arco-btn|MuiButton-root|t-button|n-button|layui-btn|ivu-btn|semi-button|chakra-button|q-btn|p-button|cds--btn|bx--btn|mantine-Button-root|fui-Button)\\b/.test(cn)) s += 5;
+        if (/\\b(?:v-btn|MuiIconButton-root)\\b/.test(cn)) s += 4;
+        if (el.classList.contains('btn') && (el.classList.contains('btn-primary') || el.classList.contains('btn-secondary')
+            || el.classList.contains('btn-success') || el.classList.contains('btn-info')
+            || el.classList.contains('btn-warning') || el.classList.contains('btn-danger')
+            || el.classList.contains('btn-default') || el.classList.contains('btn-outline-primary')
+            || el.classList.contains('btn-light') || el.classList.contains('btn-dark'))) s += 4;
+      }
+    } catch (e2) {}
+    return s;
   }
   function rowFor(el) {
     const tag = el.tagName.toLowerCase();
@@ -51,7 +132,13 @@ _COLLECT_INTERACTIVE_JS = """
   function addFrom(root) {
     if (rows.length >= maxNodes) return;
     let nodes = Array.from(root.querySelectorAll(sel)).filter(visible);
+    const staged = [];
     for (const el of nodes) {
+      if (staged.length >= 5000) break;
+      staged.push({ el, sc: scoreEl(el), y: el.getBoundingClientRect().top });
+    }
+    staged.sort((a, b) => (b.sc - a.sc) || (a.y - b.y));
+    for (const { el } of staged) {
       if (rows.length >= maxNodes) return;
       rows.push(rowFor(el));
     }
@@ -70,16 +157,96 @@ _COLLECT_INTERACTIVE_JS = """
 _COLLECT_INTERACTIVE_JS_FLAT = """
 (maxNodes) => {
   const sel = [
-    'a[href]','button','input:not([type=hidden])','textarea','select',
-    '[role=button]','[role=link]','[role=textbox]','[role=searchbox]',
-    '[role=combobox]','[contenteditable=true]'
+    'a[href]','a[role="button"]','button','input:not([type=hidden])','textarea','select','summary',
+    '[role=button]','[role=link]','[role=menuitem]','[role=tab]',
+    '[role=textbox]','[role=searchbox]','[role=combobox]','[role=switch]','[role=checkbox]','[role=radio]','[role=option]','[role=gridcell]',
+    '[contenteditable=true]',
+    '.el-menu-item','.el-submenu__title','.el-link',
+    '.ant-btn','.ant-menu-item','.ant-menu-submenu-title','.ant-tabs-tab','.ant-tabs-tab-btn',
+    '.arco-btn','.arco-menu-item','.arco-menu-inline-header','.arco-tabs-header-title','.arco-link',
+    '.n-button','.n-menu-item-content','.n-tabs-tab',
+    '.MuiButton-root','.MuiTab-root','.MuiIconButton-root','.MuiLink-root',
+    '.v-btn','.v-tab',
+    '.t-button','.t-menu__item','.t-tabs__nav-item',
+    '.layui-btn','.layui-nav-item','.layui-tab-title > li',
+    '.ivu-btn','.ivu-menu-item','.ivu-tabs-tab',
+    '.semi-button','.semi-tabs-tab','.semi-navigation-item',
+    '.chakra-button','.q-btn',
+    '.p-button','.p-menuitem-link','.p-tabview-nav-link','.p-menuitem',
+    '.cds--btn','.cds--tabs__nav-link','.bx--btn','.bx--tabs__nav-link',
+    '.mantine-Button-root','.mantine-Tabs-tab','.mantine-NavLink-root',
+    '.btn.btn-primary','.btn.btn-secondary','.btn.btn-success','.btn.btn-info','.btn.btn-warning','.btn.btn-danger','.btn.btn-default','.btn.btn-outline-primary','.btn.btn-light','.btn.btn-dark',
+    '.fui-Button'
   ].join(',');
   function visible(el) {
     const r = el.getBoundingClientRect();
     if (r.width < 2 && r.height < 2) return false;
     const st = window.getComputedStyle(el);
-    if (st.visibility === 'hidden' || st.display === 'none') return false;
+    if (st.visibility === 'hidden' || st.display === 'none' || st.opacity === '0') return false;
     return true;
+  }
+  function inDataTableRow(el) {
+    try {
+      if (!el.closest) return false;
+      const row = el.closest('tr, [role=row], .n-data-table-tr');
+      if (!row) return false;
+      const hosts = [
+        '.el-table__body tbody', '.el-table__body-wrapper tbody',
+        '.ant-table-tbody', '.ant-table-body tbody',
+        '.arco-table-body tbody', '.arco-table-content tbody',
+        '.n-data-table-tbody', '.n-data-table-base-table-body',
+        '.layui-table-body tbody', '.layui-table-view tbody',
+        '.ivu-table-tbody',
+        '.semi-table-body',
+        '.p-datatable-tbody', '.p-treetable-tbody',
+        '.cds--data-table-content tbody', '.bx--data-table tbody',
+        '.mantine-Table tbody',
+        'table tbody'
+      ];
+      return hosts.some((s) => el.closest(s));
+    } catch (e) { return false; }
+  }
+  function scoreEl(el) {
+    const tx = ((el.innerText || '') + '').trim().replace(/\\s+/g, ' ').slice(0, 72);
+    let s = 0;
+    if (/^(导出|下载|导入|查询|搜索|重置|刷新|新增|添加|编辑|删除|提交|确定|取消|保存|上传|预览|打印|筛选|批量)/.test(tx)) s += 38;
+    if (tx === '导出' || tx === '下载' || tx === '查询' || tx === '搜索' || tx === '重置') s += 28;
+    if (tx.length >= 2 && tx.length <= 24) s += 2;
+    if (inDataTableRow(el)) s -= 22;
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'button' || el.getAttribute('role') === 'button') s += 5;
+    try {
+      if (el.classList) {
+        if (el.classList.contains('el-menu-item') || el.classList.contains('ant-menu-item')
+            || el.classList.contains('arco-menu-item') || el.classList.contains('n-menu-item-content')
+            || el.classList.contains('t-menu__item') || el.classList.contains('layui-nav-item')
+            || el.classList.contains('ivu-menu-item') || el.classList.contains('semi-navigation-item')
+            || el.classList.contains('p-menuitem') || el.classList.contains('p-menuitem-link')
+            || el.classList.contains('mantine-NavLink-root')) s += 8;
+        if (el.classList.contains('ant-tabs-tab') || el.classList.contains('arco-tabs-header-title')
+            || el.classList.contains('n-tabs-tab') || el.classList.contains('MuiTab-root')
+            || el.classList.contains('v-tab') || el.classList.contains('t-tabs__nav-item')
+            || el.classList.contains('ant-tabs-tab-btn') || el.classList.contains('ivu-tabs-tab')
+            || el.classList.contains('semi-tabs-tab')
+            || el.classList.contains('p-tabview-nav-link')
+            || el.classList.contains('cds--tabs__nav-link') || el.classList.contains('bx--tabs__nav-link')
+            || el.classList.contains('mantine-Tabs-tab')) s += 6;
+        try {
+          const p = el.parentElement;
+          const tn = (el.tagName || '').toUpperCase();
+          if (tn === 'LI' && p && p.classList && p.classList.contains('layui-tab-title')) s += 6;
+        } catch (e3) {}
+        const cn = (el.className && typeof el.className === 'string') ? el.className : '';
+        if (/\\b(?:ant-btn|arco-btn|MuiButton-root|t-button|n-button|layui-btn|ivu-btn|semi-button|chakra-button|q-btn|p-button|cds--btn|bx--btn|mantine-Button-root|fui-Button)\\b/.test(cn)) s += 5;
+        if (/\\b(?:v-btn|MuiIconButton-root)\\b/.test(cn)) s += 4;
+        if (el.classList.contains('btn') && (el.classList.contains('btn-primary') || el.classList.contains('btn-secondary')
+            || el.classList.contains('btn-success') || el.classList.contains('btn-info')
+            || el.classList.contains('btn-warning') || el.classList.contains('btn-danger')
+            || el.classList.contains('btn-default') || el.classList.contains('btn-outline-primary')
+            || el.classList.contains('btn-light') || el.classList.contains('btn-dark'))) s += 4;
+      }
+    } catch (e2) {}
+    return s;
   }
   function rowFor(el) {
     const tag = el.tagName.toLowerCase();
@@ -98,13 +265,181 @@ _COLLECT_INTERACTIVE_JS_FLAT = """
   }
   const rows = [];
   const nodes = Array.from(document.querySelectorAll(sel)).filter(visible);
+  const staged = [];
   for (const el of nodes) {
+    if (staged.length >= 5000) break;
+    staged.push({ el, sc: scoreEl(el), y: el.getBoundingClientRect().top });
+  }
+  staged.sort((a, b) => (b.sc - a.sc) || (a.y - b.y));
+  for (const { el } of staged) {
     if (rows.length >= maxNodes) break;
     rows.push(rowFor(el));
   }
   return rows;
 }
 """
+
+# 主会话 / 内置浏览器 / embedded_browser_gateway inspect 共用的页面可交互快照脚本（evaluate 单参 n）。
+# 保持与 collect_page_controls 相近的组件覆盖与 Toolbar 优先策略。
+INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS = r"""(n) => {
+  const v = { width: window.innerWidth, height: window.innerHeight };
+  const set = [
+    'a[href]','a[role="button"]','button','input','textarea','select','summary',
+    '[role=button]','[role=link]','[role=tab]','[role=menuitem]','[role=searchbox]',
+    '[role=switch]','[role=checkbox]','[role=radio]','[role=option]','[role=gridcell]',
+    '.el-menu-item','.el-submenu__title','.el-link',
+    '.ant-btn','.ant-menu-item','.ant-menu-submenu-title','.ant-tabs-tab','.ant-tabs-tab-btn',
+    '.arco-btn','.arco-menu-item','.arco-menu-inline-header','.arco-tabs-header-title','.arco-link',
+    '.n-button','.n-menu-item-content','.n-tabs-tab',
+    '.MuiButton-root','.MuiTab-root','.MuiIconButton-root','.MuiLink-root',
+    '.v-btn','.v-tab',
+    '.t-button','.t-menu__item','.t-tabs__nav-item',
+    '.layui-btn','.layui-nav-item','.layui-tab-title > li',
+    '.ivu-btn','.ivu-menu-item','.ivu-tabs-tab',
+    '.semi-button','.semi-tabs-tab','.semi-navigation-item',
+    '.chakra-button','.q-btn',
+    '.p-button','.p-menuitem-link','.p-tabview-nav-link','.p-menuitem',
+    '.cds--btn','.cds--tabs__nav-link','.bx--btn','.bx--tabs__nav-link',
+    '.mantine-Button-root','.mantine-Tabs-tab','.mantine-NavLink-root',
+    '.btn.btn-primary','.btn.btn-secondary','.btn.btn-success','.btn.btn-info','.btn.btn-warning','.btn.btn-danger','.btn.btn-default','.btn.btn-outline-primary','.btn.btn-light','.btn.btn-dark',
+    '.fui-Button'
+  ].join(',');
+  const nodes = Array.from(document.querySelectorAll(set));
+  function inDataTableRow(el) {
+    try {
+      if (!el.closest) return false;
+      const row = el.closest('tr, [role=row], .n-data-table-tr');
+      if (!row) return false;
+      const hosts = [
+        '.el-table__body tbody', '.el-table__body-wrapper tbody',
+        '.ant-table-tbody', '.ant-table-body tbody',
+        '.arco-table-body tbody', '.arco-table-content tbody',
+        '.n-data-table-tbody', '.n-data-table-base-table-body',
+        '.layui-table-body tbody', '.layui-table-view tbody',
+        '.ivu-table-tbody',
+        '.semi-table-body',
+        '.p-datatable-tbody', '.p-treetable-tbody',
+        '.cds--data-table-content tbody', '.bx--data-table tbody',
+        '.mantine-Table tbody',
+        'table tbody'
+      ];
+      return hosts.some((s) => el.closest(s));
+    } catch (e) { return false; }
+  }
+  function componentMenuBoost(el) {
+    try {
+      if (!el.classList) return 0;
+      let b = 0;
+      if (el.classList.contains('el-menu-item') || el.classList.contains('ant-menu-item')
+          || el.classList.contains('arco-menu-item') || el.classList.contains('n-menu-item-content')
+          || el.classList.contains('t-menu__item') || el.classList.contains('layui-nav-item')
+          || el.classList.contains('ivu-menu-item') || el.classList.contains('semi-navigation-item')
+          || el.classList.contains('p-menuitem') || el.classList.contains('p-menuitem-link')
+          || el.classList.contains('mantine-NavLink-root')) b += 8;
+      if (el.classList.contains('ant-tabs-tab') || el.classList.contains('arco-tabs-header-title')
+          || el.classList.contains('n-tabs-tab') || el.classList.contains('MuiTab-root')
+          || el.classList.contains('v-tab') || el.classList.contains('t-tabs__nav-item')
+          || el.classList.contains('ant-tabs-tab-btn') || el.classList.contains('ivu-tabs-tab')
+          || el.classList.contains('semi-tabs-tab')
+          || el.classList.contains('p-tabview-nav-link')
+          || el.classList.contains('cds--tabs__nav-link') || el.classList.contains('bx--tabs__nav-link')
+          || el.classList.contains('mantine-Tabs-tab')) b += 6;
+      try {
+        const p = el.parentElement;
+        const tn = (el.tagName || '').toUpperCase();
+        if (tn === 'LI' && p && p.classList && p.classList.contains('layui-tab-title')) b += 6;
+      } catch (e3) {}
+      const cn = (el.className && typeof el.className === 'string') ? el.className : '';
+      if (/\b(?:ant-btn|arco-btn|MuiButton-root|t-button|n-button|layui-btn|ivu-btn|semi-button|chakra-button|q-btn|p-button|cds--btn|bx--btn|mantine-Button-root|fui-Button)\b/.test(cn)) b += 5;
+      if (/\b(?:v-btn|MuiIconButton-root)\b/.test(cn)) b += 4;
+      if (el.classList.contains('btn') && (el.classList.contains('btn-primary') || el.classList.contains('btn-secondary')
+          || el.classList.contains('btn-success') || el.classList.contains('btn-info')
+          || el.classList.contains('btn-warning') || el.classList.contains('btn-danger')
+          || el.classList.contains('btn-default') || el.classList.contains('btn-outline-primary')
+          || el.classList.contains('btn-light') || el.classList.contains('btn-dark'))) b += 4;
+      return b;
+    } catch (e2) { return 0; }
+  }
+  function scoreEl(el, tx) {
+    let s = 0;
+    const t = (tx || '').replace(/\s+/g, ' ').trim();
+    if (/^(导出|下载|导入|查询|搜索|重置|刷新|新增|添加|编辑|删除|提交|确定|取消|保存|上传|预览|打印|筛选|批量)/.test(t)) s += 38;
+    if (t === '导出' || t === '下载' || t === '查询' || t === '搜索' || t === '重置') s += 28;
+    if (t.length >= 2 && t.length <= 24) s += 2;
+    if (inDataTableRow(el)) s -= 22;
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'button' || el.getAttribute('role') === 'button') s += 5;
+    s += componentMenuBoost(el);
+    const r = el.getBoundingClientRect();
+    if (r.bottom >= 0 && r.top <= v.height && r.right >= 0 && r.left <= v.width) s += 10;
+    else if (r.top < v.height + 520 && r.bottom > -300) s += 4;
+    return s;
+  }
+  const raw = [];
+  for (const el of nodes) {
+    if (raw.length >= 5000) break;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 && r.height < 1) continue;
+    if (r.bottom < -8000 || r.top > v.height + 8000) continue;
+    const tag = (el.tagName || '').toLowerCase();
+    const idv = (el.id || '').toString();
+    const cn = (el.className && typeof el.className === 'string') ? el.className : '';
+    const cls = cn.split(/\s+/).filter((c) => c && c.length < 50).slice(0, 2);
+    const dt = (el.getAttribute('data-testid') || el.getAttribute('data-test') || '');
+    const nm = (el.getAttribute('name') || '');
+    const tx = (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const ph = (el.getAttribute('placeholder') || '') || '';
+    const al = (el.getAttribute('aria-label') || '') || '';
+    let suggest = '';
+    if (idv) suggest = tag + '#' + idv;
+    else if (dt) suggest = tag + '[data-testid="' + String(dt).replace(/"/g, '\\"') + '"]';
+    else if (nm) suggest = tag + '[name="' + String(nm).replace(/"/g, '\\"') + '"]';
+    else if (cls.length) suggest = tag + '.' + cls.join('.');
+    else if (al) suggest = tag + '[aria-label="' + al.slice(0, 40).replace(/"/g, '\\"') + '"]';
+    else if (ph) suggest = tag + '[placeholder="' + ph.slice(0, 32).replace(/"/g, '\\"') + '"]';
+    else suggest = tag;
+    const sc = scoreEl(el, tx);
+    raw.push({
+      _sc: sc,
+      _y: Math.round(r.top + r.height / 2),
+      tag,
+      idv, cls, dt, nm, tx, ph, al, r, suggest,
+      typ: (el.getAttribute('type') || '') || '',
+      href: (el.getAttribute('href') || '') || '',
+      role: (el.getAttribute('role') || '') || ''
+    });
+  }
+  raw.sort((a, b) => (b._sc - a._sc) || (a._y - b._y));
+  const out = [];
+  for (let i = 0; i < Math.min(n, raw.length); i++) {
+    const row = raw[i];
+    const r = row.r;
+    out.push({
+      n: i + 1,
+      tag: row.tag,
+      id: row.idv || null,
+      class: row.cls.join(' ') || null,
+      name: row.nm || null,
+      type: row.typ || null,
+      href: row.href || null,
+      role: row.role || null,
+      text: row.tx || null,
+      placeholder: row.ph || null,
+      ariaLabel: row.al || null,
+      dataTestid: row.dt || null,
+      box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+      suggestedSelector: row.suggest
+    });
+  }
+  return {
+    url: window.location.href,
+    title: (document.title || '') || '',
+    viewport: v,
+    items: out
+  };
+}"""
 
 
 def extract_http_urls(text: str) -> List[str]:
@@ -577,10 +912,10 @@ def collect_page_controls(url: str) -> Tuple[str, Optional[str], List[Dict[str, 
     """
     timeout_ms = _env_int("LOCAL_AI_PROBE_TIMEOUT_MS", 35000)
     settle_ms = _env_int("LOCAL_AI_PROBE_SETTLE_MS", 800)
-    max_nodes_total = _env_int("LOCAL_AI_PROBE_MAX_NODES", 220)
+    max_nodes_total = _env_int("LOCAL_AI_PROBE_MAX_NODES", 320)
     max_lines = _env_int("LOCAL_AI_PROBE_MAX_LINES", 90)
     max_chars = _env_int("LOCAL_AI_PROBE_MAX_CHARS", 18000)
-    main_cap = _env_int("LOCAL_AI_PROBE_MAIN_CAP", 140)
+    main_cap = _env_int("LOCAL_AI_PROBE_MAIN_CAP", 200)
     frame_cap = _env_int("LOCAL_AI_PROBE_FRAME_CAP", 40)
     scan_iframes = (os.environ.get("LOCAL_AI_PROBE_IFRAMES", "1").strip().lower() not in ("0", "false", "no"))
     scan_shadow = (os.environ.get("LOCAL_AI_PROBE_SHADOW", "1").strip().lower() not in ("0", "false", "no"))

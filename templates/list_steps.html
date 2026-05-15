@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}测试用例步骤管理 - UI 自动化测试平台{% endblock %}
+{% block title %}测试用例步骤管理 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style>
         * {
@@ -858,7 +858,7 @@
         </div>
 
         <div id="apiMigrateBanner" style="display:none;margin:0 30px 12px;padding:12px 14px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;font-size:14px;color:#9a3412;">
-            <strong>接口步骤：</strong>本 UI 用例中仍有「接口请求」步骤；运行 UI 自动化前请迁移到「接口测试」模块。
+            <strong>接口步骤：</strong>本 Web 用例中仍有「接口请求」步骤；运行浏览器自动化测试前请迁移到「接口测试」模块。
             <button type="button" class="btn btn-sm btn-primary" style="margin-left:10px;" onclick="runMigrateApiSteps()">一键迁移</button>
         </div>
 
@@ -2839,9 +2839,9 @@ function changePage(page) {
                 if (runCaseStatusTimer) clearInterval(runCaseStatusTimer);
                 runCaseStatusTimer = setInterval(async () => {
                     try {
-                        const stResp = await fetch('/api/cases/current-run/status');
-                        const st = await stResp.json();
-                        if (!stResp.ok || !st.success) return;
+                        const { ok, pack } = await window.uatFetchCurrentRunsPack();
+                        const st = (pack || {}).case || {};
+                        if (!ok || !st.success) return;
                         if (!st.active) {
                             resetRunCaseToolbarIdle();
                             return;
@@ -2904,8 +2904,9 @@ function changePage(page) {
                 showToast(t('steps_toast_stop_fail').replace('{msg}', e.message), 'error');
                 if (stopBtn) {
                     try {
-                        const st = await (await fetch('/api/cases/current-run/status')).json();
-                        const still = st && st.success && st.active;
+                        const r = await window.uatFetchCurrentRunsPack();
+                        const st = (r.pack || {}).case || {};
+                        const still = r.ok && st && st.success && st.active;
                         stopBtn.disabled = !still;
                     } catch (_) {
                         stopBtn.disabled = false;
@@ -3593,7 +3594,10 @@ function changePage(page) {
                 } catch (e) { console.warn('AI assistant mount', e); }
             }
             await syncRunCaseButtonState();
-            runCaseButtonSyncTimer = setInterval(syncRunCaseButtonState, 1000);
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden) syncRunCaseButtonState();
+            });
+            runCaseButtonSyncTimer = setInterval(syncRunCaseButtonState, 3500);
         });
 
         window.addEventListener('ui-preferences-updated', function (ev) {
@@ -3623,9 +3627,9 @@ function changePage(page) {
             const runBtn = document.getElementById('runCaseBtn');
             if (!stopBtn) return;
             try {
-                const resp = await fetch('/api/cases/current-run/status');
-                const data = await resp.json();
-                const active = !!(resp.ok && data.success && data.active);
+                const { ok, pack } = await window.uatFetchCurrentRunsPack();
+                const data = (pack || {}).case || {};
+                const active = !!(ok && data.success && data.active);
                 stopBtn.disabled = !active;
                 if (runBtn) {
                     runBtn.disabled = active;

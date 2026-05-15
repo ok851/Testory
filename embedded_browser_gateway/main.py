@@ -11,6 +11,7 @@ WebSocket 同步点击/滚动/导航/键盘。
   PLAYWRIGHT_BROWSER               默认 chromium；可选 chrome / edge / firefox / webkit（与主站一致）。
   EMBEDDED_INSPECT_EVAL_RETRIES    inspect 快照遇「导航销毁上下文」时重试次数，默认 6。
   EMBEDDED_INSPECT_DOM_WAIT_MS     每次 evaluate 前 wait_for_load_state(domcontentloaded) 超时毫秒，默认 8000。
+  EMBEDDED_INSPECT_MAX_ITEMS       inspect 返回的最大可交互控件条数，默认 200，上限 240（与主站 ai_page_probe 快照一致）。
   EMBEDDED_GOTO_TIMEOUT_MS         会话首跳 / run-steps navigate / WS 导航的 goto 超时毫秒，默认 28000（上限 120000）。
   EMBEDDED_STEP_SETTLE_MS          每步成功后额外等待毫秒，让页面重绘与 CDP 串流跟上（0 关闭），默认 120，上限 3000。
   EMBEDDED_SNAP_AFTER_STEP         每步成功后向已连接画布 WS 追加一帧 Playwright JPEG 截图（1 开 / 0 关），默认 1，与 CDP screencast 并行可显著对齐「操作点」与画面。
@@ -51,6 +52,8 @@ from urllib.request import urlopen
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+
+from ai_page_probe import INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS
 
 logger = logging.getLogger(__name__)
 
@@ -285,61 +288,7 @@ async def _launch_playwright_browser(
     channel = "msedge" if eng == "edge" else "chrome"
     return await p.chromium.launch(headless=headless, args=base_args, channel=channel)
 
-# 与 playwright_automation.get_interactive_page_snapshot 中 evaluate 保持一致，便于 AI/侧栏对齐。
-INTERACTIVE_SNAPSHOT_JS = """(n) => {
-    const v = { width: window.innerWidth, height: window.innerHeight };
-    const set = 'a, button, input, textarea, select, [role=button], [role=link], [role=tab], [role=searchbox]';
-    const nodes = Array.from(document.querySelectorAll(set));
-    const out = [];
-    for (const el of nodes) {
-        if (out.length >= n) break;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
-        const r = el.getBoundingClientRect();
-        if (r.width < 1 && r.height < 1) continue;
-        if (r.bottom < 0 || r.top > v.height || r.right < 0 || r.left > v.width) continue;
-        const tag = (el.tagName || '').toLowerCase();
-        const idv = (el.id || '').toString();
-        const cn = (el.className && typeof el.className === 'string') ? el.className : '';
-        const cls = cn.split(/\\s+/).filter(c => c && c.length < 50).slice(0, 2);
-        const dt = (el.getAttribute('data-testid') || el.getAttribute('data-test') || '');
-        const nm = (el.getAttribute('name') || '');
-        const tx = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
-        const ph = (el.getAttribute('placeholder') || '') || '';
-        const al = (el.getAttribute('aria-label') || '') || '';
-        let suggest = '';
-        if (idv) suggest = tag + '#' + idv;
-        else if (dt) suggest = tag + '[data-testid="' + String(dt).replace(/"/g, '\\\\"') + '"]';
-        else if (nm) suggest = tag + '[name="' + String(nm).replace(/"/g, '\\\\"') + '"]';
-        else if (cls.length) suggest = tag + '.' + cls.join('.');
-        else if (al) suggest = tag + '[aria-label="' + al.slice(0, 40).replace(/"/g, '\\\\"') + '"]';
-        else if (ph) suggest = tag + '[placeholder="' + ph.slice(0, 32).replace(/"/g, '\\\\"') + '"]';
-        else suggest = tag;
-        out.push({
-            n: out.length + 1,
-            tag,
-            id: idv || null,
-            class: cls.join(' ') || null,
-            name: nm || null,
-            type: (el.getAttribute('type') || '') || null,
-            href: (el.getAttribute('href') || '') || null,
-            role: (el.getAttribute('role') || '') || null,
-            text: tx || null,
-            placeholder: ph || null,
-            ariaLabel: al || null,
-            dataTestid: dt || null,
-            box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-            suggestedSelector: suggest
-        });
-    }
-    return {
-        url: window.location.href,
-        title: (document.title || '') || '',
-        viewport: v,
-        items: out,
-        source: 'embedded_gateway'
-    };
-}"""
+# 可交互快照脚本见 ai_page_probe.INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS（与主站内置浏览器一致）。
 
 PAGE_DIAG_JS = """() => {
     const nav = performance.getEntriesByType('navigation')[0];
@@ -619,7 +568,7 @@ async def root() -> Dict[str, Any]:
         "service": "embedded_browser_gateway",
         "ok": True,
         "health": "/health",
-        "hint": "本进程为 UI 平台配套网关；请勿用浏览器完成业务操作。健康检查请访问 /health。",
+        "hint": "本进程为 AI 自动化测试平台配套网关；请勿用浏览器完成业务操作。健康检查请访问 /health。",
     }
 
 
@@ -741,7 +690,10 @@ async def _evaluate_interactive_snapshot_stable(page: Page, n: int) -> Dict[str,
                 await page.wait_for_load_state("domcontentloaded", timeout=dom_wait_ms)
             except Exception:
                 pass
-            raw = await page.evaluate(INTERACTIVE_SNAPSHOT_JS, n)
+            raw = await page.evaluate(INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS, n)
+            if isinstance(raw, dict):
+                raw = dict(raw)
+                raw.setdefault("source", "embedded_gateway")
             return raw if isinstance(raw, dict) else {}
         except Exception as e:
             if _inspect_transient_nav_error(str(e)) and attempt + 1 < max_attempts:
@@ -768,7 +720,7 @@ async def internal_inspect(session_id: str, request: Request) -> Dict[str, Any]:
             raise HTTPException(status_code=403, detail="forbidden")
         rec.last_seen = time.time()
         page = rec.page
-    n = max(20, min(150, 200))
+    n = max(20, min(int(os.environ.get("EMBEDDED_INSPECT_MAX_ITEMS", "200") or 200), 240))
     try:
         data = await _evaluate_interactive_snapshot_stable(page, n)
     except Exception as e:

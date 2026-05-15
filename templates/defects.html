@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}缺陷管理 - UI自动化测试平台{% endblock %}
+{% block title %}缺陷管理 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style>
         .severity-critical { background: #dc2626; color: white; }
@@ -533,7 +533,7 @@
             if (!dateStr) return '-';
             const d = new Date(dateStr);
             var loc = (localStorage.getItem('ui_lang') || 'zh') === 'en' ? 'en-US' : 'zh-CN';
-            return d.toLocaleString(loc, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+            return d.toLocaleString(loc, { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
 
     </script>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}SSO 设置 - UI自动化测试平台{% endblock %}
+{% block title %}SSO 设置 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style type="text/tailwindcss">
         @layer utilities {
@@ -358,7 +358,9 @@
 
         function formatTime(timeStr) {
             if (!timeStr) return '-';
-            return new Date(timeStr).toLocaleString(ssoLocale());
+            const d = new Date(timeStr);
+            if (Number.isNaN(d.getTime())) return String(timeStr);
+            return d.toLocaleString(ssoLocale(), { timeZone: 'Asia/Shanghai' });
         }
 
         function showCreateModal() {

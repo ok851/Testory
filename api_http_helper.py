@@ -3,9 +3,25 @@
 """
 import base64
 import json
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
+
+
+# 不参与实际 HTTP 请求的 api_spec 扩展字段（Postman 风格：前置链、脚本、提取等）
+API_SPEC_META_KEYS = frozenset(
+    {
+        "prerequest_chain",
+        "prescript",
+        "postscript",
+        "pre_request_script",
+        "post_request_script",
+        "extract",
+        "extract_variables",
+        "persist_extracts_to_case",
+    }
+)
 
 
 def get_json_path_value(data: Any, json_path: str) -> Any:
@@ -117,6 +133,12 @@ def execute_api_spec_sync(
     """
     rt = resolve_text or (lambda x: x)
 
+    spec = dict(spec) if isinstance(spec, dict) else {}
+    # 内部标记：前置链子请求等场景下接受任意 2xx，避免误拷主请求的 200 断言导致链失败、主请求从未发出
+    accept_2xx_for_status = bool(spec.pop("accept_2xx_for_status", False))
+    if API_SPEC_META_KEYS.intersection(spec):
+        spec = {k: v for k, v in spec.items() if k not in API_SPEC_META_KEYS}
+
     method = (spec.get("method") or "GET").upper()
     url = rt((spec.get("url") or "").strip())
     if not url:
@@ -151,7 +173,11 @@ def execute_api_spec_sync(
     for k, v in (params_in if isinstance(params_in, dict) else {}).items():
         params[str(k)] = rt(str(v))
 
-    body_type = (spec.get("body_type") or "json").lower()
+    _bt = spec.get("body_type")
+    if _bt is None or (isinstance(_bt, str) and not str(_bt).strip()):
+        body_type = "json"
+    else:
+        body_type = str(_bt).lower()
     timeout = float(spec.get("timeout") or 30)
     verify = bool(spec.get("verify_ssl", True))
 
@@ -200,6 +226,15 @@ def execute_api_spec_sync(
     else:
         allow_redirects = bool(allow_redirects)
 
+    pdm = spec.get("pre_delay_ms")
+    if pdm is not None:
+        try:
+            ms = float(pdm)
+            if ms > 0:
+                time.sleep(min(ms / 1000.0, 60.0))
+        except (TypeError, ValueError):
+            pass
+
     try:
         resp, parsed_json = perform_http_request(
             method,
@@ -225,16 +260,20 @@ def execute_api_spec_sync(
         }
 
     text_preview = (resp.text or "")[:8000]
-    expected_status = spec.get("expected_status")
-    if expected_status is None:
-        expected_status = 200
-    try:
-        expected_status = int(expected_status)
-    except (TypeError, ValueError):
-        expected_status = 200
+    if accept_2xx_for_status:
+        ok = 200 <= int(resp.status_code) < 300
+        msg = f"HTTP {resp.status_code}（期望 2xx）"
+    else:
+        expected_status = spec.get("expected_status")
+        if expected_status is None:
+            expected_status = 200
+        try:
+            expected_status = int(expected_status)
+        except (TypeError, ValueError):
+            expected_status = 200
 
-    ok = resp.status_code == expected_status
-    msg = f"HTTP {resp.status_code}（期望 {expected_status}）"
+        ok = resp.status_code == expected_status
+        msg = f"HTTP {resp.status_code}（期望 {expected_status}）"
 
     if "expected_json_value" in spec:
         expected_json_value = spec.get("expected_json_value")

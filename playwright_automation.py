@@ -42,10 +42,10 @@ from locator_tier_utils import (
 from locator_visual_fallback import prepare_template_png_bytes_for_storage
 from locator_visual_fallback import match_template_in_viewport_png
 from api_http_helper import (
-    execute_api_spec_sync,
     playwright_cookies_to_requests_cookiejar,
     substitute_env_placeholders,
 )
+from api_spec_pipeline import run_api_spec_pipeline
 
 # 🔥 添加全局执行锁，防止并发执行多个测试用例集
 _execution_lock = threading.Lock()
@@ -8081,63 +8081,10 @@ class PlaywrightAutomation:
         """
         if self.page is None:
             raise Exception("浏览器未启动")
-        n = max(20, min(int(max_items or 100), 200))
-        data = await self.page.evaluate(
-            """(n) => {
-            const v = { width: window.innerWidth, height: window.innerHeight };
-            const set = 'a, button, input, textarea, select, [role=button], [role=link], [role=tab], [role=searchbox]';
-            const nodes = Array.from(document.querySelectorAll(set));
-            const out = [];
-            for (const el of nodes) {
-                if (out.length >= n) break;
-                const st = window.getComputedStyle(el);
-                if (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
-                const r = el.getBoundingClientRect();
-                if (r.width < 1 && r.height < 1) continue;
-                if (r.bottom < 0 || r.top > v.height || r.right < 0 || r.left > v.width) continue;
-                const tag = (el.tagName || '').toLowerCase();
-                const idv = (el.id || '').toString();
-                const cn = (el.className && typeof el.className === 'string') ? el.className : '';
-                const cls = cn.split(/\\s+/).filter(c => c && c.length < 50).slice(0, 2);
-                const dt = (el.getAttribute('data-testid') || el.getAttribute('data-test') || '');
-                const nm = (el.getAttribute('name') || '');
-                const tx = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
-                const ph = (el.getAttribute('placeholder') || '') || '';
-                const al = (el.getAttribute('aria-label') || '') || '';
-                let suggest = '';
-                if (idv) suggest = tag + '#' + idv;
-                else if (dt) suggest = tag + '[data-testid="' + String(dt).replace(/"/g, '\\\\"') + '"]';
-                else if (nm) suggest = tag + '[name="' + String(nm).replace(/"/g, '\\\\"') + '"]';
-                else if (cls.length) suggest = tag + '.' + cls.join('.');
-                else if (al) suggest = tag + '[aria-label="' + al.slice(0, 40).replace(/"/g, '\\\\"') + '"]';
-                else if (ph) suggest = tag + '[placeholder="' + ph.slice(0, 32).replace(/"/g, '\\\\"') + '"]';
-                else suggest = tag;
-                out.push({
-                    n: out.length + 1,
-                    tag,
-                    id: idv || null,
-                    class: cls.join(' ') || null,
-                    name: nm || null,
-                    type: (el.getAttribute('type') || '') || null,
-                    href: (el.getAttribute('href') || '') || null,
-                    role: (el.getAttribute('role') || '') || null,
-                    text: tx || null,
-                    placeholder: ph || null,
-                    ariaLabel: al || null,
-                    dataTestid: dt || null,
-                    box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
-                    suggestedSelector: suggest
-                });
-            }
-            return {
-                url: window.location.href,
-                title: (document.title || '') || '',
-                viewport: v,
-                items: out
-            };
-        }""",
-            n,
-        )
+        n = max(20, min(int(max_items or 100), 240))
+        from ai_page_probe import INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS
+
+        data = await self.page.evaluate(INTERACTIVE_PAGE_SNAPSHOT_EVAL_JS, n)
         return data if isinstance(data, dict) else {"url": "", "title": "", "viewport": {}, "items": []}
 
     async def get_accessibility_outline_text(self, max_lines: int = 48) -> str:
@@ -8417,9 +8364,19 @@ class PlaywrightAutomation:
                 uat_logger.warning("读取浏览器 Cookie 失败: %s", e)
 
         loop = asyncio.get_event_loop()
+        cid = int(case_id) if case_id is not None else None
         out = await loop.run_in_executor(
             None,
-            functools.partial(execute_api_spec_sync, spec, resolve_chain, jar),
+            functools.partial(
+                run_api_spec_pipeline,
+                spec,
+                _db,
+                project_id,
+                cid,
+                jar,
+                persist_extracts=bool(spec.get("persist_extracts_to_case")),
+                collect_script_logs=False,
+            ),
         )
 
         if not out.get("ok_assert"):
@@ -11387,7 +11344,9 @@ def sync_run_api_request_step(step: Dict[str, Any]):
     return worker.execute(run)
 
 
-def sync_run_api_case_for_batch(case_id: int, db, execution_context=None) -> Dict[str, Any]:
+def sync_run_api_case_for_batch(
+    case_id: int, db, execution_context=None, step_ids: Optional[List[int]] = None
+) -> Dict[str, Any]:
     """无浏览器：执行 case_type=api 的用例（仅 api_request 步骤）。返回结构与 SERIAL_MULTI_CASE 单条结果一致。"""
     import time as _time
 
@@ -11413,7 +11372,7 @@ def sync_run_api_case_for_batch(case_id: int, db, execution_context=None) -> Dic
             "case_id": case_id,
             "case_name": case_info.get("name", "未命名用例"),
             "status": "error",
-            "error": "该用例不是接口用例（case_type=api），请使用 UI 用例批量执行",
+            "error": "该用例不是接口用例（case_type=api），请使用 Web 用例批量执行",
             "total_steps": 0,
             "successful_steps": 0,
             "failed_steps": 1,
@@ -11427,6 +11386,9 @@ def sync_run_api_case_for_batch(case_id: int, db, execution_context=None) -> Dic
     automation._execution_context = execution_context
     try:
         steps = db.get_case_steps(case_id, page=1, page_size=9999)
+        if step_ids is not None:
+            allow = {int(x) for x in step_ids}
+            steps = [s for s in (steps or []) if int(s.get("id") or 0) in allow]
         if not steps:
             dur = round(_time.time() - case_start, 2)
             rh = None

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}License 管理 - UI自动化测试平台{% endblock %}
+{% block title %}License 管理 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style>
         /* 隐藏类 - 用于权限控制 */
@@ -403,7 +403,7 @@
                     const expireDate = info.expires_at || '2099-12-31T23:59:59';
                     document.getElementById('expireDate').textContent = expireDate === '2099-12-31T23:59:59'
                         ? (typeof t === 'function' ? t('lic_forever') : '')
-                        : new Date(expireDate).toLocaleDateString(licLocaleTag());
+                        : new Date(expireDate).toLocaleDateString(licLocaleTag(), { timeZone: 'Asia/Shanghai' });
                     
                     // 根据 license_type 判断配额 - 优先使用 limits 中的值
                     let maxProjects, maxCases, maxExecutions;
@@ -529,7 +529,7 @@
                 
                 if (result.success) {
                     var lt = result.license_type || '';
-                    var dt = result.expires_at ? new Date(result.expires_at).toLocaleDateString(licLocaleTag()) : '';
+                    var dt = result.expires_at ? new Date(result.expires_at).toLocaleDateString(licLocaleTag(), { timeZone: 'Asia/Shanghai' }) : '';
                     var msg = typeof t === 'function' ? licSub(t('lic_act_ok_txt'), { type: lt, date: dt }) : '';
                     Swal.fire({
                         icon: 'success',

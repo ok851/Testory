@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}审计日志 - UI自动化测试平台{% endblock %}
+{% block title %}审计日志 - AI自动化测试平台{% endblock %}
 {% block head %}
     <style type="text/tailwindcss">
         @layer utilities {
@@ -314,7 +314,9 @@
         function formatTime(timeStr) {
             if (!timeStr) return '-';
             const date = new Date(timeStr);
+            if (Number.isNaN(date.getTime())) return String(timeStr);
             return date.toLocaleString('zh-CN', {
+                timeZone: 'Asia/Shanghai',
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',

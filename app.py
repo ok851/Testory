@@ -6,6 +6,12 @@ try:
     from dotenv import load_dotenv
 
     _env_path = Path(__file__).resolve().parent / ".env"
+    try:
+        from env_example_sync import sync_env_from_example
+
+        sync_env_from_example(_env_path.parent)
+    except Exception:
+        pass
     if _env_path.is_file():
         load_dotenv(_env_path, encoding="utf-8-sig")
     else:
@@ -25,12 +31,15 @@ import secrets
 import uuid
 import json
 import re
+from typing import Any, Dict, List, Optional
 import functools
 import threading
 import io
 import tempfile
 import subprocess
 from database import Database
+from time_utils import beijing_now_iso, utc_now_sqlite_str as utc_sql_str
+from api_spec_pipeline import run_api_spec_pipeline
 from execution_context import ExecutionContext
 from embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled, embedded_gateway_json
 from batch_input_parse import parse_batch_input_lines
@@ -1173,20 +1182,37 @@ def api_create_user():
     return jsonify({'success': True, 'user_id': user_id})
 
 @app.route('/api/users/<int:user_id>', methods=['PUT'])
+@app.route('/api/users/<int:user_id>/update', methods=['POST'])
 @login_required
 @role_required('admin')
 def api_update_user(user_id):
     data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    if not username:
+        return jsonify({'success': False, 'error': '用户名不能为空'}), 400
+    role = data.get('role', 'tester')
+    if role not in ('admin', 'tester', 'viewer'):
+        return jsonify({'success': False, 'error': '无效的角色，可选: admin/tester/viewer'}), 400
+    email_raw = data.get('email')
+    if isinstance(email_raw, str):
+        email = email_raw.strip() or None
+    else:
+        email = email_raw
     _db = Database()
-    success = _db.update_user(user_id,
-        email=data.get('email'),
-        role=data.get('role'),
+    success = _db.update_user(
+        user_id,
+        username=username,
+        email=email,
+        role=role,
         is_active=data.get('is_active'),
-        password_hash=generate_password_hash(data['password']) if data.get('password') else None
+        password_hash=generate_password_hash(data['password']) if data.get('password') else None,
     )
-    return jsonify({'success': success})
+    if not success:
+        return jsonify({'success': False, 'error': '更新失败：用户名或邮箱已被占用，或用户不存在'}), 409
+    return jsonify({'success': True})
 
 @app.route('/api/users/<int:user_id>', methods=['DELETE'])
+@app.route('/api/users/<int:user_id>/delete', methods=['POST'])
 @login_required
 @role_required('admin')
 def api_delete_user(user_id):
@@ -1194,7 +1220,9 @@ def api_delete_user(user_id):
         return jsonify({'success': False, 'error': '不能删除当前登录的账号'}), 400
     _db = Database()
     success = _db.delete_user(user_id)
-    return jsonify({'success': success})
+    if not success:
+        return jsonify({'success': False, 'error': '删除失败：用户不存在或仍存在无法自动解除的关联数据'}), 400
+    return jsonify({'success': True})
 
 @app.route('/create_case_v2')
 @login_required
@@ -2579,6 +2607,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
                 memory_context=mem_ctx or None,
                 dom_context_pack=dpack or None,
                 interaction_context=interaction_context,
+                test_scope=(data.get('test_scope') or data.get('scope') or '').strip() or None,
             )
             try:
                 generated, _, tool_meta_extra = run_ai_chat_with_tools(
@@ -2752,7 +2781,7 @@ def api_ai_task_cloud_analyze():
         'payload': payload,
         'request_meta': {
             'requested_by': current_user.username,
-            'requested_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'requested_at': beijing_now_iso(),
         }
     })
     try:
@@ -2818,15 +2847,21 @@ def api_ai_structured_scenarios():
     """
     从需求说明书文本生成半结构化测试场景（无 UI 定位），便于评审后再生成自动化步骤。
     支持 JSON body：requirements_text / extra_context / model；
-    或 multipart：字段 file=说明书文本文件。
+    或 multipart：字段 file=说明书（.txt/.md/.pdf/.docx 等）。
     """
     requirements_text = ''
     extra_context = ''
     selected_model = ''
+    file_warns: List[str] = []
 
     if request.files and request.files.get('file'):
         f = request.files['file']
-        requirements_text = (f.read() or b'').decode('utf-8', errors='replace').strip()
+        raw = f.read() or b''
+        fname = (f.filename or 'upload.txt').strip()
+        from requirements_document_extract import extract_text_from_bytes
+
+        requirements_text, file_warns = extract_text_from_bytes(fname, raw)
+        requirements_text = (requirements_text or '').strip()
     else:
         data = request.get_json(silent=True) or {}
         requirements_text = (data.get('requirements_text') or data.get('text') or '').strip()
@@ -2834,29 +2869,36 @@ def api_ai_structured_scenarios():
         selected_model = (data.get('model') or '').strip()
 
     if not requirements_text:
-        return jsonify({'success': False, 'error': 'requirements_text 为空或未上传文件'}), 400
-
-    route = _route_ai_model('test_case_generation')
-    if route['provider'] != 'local':
-        return jsonify({'success': False, 'error': '结构化场景生成仅支持本地推理链路'}), 400
+        return jsonify({'success': False, 'error': 'requirements_text 为空或未上传可解析文件'}), 400
 
     mid = selected_model or _get_active_local_model()
     profile, _legacy = _resolve_inference_profile(mid)
+    route = _route_ai_model('test_case_generation')
     try:
-        from ai_structured_scenarios import generate_structured_scenarios_from_requirements
-
-        doc, warns = generate_structured_scenarios_from_requirements(
-            requirements_text, profile, extra_context=extra_context
+        from ai_structured_scenarios import (
+            generate_structured_scenarios_from_requirements,
+            generate_structured_scenarios_from_requirements_chunked,
+            structured_scenarios_chunk_size,
         )
+
+        if len(requirements_text) > int(structured_scenarios_chunk_size() * 1.15):
+            doc, w0 = generate_structured_scenarios_from_requirements_chunked(
+                requirements_text, profile, extra_context=extra_context
+            )
+        else:
+            doc, w0 = generate_structured_scenarios_from_requirements(
+                requirements_text, profile, extra_context=extra_context
+            )
     except Exception as e:
         uat_logger.exception('structured scenarios failed')
         return jsonify({'success': False, 'error': str(e)}), 500
 
+    warns = list(file_warns) + list(w0)
     return jsonify(
         {
             'success': True,
-            'provider': route['provider'],
-            'model': route['model'],
+            'provider': route.get('provider'),
+            'model': route.get('model'),
             'document': doc,
             'warnings': warns,
         }
@@ -2899,6 +2941,448 @@ def api_ai_locator_resolve_preview():
         }
 
     return jsonify({'success': True, 'steps': resolved, 'warnings': warns, 'snapshot_meta': meta})
+
+
+def _normalize_locator_candidates_for_db(val: Any) -> Optional[str]:
+    if val is None:
+        return None
+    if isinstance(val, str):
+        return val
+    try:
+        return json.dumps(val, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(val)
+
+
+@app.route('/api/cases/<int:case_id>/ai/locator-resolve-save', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_case_ai_locator_resolve_save(case_id: int):
+    """
+    对用例已有步骤：打开解析 URL、抓取 DOM 快照，将定位解析结果写回 test_steps（selector / locator_candidates）。
+    """
+    _db = Database()
+    case = _db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+    if _app_case_type(case) != 'ui':
+        return jsonify({'success': False, 'error': '仅支持 Web 用例'}), 400
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+
+    steps_db = _db.get_case_steps(case_id)
+    steps_db = sorted(steps_db, key=lambda x: int(x.get('step_order') or 0))
+    if not steps_db:
+        return jsonify({'success': False, 'error': '该用例没有步骤'}), 400
+
+    nav_url, _src = _resolve_case_navigation_url(case=case, steps=steps_db)
+    if not nav_url:
+        return jsonify({'success': False, 'error': '无法解析用于探测的 URL（请设置用例 URL 或步骤中的 navigate/url）'}), 400
+
+    snap_data, _ps, _pr, _pu, err = _ai_main_session_dom_pack(nav_url, strict=True)
+    if err:
+        code = 400 if ('目标 URL' in err or '主浏览器未就绪' in err) else 502
+        return jsonify({'success': False, 'error': err}), code
+
+    plan = []
+    for s in steps_db:
+        plan.append(
+            {
+                'action': s.get('action'),
+                'selector_type': s.get('selector_type'),
+                'selector_value': s.get('selector_value'),
+                'input_value': s.get('input_value'),
+                'description': s.get('description'),
+                'url': s.get('url'),
+            }
+        )
+
+    try:
+        from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+
+        resolved, warns = resolve_plan_steps_locators_with_snapshot(plan, snap_data, force=True)
+    except Exception as e:
+        uat_logger.exception('locator resolve-save failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    updated = 0
+    for i, s in enumerate(steps_db):
+        if i >= len(resolved) or not isinstance(resolved[i], dict):
+            break
+        r = resolved[i]
+        lc_new = _normalize_locator_candidates_for_db(r.get('locator_candidates'))
+        lc_old = _normalize_locator_candidates_for_db(s.get('locator_candidates'))
+        sv_new = (r.get('selector_value') or '').strip()
+        sv_old = (s.get('selector_value') or '').strip()
+        st_new = (r.get('selector_type') or 'css').strip()
+        st_old = (s.get('selector_type') or 'css').strip()
+        if sv_new == sv_old and st_new == st_old and (lc_new or '') == (lc_old or ''):
+            continue
+        kwargs = {'selector_type': st_new, 'selector_value': sv_new}
+        if lc_new is not None:
+            kwargs['locator_candidates'] = lc_new
+        if _db.update_test_step(int(s['id']), **kwargs):
+            updated += 1
+
+    return jsonify({'success': True, 'case_id': case_id, 'updated_steps': updated, 'warnings': warns})
+
+
+@app.route('/api/cases/<int:case_id>/steps/bulk-patch', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_case_steps_bulk_patch(case_id: int):
+    """批量按 step id 更新字段（id 必须属于该 case_id）。"""
+    data = request.get_json(silent=True) or {}
+    items = data.get('steps')
+    if not isinstance(items, list) or not items:
+        return jsonify({'success': False, 'error': 'steps 须为非空数组'}), 400
+
+    _db = Database()
+    case = _db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+
+    allowed = {
+        'action',
+        'selector_type',
+        'selector_value',
+        'input_value',
+        'description',
+        'step_order',
+        'enter_iframe',
+        'iframe_selector',
+        'compare_type',
+        'locator_candidates',
+        'click_repeat_count',
+        'api_spec',
+        'url',
+    }
+
+    patched = 0
+    errors: List[str] = []
+    for it in items[:500]:
+        if not isinstance(it, dict):
+            continue
+        try:
+            sid = int(it.get('id'))
+        except (TypeError, ValueError):
+            errors.append('跳过：缺少有效 id')
+            continue
+        row = _db.get_test_step(sid)
+        if not row or int(row.get('case_id') or 0) != int(case_id):
+            errors.append(f'步骤 {sid} 不属于该用例')
+            continue
+        kwargs: Dict[str, Any] = {}
+        for k in allowed:
+            if k not in it:
+                continue
+            v = it[k]
+            if k == 'locator_candidates' and isinstance(v, (dict, list)):
+                v = json.dumps(v, ensure_ascii=False)
+            if k == 'api_spec' and isinstance(v, (dict, list)):
+                v = json.dumps(v, ensure_ascii=False)
+            kwargs[k] = v
+        if not kwargs:
+            continue
+        if _db.update_test_step(sid, **kwargs):
+            patched += 1
+
+    return jsonify({'success': True, 'case_id': case_id, 'patched': patched, 'errors': errors})
+
+
+@app.route('/api/ai/cases/from-scenarios-batch', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+@audit_log('CREATE_CASE', 'case')
+def api_ai_cases_from_scenarios_batch():
+    """
+    将结构化场景列表批量转为 Web 用例并落库；用例 description 前缀 [REQ:场景id] 便于追溯。
+    Body: project_id, document 或 scenarios, model?, project_name?, base_url? , max_scenarios? (默认20)
+    """
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    profile, legacy_model = _resolve_inference_profile(selected_model)
+    project_name = (data.get('project_name') or '').strip()
+    base_url = (data.get('base_url') or '').strip()
+
+    try:
+        max_n = int(data.get('max_scenarios') or 20)
+    except (TypeError, ValueError):
+        max_n = 20
+    max_n = max(1, min(max_n, 40))
+
+    if not project_id:
+        return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
+
+    doc = data.get('document') if isinstance(data.get('document'), dict) else {}
+    scenarios = data.get('scenarios')
+    if not isinstance(scenarios, list):
+        scenarios = doc.get('scenarios') if isinstance(doc.get('scenarios'), list) else []
+    if not scenarios:
+        return jsonify({'success': False, 'error': 'scenarios 为空（请传入 document.scenarios 或顶层 scenarios）'}), 400
+
+    _db = Database()
+    if not _db.check_project_access(current_user.id, project_id, 'editor'):
+        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+
+    license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
+    created_ids: List[int] = []
+    all_warnings: List[str] = []
+
+    for sc in scenarios[:max_n]:
+        if not isinstance(sc, dict):
+            continue
+        sid = _ai_str(sc.get('id')) or f"auto_{len(created_ids)+1}"
+        title = _ai_str(sc.get('title')) or f"场景 {sid}"
+        pre = sc.get('preconditions') or []
+        hs = sc.get('high_level_steps') or []
+        er = sc.get('expected_results') or []
+        if isinstance(pre, str):
+            pre = [pre]
+        if isinstance(hs, str):
+            hs = [hs]
+        if isinstance(er, str):
+            er = [er]
+        pre_t = "\n".join(str(x) for x in pre if str(x).strip())
+        hs_t = "\n".join(f"- {x}" for x in hs if str(x).strip())
+        er_t = "\n".join(str(x) for x in er if str(x).strip())
+        goal = (
+            f"测试场景：{title}\n"
+            f"场景标识：{sid}\n"
+            + (f"前置条件：\n{pre_t}\n\n" if pre_t else "")
+            + (f"步骤概要：\n{hs_t}\n\n" if hs_t else "")
+            + (f"期望：\n{er_t}" if er_t else "")
+        ).strip()
+        desc = f"[REQ:{sid}] {title}"
+        if len(desc) > 3900:
+            desc = desc[:3897] + "..."
+
+        current_case_count = _db.get_project_case_count(project_id)
+        if limits['max_cases_per_project'] != -1 and current_case_count >= limits['max_cases_per_project']:
+            all_warnings.append(f"已达项目用例上限，停止在 {len(created_ids)} 条")
+            break
+
+        mem_ctx = _ai_memory_context_block(current_user.id, goal, probe_url=base_url, project_name=project_name)
+        try:
+            generated = local_ai_service.generate_case_and_steps(
+                goal,
+                project_name,
+                model=legacy_model,
+                profile=profile,
+                memory_context=mem_ctx or None,
+            )
+        except ValueError as e:
+            all_warnings.append(f"场景 {sid} 跳过：{e}")
+            continue
+
+        if license_info.license_type == LicenseType.FREE.value:
+            _db.increment_created_cases(current_user.id)
+
+        if base_url and not (generated.get('case_url') or '').strip():
+            generated['case_url'] = base_url
+
+        local_ai_service._fill_missing_step_payloads(
+            generated.get('steps') or [],
+            goal,
+            _ai_str(generated.get('case_url')),
+            None,
+        )
+        generated, norm_warns = apply_step_normalization_to_plan(generated)
+        all_warnings.extend(norm_warns)
+
+        case_id = _db.create_test_case_v2(
+            project_id,
+            (title[:200] if title else f"AI-{sid}")[:200],
+            generated.get('case_url', ''),
+            desc,
+            pre_t[:2000] if pre_t else generated.get('precondition', ''),
+            er_t[:2000] if er_t else generated.get('expected_result', ''),
+        )
+        steps = generated.get('steps') or []
+        for idx, step in enumerate(steps, start=1):
+            _db.create_test_step(**_ai_step_to_db_kwargs(step, case_id, idx))
+        log_ai_plan_to_audit(
+            current_user.id,
+            current_user.username,
+            'AI_PLAN_SCENARIO_BATCH',
+            {**generated, 'scenario_id': sid},
+            request.remote_addr,
+        )
+        created_ids.append(case_id)
+
+    return jsonify(
+        {
+            'success': True,
+            'created_case_ids': created_ids,
+            'count': len(created_ids),
+            'warnings': all_warnings,
+        }
+    )
+
+
+@app.route('/api/ai/import/api-spec/preview', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_import_api_spec_preview():
+    """解析 OpenAPI / Postman JSON，返回可导入的请求列表预览。"""
+    base_url = ''
+    content = ''
+    if request.files and request.files.get('file'):
+        f = request.files['file']
+        content = (f.read() or b'').decode('utf-8', errors='replace')
+    else:
+        data = request.get_json(silent=True) or {}
+        content = (data.get('content') or data.get('text') or '').strip()
+        base_url = (data.get('base_url') or data.get('server_url') or '').strip()
+
+    from api_doc_import import detect_and_parse_api_doc
+
+    kind, items, warns = detect_and_parse_api_doc(content, base_url_override=base_url)
+    if kind == 'unknown':
+        return jsonify({'success': False, 'error': (warns or ['无法解析'])[0], 'warnings': warns}), 400
+    return jsonify({'success': True, 'kind': kind, 'items': items[:500], 'warnings': warns})
+
+
+@app.route('/api/ai/import/api-spec/commit', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+@audit_log('CREATE_CASE', 'case')
+def api_ai_import_api_spec_commit():
+    """将预览项写入一个接口用例（多 api_request 步骤）。"""
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    case_name = (data.get('case_name') or '').strip() or '导入的接口用例'
+    items = data.get('items')
+    if not project_id:
+        return jsonify({'success': False, 'error': 'project_id 不能为空'}), 400
+    if not isinstance(items, list) or not items:
+        return jsonify({'success': False, 'error': 'items 须为非空数组'}), 400
+
+    _db = Database()
+    if not _db.check_project_access(current_user.id, project_id, 'editor'):
+        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+
+    license_info = license_manager.get_current_license()
+    limits = license_manager.get_limits()
+    current_case_count = _db.get_project_case_count(project_id)
+    if limits['max_cases_per_project'] != -1 and current_case_count >= limits['max_cases_per_project']:
+        return jsonify({'success': False, 'error': '已达到项目用例数量限制', 'limit_reached': True}), 403
+    if license_info.license_type == LicenseType.FREE.value:
+        _db.increment_created_cases(current_user.id)
+
+    desc = (data.get('description') or '').strip()[:4000]
+    case_id = _db.create_test_case_v2(
+        project_id,
+        case_name[:200],
+        '',
+        desc,
+        '',
+        '',
+        case_type='api',
+    )
+    n = 0
+    for i, it in enumerate(items[:300], start=1):
+        if not isinstance(it, dict):
+            continue
+        spec = it.get('api_spec')
+        if isinstance(spec, str):
+            try:
+                spec = json.loads(spec)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(spec, dict):
+            continue
+        api_json = json.dumps(spec, ensure_ascii=False)
+        desc_step = (it.get('description') or it.get('name') or f"请求{i}")[:2000]
+        _db.create_test_step(
+            case_id,
+            'api_request',
+            '',
+            '',
+            '',
+            desc_step,
+            i,
+            api_spec=api_json,
+        )
+        n += 1
+
+    if n == 0:
+        try:
+            _db.delete_test_case(case_id)
+        except Exception:
+            pass
+        return jsonify({'success': False, 'error': '没有可写入的有效 api_spec 项'}), 400
+
+    return jsonify({'success': True, 'case_id': case_id, 'steps_created': n})
+
+
+@app.route('/api/ai/cases/import-ui-plan', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_cases_import_ui_plan():
+    """
+    将外部工具（如 OpenClaw / 工具循环）产出的步骤 JSON 写入用例：可选 replace 清空原步骤后写入。
+    Body: case_id, steps[], replace? (默认 false 为追加)
+    """
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id')
+    steps = data.get('steps') or []
+    replace = bool(data.get('replace'))
+    if not case_id:
+        return jsonify({'success': False, 'error': 'case_id 不能为空'}), 400
+    if not isinstance(steps, list) or not steps:
+        return jsonify({'success': False, 'error': 'steps 须为非空数组'}), 400
+
+    case = db.get_test_case_v2(int(case_id))
+    if not case:
+        return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+    _db = Database()
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+        return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+    if _app_case_type(case) != 'ui':
+        return jsonify({'success': False, 'error': '仅支持 Web 用例'}), 400
+
+    goal_hint = _ai_str(data.get('goal')) or _ai_str(case.get('name')) or ''
+    local_ai_service._fill_missing_step_payloads(
+        steps,
+        goal_hint,
+        _ai_str(case.get('url')),
+        None,
+    )
+    clean_steps, warnings = dedupe_and_validate_ai_steps(steps)
+    clean_steps = [s for s in clean_steps if (s.get('action') or '').strip().lower() != 'api_request']
+    if not clean_steps:
+        return jsonify({'success': False, 'error': '没有可写入的 Web 步骤', 'warnings': warnings}), 400
+
+    if replace:
+        _db.delete_case_steps(int(case_id))
+        start_order = 0
+    else:
+        old_steps, _t = _db.get_case_steps_paginated(int(case_id), 1, 2000)
+        start_order = max([int(s.get('step_order') or 0) for s in old_steps] or [0])
+
+    created = 0
+    for idx, step in enumerate(clean_steps, start=1):
+        _db.create_test_step(**_ai_step_to_db_kwargs(step, int(case_id), start_order + idx))
+        created += 1
+
+    return jsonify({'success': True, 'case_id': int(case_id), 'steps_created': created, 'warnings': warnings})
 
 
 @app.route('/api/ai/diagnostics/failure-bundle', methods=['POST'])
@@ -3493,7 +3977,7 @@ def api_ai_append_steps_to_case():
         return jsonify(
             {
                 "success": False,
-                "error": "没有可写入的步骤（UI 用例已忽略接口类步骤）",
+                "error": "没有可写入的步骤（Web 用例已忽略接口类步骤）",
                 "warnings": warnings,
             }
         ), 400
@@ -4124,7 +4608,7 @@ def api_browser_ai_analyze():
 
     page_snapshot_txt, probe_registry, probe_pu = probe_registry_from_interactive_snapshot(snap)
     goal_lines = [
-        f'请根据以下「{ctx_label}」生成可执行 UI 用例与步骤。',
+        f'请根据以下「{ctx_label}」生成可执行 Web 用例与步骤。',
         f"页面标题: {page_body['title']}",
         f"URL: {page_body['url']}",
     ]
@@ -4315,13 +4799,13 @@ def _app_case_type(case_dict) -> str:
 
 
 def _validate_step_action_for_case(case_dict, action: str):
-    """服务端步骤写入校验：UI 用例禁止 api_request；接口用例仅允许 api_request。"""
+    """服务端步骤写入校验：Web 用例禁止 api_request；接口用例仅允许 api_request。"""
     if not case_dict:
         return "用例不存在"
     act = (action or "").strip()
     ct = _app_case_type(case_dict)
     if ct == "ui" and act == "api_request":
-        return "UI 用例不允许添加接口步骤，请在「接口测试」模块中维护接口用例"
+        return "Web 用例不允许添加接口步骤，请在「接口测试」模块中维护接口用例"
     if ct == "api" and act != "api_request":
         return "接口用例仅允许「接口请求」步骤（api_request）"
     return None
@@ -4695,7 +5179,7 @@ def api_migrate_api_steps(case_id):
     if pid and not _db.check_project_access(current_user.id, int(pid), 'editor'):
         return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
     if _app_case_type(case) != 'ui':
-        return jsonify({'success': False, 'error': '仅可从 UI 用例迁移接口步骤'}), 400
+        return jsonify({'success': False, 'error': '仅可从 Web 用例迁移接口步骤'}), 400
     data = request.get_json(silent=True) or {}
     tid = data.get('target_api_case_id')
     if tid is not None:
@@ -4757,11 +5241,11 @@ def api_create_api_case_from_ui_case():
         return jsonify({'success': True, 'case_id': case_id})
     src = _db.get_test_case_v2(int(source_ui_case_id))
     if not src:
-        return jsonify({'success': False, 'error': '源 UI 用例不存在'}), 404
+        return jsonify({'success': False, 'error': '源 Web 用例不存在'}), 404
     if int(src.get('project_id') or 0) != int(project_id):
         return jsonify({'success': False, 'error': '源用例必须属于所选项目'}), 400
     if _app_case_type(src) != 'ui':
-        return jsonify({'success': False, 'error': '源用例必须是 UI 用例'}), 400
+        return jsonify({'success': False, 'error': '源用例必须是 Web 用例'}), 400
     new_name = name or f"{src.get('name') or '用例'} (接口)"
     new_id = _db.create_test_case_v2(
         int(project_id),
@@ -4858,9 +5342,31 @@ def api_run_api_case(case_id):
     if _app_case_type(case) != 'api':
         return jsonify({
             'success': False,
-            'error': '该用例不是接口用例，请使用 UI 用例的「运行」按钮执行浏览器自动化。',
+            'error': '该用例不是接口用例，请使用 Web 用例的「运行」按钮执行浏览器自动化。',
         }), 400
-    payload = sync_run_api_case_for_batch(case_id, _db, execution_context=None)
+    body = request.get_json(silent=True) or {}
+    raw_step_ids = body.get('step_ids')
+    step_ids_param = None
+    if raw_step_ids is not None:
+        if not isinstance(raw_step_ids, list):
+            return jsonify({'success': False, 'error': 'step_ids 须为非空整数数组'}), 400
+        try:
+            step_ids_param = [int(x) for x in raw_step_ids]
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'step_ids 须为整数'}), 400
+        if not step_ids_param:
+            return jsonify({'success': False, 'error': '请至少选择一个要执行的接口步骤'}), 400
+        all_steps = _db.get_case_steps(case_id, page=1, page_size=9999)
+        valid = {int(s['id']) for s in (all_steps or []) if s.get('id') is not None}
+        step_ids_param = list(dict.fromkeys([sid for sid in step_ids_param if sid in valid]))
+        if not step_ids_param:
+            return jsonify({
+                'success': False,
+                'error': '所选步骤不属于本用例或不存在，请刷新后重试。',
+            }), 400
+    payload = sync_run_api_case_for_batch(
+        case_id, _db, execution_context=None, step_ids=step_ids_param
+    )
     duration = round(time.time() - start_time, 2)
     out = {
         'success': payload.get('status') == 'success',
@@ -4875,6 +5381,72 @@ def api_run_api_case(case_id):
     if payload.get('status') == 'error':
         out['error'] = payload.get('error') or '接口用例执行失败'
     return jsonify(out)
+
+
+@app.route('/api/api-cases/dry-run-request', methods=['POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_dry_run_api_request():
+    """试发当前表单中的单条 HTTP 规格（不写库），用于弹窗内查看响应与断言结果。"""
+    data = request.get_json(silent=True) or {}
+    case_id = data.get('case_id')
+    if case_id is None:
+        return jsonify({'success': False, 'error': 'case_id 不能为空'}), 400
+    try:
+        case_id = int(case_id)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'case_id 无效'}), 400
+
+    _db = Database()
+    case = _db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '用例不存在'}), 404
+    if case.get('project_id') and not _db.check_project_access(
+        current_user.id, int(case['project_id']), 'viewer'
+    ):
+        return jsonify({'success': False, 'error': '无权限'}), 403
+    if _app_case_type(case) != 'api':
+        return jsonify({'success': False, 'error': '仅支持接口用例'}), 400
+
+    spec = data.get('api_spec')
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except json.JSONDecodeError:
+            return jsonify({'success': False, 'error': 'api_spec JSON 无效'}), 400
+    if not isinstance(spec, dict):
+        return jsonify({'success': False, 'error': 'api_spec 须为对象'}), 400
+
+    project_id = case.get('project_id')
+
+    out = run_api_spec_pipeline(
+        spec,
+        _db,
+        project_id,
+        case_id,
+        browser_cookie_jar=None,
+        persist_extracts=False,
+        collect_script_logs=True,
+    )
+
+    rt = out.get('response_text') or ''
+    if len(rt) > 48000:
+        rt = rt[:48000] + '\n…(已截断)'
+    # 未拿到 HTTP 响应（连接失败、URL 无效、前置链在发出主请求前失败等）时 success=False，便于前端明确提示
+    hard_fail = out.get('status_code') is None and bool(out.get('error'))
+    payload = {
+        'success': not hard_fail,
+        'status_code': out.get('status_code'),
+        'response_text': rt,
+        'response_json': out.get('response_json'),
+        'ok_assert': out.get('ok_assert'),
+        'assert_message': out.get('assert_message'),
+        'error': out.get('error'),
+    }
+    if out.get('script_logs'):
+        payload['script_logs'] = out.get('script_logs')
+    return jsonify(payload)
 
 
 def _effective_step_iframe_selector(automation, db, step, project_id, case_id, row_resolve_fn=None):
@@ -5421,7 +5993,7 @@ def api_run_case(case_id):
     if any((s.get('action') or '').strip() == 'api_request' for s in steps):
         return jsonify({
             'success': False,
-            'error': '该 UI 用例仍包含接口测试步骤，请先使用「一键迁移」迁移到接口用例后再运行 UI 自动化。',
+            'error': '该 Web 用例仍包含接口测试步骤，请先使用「一键迁移」迁移到接口用例后再运行 AI 自动化测试。',
         }), 400
 
     if not steps:
@@ -6044,27 +6616,24 @@ def api_run_case(case_id):
                 job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
 
 
-@app.route('/api/cases/current-run/status', methods=['GET'])
-@login_required
-@api_error_handler
-def api_case_run_status():
-    user_id = current_user.id
+def _case_run_status_payload(user_id: int) -> dict:
+    """当前用户 Web 用例步骤运行任务状态（与 /api/cases/current-run/status 响应体一致）。"""
     with _case_run_lock:
         job = _case_run_jobs.get(user_id)
     if not job:
-        return jsonify({
+        return {
             'success': True,
             'active': False,
             'total_steps': 0,
             'completed_steps': 0,
             'progress': 0,
-            'message': '暂无运行任务'
-        })
+            'message': '暂无运行任务',
+        }
 
     total_steps = max(1, int(job.get('total_steps', 0) or 0))
     completed_steps = int(job.get('completed_steps', 0) or 0)
     progress = min(100, int((completed_steps / total_steps) * 100))
-    return jsonify({
+    return {
         'success': True,
         'active': bool(job.get('active')),
         'case_id': job.get('case_id'),
@@ -6077,7 +6646,52 @@ def api_case_run_status():
         'cancel_requested': bool(job.get('cancel_requested')),
         'message': job.get('message', ''),
         'duration': job.get('duration'),
+    }
+
+
+def _dataset_current_run_payload(user_id: int) -> dict:
+    """当前用户数据驱动任务状态（与 /api/datasets/current-run/status 响应体一致）。"""
+    run_id, job = _get_current_user_dataset_job(user_id)
+    if not job:
+        return {'success': True, 'active': False, 'message': '暂无运行任务'}
+
+    finished = bool(job.get('finished'))
+    total = int(job.get('total', 0) or 0)
+    completed = int(job.get('completed', 0) or 0)
+    return {
+        'success': True,
+        'active': not finished,
+        'finished': finished,
+        'run_id': run_id,
+        'dataset_id': job.get('dataset_id'),
+        'case_id': job.get('case_id'),
+        'total': total,
+        'completed': completed,
+        'successful_rows': int(job.get('successful_rows', 0) or 0),
+        'failed_rows': int(job.get('failed_rows', 0) or 0),
+        'current_row_index': job.get('current_row_index'),
+        'error': job.get('error'),
+    }
+
+
+@app.route('/api/ui/current-runs/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ui_current_runs_status():
+    """合并用例与数据驱动的运行状态，供全站轮询一次请求拿到全部信息。"""
+    uid = current_user.id
+    return jsonify({
+        'success': True,
+        'case': _case_run_status_payload(uid),
+        'dataset': _dataset_current_run_payload(uid),
     })
+
+
+@app.route('/api/cases/current-run/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_case_run_status():
+    return jsonify(_case_run_status_payload(current_user.id))
 
 
 @app.route('/api/cases/current-run/stop', methods=['POST'])
@@ -6776,7 +7390,7 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                 run_id,
                 finished=True,
                 success=False,
-                error='数据驱动执行仅支持 UI 用例；接口用例请使用接口测试运行入口。',
+                error='数据驱动执行仅支持 Web 用例；接口用例请使用接口测试运行入口。',
             )
             return
         steps = _db.get_case_steps(case_id)
@@ -7425,27 +8039,7 @@ def _get_current_user_dataset_job(user_id: int):
 @login_required
 def api_dataset_current_run_status():
     """查询当前用户的数据驱动任务状态（用于跨页面恢复显示/停止）。"""
-    run_id, job = _get_current_user_dataset_job(current_user.id)
-    if not job:
-        return jsonify({'success': True, 'active': False, 'message': '暂无运行任务'})
-
-    finished = bool(job.get('finished'))
-    total = int(job.get('total', 0) or 0)
-    completed = int(job.get('completed', 0) or 0)
-    return jsonify({
-        'success': True,
-        'active': not finished,
-        'finished': finished,
-        'run_id': run_id,
-        'dataset_id': job.get('dataset_id'),
-        'case_id': job.get('case_id'),
-        'total': total,
-        'completed': completed,
-        'successful_rows': int(job.get('successful_rows', 0) or 0),
-        'failed_rows': int(job.get('failed_rows', 0) or 0),
-        'current_row_index': job.get('current_row_index'),
-        'error': job.get('error'),
-    })
+    return jsonify(_dataset_current_run_payload(current_user.id))
 
 
 @app.route('/api/datasets/current-run/stop', methods=['POST'])
@@ -7549,13 +8143,13 @@ try:
                     notify('case_success', {
                         'case_name': case_name,
                         'duration': case_duration,
-                        'executed_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        'executed_at': beijing_now_iso()
                     })
                 elif case_status in ('error', 'failed'):
                     notify('case_failed', {
                         'case_name': case_name,
                         'error': case_error or '执行失败',
-                        'executed_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        'executed_at': beijing_now_iso()
                     })
 
             if failed == 0:
@@ -7568,7 +8162,7 @@ try:
                     'success_count': successful,
                     'total_count': successful + failed,
                     'duration': duration,
-                    'executed_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    'executed_at': beijing_now_iso()
                 })
             elif retry_count < max_retries:
                 # 有失败且还可以重跑
@@ -7590,7 +8184,7 @@ try:
                     'failed_count': failed,
                     'total_count': successful + failed,
                     'error': f'{failed}个用例失败，达到最大重试次数',
-                    'executed_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    'executed_at': beijing_now_iso()
                 })
 
         except Exception as e:
@@ -7609,14 +8203,14 @@ try:
                     'schedule_name': schedule_name,
                     'retry_count': retry_count,
                     'error': error_msg,
-                    'executed_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    'executed_at': beijing_now_iso()
                 })
         finally:
             try:
                 sync_close_browser()
             except Exception:
                 pass
-            last_run = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            last_run = utc_sql_str()
             _db.update_schedule(schedule_id, last_run=last_run)
 
     def _register_schedule_job(schedule_id: int, case_ids: list, cron_expr: str):

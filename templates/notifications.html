@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}通知配置 - UI自动化测试平台{% endblock %}
+{% block title %}通知配置 - AI自动化测试平台{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 text-gray-900 dark:text-gray-100">
@@ -513,7 +513,7 @@
         if (!dateStr) return '-';
         const date = new Date(dateStr);
         var loc = (localStorage.getItem('ui_lang') || 'zh') === 'en' ? 'en-US' : 'zh-CN';
-        return date.toLocaleString(loc, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        return date.toLocaleString(loc, { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     }
 
     document.addEventListener('DOMContentLoaded', function() {

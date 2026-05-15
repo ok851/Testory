@@ -1,7 +1,8 @@
 from test_report import TestReportGenerator
 from typing import Dict, List, Any
-from datetime import datetime
 import os
+
+from time_utils import beijing_now_strftime as _bj_now_fmt
 
 
 class ReportExporter:
@@ -26,7 +27,7 @@ class ReportExporter:
             导出文件的完整路径
         """
         if not filename:
-            filename = f"test_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            filename = f"test_report_{_bj_now_fmt('%Y%m%d_%H%M%S')}"
         
         filepath = os.path.join(self.export_dir, f"{filename}.html")
         
@@ -55,7 +56,7 @@ class ReportExporter:
             raise ImportError("请安装 openpyxl 库: pip install openpyxl")
         
         if not filename:
-            filename = f"test_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            filename = f"test_report_{_bj_now_fmt('%Y%m%d_%H%M%S')}"
         
         filepath = os.path.join(self.export_dir, f"{filename}.xlsx")
         
@@ -95,7 +96,7 @@ class ReportExporter:
         # 写入主标题
         ws.merge_cells('A1:G1')
         title_cell = ws['A1']
-        title_cell.value = 'UI自动化测试报告'
+        title_cell.value = 'AI自动化测试报告'
         title_cell.font = title_font
         title_cell.alignment = center_align
         ws.row_dimensions[1].height = 35
@@ -103,7 +104,7 @@ class ReportExporter:
         # 写入生成时间
         ws.merge_cells('A2:G2')
         time_cell = ws['A2']
-        time_cell.value = f'生成时间: {datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")}'
+        time_cell.value = f'生成时间: {_bj_now_fmt("%Y年%m月%d日 %H:%M:%S")}'
         time_cell.font = Font(name='微软雅黑', size=10, color='999999')
         time_cell.alignment = center_align
         ws.row_dimensions[2].height = 20
@@ -332,7 +333,7 @@ class ReportExporter:
         from reportlab.lib.colors import HexColor, white, black
         
         if not filename:
-            filename = "test_report_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = "test_report_" + _bj_now_fmt("%Y%m%d_%H%M%S")
         
         filepath = os.path.join(self.export_dir, filename + ".pdf")
         
@@ -373,7 +374,7 @@ class ReportExporter:
             c.rect(0, height - 1.5*cm, width, 1.5*cm, fill=1, stroke=0)
             c.setFillColor(white)
             c.setFont(font_name_bold, 16)
-            c.drawCentredString(width/2, height - 1*cm, 'UI自动化测试报告')
+            c.drawCentredString(width/2, height - 1*cm, 'AI自动化测试报告')
         
         def draw_footer(page_num):
             """绘制页脚"""
@@ -381,7 +382,7 @@ class ReportExporter:
             c.line(2*cm, 1.5*cm, width - 2*cm, 1.5*cm)
             c.setFillColor(HexColor('#999999'))
             c.setFont(font_name, 9)
-            c.drawString(2*cm, 1*cm, f'生成时间: {datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")}')
+            c.drawString(2*cm, 1*cm, f'生成时间: {_bj_now_fmt("%Y年%m月%d日 %H:%M:%S")}')
             c.drawRightString(width - 2*cm, 1*cm, f'第 {page_num} 页')
         
         def draw_card(x, y, w, h, label, value, color):
@@ -664,7 +665,7 @@ class ReportExporter:
     <div class="container">
         <h1>测试报告</h1>
         <p style="text-align: center; color: #999; margin-bottom: 30px;">
-            生成时间: ''' + datetime.now().strftime('%Y年%m月%d日 %H:%M:%S') + '''
+            生成时间: ''' + _bj_now_fmt('%Y年%m月%d日 %H:%M:%S') + '''
         </p>
         
         <div class="section">
@@ -767,7 +768,7 @@ class ReportExporter:
         </div>
         
         <div class="footer">
-            <p>本报告由UI自动化测试平台自动生成</p>
+            <p>本报告由AI自动化测试平台自动生成</p>
         </div>
     </div>
 </body>
@@ -905,7 +906,7 @@ class ReportExporter:
     <div class="container">
         <h1>测试报告</h1>
         <p style="text-align: center; color: #999; margin-bottom: 30px;">
-            生成时间: ''' + datetime.now().strftime('%Y年%m月%d日 %H:%M:%S') + '''
+            生成时间: ''' + _bj_now_fmt('%Y年%m月%d日 %H:%M:%S') + '''
         </p>
         
         <div class="section">
@@ -1006,7 +1007,7 @@ class ReportExporter:
         </div>
         
         <div class="footer">
-            <p>本报告由UI自动化测试平台自动生成</p>
+            <p>本报告由AI自动化测试平台自动生成</p>
         </div>
     </div>
 </body>

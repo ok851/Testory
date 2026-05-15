@@ -94,7 +94,7 @@ def resolve_plan_steps_locators_with_snapshot(
         )
 
     prompt = (
-        "You map UI automation steps to concrete selectors using ONLY the control list below.\n"
+        "You map web test automation steps to concrete selectors using ONLY the control list below.\n"
         "Return exactly one JSON object, no markdown. Schema:\n"
         '{"updates":[{"index":<int>,"selector_type":"css|xpath|text|partial_text",'
         '"selector_value":"<string>","probe_index":<optional int matching [n] in list>}]}\n'
