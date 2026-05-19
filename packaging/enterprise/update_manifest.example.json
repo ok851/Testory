@@ -1,0 +1,18 @@
+{
+  "product": "uat-platform",
+  "channel": "stable",
+  "version": "1.2.0",
+  "min_supported_version": "1.0.0",
+  "published_at": "2026-05-19T00:00:00Z",
+  "mandatory": false,
+  "package_url": "https://updates.example.com/uat/uat_platform_setup_1.2.0.exe",
+  "sha256": "REPLACE_WITH_SHA256_HEX_OF_FULL_INSTALLER",
+  "size_bytes": 0,
+  "base_version": "1.1.0",
+  "patch_url": "https://updates.example.com/uat/patch_1.1.0_to_1.2.0.bsdiff",
+  "patch_sha256": "REPLACE_WITH_SHA256_HEX_OF_PATCH_FILE",
+  "patch_cache_basename": "uat_platform_setup.exe",
+  "patch_size_bytes": 0,
+  "release_notes_url": "https://updates.example.com/uat/notes/1.2.0.html",
+  "release_notes": "修复混排执行锁；更新本地架构。支持差分更新（需本机已有 v1.1.0 安装包缓存）。"
+}

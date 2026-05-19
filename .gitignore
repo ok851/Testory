@@ -10,4 +10,11 @@ __pycache__/
 *.db-shm
 *.db-wal
 .env
+screenshots/
+videos/
+exports/
+dist/
+packaging/tools/
+*.log
+agent-tools/
  

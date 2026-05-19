@@ -18,3 +18,5 @@ class ExecutionContext:
     trigger: str = "unknown"
     on_case_failure: Optional[CaseFailureCallback] = None
     extra: Dict[str, Any] = field(default_factory=dict)
+    desktop_agent_session_id: Optional[str] = None
+    desktop_machine_id: Optional[int] = None

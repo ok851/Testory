@@ -168,10 +168,19 @@ def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
 
 
 def normalize_ai_step(step: dict) -> dict:
+    layer = _str(step.get("automation_layer")).lower() or "web"
+    if layer not in ("web", "desktop"):
+        layer = "web"
+    desktop_actions = {
+        "launch_app", "attach_window", "click", "input", "wait", "verify",
+        "extract_text", "assert", "hotkey", "screenshot", "double_click", "right_click",
+    }
     allowed_actions = {"navigate", "click", "input", "wait", "verify", "extract_text", "assert"}
+    if layer == "desktop":
+        allowed_actions = desktop_actions
     action = _str(step.get("action")).lower()
     if action not in allowed_actions:
-        action = "click"
+        action = "launch_app" if layer == "desktop" else "click"
     selector_type = _str(step.get("selector_type")).lower()
     selector_value = _str(step.get("selector_value"))
     input_value = _str(step.get("input_value"))
@@ -193,7 +202,17 @@ def normalize_ai_step(step: dict) -> dict:
         "selector_value": selector_value,
         "input_value": input_value,
         "description": description,
+        "automation_layer": layer,
     }
+    ds = step.get("desktop_spec")
+    if ds is not None:
+        if isinstance(ds, str):
+            out["desktop_spec"] = ds
+        else:
+            try:
+                out["desktop_spec"] = json.dumps(ds, ensure_ascii=False)
+            except Exception:
+                out["desktop_spec"] = ""
     if compare_type and action == "assert":
         out["compare_type"] = compare_type
     if lc:

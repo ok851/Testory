@@ -889,6 +889,24 @@
                 <h3 data-i18n="steps_modal_add">添加测试步骤</h3>
             </div>
             <div class="form-group">
+                <label for="stepAutomationLayer">自动化层</label>
+                <select id="stepAutomationLayer" onchange="onAutomationLayerChange('create')">
+                    <option value="web">Web 浏览器</option>
+                    <option value="desktop">Windows 桌面</option>
+                </select>
+                <small style="color:#666;display:block;margin-top:4px;font-size:12px;">混排用例可在同一步骤列表中交替使用 Web 与桌面步骤</small>
+            </div>
+            <div class="form-group" id="stepDesktopSpecGroup" style="display:none;">
+                <input type="hidden" id="stepDesktopSpec" value="">
+                <label style="font-size:13px;color:#374151;">Windows 桌面</label>
+                <p id="stepDesktopWindowSummary" style="font-size:12px;color:#64748b;margin:6px 0 10px;">窗口：未选择（请先打开被测程序，再点下方按钮）</p>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="desktopPickWindow('create')">① 选择当前窗口</button>
+                    <button type="button" class="btn btn-sm btn-primary" id="stepDesktopPickControlBtn" onclick="desktopPickControl('create')">② 拾取桌面控件</button>
+                </div>
+                <small style="color:#666;font-size:12px;line-height:1.5;">程序名填在「输入值」，不要填选择器。推荐先打开被测程序，用「附着窗口」+「选择当前窗口」。</small>
+            </div>
+            <div class="form-group">
                 <label for="stepAction" data-i18n="steps_label_action">操作类型 *</label>
                 <select id="stepAction" onchange="toggleActionFields()">
                     <option value="navigate" data-i18n-opt="steps_act_navigate">导航</option>
@@ -1059,6 +1077,23 @@
         <div class="modal-content modal-content--steps">
             <div class="modal-header">
                 <h3 data-i18n="steps_modal_edit">编辑测试步骤</h3>
+            </div>
+            <div class="form-group">
+                <label for="editStepAutomationLayer">自动化层</label>
+                <select id="editStepAutomationLayer" onchange="onAutomationLayerChange('edit')">
+                    <option value="web">Web 浏览器</option>
+                    <option value="desktop">Windows 桌面</option>
+                </select>
+            </div>
+            <div class="form-group" id="editStepDesktopSpecGroup" style="display:none;">
+                <input type="hidden" id="editStepDesktopSpec" value="">
+                <label style="font-size:13px;color:#374151;">Windows 桌面</label>
+                <p id="editDesktopWindowSummary" style="font-size:12px;color:#64748b;margin:6px 0 10px;">窗口：未选择</p>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="desktopPickWindow('edit')">① 选择当前窗口</button>
+                    <button type="button" class="btn btn-sm btn-primary" id="editDesktopPickControlBtn" onclick="desktopPickControl('edit')">② 拾取桌面控件</button>
+                </div>
+                <small style="color:#666;font-size:12px;line-height:1.5;">无需 JSON / .env</small>
             </div>
             <div class="form-group">
                 <label for="editStepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -1633,10 +1668,13 @@
                                 apiCardRow = '<div class="step-nav-url"><strong>HTTP</strong> <span>（配置 JSON 无效）</span></div>';
                             }
                         }
+                        const layerTag = ((step.automation_layer || 'web').toLowerCase() === 'desktop')
+                            ? '<span style="font-size:11px;color:#0369a1;font-weight:600;margin-right:6px;">🖥 桌面</span>'
+                            : '<span style="font-size:11px;color:#15803d;font-weight:600;margin-right:6px;">🌐 Web</span>';
                         stepItem.innerHTML = `
                             <div class="step-number">${actualStepNumber}</div>
                             <div class="step-content">
-                                <h4>${escapeHtml(step.description || actionText)}${clickRepBadge}</h4>
+                                <h4>${layerTag}${escapeHtml(step.description || actionText)}${clickRepBadge}</h4>
                                 <div class="step-details">
                                     ${selectorMissingOnCard ? `<div style="color:#b45309;font-size:13px;"><strong>${lblSel}</strong> ${escapeHtml(t('steps_card_selector_missing'))}</div>` : ''}
                                     ${(step.selector_value || showBatchLoc) ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
@@ -1909,6 +1947,11 @@ function changePage(page) {
         
         function showCreateStepModal() {
             document.getElementById('createStepModal').classList.add('active');
+            const layerEl = document.getElementById('stepAutomationLayer');
+            if (layerEl) layerEl.value = 'web';
+            const dsEl = document.getElementById('stepDesktopSpec');
+            if (dsEl) dsEl.value = '';
+            onAutomationLayerChange('create');
             document.getElementById('stepAction').value = 'click';
             document.getElementById('stepSelectorType').value = 'css';
             document.getElementById('stepSelectorValue').value = '';
@@ -1933,6 +1976,10 @@ function changePage(page) {
             
             toggleActionFields();
             refreshStepsFormSelectOptions();
+            const layer = (document.getElementById('stepAutomationLayer') || {}).value;
+            if (layer === 'desktop') {
+                loadDesktopEnvConfig().then(cfg => applyDesktopEnvHints('create', cfg));
+            }
         }
         
         function closeCreateStepModal() {
@@ -1942,6 +1989,16 @@ function changePage(page) {
         function showEditStepModal(step) {
             currentEditingStepId = step.id;
             document.getElementById('editStepModal').classList.add('active');
+            const layerEl = document.getElementById('editStepAutomationLayer');
+            if (layerEl) {
+                layerEl.value = ((step.automation_layer || 'web').toLowerCase() === 'desktop') ? 'desktop' : 'web';
+            }
+            let _ds = step.desktop_spec;
+            if (typeof _ds === 'string' && _ds.trim()) {
+                try { _ds = JSON.parse(_ds); } catch (e) { _ds = null; }
+            }
+            setDesktopSpecField('edit', _ds && typeof _ds === 'object' ? _ds : null);
+            onAutomationLayerChange('edit');
             document.getElementById('editStepAction').value = step.action;
             document.getElementById('editStepSelectorType').value = step.selector_type || 'css';
             document.getElementById('editStepSelectorValue').value = step.selector_value || '';
@@ -2042,6 +2099,280 @@ function changePage(page) {
         
         // 绑定编辑模态框的选择器类型变化事件
         document.getElementById('editStepSelectorType').addEventListener('change', updateEditSelectorHelp);
+
+        const WEB_STEP_ACTIONS = [
+            ['navigate', '导航'], ['click', '点击'], ['input', '输入'], ['batch_input', '批量输入'],
+            ['hover', '悬停'], ['double_click', '双击'], ['right_click', '右键点击'], ['wait', '等待'],
+            ['scroll', '滚动'], ['extract_text', '提取文本'], ['swipe', '滑动'], ['verify', '验证操作'],
+            ['enter_iframe', '进入iframe'], ['exit_iframe', '跳出iframe'], ['select', '下拉框选择'],
+            ['date', '日期选择'], ['assert', '断言操作']
+        ];
+        const DESKTOP_STEP_ACTIONS = [
+            ['launch_app', '启动应用'], ['attach_window', '附着窗口'], ['click', '点击'],
+            ['double_click', '双击'], ['right_click', '右键点击'], ['input', '输入'],
+            ['hotkey', '快捷键'], ['wait', '等待'], ['screenshot', '截图'], ['assert', '断言'], ['verify', '验证']
+        ];
+        const DESKTOP_SELECTOR_TYPES = [
+            ['automation_id', 'AutomationId'], ['name', '控件名称'], ['control_type', '控件类型'],
+            ['uia_path', 'UIA路径JSON'], ['coordinate', '坐标 x,y'], ['class_name', '类名']
+        ];
+
+        function rebuildActionSelect(selectId, layer) {
+            const sel = document.getElementById(selectId);
+            if (!sel) return;
+            const prev = sel.value;
+            const list = layer === 'desktop' ? DESKTOP_STEP_ACTIONS : WEB_STEP_ACTIONS;
+            sel.innerHTML = list.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
+            if (list.some(([v]) => v === prev)) sel.value = prev;
+            else sel.value = list[0][0];
+        }
+
+        function rebuildSelectorTypeSelect(selectId, layer) {
+            const sel = document.getElementById(selectId);
+            if (!sel) return;
+            const prev = sel.value;
+            if (layer === 'desktop') {
+                sel.innerHTML = DESKTOP_SELECTOR_TYPES.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
+                if (DESKTOP_SELECTOR_TYPES.some(([v]) => v === prev)) sel.value = prev;
+                else sel.value = 'automation_id';
+            } else {
+                sel.innerHTML = `
+                    <option value="css">CSS</option><option value="xpath">XPath</option>
+                    <option value="id">ID</option><option value="text">文本</option>
+                    <option value="partial_text">部分文本</option>`;
+                sel.value = prev || 'css';
+            }
+        }
+
+        let _desktopEnvConfigCache = null;
+        async function loadDesktopEnvConfig() {
+            if (_desktopEnvConfigCache) return _desktopEnvConfigCache;
+            try {
+                const r = await fetch('/api/desktop/config', { credentials: 'same-origin' });
+                const data = await r.json();
+                if (data.success) _desktopEnvConfigCache = data;
+            } catch (e) { /* ignore */ }
+            return _desktopEnvConfigCache;
+        }
+
+        function getDesktopSpecFieldId(mode) {
+            return mode === 'edit' ? 'editStepDesktopSpec' : 'stepDesktopSpec';
+        }
+
+        function parseDesktopSpecField(mode) {
+            const el = document.getElementById(getDesktopSpecFieldId(mode));
+            if (!el || !String(el.value || '').trim()) return null;
+            try {
+                return JSON.parse(el.value);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function setDesktopSpecField(mode, spec) {
+            const el = document.getElementById(getDesktopSpecFieldId(mode));
+            if (!el) return;
+            el.value = spec ? JSON.stringify(spec) : '';
+            updateDesktopWindowSummary(mode, spec);
+        }
+
+        function updateDesktopWindowSummary(mode, spec) {
+            const sumId = mode === 'edit' ? 'editDesktopWindowSummary' : 'stepDesktopWindowSummary';
+            const sum = document.getElementById(sumId);
+            if (!sum) return;
+            if (!spec) {
+                sum.textContent = '窗口：未选择（请先打开被测程序，再点「选择当前窗口」）';
+                return;
+            }
+            const label = spec.window_title || spec.window_title_re || spec.process || '已配置';
+            sum.textContent = '窗口：' + label;
+        }
+
+        function getDesktopSpecForApi(mode) {
+            const spec = parseDesktopSpecField(mode);
+            return spec || '';
+        }
+
+        async function verifyDesktopLaunchInput(mode) {
+            const isEdit = mode === 'edit';
+            const layerEl = document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer');
+            const actionEl = document.getElementById(isEdit ? 'editStepAction' : 'stepAction');
+            const inputEl = document.getElementById(isEdit ? 'editStepInputValue' : 'stepInputValue');
+            if (!inputEl || (layerEl && layerEl.value) !== 'desktop') return;
+            if ((actionEl && actionEl.value) !== 'launch_app') return;
+            const name = String(inputEl.value || '').trim();
+            if (!name || name.indexOf('\\') >= 0 || name.indexOf(':') >= 0) return;
+            try {
+                const r = await fetch('/api/desktop/resolve-app?name=' + encodeURIComponent(name), { credentials: 'same-origin' });
+                const data = await r.json();
+                if (data.success) {
+                    showToast('已解析路径：' + data.path + (data.method ? '（' + data.method + '）' : ''), 'success');
+                } else if (data.error) {
+                    showToast(String(data.error).slice(0, 280), 'warning');
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        function applyDesktopEnvHints(mode, cfg) {
+            const action = (document.getElementById(mode === 'edit' ? 'editStepAction' : 'stepAction') || {}).value || '';
+            const inputEl = document.getElementById(mode === 'edit' ? 'editStepInputValue' : 'stepInputValue');
+            const inputLbl = document.querySelector(mode === 'edit' ? 'label[for="editStepInputValue"]' : 'label[for="stepInputValue"]');
+            if (action === 'launch_app' && inputLbl) {
+                inputLbl.textContent = '程序名（如 calc.exe、mspaint.exe，填在输入值）';
+                if (inputEl) {
+                    inputEl.placeholder = 'calc.exe';
+                    inputEl.onblur = function () { verifyDesktopLaunchInput(mode); };
+                }
+            } else if (action === 'attach_window' && inputLbl) {
+                inputLbl.textContent = '窗口标题（可选，推荐用「选择当前窗口」）';
+            } else if (action === 'hotkey' && inputLbl) {
+                inputLbl.textContent = '快捷键（如 ^c 表示 Ctrl+C）';
+            }
+        }
+
+        async function desktopPickWindow(mode) {
+            const isEdit = mode === 'edit';
+            const actionEl = document.getElementById(isEdit ? 'editStepAction' : 'stepAction');
+            const inputEl = document.getElementById(isEdit ? 'editStepInputValue' : 'stepInputValue');
+            const specEl = document.getElementById(isEdit ? 'editStepDesktopSpec' : 'stepDesktopSpec');
+            const layerEl = document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer');
+            if ((layerEl && layerEl.value) !== 'desktop') {
+                showToast('请先将自动化层切换为 Windows 桌面', 'error');
+                return;
+            }
+            try {
+                const r = await fetch('/api/desktop/windows', { credentials: 'same-origin' });
+                const data = await r.json();
+                if (!data.success) {
+                    showToast(data.error || '无法获取窗口列表', 'error');
+                    return;
+                }
+                const wins = data.windows || [];
+                if (!wins.length) {
+                    showToast('未检测到可见窗口，请先打开被测应用', 'error');
+                    return;
+                }
+                const lines = wins.map((w, i) => {
+                    const proc = w.process ? ` [${w.process}]` : '';
+                    return `${i + 1}. ${w.title}${proc}`;
+                });
+                const pick = window.prompt(
+                    '请先打开被测应用，再输入序号选择窗口（将自动填入附着信息）：\n\n' + lines.join('\n').slice(0, 3500),
+                    '1'
+                );
+                if (pick === null) return;
+                const idx = parseInt(String(pick).trim(), 10) - 1;
+                if (Number.isNaN(idx) || idx < 0 || idx >= wins.length) {
+                    showToast('序号无效', 'error');
+                    return;
+                }
+                const chosen = wins[idx];
+                const sr = await fetch('/api/desktop/window-spec', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ hwnd: chosen.hwnd })
+                });
+                const specData = await sr.json();
+                if (!specData.success) {
+                    showToast(specData.error || '生成窗口配置失败', 'error');
+                    return;
+                }
+                if (actionEl && actionEl.value !== 'attach_window') {
+                    actionEl.value = 'attach_window';
+                    if (isEdit && typeof toggleEditActionFields === 'function') toggleEditActionFields();
+                    else if (typeof toggleActionFields === 'function') toggleActionFields();
+                }
+                if (inputEl) inputEl.value = specData.suggested_input || chosen.title;
+                setDesktopSpecField(mode, specData.desktop_spec || {});
+                showToast(`已选择：${chosen.title}`, 'success');
+            } catch (e) {
+                showToast('选择窗口失败：' + (e.message || e), 'error');
+            }
+        }
+
+        async function onAutomationLayerChange(mode) {
+            const isEdit = mode === 'edit';
+            const layerEl = document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer');
+            const layer = (layerEl && layerEl.value) || 'web';
+            const specGrp = document.getElementById(isEdit ? 'editStepDesktopSpecGroup' : 'stepDesktopSpecGroup');
+            if (specGrp) specGrp.style.display = layer === 'desktop' ? 'block' : 'none';
+            rebuildActionSelect(isEdit ? 'editStepAction' : 'stepAction', layer);
+            rebuildSelectorTypeSelect(isEdit ? 'editStepSelectorType' : 'stepSelectorType', layer);
+            const pickBtn = document.getElementById(isEdit ? 'pickEditBtn' : 'pickCreateBtn');
+            if (pickBtn) pickBtn.style.display = layer === 'desktop' ? 'none' : '';
+            if (layer === 'desktop') {
+                applyDesktopEnvHints(mode, await loadDesktopEnvConfig());
+            }
+            if (isEdit) toggleEditActionFields();
+            else toggleActionFields();
+        }
+
+        async function desktopPickControl(mode) {
+            const isEdit = mode === 'edit';
+            const layerEl = document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer');
+            if ((layerEl && layerEl.value) !== 'desktop') {
+                showToast('请先将自动化层切换为 Windows 桌面', 'error');
+                return;
+            }
+            let spec = parseDesktopSpecField(mode);
+            if (!spec || (!spec.window_title_re && !spec.process && !spec.window_title)) {
+                showToast('请先点「选择当前窗口」', 'error');
+                return;
+            }
+            try {
+                const r = await fetch('/api/desktop/inspect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ desktop_spec: spec })
+                });
+                const data = await r.json();
+                if (!data.success) {
+                    showToast(data.error || '拾取失败：请先选择窗口并确保 pywinauto 已安装', 'error');
+                    return;
+                }
+                const nodes = data.nodes || [];
+                if (!nodes.length) {
+                    showToast('未探测到控件，请确认窗口已打开', 'error');
+                    return;
+                }
+                const lines = nodes.map((n, i) => {
+                    const aid = n.automation_id ? ` id=${n.automation_id}` : '';
+                    const nm = n.name ? ` "${n.name}"` : '';
+                    return `${i + 1}. [${n.control_type || ''}]${nm}${aid}`;
+                });
+                const pick = window.prompt(
+                    '输入序号选择控件（将填入定位方式与选择器值）：\n\n' + lines.join('\n').slice(0, 4000),
+                    '1'
+                );
+                if (pick === null) return;
+                const idx = parseInt(String(pick).trim(), 10) - 1;
+                if (Number.isNaN(idx) || idx < 0 || idx >= nodes.length) {
+                    showToast('序号无效', 'error');
+                    return;
+                }
+                const node = nodes[idx];
+                const selType = document.getElementById(isEdit ? 'editStepSelectorType' : 'stepSelectorType');
+                const selVal = document.getElementById(isEdit ? 'editStepSelectorValue' : 'stepSelectorValue');
+                if (node.automation_id) {
+                    if (selType) selType.value = 'automation_id';
+                    if (selVal) selVal.value = node.automation_id;
+                } else if (node.name) {
+                    if (selType) selType.value = 'name';
+                    if (selVal) selVal.value = node.name;
+                }
+                const act = document.getElementById(isEdit ? 'editStepAction' : 'stepAction');
+                if (act && ['launch_app', 'attach_window', 'screenshot', 'wait'].indexOf(act.value) >= 0) {
+                    act.value = 'click';
+                    if (isEdit && typeof toggleEditActionFields === 'function') toggleEditActionFields();
+                    else if (typeof toggleActionFields === 'function') toggleActionFields();
+                }
+                showToast('已填入控件定位信息', 'success');
+            } catch (e) {
+                showToast('拾取失败：' + (e.message || e), 'error');
+            }
+        }
         
         function toggleActionFields() {
             const action = document.getElementById('stepAction').value;
@@ -2638,6 +2969,7 @@ function changePage(page) {
                     const r = parseInt(document.getElementById('stepClickRepeat').value, 10);
                     clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
                 }
+                const postLayer = (document.getElementById('stepAutomationLayer') || {}).value || 'web';
                 const postBody = {
                         case_id: currentCaseId,
                         action: action,
@@ -2648,8 +2980,15 @@ function changePage(page) {
                         description: description,
                         compare_type: compareType,
                         click_repeat_count: clickRepeatCount,
-                        api_spec: ''
+                        automation_layer: postLayer,
                 };
+                if (postLayer === 'desktop') {
+                    const ds = getDesktopSpecForApi('create');
+                    if (ds) postBody.desktop_spec = ds;
+                }
+                if (action === 'api_request') {
+                    postBody.api_spec = '';
+                }
                 const response = await fetch('/api/steps', {
                     method: 'POST',
                     headers: {
@@ -2745,6 +3084,7 @@ function changePage(page) {
                     const r = parseInt(document.getElementById('editStepClickRepeat').value, 10);
                     clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
                 }
+                const putLayer = (document.getElementById('editStepAutomationLayer') || {}).value || 'web';
                 const putBody = {
                         action: action,
                         selector_type: selectorType,
@@ -2754,8 +3094,12 @@ function changePage(page) {
                         description: description,
                         compare_type: compareType,
                         click_repeat_count: clickRepeatCount,
-                        api_spec: ''
+                        automation_layer: putLayer,
                 };
+                if (putLayer === 'desktop') {
+                    const ds = getDesktopSpecForApi('edit');
+                    if (ds) putBody.desktop_spec = ds;
+                }
                 const response = await fetch(`/api/steps/${currentEditingStepId}`, {
                     method: 'PUT',
                     headers: {

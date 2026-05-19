@@ -143,6 +143,14 @@ def force_reset_execution_state():
         uat_logger.warning(f"⚠️ [FORCE_RESET] 清空浏览器引用时出错: {e}")
 
     try:
+        from desktop_automation import sync_reset_desktop_automation
+
+        sync_reset_desktop_automation()
+        uat_logger.info("✅ [FORCE_RESET] 桌面自动化会话已重置")
+    except Exception as e:
+        uat_logger.debug(f"[FORCE_RESET] 桌面会话重置跳过: {e}")
+
+    try:
         automation.recording = False
         automation.recorded_steps = []
         automation.current_iframe = None
@@ -9300,6 +9308,14 @@ class PlaywrightAutomation:
                     exec_step["compare_type"] = step.get("compare_type", "text_contains")
                 if step.get("description"):
                     exec_step["description"] = step["description"]
+                from step_executor import enrich_execution_step
+
+                enriched = enrich_execution_step(step)
+                exec_step["automation_layer"] = enriched.get("automation_layer", "web")
+                if enriched.get("desktop_spec"):
+                    exec_step["desktop_spec"] = enriched["desktop_spec"]
+                elif step.get("desktop_spec"):
+                    exec_step["desktop_spec"] = step.get("desktop_spec")
                 execution_steps.append(exec_step)
             return execution_steps
         
@@ -9656,8 +9672,10 @@ class PlaywrightAutomation:
             try:
                 # 🔥 修改：为每个步骤执行添加60秒超时控制
                 import asyncio
+                from execution_factory import get_executor_factory
+
                 step_result = await asyncio.wait_for(
-                    self.execute_single_step(step),
+                    get_executor_factory().execute_step_async(step, self),
                     timeout=60  # 60秒超时
                 )
                 case_results.extend(step_result if isinstance(step_result, list) else [step_result])
@@ -11756,9 +11774,35 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, 
         force_reset_execution_state()
         uat_logger.info("✅ [EXECUTION_LOCK] 已自动重置锁状态，继续执行")
     
+    machine_lock_acquired = False
+    try:
+        from execution_lock import acquire as acquire_machine_lock
+
+        machine_lock_acquired = acquire_machine_lock(
+            owner=f"multi_case:{len(case_ids)}", timeout_sec=60
+        )
+        if not machine_lock_acquired:
+            uat_logger.error("❌ [UAT_LOCK] 本机执行锁获取超时")
+            return {
+                "total_cases": len(case_ids),
+                "successful_cases": 0,
+                "failed_cases": len(case_ids),
+                "case_results": [],
+                "error": "本机已有自动化任务在执行，请稍后重试",
+            }
+    except ImportError:
+        pass
+
     # 🔥 获取执行锁
     if not _execution_lock.acquire(blocking=True, timeout=60):
         uat_logger.error(f"❌ [EXECUTION_LOCK] 获取执行锁超时")
+        if machine_lock_acquired:
+            try:
+                from execution_lock import release as release_machine_lock
+
+                release_machine_lock()
+            except ImportError:
+                pass
         return {
             "total_cases": len(case_ids),
             "successful_cases": 0,
@@ -11805,6 +11849,13 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, 
             _execution_lock.release()
         except RuntimeError:
             pass
+        if machine_lock_acquired:
+            try:
+                from execution_lock import release as release_machine_lock
+
+                release_machine_lock()
+            except ImportError:
+                pass
         uat_logger.info(f"🔓 [EXECUTION_LOCK] 释放执行锁")
 
 

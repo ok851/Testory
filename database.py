@@ -10,6 +10,18 @@ from time_utils import utc_now_sqlite_str as _utc_now_sql, to_beijing_iso as _bj
 
 _db_log = logging.getLogger(__name__)
 
+# update_user 未传字段与「显式置空」区分（email=None 表示清空邮箱）
+_UNSET = object()
+
+
+def _normalize_user_email(email: Any) -> Optional[str]:
+    if email is None:
+        return None
+    if isinstance(email, str):
+        s = email.strip()
+        return s or None
+    return email
+
 # API 返回前统一转为北京时间 ISO（与 time_utils 约定：库内 naive 为 UTC）
 _API_TS_KEYS = frozenset({
     "created_at", "updated_at", "last_login", "started_at", "completed_at",
@@ -32,6 +44,13 @@ _PROJECTS_SELECT = "id, name, description, tenant_id, created_at"
 
 # test_cases 当前列（与 CREATE + ALTER 一致）
 _TEST_CASES_SELECT = "id, project_id, name, url, description, created_at, precondition, expected_result, case_type"
+
+# test_steps 当前列（勿用 SELECT * + 固定下标，与 _row_to_step_dict 一致）
+_TEST_STEPS_SELECT = (
+    "id, case_id, action, selector_type, selector_value, input_value, description, "
+    "step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, "
+    "compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec"
+)
 
 
 def _normalize_case_type(raw: Any) -> str:
@@ -285,6 +304,40 @@ class Database:
             cursor.execute("ALTER TABLE test_steps ADD COLUMN api_spec TEXT")
         except sqlite3.OperationalError:
             pass
+
+        # 自动化层：web | desktop（混排用例按步骤区分）
+        try:
+            cursor.execute(
+                "ALTER TABLE test_steps ADD COLUMN automation_layer TEXT DEFAULT 'web'"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute(
+                "UPDATE test_steps SET automation_layer = 'web' "
+                "WHERE automation_layer IS NULL OR TRIM(automation_layer) = ''"
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        # 桌面步骤扩展：窗口/进程/backend 等 JSON
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN desktop_spec TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS test_machines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                agent_url TEXT NOT NULL,
+                agent_secret TEXT,
+                os_version TEXT,
+                status TEXT DEFAULT 'unknown',
+                last_seen_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
         # 创建运行历史记录表
         cursor.execute('''
@@ -403,6 +456,24 @@ class Database:
                 cursor.execute(
                     "INSERT INTO _schema_patches (patch_id) VALUES (?)",
                     ("sched_exec_minus_one_unlimited",),
+                )
+        except sqlite3.OperationalError:
+            pass
+
+        # 用户邮箱：空字符串与 NULL 混用会导致 UNIQUE 冲突，统一为 NULL
+        try:
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS _schema_patches (patch_id TEXT PRIMARY KEY)"
+            )
+            cursor.execute(
+                "SELECT 1 FROM _schema_patches WHERE patch_id = ?",
+                ("users_email_empty_to_null",),
+            )
+            if not cursor.fetchone():
+                cursor.execute("UPDATE users SET email = NULL WHERE email = ''")
+                cursor.execute(
+                    "INSERT INTO _schema_patches (patch_id) VALUES (?)",
+                    ("users_email_empty_to_null",),
                 )
         except sqlite3.OperationalError:
             pass
@@ -1331,7 +1402,8 @@ class Database:
                          swipe_x: str = "", swipe_y: str = "", url: str = "",
                          enter_iframe: bool = False, iframe_selector: str = "", compare_type: str = "equals",
                          locator_candidates: str = "", click_repeat_count: int = 1,
-                         api_spec: str = "") -> int:
+                         api_spec: str = "", automation_layer: str = "web",
+                         desktop_spec: str = "") -> int:
         """创建测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1349,12 +1421,21 @@ class Database:
             crc = 1
         if crc > 99:
             crc = 99
+        layer = (automation_layer or "web").strip().lower()
+        if layer not in ("web", "desktop"):
+            layer = "web"
+        if desktop_spec is not None and not isinstance(desktop_spec, str):
+            try:
+                desktop_spec = json.dumps(desktop_spec, ensure_ascii=False)
+            except Exception:
+                desktop_spec = ""
+        desktop_spec = desktop_spec or ""
             
         cursor.execute(
             """INSERT INTO test_steps 
-               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc, api_spec or '')
+               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc, api_spec or '', layer, desktop_spec)
         )
         step_id = cursor.lastrowid
             
@@ -1420,11 +1501,20 @@ class Database:
                 if not selector_type:
                     selector_type = 'xpath' if str(selector_value).startswith('//') or str(selector_value).startswith('/') else 'css'
                     
+                layer = (step.get("automation_layer") or "web").strip().lower()
+                if layer not in ("web", "desktop"):
+                    layer = "web"
+                ds = step.get("desktop_spec") or ""
+                if ds is not None and not isinstance(ds, str):
+                    try:
+                        ds = json.dumps(ds, ensure_ascii=False)
+                    except Exception:
+                        ds = ""
                 cursor.execute(
                     """INSERT INTO test_steps 
-                       (case_id, action, selector_type, selector_value, input_value, description, step_order, locator_candidates) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order, locator_candidates)
+                       (case_id, action, selector_type, selector_value, input_value, description, step_order, locator_candidates, automation_layer, desktop_spec) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order, locator_candidates, layer, ds or "")
                 )
                 
             conn.commit()
@@ -1441,33 +1531,14 @@ class Database:
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT * FROM test_steps WHERE id = ?", (step_id,))
+        cursor.execute(
+            f"SELECT {_TEST_STEPS_SELECT} FROM test_steps WHERE id = ?",
+            (step_id,),
+        )
         row = cursor.fetchone()
-        
-        if row:
-            return {
-                'id': row[0],
-                'case_id': row[1],
-                'action': row[2],
-                'selector_type': row[3],
-                'selector_value': row[4],
-                'input_value': row[5],
-                'description': row[6],
-                'step_order': row[7],
-                'created_at': _bj_iso(row[8]),
-                'page_name': row[9] if len(row) > 9 else '',
-                'swipe_x': row[10] if len(row) > 10 else '',
-                'swipe_y': row[11] if len(row) > 11 else '',
-                'url': row[12] if len(row) > 12 else '',
-                'enter_iframe': row[13] if len(row) > 13 else False,
-                'iframe_selector': row[14] if len(row) > 14 else '',
-                'compare_type': row[15] if len(row) > 15 else 'equals',
-                'locator_candidates': row[16] if len(row) > 16 else '',
-                'click_repeat_count': int(row[17]) if len(row) > 17 and row[17] is not None else 1,
-                'api_spec': row[18] if len(row) > 18 else '',
-            }
-        
         conn.close()
+        if row:
+            return self._row_to_step_dict(row)
         return None
     
     def _row_to_step_dict(self, row: tuple) -> Dict[str, Any]:
@@ -1500,6 +1571,8 @@ class Database:
             'locator_candidates': row[16] if len(row) > 16 else '',
             'click_repeat_count': crc,
             'api_spec': row[18] if len(row) > 18 else '',
+            'automation_layer': (row[19] if len(row) > 19 and row[19] else 'web') or 'web',
+            'desktop_spec': row[20] if len(row) > 20 else '',
         }
 
     def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:
@@ -1514,9 +1587,8 @@ class Database:
         offset = (max(1, page) - 1) * max(1, page_size)
         limit = max(1, page_size)
         cursor.execute(
-            """
-            SELECT id, case_id, action, selector_type, selector_value, input_value, description,
-                   step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec,
+            f"""
+            SELECT {_TEST_STEPS_SELECT},
                    COUNT(*) OVER() AS __total
             FROM test_steps
             WHERE case_id = ?
@@ -1550,7 +1622,8 @@ class Database:
                         description: str = None, step_order: int = None,
                         enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None,
                         locator_candidates: str = None, click_repeat_count: int = None,
-                        api_spec: str = None, url: str = None) -> bool:
+                        api_spec: str = None, url: str = None,
+                        automation_layer: str = None, desktop_spec: str = None) -> bool:
         """更新测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1617,6 +1690,22 @@ class Database:
         if url is not None:
             updates.append("url = ?")
             params.append(url)
+
+        if automation_layer is not None:
+            layer = (automation_layer or "web").strip().lower()
+            if layer not in ("web", "desktop"):
+                layer = "web"
+            updates.append("automation_layer = ?")
+            params.append(layer)
+
+        if desktop_spec is not None:
+            if not isinstance(desktop_spec, str):
+                try:
+                    desktop_spec = json.dumps(desktop_spec, ensure_ascii=False)
+                except Exception:
+                    desktop_spec = ""
+            updates.append("desktop_spec = ?")
+            params.append(desktop_spec)
         
         if not updates:
             conn.close()
@@ -1632,6 +1721,22 @@ class Database:
         conn.close()
         
         return success
+
+    def case_has_desktop_steps(self, case_id: int) -> bool:
+        """用例是否包含桌面自动化步骤（用于混排运行环境检测）。"""
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT 1 FROM test_steps
+            WHERE case_id = ? AND LOWER(TRIM(COALESCE(automation_layer, 'web'))) = 'desktop'
+            LIMIT 1
+            """,
+            (case_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None
     
     def delete_test_step(self, step_id: int) -> bool:
         """删除测试步骤"""
@@ -2125,12 +2230,15 @@ class Database:
         cursor = conn.cursor()
         try:
             for st in sorted(steps, key=lambda x: int(x.get("step_order") or 0)):
+                layer = (st.get("automation_layer") or "web").strip().lower()
+                if layer not in ("web", "desktop"):
+                    layer = "web"
                 cursor.execute(
                     """INSERT INTO test_steps
                     (case_id, action, selector_type, selector_value, input_value, description, step_order,
                      page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
-                     locator_candidates, click_repeat_count, api_spec)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         new_id,
                         st.get("action") or "",
@@ -2149,6 +2257,8 @@ class Database:
                         st.get("locator_candidates") or "",
                         int(st.get("click_repeat_count") or 1),
                         st.get("api_spec") or "",
+                        layer,
+                        st.get("desktop_spec") or "",
                     ),
                 )
             conn.commit()
@@ -2168,6 +2278,7 @@ class Database:
 
     def create_user(self, username: str, password_hash: str, email: str = None, role: str = 'tester') -> int:
         """创建用户"""
+        email = _normalize_user_email(email)
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         try:
@@ -2304,7 +2415,7 @@ class Database:
         cursor.execute("SELECT id, username, email, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC")
         rows = cursor.fetchall()
         conn.close()
-        return [{'id': r[0], 'username': r[1], 'email': r[2], 'role': r[3],
+        return [{'id': r[0], 'username': r[1], 'email': r[2] or None, 'role': r[3],
                  'is_active': r[4], 'created_at': _bj_iso(r[5]), 'last_login': _bj_iso(r[6])} for r in rows]
 
     def update_user_last_login(self, user_id: int):
@@ -2319,13 +2430,14 @@ class Database:
     def update_user(
         self,
         user_id: int,
-        email: str = None,
-        role: str = None,
-        is_active: int = None,
-        password_hash: str = None,
-        username: str = None,
+        *,
+        username: Any = _UNSET,
+        email: Any = _UNSET,
+        role: Any = _UNSET,
+        is_active: Any = _UNSET,
+        password_hash: Any = _UNSET,
     ) -> bool:
-        """更新用户信息（不以 rowcount 判定成功：部分 SQLite/驱动在值未变时 rowcount 为 0）。"""
+        """更新用户信息（不以 rowcount 判定成功；email=None 可清空邮箱）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         try:
@@ -2333,17 +2445,21 @@ class Database:
             if not cursor.fetchone():
                 return False
             updates, params = [], []
-            if username is not None:
+            if username is not _UNSET:
                 updates.append("username = ?")
                 params.append(username)
-            if email is not None:
-                updates.append("email = ?"); params.append(email)
-            if role is not None:
-                updates.append("role = ?"); params.append(role)
-            if is_active is not None:
-                updates.append("is_active = ?"); params.append(is_active)
-            if password_hash is not None:
-                updates.append("password_hash = ?"); params.append(password_hash)
+            if email is not _UNSET:
+                updates.append("email = ?")
+                params.append(_normalize_user_email(email))
+            if role is not _UNSET:
+                updates.append("role = ?")
+                params.append(role)
+            if is_active is not _UNSET:
+                updates.append("is_active = ?")
+                params.append(is_active)
+            if password_hash is not _UNSET:
+                updates.append("password_hash = ?")
+                params.append(password_hash)
             if not updates:
                 return False
             params.append(user_id)
@@ -2391,11 +2507,15 @@ class Database:
             cursor.execute("DELETE FROM ai_context_memory WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM sso_login_records WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM user_sso_bindings WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM project_members WHERE user_id = ?", (user_id,))
+            try:
+                cursor.execute("DELETE FROM order_licenses WHERE user_id = ?", (user_id,))
+            except sqlite3.OperationalError:
+                pass
 
             cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            success = cursor.rowcount > 0
             conn.commit()
-            return success
+            return True
         except sqlite3.IntegrityError as e:
             conn.rollback()
             _db_log.warning("delete_user: integrity error for user_id=%s: %s", user_id, e)
@@ -3776,3 +3896,68 @@ class Database:
         )
         
         return defect_id
+
+    def create_test_machine(
+        self,
+        name: str,
+        agent_url: str,
+        os_version: str = "",
+        agent_secret: str = "",
+    ) -> int:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO test_machines (name, agent_url, os_version, agent_secret, status)
+            VALUES (?, ?, ?, ?, 'offline')
+            """,
+            (name, agent_url, os_version or "", agent_secret or ""),
+        )
+        mid = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return int(mid)
+
+    def list_test_machines(self) -> List[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, name, agent_url, os_version, status, last_seen_at, created_at
+            FROM test_machines ORDER BY id DESC
+            """
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        out = []
+        for row in rows:
+            out.append({
+                "id": row[0],
+                "name": row[1],
+                "agent_url": row[2],
+                "os_version": row[3] or "",
+                "status": row[4] or "unknown",
+                "last_seen_at": _bj_iso(row[5]) if row[5] else None,
+                "created_at": _bj_iso(row[6]),
+            })
+        return out
+
+    def get_test_machine(self, machine_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, name, agent_url, agent_secret, os_version, status FROM test_machines WHERE id = ?",
+            (machine_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "name": row[1],
+            "agent_url": row[2],
+            "agent_secret": row[3] or "",
+            "os_version": row[4] or "",
+            "status": row[5] or "unknown",
+        }

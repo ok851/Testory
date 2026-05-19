@@ -1,4 +1,5 @@
 import os
+import sys
 
 try:
     from pathlib import Path
@@ -19,11 +20,18 @@ try:
 except ImportError:
     pass
 
+if sys.platform == "win32":
+    try:
+        from desktop_service_bootstrap import bootstrap_desktop_services
+
+        bootstrap_desktop_services()
+    except Exception:
+        pass
+
 from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for, Response, stream_with_context
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-import sys
 import time
 import shlex
 import shutil
@@ -1124,7 +1132,7 @@ def api_me():
 def api_update_me():
     """更新当前用户信息"""
     data = request.get_json(silent=True) or {}
-    email = data.get('email', '').strip()
+    email = (data.get('email') or '').strip() or None
 
     if email and '@' not in email:
         return jsonify({'success': False, 'error': '邮箱格式不正确'}), 400
@@ -1193,20 +1201,19 @@ def api_update_user(user_id):
     role = data.get('role', 'tester')
     if role not in ('admin', 'tester', 'viewer'):
         return jsonify({'success': False, 'error': '无效的角色，可选: admin/tester/viewer'}), 400
-    email_raw = data.get('email')
-    if isinstance(email_raw, str):
-        email = email_raw.strip() or None
-    else:
-        email = email_raw
+    update_kwargs = {'username': username, 'role': role}
+    if 'email' in data:
+        email_raw = data.get('email')
+        if isinstance(email_raw, str):
+            update_kwargs['email'] = email_raw.strip() or None
+        else:
+            update_kwargs['email'] = email_raw
+    if data.get('password'):
+        update_kwargs['password_hash'] = generate_password_hash(data['password'])
+    if 'is_active' in data:
+        update_kwargs['is_active'] = data.get('is_active')
     _db = Database()
-    success = _db.update_user(
-        user_id,
-        username=username,
-        email=email,
-        role=role,
-        is_active=data.get('is_active'),
-        password_hash=generate_password_hash(data['password']) if data.get('password') else None,
-    )
+    success = _db.update_user(user_id, **update_kwargs)
     if not success:
         return jsonify({'success': False, 'error': '更新失败：用户名或邮箱已被占用，或用户不存在'}), 409
     return jsonify({'success': True})
@@ -4233,6 +4240,193 @@ def api_browser_inspect():
     return jsonify({'success': True, 'data': payload})
 
 
+@app.route('/api/desktop/inspect', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_inspect():
+    """设计期：附着窗口并返回 UIA 控件树片段（Windows + pywinauto）。"""
+    data = request.get_json(silent=True) or {}
+    spec = data.get('desktop_spec') or {}
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec) if spec.strip() else {}
+        except json.JSONDecodeError:
+            return jsonify({'success': False, 'error': 'desktop_spec JSON 无效'}), 400
+    try:
+        from desktop_automation import sync_desktop_inspect
+        from desktop_locator import desktop_runtime_available
+        from desktop_automation import sync_desktop_attach_from_spec
+
+        if not desktop_runtime_available():
+            return jsonify({
+                'success': False,
+                'error': '桌面探测仅支持 Windows，且需安装 pywinauto（见 requirements-windows.txt）',
+            }), 400
+        if spec:
+            sync_desktop_attach_from_spec(spec)
+        max_depth = int(data.get('max_depth') or 4)
+        max_nodes = int(data.get('max_nodes') or 120)
+        nodes = sync_desktop_inspect(max_depth=max_depth, max_nodes=max_nodes)
+        return jsonify({'success': True, 'nodes': nodes})
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_inspect', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/desktop/pick', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_pick():
+    """根据屏幕坐标反查控件（首期：返回坐标占位，供步骤 coordinate 定位）。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        x = int(data.get('x'))
+        y = int(data.get('y'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': '请提供整数坐标 x, y'}), 400
+    return jsonify({
+        'success': True,
+        'selector_type': 'coordinate',
+        'selector_value': f'{x},{y}',
+        'hint': '已生成坐标定位；可在 desktop_spec 中配置窗口后再试 UIA 探测',
+    })
+
+
+@app.route('/api/desktop/config', methods=['GET'])
+@login_required
+@api_error_handler
+def api_desktop_config():
+    """返回 .env 中的桌面默认配置，供步骤编辑页预填与提示。"""
+    try:
+        from desktop_env_config import public_config
+
+        return jsonify({'success': True, **public_config()})
+    except ImportError:
+        return jsonify({'success': False, 'error': '桌面模块未安装'}), 500
+
+
+@app.route('/api/desktop/windows', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_windows():
+    """枚举本机当前可见顶层窗口（零配置附着窗口）。"""
+    from desktop_discovery import discovery_available, list_visible_windows
+
+    if not discovery_available():
+        return jsonify({
+            'success': False,
+            'error': '窗口枚举仅支持 Windows',
+        }), 400
+    return jsonify({'success': True, 'windows': list_visible_windows()})
+
+
+@app.route('/api/desktop/window-spec', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_window_spec():
+    """根据 hwnd 生成 attach_window 用的 desktop_spec（写入步骤，不依赖 .env）。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        hwnd = int(data.get('hwnd'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': '请提供整数 hwnd'}), 400
+    try:
+        from desktop_discovery import attachment_spec_for_window, discovery_available
+
+        if not discovery_available():
+            return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
+        spec, title = attachment_spec_for_window(hwnd)
+        return jsonify({
+            'success': True,
+            'desktop_spec': spec,
+            'suggested_input': title,
+            'process': spec.get('process') or '',
+        })
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_window_spec', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/desktop/resolve-app', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_resolve_app():
+    """按程序名解析本机 exe 路径（PATH / App Paths）。"""
+    name = (request.args.get('name') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': '请提供 name 参数'}), 400
+    try:
+        from desktop_discovery import (
+            discovery_available,
+            format_resolve_error,
+            resolve_executable_with_meta,
+        )
+
+        if not discovery_available():
+            return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
+        meta = resolve_executable_with_meta(name)
+        if not meta.found:
+            return jsonify({
+                'success': False,
+                'error': format_resolve_error(meta),
+                'tried': meta.tried,
+                'suggestions': meta.suggestions,
+            }), 404
+        return jsonify({
+            'success': True,
+            'path': meta.path,
+            'name': name,
+            'method': meta.method,
+            'tried': meta.tried,
+        })
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_resolve_app', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/desktop/machines', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_machines():
+    """远程桌面 Agent 测试机注册（Phase 3）；本地版 DEPLOYMENT_PROFILE=local 默认禁用。"""
+    try:
+        from desktop_env_config import is_local_deployment
+
+        if is_local_deployment():
+            return jsonify({
+                'success': False,
+                'error': '本地部署模式不提供远程测试机注册；请在用户本机执行桌面步骤（inprocess）。',
+                'deployment_profile': 'local',
+            }), 403
+    except ImportError:
+        pass
+    if request.method == 'GET':
+        machines = db.list_test_machines()
+        return jsonify({'success': True, 'machines': machines})
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    agent_url = (data.get('agent_url') or '').strip().rstrip('/')
+    if not name or not agent_url:
+        return jsonify({'success': False, 'error': 'name 与 agent_url 必填'}), 400
+    mid = db.create_test_machine(
+        name,
+        agent_url,
+        (data.get('os_version') or '').strip(),
+        (data.get('secret') or '').strip(),
+    )
+    return jsonify({'success': True, 'machine_id': mid})
+
+
 _PLAYWRIGHT_BROWSER_OPTIONS = [
     {"id": "chromium", "label_zh": "Chromium（Playwright 内置）", "label_en": "Chromium (bundled)"},
     {"id": "chrome", "label_zh": "Google Chrome", "label_en": "Google Chrome"},
@@ -4798,8 +4992,8 @@ def _app_case_type(case_dict) -> str:
     return "api" if t == "api" else "ui"
 
 
-def _validate_step_action_for_case(case_dict, action: str):
-    """服务端步骤写入校验：Web 用例禁止 api_request；接口用例仅允许 api_request。"""
+def _validate_step_action_for_case(case_dict, action: str, automation_layer: str = "web"):
+    """服务端步骤写入校验：Web 用例禁止 api_request；接口用例仅允许 api_request；按层校验动作。"""
     if not case_dict:
         return "用例不存在"
     act = (action or "").strip()
@@ -4808,6 +5002,16 @@ def _validate_step_action_for_case(case_dict, action: str):
         return "Web 用例不允许添加接口步骤，请在「接口测试」模块中维护接口用例"
     if ct == "api" and act != "api_request":
         return "接口用例仅允许「接口请求」步骤（api_request）"
+    if ct == "ui":
+        try:
+            from desktop_automation import validate_step_for_layer
+
+            layer = (automation_layer or "web").strip().lower()
+            layer_err = validate_step_for_layer(act, layer)
+            if layer_err:
+                return layer_err
+        except ImportError:
+            pass
     return None
 
 
@@ -5019,6 +5223,10 @@ def api_create_step():
     api_spec = data.get('api_spec', '')
     if api_spec is not None and not isinstance(api_spec, str):
         api_spec = json.dumps(api_spec, ensure_ascii=False)
+    automation_layer = (data.get('automation_layer') or 'web').strip().lower()
+    desktop_spec = data.get('desktop_spec', '')
+    if desktop_spec is not None and not isinstance(desktop_spec, str):
+        desktop_spec = json.dumps(desktop_spec, ensure_ascii=False)
     
     if not case_id:
         return jsonify({'success': False, 'error': '用例ID不能为空'}), 400
@@ -5031,7 +5239,7 @@ def api_create_step():
     pid = case_row.get('project_id')
     if pid and not db.check_project_access(current_user.id, int(pid), 'editor'):
         return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
-    step_err = _validate_step_action_for_case(case_row, action)
+    step_err = _validate_step_action_for_case(case_row, action, automation_layer)
     if step_err:
         return jsonify({'success': False, 'error': step_err}), 422
     
@@ -5039,7 +5247,9 @@ def api_create_step():
                                   input_value, description, step_order, page_name,
                                   swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type,
                                   locator_candidates or '', click_repeat_count=click_repeat_count,
-                                  api_spec=api_spec or '')
+                                  api_spec=api_spec or '',
+                                  automation_layer=automation_layer,
+                                  desktop_spec=desktop_spec or '')
     return jsonify({'success': True, 'step_id': step_id})
 
 # API: 更新测试步骤
@@ -5054,7 +5264,10 @@ def api_update_step(step_id):
     case_row = db.get_test_case_v2(int(step_row['case_id']))
     action = data.get('action')
     eff_action = action if action is not None else step_row.get('action')
-    step_err = _validate_step_action_for_case(case_row, eff_action)
+    eff_layer = data.get('automation_layer')
+    if eff_layer is None:
+        eff_layer = step_row.get('automation_layer') or 'web'
+    step_err = _validate_step_action_for_case(case_row, eff_action, eff_layer)
     if step_err:
         return jsonify({'error': step_err}), 422
     selector_type = data.get('selector_type')
@@ -5078,13 +5291,18 @@ def api_update_step(step_id):
     else:
         click_repeat_count = None
 
-    api_spec = data.get('api_spec')
+    api_spec = data.get('api_spec') if 'api_spec' in data else None
     if api_spec is not None and not isinstance(api_spec, str):
         api_spec = json.dumps(api_spec, ensure_ascii=False)
+    automation_layer = data.get('automation_layer') if 'automation_layer' in data else None
+    desktop_spec = data.get('desktop_spec') if 'desktop_spec' in data else None
+    if desktop_spec is not None and not isinstance(desktop_spec, str):
+        desktop_spec = json.dumps(desktop_spec, ensure_ascii=False)
 
     success = db.update_test_step(step_id, action, selector_type, selector_value,
                                    input_value, description, step_order, enter_iframe, iframe_selector, compare_type,
-                                   locator_candidates, click_repeat_count, api_spec=api_spec)
+                                   locator_candidates, click_repeat_count, api_spec=api_spec,
+                                   automation_layer=automation_layer, desktop_spec=desktop_spec)
     
     if success:
         return jsonify({'success': True})
@@ -6003,6 +6221,35 @@ def api_run_case(case_id):
         return jsonify({'success': False, 'status': 'error', 'duration': 0,
                         'error': '该用例尚未添加任何步骤，请先编辑用例添加步骤后再执行。'})
 
+    try:
+        from execution_factory import get_executor_factory
+
+        env_msg = get_executor_factory().validate_case_environment(steps)
+        if env_msg and ("不支持" in env_msg or "需 Windows" in env_msg):
+            return jsonify({'success': False, 'error': env_msg}), 400
+        if env_msg:
+            uat_logger.warning("混排运行环境提示: %s", env_msg)
+    except ImportError:
+        pass
+
+    machine_lock_acquired = False
+    try:
+        from execution_lock import ExecutionLockError, acquire as acquire_machine_lock
+
+        machine_lock_acquired = acquire_machine_lock(
+            owner=f"case_run:{case_id}:user:{user_id}", timeout_sec=120
+        )
+        if not machine_lock_acquired:
+            return jsonify({
+                'success': False,
+                'error': '本机已有自动化任务在执行，请稍后再试。',
+                'lock': 'busy',
+            }), 409
+    except ExecutionLockError as lock_exc:
+        return jsonify({'success': False, 'error': str(lock_exc), 'lock': 'busy'}), 409
+    except ImportError:
+        pass
+
     uat_logger.info(f"开始运行测试用例 #{case_id}: {case['name']}")
     uat_logger.info(f"测试用例共有 {len(steps)} 个步骤")
     with _case_run_lock:
@@ -6029,6 +6276,7 @@ def api_run_case(case_id):
     step_results_list = []
     # 浏览器状态标记
     browser_closed_manually = False
+    browser_started = False
     
     try:
         # 若用户仍处于“拾取元素”会话，执行前强制隔离浏览器，避免复用拾取窗口导致运行失败
@@ -6066,25 +6314,34 @@ def api_run_case(case_id):
         
         if browser_disconnected:
             uat_logger.warning("⚠️ [浏览器恢复] 检测到浏览器已断连，执行前强制重置所有状态")
-            # 调用强制重置函数，它会清空执行锁和所有浏览器引用
             force_reset_execution_state()
-            uat_logger.info("✅ [浏览器恢复] 状态已重置，将自动重新启动浏览器")
+            uat_logger.info("✅ [浏览器恢复] 状态已重置")
 
-        # 启动浏览器（如果断连后已重置，这里会创建新实例）
-        sync_start_browser()
-        
+        # 纯桌面用例不启动 Playwright，避免先弹出 about:blank 空浏览器窗口
+        from step_executor import case_steps_include_web, is_desktop_step
+
+        def _ensure_browser_for_web_step() -> None:
+            nonlocal browser_started
+            if browser_started:
+                return
+            sync_start_browser()
+            browser_started = True
+            initial_nav_url, nav_source = _resolve_case_navigation_url(
+                case=case, case_id=case_id, steps=steps
+            )
+            if initial_nav_url:
+                uat_logger.log_automation_step(
+                    "navigate", initial_nav_url, f"首次 Web 步骤前导航({nav_source})"
+                )
+                sync_navigate_to(initial_nav_url)
+
+        if not case_steps_include_web(steps):
+            uat_logger.info("纯桌面用例，跳过 Playwright 浏览器启动")
+
         # 执行测试步骤
         try:
-            # 统一导航优先级：case.url > step.url/navigate.input_value
-            initial_nav_url, nav_source = _resolve_case_navigation_url(case=case, case_id=case_id, steps=steps)
-            if initial_nav_url:
-                uat_logger.log_automation_step("navigate", initial_nav_url, f"测试开始时导航({nav_source})")
-                sync_navigate_to(initial_nav_url)
-            else:
-                uat_logger.warning("未找到可用初始URL，跳过测试开始导航")
-            
-            # 执行所有步骤
-            for step in steps:
+            total_step_count = len(steps)
+            for step_index, step in enumerate(steps, start=1):
                 with _case_run_lock:
                     cancel_requested = bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
                 if cancel_requested:
@@ -6113,9 +6370,9 @@ def api_run_case(case_id):
                 uat_logger.log_automation_step(action, selector_value or input_value, description)
                 _case_job_update(
                     user_id,
-                    current_step_order=step.get('step_order', 0),
+                    current_step_order=step_index,
                     current_action=action,
-                    message=f"正在执行步骤 {step.get('step_order', 0)}/{len(steps)}: {action}",
+                    message=f"正在执行步骤 {step_index}/{total_step_count}: {action}",
                 )
                                                         
                 # 详细的调试日志，跟踪 action 值和执行的方法
@@ -6124,6 +6381,39 @@ def api_run_case(case_id):
                     f"SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, "
                     f"IframeSelector={iframe_selector}, IframeEffective={iframe_for_step}"
                 )
+
+                try:
+                    from execution_factory import get_executor_factory
+
+                    factory = get_executor_factory()
+                    if factory.is_desktop_step(step):
+                        desk_result = factory.execute_desktop_step(
+                            step,
+                            selector_value=selector_value,
+                            input_value=input_value,
+                        )
+                        step_status = 'success'
+                        step_error = ''
+                        step_screenshot = (desk_result or {}).get('screenshot') or ''
+                        step_duration = round(time.time() - step_start_time, 3)
+                        step_results_list.append({
+                            'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                            'action': action, 'selector_value': selector_value,
+                            'input_value': input_value, 'description': description,
+                            'status': step_status, 'error': step_error,
+                            'screenshot': step_screenshot, 'duration': step_duration,
+                            'automation_layer': 'desktop',
+                        })
+                        _case_job_update(
+                            user_id,
+                            completed_steps=len(step_results_list),
+                            message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
+                        )
+                        continue
+                except ImportError:
+                    pass
+
+                _ensure_browser_for_web_step()
                 
                 if action == 'navigate':
                     # 获取URL并进行有效性检查
@@ -6459,11 +6749,11 @@ def api_run_case(case_id):
             except Exception as history_error:
                 uat_logger.warning(f"保存运行历史记录失败: {history_error}")
             
-            # 尝试关闭浏览器
-            try:
-                sync_close_browser()
-            except Exception as close_error:
-                uat_logger.warning(f"关闭浏览器时出错: {close_error}")
+            if browser_started:
+                try:
+                    sync_close_browser()
+                except Exception as close_error:
+                    uat_logger.warning(f"关闭浏览器时出错: {close_error}")
             
             return jsonify({
                 'success': True,
@@ -6574,8 +6864,7 @@ def api_run_case(case_id):
             except Exception as history_error:
                 uat_logger.error(f"保存运行历史记录失败: {history_error}")
             
-            # 尝试关闭浏览器（仅在浏览器未被关闭时）
-            if not browser_closed_manually:
+            if browser_started and not browser_closed_manually:
                 try:
                     sync_close_browser()
                 except Exception:
@@ -6608,6 +6897,13 @@ def api_run_case(case_id):
             'error': error_msg
         }), 500
     finally:
+        if machine_lock_acquired:
+            try:
+                from execution_lock import release as release_machine_lock
+
+                release_machine_lock()
+            except ImportError:
+                pass
         with _case_run_lock:
             job = _case_run_jobs.get(user_id)
             if job:
@@ -7357,6 +7653,8 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
     """后台线程：按数据行执行用例，每行更新进度。"""
     import time as _time
 
+    machine_lock_acquired = False
+
     def resolve_with_row(text, row_dict):
         if not text:
             return text
@@ -7397,6 +7695,24 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
         if not steps:
             _dataset_job_update(run_id, finished=True, success=False, error='测试用例没有步骤')
             return
+
+        machine_lock_acquired = False
+        try:
+            from execution_lock import acquire as acquire_machine_lock
+
+            machine_lock_acquired = acquire_machine_lock(
+                owner=f"dataset:{dataset_id}:case:{case_id}", timeout_sec=120
+            )
+            if not machine_lock_acquired:
+                _dataset_job_update(
+                    run_id,
+                    finished=True,
+                    success=False,
+                    error='本机已有自动化任务在执行，请稍后再试。',
+                )
+                return
+        except ImportError:
+            pass
 
         with _dataset_run_lock:
             if run_id in _dataset_run_jobs:
@@ -7747,6 +8063,14 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
         except Exception:
             pass
         _dataset_job_update(run_id, finished=True, success=False, error=str(e))
+    finally:
+        if machine_lock_acquired:
+            try:
+                from execution_lock import release as release_machine_lock
+
+                release_machine_lock()
+            except ImportError:
+                pass
 
 
 @app.route('/data-driven')
@@ -8117,6 +8441,26 @@ try:
         start_time = time.time()
         uat_logger.info(f"⏰ 定时任务 #{schedule_id} 开始执行（第{retry_count + 1}次尝试），用例: {case_ids}")
 
+        machine_lock_acquired = False
+        try:
+            from execution_lock import acquire as acquire_machine_lock
+
+            machine_lock_acquired = acquire_machine_lock(
+                owner=f"schedule:{schedule_id}", timeout_sec=120
+            )
+            if not machine_lock_acquired:
+                _db.update_schedule_history(
+                    history_id,
+                    'failed',
+                    '本机已有自动化任务在执行，跳过本次调度',
+                )
+                uat_logger.warning(
+                    "⏰ 定时任务 #%s 因本机执行锁占用而跳过", schedule_id
+                )
+                return
+        except ImportError:
+            pass
+
         try:
             _spid = schedule.get("project_id") if schedule else None
             _exec_ctx = ExecutionContext(
@@ -8206,6 +8550,13 @@ try:
                     'executed_at': beijing_now_iso()
                 })
         finally:
+            if machine_lock_acquired:
+                try:
+                    from execution_lock import release as release_machine_lock
+
+                    release_machine_lock()
+                except ImportError:
+                    pass
             try:
                 sync_close_browser()
             except Exception:
