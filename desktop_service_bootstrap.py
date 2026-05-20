@@ -88,6 +88,13 @@ def bootstrap_desktop_services(*, force: bool = False) -> dict:
     if sys.platform != "win32":
         return {"skipped": True, "reason": "non-windows"}
 
+    try:
+        from desktop_app_catalog import ensure_catalog_built_async
+
+        ensure_catalog_built_async()
+    except Exception:
+        pass
+
     _ensure_local_profile_defaults()
     out = {
         "deployment_profile": deployment_profile(),
@@ -98,6 +105,13 @@ def bootstrap_desktop_services(*, force: bool = False) -> dict:
 
     if is_local_deployment() and desktop_execution_mode() == "inprocess":
         out["skipped_gateway"] = True
+        try:
+            from desktop_app_catalog import ensure_catalog_built_async
+
+            ensure_catalog_built_async()
+            out["catalog_scan_scheduled"] = True
+        except Exception:
+            pass
         return out
 
     _ensure_desktop_env_defaults()

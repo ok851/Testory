@@ -95,16 +95,25 @@ def desktop_default_backend() -> str:
 
 
 def load_app_aliases() -> Dict[str, str]:
-    raw = (os.environ.get("DESKTOP_APP_ALIASES") or "").strip()
-    if not raw:
-        return {}
+    """.env 别名 + 本机开始菜单自动目录（目录项可被 .env 覆盖）。"""
+    merged: Dict[str, str] = {}
     try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            return {str(k).strip().lower(): str(v).strip() for k, v in data.items() if v}
-    except json.JSONDecodeError:
+        from desktop_app_catalog import catalog_aliases_map
+
+        merged.update(catalog_aliases_map())
+    except Exception:
         pass
-    return {}
+    raw = (os.environ.get("DESKTOP_APP_ALIASES") or "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if v:
+                        merged[str(k).strip().lower()] = str(v).strip()
+        except json.JSONDecodeError:
+            pass
+    return merged
 
 
 def default_launch_path() -> str:
@@ -232,6 +241,15 @@ def launch_path_hint() -> str:
     return "；".join(parts) if parts else "未配置默认路径（Windows 下可用「选择当前窗口」）"
 
 
+def _catalog_public_meta() -> Dict[str, Any]:
+    try:
+        from desktop_app_catalog import catalog_meta
+
+        return catalog_meta()
+    except Exception:
+        return {}
+
+
 def public_config() -> Dict[str, Any]:
     return {
         "deployment_profile": deployment_profile(),
@@ -245,6 +263,7 @@ def public_config() -> Dict[str, Any]:
         "gateway_url": (os.environ.get("DESKTOP_AGENT_GATEWAY_URL") or "").strip(),
         "hint": launch_path_hint(),
         "discovery_available": discovery_available(),
+        "catalog": _catalog_public_meta(),
         "zero_config_hint": (
             "推荐：先手动打开被测客户端，添加「附着窗口」步骤并点「选择当前窗口」；"
             "或 launch_app 直接填 notepad.exe 等程序名，系统自动解析路径。"

@@ -177,8 +177,10 @@ def attach_application(
     if be not in ("uia", "win32"):
         be = "uia"
 
+    hwnd_raw = desktop_spec.get("hwnd")
     path = (desktop_spec.get("path") or desktop_spec.get("exe") or "").strip()
     process = (desktop_spec.get("process") or "").strip()
+    pid = desktop_spec.get("pid")
     title = (desktop_spec.get("window_title") or "").strip()
     title_re = (desktop_spec.get("window_title_re") or title or "").strip()
     cmd_line = (desktop_spec.get("cmd_line") or "").strip()
@@ -186,6 +188,19 @@ def attach_application(
     window_wait = min(timeout, 25)
 
     app: Any = None
+    if hwnd_raw is not None and str(hwnd_raw).strip() != "":
+        h = int(hwnd_raw)
+        app = Application(backend=be).connect(handle=h, timeout=timeout)
+        win = app.window(handle=h)
+        try:
+            win.wait("exists", timeout=min(window_wait, 10))
+        except Exception:
+            pass
+        return app, win.wrapper_object() if hasattr(win, "wrapper_object") else win
+    if pid is not None and str(pid).strip() != "":
+        app = Application(backend=be).connect(process=int(pid), timeout=timeout)
+        win = _resolve_main_window(app, timeout=window_wait, title_re=title_re if title_re else "")
+        return app, win
     if path or cmd_line:
         cmd = (cmd_line or path).strip()
         if not cmd_line and path:

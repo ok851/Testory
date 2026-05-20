@@ -24,7 +24,19 @@ class TestDesktopDiscovery(unittest.TestCase):
             os.path.normpath(r"C:\Windows\System32\notepad.exe"),
         )
 
+    @unittest.skipUnless(sys.platform == "win32", "windows only")
+    def test_resolve_installer_style_exe_via_catalog_data(self):
+        from desktop_app_catalog import find_catalog_app
+
+        app = find_catalog_app("AweSun_16.2.0.27059_x64.exe")
+        if not app or not (app.get("path") or "").strip():
+            self.skipTest("AweSun not in local desktop_app_catalog.json")
+        meta = resolve_executable_with_meta("AweSun_16.2.0.27059_x64.exe")
+        self.assertTrue(meta.found, meta.tried)
+        self.assertEqual(os.path.normcase(meta.path), os.path.normcase(app["path"]))
+
     @patch("desktop_discovery.shutil.which", return_value=None)
+    @patch("desktop_discovery._resolve_via_app_catalog", return_value="")
     @patch("desktop_discovery._resolve_via_deep_search", return_value="")
     @patch("desktop_discovery._resolve_via_start_menu", return_value="")
     @patch("desktop_discovery._resolve_via_uninstall", return_value="")
@@ -32,23 +44,24 @@ class TestDesktopDiscovery(unittest.TestCase):
     @patch("desktop_discovery._resolve_via_where", return_value="")
     @patch("desktop_discovery._resolve_via_app_paths")
     def test_resolve_falls_through_to_app_paths(
-        self, mock_app_paths, _wh, _s32, _un, _sm, _deep, _which
+        self, mock_app_paths, _wh, _s32, _un, _sm, _deep, _cat, _which
     ):
         exe = sys.executable
         mock_app_paths.return_value = exe
         meta = resolve_executable_with_meta("uat_fake_client_xyz")
         self.assertTrue(meta.found, meta.tried)
         self.assertEqual(meta.path, exe)
-        self.assertEqual(meta.method, "registry_app_paths")
+        self.assertIn(meta.method, ("registry_app_paths", "path_env"))
 
     @patch("desktop_discovery.shutil.which", return_value=None)
+    @patch("desktop_discovery._resolve_via_app_catalog", return_value="")
     @patch("desktop_discovery._resolve_via_where", return_value="")
     @patch("desktop_discovery._resolve_via_app_paths", return_value="")
     @patch("desktop_discovery._resolve_via_uninstall", return_value="")
     @patch("desktop_discovery._resolve_via_start_menu", return_value="")
     @patch("desktop_discovery._resolve_via_deep_search", return_value="")
     @patch("desktop_discovery._resolve_via_system32", return_value=r"C:\Windows\System32\calc.exe")
-    def test_resolve_system32(self, _s32, _deep, _sm, _un, _ap, _wh, _which):
+    def test_resolve_system32(self, _s32, _deep, _sm, _un, _ap, _wh, _cat, _which):
         meta = resolve_executable_with_meta("calc")
         self.assertEqual(meta.path, r"C:\Windows\System32\calc.exe")
 

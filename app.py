@@ -203,6 +203,13 @@ def _case_job_update(user_id: int, **kwargs):
             _case_run_jobs[user_id].update(kwargs)
 
 
+def _case_run_cancelled(user_id: int) -> bool:
+    """当前用户是否已请求停止用例执行（与 /api/cases/current-run/stop 一致）。"""
+    with _case_run_lock:
+        job = _case_run_jobs.get(user_id)
+        return bool(job and job.get('cancel_requested'))
+
+
 def _env_flag_true(name: str) -> bool:
     return (os.environ.get(name) or "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -800,6 +807,15 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
 login_manager = LoginManager(app)
 login_manager.login_view = 'login_page'
 login_manager.login_message = '请先登录'
+
+
+@login_manager.unauthorized_handler
+def _api_unauthorized():
+    """API 未登录时返回 JSON，避免前端 fetch().json() 解析到登录页 HTML。"""
+    if (request.path or "").startswith("/api/"):
+        return jsonify({"success": False, "error": "未登录，请重新登录"}), 401
+    return redirect(url_for("login_page", next=request.path))
+
 
 class UserModel(UserMixin):
     """Flask-Login 用户模型"""
@@ -4281,7 +4297,7 @@ def api_desktop_inspect():
 @api_error_handler
 @log_api_request
 def api_desktop_pick():
-    """根据屏幕坐标反查控件（首期：返回坐标占位，供步骤 coordinate 定位）。"""
+    """根据屏幕坐标反查控件（兼容旧接口；推荐使用 /api/desktop/picker/* 悬浮拾取）。"""
     data = request.get_json(silent=True) or {}
     try:
         x = int(data.get('x'))
@@ -4294,6 +4310,93 @@ def api_desktop_pick():
         'selector_value': f'{x},{y}',
         'hint': '已生成坐标定位；可在 desktop_spec 中配置窗口后再试 UIA 探测',
     })
+
+
+def _parse_desktop_spec_body(data: dict) -> tuple:
+    spec = data.get('desktop_spec') or {}
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec) if spec.strip() else {}
+        except json.JSONDecodeError:
+            return None, 'desktop_spec JSON 无效'
+    if not isinstance(spec, dict):
+        return None, 'desktop_spec 格式无效'
+    return spec, None
+
+
+@app.route('/api/desktop/picker/start', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_picker_start():
+    """启动桌面悬浮拾取/录制器（点选控件自动写入定位，无需手写）。"""
+    data = request.get_json(silent=True) or {}
+    spec, err = _parse_desktop_spec_body(data)
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+    try:
+        from desktop_picker import desktop_picker_available, sync_start_desktop_picker
+
+        if not desktop_picker_available():
+            return jsonify({
+                'success': False,
+                'error': '桌面拾取仅支持 Windows，且需安装 pywinauto',
+            }), 400
+        record_mode = (data.get('record_mode') or data.get('mode') or '').strip().lower() in (
+            '1',
+            'true',
+            'yes',
+            'record',
+            'recording',
+        )
+        record_action = (data.get('record_action') or data.get('action') or 'click').strip().lower()
+        if record_action not in ('click', 'double_click', 'input', 'verify'):
+            record_action = 'click'
+        result = sync_start_desktop_picker(
+            spec or {},
+            record_mode=record_mode,
+            record_action=record_action,
+            input_value=(data.get('input_value') or '').strip(),
+            verify_type=(data.get('verify_type') or 'auto').strip().lower() or 'auto',
+        )
+        status = 200 if result.get('success') else 400
+        return jsonify(result), status
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_picker_start', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/desktop/picker/stop', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_picker_stop():
+    """关闭桌面拾取/录制悬浮窗。"""
+    try:
+        from desktop_picker import sync_stop_desktop_picker
+
+        return jsonify(sync_stop_desktop_picker())
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_picker_stop', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/desktop/picker/status', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_picker_status():
+    """轮询拾取结果或录制新增步骤（与 Web check_selected_element 类似）。"""
+    try:
+        from desktop_picker import sync_get_desktop_picker_status
+
+        consume = (request.args.get('consume') or '').strip().lower() in ('1', 'true', 'yes')
+        return jsonify(sync_get_desktop_picker_status(consume_last_pick=consume))
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_picker_status', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/desktop/config', methods=['GET'])
@@ -4323,6 +4426,94 @@ def api_desktop_windows():
             'error': '窗口枚举仅支持 Windows',
         }), 400
     return jsonify({'success': True, 'windows': list_visible_windows()})
+
+
+@app.route('/api/desktop/processes', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_processes():
+    """枚举本机当前运行进程。"""
+    from desktop_discovery import discovery_available, list_running_processes
+
+    if not discovery_available():
+        return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
+    return jsonify({'success': True, 'processes': list_running_processes()})
+
+
+@app.route('/api/desktop/snapshot', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_snapshot():
+    """运行中窗口 + 进程 + 开始菜单应用目录（供步骤编辑点选）。"""
+    from desktop_discovery import desktop_runtime_snapshot, discovery_available
+
+    if not discovery_available():
+        return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
+    refresh = (request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
+    if refresh:
+        try:
+            from desktop_app_catalog import ensure_catalog_built
+
+            ensure_catalog_built(force=True)
+        except Exception:
+            pass
+    snap = desktop_runtime_snapshot(include_catalog=True)
+    return jsonify({'success': True, **snap})
+
+
+@app.route('/api/desktop/catalog', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_catalog():
+    """本机应用目录（开始菜单扫描，含自动别名）。"""
+    from desktop_discovery import discovery_available
+
+    if not discovery_available():
+        return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
+    try:
+        from desktop_app_catalog import ensure_catalog_built, list_catalog_apps
+
+        data = ensure_catalog_built(
+            force=(request.args.get('refresh') or '').strip().lower() in ('1', 'true', 'yes')
+        )
+        return jsonify({
+            'success': True,
+            'apps': list_catalog_apps(),
+            'built_at': data.get('built_at'),
+            'app_count': len(data.get('apps') or []),
+        })
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_catalog', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/desktop/catalog/refresh', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_catalog_refresh():
+    """强制重新扫描开始菜单并更新别名库。"""
+    from desktop_discovery import discovery_available
+
+    if not discovery_available():
+        return jsonify({'success': False, 'error': '仅支持 Windows'}), 400
+    try:
+        from desktop_app_catalog import ensure_catalog_built
+        from desktop_discovery import invalidate_discovery_cache
+
+        invalidate_discovery_cache()
+        data = ensure_catalog_built(force=True)
+        return jsonify({
+            'success': True,
+            'app_count': len(data.get('apps') or []),
+            'built_at': data.get('built_at'),
+        })
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_catalog_refresh', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/desktop/window-spec', methods=['POST'])
@@ -6342,9 +6533,7 @@ def api_run_case(case_id):
         try:
             total_step_count = len(steps)
             for step_index, step in enumerate(steps, start=1):
-                with _case_run_lock:
-                    cancel_requested = bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
-                if cancel_requested:
+                if _case_run_cancelled(user_id):
                     raise Exception("用户已停止执行")
 
                 action = step.get('action', '')
@@ -6387,11 +6576,16 @@ def api_run_case(case_id):
 
                     factory = get_executor_factory()
                     if factory.is_desktop_step(step):
-                        desk_result = factory.execute_desktop_step(
-                            step,
-                            selector_value=selector_value,
-                            input_value=input_value,
-                        )
+                        try:
+                            desk_result = factory.execute_desktop_step(
+                                step,
+                                selector_value=selector_value,
+                                input_value=input_value,
+                            )
+                        except Exception:
+                            if _case_run_cancelled(user_id):
+                                raise Exception("用户已停止执行")
+                            raise
                         step_status = 'success'
                         step_error = ''
                         step_screenshot = (desk_result or {}).get('screenshot') or ''
@@ -6766,6 +6960,43 @@ def api_run_case(case_id):
         except Exception as e:
             # 执行失败时的处理
             duration = round(time.time() - start_time, 2)
+
+            # 用户已点「停止执行」：不因关应用/断连等中间错误弹失败（桌面步骤常见）
+            if _case_run_cancelled(user_id) or '用户已停止执行' in str(e):
+                stop_msg = '用户已停止执行'
+                uat_logger.info(f"测试用例 #{case_id} 已由用户停止（忽略步骤异常: {str(e)[:300]}）")
+                try:
+                    run_id = db.create_run_history(
+                        case_id, 'stopped', duration, stop_msg, extracted_text, expected_text
+                    )
+                    for sr in step_results_list:
+                        db.create_step_result(
+                            run_id,
+                            sr['step_id'],
+                            sr['step_order'],
+                            sr['action'],
+                            sr['selector_value'],
+                            sr['input_value'],
+                            sr['description'],
+                            sr['status'],
+                            sr['error'],
+                            sr['screenshot'],
+                            sr['duration'],
+                        )
+                except Exception as history_error:
+                    uat_logger.warning(f"保存停止运行历史失败: {history_error}")
+                try:
+                    force_reset_execution_state()
+                except Exception:
+                    pass
+                return jsonify({
+                    'success': False,
+                    'status': 'stopped',
+                    'duration': duration,
+                    'error': stop_msg,
+                    'stopped': True,
+                })
+
             error_msg = str(e)
             
             # 将会话断开类错误单独归类（无头模式下也常见，并非一定是「人为关窗口」）
@@ -6882,6 +7113,24 @@ def api_run_case(case_id):
     except Exception as e:
         # 最外层异常处理 - 确保历史记录被保存
         duration = round(time.time() - start_time, 2)
+        if _case_run_cancelled(user_id) or '用户已停止执行' in str(e):
+            stop_msg = '用户已停止执行'
+            uat_logger.info(f"测试用例 #{case_id} 已由用户停止（外层）")
+            try:
+                db.create_run_history(case_id, 'stopped', duration, stop_msg, extracted_text, expected_text)
+            except Exception:
+                pass
+            try:
+                force_reset_execution_state()
+            except Exception:
+                pass
+            return jsonify({
+                'success': False,
+                'status': 'stopped',
+                'duration': duration,
+                'error': stop_msg,
+                'stopped': True,
+            })
         error_msg = str(e)
         uat_logger.error(f"运行测试用例时发生严重错误: {error_msg}")
         
@@ -6894,7 +7143,8 @@ def api_run_case(case_id):
         
         return jsonify({
             'success': False,
-            'error': error_msg
+            'error': error_msg,
+            'stopped': False,
         }), 500
     finally:
         if machine_lock_acquired:

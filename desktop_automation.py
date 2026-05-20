@@ -251,7 +251,49 @@ class DesktopAutomation:
             rel = f"/static/desktop_screenshots/{fname}"
             return {"status": "success", "action": action, "screenshot": rel}
 
-        if action in ("assert", "verify"):
+        if action == "verify":
+            vt = (
+                (input_value or "").strip()
+                or (compare_type or "").strip()
+                or "auto"
+            ).lower()
+            if vt in ("auto", "slider", "image", "visible", "exist", "clickable"):
+                from desktop_captcha import run_desktop_verify
+
+                return run_desktop_verify(
+                    self._window,
+                    selector_type,
+                    selector_value,
+                    spec,
+                    vt,
+                )
+            expected = str(input_value or "")
+            if selector_value:
+                ctrl = resolve_control(
+                    self._window, selector_type, selector_value, spec
+                )
+                try:
+                    actual = ctrl.window_text()
+                except Exception:
+                    actual = str(getattr(ctrl, "texts", lambda: [""])())
+            else:
+                actual = self._window.window_text()
+            actual = actual or ""
+            ct = compare_type or "contains"
+            ok = False
+            if ct in ("equals", "text_equals"):
+                ok = actual == expected
+            elif ct in ("contains", "text_contains"):
+                ok = expected in actual
+            else:
+                ok = expected in actual
+            if not ok:
+                raise AssertionError(
+                    f"桌面断言失败：期望「{expected}」({ct})，实际「{actual[:200]}」"
+                )
+            return {"status": "success", "action": action, "actual": actual}
+
+        if action == "assert":
             expected = str(input_value or "")
             if selector_value:
                 ctrl = resolve_control(

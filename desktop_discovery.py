@@ -344,6 +344,29 @@ def _resolve_via_start_menu(stem: str, base_exe: str, tried: List[str]) -> str:
     return ""
 
 
+def _resolve_via_app_catalog(q: str, base: str, base_exe: str, stem: str, tried: List[str]) -> str:
+    """.env 别名 + data/desktop_app_catalog.json（含安装包长文件名前缀匹配）。"""
+    _record(tried, "app_catalog")
+    try:
+        from desktop_env_config import load_app_aliases
+        from desktop_app_catalog import find_catalog_app
+    except ImportError:
+        return ""
+    aliases = load_app_aliases()
+    for key in (q.lower(), base.lower(), base_exe.lower(), stem.lower()):
+        if key and key in aliases:
+            p = aliases[key]
+            if p and os.path.isfile(p):
+                return os.path.normpath(p)
+    for candidate in (q, base_exe, stem, base):
+        app = find_catalog_app(candidate)
+        if app:
+            p = (app.get("path") or "").strip()
+            if p and os.path.isfile(p):
+                return os.path.normpath(p)
+    return ""
+
+
 def _resolve_via_deep_search(base_exe: str, tried: List[str]) -> str:
     if not _deep_search_enabled() or not base_exe:
         return ""
@@ -398,6 +421,7 @@ def resolve_executable_with_meta(query: str) -> ResolveResult:
 
     strategies = (
         lambda: _resolve_direct_file(q, result.tried),
+        lambda: _resolve_via_app_catalog(q, base, base_exe, stem, result.tried),
         lambda: _resolve_via_path_env(q, base, base_exe, result.tried),
         lambda: _resolve_via_where(base_exe, result.tried),
         lambda: _resolve_via_system32(base_exe, result.tried),
@@ -499,6 +523,88 @@ def list_visible_windows() -> List[Dict[str, Any]]:
         return []
 
 
+def list_running_processes() -> List[Dict[str, Any]]:
+    """枚举当前运行进程（去重，含 exe 路径）。"""
+    if not _DISCOVERY_AVAILABLE:
+        return []
+    try:
+        import psutil
+    except ImportError:
+        return []
+
+    skip_names = frozenset({
+        "system idle process",
+        "system",
+        "_total",
+    })
+    by_key: Dict[tuple, Dict[str, Any]] = {}
+    for proc in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            info = proc.info or {}
+            pid = int(info.get("pid") or 0)
+            name = (info.get("name") or "").strip()
+            exe_path = (info.get("exe") or "").strip()
+            if not pid or not name:
+                continue
+            if name.lower() in skip_names:
+                continue
+            key = (pid, exe_path or name.lower())
+            if key in by_key:
+                continue
+            by_key[key] = {
+                "pid": pid,
+                "name": name,
+                "exe": os.path.basename(exe_path) if exe_path else name,
+                "exe_path": exe_path,
+            }
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    rows = list(by_key.values())
+    rows.sort(key=lambda x: ((x.get("name") or "").lower(), x.get("pid", 0)))
+    return rows
+
+
+def find_windows_for_process(
+    exe_path: str = "",
+    exe_name: str = "",
+    pid: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """按进程匹配当前可见顶层窗口。"""
+    exe_path_n = os.path.normcase((exe_path or "").strip())
+    exe_name_l = (exe_name or "").strip().lower()
+    if not exe_name_l and exe_path_n:
+        exe_name_l = os.path.basename(exe_path_n).lower()
+    out: List[Dict[str, Any]] = []
+    for win in list_visible_windows():
+        if pid is not None and int(win.get("pid") or 0) != int(pid):
+            continue
+        wpath = os.path.normcase((win.get("process_path") or "").strip())
+        wexe = (win.get("process") or "").strip().lower()
+        if exe_path_n and wpath and wpath == exe_path_n:
+            out.append(win)
+        elif exe_name_l and wexe == exe_name_l:
+            out.append(win)
+    return out
+
+
+def desktop_runtime_snapshot(*, include_catalog: bool = True) -> Dict[str, Any]:
+    """运行中窗口 + 进程 +（可选）应用目录摘要。"""
+    snap: Dict[str, Any] = {
+        "windows": list_visible_windows(),
+        "processes": list_running_processes(),
+    }
+    if include_catalog:
+        try:
+            from desktop_app_catalog import catalog_meta, list_catalog_apps
+
+            snap["catalog"] = catalog_meta()
+            snap["catalog_apps"] = list_catalog_apps()
+        except ImportError:
+            snap["catalog"] = {}
+            snap["catalog_apps"] = []
+    return snap
+
+
 def process_image_path(pid: int) -> str:
     if not pid:
         return ""
@@ -532,13 +638,17 @@ def attachment_spec_for_window(hwnd: int) -> tuple[Dict[str, Any], str]:
 
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
-    exe_path = process_image_path(int(pid.value))
+    pid_val = int(pid.value)
+    exe_path = process_image_path(pid_val)
     spec: Dict[str, Any] = {
+        "hwnd": int(h),
+        "window_title": title,
         "window_title_re": f".*{re.escape(title)}.*",
     }
     if exe_path:
         spec["process"] = os.path.basename(exe_path)
         spec["path"] = exe_path
+    spec["pid"] = pid_val
     return spec, title
 
 

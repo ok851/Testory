@@ -1,0 +1,1183 @@
+{
+  "version": 1,
+  "built_at": 1779247017.8599784,
+  "apps": [
+    {
+      "id": "another_redis_desktop_manager",
+      "display_name": "Another Redis Desktop Manager",
+      "exe_name": "Another Redis Desktop Manager.exe",
+      "path": "D:\\Program Files\\Another\\Another Redis Desktop Manager\\Another Redis Desktop Manager.exe",
+      "aliases": [
+        "another redis desktop manager",
+        "another redis desktop manager.exe",
+        "another_redis_desktop_manager"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "apifox",
+      "display_name": "Apifox",
+      "exe_name": "Apifox.exe",
+      "path": "D:\\Program Files\\Apifox\\Apifox.exe",
+      "aliases": [
+        "apifox",
+        "apifox.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "apipost",
+      "display_name": "Apipost",
+      "exe_name": "Apipost.exe",
+      "path": "D:\\Program Files\\Apipost\\Apipost.exe",
+      "aliases": [
+        "apipost",
+        "apipost.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "apipost7",
+      "display_name": "ApiPost7",
+      "exe_name": "ApiPost7.exe",
+      "path": "D:\\Program Files\\ApiPost7\\ApiPost7.exe",
+      "aliases": [
+        "apipost7",
+        "apipost7.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "awesun",
+      "display_name": "AweSun",
+      "exe_name": "AweSun.exe",
+      "path": "D:\\AweSun\\AweSun.exe",
+      "aliases": [
+        "awesun",
+        "awesun.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "catpawai",
+      "display_name": "catpawai",
+      "exe_name": "CatPawAI.exe",
+      "path": "D:\\CatPawAI\\CatPawAI.exe",
+      "aliases": [
+        "catpawai",
+        "catpawai.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "charmap",
+      "display_name": "character map",
+      "exe_name": "charmap.exe",
+      "path": "C:\\WINDOWS\\system32\\charmap.exe",
+      "aliases": [
+        "character map",
+        "character_map",
+        "charmap",
+        "charmap.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "cleanmgr",
+      "display_name": "cleanmgr",
+      "exe_name": "cleanmgr.exe",
+      "path": "C:\\WINDOWS\\system32\\cleanmgr.exe",
+      "aliases": [
+        "cleanmgr",
+        "cleanmgr.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "compil32",
+      "display_name": "Compil32",
+      "exe_name": "Compil32.exe",
+      "path": "D:\\Inno Setup 6\\Compil32.exe",
+      "aliases": [
+        "compil32",
+        "compil32.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "winpath",
+      "display_name": "console",
+      "exe_name": "winpath.exe",
+      "path": "C:\\Program Files\\Tesseract-OCR\\winpath.exe",
+      "aliases": [
+        "console",
+        "winpath",
+        "winpath.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "recoverydrive",
+      "display_name": "create usb recovery",
+      "exe_name": "RecoveryDrive.exe",
+      "path": "C:\\Windows\\System32\\RecoveryDrive.exe",
+      "aliases": [
+        "create usb recovery",
+        "create_usb_recovery",
+        "recoverydrive",
+        "recoverydrive.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "cursor",
+      "display_name": "Cursor",
+      "exe_name": "Cursor.exe",
+      "path": "D:\\cursor\\Cursor.exe",
+      "aliases": [
+        "cursor",
+        "cursor.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "powershell",
+      "display_name": "developer powershell for vs 2022",
+      "exe_name": "powershell.exe",
+      "path": "C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "aliases": [
+        "developer powershell for vs 2022",
+        "developer_powershell_for_vs_2022",
+        "powershell",
+        "powershell.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "dfrgui",
+      "display_name": "dfrgui",
+      "exe_name": "dfrgui.exe",
+      "path": "C:\\WINDOWS\\system32\\dfrgui.exe",
+      "aliases": [
+        "dfrgui",
+        "dfrgui.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "ea",
+      "display_name": "EA",
+      "exe_name": "EA.exe",
+      "path": "D:\\Program Files (x86)\\Sparx Systems\\EA Trial\\EA.exe",
+      "aliases": [
+        "ea",
+        "ea.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "ebookreader",
+      "display_name": "ebookreader",
+      "exe_name": "ebookreader.exe",
+      "path": "D:\\Program Files (x86)\\Icecream Ebook Reader\\ebookreader.exe",
+      "aliases": [
+        "ebookreader",
+        "ebookreader.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "everything",
+      "display_name": "everything",
+      "exe_name": "Everything.exe",
+      "path": "D:\\Program Files (x86)\\Everything\\Everything.exe",
+      "aliases": [
+        "everything",
+        "everything.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "excel",
+      "display_name": "EXCEL",
+      "exe_name": "EXCEL.EXE",
+      "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
+      "aliases": [
+        "excel",
+        "excel.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "firefox",
+      "display_name": "firefox",
+      "exe_name": "firefox.exe",
+      "path": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+      "aliases": [
+        "firefox",
+        "firefox.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "private_browsing",
+      "display_name": "firefox 隐私浏览",
+      "exe_name": "private_browsing.exe",
+      "path": "C:\\Program Files\\Mozilla Firefox\\private_browsing.exe",
+      "aliases": [
+        "firefox",
+        "firefox 隐私浏览",
+        "private_browsing",
+        "private_browsing.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "foxitpdfreader",
+      "display_name": "FoxitPDFReader",
+      "exe_name": "FoxitPDFReader.exe",
+      "path": "D:\\Program Files (x86)\\foxit_software\\Foxit PDF Reader\\FoxitPDFReader.exe",
+      "aliases": [
+        "foxitpdfreader",
+        "foxitpdfreader.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "git_cmd",
+      "display_name": "git cmd",
+      "exe_name": "git-cmd.exe",
+      "path": "D:\\Program Files\\Git\\git-cmd.exe",
+      "aliases": [
+        "git cmd",
+        "git-cmd",
+        "git-cmd.exe",
+        "git_cmd"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "git_bash",
+      "display_name": "git-bash",
+      "exe_name": "git-bash.exe",
+      "path": "D:\\Program Files\\Git\\git-bash.exe",
+      "aliases": [
+        "git-bash",
+        "git-bash.exe",
+        "git_bash"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "git_gui",
+      "display_name": "git-gui",
+      "exe_name": "git-gui.exe",
+      "path": "D:\\Program Files\\Git\\cmd\\git-gui.exe",
+      "aliases": [
+        "git-gui",
+        "git-gui.exe",
+        "git_gui"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "chrome",
+      "display_name": "google chrome",
+      "exe_name": "chrome.exe",
+      "path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "aliases": [
+        "chrome",
+        "chrome.exe",
+        "google chrome",
+        "google_chrome"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "hiddify",
+      "display_name": "Hiddify",
+      "exe_name": "Hiddify.exe",
+      "path": "D:\\mkst_baixiang\\VPN工具\\hiddify\\Hiddify\\Hiddify.exe",
+      "aliases": [
+        "hiddify",
+        "hiddify.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "hipsmain",
+      "display_name": "HipsMain",
+      "exe_name": "HipsMain.exe",
+      "path": "D:\\Huorong\\Sysdiag\\bin\\HipsMain.exe",
+      "aliases": [
+        "hipsmain",
+        "hipsmain.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "idea64",
+      "display_name": "intellij idea 2021.3",
+      "exe_name": "idea64.exe",
+      "path": "D:\\Program Files\\JetBrains\\IntelliJ IDEA 2021.3\\bin\\idea64.exe",
+      "aliases": [
+        "idea64",
+        "idea64.exe",
+        "intellij idea 2021.3",
+        "intellij_idea_2021_3"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "iscsicpl",
+      "display_name": "iscsi initiator",
+      "exe_name": "iscsicpl.exe",
+      "path": "C:\\WINDOWS\\system32\\iscsicpl.exe",
+      "aliases": [
+        "iscsi initiator",
+        "iscsi_initiator",
+        "iscsicpl",
+        "iscsicpl.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "justassembly",
+      "display_name": "JustAssembly",
+      "exe_name": "JustAssembly.exe",
+      "path": "D:\\Program Files (x86)\\Progress\\JustAssembly\\Libraries\\JustAssembly.exe",
+      "aliases": [
+        "justassembly",
+        "justassembly.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "justdecompile",
+      "display_name": "JustDecompile",
+      "exe_name": "JustDecompile.exe",
+      "path": "D:\\Program Files (x86)\\Progress\\JustDecompile\\Libraries\\JustDecompile.exe",
+      "aliases": [
+        "justdecompile",
+        "justdecompile.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "ksomisc",
+      "display_name": "ksomisc",
+      "exe_name": "ksomisc.exe",
+      "path": "C:\\Users\\zxcyb\\AppData\\Local\\Kingsoft\\WPS Office\\12.1.0.25865\\office6\\ksomisc.exe",
+      "aliases": [
+        "ksomisc",
+        "ksomisc.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "lingma",
+      "display_name": "lingma",
+      "exe_name": "Lingma.exe",
+      "path": "D:\\Lingma\\Lingma.exe",
+      "aliases": [
+        "lingma",
+        "lingma.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "mdsched",
+      "display_name": "memory diagnostics tool",
+      "exe_name": "MdSched.exe",
+      "path": "C:\\WINDOWS\\system32\\MdSched.exe",
+      "aliases": [
+        "mdsched",
+        "mdsched.exe",
+        "memory diagnostics tool",
+        "memory_diagnostics_tool"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "microsoft_analysisservices_deployment",
+      "display_name": "Microsoft.AnalysisServices.Deployment",
+      "exe_name": "Microsoft.AnalysisServices.Deployment.exe",
+      "path": "D:\\Program Files (x86)\\Microsoft SQL Server Management Studio 20\\Common7\\IDE\\Microsoft.AnalysisServices.Deployment.exe",
+      "aliases": [
+        "microsoft.analysisservices.deployment",
+        "microsoft.analysisservices.deployment.exe",
+        "microsoft_analysisservices_deployment"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "mobarte",
+      "display_name": "mobadiff",
+      "exe_name": "MobaRTE.exe",
+      "path": "D:\\MobaXterm\\MobaRTE.exe",
+      "aliases": [
+        "mobadiff",
+        "mobarte",
+        "mobarte.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "mobaxterm",
+      "display_name": "mobaxterm",
+      "exe_name": "MobaXterm.exe",
+      "path": "D:\\MobaXterm\\MobaXterm.exe",
+      "aliases": [
+        "mobaxterm",
+        "mobaxterm.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "msedge",
+      "display_name": "msedge",
+      "exe_name": "msedge.exe",
+      "path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "aliases": [
+        "msedge",
+        "msedge.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "navicat",
+      "display_name": "navicat premium 17",
+      "exe_name": "navicat.exe",
+      "path": "D:\\Program Files\\Navicat Premium 17\\navicat.exe",
+      "aliases": [
+        "navicat",
+        "navicat premium 17",
+        "navicat.exe",
+        "navicat_premium_17"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "node",
+      "display_name": "node.js",
+      "exe_name": "node.exe",
+      "path": "D:\\Program Files\\nodejs\\node.exe",
+      "aliases": [
+        "node",
+        "node.exe",
+        "node.js",
+        "node_js"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "cmd",
+      "display_name": "node.js command prompt",
+      "exe_name": "cmd.exe",
+      "path": "C:\\Windows\\System32\\cmd.exe",
+      "aliases": [
+        "cmd",
+        "cmd.exe",
+        "node.js command prompt",
+        "node_js_command_prompt"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "nvm",
+      "display_name": "nvm",
+      "exe_name": "nvm.exe",
+      "path": "C:\\Users\\zxcyb\\AppData\\Local\\nvm\\nvm.exe",
+      "aliases": [
+        "nvm",
+        "nvm.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "odbcad32",
+      "display_name": "odbc data sources (32-bit)",
+      "exe_name": "odbcad32.exe",
+      "path": "C:\\WINDOWS\\syswow64\\odbcad32.exe",
+      "aliases": [
+        "odbc data sources (32-bit)",
+        "odbc_data_sources_32_bit",
+        "odbcad32",
+        "odbcad32.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "odbcad32",
+      "display_name": "odbc data sources (64-bit)",
+      "exe_name": "odbcad32.exe",
+      "path": "C:\\WINDOWS\\system32\\odbcad32.exe",
+      "aliases": [
+        "odbc data sources (64-bit)",
+        "odbc_data_sources_64_bit",
+        "odbcad32",
+        "odbcad32.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "ollama_app",
+      "display_name": "ollama",
+      "exe_name": "ollama app.exe",
+      "path": "C:\\Users\\zxcyb\\AppData\\Local\\Programs\\Ollama\\ollama app.exe",
+      "aliases": [
+        "ollama",
+        "ollama app",
+        "ollama app.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "onedrive",
+      "display_name": "OneDrive",
+      "exe_name": "OneDrive.exe",
+      "path": "C:\\Program Files\\Microsoft OneDrive\\OneDrive.exe",
+      "aliases": [
+        "onedrive",
+        "onedrive.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "onenote",
+      "display_name": "ONENOTE",
+      "exe_name": "ONENOTE.EXE",
+      "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\ONENOTE.EXE",
+      "aliases": [
+        "onenote",
+        "onenote.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "powerpnt",
+      "display_name": "POWERPNT",
+      "exe_name": "POWERPNT.EXE",
+      "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE",
+      "aliases": [
+        "powerpnt",
+        "powerpnt.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "powershell_ise",
+      "display_name": "PowerShell_ISE",
+      "exe_name": "PowerShell_ISE.exe",
+      "path": "C:\\WINDOWS\\syswow64\\WindowsPowerShell\\v1.0\\PowerShell_ISE.exe",
+      "aliases": [
+        "powershell_ise",
+        "powershell_ise.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "pycharm64",
+      "display_name": "pycharm 2025.2.1.1",
+      "exe_name": "pycharm64.exe",
+      "path": "C:\\Program Files\\JetBrains\\PyCharm 2025.2.1.1\\bin\\pycharm64.exe",
+      "aliases": [
+        "pycharm 2025.2.1.1",
+        "pycharm64",
+        "pycharm64.exe",
+        "pycharm_2025_2_1_1"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "qoder",
+      "display_name": "qoder",
+      "exe_name": "Qoder.exe",
+      "path": "D:\\Qoder\\Qoder.exe",
+      "aliases": [
+        "qoder",
+        "qoder.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "qq",
+      "display_name": "QQ",
+      "exe_name": "QQ.exe",
+      "path": "D:\\QQ.exe",
+      "aliases": [
+        "qq",
+        "qq.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "recoverydrive",
+      "display_name": "recoverydrive",
+      "exe_name": "RecoveryDrive.exe",
+      "path": "C:\\WINDOWS\\system32\\RecoveryDrive.exe",
+      "aliases": [
+        "recoverydrive",
+        "recoverydrive.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "regedit",
+      "display_name": "registry editor",
+      "exe_name": "regedit.exe",
+      "path": "C:\\WINDOWS\\regedit.exe",
+      "aliases": [
+        "regedit",
+        "regedit.exe",
+        "registry editor",
+        "registry_editor"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "mstsc",
+      "display_name": "remote desktop connection",
+      "exe_name": "mstsc.exe",
+      "path": "C:\\WINDOWS\\system32\\mstsc.exe",
+      "aliases": [
+        "mstsc",
+        "mstsc.exe",
+        "remote desktop connection",
+        "remote_desktop_connection"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "perfmon",
+      "display_name": "resource monitor",
+      "exe_name": "perfmon.exe",
+      "path": "C:\\WINDOWS\\system32\\perfmon.exe",
+      "aliases": [
+        "perfmon",
+        "perfmon.exe",
+        "resource monitor",
+        "resource_monitor"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "setlang",
+      "display_name": "SETLANG",
+      "exe_name": "SETLANG.EXE",
+      "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\SETLANG.EXE",
+      "aliases": [
+        "setlang",
+        "setlang.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "shadowbot",
+      "display_name": "ShadowBot",
+      "exe_name": "ShadowBot.exe",
+      "path": "C:\\Program Files\\ShadowBot\\ShadowBot.exe",
+      "aliases": [
+        "shadowbot",
+        "shadowbot.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "profiler",
+      "display_name": "sql server profiler 20",
+      "exe_name": "PROFILER.EXE",
+      "path": "D:\\Program Files (x86)\\Microsoft SQL Server Management Studio 20\\Common7\\PROFILER.EXE",
+      "aliases": [
+        "profiler",
+        "profiler.exe",
+        "sql server profiler 20",
+        "sql_server_profiler_20"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "ssms",
+      "display_name": "Ssms",
+      "exe_name": "Ssms.exe",
+      "path": "D:\\Program Files (x86)\\Microsoft SQL Server Management Studio 20\\Common7\\IDE\\Ssms.exe",
+      "aliases": [
+        "ssms",
+        "ssms.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "psr",
+      "display_name": "steps recorder",
+      "exe_name": "psr.exe",
+      "path": "C:\\WINDOWS\\system32\\psr.exe",
+      "aliases": [
+        "psr",
+        "psr.exe",
+        "steps recorder",
+        "steps_recorder"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "msconfig",
+      "display_name": "system configuration",
+      "exe_name": "msconfig.exe",
+      "path": "C:\\WINDOWS\\system32\\msconfig.exe",
+      "aliases": [
+        "msconfig",
+        "msconfig.exe",
+        "system configuration",
+        "system_configuration"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "msinfo32",
+      "display_name": "system information",
+      "exe_name": "msinfo32.exe",
+      "path": "C:\\WINDOWS\\system32\\msinfo32.exe",
+      "aliases": [
+        "msinfo32",
+        "msinfo32.exe",
+        "system information",
+        "system_information"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "taskmgr",
+      "display_name": "taskmgr",
+      "exe_name": "taskmgr.exe",
+      "path": "C:\\WINDOWS\\system32\\taskmgr.exe",
+      "aliases": [
+        "taskmgr",
+        "taskmgr.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "todesk",
+      "display_name": "todesk",
+      "exe_name": "ToDesk.exe",
+      "path": "C:\\Program Files\\ToDesk\\ToDesk.exe",
+      "aliases": [
+        "todesk",
+        "todesk.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "trae_cn",
+      "display_name": "trae cn",
+      "exe_name": "Trae CN.exe",
+      "path": "C:\\Users\\zxcyb\\AppData\\Local\\Programs\\Trae CN\\Trae CN.exe",
+      "aliases": [
+        "trae cn",
+        "trae cn.exe",
+        "trae_cn"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "typora",
+      "display_name": "typora",
+      "exe_name": "Typora.exe",
+      "path": "D:\\Program Files\\Typora\\Typora.exe",
+      "aliases": [
+        "typora",
+        "typora.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "uninst",
+      "display_name": "uninst",
+      "exe_name": "uninst.exe",
+      "path": "C:\\Program Files\\ToDesk\\uninst.exe",
+      "aliases": [
+        "uninst",
+        "uninst.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "tesseract_uninstall",
+      "display_name": "uninstall",
+      "exe_name": "tesseract-uninstall.exe",
+      "path": "C:\\Program Files\\Tesseract-OCR\\tesseract-uninstall.exe",
+      "aliases": [
+        "tesseract-uninstall",
+        "tesseract-uninstall.exe",
+        "uninstall"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "msiexec",
+      "display_name": "uninstall node.js",
+      "exe_name": "msiexec.exe",
+      "path": "C:\\Windows\\SysWOW64\\msiexec.exe",
+      "aliases": [
+        "msiexec",
+        "msiexec.exe",
+        "uninstall node.js",
+        "uninstall_node_js"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "unins000",
+      "display_name": "uninstall nvm",
+      "exe_name": "unins000.exe",
+      "path": "C:\\Users\\zxcyb\\AppData\\Local\\nvm\\unins000.exe",
+      "aliases": [
+        "unins000",
+        "unins000.exe",
+        "uninstall nvm",
+        "uninstall_nvm"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "univpn",
+      "display_name": "univpn",
+      "exe_name": "UniVPN.exe",
+      "path": "C:\\Program Files (x86)\\UniVPN\\UniVPN.exe",
+      "aliases": [
+        "univpn",
+        "univpn.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "devenv",
+      "display_name": "visual studio 2022",
+      "exe_name": "devenv.exe",
+      "path": "D:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\Common7\\IDE\\devenv.exe",
+      "aliases": [
+        "devenv",
+        "devenv.exe",
+        "visual studio 2022",
+        "visual_studio_2022"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "code",
+      "display_name": "visual studio code",
+      "exe_name": "Code.exe",
+      "path": "D:\\Users\\zxcyb\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+      "aliases": [
+        "code",
+        "code.exe",
+        "visual studio code",
+        "visual_studio_code"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "setup",
+      "display_name": "visual studio installer",
+      "exe_name": "setup.exe",
+      "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\setup.exe",
+      "aliases": [
+        "setup",
+        "setup.exe",
+        "visual studio installer",
+        "visual_studio_installer"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "wavessvc64",
+      "display_name": "WavesSvc64",
+      "exe_name": "WavesSvc64.exe",
+      "path": "C:\\Windows\\System32\\DriverStore\\FileRepository\\wavesapo10de.inf_amd64_db3f3288eba6a142\\WavesSvc64.exe",
+      "aliases": [
+        "wavessvc64",
+        "wavessvc64.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "webstorm64",
+      "display_name": "webstorm64",
+      "exe_name": "webstorm64.exe",
+      "path": "D:\\Program Files\\JetBrains\\WebStorm 2021.3\\bin\\webstorm64.exe",
+      "aliases": [
+        "webstorm64",
+        "webstorm64.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "weixin",
+      "display_name": "Weixin",
+      "exe_name": "Weixin.exe",
+      "path": "C:\\Program Files\\Tencent\\Weixin\\Weixin.exe",
+      "aliases": [
+        "weixin",
+        "weixin.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "wmplayer",
+      "display_name": "windows media player legacy",
+      "exe_name": "wmplayer.exe",
+      "path": "C:\\Program Files (x86)\\Windows Media Player\\wmplayer.exe",
+      "aliases": [
+        "windows media player legacy",
+        "windows_media_player_legacy",
+        "wmplayer",
+        "wmplayer.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "powershell_ise",
+      "display_name": "windows powershell ise",
+      "exe_name": "PowerShell_ISE.exe",
+      "path": "C:\\WINDOWS\\system32\\WindowsPowerShell\\v1.0\\PowerShell_ISE.exe",
+      "aliases": [
+        "powershell_ise",
+        "powershell_ise.exe",
+        "windows powershell ise",
+        "windows_powershell_ise"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "winrar",
+      "display_name": "WinRAR",
+      "exe_name": "WinRAR.exe",
+      "path": "D:\\Program Files\\winrar\\WinRAR.exe",
+      "aliases": [
+        "winrar",
+        "winrar.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "winword",
+      "display_name": "word",
+      "exe_name": "WINWORD.EXE",
+      "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+      "aliases": [
+        "winword",
+        "winword.exe",
+        "word"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "ksolaunch",
+      "display_name": "wps office",
+      "exe_name": "ksolaunch.exe",
+      "path": "C:\\Users\\zxcyb\\AppData\\Local\\Kingsoft\\WPS Office\\ksolaunch.exe",
+      "aliases": [
+        "ksolaunch",
+        "ksolaunch.exe",
+        "wps office",
+        "wps_office"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "tqcheck",
+      "display_name": "一键自查",
+      "exe_name": "TQCheck.exe",
+      "path": "C:\\Program Files (x86)\\天桥科技\\终端保密技术检查系统[网络版]\\TQCheck\\TQCheck.exe",
+      "aliases": [
+        "app",
+        "tqcheck",
+        "tqcheck.exe",
+        "一键自查"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "uninst",
+      "display_name": "卸载",
+      "exe_name": "uninst.exe",
+      "path": "C:\\Program Files (x86)\\UniVPN\\uninst.exe",
+      "aliases": [
+        "app",
+        "uninst",
+        "uninst.exe",
+        "卸载"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "shadowbot_installer",
+      "display_name": "卸载影刀",
+      "exe_name": "ShadowBot.Installer.exe",
+      "path": "C:\\Program Files\\ShadowBot\\installer\\ShadowBot.Installer.exe",
+      "aliases": [
+        "app",
+        "shadowbot.installer",
+        "shadowbot.installer.exe",
+        "卸载影刀"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "uninstall",
+      "display_name": "卸载微信",
+      "exe_name": "Uninstall.exe",
+      "path": "C:\\Program Files\\Tencent\\Weixin\\Uninstall.exe",
+      "aliases": [
+        "app",
+        "uninstall",
+        "uninstall.exe",
+        "卸载微信"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "uninst",
+      "display_name": "卸载火绒",
+      "exe_name": "uninst.exe",
+      "path": "D:\\Huorong\\Sysdiag\\uninst.exe",
+      "aliases": [
+        "app",
+        "uninst",
+        "uninst.exe",
+        "卸载火绒"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "fxdump",
+      "display_name": "卸载福昕pdf编辑器",
+      "exe_name": "FxDump.exe",
+      "path": "C:\\Program Files (x86)\\Foxit Software\\Foxit Phantom\\FxDump.exe",
+      "aliases": [
+        "fxdump",
+        "fxdump.exe",
+        "pdf",
+        "卸载福昕pdf编辑器"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "uninst",
+      "display_name": "卸载福昕阅读器",
+      "exe_name": "Uninst.exe",
+      "path": "D:\\Program Files (x86)\\foxit_software\\Foxit PDF Reader\\Uninst.exe",
+      "aliases": [
+        "app",
+        "uninst",
+        "uninst.exe",
+        "卸载福昕阅读器"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "app",
+      "display_name": "微信开发者工具",
+      "exe_name": "微信开发者工具.exe",
+      "path": "D:\\Tencent\\微信web开发者工具\\微信开发者工具.exe",
+      "aliases": [
+        "app",
+        "微信开发者工具",
+        "微信开发者工具.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "dtashell",
+      "display_name": "数据库引擎优化顾问 20",
+      "exe_name": "DTASHELL.EXE",
+      "path": "D:\\Program Files (x86)\\Microsoft SQL Server Management Studio 20\\Common7\\DTASHELL.EXE",
+      "aliases": [
+        "20",
+        "dtashell",
+        "dtashell.exe",
+        "数据库引擎优化顾问 20"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "hipslog",
+      "display_name": "火绒日志",
+      "exe_name": "HipsLog.exe",
+      "path": "D:\\Huorong\\Sysdiag\\bin\\HipsLog.exe",
+      "aliases": [
+        "app",
+        "hipslog",
+        "hipslog.exe",
+        "火绒日志"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "app",
+      "display_name": "照片验证工具",
+      "exe_name": "照片验证工具.exe",
+      "path": "C:\\Program Files (x86)\\Zhuofan\\照片验证工具\\照片验证工具.exe",
+      "aliases": [
+        "app",
+        "照片验证工具",
+        "照片验证工具.exe"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "foxitphantom",
+      "display_name": "福昕pdf编辑器",
+      "exe_name": "FoxitPhantom.exe",
+      "path": "C:\\Program Files (x86)\\Foxit Software\\Foxit Phantom\\FoxitPhantom.exe",
+      "aliases": [
+        "foxitphantom",
+        "foxitphantom.exe",
+        "pdf",
+        "福昕pdf编辑器"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "doubao",
+      "display_name": "豆包浏览器",
+      "exe_name": "Doubao.exe",
+      "path": "D:\\Doubao\\Doubao.exe",
+      "aliases": [
+        "app",
+        "doubao",
+        "doubao.exe",
+        "豆包浏览器"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "sogouexe",
+      "display_name": "输入法修复器",
+      "exe_name": "SogouExe.exe",
+      "path": "D:\\Program Files (x86)\\SogouInput\\SogouExe\\SogouExe.exe",
+      "aliases": [
+        "app",
+        "sogouexe",
+        "sogouexe.exe",
+        "输入法修复器"
+      ],
+      "source": "start_menu"
+    },
+    {
+      "id": "dingtalklauncher",
+      "display_name": "钉钉",
+      "exe_name": "DingtalkLauncher.exe",
+      "path": "C:\\Program Files (x86)\\DingDing\\DingtalkLauncher.exe",
+      "aliases": [
+        "app",
+        "dingtalklauncher",
+        "dingtalklauncher.exe",
+        "钉钉"
+      ],
+      "source": "start_menu"
+    }
+  ],
+  "app_count": 98
+}
