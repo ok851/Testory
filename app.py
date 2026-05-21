@@ -305,6 +305,15 @@ def _force_stop_browser_async():
     except Exception:
         pass
 
+def _parse_api_bool(val, default: bool = True) -> bool:
+    """解析 JSON 中的布尔或字符串开关（避免对 True 调用 .strip() 导致 500）。"""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() not in ("0", "false", "no", "off", "")
+
+
 # 统一的API错误处理装饰器
 def api_error_handler(func):
     @functools.wraps(func)
@@ -815,6 +824,17 @@ def _api_unauthorized():
     if (request.path or "").startswith("/api/"):
         return jsonify({"success": False, "error": "未登录，请重新登录"}), 401
     return redirect(url_for("login_page", next=request.path))
+
+
+@app.errorhandler(404)
+def _http_not_found(e):
+    """API 路径不存在时返回 JSON，避免前端解析到 HTML 404 页。"""
+    if (request.path or "").startswith("/api/"):
+        return jsonify({
+            "success": False,
+            "error": "接口不存在，请确认已重启后端服务（python app.py）",
+        }), 404
+    return e
 
 
 class UserModel(UserMixin):
@@ -4343,13 +4363,19 @@ def api_desktop_picker_start():
                 'success': False,
                 'error': '桌面拾取仅支持 Windows，且需安装 pywinauto',
             }), 400
-        record_mode = (data.get('record_mode') or data.get('mode') or '').strip().lower() in (
-            '1',
-            'true',
-            'yes',
-            'record',
-            'recording',
-        )
+        record_mode = _parse_api_bool(data.get('record_mode'), default=False)
+        if not record_mode:
+            mode_s = data.get('mode')
+            if isinstance(mode_s, bool):
+                record_mode = mode_s
+            else:
+                record_mode = str(mode_s or '').strip().lower() in (
+                    '1',
+                    'true',
+                    'yes',
+                    'record',
+                    'recording',
+                )
         record_action = (data.get('record_action') or data.get('action') or 'click').strip().lower()
         if record_action not in ('click', 'double_click', 'input', 'verify'):
             record_action = 'click'
@@ -4396,6 +4422,127 @@ def api_desktop_picker_status():
         return jsonify(sync_get_desktop_picker_status(consume_last_pick=consume))
     except Exception as e:
         uat_logger.log_exception('api_desktop_picker_status', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _enrich_desktop_spec_from_case(case_id, spec: dict) -> dict:
+    """元素捕获未传 desktop_spec 时，从用例已有桌面步骤推断附着窗口。"""
+    if not isinstance(spec, dict):
+        spec = {}
+    if spec.get('hwnd') or spec.get('process') or spec.get('path') or spec.get('window_title'):
+        return spec
+    if not case_id:
+        return spec
+    try:
+        cid = int(case_id)
+    except (TypeError, ValueError):
+        return spec
+    for st in db.get_case_steps(cid) or []:
+        if (st.get('automation_layer') or 'web').strip().lower() != 'desktop':
+            continue
+        raw = st.get('desktop_spec')
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+    return spec
+
+
+def _resolve_element_picker_web_url(data: dict) -> tuple:
+    """解析 Web 拾取导航 URL（与 start_visual_selection 一致）。"""
+    case_id = data.get('case_id')
+    target_url = (data.get('url') or '').strip()
+    fixed_url = None
+    if target_url:
+        fixed_url, url_err = _validate_and_fix_url(target_url)
+        if url_err:
+            uat_logger.warning(f"元素捕获传入 URL 无效，将尝试按用例解析: {url_err}")
+    if not fixed_url and case_id:
+        try:
+            parsed_case_id = int(case_id)
+        except Exception:
+            parsed_case_id = None
+        if parsed_case_id:
+            case_info = db.get_test_case_v2(parsed_case_id)
+            case_steps = db.get_case_steps(parsed_case_id)
+            resolved_url, _source = _resolve_case_navigation_url(
+                case=case_info, case_id=parsed_case_id, steps=case_steps
+            )
+            if resolved_url:
+                fixed_url = resolved_url
+    return fixed_url, None
+
+
+@app.route('/api/element-picker/start', methods=['POST'])
+@app.route('/api/element_picker/start', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_element_picker_start():
+    """统一元素捕获：Windows 桌面 + Web 浏览器。"""
+    data = request.get_json(silent=True) or {}
+    spec, err = _parse_desktop_spec_body(data)
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+    spec = _enrich_desktop_spec_from_case(data.get('case_id'), spec or {})
+    record_mode = _parse_api_bool(data.get('record_mode'), default=False)
+    if not record_mode:
+        mode_s = (data.get('mode') or '').strip().lower()
+        record_mode = mode_s in ('1', 'true', 'yes', 'record', 'recording')
+    enable_web = _parse_api_bool(data.get('enable_web'), default=True)
+    web_url, _ = _resolve_element_picker_web_url(data)
+    try:
+        from element_picker import sync_start_element_picker
+
+        result = sync_start_element_picker(
+            desktop_spec=spec or {},
+            record_mode=record_mode,
+            web_url=web_url or '',
+            enable_web=enable_web,
+        )
+        status = 200 if result.get('success') else 400
+        return jsonify(result), status
+    except Exception as e:
+        uat_logger.log_exception('api_element_picker_start', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/element-picker/stop', methods=['POST'])
+@app.route('/api/element_picker/stop', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_element_picker_stop():
+    """停止统一元素捕获。"""
+    try:
+        from element_picker import sync_stop_element_picker
+
+        return jsonify(sync_stop_element_picker())
+    except Exception as e:
+        uat_logger.log_exception('api_element_picker_stop', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/element-picker/status', methods=['GET'])
+@app.route('/api/element_picker/status', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_element_picker_status():
+    """轮询统一捕获状态（桌面 + Web）。"""
+    try:
+        from element_picker import sync_get_element_picker_status
+
+        consume = (request.args.get('consume') or '').strip().lower() in ('1', 'true', 'yes')
+        return jsonify(sync_get_element_picker_status(consume_last_pick=consume))
+    except Exception as e:
+        uat_logger.log_exception('api_element_picker_status', e)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -10419,4 +10566,4 @@ if __name__ == '__main__':
     _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
     # 默认关闭 debug，避免生产式部署误暴露调试信息与 Werkzeug 交互式调试器
     _debug = os.environ.get('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
-    app.run(debug=_debug, host='0.0.0.0', port=_port)
+    app.run(debug=_debug, host='0.0.0.0', port=_port, threaded=True)

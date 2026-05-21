@@ -861,7 +861,7 @@
                 <button type="button" onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" data-i18n="steps_import_side">
                     🧪 从 Selenium IDE 导入
                 </button>
-                <button type="button" onclick="startDesktopCaseRecorder()" class="btn btn-primary" id="desktopCaseRecordBtn" title="悬浮窗点选桌面控件，自动写入步骤（无需手写定位）">🖱 桌面录制</button>
+                <button type="button" onclick="toggleElementCapture({ recordToCase: true })" class="btn btn-primary" id="elementCaptureRecordBtn" title="统一捕获：桌面 Ctrl+点击、网页浏览器内点击，自动写入步骤">🧲 元素捕获 / 录制</button>
             </div>
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
@@ -913,11 +913,6 @@
                 <p id="stepDesktopWindowSummary" style="font-size:12px;color:#64748b;margin:6px 0 8px;">窗口：未选择（从下方列表点选）</p>
                 <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;align-items:center;">
                     <button type="button" class="btn btn-sm btn-secondary" onclick="refreshDesktopSnapshot('create')">刷新列表</button>
-                    <button type="button" class="btn btn-sm btn-primary" id="stepDesktopPickControlBtn" onclick="startDesktopPicker('create', false)">拾取控件</button>
-                    <button type="button" class="btn btn-sm btn-info" onclick="startDesktopPicker('create', true, 'click')">录：单击</button>
-                    <button type="button" class="btn btn-sm btn-info" onclick="startDesktopPicker('create', true, 'double_click')">录：双击</button>
-                    <button type="button" class="btn btn-sm btn-info" onclick="startDesktopPicker('create', true, 'input')">录：输入</button>
-                    <button type="button" class="btn btn-sm btn-warning" onclick="startDesktopPicker('create', true, 'verify')">录：验证码</button>
                     <span id="stepDesktopCatalogHint" style="font-size:11px;color:#94a3b8;"></span>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-height:220px;">
@@ -930,7 +925,7 @@
                         <div id="stepDesktopAppList" class="desktop-pick-list" style="overflow:auto;max-height:180px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;"></div>
                     </div>
                 </div>
-                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">点选窗口后点「拾取/录：xxx」：悬浮条选操作类型后在目标程序上点控件，自动写入定位。录：输入请在悬浮条填文字；录：验证码请点选验证码区域（执行时自动滑块/点选，需 LOCAL_VISION_ENABLE 或 LOCAL_OCR_ENABLE）。</small>
+                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">请使用工具栏「元素捕获 / 录制」或定位旁的「拾取元素」捕获控件（桌面 Ctrl+点击，网页在浏览器内点击）。</small>
             </div>
             <div class="form-group">
                 <label for="stepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -972,7 +967,7 @@
                         <option value="data" data-i18n-opt="steps_loc_data">Data属性</option>
                         <option value="aria" data-i18n-opt="steps_loc_aria">ARIA标签</option>
                     </select>
-                    <button type="button" class="btn btn-primary" id="pickCreateBtn" onclick="startVisualSelection('create')" data-i18n="steps_pick">🧲 拾取元素</button>
+                    <button type="button" class="btn btn-primary" id="pickCreateBtn" onclick="toggleElementCapture({ formTarget: 'create' })" data-i18n="steps_pick">🧲 拾取元素</button>
                 </div>
             </div>
             <div class="form-group">
@@ -1117,11 +1112,6 @@
                 <p id="editDesktopWindowSummary" style="font-size:12px;color:#64748b;margin:6px 0 8px;">窗口：未选择（从下方列表点选）</p>
                 <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;align-items:center;">
                     <button type="button" class="btn btn-sm btn-secondary" onclick="refreshDesktopSnapshot('edit')">刷新列表</button>
-                    <button type="button" class="btn btn-sm btn-primary" id="editDesktopPickControlBtn" onclick="startDesktopPicker('edit', false)">拾取控件</button>
-                    <button type="button" class="btn btn-sm btn-info" onclick="startDesktopPicker('edit', true, 'click')">录：单击</button>
-                    <button type="button" class="btn btn-sm btn-info" onclick="startDesktopPicker('edit', true, 'double_click')">录：双击</button>
-                    <button type="button" class="btn btn-sm btn-info" onclick="startDesktopPicker('edit', true, 'input')">录：输入</button>
-                    <button type="button" class="btn btn-sm btn-warning" onclick="startDesktopPicker('edit', true, 'verify')">录：验证码</button>
                     <span id="editDesktopCatalogHint" style="font-size:11px;color:#94a3b8;"></span>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-height:220px;">
@@ -1134,7 +1124,7 @@
                         <div id="editDesktopAppList" class="desktop-pick-list" style="overflow:auto;max-height:180px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;"></div>
                     </div>
                 </div>
-                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">点选窗口或应用即可配置，无需手写 JSON。</small>
+                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">点选窗口或应用即可配置；捕获元素请用工具栏「元素捕获 / 录制」。</small>
             </div>
             <div class="form-group">
                 <label for="editStepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -1176,7 +1166,6 @@
                         <option value="data" data-i18n-opt="steps_loc_data">Data属性</option>
                         <option value="aria" data-i18n-opt="steps_loc_aria">ARIA标签</option>
                     </select>
-                    <button type="button" class="btn btn-secondary" id="pickEditBtn" onclick="startVisualSelection('edit')" data-i18n="steps_pick">🧲 拾取元素</button>
                 </div>
             </div>
             <div class="form-group">
@@ -1630,7 +1619,7 @@
                         
                 // ✅ 关键优化：添加缓存控制参数，确保获取最新数据
                 const cacheParam = forceRefresh ? `&_t=${Date.now()}` : '';
-                const response = await fetch(`/api/cases/${currentCaseId}/steps?page=${currentPage}&page_size=${pageSize}${cacheParam}`, {
+                const response = await fetchApi(`/api/cases/${currentCaseId}/steps?page=${currentPage}&page_size=${pageSize}${cacheParam}`, {
                     headers: {
                         'Cache-Control': forceRefresh ? 'no-cache' : '',
                         'Pragma': forceRefresh ? 'no-cache' : ''
@@ -2515,7 +2504,7 @@ function changePage(page) {
             rebuildActionSelect(isEdit ? 'editStepAction' : 'stepAction', layer);
             rebuildSelectorTypeSelect(isEdit ? 'editStepSelectorType' : 'stepSelectorType', layer);
             const pickBtn = document.getElementById(isEdit ? 'pickEditBtn' : 'pickCreateBtn');
-            if (pickBtn) pickBtn.style.display = layer === 'desktop' ? 'none' : '';
+            if (pickBtn) pickBtn.style.display = isEdit ? 'none' : '';
             if (layer === 'desktop') {
                 applyDesktopEnvHints(mode, await loadDesktopEnvConfig());
                 refreshDesktopSnapshot(mode, false);
@@ -2524,10 +2513,56 @@ function changePage(page) {
             else toggleActionFields();
         }
 
-        let _desktopPickerPollTimer = null;
-        let _desktopPickerTargetMode = null;
-        let _desktopPickerRecordToCase = false;
-        let _desktopCaseRecordSpec = null;
+        let _elementCaptureActive = false;
+        let _elementCapturePollTimer = null;
+        let _elementCaptureFormTarget = null;
+        let _elementCaptureRecordToCase = false;
+
+        function formatFetchError(err) {
+            const msg = (err && err.message) ? String(err.message) : String(err || '');
+            if (/failed to fetch|networkerror|load failed/i.test(msg)) {
+                return '无法连接测试平台服务（请确认 python app.py 正在运行且页面地址正确）';
+            }
+            return msg || '未知错误';
+        }
+
+        async function fetchApi(url, options, retries) {
+            retries = retries == null ? 2 : retries;
+            const opts = Object.assign({ credentials: 'same-origin' }, options || {});
+            let lastErr;
+            for (let i = 0; i <= retries; i++) {
+                try {
+                    const r = await fetch(url, opts);
+                    return r;
+                } catch (e) {
+                    lastErr = e;
+                    if (i < retries) {
+                        await new Promise(function (resolve) { setTimeout(resolve, 400 * (i + 1)); });
+                    }
+                }
+            }
+            throw lastErr;
+        }
+
+        async function parseApiJsonResponse(response) {
+            const ct = (response.headers.get('content-type') || '').toLowerCase();
+            const text = await response.text();
+            if (ct.includes('application/json') || (text.trim().startsWith('{') || text.trim().startsWith('['))) {
+                try {
+                    return JSON.parse(text);
+                } catch (e) {
+                    throw new Error('响应 JSON 解析失败');
+                }
+            }
+            if (response.status === 404) {
+                throw new Error('元素捕获接口未找到，请重启 python app.py 后再试');
+            }
+            if (response.status === 401) {
+                throw new Error('未登录或会话已过期，请重新登录');
+            }
+            const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+            throw new Error('服务器返回非 JSON（HTTP ' + response.status + '）：' + snippet);
+        }
 
         function applyDesktopPickToForm(mode, pick) {
             if (!pick) return;
@@ -2570,10 +2605,9 @@ function changePage(page) {
                     description: st.description || '',
                     desktop_spec: typeof st.desktop_spec === 'string' ? st.desktop_spec : JSON.stringify(st.desktop_spec || {}),
                 };
-                const r = await fetch('/api/steps', {
+                const r = await fetchApi('/api/steps', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    credentials: 'same-origin',
                     body: JSON.stringify(body),
                 });
                 const data = await r.json();
@@ -2583,184 +2617,233 @@ function changePage(page) {
             return n;
         }
 
-        function stopDesktopPickerPoll() {
-            if (_desktopPickerPollTimer) {
-                clearInterval(_desktopPickerPollTimer);
-                _desktopPickerPollTimer = null;
+        function stopElementCapturePoll() {
+            if (_elementCapturePollTimer) {
+                clearInterval(_elementCapturePollTimer);
+                _elementCapturePollTimer = null;
             }
-            _desktopPickerTargetMode = null;
-            _desktopPickerRecordToCase = false;
+            _elementCaptureFormTarget = null;
+            _elementCaptureRecordToCase = false;
+            _elementCaptureActive = false;
         }
 
-        async function stopDesktopPickerSession() {
-            stopDesktopPickerPoll();
+        async function stopElementCaptureSession() {
+            stopElementCapturePoll();
+            isSelecting = false;
+            setPickButtonsLoading(false);
             try {
-                await fetch('/api/desktop/picker/stop', { method: 'POST', credentials: 'same-origin' });
+                await fetchApi('/api/element-picker/stop', { method: 'POST' }, 1);
             } catch (e) { /* ignore */ }
         }
 
-        function startDesktopPickerPoll(mode, recordToCase) {
-            stopDesktopPickerPoll();
-            _desktopPickerTargetMode = mode;
-            _desktopPickerRecordToCase = !!recordToCase;
+        function normalizeWebPickElement(raw) {
+            if (!raw || typeof raw !== 'object') return null;
+            if (raw.selector_type && raw.selector_value) return raw;
+            const sel = raw.selector || {};
+            const info = raw.elementInfo || {};
+            return {
+                selector_type: sel.selector_type || raw.selector_type || 'css',
+                selector_value: sel.selector_value || raw.selector_value || '',
+                locator_candidates: raw.locator_candidates || sel.locator_candidates || '',
+                card_item_xpath: raw.card_item_xpath || sel.card_item_xpath || '',
+                tag_name: info.tagName || raw.tag_name || '',
+            };
+        }
+
+        async function appendWebCapturedStep(el) {
+            if (!el || !currentCaseId) return 0;
+            const body = {
+                case_id: currentCaseId,
+                action: 'click',
+                automation_layer: 'web',
+                selector_type: el.selector_type || 'css',
+                selector_value: el.selector_value || '',
+                input_value: '',
+                description: '捕获：' + (el.tag_name || el.selector_value || '元素'),
+                locator_candidates: el.locator_candidates || '',
+            };
+            const r = await fetchApi('/api/steps', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await r.json();
+            if (data.success) {
+                await loadSteps(true);
+                return 1;
+            }
+            return 0;
+        }
+
+        function startElementCapturePoll(formTarget, recordToCase) {
+            stopElementCapturePoll();
+            _elementCaptureFormTarget = formTarget;
+            _elementCaptureRecordToCase = !!recordToCase;
+            _elementCaptureActive = true;
             const startedAt = Date.now();
-            _desktopPickerPollTimer = setInterval(async function () {
+            _elementCapturePollTimer = setInterval(async function () {
                 try {
-                    const r = await fetch('/api/desktop/picker/status?consume=1', { credentials: 'same-origin' });
-                    const data = await r.json();
+                    const r = await fetchApi('/api/element-picker/status?consume=1', {
+                        headers: { 'Accept': 'application/json' },
+                    }, 1);
+                    const data = await parseApiJsonResponse(r);
                     if (!data.success) return;
                     if (data.picker_closed) {
-                        if (_desktopPickerRecordToCase && (data.recorded_steps || []).length) {
+                        if (_elementCaptureRecordToCase && (data.recorded_steps || []).length) {
                             await appendDesktopRecordedSteps(data.recorded_steps);
                         }
-                        showToast('桌面拾取已关闭', 'info');
-                        stopDesktopPickerPoll();
+                        showToast(_elementCaptureRecordToCase ? '元素录制已结束' : '元素捕获已结束', 'info');
+                        stopElementCapturePoll();
+                        isSelecting = false;
+                        setPickButtonsLoading(false);
                         return;
                     }
                     if (Date.now() - startedAt > 600000) {
-                        showToast('桌面拾取超时，已自动停止', 'warning');
-                        await stopDesktopPickerSession();
+                        showToast('元素捕获超时，已自动停止', 'warning');
+                        await stopElementCaptureSession();
                         return;
                     }
-                    if (data.error) {
-                        showToast(data.error, 'error');
-                    }
-                    const newSteps = data.new_recorded_steps || [];
-                    if (_desktopPickerRecordToCase && newSteps.length) {
+                    if (data.error) showToast(data.error, 'error');
+
+                    const desk = data.desktop || {};
+                    const newSteps = data.new_recorded_steps || desk.new_recorded_steps || [];
+                    if (_elementCaptureRecordToCase && newSteps.length) {
                         const n = await appendDesktopRecordedSteps(newSteps);
                         showToast('已录制 ' + n + ' 个桌面步骤', 'success');
-                    } else if (data.last_pick && _desktopPickerTargetMode) {
-                        applyDesktopPickToForm(_desktopPickerTargetMode, data.last_pick);
-                        showToast('已填入：' + (data.last_pick.label || '控件'), 'success');
+                    } else if (desk.last_pick && _elementCaptureFormTarget) {
+                        const layerEl = document.getElementById(
+                            _elementCaptureFormTarget === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer'
+                        );
+                        if (layerEl) layerEl.value = 'desktop';
+                        onAutomationLayerChange(_elementCaptureFormTarget);
+                        applyDesktopPickToForm(_elementCaptureFormTarget, desk.last_pick);
+                        showToast('已填入桌面：' + (desk.last_pick.label || '控件'), 'success');
+                    }
+
+                    const webEl = normalizeWebPickElement(
+                        (data.web && data.web.selected_element) || data.selected_element
+                    );
+                    if (webEl) {
+                        if (_elementCaptureRecordToCase) {
+                            const n = await appendWebCapturedStep(webEl);
+                            if (n) showToast('已录制网页步骤', 'success');
+                        } else if (_elementCaptureFormTarget) {
+                            const layerEl = document.getElementById(
+                                _elementCaptureFormTarget === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer'
+                            );
+                            if (layerEl) layerEl.value = 'web';
+                            onAutomationLayerChange(_elementCaptureFormTarget);
+                            fillElementToForm(webEl, _elementCaptureFormTarget);
+                            showToast(t('steps_pick_updated') || '已填入网页元素', 'success');
+                        }
                     }
                 } catch (e) {
-                    console.error('desktop picker poll', e);
+                    console.error('element capture poll', e);
+                    if (/failed to fetch|networkerror/i.test((e && e.message) || '')) {
+                        showToast(formatFetchError(e), 'error');
+                        await stopElementCaptureSession();
+                    }
                 }
             }, 800);
         }
 
-        async function startDesktopPicker(mode, recordMode, recordAction) {
-            const isEdit = mode === 'edit';
-            const layerEl = document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer');
-            if ((layerEl && layerEl.value) !== 'desktop') {
-                showToast('请先将自动化层切换为 Windows 桌面', 'error');
-                return;
-            }
-            let spec = parseDesktopSpecField(mode);
-            if (!spec || (!spec.window_title_re && !spec.process && !spec.window_title && !spec.hwnd)) {
-                showToast('请先从「运行中窗口」点选要操作的应用窗口', 'error');
-                return;
-            }
-            const act = (recordAction || 'click').toLowerCase();
-            let inputValue = '';
-            let verifyType = 'auto';
-            if (recordMode && act === 'input') {
-                inputValue = window.prompt('录制「输入」：请填写要输入的文字', '') || '';
-                if (!inputValue.trim()) {
-                    showToast('已取消：未填写输入内容', 'info');
-                    return;
-                }
-            }
-            if (recordMode && act === 'verify') {
-                verifyType = window.prompt('验证码类型：auto（自动）/ slider（滑块）/ image（点选文字）', 'auto') || 'auto';
-                verifyType = verifyType.trim().toLowerCase() || 'auto';
-            }
+        async function resolveCaseNavUrlForPicker() {
+            if (currentCaseUrl) return currentCaseUrl;
+            if (!currentCaseId) return '';
             try {
-                await stopDesktopPickerSession();
-                const r = await fetch('/api/desktop/picker/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'same-origin',
-                    body: JSON.stringify({
-                        desktop_spec: spec,
-                        record_mode: !!recordMode,
-                        record_action: act,
-                        input_value: inputValue,
-                        verify_type: verifyType,
-                    }),
-                });
+                const r = await fetchApi(`/api/cases/${currentCaseId}/steps?page=1&page_size=80`);
                 const data = await r.json();
-                if (!data.success) {
-                    showToast(data.error || '无法启动桌面拾取', 'error');
-                    return;
+                for (const st of (data.steps || [])) {
+                    const act = (st.action || '').toLowerCase();
+                    if (act === 'navigate' && (st.input_value || '').trim()) {
+                        return String(st.input_value).trim();
+                    }
+                    if ((st.url || '').trim()) return String(st.url).trim();
                 }
-                const actNames = { click: '单击', double_click: '双击', input: '输入', verify: '验证码' };
-                showToast(
-                    recordMode
-                        ? ('录制「' + (actNames[act] || act) + '」：悬浮条点「拾取控件」后在目标程序上点击')
-                        : '拾取已启动：悬浮窗点「拾取控件」后，在目标程序上点击控件',
-                    'success'
-                );
-                startDesktopPickerPoll(mode, !!recordMode);
-            } catch (e) {
-                showToast('启动失败：' + (e.message || e), 'error');
-            }
+            } catch (e) { console.warn('resolveCaseNavUrlForPicker', e); }
+            return '';
         }
 
-        async function ensureDesktopSpecForCaseRecord() {
-            if (_desktopCaseRecordSpec) return _desktopCaseRecordSpec;
-            await refreshDesktopSnapshot('create', false);
-            const wins = (window._desktopSnapshotCache && window._desktopSnapshotCache.windows) || [];
-            if (!wins.length) {
-                showToast('请先打开被测程序，在添加步骤里选 Windows 桌面并刷新窗口列表', 'error');
-                return null;
-            }
-            const lines = wins.map(function (w, i) {
-                const proc = w.process ? ' [' + w.process + ']' : '';
-                return (i + 1) + '. ' + w.title + proc;
-            });
-            const pick = window.prompt(
-                '选择要录制的窗口（输入序号）：\n\n' + lines.join('\n').slice(0, 3500),
-                '1'
-            );
-            if (pick === null) return null;
-            const idx = parseInt(String(pick).trim(), 10) - 1;
-            if (Number.isNaN(idx) || idx < 0 || idx >= wins.length) {
-                showToast('序号无效', 'error');
-                return null;
-            }
-            const sr = await fetch('/api/desktop/window-spec', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({ hwnd: wins[idx].hwnd }),
-            });
-            const specData = await sr.json();
-            if (!specData.success) {
-                showToast(specData.error || '窗口配置失败', 'error');
-                return null;
-            }
-            _desktopCaseRecordSpec = specData.spec;
-            return _desktopCaseRecordSpec;
-        }
-
-        async function startDesktopCaseRecorder() {
+        async function startElementCapture(opts) {
+            opts = opts || {};
+            const formTarget = opts.formTarget || null;
+            const recordToCase = !!opts.recordToCase;
+            const recordMode = opts.recordMode != null ? !!opts.recordMode : recordToCase;
             if (!currentCaseId) {
                 showToast('未找到当前用例', 'error');
                 return;
             }
-            const spec = await ensureDesktopSpecForCaseRecord();
-            if (!spec) return;
+            const pickerUrl = (opts.url || currentCaseUrl || await resolveCaseNavUrlForPicker() || '').trim();
+            let desktopSpec = {};
+            if (formTarget) {
+                const layerEl = document.getElementById(
+                    formTarget === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer'
+                );
+                if (layerEl && layerEl.value === 'desktop') {
+                    desktopSpec = parseDesktopSpecField(formTarget) || {};
+                }
+            }
             try {
-                await stopDesktopPickerSession();
-                const r = await fetch('/api/desktop/picker/start', {
+                await stopElementCaptureSession();
+                isSelecting = true;
+                setPickButtonsLoading(true);
+                const r = await fetchApi('/api/element-picker/start', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'same-origin',
-                    body: JSON.stringify({ desktop_spec: spec, record_mode: true }),
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({
+                        case_id: currentCaseId,
+                        url: pickerUrl,
+                        record_mode: recordMode,
+                        desktop_spec: desktopSpec,
+                        enable_web: true,
+                    }),
                 });
-                const data = await r.json();
+                const data = await parseApiJsonResponse(r);
                 if (!data.success) {
-                    showToast(data.error || '无法启动桌面录制', 'error');
+                    showToast(data.error || '无法启动元素捕获', 'error');
+                    isSelecting = false;
+                    setPickButtonsLoading(false);
                     return;
                 }
-                showToast('桌面录制：悬浮窗选操作类型 →「拾取控件」→ 点选控件；关闭悬浮窗结束', 'success');
-                _desktopPickerRecordToCase = true;
-                _desktopPickerTargetMode = null;
-                startDesktopPickerPoll(null, true);
+                const web = data.web || {};
+                const desk = data.desktop || {};
+                let msg = recordMode
+                    ? '元素录制：点击桌面控件；在浏览器中直接点击网页元素；ESC 结束'
+                    : '元素捕获：点击桌面控件；在浏览器中直接点击网页元素；ESC 结束';
+                if (web.success) {
+                    msg += pickerUrl ? '（网页：' + pickerUrl + '）' : '（网页拾取已开启）';
+                } else if (web.error && !web.skipped) {
+                    msg += '（网页：' + web.error + '）';
+                }
+                if (desk.error) {
+                    showToast(desk.error, 'warning');
+                }
+                showToast(msg, 'success');
+                startElementCapturePoll(formTarget, recordToCase);
             } catch (e) {
-                showToast('启动录制失败：' + (e.message || e), 'error');
+                showToast('启动失败：' + formatFetchError(e), 'error');
+                isSelecting = false;
+                setPickButtonsLoading(false);
             }
+        }
+
+        async function toggleElementCapture(opts) {
+            if (_elementCaptureActive || isSelecting) {
+                showToast('正在停止元素捕获…', 'info');
+                await stopElementCaptureSession();
+                return;
+            }
+            await startElementCapture(opts || {});
+        }
+
+        function startDesktopPicker(mode, recordMode) {
+            toggleElementCapture({ formTarget: mode, recordToCase: !!recordMode, recordMode: !!recordMode });
+        }
+        function startDesktopCaseRecorder() {
+            toggleElementCapture({ recordToCase: true, recordMode: true });
+        }
+        async function stopDesktopPickerSession() {
+            return stopElementCaptureSession();
         }
         
         function toggleActionFields() {
@@ -2994,8 +3077,6 @@ function changePage(page) {
             if (editStepClickRepeatGroup) editStepClickRepeatGroup.style.display = 'none';
             const editStepBatchInputGroup = document.getElementById('editStepBatchInputGroup');
             if (editStepBatchInputGroup) editStepBatchInputGroup.style.display = 'none';
-            const pickEditBtn = document.getElementById('pickEditBtn');
-            if (pickEditBtn) pickEditBtn.style.display = '';
             
             // 重置所有字段为默认状态
             selectorTypeField.style.display = 'block';
@@ -3038,7 +3119,6 @@ function changePage(page) {
                 selectorValueField.style.display = 'none';
                 inputValueField.style.display = 'none';
                 if (editStepBatchInputGroup) editStepBatchInputGroup.style.display = 'block';
-                if (pickEditBtn) pickEditBtn.style.display = 'none';
             } else if (action === 'extract_text') {
                 // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
@@ -3109,13 +3189,14 @@ function changePage(page) {
         let selectionTarget = 'create'; // create | edit
         
         function setPickButtonsLoading(loading) {
-            const ids = ['pickCreateBtn', 'pickEditBtn'];
-            ids.forEach(id => {
-                const btn = document.getElementById(id);
-                if (!btn) return;
-                btn.disabled = false;
-                btn.textContent = loading ? t('steps_pick_stop') : t('steps_pick');
-            });
+            const pickBtn = document.getElementById('pickCreateBtn');
+            if (pickBtn) {
+                pickBtn.textContent = loading ? t('steps_pick_stop') : t('steps_pick');
+            }
+            const recBtn = document.getElementById('elementCaptureRecordBtn');
+            if (recBtn) {
+                recBtn.textContent = loading ? '停止捕获' : '🧲 元素捕获 / 录制';
+            }
         }
         
         function _selCfg(target) {
@@ -3133,141 +3214,12 @@ function changePage(page) {
         }
         
         function startVisualSelection(target = 'create') {
-            if (isSelecting) {
-                showToast(t('steps_toast_stop_pick'), 'info');
-                stopVisualSelection();
-                return;
-            }
-            if (!currentCaseId) {
-                showToast(t('steps_toast_no_case_pick'), 'error');
-                return;
-            }
-            isSelecting = true;
             selectionTarget = target === 'edit' ? 'edit' : 'create';
-            setPickButtonsLoading(true);
-            showToast(t('steps_toast_pick_starting'), 'info');
-            
-            const caseId = currentCaseId;
-            console.log('正在启动可视化选择，case_id:', caseId);
-            // URL 统一交给后端解析（case.url > step.url > navigate.input_value），前端不再拼接，避免 about:blank 干扰
-            fetch('/api/start_visual_selection', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ case_id: caseId, url: (currentCaseUrl || '') })
-            })
-            .then(response => {
-                console.log('启动选择响应状态:', response.status);
-                console.log('响应类型:', response.headers.get('content-type'));
-                if (!response.ok) {
-                    throw new Error(t('steps_start_pick_fail').replace('{code}', String(response.status)));
-                }
-                return response.json();
-            })
-            .then(data => {
-                if (data.success) {
-                    if (data.stopped) {
-                        showToast(data.message || t('steps_toast_stop_pick'), 'info');
-                        stopVisualSelection();
-                        return;
-                    }
-                    console.log('可视化选择已启动');
-                    // 开始监听元素选择事件
-                    startListeningForSelection();
-                } else {
-                    alert(t('steps_pick_fail_alert').replace('{err}', data.error || ''));
-                    stopVisualSelection();
-                }
-            })
-            .catch(error => {
-                console.error('启动可视化选择时出错:', error);
-                showToast(t('steps_pick_fail_toast').replace('{msg}', error.message), 'error');
-                stopVisualSelection();
-            });
+            toggleElementCapture({ formTarget: selectionTarget });
         }
-        
+
         function stopVisualSelection() {
-            isSelecting = false;
-            setPickButtonsLoading(false);
-            
-            // 调用后端API停止可视化选择
-            fetch('/api/stop_visual_selection', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    console.log('可视化选择已停止');
-                    // 停止监听元素选择事件
-                    stopListeningForSelection();
-                }
-            })
-            .catch(error => {
-                console.error('停止可视化选择时出错:', error);
-                setPickButtonsLoading(false);
-            });
-        }
-        
-        function startListeningForSelection() {
-            const startedAt = Date.now();
-            const maxPickMs = 180000; // 3 分钟兜底，防止前端一直“拾取中”
-            let pickerClosedHits = 0;
-            // 启动轮询，检查是否有元素被选择
-            const pollInterval = setInterval(() => {
-                if (!isSelecting) {
-                    clearInterval(pollInterval);
-                    return;
-                }
-                if (Date.now() - startedAt > maxPickMs) {
-                    showToast(t('steps_pick_timeout'), 'warning');
-                    stopVisualSelection();
-                    clearInterval(pollInterval);
-                    return;
-                }
-                
-                fetch('/api/check_selected_element')
-                .then(response => response.json())
-                .then(data => {
-                    if (!data || data.success === false) {
-                        showToast(t('steps_pick_abnormal'), 'error');
-                        stopVisualSelection();
-                        clearInterval(pollInterval);
-                        return;
-                    }
-                    if (data && data.picker_closed) {
-                        pickerClosedHits += 1;
-                        if (pickerClosedHits < 3) {
-                            // 后端会尝试自动恢复，连续多次 closed 才真正停止
-                            return;
-                        }
-                        showToast(t('steps_pick_closed'), 'warning');
-                        stopVisualSelection();
-                        clearInterval(pollInterval);
-                        return;
-                    }
-                    pickerClosedHits = 0;
-                    if (data.success && data.selected_element) {
-                        // 元素已被选择，填充到表单
-                        fillElementToForm(data.selected_element, selectionTarget);
-                        // 保持拾取会话，不自动停止；允许连续拾取覆盖
-                        showToast(t('steps_pick_updated'), 'success');
-                    }
-                })
-                .catch(error => {
-                    console.error('检查选择元素时出错:', error);
-                    showToast(t('steps_pick_check_fail'), 'error');
-                    stopVisualSelection();
-                    clearInterval(pollInterval);
-                });
-            }, 1000); // 每秒轮询一次
-        }
-        
-        function stopListeningForSelection() {
-            // 停止轮询
+            stopElementCaptureSession();
         }
         
         function fillElementToForm(elementInfo, target = 'create') {
@@ -3407,7 +3359,7 @@ function changePage(page) {
         
         async function editStep(stepId) {
             try {
-                const response = await fetch(`/api/steps/${stepId}`);
+                const response = await fetchApi(`/api/steps/${stepId}`);
                 const data = await response.json();
                 
                 if (data.step) {
@@ -3416,7 +3368,7 @@ function changePage(page) {
                     alert(t('steps_fail_get_step'));
                 }
             } catch (error) {
-                alert(t('steps_fail_get_step_err').replace('{msg}', error.message));
+                alert(t('steps_fail_get_step_err').replace('{msg}', formatFetchError(error)));
             }
         }
         

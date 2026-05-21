@@ -10219,8 +10219,11 @@ class PlaywrightAutomation:
             await self.page.goto(target, wait_until='load', timeout=timeout)
             await self._wait_pick_page_ready(after_nav=True, timeout_ms=int(timeout))
 
-    async def enable_element_selection(self, url=''):
-        """启用元素选择模式,显示悬浮窗让用户选择页面元素"""
+    async def enable_element_selection(self, url='', auto_arm: bool = False):
+        """启用元素选择模式,显示悬浮窗让用户选择页面元素。
+
+        auto_arm: 为 True 时进入页面后直接处于可点击拾取状态（统一元素捕获用）。
+        """
         try:
             # 检查浏览器实例是否有效
             browser_valid = False
@@ -10295,7 +10298,7 @@ class PlaywrightAutomation:
                         if (!host) return false;
                         if (window.automationSelection && window.automationSelection._inited) {
                             if (typeof window.enableElementSelection === 'function') {
-                                window.enableElementSelection();
+                                window.enableElementSelection(__AUTO_ARM__);
                             }
                             return true;
                         }
@@ -10481,14 +10484,18 @@ class PlaywrightAutomation:
                             }, true);
                         }
 
-                        window.enableElementSelection = function () {
+                        window.enableElementSelection = function (arm) {
                             ensureToolbar();
-                            state.enabled = false;
+                            const armed = !(arm === false || arm === 0 || arm === '0');
+                            state.enabled = armed;
                             if (state.btn) {
-                                state.btn.textContent = '拾取元素';
-                                state.btn.style.background = '#3b82f6';
+                                state.btn.textContent = armed ? '退出拾取' : '拾取元素';
+                                state.btn.style.background = armed ? '#ef4444' : '#3b82f6';
                             }
-                            if (state.tip) state.tip.textContent = '点击后在页面选择目标';
+                            if (state.tip) {
+                                state.tip.textContent = armed ? '请点击目标元素' : '点击后在页面选择目标';
+                            }
+                            if (!armed && state.overlay) state.overlay.style.display = 'none';
                             try {
                                 const fs = document.querySelectorAll('iframe');
                                 for (const f of fs) {
@@ -10496,7 +10503,7 @@ class PlaywrightAutomation:
                                         f.contentWindow.postMessage({
                                             __automationPicker: true,
                                             type: 'picker_state',
-                                            enabled: true
+                                            enabled: armed
                                         }, '*');
                                     }
                                 }
@@ -10519,13 +10526,13 @@ class PlaywrightAutomation:
                             } catch (_) {}
                         };
 
-                        window.enableElementSelection();
+                        window.enableElementSelection(__AUTO_ARM__);
                         return true;
                     } catch (e) {
                         return false;
                     }
                 })()
-            """)
+            """.replace("__AUTO_ARM__", "true" if auto_arm else "false"))
             if not picker_injected:
                 raise Exception("拾取器注入失败：页面DOM尚未就绪或被页面脚本拦截")
             # 同源 iframe 轻量拾取桥接：frame 内点击后把元素详情回传到 top 的 automationSelection
@@ -11722,9 +11729,9 @@ def sync_stop_recording():
         return await automation.stop_recording()
     return worker.execute(run)
 
-def sync_enable_element_selection(url=''):
+def sync_enable_element_selection(url='', auto_arm: bool = False):
     async def run():
-        return await automation.enable_element_selection(url)
+        return await automation.enable_element_selection(url, auto_arm=auto_arm)
     return worker.execute(run)
 
 def sync_disable_element_selection():
