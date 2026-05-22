@@ -6617,9 +6617,17 @@ def api_run_case(case_id):
     browser_started = False
     
     try:
-        # 若用户仍处于“拾取元素”会话，执行前强制隔离浏览器，避免复用拾取窗口导致运行失败
+        # 若用户仍处于元素/桌面拾取会话，执行前关闭拾取 UI，避免全屏遮罩与钩子干扰
+        try:
+            from element_picker import sync_stop_element_picker
+
+            picker_stopped = sync_stop_element_picker()
+            if (picker_stopped.get("desktop") or {}).get("was_active"):
+                uat_logger.info("检测到元素捕获仍在运行，执行前已自动关闭")
+        except Exception:
+            pass
         if bool(getattr(automation, '_selection_mode_active', False)):
-            uat_logger.info("检测到拾取器会话仍在，执行前自动关闭拾取器并重建执行浏览器")
+            uat_logger.info("检测到 Web 拾取器会话仍在，执行前自动关闭并重建执行浏览器")
             try:
                 sync_disable_element_selection()
             except Exception:
@@ -6733,9 +6741,23 @@ def api_run_case(case_id):
                             if _case_run_cancelled(user_id):
                                 raise Exception("用户已停止执行")
                             raise
+                        desk_status = str(
+                            (desk_result or {}).get("status") or "success"
+                        ).strip().lower()
+                        if desk_status not in ("success", "ok", "passed"):
+                            raise RuntimeError(
+                                (desk_result or {}).get("error")
+                                or "桌面步骤执行失败"
+                            )
                         step_status = 'success'
                         step_error = ''
                         step_screenshot = (desk_result or {}).get('screenshot') or ''
+                        if (desk_result or {}).get("resolved_via"):
+                            uat_logger.info(
+                                "桌面步骤 #%s 定位方式: %s",
+                                step.get("id"),
+                                desk_result.get("resolved_via"),
+                            )
                         step_duration = round(time.time() - step_start_time, 3)
                         step_results_list.append({
                             'step_id': step.get('id'), 'step_order': step.get('step_order', 0),

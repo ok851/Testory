@@ -861,7 +861,7 @@
                 <button type="button" onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" data-i18n="steps_import_side">
                     🧪 从 Selenium IDE 导入
                 </button>
-                <button type="button" onclick="toggleElementCapture({ recordToCase: true })" class="btn btn-primary" id="elementCaptureRecordBtn" title="统一捕获：桌面 Ctrl+点击、网页浏览器内点击，自动写入步骤">🧲 元素捕获 / 录制</button>
+                <button type="button" onclick="toggleElementCapture({ recordToCase: true })" class="btn btn-primary" id="elementCaptureRecordBtn" title="统一捕获：桌面悬浮窗点击控件；有用例/步骤 URL 时同时打开网页拾取">🧲 元素捕获 / 录制</button>
             </div>
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
@@ -925,7 +925,7 @@
                         <div id="stepDesktopAppList" class="desktop-pick-list" style="overflow:auto;max-height:180px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;"></div>
                     </div>
                 </div>
-                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">请使用工具栏「元素捕获 / 录制」或定位旁的「拾取元素」捕获控件（桌面 Ctrl+点击，网页在浏览器内点击）。</small>
+                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">请使用工具栏「元素捕获 / 录制」或定位旁的「拾取元素」捕获控件（桌面与网页均需按住 Ctrl 并点击目标）。</small>
             </div>
             <div class="form-group">
                 <label for="stepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -2517,6 +2517,7 @@ function changePage(page) {
         let _elementCapturePollTimer = null;
         let _elementCaptureFormTarget = null;
         let _elementCaptureRecordToCase = false;
+        let _elementCaptureStarting = false;
 
         function formatFetchError(err) {
             const msg = (err && err.message) ? String(err.message) : String(err || '');
@@ -2587,6 +2588,16 @@ function changePage(page) {
             const desc = document.getElementById(isEdit ? 'editStepDescription' : 'stepDescription');
             if (desc && !String(desc.value || '').trim()) {
                 desc.value = '拾取：' + (pick.label || pick.name || pick.automation_id || '控件');
+            }
+            if (pick.desktop_spec || pick.uia_path || pick.rectangle) {
+                const spec = Object.assign({}, pick.desktop_spec || {});
+                if (pick.uia_path && !spec.uia_path) spec.uia_path = pick.uia_path;
+                if (pick.rectangle) {
+                    const r = pick.rectangle;
+                    spec.pick_center = Math.round((Number(r.left) + Number(r.right)) / 2) + ','
+                        + Math.round((Number(r.top) + Number(r.bottom)) / 2);
+                }
+                setDesktopSpecField(mode, spec);
             }
         }
 
@@ -2689,10 +2700,12 @@ function changePage(page) {
                     const data = await parseApiJsonResponse(r);
                     if (!data.success) return;
                     if (data.picker_closed) {
-                        if (_elementCaptureRecordToCase && (data.recorded_steps || []).length) {
-                            await appendDesktopRecordedSteps(data.recorded_steps);
-                        }
-                        showToast(_elementCaptureRecordToCase ? '元素录制已结束' : '元素捕获已结束', 'info');
+                        const closeMsg = (data.error || data.desktop && data.desktop.error) || '';
+                        showToast(
+                            (_elementCaptureRecordToCase ? '元素录制已结束' : '元素捕获已结束')
+                            + (closeMsg ? '：' + closeMsg : ''),
+                            closeMsg ? 'warning' : 'info'
+                        );
                         stopElementCapturePoll();
                         isSelecting = false;
                         setPickButtonsLoading(false);
@@ -2765,15 +2778,21 @@ function changePage(page) {
         }
 
         async function startElementCapture(opts) {
+            if (_elementCaptureStarting || _elementCaptureActive || isSelecting) {
+                return;
+            }
+            _elementCaptureStarting = true;
             opts = opts || {};
             const formTarget = opts.formTarget || null;
             const recordToCase = !!opts.recordToCase;
             const recordMode = opts.recordMode != null ? !!opts.recordMode : recordToCase;
             if (!currentCaseId) {
+                _elementCaptureStarting = false;
                 showToast('未找到当前用例', 'error');
                 return;
             }
             const pickerUrl = (opts.url || currentCaseUrl || await resolveCaseNavUrlForPicker() || '').trim();
+            const enableWeb = opts.enableWeb != null ? !!opts.enableWeb : !!pickerUrl;
             let desktopSpec = {};
             if (formTarget) {
                 const layerEl = document.getElementById(
@@ -2795,7 +2814,7 @@ function changePage(page) {
                         url: pickerUrl,
                         record_mode: recordMode,
                         desktop_spec: desktopSpec,
-                        enable_web: true,
+                        enable_web: enableWeb,
                     }),
                 });
                 const data = await parseApiJsonResponse(r);
@@ -2808,15 +2827,22 @@ function changePage(page) {
                 const web = data.web || {};
                 const desk = data.desktop || {};
                 let msg = recordMode
-                    ? '元素录制：点击桌面控件；在浏览器中直接点击网页元素；ESC 结束'
-                    : '元素捕获：点击桌面控件；在浏览器中直接点击网页元素；ESC 结束';
-                if (web.success) {
-                    msg += pickerUrl ? '（网页：' + pickerUrl + '）' : '（网页拾取已开启）';
-                } else if (web.error && !web.skipped) {
+                    ? '元素录制：按住 Ctrl 并点击桌面/网页元素；ESC 结束'
+                    : '元素捕获：按住 Ctrl 并点击桌面/网页元素；ESC 结束';
+                if (web.success && pickerUrl) {
+                    msg += '；网页：' + pickerUrl;
+                } else if (!enableWeb || web.skipped) {
+                    msg += '（仅桌面，未打开浏览器）';
+                } else if (web.error) {
                     msg += '（网页：' + web.error + '）';
                 }
                 if (desk.error) {
                     showToast(desk.error, 'warning');
+                } else if (!desk.success) {
+                    showToast(desk.error || '桌面捕获未启动', 'error');
+                    isSelecting = false;
+                    setPickButtonsLoading(false);
+                    return;
                 }
                 showToast(msg, 'success');
                 startElementCapturePoll(formTarget, recordToCase);
@@ -2824,6 +2850,8 @@ function changePage(page) {
                 showToast('启动失败：' + formatFetchError(e), 'error');
                 isSelecting = false;
                 setPickButtonsLoading(false);
+            } finally {
+                _elementCaptureStarting = false;
             }
         }
 

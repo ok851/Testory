@@ -46,6 +46,7 @@ def start_element_picker(
 
     desk_result: Dict[str, Any] = {"success": False, "skipped": True}
     web_result: Dict[str, Any] = {"success": False, "skipped": True}
+    nav = (web_url or "").strip()
 
     try:
         from desktop_picker import desktop_picker_available, sync_start_desktop_picker
@@ -55,6 +56,7 @@ def start_element_picker(
                 dict(desktop_spec or {}),
                 record_mode=bool(record_mode),
                 unified_mode=True,
+                prefer_web_clicks=bool(enable_web and nav),
             )
         else:
             desk_result = {
@@ -67,25 +69,28 @@ def start_element_picker(
 
     web_enabled = False
     web_error = ""
-    if enable_web:
+    if enable_web and nav:
         try:
             from playwright_automation import sync_enable_element_selection
 
-            nav = (web_url or "").strip()
             sync_enable_element_selection(nav, auto_arm=True)
             web_result = {
                 "success": True,
                 "url": nav,
                 "auto_arm": True,
-                "hint": "已在浏览器中开启拾取，直接点击页面元素即可"
-                if nav
-                else "已打开浏览器拾取模式（无导航 URL 时使用当前页/空白页）",
+                "hint": "已在浏览器中开启拾取，按住 Ctrl 并点击页面元素即可",
             }
             web_enabled = True
         except Exception as exc:
             msg = str(exc)
             web_error = msg
             web_result = {"success": False, "error": msg, "skipped": False}
+    elif enable_web:
+        web_result = {
+            "success": False,
+            "skipped": True,
+            "error": "无 Web 导航 URL，已跳过网页拾取（不会打开空白浏览器）",
+        }
     else:
         web_result = {
             "success": False,
@@ -121,12 +126,15 @@ def stop_element_picker() -> Dict[str, Any]:
         desk_out = sync_stop_desktop_picker()
     except Exception as exc:
         desk_out = {"success": False, "error": str(exc)}
-    try:
-        from playwright_automation import sync_disable_element_selection
+    with _lock:
+        was_web = bool(_state.get("web_enabled"))
+    if was_web:
+        try:
+            from playwright_automation import sync_disable_element_selection
 
-        sync_disable_element_selection()
-    except Exception as exc:
-        web_out = {"success": False, "error": str(exc)}
+            sync_disable_element_selection()
+        except Exception as exc:
+            web_out = {"success": False, "error": str(exc)}
 
     _set_state(active=False, web_enabled=False)
     return {

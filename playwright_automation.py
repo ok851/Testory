@@ -10343,6 +10343,10 @@ class PlaywrightAutomation:
                         }
                         window.generateSelector = generateSelector;
 
+                        function pickModifierDown(e) {
+                            return !!(e && (e.ctrlKey || e.metaKey));
+                        }
+
                         function ensureOverlay() {
                             if (state.overlay) return state.overlay;
                             const ov = document.createElement('div');
@@ -10389,7 +10393,7 @@ class PlaywrightAutomation:
                                 state.enabled = !state.enabled;
                                 btn.textContent = state.enabled ? '退出拾取' : '拾取元素';
                                 btn.style.background = state.enabled ? '#ef4444' : '#3b82f6';
-                                tip.textContent = state.enabled ? '请点击目标元素' : '点击后在页面选择目标';
+                                tip.textContent = state.enabled ? '按住 Ctrl 并点击目标元素' : '点击「拾取元素」后 Ctrl + 点击';
                                 if (!state.enabled && state.overlay) state.overlay.style.display = 'none';
                                 broadcastPickerState(state.enabled);
                             };
@@ -10398,6 +10402,10 @@ class PlaywrightAutomation:
 
                         function onMove(e) {
                             if (!state.enabled) return;
+                            if (!pickModifierDown(e)) {
+                                if (state.overlay) state.overlay.style.display = 'none';
+                                return;
+                            }
                             const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
                             const target = resolveElementTarget(raw);
                             if (!target || target === state.toolbar || state.toolbar.contains(target)) return;
@@ -10412,6 +10420,7 @@ class PlaywrightAutomation:
 
                         function onClick(e) {
                             if (!state.enabled) return;
+                            if (!pickModifierDown(e)) return;
                             const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
                             const target = resolveElementTarget(raw);
                             if (!target || target === state.toolbar || state.toolbar.contains(target)) return;
@@ -10426,7 +10435,7 @@ class PlaywrightAutomation:
                             if (state.tip) {
                                 state.tip.textContent = '已成功拾取元素';
                                 window.setTimeout(() => {
-                                    if (state.tip && !state.enabled) state.tip.textContent = '请点击目标元素';
+                                    if (state.tip && !state.enabled) state.tip.textContent = '按住 Ctrl 并点击目标元素';
                                 }, 3000);
                             }
                             if (state.overlay) state.overlay.style.display = 'none';
@@ -10493,7 +10502,7 @@ class PlaywrightAutomation:
                                 state.btn.style.background = armed ? '#ef4444' : '#3b82f6';
                             }
                             if (state.tip) {
-                                state.tip.textContent = armed ? '请点击目标元素' : '点击后在页面选择目标';
+                                state.tip.textContent = armed ? '按住 Ctrl 并点击目标元素' : '点击「拾取元素」后 Ctrl + 点击';
                             }
                             if (!armed && state.overlay) state.overlay.style.display = 'none';
                             try {
@@ -10572,6 +10581,9 @@ class PlaywrightAutomation:
                                         if (raw.nodeType === 1) return raw;
                                         return raw.parentElement || null;
                                     }
+                                    function pickModifierDown(e) {
+                                        return !!(e && (e.ctrlKey || e.metaKey));
+                                    }
                                     const frameState = { enabled: false };
                                     let overlay = null;
                                     function ensureOverlay() {
@@ -10589,6 +10601,10 @@ class PlaywrightAutomation:
                                             if (overlay) overlay.style.display = 'none';
                                             return;
                                         }
+                                        if (!pickModifierDown(e)) {
+                                            if (overlay) overlay.style.display = 'none';
+                                            return;
+                                        }
                                         const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
                                         const target = resolveElementTarget(raw);
                                         if (!target) return;
@@ -10603,6 +10619,7 @@ class PlaywrightAutomation:
                                     }
                                     function onClick(e) {
                                         if (!frameState.enabled) return;
+                                        if (!pickModifierDown(e)) return;
                                         const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
                                         const target = resolveElementTarget(raw);
                                         if (!target) return;
@@ -10744,6 +10761,9 @@ class PlaywrightAutomation:
                                     if (window.__automationFramePickerBound) return false;
                                     window.__automationFramePickerBound = true;
                                     const frameState = { enabled: false };
+                                    function pickModifierDown(e) {
+                                        return !!(e && (e.ctrlKey || e.metaKey));
+                                    }
                                     function stableClassSelector(el) {
                                         if (!el || !el.classList || !el.classList.length) return '';
                                         const keep = [];
@@ -10786,6 +10806,10 @@ class PlaywrightAutomation:
                                             if (overlay) overlay.style.display = 'none';
                                             return;
                                         }
+                                        if (!pickModifierDown(e)) {
+                                            if (overlay) overlay.style.display = 'none';
+                                            return;
+                                        }
                                         const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
                                         const target = resolveElementTarget(raw);
                                         if (!target) return;
@@ -10800,6 +10824,7 @@ class PlaywrightAutomation:
                                     }
                                     function onClick(e) {
                                         if (!frameState.enabled) return;
+                                        if (!pickModifierDown(e)) return;
                                         const raw = (e.composedPath && e.composedPath()[0]) ? e.composedPath()[0] : e.target;
                                         const target = resolveElementTarget(raw);
                                         if (!target) return;

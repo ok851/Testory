@@ -12,13 +12,27 @@ import queue
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from desktop_input import (
+    focus_hwnd,
+    infer_effect_keyword,
+    screen_click,
+    screen_double_click,
+    screen_right_click,
+    should_verify_desktop_effect,
+)
 from desktop_locator import (
     attach_application,
+    attach_desktop_shell,
+    desktop_listitem_at_screen_point,
     desktop_runtime_available,
+    is_desktop_shell_spec,
     parse_desktop_spec,
     resolve_control,
+    resolve_desktop_icon_at_point,
+    shell_open_folder,
+    _split_coordinate,
 )
 from desktop_env_config import (
     desktop_execution_mode,
@@ -108,6 +122,362 @@ class DesktopAutomation:
     def has_window(self) -> bool:
         return self._window is not None
 
+    def _ensure_attached(self, spec: Dict[str, Any], action: str, selector_type: str) -> None:
+        """步骤含 desktop_spec 时按需附着窗口，无需单独 attach_window 步骤。"""
+        if self._window is not None:
+            return
+        st = (selector_type or "").strip().lower()
+        if action in ("click", "double_click", "right_click") and st == "coordinate":
+            return
+        if not spec:
+            raise RuntimeError(
+                "未附着桌面窗口：请在步骤中保存 desktop_spec（hwnd/窗口标题），"
+                "或使用 launch_app / attach_window"
+            )
+        if not (
+            spec.get("hwnd")
+            or spec.get("pid")
+            or spec.get("process")
+            or spec.get("path")
+            or spec.get("exe")
+            or spec.get("window_title")
+            or spec.get("window_title_re")
+            or spec.get("cmd_line")
+        ):
+            raise RuntimeError(
+                "未附着桌面窗口：desktop_spec 缺少 hwnd/process/窗口标题等字段，"
+                "请重新捕获元素或填写 launch_app"
+            )
+        if is_desktop_shell_spec(spec):
+            self._app, self._window = attach_desktop_shell(spec)
+        else:
+            self._app, self._window = attach_application(spec)
+
+    def _uia_path_json(self, spec: Dict[str, Any]) -> str:
+        uia_nodes = spec.get("uia_path")
+        if isinstance(uia_nodes, list) and uia_nodes:
+            return json.dumps(uia_nodes, ensure_ascii=False)
+        if isinstance(uia_nodes, str) and uia_nodes.strip():
+            return uia_nodes.strip()
+        return ""
+
+    def _build_resolve_attempts(
+        self,
+        selector_type: str,
+        selector_value: str,
+        spec: Dict[str, Any],
+    ) -> List[Tuple[str, str]]:
+        """桌面图标层优先 UIA 精准路径（竞品方案），坐标仅作最后回退。"""
+        st = (selector_type or "").strip().lower()
+        sv = (selector_value or "").strip()
+        center = (spec.get("pick_center") or "").strip()
+        uia_json = self._uia_path_json(spec)
+        attempts: List[Tuple[str, str]] = []
+
+        if is_desktop_shell_spec(spec):
+            if uia_json:
+                attempts.append(("uia_path", uia_json))
+            if center:
+                attempts.append(("__desktop_hit__", center))
+            if st == "name" and sv:
+                attempts.append(("name", sv))
+            elif st == "coordinate" and sv:
+                attempts.append(("coordinate", sv))
+            elif st not in ("uia_path", "__desktop_hit__") and sv:
+                attempts.append((st, sv))
+            if center and ("coordinate", center) not in attempts:
+                attempts.append(("coordinate", center))
+            return attempts
+
+        if st == "coordinate" and sv:
+            attempts.append((st, sv))
+        elif st and sv:
+            attempts.append((st, sv))
+        if uia_json and ("uia_path", uia_json) not in attempts:
+            attempts.append(("uia_path", uia_json))
+        if center and st != "coordinate" and ("coordinate", center) not in attempts:
+            attempts.append(("coordinate", center))
+        return attempts
+
+    @staticmethod
+    def _control_screen_center(ctrl: Any) -> Tuple[int, int]:
+        rect = ctrl.rectangle()
+        return (
+            int((rect.left + rect.right) / 2),
+            int((rect.top + rect.bottom) / 2),
+        )
+
+    @staticmethod
+    def _assert_screen_coords(x: int, y: int) -> None:
+        if sys.platform != "win32":
+            return
+        import ctypes
+
+        sw = int(ctypes.windll.user32.GetSystemMetrics(0))
+        sh = int(ctypes.windll.user32.GetSystemMetrics(1))
+        if not (0 <= x < sw and 0 <= y < sh):
+            raise RuntimeError(
+                f"点击坐标 ({x},{y}) 超出屏幕范围 {sw}x{sh}，请重新捕获元素"
+            )
+
+    @staticmethod
+    def _verify_resolved_name(ctrl: Any, expected: str, selector_type: str) -> None:
+        st = (selector_type or "").strip().lower()
+        exp = (expected or "").strip()
+        if st != "name" or not exp:
+            return
+        try:
+            actual = (getattr(ctrl.element_info, "name", None) or "").strip()
+        except Exception:
+            actual = ""
+        if not actual:
+            raise RuntimeError(f"无法确认控件名称是否为「{exp}」")
+        if exp not in actual and actual not in exp:
+            raise RuntimeError(
+                f"解析到的控件为「{actual}」，与期望「{exp}」不一致，将尝试其他定位方式"
+            )
+
+    def _screen_pointer_action(
+        self,
+        action: str,
+        x: int,
+        y: int,
+        spec: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self._assert_screen_coords(x, y)
+        px, py = int(x), int(y)
+        if is_desktop_shell_spec(spec or {}):
+            hwnd = int((spec or {}).get("hwnd") or 0)
+            focus_hwnd(hwnd)
+        uat_logger.info("桌面屏幕点击: %s @ (%s, %s)", action, px, py)
+        if action == "click":
+            screen_click(px, py)
+        elif action == "double_click":
+            screen_double_click(px, py)
+        elif action == "right_click":
+            screen_right_click(px, py)
+        else:
+            raise ValueError(f"不支持的指针动作：{action}")
+
+    def _verify_pointer_effect(
+        self,
+        action: str,
+        spec: Dict[str, Any],
+        description: str = "",
+        *,
+        fg_before: int = 0,
+    ) -> None:
+        """双击/打开类操作：未出现预期窗口则判失败，避免“代码跑完但界面无变化”仍报成功。"""
+        if action != "double_click":
+            return
+        keyword = infer_effect_keyword(spec, description)
+        if not keyword:
+            return
+        timeout = 8.0
+        from desktop_input import wait_for_desktop_effect
+
+        shell = is_desktop_shell_spec(spec)
+        if not wait_for_desktop_effect(
+            keyword,
+            fg_before=fg_before,
+            timeout=timeout,
+            desktop_shell=shell,
+            require_verify=should_verify_desktop_effect(spec),
+        ):
+            hint = (
+                "资源管理器窗口（如「回收站」文件夹）"
+                if shell
+                else "相关应用窗口"
+            )
+            raise RuntimeError(
+                f"已执行双击，但 {timeout:.0f}s 内未检测到与「{keyword}」相关的{hint}。"
+                "请重新捕获该桌面图标，并确认手动双击可正常打开。"
+            )
+
+    def _resolve_step_control(
+        self,
+        selector_type: str,
+        selector_value: str,
+        spec: Dict[str, Any],
+    ) -> Any:
+        """解析控件；按场景排序多种定位策略。"""
+        last_err: Optional[Exception] = None
+        for try_st, try_sv in self._build_resolve_attempts(
+            selector_type, selector_value, spec
+        ):
+            if not try_sv and try_st != "coordinate":
+                continue
+            try:
+                if try_st == "__desktop_hit__":
+                    x, y = _split_coordinate(try_sv)
+                    self._assert_screen_coords(x, y)
+                    ctrl = resolve_desktop_icon_at_point(
+                        x, y, self._window, spec, self._app
+                    )
+                    self._verify_resolved_name(
+                        ctrl, (spec.get("target_name") or ""), "name"
+                    )
+                    return ctrl
+                if try_st == "coordinate":
+                    x, y = _split_coordinate(try_sv)
+                    self._assert_screen_coords(x, y)
+
+                    class _CoordTarget:
+                        def __init__(self, px: int, py: int):
+                            self._x, self._y = px, py
+
+                        def rectangle(self):
+                            from types import SimpleNamespace
+
+                            return SimpleNamespace(
+                                left=self._x,
+                                top=self._y,
+                                right=self._x + 1,
+                                bottom=self._y + 1,
+                            )
+
+                        def click_input(self, **kwargs):
+                            self._screen_pointer_action("click", self._x, self._y)
+
+                        def double_click_input(self, **kwargs):
+                            self._screen_pointer_action(
+                                "double_click", self._x, self._y
+                            )
+
+                        def right_click_input(self, **kwargs):
+                            self._screen_pointer_action(
+                                "right_click", self._x, self._y
+                            )
+
+                    return _CoordTarget(x, y)
+
+                ctrl = resolve_control(
+                    self._window, try_st, try_sv, spec, app=self._app
+                )
+                self._verify_resolved_name(ctrl, selector_value, try_st)
+                return ctrl
+            except Exception as exc:
+                last_err = exc
+        if last_err:
+            raise last_err
+        raise RuntimeError("无法解析桌面控件：缺少有效的定位信息")
+
+    @staticmethod
+    def _is_uia_listitem(ctrl: Any) -> bool:
+        try:
+            ct = str(getattr(ctrl.element_info, "control_type", "") or "").lower()
+            return "listitem" in ct
+        except Exception:
+            return False
+
+    def _desktop_icon_name(self, ctrl: Any, spec: Dict[str, Any]) -> str:
+        try:
+            n = (getattr(ctrl.element_info, "name", None) or "").strip()
+            if n:
+                return n
+        except Exception:
+            pass
+        return infer_effect_keyword(spec, "")
+
+    def _invoke_control_pointer(
+        self, ctrl: Any, action: str, *, spec: Optional[Dict[str, Any]] = None
+    ) -> None:
+        try:
+            ctrl.set_focus()
+        except Exception:
+            pass
+        time.sleep(0.08)
+        if action == "double_click" and self._is_uia_listitem(ctrl):
+            icon_name = self._desktop_icon_name(ctrl, spec or {})
+            # 桌面图标：中心物理双击（多数 RPA 默认）→ invoke → shell: 回退
+            try:
+                cx, cy = self._control_screen_center(ctrl)
+                screen_double_click(cx, cy)
+                time.sleep(0.2)
+                return
+            except Exception:
+                pass
+            try:
+                ctrl.invoke()
+                time.sleep(0.15)
+                return
+            except Exception:
+                pass
+            try:
+                ctrl.double_click_input()
+                return
+            except Exception:
+                pass
+            if icon_name and shell_open_folder(icon_name):
+                time.sleep(0.25)
+                return
+        if action == "click":
+            ctrl.click_input()
+        elif action == "double_click":
+            ctrl.double_click_input()
+        else:
+            ctrl.right_click_input()
+
+    def _perform_pointer_step(
+        self,
+        action: str,
+        selector_type: str,
+        selector_value: str,
+        spec: Dict[str, Any],
+        *,
+        description: str = "",
+    ) -> Dict[str, Any]:
+        """点击类步骤：优先 UIA 精准路径命中 ListItem，再回退屏幕坐标。"""
+        from desktop_input import get_foreground_hwnd
+
+        resolved_via = ""
+        click_x = click_y = 0
+        fg_before = get_foreground_hwnd()
+        st = (selector_type or "").strip().lower()
+        if (
+            st == "coordinate"
+            and selector_value
+            and not is_desktop_shell_spec(spec)
+        ):
+            click_x, click_y = _split_coordinate(selector_value)
+            self._screen_pointer_action(action, click_x, click_y, spec)
+            resolved_via = "coordinate"
+        else:
+            ctrl = self._resolve_step_control(
+                selector_type, selector_value, spec
+            )
+            if self._is_uia_listitem(ctrl):
+                self._invoke_control_pointer(ctrl, action, spec=spec)
+                click_x, click_y = self._control_screen_center(ctrl)
+                resolved_via = "uia_listitem"
+            elif is_desktop_shell_spec(spec) or not hasattr(ctrl, "element_info"):
+                click_x, click_y = self._control_screen_center(ctrl)
+                self._screen_pointer_action(action, click_x, click_y, spec)
+                resolved_via = "screen_coords"
+            else:
+                self._invoke_control_pointer(ctrl, action, spec=spec)
+                try:
+                    click_x, click_y = self._control_screen_center(ctrl)
+                except Exception:
+                    pass
+                resolved_via = (selector_type or "control").strip().lower()
+        self._verify_pointer_effect(
+            action, spec, description, fg_before=fg_before
+        )
+        uat_logger.info(
+            "桌面指针操作完成: %s via %s @ (%s,%s)",
+            action,
+            resolved_via or "unknown",
+            click_x,
+            click_y,
+        )
+        return {
+            "status": "success",
+            "action": action,
+            "resolved_via": resolved_via,
+            "coords": f"{click_x},{click_y}" if click_x or click_y else "",
+        }
+
     def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
         if not desktop_runtime_available():
             raise RuntimeError(
@@ -136,39 +506,22 @@ class DesktopAutomation:
             return {"status": "success", "action": action}
 
         if action in ("click", "double_click", "right_click"):
-            if self._window is None:
-                raise RuntimeError("未附着桌面窗口，请先执行 launch_app 或 attach_window")
-            if selector_type == "coordinate" and selector_value:
-                x, y = [int(float(p)) for p in selector_value.replace(";", ",").split(",")[:2]]
-                self._window.set_focus()
-                if action == "click":
-                    self._window.click_input(coords=(x, y))
-                elif action == "double_click":
-                    import pywinauto.mouse as mouse  # type: ignore
-
-                    mouse.double_click(coords=(x, y))
-                else:
-                    import pywinauto.mouse as mouse  # type: ignore
-
-                    mouse.right_click(coords=(x, y))
-            else:
-                ctrl = resolve_control(
-                    self._window, selector_type, selector_value, spec
-                )
-                if action == "click":
-                    ctrl.click_input()
-                elif action == "double_click":
-                    ctrl.double_click_input()
-                else:
-                    ctrl.right_click_input()
-            return {"status": "success", "action": action}
+            self._ensure_attached(spec, action, selector_type)
+            return self._perform_pointer_step(
+                action,
+                selector_type,
+                selector_value,
+                spec,
+                description=(step.get("description") or ""),
+            )
 
         if action in ("input", "fill"):
             if not str(input_value):
                 raise ValueError("桌面输入步骤缺少 input_value")
+            self._ensure_attached(spec, action, selector_type)
             if selector_value:
-                ctrl = resolve_control(
-                    self._window, selector_type, selector_value, spec
+                ctrl = self._resolve_step_control(
+                    selector_type, selector_value, spec
                 )
                 ctrl.set_focus()
                 try:
@@ -186,12 +539,15 @@ class DesktopAutomation:
             keys = (input_value or "").strip()
             if not keys:
                 raise ValueError("hotkey 需要 input_value，如 ^c 或 %{F4}")
+            self._ensure_attached(spec, action, selector_type)
             self._window.set_focus()
             self._window.type_keys(keys, set_foreground=True)
             return {"status": "success", "action": action}
 
         if action == "wait":
             mode = (compare_type or "fixed").strip().lower()
+            if mode == "control" and selector_value:
+                self._ensure_attached(spec, action, selector_type)
             if mode == "window" or spec.get("wait_for") == "window":
                 title_re = spec.get("window_title_re") or input_value or ".*"
                 timeout = float(spec.get("timeout", 30))
@@ -207,8 +563,8 @@ class DesktopAutomation:
                 last_err = None
                 while time.time() < deadline:
                     try:
-                        resolve_control(
-                            self._window, selector_type, selector_value, spec
+                        self._resolve_step_control(
+                            selector_type, selector_value, spec
                         )
                         last_err = None
                         break
@@ -252,6 +608,7 @@ class DesktopAutomation:
             return {"status": "success", "action": action, "screenshot": rel}
 
         if action == "verify":
+            self._ensure_attached(spec, action, selector_type)
             vt = (
                 (input_value or "").strip()
                 or (compare_type or "").strip()
@@ -266,11 +623,12 @@ class DesktopAutomation:
                     selector_value,
                     spec,
                     vt,
+                    app=self._app,
                 )
             expected = str(input_value or "")
             if selector_value:
-                ctrl = resolve_control(
-                    self._window, selector_type, selector_value, spec
+                ctrl = self._resolve_step_control(
+                    selector_type, selector_value, spec
                 )
                 try:
                     actual = ctrl.window_text()
@@ -294,10 +652,11 @@ class DesktopAutomation:
             return {"status": "success", "action": action, "actual": actual}
 
         if action == "assert":
+            self._ensure_attached(spec, action, selector_type)
             expected = str(input_value or "")
             if selector_value:
-                ctrl = resolve_control(
-                    self._window, selector_type, selector_value, spec
+                ctrl = self._resolve_step_control(
+                    selector_type, selector_value, spec
                 )
                 try:
                     actual = ctrl.window_text()

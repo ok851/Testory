@@ -127,6 +127,7 @@ def run_desktop_verify(
     selector_value: str,
     desktop_spec: Optional[Dict[str, Any]],
     verify_type: str,
+    app: Any = None,
 ) -> Dict[str, Any]:
     """
     在已附着窗口内处理验证码步骤。
@@ -141,7 +142,9 @@ def run_desktop_verify(
     if not selector_value and not (desktop_spec or {}).get("coordinate"):
         raise ValueError("验证码步骤需先拾取验证码区域/控件")
 
-    ctrl = resolve_control(window, selector_type, selector_value, desktop_spec or {})
+    ctrl = resolve_control(
+        window, selector_type, selector_value, desktop_spec or {}, app=app
+    )
     left, top, right, bottom = _control_screen_rect(ctrl)
     method = ""
 

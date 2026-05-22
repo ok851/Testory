@@ -218,6 +218,9 @@ def prepare_desktop_step(step: Dict[str, Any]) -> Dict[str, Any]:
         if iv and not spec.get("window_title_re"):
             spec["window_title_re"] = iv if ("*" in iv or iv.startswith(".")) else f".*{re.escape(iv)}.*"
 
+    if spec.get("best_match") in (False, 0, "0", "false", "no", "off"):
+        spec.pop("best_match", None)
+
     spec = merge_desktop_spec(spec, action=action)
     if spec:
         s["desktop_spec"] = spec
