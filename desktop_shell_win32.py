@@ -29,6 +29,9 @@ LVIR_BOUNDS = 0
 # 单格图标合理上限，防止异常矩形盖住整屏
 _MAX_ICON_W = int(os.environ.get("DESKTOP_ICON_MAX_W", "320") or "320")
 _MAX_ICON_H = int(os.environ.get("DESKTOP_ICON_MAX_H", "320") or "320")
+# 控件悬停高亮上限（仍拒绝接近全屏的矩形）
+_MAX_HOVER_W = int(os.environ.get("DESKTOP_HOVER_MAX_W", "520") or "520")
+_MAX_HOVER_H = int(os.environ.get("DESKTOP_HOVER_MAX_H", "420") or "420")
 
 
 def _user32():
@@ -55,6 +58,9 @@ def is_desktop_root_hwnd(hwnd: int) -> bool:
 
 def sanitize_highlight_rect(
     rect: Optional[Tuple[int, int, int, int]],
+    *,
+    max_w: Optional[int] = None,
+    max_h: Optional[int] = None,
 ) -> Optional[Tuple[int, int, int, int]]:
     """拒绝全屏级矩形，避免 Tk 顶置窗口盖住桌面导致黑屏。"""
     if not rect:
@@ -63,12 +69,26 @@ def sanitize_highlight_rect(
     w, h = right - left, bottom - top
     if w < 6 or h < 6:
         return None
-    if w > _MAX_ICON_W or h > _MAX_ICON_H:
+    cap_w = int(max_w if max_w is not None else _MAX_ICON_W)
+    cap_h = int(max_h if max_h is not None else _MAX_ICON_H)
+    if w > cap_w or h > cap_h:
         return None
     sw, sh = _screen_size()
     if sw > 0 and sh > 0 and (w > sw * 0.42 or h > sh * 0.42):
         return None
     return left, top, right, bottom
+
+
+def sanitize_icon_rect(
+    rect: Optional[Tuple[int, int, int, int]],
+) -> Optional[Tuple[int, int, int, int]]:
+    return sanitize_highlight_rect(rect, max_w=_MAX_ICON_W, max_h=_MAX_ICON_H)
+
+
+def sanitize_hover_rect(
+    rect: Optional[Tuple[int, int, int, int]],
+) -> Optional[Tuple[int, int, int, int]]:
+    return sanitize_highlight_rect(rect, max_w=_MAX_HOVER_W, max_h=_MAX_HOVER_H)
 
 
 def _listview_under_defview(parent_hwnd: int) -> int:
@@ -153,7 +173,7 @@ def _collect_bounds_sync() -> List[Dict[str, int]]:
             "right": int(br.x),
             "bottom": int(br.y),
         }
-        if sanitize_highlight_rect(
+        if sanitize_icon_rect(
             (row["left"], row["top"], row["right"], row["bottom"])
         ):
             rows.append(row)
@@ -229,7 +249,7 @@ def desktop_icon_rect_at_win32(
             best_area = area
     if not best:
         return None
-    return sanitize_highlight_rect(
+    return sanitize_icon_rect(
         (
             int(best["left"]),
             int(best["top"]),
@@ -239,8 +259,41 @@ def desktop_icon_rect_at_win32(
     )
 
 
+def hwnd_under_cursor(
+    x: int,
+    y: int,
+    exclude: Optional[set] = None,
+) -> Optional[int]:
+    """屏幕坐标下最深层可见 HWND（Win32，无 UIA）。"""
+    ex = exclude or set()
+    import ctypes
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    u = _user32()
+    pt = POINT(int(x), int(y))
+    h = int(u.WindowFromPoint(pt) or 0)
+    if not h or h in ex:
+        return None
+    for _ in range(48):
+        if h in ex or not u.IsWindow(h):
+            return None
+        client = POINT(int(x), int(y))
+        if not u.ScreenToClient(int(h), ctypes.byref(client)):
+            break
+        child = int(u.ChildWindowFromPoint(int(h), client) or 0)
+        if not child or child == h or child in ex:
+            break
+        h = child
+    root = int(u.GetAncestor(int(h), 2) or h)
+    if root in ex:
+        return None
+    return int(h)
+
+
 def hwnd_screen_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
-    """非桌面区域悬停：仅高亮顶层窗口外框（Win32，无 UIA）。"""
+    """非桌面区域悬停：高亮光标下控件外框（Win32，无 UIA）。"""
     if not hwnd or is_desktop_root_hwnd(hwnd):
         return None
     import ctypes
@@ -258,6 +311,21 @@ def hwnd_screen_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
         return None
     if rc.right <= rc.left or rc.bottom <= rc.top:
         return None
-    return sanitize_highlight_rect(
+    return sanitize_hover_rect(
         (int(rc.left), int(rc.top), int(rc.right), int(rc.bottom))
     )
+
+
+def control_rect_at_screen_point(
+    x: int,
+    y: int,
+    exclude: Optional[set] = None,
+) -> Optional[Tuple[int, int, int, int]]:
+    """悬停高亮：桌面仅图标格；其它区域用光标下子窗口矩形。"""
+    ex = exclude or set()
+    root = hwnd_under_cursor(x, y, ex)
+    if not root:
+        return None
+    if is_desktop_root_hwnd(root):
+        return desktop_icon_rect_at_win32(x, y, allow_sync_build=False)
+    return hwnd_screen_rect(root)

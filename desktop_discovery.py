@@ -616,6 +616,77 @@ def process_image_path(pid: int) -> str:
         return ""
 
 
+def _window_class_name_win32(hwnd: int) -> str:
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(256)
+    if not ctypes.windll.user32.GetClassNameW(int(hwnd), buf, 256):
+        return ""
+    return (buf.value or "").strip()
+
+
+def _read_window_text_win32(hwnd: int) -> str:
+    """读取顶层窗口标题；部分进程 UIPI 下 GetWindowText 为空，再试 SendMessage WM_GETTEXT。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    h = int(hwnd)
+    length = int(user32.GetWindowTextLengthW(h) or 0)
+    buff = ctypes.create_unicode_buffer(max(length, 0) + 1)
+    user32.GetWindowTextW(h, buff, len(buff))
+    title = (buff.value or "").strip()
+    if title:
+        return title
+
+    WM_GETTEXT = 0x000D
+    WM_GETTEXTLENGTH = 0x000E
+    SMTO_ABORTIFHUNG = 0x0002
+    result = wintypes.DWORD()
+    sm_len = user32.SendMessageTimeoutW(
+        h,
+        WM_GETTEXTLENGTH,
+        0,
+        0,
+        SMTO_ABORTIFHUNG,
+        200,
+        ctypes.byref(result),
+    )
+    if sm_len and int(result.value or 0) > 0:
+        n = int(result.value)
+        buff2 = ctypes.create_unicode_buffer(n + 1)
+        user32.SendMessageTimeoutW(
+            h,
+            WM_GETTEXT,
+            n + 1,
+            ctypes.cast(buff2, ctypes.c_void_p).value or 0,
+            SMTO_ABORTIFHUNG,
+            200,
+            ctypes.byref(result),
+        )
+        title = (buff2.value or "").strip()
+        if title:
+            return title
+    return ""
+
+
+def _display_title_for_window(
+    hwnd: int,
+    *,
+    title: str,
+    class_name: str,
+    exe_path: str,
+) -> str:
+    """无标题窗口用类名 / 进程名 / hwnd 生成展示名（附着优先用 hwnd，不强制标题）。"""
+    if title:
+        return title
+    if class_name and class_name not in ("Progman", "WorkerW"):
+        return class_name
+    if exe_path:
+        return os.path.basename(exe_path)
+    return f"窗口 {int(hwnd)}"
+
+
 def attachment_spec_for_window(hwnd: int) -> tuple[Dict[str, Any], str]:
     """根据窗口句柄生成附着 spec 与窗口标题（写入步骤 desktop_spec，执行时不依赖 .env）。"""
     if not _DISCOVERY_AVAILABLE:
@@ -629,27 +700,30 @@ def attachment_spec_for_window(hwnd: int) -> tuple[Dict[str, Any], str]:
     if not user32.IsWindow(h):
         raise ValueError("窗口已关闭或句柄无效")
 
-    length = user32.GetWindowTextLengthW(h)
-    buff = ctypes.create_unicode_buffer(length + 1)
-    user32.GetWindowTextW(h, buff, length + 1)
-    title = (buff.value or "").strip()
-    if not title:
-        raise ValueError("无法读取窗口标题")
+    title = _read_window_text_win32(h)
+    class_name = _window_class_name_win32(h)
 
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
     pid_val = int(pid.value)
     exe_path = process_image_path(pid_val)
+    display_title = _display_title_for_window(
+        h, title=title, class_name=class_name, exe_path=exe_path
+    )
+
     spec: Dict[str, Any] = {
         "hwnd": int(h),
-        "window_title": title,
-        "window_title_re": f".*{re.escape(title)}.*",
+        "window_title": display_title,
     }
+    if title:
+        spec["window_title_re"] = f".*{re.escape(title)}.*"
+    if class_name:
+        spec["class_name"] = class_name
     if exe_path:
         spec["process"] = os.path.basename(exe_path)
         spec["path"] = exe_path
     spec["pid"] = pid_val
-    return spec, title
+    return spec, display_title
 
 
 def smart_resolve_launch_path(raw: str) -> str:

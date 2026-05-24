@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-from desktop_input import infer_effect_keyword, should_verify_desktop_effect
+from desktop_input import (
+    infer_effect_keyword,
+    is_desktop_shell_hwnd,
+    should_verify_desktop_effect,
+    verify_pointer_delivered,
+)
 
 
 class TestDesktopInput(unittest.TestCase):
@@ -23,15 +28,23 @@ class TestDesktopInput(unittest.TestCase):
             "控制面板",
         )
 
-    def test_shell_verify_off_by_default(self):
-        self.assertFalse(
+    def test_verify_on_by_default(self):
+        self.assertTrue(
             should_verify_desktop_effect({"surface": "desktop_shell"})
         )
-        self.assertTrue(
+        self.assertFalse(
             should_verify_desktop_effect(
-                {"surface": "desktop_shell", "verify_effect": True}
+                {"surface": "desktop_shell", "verify_effect": False}
             )
         )
+
+    def test_physical_click_non_shell(self):
+        self.assertTrue(
+            verify_pointer_delivered(0, 0, desktop_shell=False, physical=True)
+        )
+
+    def test_desktop_shell_hwnd_rejects_zero(self):
+        self.assertFalse(is_desktop_shell_hwnd(0))
 
 
 if __name__ == "__main__":

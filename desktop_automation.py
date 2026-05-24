@@ -17,10 +17,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from desktop_input import (
     focus_hwnd,
     infer_effect_keyword,
+    physical_mouse_enabled,
+    pointer_action_at_screen,
     screen_click,
     screen_double_click,
     screen_right_click,
     should_verify_desktop_effect,
+    steal_focus_enabled,
+    wait_for_desktop_effect,
 )
 from desktop_locator import (
     attach_application,
@@ -108,28 +112,104 @@ class DesktopAutomation:
     def __init__(self):
         self._app: Any = None
         self._window: Any = None
-
-    def reset_session(self) -> None:
-        """释放当前附着（停止执行或浏览器强制重置时调用）。"""
-        self._app = None
-        self._window = None
+        self._attach_fp: Optional[Tuple[Any, ...]] = None
         self._screenshot_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "static", "desktop_screenshots"
         )
         os.makedirs(self._screenshot_dir, exist_ok=True)
 
+    def reset_session(self) -> None:
+        """释放当前附着（停止执行或浏览器强制重置时调用）。"""
+        self._app = None
+        self._window = None
+        self._attach_fp = None
+
     @property
     def has_window(self) -> bool:
         return self._window is not None
 
-    def _ensure_attached(self, spec: Dict[str, Any], action: str, selector_type: str) -> None:
-        """步骤含 desktop_spec 时按需附着窗口，无需单独 attach_window 步骤。"""
-        if self._window is not None:
+    @staticmethod
+    def _attach_fingerprint(spec: Dict[str, Any]) -> Tuple[Any, ...]:
+        s = spec or {}
+        return (
+            int(s.get("hwnd") or 0),
+            int(s.get("pid") or 0),
+            (s.get("process") or "").strip().lower(),
+            (s.get("window_title_re") or s.get("window_title") or "").strip(),
+            (s.get("surface") or "").strip().lower(),
+        )
+
+    def _activate_attached_window(self, spec: Dict[str, Any]) -> None:
+        """默认不抢焦点；仅 DESKTOP_STEAL_FOCUS=1 时置前目标窗口。"""
+        if not steal_focus_enabled():
             return
+        hwnd = int((spec or {}).get("hwnd") or 0)
+        if not hwnd and self._window is not None:
+            try:
+                hwnd = int(getattr(self._window, "handle", 0) or 0)
+            except Exception:
+                hwnd = 0
+        if hwnd:
+            focus_hwnd(hwnd)
+            time.sleep(0.12)
+            return
+        if self._window is not None:
+            try:
+                self._window.set_focus()
+                time.sleep(0.08)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _control_root_hwnd(ctrl: Any) -> int:
+        import ctypes
+
+        raw = int(
+            getattr(getattr(ctrl, "element_info", None), "handle", 0)
+            or getattr(ctrl, "handle", 0)
+            or 0
+        )
+        if not raw:
+            return 0
+        return int(ctypes.windll.user32.GetAncestor(raw, 2) or raw)
+
+    def _assert_control_on_target(self, ctrl: Any, spec: Dict[str, Any]) -> None:
+        """确保解析到的控件属于步骤指定的目标窗口，避免点到当前屏幕其它区域。"""
+        if is_desktop_shell_spec(spec):
+            return
+        spec_hwnd = int(spec.get("hwnd") or 0)
+        if not spec_hwnd:
+            return
+        root = self._control_root_hwnd(ctrl)
+        if root and root != spec_hwnd:
+            raise RuntimeError(
+                f"控件不在目标窗口内（期望 hwnd={spec_hwnd}，实际顶层 hwnd={root}）。"
+                "请确认目标应用未关闭，且步骤 desktop_spec 与捕获时一致。"
+            )
+
+    @staticmethod
+    def _assert_control_actionable(ctrl: Any) -> None:
+        if type(ctrl).__name__ == "_CoordTarget":
+            return
+        try:
+            rect = ctrl.rectangle()
+        except Exception as exc:
+            raise RuntimeError(f"无法读取控件位置: {exc}") from exc
+        w = int(rect.right) - int(rect.left)
+        h = int(rect.bottom) - int(rect.top)
+        if w < 2 or h < 2:
+            raise RuntimeError("目标控件尺寸无效或不可见")
+        if hasattr(ctrl, "is_enabled") and not ctrl.is_enabled():
+            raise RuntimeError("目标控件当前不可用（disabled）")
+
+    def _ensure_attached(self, spec: Dict[str, Any], action: str, selector_type: str) -> None:
+        """步骤含 desktop_spec 时按需附着/切换窗口（同进程内 hwnd 变化会重新附着）。"""
         st = (selector_type or "").strip().lower()
         if action in ("click", "double_click", "right_click") and st == "coordinate":
             return
         if not spec:
+            if self._window is not None:
+                return
             raise RuntimeError(
                 "未附着桌面窗口：请在步骤中保存 desktop_spec（hwnd/窗口标题），"
                 "或使用 launch_app / attach_window"
@@ -148,10 +228,16 @@ class DesktopAutomation:
                 "未附着桌面窗口：desktop_spec 缺少 hwnd/process/窗口标题等字段，"
                 "请重新捕获元素或填写 launch_app"
             )
+        fp = self._attach_fingerprint(spec)
+        if self._window is not None and self._attach_fp == fp:
+            self._activate_attached_window(spec)
+            return
         if is_desktop_shell_spec(spec):
             self._app, self._window = attach_desktop_shell(spec)
         else:
             self._app, self._window = attach_application(spec)
+        self._attach_fp = fp
+        self._activate_attached_window(spec)
 
     def _uia_path_json(self, spec: Dict[str, Any]) -> str:
         uia_nodes = spec.get("uia_path")
@@ -175,14 +261,14 @@ class DesktopAutomation:
         attempts: List[Tuple[str, str]] = []
 
         if is_desktop_shell_spec(spec):
+            if st == "coordinate" and sv:
+                return [("coordinate", sv)]
             if uia_json:
                 attempts.append(("uia_path", uia_json))
             if center:
                 attempts.append(("__desktop_hit__", center))
             if st == "name" and sv:
                 attempts.append(("name", sv))
-            elif st == "coordinate" and sv:
-                attempts.append(("coordinate", sv))
             elif st not in ("uia_path", "__desktop_hit__") and sv:
                 attempts.append((st, sv))
             if center and ("coordinate", center) not in attempts:
@@ -244,20 +330,17 @@ class DesktopAutomation:
         y: int,
         spec: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """非 UIA 控件时的屏幕消息点击（不移动用户鼠标）。"""
         self._assert_screen_coords(x, y)
         px, py = int(x), int(y)
-        if is_desktop_shell_spec(spec or {}):
-            hwnd = int((spec or {}).get("hwnd") or 0)
-            focus_hwnd(hwnd)
-        uat_logger.info("桌面屏幕点击: %s @ (%s, %s)", action, px, py)
-        if action == "click":
-            screen_click(px, py)
-        elif action == "double_click":
-            screen_double_click(px, py)
-        elif action == "right_click":
-            screen_right_click(px, py)
-        else:
-            raise ValueError(f"不支持的指针动作：{action}")
+        if physical_mouse_enabled():
+            uat_logger.info("桌面指针: %s @ (%s, %s) [physical=1]", action, px, py)
+            pointer_action_at_screen(px, py, action, force_physical=True)
+            return
+        uat_logger.info(
+            "桌面指针: %s @ (%s, %s) [mode=message]", action, px, py
+        )
+        pointer_action_at_screen(px, py, action, force_physical=False)
 
     def _verify_pointer_effect(
         self,
@@ -266,33 +349,109 @@ class DesktopAutomation:
         description: str = "",
         *,
         fg_before: int = 0,
+        selector_type: str = "",
     ) -> None:
-        """双击/打开类操作：未出现预期窗口则判失败，避免“代码跑完但界面无变化”仍报成功。"""
+        """非桌面层步骤：可选校验窗口变化（桌面/坐标步骤不在此校验）。"""
         if action != "double_click":
             return
-        keyword = infer_effect_keyword(spec, description)
-        if not keyword:
-            return
-        timeout = 8.0
-        from desktop_input import wait_for_desktop_effect
+        from desktop_input import get_foreground_hwnd
 
+        st = (selector_type or "").strip().lower()
+        if st == "coordinate" or is_desktop_shell_spec(spec):
+            return
+        keyword = infer_effect_keyword(spec, description)
         shell = is_desktop_shell_spec(spec)
-        if not wait_for_desktop_effect(
-            keyword,
-            fg_before=fg_before,
-            timeout=timeout,
-            desktop_shell=shell,
-            require_verify=should_verify_desktop_effect(spec),
-        ):
-            hint = (
-                "资源管理器窗口（如「回收站」文件夹）"
-                if shell
-                else "相关应用窗口"
-            )
+        require = should_verify_desktop_effect(spec)
+        timeout = 8.0 if shell else 5.0
+        if shell:
+            if not wait_for_desktop_effect(
+                keyword,
+                fg_before=fg_before,
+                timeout=timeout,
+                desktop_shell=True,
+                require_verify=True,
+            ):
+                hint = "资源管理器窗口（如「回收站」文件夹）"
+                raise RuntimeError(
+                    f"已执行双击，但 {timeout:.0f}s 内未检测到与「{keyword or '目标'}」相关的{hint}。"
+                    "请重新捕获该桌面图标，并确认手动双击可正常打开。"
+                )
+            return
+        if keyword and require:
+            if not wait_for_desktop_effect(
+                keyword,
+                fg_before=fg_before,
+                timeout=timeout,
+                desktop_shell=False,
+                require_verify=True,
+            ):
+                raise RuntimeError(
+                    f"已执行双击，但 {timeout:.0f}s 内未检测到与「{keyword}」相关的窗口变化。"
+                    "请确认目标应用已打开且元素可双击。"
+                )
+            return
+        fg_after = get_foreground_hwnd()
+        if fg_after and fg_after != fg_before:
+            return
+        raise RuntimeError(
+            "已执行双击，但前台窗口未变化，目标可能未获得焦点或未响应。"
+            "请重新捕获元素，并确认 desktop_spec 指向目标应用窗口（勿使用 explorer/WorkerW）。"
+        )
+
+    def _verify_pointer_step(
+        self,
+        action: str,
+        spec: Dict[str, Any],
+        description: str,
+        *,
+        ctrl: Any,
+        fg_before: int,
+        selector_type: str = "",
+        click_x: int = 0,
+        click_y: int = 0,
+    ) -> None:
+        """校验元素可执行：UIA 控件已解析；纯坐标回退则校验消息送达。"""
+        self._assert_control_actionable(ctrl)
+        act = (action or "click").strip().lower()
+        if type(ctrl).__name__ == "_CoordTarget":
+            from desktop_input import hwnd_at_screen_point
+
+            if hwnd_at_screen_point(click_x, click_y):
+                return
             raise RuntimeError(
-                f"已执行双击，但 {timeout:.0f}s 内未检测到与「{keyword}」相关的{hint}。"
-                "请重新捕获该桌面图标，并确认手动双击可正常打开。"
+                f"坐标 ({click_x},{click_y}) 下无有效窗口，无法发送点击消息。"
+                "请重新捕获坐标并确认该位置未被完全遮挡。"
             )
+        try:
+            ctrl.rectangle()
+        except Exception as exc:
+            raise RuntimeError(f"无法确认目标控件仍有效: {exc}") from exc
+        if act == "double_click":
+            self._verify_pointer_effect(
+                action,
+                spec,
+                description,
+                fg_before=fg_before,
+                selector_type=selector_type,
+            )
+            return
+        if act in ("click", "right_click"):
+            if is_desktop_shell_spec(spec):
+                return
+            spec_hwnd = int(spec.get("hwnd") or 0)
+            root = self._control_root_hwnd(ctrl)
+            if spec_hwnd and root and root != spec_hwnd:
+                raise RuntimeError(
+                    f"执行后控件窗口校验失败（期望 hwnd={spec_hwnd}，实际 {root}）"
+                )
+            if steal_focus_enabled() and spec_hwnd:
+                from desktop_input import get_foreground_hwnd
+
+                fg = get_foreground_hwnd()
+                if fg and fg != spec_hwnd and fg == fg_before:
+                    uat_logger.warning(
+                        "点击后前台未切换到目标窗口（未开启抢焦点时属正常）"
+                    )
 
     def _resolve_step_control(
         self,
@@ -314,6 +473,7 @@ class DesktopAutomation:
                     ctrl = resolve_desktop_icon_at_point(
                         x, y, self._window, spec, self._app
                     )
+                    self._last_resolved_via = "desktop_hit"
                     self._verify_resolved_name(
                         ctrl, (spec.get("target_name") or ""), "name"
                     )
@@ -323,8 +483,9 @@ class DesktopAutomation:
                     self._assert_screen_coords(x, y)
 
                     class _CoordTarget:
-                        def __init__(self, px: int, py: int):
+                        def __init__(self, px: int, py: int, owner: "DesktopAutomation"):
                             self._x, self._y = px, py
+                            self._owner = owner
 
                         def rectangle(self):
                             from types import SimpleNamespace
@@ -336,25 +497,40 @@ class DesktopAutomation:
                                 bottom=self._y + 1,
                             )
 
+                        def _do(self, act: str) -> None:
+                            self._owner._last_resolved_via = "coordinate"
+                            self._owner._screen_pointer_action(
+                                act, self._x, self._y
+                            )
+
                         def click_input(self, **kwargs):
-                            self._screen_pointer_action("click", self._x, self._y)
+                            self._do("click")
 
                         def double_click_input(self, **kwargs):
-                            self._screen_pointer_action(
-                                "double_click", self._x, self._y
-                            )
+                            self._do("double_click")
 
                         def right_click_input(self, **kwargs):
-                            self._screen_pointer_action(
-                                "right_click", self._x, self._y
-                            )
+                            self._do("right_click")
 
-                    return _CoordTarget(x, y)
+                        def click(self, **kwargs):
+                            self._do("click")
+
+                        def double_click(self, **kwargs):
+                            self._do("double_click")
+
+                        def right_click(self, **kwargs):
+                            self._do("right_click")
+
+                    self._last_resolved_via = "coordinate"
+                    return _CoordTarget(x, y, self)
 
                 ctrl = resolve_control(
                     self._window, try_st, try_sv, spec, app=self._app
                 )
+                self._last_resolved_via = try_st
                 self._verify_resolved_name(ctrl, selector_value, try_st)
+                if try_st != "coordinate":
+                    self._assert_control_actionable(ctrl)
                 return ctrl
             except Exception as exc:
                 last_err = exc
@@ -382,41 +558,58 @@ class DesktopAutomation:
     def _invoke_control_pointer(
         self, ctrl: Any, action: str, *, spec: Optional[Dict[str, Any]] = None
     ) -> None:
-        try:
-            ctrl.set_focus()
-        except Exception:
-            pass
-        time.sleep(0.08)
-        if action == "double_click" and self._is_uia_listitem(ctrl):
-            icon_name = self._desktop_icon_name(ctrl, spec or {})
-            # 桌面图标：中心物理双击（多数 RPA 默认）→ invoke → shell: 回退
+        """默认 UIA 消息点击（不移动用户鼠标）；物理鼠标仅 DESKTOP_PHYSICAL_MOUSE=1。"""
+        spec = spec or {}
+        act = (action or "click").strip().lower()
+        if steal_focus_enabled():
             try:
-                cx, cy = self._control_screen_center(ctrl)
-                screen_double_click(cx, cy)
-                time.sleep(0.2)
-                return
+                ctrl.set_focus()
             except Exception:
                 pass
-            try:
-                ctrl.invoke()
-                time.sleep(0.15)
-                return
-            except Exception:
-                pass
-            try:
-                ctrl.double_click_input()
-                return
-            except Exception:
-                pass
-            if icon_name and shell_open_folder(icon_name):
+            time.sleep(0.05)
+
+        if act == "double_click" and self._is_uia_listitem(ctrl) and is_desktop_shell_spec(spec):
+            icon_name = self._desktop_icon_name(ctrl, spec)
+            skip_shell = icon_name in ("FolderView", "桌面", "Desktop", "桌面 1", "")
+            if icon_name and not skip_shell and shell_open_folder(icon_name):
                 time.sleep(0.25)
                 return
-        if action == "click":
-            ctrl.click_input()
-        elif action == "double_click":
-            ctrl.double_click_input()
+            for method_name in ("invoke", "double_click", "double_click_input"):
+                if method_name.endswith("_input") and not physical_mouse_enabled():
+                    continue
+                try:
+                    getattr(ctrl, method_name)()
+                    time.sleep(0.15)
+                    return
+                except Exception:
+                    continue
+            cx, cy = self._control_screen_center(ctrl)
+            dbl = act == "double_click"
+            right = act == "right_click"
+            from desktop_input import message_click_at_screen
+
+            message_click_at_screen(
+                cx, cy, double=dbl, right=right
+            )
+            return
+
+        if physical_mouse_enabled():
+            if act == "click":
+                ctrl.click_input()
+            elif act == "double_click":
+                ctrl.double_click_input()
+            else:
+                ctrl.right_click_input()
+            return
+
+        if act == "click":
+            ctrl.click()
+        elif act == "double_click":
+            ctrl.double_click()
+        elif act == "right_click":
+            ctrl.right_click()
         else:
-            ctrl.right_click_input()
+            raise ValueError(f"不支持的指针动作：{act}")
 
     def _perform_pointer_step(
         self,
@@ -427,55 +620,75 @@ class DesktopAutomation:
         *,
         description: str = "",
     ) -> Dict[str, Any]:
-        """点击类步骤：优先 UIA 精准路径命中 ListItem，再回退屏幕坐标。"""
+        """点击类步骤：必须在目标窗口内实时解析控件，禁止盲用旧屏幕坐标。"""
         from desktop_input import get_foreground_hwnd
 
-        resolved_via = ""
-        click_x = click_y = 0
         fg_before = get_foreground_hwnd()
-        st = (selector_type or "").strip().lower()
-        if (
-            st == "coordinate"
-            and selector_value
-            and not is_desktop_shell_spec(spec)
-        ):
-            click_x, click_y = _split_coordinate(selector_value)
-            self._screen_pointer_action(action, click_x, click_y, spec)
-            resolved_via = "coordinate"
-        else:
-            ctrl = self._resolve_step_control(
-                selector_type, selector_value, spec
-            )
-            if self._is_uia_listitem(ctrl):
-                self._invoke_control_pointer(ctrl, action, spec=spec)
-                click_x, click_y = self._control_screen_center(ctrl)
-                resolved_via = "uia_listitem"
-            elif is_desktop_shell_spec(spec) or not hasattr(ctrl, "element_info"):
-                click_x, click_y = self._control_screen_center(ctrl)
-                self._screen_pointer_action(action, click_x, click_y, spec)
-                resolved_via = "screen_coords"
-            else:
-                self._invoke_control_pointer(ctrl, action, spec=spec)
-                try:
-                    click_x, click_y = self._control_screen_center(ctrl)
-                except Exception:
-                    pass
-                resolved_via = (selector_type or "control").strip().lower()
-        self._verify_pointer_effect(
-            action, spec, description, fg_before=fg_before
+        shell = is_desktop_shell_spec(spec)
+        self._last_resolved_via = (selector_type or "uia").strip().lower()
+        ctrl = self._resolve_step_control(selector_type, selector_value, spec)
+        self._assert_control_on_target(ctrl, spec)
+        self._assert_control_actionable(ctrl)
+        click_x, click_y = self._control_screen_center(ctrl)
+        self._invoke_control_pointer(ctrl, action, spec=spec)
+        resolved_via = (
+            getattr(self, "_last_resolved_via", None)
+            or (selector_type or "uia").strip().lower()
         )
+        verified = False
+
+        try:
+            self._verify_pointer_step(
+                action,
+                spec,
+                description,
+                ctrl=ctrl,
+                fg_before=fg_before,
+                selector_type=selector_type,
+                click_x=click_x,
+                click_y=click_y,
+            )
+            verified = True
+        except RuntimeError:
+            if (
+                (action or "").strip().lower() == "double_click"
+                and shell
+                and (selector_type or "").strip().lower() != "coordinate"
+            ):
+                keyword = infer_effect_keyword(spec, description)
+                if keyword and shell_open_folder(keyword):
+                    time.sleep(0.5)
+                    if wait_for_desktop_effect(
+                        keyword,
+                        fg_before=fg_before,
+                        timeout=6.0,
+                        desktop_shell=True,
+                        require_verify=True,
+                    ):
+                        uat_logger.info("桌面双击 Shell 回退打开: %s", keyword)
+                        return {
+                            "status": "success",
+                            "action": action,
+                            "resolved_via": "shell_open_folder",
+                            "coords": "",
+                            "verified": True,
+                        }
+            raise
         uat_logger.info(
-            "桌面指针操作完成: %s via %s @ (%s,%s)",
+            "桌面指针操作完成: %s via %s @ (%s,%s) verified=%s",
             action,
-            resolved_via or "unknown",
+            resolved_via,
             click_x,
             click_y,
+            verified,
         )
         return {
             "status": "success",
             "action": action,
             "resolved_via": resolved_via,
-            "coords": f"{click_x},{click_y}" if click_x or click_y else "",
+            "coords": f"{click_x},{click_y}",
+            "verified": verified,
+            "pointer_executed": verified,
         }
 
     def execute_step(self, step: Dict[str, Any]) -> Dict[str, Any]:
@@ -498,12 +711,18 @@ class DesktopAutomation:
                 raise ValueError(err)
             path = (input_value or spec.get("path") or spec.get("exe") or "").strip()
             spec = {**spec, "path": path}
+            self._attach_fp = None
             self._app, self._window = attach_application(spec)
-            return {"status": "success", "action": action}
+            self._attach_fp = self._attach_fingerprint(spec)
+            self._activate_attached_window(spec)
+            return {"status": "success", "action": action, "verified": True}
 
         if action == "attach_window":
+            self._attach_fp = None
             self._app, self._window = attach_application(spec)
-            return {"status": "success", "action": action}
+            self._attach_fp = self._attach_fingerprint(spec)
+            self._activate_attached_window(spec)
+            return {"status": "success", "action": action, "verified": True}
 
         if action in ("click", "double_click", "right_click"):
             self._ensure_attached(spec, action, selector_type)
@@ -719,6 +938,8 @@ class DesktopWorker:
     def __init__(self):
         self.task_queue: queue.Queue = queue.Queue()
         self.result_queue: queue.Queue = queue.Queue()
+        self._orphan_results: Dict[str, Tuple[Any, Optional[Exception]]] = {}
+        self._orphan_lock = threading.Lock()
         self.thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.automation = DesktopAutomation()
         self.thread.start()
@@ -739,15 +960,31 @@ class DesktopWorker:
         import uuid
 
         task_id = str(uuid.uuid4())
+        with self._orphan_lock:
+            orphan = self._orphan_results.pop(task_id, None)
+        if orphan is not None:
+            result, err = orphan
+            if err:
+                raise err
+            return result
         self.task_queue.put((task_id, func, args, kwargs))
         deadline = time.time() + timeout
         while time.time() < deadline:
+            with self._orphan_lock:
+                orphan = self._orphan_results.pop(task_id, None)
+            if orphan is not None:
+                result, err = orphan
+                if err:
+                    raise err
+                return result
             try:
-                rid, result, err = self.result_queue.get(timeout=0.5)
+                rid, result, err = self.result_queue.get(timeout=0.3)
                 if rid == task_id:
                     if err:
                         raise err
                     return result
+                with self._orphan_lock:
+                    self._orphan_results[rid] = (result, err)
             except queue.Empty:
                 continue
         raise TimeoutError("桌面自动化操作超时")

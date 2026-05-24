@@ -23,19 +23,60 @@ except ImportError:
     def format_resolve_error(meta) -> str:
         return "找不到可执行程序"
 
-_DESKTOP_AVAILABLE = sys.platform == "win32"
-if _DESKTOP_AVAILABLE:
-    try:
-        from pywinauto import Application  # type: ignore
-        from pywinauto.findwindows import ElementNotFoundError  # type: ignore
-    except ImportError:
+_DESKTOP_AVAILABLE = False
+Application = None  # type: ignore
+ElementNotFoundError = Exception  # type: ignore
+
+
+def _refresh_desktop_imports() -> bool:
+    """运行时检测/加载 pywinauto（避免 pip 安装后须重启才能识别）。"""
+    global _DESKTOP_AVAILABLE, Application, ElementNotFoundError
+    if sys.platform != "win32":
         _DESKTOP_AVAILABLE = False
+        return False
+    if _DESKTOP_AVAILABLE:
+        return True
+    try:
+        from pywinauto import Application as _App  # type: ignore
+        from pywinauto.findwindows import ElementNotFoundError as _ENF  # type: ignore
+
+        Application = _App
+        ElementNotFoundError = _ENF
+        _DESKTOP_AVAILABLE = True
+        return True
+    except ImportError:
         Application = None  # type: ignore
         ElementNotFoundError = Exception  # type: ignore
+        _DESKTOP_AVAILABLE = False
+        return False
+
+
+_refresh_desktop_imports()
 
 
 def desktop_runtime_available() -> bool:
-    return _DESKTOP_AVAILABLE
+    return _refresh_desktop_imports()
+
+
+def desktop_runtime_unavailable_reason() -> str:
+    """供 API 返回：说明当前解释器下桌面自动化不可用的原因。"""
+    import sys as _sys
+
+    if _sys.platform != "win32":
+        return "桌面自动化仅支持 Windows"
+    try:
+        import pywinauto  # noqa: F401
+
+        ver = getattr(pywinauto, "__version__", "")
+        return ""
+    except ImportError:
+        return (
+            f"当前 Python（{_sys.executable}）未安装 pywinauto。"
+            f"请执行: \"{_sys.executable}\" -m pip install -r requirements-windows.txt "
+            "后重启 python app.py"
+        )
+    except Exception as exc:
+        return f"pywinauto 加载失败: {exc}（解释器: {_sys.executable}）"
 
 
 def parse_desktop_spec(raw: Any) -> Dict[str, Any]:
@@ -59,11 +100,16 @@ def is_desktop_shell_spec(spec: Optional[Dict[str, Any]]) -> bool:
     s = spec or {}
     if (s.get("surface") or "").strip().lower() == "desktop_shell":
         return True
+    cls = (s.get("class_name") or "").strip()
+    if cls in ("Progman", "WorkerW"):
+        return True
     title = (s.get("window_title") or "").strip().lower()
     if title in ("program manager", "progman", "program manager "):
         return True
     proc = (s.get("process") or "").strip().lower()
-    if proc == "explorer.exe" and title.startswith("program"):
+    if proc == "explorer.exe" and (
+        title.startswith("program") or cls in ("Progman", "WorkerW")
+    ):
         return True
     return False
 
@@ -552,14 +598,21 @@ def desktop_listitem_at_screen_point(
     window: Any = None,
     desktop_spec: Optional[Dict[str, Any]] = None,
     app: Any = None,
+    *,
+    force_cache: bool = True,
 ) -> Any:
     """
-    在桌面图标层按屏幕坐标命中 ListItem（竞品/RPA 常用：列表矩形包含点，而非 from_point）。
-    多个重叠时取面积最小者。
+    在桌面图标层按屏幕坐标命中 ListItem（使用 Win32 矩形缓存，远快于 UIA 全树扫描）。
+    命中失败时若 force_cache=True 会强制刷新一次缓存再试。
     """
     if app is None or window is None:
         app, window = attach_desktop_shell(desktop_spec)
-    bounds = refresh_desktop_icon_cache(desktop_spec, force=True)
+    bounds = refresh_desktop_icon_cache(desktop_spec, force=force_cache)
+    hit = _hit_test_icon_bounds(x, y, bounds)
+    if not hit and force_cache:
+        # 缓存未命中，强制刷新一次再试
+        bounds = refresh_desktop_icon_cache(desktop_spec, force=True)
+        hit = _hit_test_icon_bounds(x, y, bounds)
     hit = _hit_test_icon_bounds(x, y, bounds)
     if hit and hit[4]:
         try:

@@ -10219,10 +10219,13 @@ class PlaywrightAutomation:
             await self.page.goto(target, wait_until='load', timeout=timeout)
             await self._wait_pick_page_ready(after_nav=True, timeout_ms=int(timeout))
 
-    async def enable_element_selection(self, url='', auto_arm: bool = False):
+    async def enable_element_selection(
+        self, url='', auto_arm: bool = False, *, launch_if_needed: bool = True
+    ):
         """启用元素选择模式,显示悬浮窗让用户选择页面元素。
 
         auto_arm: 为 True 时进入页面后直接处于可点击拾取状态（统一元素捕获用）。
+        launch_if_needed: False 时仅附着已有浏览器会话，不启动 about:blank 新窗口。
         """
         try:
             # 检查浏览器实例是否有效
@@ -10263,9 +10266,18 @@ class PlaywrightAutomation:
                 self.context = None
                 self.playwright = None
             
+            nav = (url or "").strip()
+
             # 4. 启动或复用浏览器实例
             if not browser_valid:
-                # 如果浏览器实例不存在或已失效,则启动新实例
+                if not launch_if_needed:
+                    uat_logger.info(
+                        "无可用浏览器会话，跳过网页拾取（未请求 launch_if_needed）"
+                    )
+                    return False
+                if not nav:
+                    uat_logger.info("未提供 URL，拒绝启动空白浏览器用于拾取")
+                    return False
                 uat_logger.info("启动新的浏览器实例")
                 await self.start_browser(headless=False)
             else:
@@ -10282,8 +10294,8 @@ class PlaywrightAutomation:
                     pass
 
             # 如果提供了URL,则导航到该URL（_picker_goto 内已等待 load）；否则确保当前页 dom 就绪
-            if (url or '').strip():
-                await self._picker_goto(url)
+            if nav:
+                await self._picker_goto(nav)
             else:
                 await self._wait_pick_page_ready(after_nav=False)
 
@@ -11754,9 +11766,14 @@ def sync_stop_recording():
         return await automation.stop_recording()
     return worker.execute(run)
 
-def sync_enable_element_selection(url='', auto_arm: bool = False):
+def sync_enable_element_selection(
+    url='', auto_arm: bool = False, *, launch_if_needed: bool = True
+):
     async def run():
-        return await automation.enable_element_selection(url, auto_arm=auto_arm)
+        return await automation.enable_element_selection(
+            url, auto_arm=auto_arm, launch_if_needed=launch_if_needed
+        )
+
     return worker.execute(run)
 
 def sync_disable_element_selection():

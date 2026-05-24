@@ -10,7 +10,7 @@ class TestDesktopShellResolve(unittest.TestCase):
         spec = {"window_title": "Program Manager", "process": "explorer.exe"}
         self.assertTrue(is_desktop_shell_spec(spec))
 
-    def test_attempt_order_shell_hit_before_coordinate(self):
+    def test_coordinate_on_shell_uses_screen_coords_only(self):
         auto = DesktopAutomation()
         spec = {
             "surface": "desktop_shell",
@@ -19,6 +19,21 @@ class TestDesktopShellResolve(unittest.TestCase):
             "uia_path": [{"control_type": "ListItem", "name": "控制面板"}],
         }
         attempts = auto._build_resolve_attempts("coordinate", "38,941", spec)
+        self.assertEqual(attempts, [("coordinate", "38,941")])
+
+    def test_uia_path_still_prefers_hit_before_coordinate(self):
+        auto = DesktopAutomation()
+        spec = {
+            "surface": "desktop_shell",
+            "window_title": "Program Manager",
+            "pick_center": "38,941",
+            "uia_path": [{"control_type": "ListItem", "name": "控制面板"}],
+        }
+        attempts = auto._build_resolve_attempts(
+            "uia_path",
+            '[{"control_type": "ListItem", "name": "控制面板"}]',
+            spec,
+        )
         self.assertEqual(attempts[0][0], "uia_path")
         self.assertEqual(attempts[1], ("__desktop_hit__", "38,941"))
         self.assertEqual(attempts[-1], ("coordinate", "38,941"))

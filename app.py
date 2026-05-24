@@ -149,6 +149,26 @@ _ai_model_cfg_lock = threading.Lock()
 _login_fail_lock = threading.Lock()
 _login_fail_timestamps: dict = {}
 
+if sys.platform == "win32":
+    try:
+        from desktop_locator import (
+            desktop_runtime_available,
+            desktop_runtime_unavailable_reason,
+        )
+
+        if desktop_runtime_available():
+            uat_logger.info(
+                "桌面自动化依赖就绪 (pywinauto, 解释器=%s)", sys.executable
+            )
+        else:
+            uat_logger.warning(
+                "桌面自动化不可用: %s",
+                desktop_runtime_unavailable_reason() or "未知原因",
+            )
+    except Exception as _desk_boot_exc:
+        uat_logger.debug("桌面依赖自检跳过: %s", _desk_boot_exc)
+
+
 def _is_production_env() -> bool:
     return (
         os.environ.get("FLASK_ENV", "").strip().lower() == "production"
@@ -4477,6 +4497,54 @@ def _resolve_element_picker_web_url(data: dict) -> tuple:
     return fixed_url, None
 
 
+def _persist_desktop_picker_steps_to_case(case_id: int, steps: list) -> list:
+    """将捕获器 session 中的桌面步骤直接写入用例（status 轮询时调用，避免前端 POST 丢失）。"""
+    if not case_id or not steps:
+        return []
+    case_row = db.get_test_case_v2(int(case_id))
+    if not case_row:
+        return []
+    pid = case_row.get('project_id')
+    if pid and not db.check_project_access(current_user.id, int(pid), 'editor'):
+        return []
+    saved_ids = []
+    for st in steps:
+        if not isinstance(st, dict):
+            continue
+        action = (st.get('action') or 'click').strip()
+        layer = 'desktop'
+        step_err = _validate_step_action_for_case(case_row, action, layer)
+        if step_err:
+            continue
+        ds = st.get('desktop_spec') or {}
+        if not isinstance(ds, str):
+            ds = json.dumps(ds, ensure_ascii=False)
+        step_id = db.create_test_step(
+            int(case_id),
+            action,
+            st.get('selector_type') or 'automation_id',
+            st.get('selector_value') or '',
+            st.get('input_value') or '',
+            st.get('description') or '',
+            None,
+            '',
+            '',
+            '',
+            '',
+            False,
+            '',
+            st.get('compare_type') or 'equals',
+            st.get('locator_candidates') or '',
+            1,
+            '',
+            automation_layer=layer,
+            desktop_spec=ds or '',
+        )
+        if step_id:
+            saved_ids.append(step_id)
+    return saved_ids
+
+
 @app.route('/api/element-picker/start', methods=['POST'])
 @app.route('/api/element_picker/start', methods=['POST'])
 @login_required
@@ -4494,16 +4562,50 @@ def api_element_picker_start():
     if not record_mode:
         mode_s = (data.get('mode') or '').strip().lower()
         record_mode = mode_s in ('1', 'true', 'yes', 'record', 'recording')
-    enable_web = _parse_api_bool(data.get('enable_web'), default=True)
-    web_url, _ = _resolve_element_picker_web_url(data)
+    web_navigate = _parse_api_bool(data.get('web_navigate'), default=False)
+    web_attach_existing = _parse_api_bool(
+        data.get('web_attach_existing'), default=False
+    )
+    enable_web = _parse_api_bool(
+        data.get('enable_web'),
+        default=bool(web_navigate or web_attach_existing),
+    )
+    web_url = ''
+    web_fallback_url = ''
+    resolved_url, _ = _resolve_element_picker_web_url(data)
+    if web_navigate:
+        web_url = resolved_url or ''
+    elif enable_web:
+        web_fallback_url = resolved_url or ''
     try:
+        case_id_raw = data.get('case_id')
+        try:
+            picker_case_id = int(case_id_raw) if case_id_raw not in (None, '') else None
+        except (TypeError, ValueError):
+            picker_case_id = None
+        from desktop_locator import desktop_runtime_available, desktop_runtime_unavailable_reason
         from element_picker import sync_start_element_picker
+
+        if sys.platform == "win32" and not desktop_runtime_available():
+            reason = desktop_runtime_unavailable_reason()
+            if reason:
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": reason,
+                        "python_executable": sys.executable,
+                    }
+                ), 400
 
         result = sync_start_element_picker(
             desktop_spec=spec or {},
             record_mode=record_mode,
             web_url=web_url or '',
+            web_fallback_url=web_fallback_url or '',
             enable_web=enable_web,
+            web_navigate=web_navigate,
+            web_attach_existing=web_attach_existing,
+            case_id=picker_case_id,
         )
         status = 200 if result.get('success') else 400
         return jsonify(result), status
@@ -4521,9 +4623,27 @@ def api_element_picker_start():
 def api_element_picker_stop():
     """停止统一元素捕获。"""
     try:
-        from element_picker import sync_stop_element_picker
+        from element_picker import sync_get_element_picker_status, sync_stop_element_picker
 
-        return jsonify(sync_stop_element_picker())
+        pre = sync_get_element_picker_status(consume_last_pick=False)
+        case_id = int(
+            pre.get('case_id')
+            or (pre.get('desktop') or {}).get('case_id')
+            or 0
+        )
+        new_steps = list(pre.get('new_recorded_steps') or [])
+        if not new_steps:
+            desk = pre.get('desktop') or {}
+            rec = list(desk.get('recorded_steps') or [])
+            sent = int(desk.get('_sent_count') or 0)
+            if len(rec) > sent:
+                new_steps = rec[sent:]
+        result = sync_stop_element_picker()
+        if case_id and new_steps:
+            saved_ids = _persist_desktop_picker_steps_to_case(case_id, new_steps)
+            if saved_ids:
+                result['saved_step_ids'] = saved_ids
+        return jsonify(result)
     except Exception as e:
         uat_logger.log_exception('api_element_picker_stop', e)
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4540,7 +4660,29 @@ def api_element_picker_status():
         from element_picker import sync_get_element_picker_status
 
         consume = (request.args.get('consume') or '').strip().lower() in ('1', 'true', 'yes')
-        return jsonify(sync_get_element_picker_status(consume_last_pick=consume))
+        result = sync_get_element_picker_status(consume_last_pick=consume)
+        case_id = int(
+            result.get('case_id')
+            or (result.get('desktop') or {}).get('case_id')
+            or 0
+        )
+        new_steps = list(result.get('new_recorded_steps') or [])
+        if not new_steps:
+            desk = result.get('desktop') or {}
+            new_steps = list(desk.get('new_recorded_steps') or [])
+        if case_id and new_steps:
+            saved_ids = _persist_desktop_picker_steps_to_case(case_id, new_steps)
+            if saved_ids:
+                result['saved_step_ids'] = saved_ids
+        if case_id and result.get('picker_closed') and not result.get('saved_step_ids'):
+            desk = result.get('desktop') or {}
+            flush_all = list(result.get('recorded_steps') or desk.get('recorded_steps') or [])
+            sent = int(desk.get('_sent_count') or result.get('_sent_count') or 0)
+            if len(flush_all) > sent:
+                saved_ids = _persist_desktop_picker_steps_to_case(case_id, flush_all[sent:])
+                if saved_ids:
+                    result['saved_step_ids'] = saved_ids
+        return jsonify(result)
     except Exception as e:
         uat_logger.log_exception('api_element_picker_status', e)
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -6749,6 +6891,17 @@ def api_run_case(case_id):
                                 (desk_result or {}).get("error")
                                 or "桌面步骤执行失败"
                             )
+                        if action in ("click", "double_click", "right_click"):
+                            if not (desk_result or {}).get("verified"):
+                                raise RuntimeError(
+                                    (desk_result or {}).get("error")
+                                    or "桌面指针步骤未通过执行校验（可能未命中目标控件）"
+                                )
+                            if not (desk_result or {}).get("pointer_executed"):
+                                raise RuntimeError(
+                                    (desk_result or {}).get("error")
+                                    or "桌面指针步骤未真正执行（pointer_executed=false）"
+                                )
                         step_status = 'success'
                         step_error = ''
                         step_screenshot = (desk_result or {}).get('screenshot') or ''
