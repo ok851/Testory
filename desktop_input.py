@@ -100,6 +100,30 @@ def message_click_at_screen(
     return hwnd
 
 
+def message_click_at_client(
+    hwnd: int,
+    cx: int,
+    cy: int,
+    *,
+    double: bool = False,
+    right: bool = False,
+) -> int:
+    """向指定 HWND 客户区坐标发送鼠标消息（不依赖该窗口是否在前台）。"""
+    if not hwnd:
+        raise RuntimeError("message_click_at_client 需要有效 hwnd")
+    lparam = (int(cy) << 16) | (int(cx) & 0xFFFF)
+    user32 = _user32()
+    if right:
+        user32.PostMessageW(int(hwnd), 0x0204, 2, lparam)
+        user32.PostMessageW(int(hwnd), 0x0205, 0, lparam)
+    elif double:
+        user32.PostMessageW(int(hwnd), 0x0203, 1, lparam)
+    else:
+        user32.PostMessageW(int(hwnd), 0x0201, 1, lparam)
+        user32.PostMessageW(int(hwnd), 0x0202, 0, lparam)
+    return int(hwnd)
+
+
 def restore_cursor_after_pointer(*, force_physical: bool = False) -> bool:
     """默认不恢复光标（便于看见坐标点击）；DESKTOP_RESTORE_CURSOR=1 时恢复。"""
     raw = (os.environ.get("DESKTOP_RESTORE_CURSOR") or "").strip().lower()
@@ -160,6 +184,44 @@ _SHELL_VIEW_CLASSES = frozenset(
 )
 
 
+def is_valid_hwnd(hwnd: int) -> bool:
+    """窗口句柄是否仍存在（录制时的 hwnd 可能已失效）。"""
+    if not hwnd:
+        return False
+    try:
+        return bool(_user32().IsWindow(int(hwnd)))
+    except Exception:
+        return False
+
+
+def resolve_hwnd_from_spec(spec: Optional[dict]) -> int:
+    """优先使用 spec.hwnd；失效时按窗口标题/正则匹配当前可见窗口。"""
+    s = spec or {}
+    hwnd = int(s.get("hwnd") or 0)
+    if is_valid_hwnd(hwnd):
+        return hwnd
+    title_pat = (s.get("window_title_re") or "").strip()
+    title_sub = (s.get("window_title") or "").strip()
+    if not title_pat and not title_sub:
+        return 0
+    for wh, wt, _cls in _enum_visible_windows():
+        if title_pat:
+            try:
+                if re.search(title_pat, wt or "", re.I):
+                    return int(wh)
+            except re.error:
+                if title_pat in (wt or ""):
+                    return int(wh)
+        elif title_sub and title_sub in (wt or ""):
+            return int(wh)
+    return 0
+
+
+def screen_point_on_desktop_shell(x: int, y: int) -> bool:
+    """屏幕坐标是否落在桌面 Shell（Progman/图标层）窗口树内。"""
+    return is_desktop_shell_hwnd(hwnd_at_screen_point(int(x), int(y)))
+
+
 def hwnd_at_screen_point(x: int, y: int) -> int:
     import ctypes
     from ctypes import wintypes
@@ -195,28 +257,212 @@ def is_desktop_shell_hwnd(hwnd: int) -> bool:
     return False
 
 
+def virtual_screen_rect() -> Tuple[int, int, int, int]:
+    """虚拟桌面范围 (left, top, width, height)，覆盖多显示器。"""
+    u = _user32()
+    return (
+        int(u.GetSystemMetrics(76)),
+        int(u.GetSystemMetrics(77)),
+        int(u.GetSystemMetrics(78)),
+        int(u.GetSystemMetrics(79)),
+    )
+
+
+def screen_coords_in_virtual_bounds(x: int, y: int) -> bool:
+    left, top, width, height = virtual_screen_rect()
+    return (
+        left <= int(x) < left + width
+        and top <= int(y) < top + height
+    )
+
+
+def screen_size() -> tuple[int, int]:
+    """主显示器宽高（兼容旧逻辑）。"""
+    u = _user32()
+    return int(u.GetSystemMetrics(0)), int(u.GetSystemMetrics(1))
+
+
+def hwnd_belongs_to_target(point_hwnd: int, target_hwnd: int) -> bool:
+    """屏幕坐标命中窗口是否属于目标顶层/父窗口树。"""
+    if not point_hwnd:
+        return False
+    if not target_hwnd:
+        return bool(point_hwnd)
+    if int(point_hwnd) == int(target_hwnd):
+        return True
+    u = _user32()
+    cur = int(point_hwnd)
+    for _ in range(64):
+        if cur == int(target_hwnd):
+            return True
+        parent = int(u.GetParent(cur) or 0)
+        if not parent or parent == cur:
+            break
+        cur = parent
+    try:
+        root = int(u.GetAncestor(int(point_hwnd), 2))
+        return root == int(target_hwnd)
+    except Exception:
+        return False
+
+
+def screen_to_client_xy(hwnd: int, x: int, y: int) -> Tuple[int, int]:
+    import ctypes
+    from ctypes import wintypes
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    pt = POINT(int(x), int(y))
+    if not _user32().ScreenToClient(int(hwnd), ctypes.byref(pt)):
+        raise RuntimeError(f"ScreenToClient 失败: hwnd={hwnd} ({x},{y})")
+    return int(pt.x), int(pt.y)
+
+
+def client_to_screen_xy(hwnd: int, cx: int, cy: int) -> Tuple[int, int]:
+    import ctypes
+    from ctypes import wintypes
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    pt = POINT(int(cx), int(cy))
+    if not _user32().ClientToScreen(int(hwnd), ctypes.byref(pt)):
+        raise RuntimeError(f"ClientToScreen 失败: hwnd={hwnd} ({cx},{cy})")
+    return int(pt.x), int(pt.y)
+
+
+def visible_window_effect_for_spec(
+    spec: Optional[dict],
+    keyword: str = "",
+    *,
+    fg_before: int = 0,
+) -> bool:
+    """
+    不依赖前台焦点：检测可见窗口标题是否出现预期变化（用于后台双击校验）。
+    """
+    keys = _effect_keywords(keyword)
+    title_hint = (
+        (spec or {}).get("window_title_re")
+        or (spec or {}).get("window_title")
+        or ""
+    ).strip()
+    for hwnd, title, _cls in _enum_visible_windows():
+        if fg_before and hwnd == fg_before:
+            continue
+        if keys and _title_matches(keyword, [title]):
+            return True
+        if title_hint and title and title_hint in title:
+            return True
+    if keys and _title_matches(keyword, _enum_visible_window_titles()):
+        return True
+    return False
+
+
+def client_point_in_hwnd(hwnd: int, client_x: int, client_y: int) -> bool:
+    """客户区坐标是否在窗口客户区矩形内（用于后台 PostMessage 送达校验）。"""
+    if not is_valid_hwnd(hwnd):
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    u = _user32()
+    h = int(hwnd)
+    cx, cy = int(client_x), int(client_y)
+    rect = wintypes.RECT()
+    if u.GetClientRect(h, ctypes.byref(rect)):
+        cw = int(rect.right) - int(rect.left)
+        ch = int(rect.bottom) - int(rect.top)
+        if cw > 0 and ch > 0:
+            return (
+                int(rect.left) <= cx < int(rect.right)
+                and int(rect.top) <= cy < int(rect.bottom)
+            )
+    try:
+        sx, sy = client_to_screen_xy(h, cx, cy)
+        wr = wintypes.RECT()
+        if u.GetWindowRect(h, ctypes.byref(wr)):
+            return (
+                int(wr.left) <= sx < int(wr.right)
+                and int(wr.top) <= sy < int(wr.bottom)
+            )
+    except Exception:
+        pass
+    return u.IsIconic(h) or u.IsZoomed(h)
+
+
+def verify_client_message_delivered(
+    hwnd: int,
+    client_x: int,
+    client_y: int,
+    spec: Optional[dict] = None,
+) -> bool:
+    """
+    后台向目标 HWND 客户区发消息后校验：不依赖 WindowFromPoint / 前台 Z 序。
+    """
+    anchor = resolve_hwnd_from_spec(spec) if spec else 0
+    if not anchor:
+        anchor = int(hwnd) if is_valid_hwnd(hwnd) else 0
+    if not anchor:
+        return False
+    return client_point_in_hwnd(anchor, client_x, client_y)
+
+
 def verify_pointer_delivered(
     x: int,
     y: int,
     *,
     desktop_shell: bool = False,
     physical: bool = False,
+    target_hwnd: int = 0,
+    used_physical_click: bool = False,
+    client_x: Optional[int] = None,
+    client_y: Optional[int] = None,
+    delivery_mode: str = "",
+    spec: Optional[dict] = None,
 ) -> bool:
     """
-    坐标点击送达校验：确认坐标处为桌面/目标窗口，不校验资源管理器是否打开。
-    物理点击另要求光标曾到达目标坐标（由 screen_*_click 保证）。
+    坐标点击送达校验。
+    delivery_mode=client：已向目标窗口客户区 PostMessage，不用 WindowFromPoint。
     """
+    mode = (delivery_mode or "").strip().lower()
+    if mode == "client" and target_hwnd and client_x is not None and client_y is not None:
+        merged = dict(spec or {})
+        merged.setdefault("hwnd", int(target_hwnd))
+        return verify_client_message_delivered(
+            int(target_hwnd),
+            int(client_x),
+            int(client_y),
+            spec=merged,
+        )
+
     hwnd = hwnd_at_screen_point(int(x), int(y))
     if not hwnd:
         return False
     if desktop_shell:
         return is_desktop_shell_hwnd(hwnd)
-    return bool(physical or hwnd)
-
-
-def screen_size() -> tuple[int, int]:
-    u = _user32()
-    return int(u.GetSystemMetrics(0)), int(u.GetSystemMetrics(1))
+    if target_hwnd and not used_physical_click and not physical:
+        merged = dict(spec or {})
+        merged.setdefault("hwnd", int(target_hwnd))
+        live = resolve_hwnd_from_spec(merged) or int(target_hwnd)
+        if client_x is not None and client_y is not None:
+            if verify_client_message_delivered(
+                live, int(client_x), int(client_y), spec=merged
+            ):
+                return True
+    if target_hwnd:
+        merged = dict(spec or {})
+        merged.setdefault("hwnd", int(target_hwnd))
+        live = resolve_hwnd_from_spec(merged) or int(target_hwnd)
+        if hwnd_belongs_to_target(hwnd, live):
+            return True
+        if client_x is not None and client_y is not None:
+            return verify_client_message_delivered(live, int(client_x), int(client_y))
+    if used_physical_click or physical:
+        return bool(hwnd)
+    if target_hwnd:
+        return False
+    return bool(hwnd)
 
 
 def _move_cursor(x: int, y: int) -> None:
@@ -472,13 +718,24 @@ def wait_for_desktop_effect(
     return False
 
 
+_SPURIOUS_TARGET_NAMES = frozenset({
+    "folderview",
+    "桌面",
+    "desktop",
+    "桌面 1",
+    "syslistview32",
+    "shelldll_defview",
+    "directuihwnd",
+})
+
+
 def infer_effect_keyword(
     spec: Optional[dict],
     description: str = "",
 ) -> str:
     s = spec or {}
     name = (s.get("target_name") or "").strip()
-    if name:
+    if name and name.strip().lower() not in _SPURIOUS_TARGET_NAMES:
         return name
     uia = s.get("uia_path")
     if isinstance(uia, list) and uia:

@@ -189,7 +189,11 @@ def _path_node_to_kwargs(node: Dict[str, Any]) -> Dict[str, Any]:
         kwargs["title"] = name
     cls = (node.get("class_name") or "").strip()
     if cls:
-        kwargs["class_name"] = cls
+        if "|" in cls or cls.startswith("regex:"):
+            pat = cls[6:].strip() if cls.startswith("regex:") else cls
+            kwargs["class_name_re"] = pat
+        else:
+            kwargs["class_name"] = cls
     ct = (node.get("control_type") or "").strip()
     if ct and not cls:
         if ct in ("ListItem", "List", "Pane", "Window", "Button", "Edit", "Text"):
@@ -365,7 +369,20 @@ def shell_open_folder(icon_name: str) -> bool:
     key = (icon_name or "").strip()
     if not key:
         return False
-    uri = _SHELL_FOLDER_URI.get(key) or _SHELL_FOLDER_URI.get(key.lower())
+    low = key.lower()
+    if low in ("记事本", "notepad"):
+        try:
+            import subprocess
+
+            subprocess.Popen(["notepad.exe"], shell=False)
+            return True
+        except Exception:
+            try:
+                os.startfile("notepad.exe")  # type: ignore[attr-defined]
+                return True
+            except Exception:
+                return False
+    uri = _SHELL_FOLDER_URI.get(key) or _SHELL_FOLDER_URI.get(low)
     if not uri:
         return False
     try:
@@ -581,15 +598,43 @@ def desktop_icon_rect_at_point(
     background_refresh: bool = True,
 ) -> Optional[Tuple[int, int, int, int]]:
     """悬停高亮用：仅矩形命中，不附着 UIA 控件。"""
-    bounds = refresh_desktop_icon_cache(
-        desktop_spec, background=background_refresh
+    hit = desktop_icon_hit_at_screen_point(
+        x, y, desktop_spec, background_refresh=background_refresh
     )
-    if not bounds and background_refresh:
-        bounds = refresh_desktop_icon_cache(desktop_spec, force=True)
-    hit = _hit_test_icon_bounds(x, y, bounds)
     if not hit:
         return None
     return hit[0], hit[1], hit[2], hit[3]
+
+
+def desktop_icon_hit_at_screen_point(
+    x: int,
+    y: int,
+    desktop_spec: Optional[Dict[str, Any]] = None,
+    *,
+    background_refresh: bool = True,
+) -> Optional[Tuple[int, int, int, int, str]]:
+    """
+    屏幕坐标命中桌面图标：返回 (left, top, right, bottom, icon_name)。
+    不依赖 Z 序顶层窗口；默认 Win32 ListView（拾取快），UIA 仅作回退。
+    """
+    try:
+        from desktop_shell_win32 import desktop_icon_hit_at_win32
+
+        hit = desktop_icon_hit_at_win32(x, y, allow_sync=not background_refresh)
+        if hit:
+            return hit
+        if background_refresh:
+            hit = desktop_icon_hit_at_win32(x, y, allow_sync=True)
+            if hit:
+                return hit
+    except Exception:
+        pass
+    shell = dict(desktop_spec or {})
+    shell.setdefault("surface", "desktop_shell")
+    bounds = refresh_desktop_icon_cache(shell, background=background_refresh)
+    if not bounds and background_refresh:
+        bounds = refresh_desktop_icon_cache(shell, force=True)
+    return _hit_test_icon_bounds(x, y, bounds)
 
 
 def desktop_listitem_at_screen_point(
@@ -610,10 +655,8 @@ def desktop_listitem_at_screen_point(
     bounds = refresh_desktop_icon_cache(desktop_spec, force=force_cache)
     hit = _hit_test_icon_bounds(x, y, bounds)
     if not hit and force_cache:
-        # 缓存未命中，强制刷新一次再试
         bounds = refresh_desktop_icon_cache(desktop_spec, force=True)
         hit = _hit_test_icon_bounds(x, y, bounds)
-    hit = _hit_test_icon_bounds(x, y, bounds)
     if hit and hit[4]:
         try:
             return resolve_shell_desktop_icon(

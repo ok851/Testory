@@ -16,6 +16,7 @@ from step_executor import (
     enrich_execution_step,
     is_desktop_step,
     normalize_automation_layer,
+    validate_desktop_step_result,
     validate_step_for_layer,
 )
 
@@ -57,7 +58,10 @@ class ExecutorFactory:
         err = self.validate_step(exec_step)
         if err:
             raise ValueError(err)
-        return sync_desktop_execute_step(exec_step)
+        result = sync_desktop_execute_step(exec_step)
+        return validate_desktop_step_result(
+            result, (exec_step.get("action") or "").strip()
+        )
 
     def execute_step(
         self,

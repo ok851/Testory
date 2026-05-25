@@ -51,6 +51,12 @@ from api_spec_pipeline import run_api_spec_pipeline
 _execution_lock = threading.Lock()
 _currently_executing = False
 
+def click_force_default() -> bool:
+    """默认不用 force 点击（元素须可见）；PLAYWRIGHT_CLICK_FORCE_DEFAULT=1 时允许强制点击。"""
+    raw = (os.environ.get("PLAYWRIGHT_CLICK_FORCE_DEFAULT") or "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _norm_click_repeat_count_pa(raw) -> int:
     """与 app._norm_click_repeat_count 一致：点击连续执行次数 1–99。"""
     if raw is None or raw == '':
@@ -2685,7 +2691,9 @@ class PlaywrightAutomation:
                     try:
                         await tgt.click(timeout=8000)
                     except Exception:
-                        await tgt.click(timeout=8000, force=True)
+                        await tgt.click(
+                            timeout=8000, force=click_force_default()
+                        )
                     uat_logger.info(
                         "✅ [CLICK_DEBUG] partial_text 已通过 Playwright get_by_text 点击成功"
                     )
@@ -8426,6 +8434,13 @@ class PlaywrightAutomation:
         has_clicked = False
         has_submitted = False
         
+        from step_executor import (
+            enrich_execution_step,
+            is_desktop_step,
+            validate_desktop_step_result,
+        )
+        from desktop_automation import sync_desktop_execute_step
+
         for step in steps:
             step_index += 1
             action = step.get("action")
@@ -8441,6 +8456,30 @@ class PlaywrightAutomation:
                 uat_logger.warning(f"🎯 [STEP_DEBUG] 获取当前URL失败: {str(e)}")
             
             try:
+                exec_step = enrich_execution_step(step)
+                if is_desktop_step(exec_step):
+                    import asyncio as _asyncio_desk
+
+                    uat_logger.info(
+                        "🖥️ [DESKTOP_SCRIPT] 桌面步骤走 sync_desktop_execute_step: %s",
+                        action,
+                    )
+                    desk_result = await _asyncio_desk.to_thread(
+                        sync_desktop_execute_step, exec_step
+                    )
+                    validate_desktop_step_result(desk_result, action)
+                    row = dict(desk_result)
+                    row["step"] = step
+                    results.append(row)
+                    if action == "click":
+                        has_clicked = True
+                    uat_logger.info(
+                        "✅ [STEP_DEBUG] ========== 桌面步骤 %s/%s 执行成功 ==========",
+                        step_index,
+                        len(steps),
+                    )
+                    continue
+
                 # 强制检查:submit操作前必须先click
                 if action == "submit":
                     if not has_clicked:

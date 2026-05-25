@@ -23,6 +23,24 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _PICKER_AVAILABLE = sys.platform == "win32"
 
+# 捕获器内置策略（不通过 .env 暴露开关，避免误配导致卡死/超时）
+_PICKER_PICK_TIMEOUT_STANDARD_SEC = 6.0
+_PICKER_PICK_TIMEOUT_DEEP_SEC = 12.0
+_UIA_FROM_POINT_TIMEOUT_SEC = 4.0
+_PICKER_HOVER_HIGHLIGHT = False
+_PICKER_SCREEN_BORDER = False
+_PICKER_TOOLBAR_TOPMOST = False
+
+CAPTURE_MODE_STANDARD = "standard"
+CAPTURE_MODE_DEEP = "deep"
+CAPTURE_MODE_CHOICES: List[Tuple[str, str]] = [
+    (CAPTURE_MODE_STANDARD, "标准（Win32 快捕）"),
+    (CAPTURE_MODE_DEEP, "深度（UIA 精准链）"),
+]
+
+_com_pick_lock = threading.Lock()
+_com_pick_initialized = False
+
 RECORD_ACTION_CHOICES: List[Tuple[str, str]] = [
     ("auto", "自动识别"),
     ("click", "单击"),
@@ -74,6 +92,7 @@ _session: Dict[str, Any] = {
     "picker_closed": False,
     "shutdown_requested": False,
     "message": "",
+    "capture_mode": CAPTURE_MODE_STANDARD,
 }
 
 
@@ -116,6 +135,7 @@ def _session_snapshot() -> Dict[str, Any]:
         "message": src.get("message") or "",
         "desktop_spec": dict(src.get("desktop_spec") or {}),
         "case_id": int(src.get("case_id") or 0),
+        "capture_mode": src.get("capture_mode") or CAPTURE_MODE_STANDARD,
     }
 
 
@@ -280,6 +300,15 @@ _OVERLAY_EXE_BASENAMES = frozenset({
     "gamebar.exe",
     "gamebarftserver.exe",
     "microsoft.notes.exe",
+    "sogoucloud.exe",
+    "sogouinput.exe",
+    "sgtool.exe",
+    "sgim_tip.exe",
+    "360desktop.exe",
+    "360sela.exe",
+    "360tray.exe",
+    "360safe.exe",
+    "360sd.exe",
 })
 
 
@@ -417,7 +446,41 @@ def _top_level_hwnd_at(x: int, y: int, exclude: set) -> Optional[int]:
     return root
 
 
+def _progman_shell_spec_minimal() -> Dict[str, Any]:
+    """桌面 Shell 上下文（不调用 attachment_spec / UIA，拾取线程安全）。"""
+    return {
+        "surface": "desktop_shell",
+        "process": "explorer.exe",
+        "window_title": "Program Manager",
+        "class_name": "Progman",
+    }
+
+
+def _desktop_icon_hit_for_pick(x: int, y: int) -> Optional[Tuple[Any, ...]]:
+    try:
+        from desktop_shell_win32 import desktop_icon_hit_at_win32
+
+        return desktop_icon_hit_at_win32(x, y, allow_sync=True)
+    except Exception:
+        return None
+
+
 def _desktop_spec_at_point(x: int, y: int, exclude: set) -> Dict[str, Any]:
+    from desktop_input import is_desktop_shell_hwnd, hwnd_at_screen_point
+
+    hit = _desktop_icon_hit_for_pick(x, y)
+    if hit:
+        spec = _progman_shell_spec_minimal()
+        spec["target_name"] = (hit[4] or "").strip()
+        spec["pick_center"] = f"{int(x)},{int(y)}"
+        return spec
+
+    pt_hwnd = hwnd_at_screen_point(x, y)
+    if is_desktop_shell_hwnd(pt_hwnd):
+        spec = _progman_shell_spec_minimal()
+        spec["pick_center"] = f"{int(x)},{int(y)}"
+        return spec
+
     hwnd = _top_level_hwnd_at(x, y, exclude)
     if not hwnd:
         raise RuntimeError("未识别到有效窗口，请点击应用或桌面上的控件")
@@ -456,6 +519,9 @@ def _normalize_desktop_uia_path(nodes: List[Dict[str, Any]]) -> List[Dict[str, A
     捕获链若缺少 DefView，在 SysListView32 前自动补一层。
     """
     out = [dict(n) for n in (nodes or [])]
+    if out and (out[0].get("control_type") or "").strip() == "Window":
+        if not (out[0].get("class_name") or "").strip():
+            out[0]["class_name"] = "Progman|WorkerW"
     cls_set = {(n.get("class_name") or "").strip() for n in out}
     if "SHELLDLL_DefView" not in cls_set:
         insert_at = 0
@@ -507,6 +573,43 @@ def _coordinate_pick_at(x: int, y: int, spec: Dict[str, Any]) -> Dict[str, Any]:
     px, py = int(x), int(y)
     merged = dict(spec or {})
     merged["pick_center"] = f"{px},{py}"
+    hwnd = int(merged.get("hwnd") or 0)
+    if hwnd:
+        try:
+            from desktop_input import screen_to_client_xy
+
+            cx, cy = screen_to_client_xy(hwnd, px, py)
+            merged["client_center"] = f"{cx},{cy}"
+            try:
+                from desktop_precise_locator import build_relative_coord_value
+
+                rel = build_relative_coord_value(merged, px, py)
+                if rel:
+                    merged["relative_coord"] = rel
+            except Exception:
+                pass
+            return {
+                "selector_type": "client_coord",
+                "selector_value": f"{cx},{cy}",
+                "control_type": "ClientCoord",
+                "name": "",
+                "automation_id": "",
+                "class_name": "",
+                "rectangle": {
+                    "left": px,
+                    "top": py,
+                    "right": px + 2,
+                    "bottom": py + 2,
+                },
+                "uia_path": [],
+                "label": f"窗口坐标 ({cx},{cy})",
+                "value_text": "",
+                "desktop_spec": merged,
+                "window_title": merged.get("window_title") or "",
+                "pick_point": {"x": px, "y": py},
+            }
+        except Exception:
+            pass
     return {
         "selector_type": "coordinate",
         "selector_value": f"{px},{py}",
@@ -637,9 +740,18 @@ def _minimal_desktop_spec_at(x: int, y: int, exclude: set) -> Optional[Dict[str,
     }
 
 
-def _desktop_shell_wrapper_at(x: int, y: int, exclude: set, *, force_icon_cache: bool = False) -> Optional[Any]:
-    """桌面图标层：点击时解析 ListItem（使用矩形缓存 + 按名解析，避免每次全树扫描）。"""
-    spec = _minimal_desktop_spec_at(x, y, exclude)
+def _desktop_shell_wrapper_at(
+    x: int,
+    y: int,
+    exclude: set,
+    *,
+    shell_spec: Optional[Dict[str, Any]] = None,
+    force_icon_cache: bool = False,
+) -> Optional[Any]:
+    """桌面图标层：解析 ListItem；shell_spec 已给定时不依赖 WindowFromPoint/Z 序。"""
+    spec = dict(shell_spec or {})
+    if not spec.get("surface"):
+        spec = _minimal_desktop_spec_at(x, y, exclude) or _progman_shell_spec()
     if not spec:
         return None
     from desktop_locator import attach_desktop_shell, desktop_listitem_at_screen_point
@@ -653,117 +765,281 @@ def _desktop_shell_wrapper_at(x: int, y: int, exclude: set, *, force_icon_cache:
         return None
 
 
-def _prefer_coordinate_picking() -> bool:
-    """优先使用坐标拾取模式（更可靠、无超时）。通过环境变量 DESKTOP_PICKER_COORDINATE_FIRST=1 控制，默认开启。"""
-    raw = (os.environ.get("DESKTOP_PICKER_COORDINATE_FIRST") or "1").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+def _finalize_shell_desktop_pick(
+    pick: Dict[str, Any],
+    path_nodes: List[Dict[str, Any]],
+    x: int,
+    y: int,
+    *,
+    icon_name: str = "",
+) -> Dict[str, Any]:
+    """桌面 Shell 拾取：标准 desktop_spec + uia_path 主选择器（去掉误绑 hwnd）。"""
+    try:
+        from desktop_precise_locator import standard_desktop_shell_spec
+    except ImportError:
+        standard_desktop_shell_spec = lambda: _progman_shell_spec()  # type: ignore
+
+    shell = standard_desktop_shell_spec()
+    shell["pick_center"] = f"{int(x)},{int(y)}"
+    if path_nodes:
+        shell["uia_path"] = path_nodes
+    tn = (icon_name or pick.get("name") or "").strip()
+    if tn:
+        shell["target_name"] = tn
+    pick["desktop_spec"] = shell
+    pick["window_title"] = shell.get("window_title") or ""
+    if path_nodes:
+        pick["uia_path"] = path_nodes
+        pick["selector_type"] = "uia_path"
+        pick["selector_value"] = json.dumps(path_nodes, ensure_ascii=False)
+    pick["locator_candidates"] = _build_desktop_locator_candidates(pick, shell)
+    return pick
 
 
-def _pure_coordinate_picking() -> bool:
-    """纯坐标模式：拾取时完全不调用 UIA，只使用 Win32 API。通过 DESKTOP_PICKER_PURE_COORDINATE=1 控制，默认开启。"""
-    raw = (os.environ.get("DESKTOP_PICKER_PURE_COORDINATE") or "1").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+def _build_shell_icon_pick_from_cache(
+    hit: Tuple[Any, ...], x: int, y: int
+) -> Dict[str, Any]:
+    """图标矩形缓存命中但 UIA ListItem 未解析时，用合成 UIA 链仍产出完整拾取结果。"""
+    left, top, right, bottom = int(hit[0]), int(hit[1]), int(hit[2]), int(hit[3])
+    icon_name = (hit[4] or "").strip() if len(hit) > 4 else ""
+    try:
+        from desktop_precise_locator import synthesize_desktop_icon_uia_path
+
+        path_nodes = synthesize_desktop_icon_uia_path(icon_name)
+    except ImportError:
+        path_nodes = []
+    label = icon_name or f"桌面图标 ({x},{y})"
+    pick: Dict[str, Any] = {
+        "selector_type": "uia_path" if path_nodes else "coordinate",
+        "selector_value": (
+            json.dumps(path_nodes, ensure_ascii=False)
+            if path_nodes
+            else f"{int(x)},{int(y)}"
+        ),
+        "control_type": "ListItem",
+        "name": icon_name,
+        "automation_id": "",
+        "class_name": "",
+        "rectangle": {
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+        },
+        "uia_path": path_nodes,
+        "label": label[:80],
+        "value_text": "",
+        "pick_point": {"x": int(x), "y": int(y)},
+    }
+    return _finalize_shell_desktop_pick(pick, path_nodes, x, y, icon_name=icon_name)
 
 
-def _pick_control_at(x: int, y: int, toolbar_hwnds: set) -> Optional[Dict[str, Any]]:
+def _ensure_pick_com_apartment() -> None:
+    """子进程拾取线程内 COM 仅初始化一次，避免每次 from_point 重复 CoInitialize 卡顿。"""
+    global _com_pick_initialized
+    with _com_pick_lock:
+        if _com_pick_initialized:
+            return
+        try:
+            import pythoncom
+
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+        _com_pick_initialized = True
+
+
+def _session_capture_mode() -> str:
+    snap = _session_snapshot()
+    mode = (snap.get("capture_mode") or CAPTURE_MODE_STANDARD).strip().lower()
+    return CAPTURE_MODE_DEEP if mode == CAPTURE_MODE_DEEP else CAPTURE_MODE_STANDARD
+
+
+def _attach_precise_capture_metadata_sync(
+    pick: Dict[str, Any], x: int, y: int
+) -> Dict[str, Any]:
+    """同步附加区域截图（预览 + visual_template 候选）。"""
+    try:
+        from desktop_precise_locator import (
+            build_visual_template_candidate,
+            capture_rect_preview_b64,
+        )
+
+        r = pick.get("rectangle") or {}
+        left = int(r.get("left", x))
+        top = int(r.get("top", y))
+        right = int(r.get("right", left + 32))
+        bottom = int(r.get("bottom", top + 32))
+        b64 = capture_rect_preview_b64(left, top, right, bottom)
+        if b64:
+            pick["preview_image_b64"] = b64
+            pick["visual_template"] = build_visual_template_candidate(b64, 96)
+            spec = pick.get("desktop_spec") or {}
+            pick["locator_candidates"] = _build_desktop_locator_candidates(
+                pick, spec
+            )
+    except Exception:
+        pass
+    return pick
+
+
+def _merge_async_preview_into_session(pick: Dict[str, Any]) -> None:
+    """后台截图完成后更新 session last_pick（供前端轮询刷新预览）。"""
+    if not pick:
+        return
+    with _session_lock:
+        cur = _session.get("last_pick")
+        if not isinstance(cur, dict):
+            disk = _load_session_from_disk() or {}
+            cur = disk.get("last_pick")
+        if not isinstance(cur, dict):
+            return
+        if (
+            cur.get("selector_type") == pick.get("selector_type")
+            and cur.get("selector_value") == pick.get("selector_value")
+        ):
+            merged = {**cur, **pick}
+            _session["last_pick"] = merged
+    if _is_picker_child_process():
+        disk = _load_session_from_disk() or {}
+        cur = disk.get("last_pick")
+        if isinstance(cur, dict) and (
+            cur.get("selector_type") == pick.get("selector_type")
+            and cur.get("selector_value") == pick.get("selector_value")
+        ):
+            disk["last_pick"] = {**cur, **pick}
+            try:
+                _session_file_path().write_text(
+                    json.dumps(disk, ensure_ascii=False, default=str),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+
+
+def _schedule_async_capture_metadata(pick: Dict[str, Any], x: int, y: int) -> None:
+    """拾取完成后异步截图，不阻塞 Tk 主循环。"""
+
+    def _worker() -> None:
+        try:
+            updated = _attach_precise_capture_metadata_sync(dict(pick), x, y)
+            _merge_async_preview_into_session(updated)
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=_worker, daemon=True, name="uat-desktop-pick-preview"
+    ).start()
+
+
+def _attach_precise_capture_metadata(
+    pick: Dict[str, Any], x: int, y: int, *, async_preview: bool = True
+) -> Dict[str, Any]:
+    """为拾取结果附加区域截图；默认异步，立即返回 pick 供弹窗。"""
+    if async_preview:
+        _schedule_async_capture_metadata(pick, x, y)
+        return pick
+    return _attach_precise_capture_metadata_sync(pick, x, y)
+
+
+def _progman_shell_spec() -> Dict[str, Any]:
+    import ctypes
+
+    from desktop_discovery import attachment_spec_for_window
+
+    prog = int(ctypes.windll.user32.FindWindowW("Progman", None) or 0)
+    if not prog:
+        prog = int(ctypes.windll.user32.FindWindowW("WorkerW", None) or 0)
+    if prog:
+        spec, _ = attachment_spec_for_window(prog)
+        spec["surface"] = "desktop_shell"
+        return spec
+    return {
+        "surface": "desktop_shell",
+        "process": "explorer.exe",
+        "window_title": "Program Manager",
+        "class_name": "Progman",
+    }
+
+
+def _pick_control_at(
+    x: int,
+    y: int,
+    toolbar_hwnds: set,
+    *,
+    capture_mode: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
-    优化后的拾取逻辑：把桌面当作"画布"，优先使用坐标定位。
-
-    核心思路（按用户建议）：
-    1. 不深入解析 UIA 控件树（避免超时）
-    2. 只关心"在哪个应用的什么位置"
-    3. 记录坐标 + 窗口上下文，执行时直接在该位置执行动作
+    拾取：Win32 桌面图标 →（深度模式）限时 UIA(from_point) → Win32 坐标回退。
+    标准模式不调用 UIA，避免桌面卡死。
     """
+    mode = capture_mode or _session_capture_mode()
+    deep = mode == CAPTURE_MODE_DEEP
     exclude = set(toolbar_hwnds) | set(_PICKER_UI_HWNDS)
+
+    hit = _desktop_icon_hit_for_pick(x, y)
+    if hit:
+        pick = _build_shell_icon_pick_from_cache(hit, x, y)
+        if _is_picker_child_process():
+            _set_session(desktop_spec=dict(pick["desktop_spec"]))
+        return _attach_precise_capture_metadata(pick, x, y)
+
     pt_hwnd = _top_level_hwnd_at(x, y, exclude)
     if not pt_hwnd:
         raise RuntimeError(
             "未识别到有效窗口（可能点在捕获工具条上），请对准目标应用内控件"
         )
 
-    # 获取窗口规格（应用上下文）- 这是"在哪个应用"
     spec = _desktop_spec_at_point(x, y, exclude)
     if _is_picker_child_process():
         _set_session(desktop_spec=dict(spec))
-    else:
-        # 纯坐标模式下跳过可能引入 UIA 的 attach 操作
-        if not _pure_coordinate_picking():
-            _sync_attach_for_spec(spec)
 
     root_handle = int(spec.get("hwnd") or 0)
+    if deep:
+        _ensure_pick_com_apartment()
+        wrapper = _uia_wrapper_from_point_timed(
+            x, y, timeout_sec=_UIA_FROM_POINT_TIMEOUT_SEC
+        )
+        if wrapper is not None and not _is_spurious_top_level_pick(
+            wrapper, root_handle
+        ):
+            skip_uia = False
+            try:
+                ct = str(
+                    getattr(wrapper.element_info, "control_type", "") or ""
+                ).lower()
+                if ct in ("pane", "window"):
+                    rect = wrapper.rectangle()
+                    w = int(rect.right) - int(rect.left)
+                    h = int(rect.bottom) - int(rect.top)
+                    if w > 400 or h > 300:
+                        skip_uia = True
+            except Exception:
+                pass
+            if not skip_uia:
+                st, sv, path_nodes = _element_to_locator(
+                    wrapper, root_handle, click_x=int(x), click_y=int(y)
+                )
+                pick = _build_pick_result(
+                    wrapper, wrapper.element_info, st, sv, path_nodes, spec, x, y
+                )
+                pick["locator_candidates"] = _build_desktop_locator_candidates(
+                    pick, pick.get("desktop_spec") or spec
+                )
+                return _attach_precise_capture_metadata(pick, x, y)
 
-    # ===== 快速路径 1：桌面图标层（特殊处理，有缓存优化）=====
-    # 纯坐标模式下：即使是桌面也直接用坐标，完全不调用 UIA
-    if not _pure_coordinate_picking():
-        shell_spec = _minimal_desktop_spec_at(x, y, exclude)
-        if shell_spec:
-            wrapper = _desktop_shell_wrapper_at(x, y, exclude, force_icon_cache=True)
-            if wrapper is not None:
-                # 桌面图标成功解析，走 UIA 路径（有优化缓存，不会慢）
-                st, sv, path_nodes = _element_to_locator(wrapper, root_handle, click_x=int(x), click_y=int(y))
-                ei = wrapper.element_info
-                pick = _build_pick_result(wrapper, ei, st, sv, path_nodes, spec, x, y)
-                pick["desktop_spec"]["surface"] = "desktop_shell"
-                return pick
-            # 桌面层但图标解析失败，直接返回坐标（桌面空白处点击）
-            return _coordinate_pick_at(x, y, shell_spec)
-
-    # ===== 快速路径 2：优先坐标模式（用户建议的"网页式"思维）=====
-    if _prefer_coordinate_picking():
-        # 纯坐标模式：完全不调用 UIA（避免任何超时），只用 Win32 API 获取窗口信息
-        if _pure_coordinate_picking():
-            # 尝试用 Win32 获取控件文本（纯 Win32，不调用 UIA）
-            win32_info = _try_win32_control_info(x, y, pt_hwnd)
-            pick = _coordinate_pick_at(x, y, spec)
-            if win32_info:
-                pick["control_type"] = win32_info.get("class_name", "")
-                pick["name"] = win32_info.get("text", "")
-                pick["label"] = win32_info.get("label", f"坐标 ({x},{y})")
-            else:
-                pick["label"] = f"坐标 ({x},{y})"
-            return pick
-
-        # 尝试轻量 UIA 获取控件信息（带超时保护，不影响功能）
-        light_info = _try_lightweight_uia_info(x, y, root_handle)
-        if light_info:
-            # 有 UIA 信息，但用坐标作为定位器（最可靠）
-            pick = _coordinate_pick_at(x, y, spec)
-            pick["control_type"] = light_info.get("control_type", "")
-            pick["name"] = light_info.get("name", "")
-            pick["label"] = light_info.get("label", f"坐标 ({x},{y})")
-            pick["_uia_hint"] = light_info  # 保留 UIA 信息作为参考
-            return pick
-        # 无 UIA 信息，纯坐标模式
-        return _coordinate_pick_at(x, y, spec)
-
-    # ===== 回退路径：完整 UIA 解析（传统模式，可能超时）=====
-    from pywinauto import Desktop
-    from pywinauto.controls.uiawrapper import UIAWrapper
-
-    try:
-        raw = Desktop(backend="uia").from_point(x, y)
-        wrapper = raw if hasattr(raw, "element_info") else UIAWrapper(raw)
-    except Exception:
-        # UIA 失败时返回坐标拾取，避免超时
-        return _coordinate_pick_at(x, y, spec)
-
-    if _is_spurious_top_level_pick(wrapper, root_handle):
-        return _coordinate_pick_at(x, y, spec)
-
-    # 桌面层若最终仍是根窗格（大面积 Pane/Window），直接走坐标
-    try:
-        ct = str(getattr(wrapper.element_info, "control_type", "") or "").lower()
-        if ct in ("pane", "window"):
-            rect = wrapper.rectangle()
-            w = int(rect.right) - int(rect.left)
-            h = int(rect.bottom) - int(rect.top)
-            if w > 400 or h > 300:
-                return _coordinate_pick_at(x, y, spec)
-    except Exception:
-        pass
-
-    st, sv, path_nodes = _element_to_locator(wrapper, root_handle, click_x=int(x), click_y=int(y))
-    return _build_pick_result(wrapper, wrapper.element_info, st, sv, path_nodes, spec, x, y)
+    win32_info = _try_win32_control_info(x, y, pt_hwnd)
+    pick = _coordinate_pick_at(x, y, spec)
+    if win32_info:
+        pick["control_type"] = win32_info.get("class_name", "")
+        pick["name"] = win32_info.get("text", "")
+        pick["label"] = win32_info.get("label", f"坐标 ({x},{y})")
+    else:
+        pick["label"] = f"坐标 ({x},{y})"
+    pick["locator_candidates"] = _build_desktop_locator_candidates(
+        pick, pick.get("desktop_spec") or spec
+    )
+    return _attach_precise_capture_metadata(pick, x, y)
 
 
 def _try_win32_control_info(x: int, y: int, hwnd: int) -> Optional[Dict[str, Any]]:
@@ -821,6 +1097,38 @@ def _try_win32_control_info(x: int, y: int, hwnd: int) -> Optional[Dict[str, Any
         }
     except Exception:
         return None
+
+
+def _uia_wrapper_from_point_timed(
+    x: int, y: int, *, timeout_sec: float = 6.0
+) -> Optional[Any]:
+    """from_point 带超时，防止 pywinauto/COM 在拾取线程无限阻塞。"""
+    import threading
+
+    holder: List[Any] = [None]
+
+    def _work() -> None:
+        try:
+            import pythoncom
+
+            pythoncom.CoInitialize()
+            try:
+                from pywinauto import Desktop
+                from pywinauto.controls.uiawrapper import UIAWrapper
+
+                raw = Desktop(backend="uia").from_point(int(x), int(y))
+                holder[0] = (
+                    raw if hasattr(raw, "element_info") else UIAWrapper(raw)
+                )
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception:
+            holder[0] = None
+
+    t = threading.Thread(target=_work, daemon=True, name="uia-from-point")
+    t.start()
+    t.join(timeout=max(1.0, float(timeout_sec)))
+    return holder[0]
 
 
 def _try_lightweight_uia_info(x: int, y: int, root_handle: int) -> Optional[Dict[str, Any]]:
@@ -905,14 +1213,29 @@ def _build_pick_result(wrapper, ei, st: str, sv: str, path_nodes: list, spec: Di
     pick["window_title"] = spec.get("window_title") or ""
     pick["pick_point"] = {"x": int(x), "y": int(y)}
     pick["desktop_spec"]["pick_center"] = f"{int(x)},{int(y)}"
+    hwnd = int(spec.get("hwnd") or 0)
+    if hwnd:
+        try:
+            from desktop_input import screen_to_client_xy
+
+            cx, cy = screen_to_client_xy(hwnd, int(x), int(y))
+            pick["desktop_spec"]["client_center"] = f"{cx},{cy}"
+            try:
+                from desktop_precise_locator import build_relative_coord_value
+
+                rel = build_relative_coord_value(spec, int(x), int(y))
+                if rel:
+                    pick["desktop_spec"]["relative_coord"] = rel
+            except Exception:
+                pass
+        except Exception:
+            pass
     return pick
 
 
 def _prewarm_desktop_icon_cache(_spec: Optional[Dict[str, Any]] = None) -> None:
-    """后台用 Win32 ListView 预热桌面图标矩形（无 UIA）。默认关闭，避免启动时 EnumWindows 导致任务栏闪动。"""
-    raw = (os.environ.get("DESKTOP_PICKER_PREWARM") or "0").strip().lower()
-    if raw not in ("1", "true", "yes", "on"):
-        return
+    """后台预热桌面图标 Win32 缓存（异步，不阻塞 UI）。"""
+    del _spec
     try:
         from desktop_shell_win32 import schedule_win32_desktop_icon_cache_refresh
 
@@ -922,9 +1245,7 @@ def _prewarm_desktop_icon_cache(_spec: Optional[Dict[str, Any]] = None) -> None:
 
 
 def _picker_topmost_enabled() -> bool:
-    """默认不用 Tk topmost（易触发 DWM 重绘、任务栏闪一下）；需始终置顶时设 DESKTOP_PICKER_TOPMOST=1。"""
-    raw = (os.environ.get("DESKTOP_PICKER_TOPMOST") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    return _PICKER_TOOLBAR_TOPMOST
 
 
 def _apply_picker_topmost(root: Any, enabled: bool = True) -> None:
@@ -936,16 +1257,15 @@ def _apply_picker_topmost(root: Any, enabled: bool = True) -> None:
         pass
 
 
-def _picker_pick_timeout_sec() -> float:
-    try:
-        return max(5.0, float(os.environ.get("DESKTOP_PICKER_PICK_TIMEOUT", "8") or "8"))
-    except (TypeError, ValueError):
-        return 8.0
+def _picker_pick_timeout_sec(mode: Optional[str] = None) -> float:
+    m = mode or _session_capture_mode()
+    if m == CAPTURE_MODE_DEEP:
+        return _PICKER_PICK_TIMEOUT_DEEP_SEC
+    return _PICKER_PICK_TIMEOUT_STANDARD_SEC
 
 
 def _hover_highlight_enabled() -> bool:
-    raw = (os.environ.get("DESKTOP_PICKER_HOVER") or "1").strip().lower()
-    return raw not in ("0", "false", "no", "off")
+    return _PICKER_HOVER_HIGHLIGHT
 
 
 def _lbutton_pressed() -> bool:
@@ -1044,10 +1364,35 @@ def _build_desktop_locator_candidates(
 
     uia = pick.get("uia_path")
     if isinstance(uia, list) and uia:
-        _add("uia_path", json.dumps(uia, ensure_ascii=False), 92)
+        _add("uia_path", json.dumps(uia, ensure_ascii=False), 98)
+    vt = pick.get("visual_template")
+    if isinstance(vt, dict) and vt.get("selector_value"):
+        _add(
+            vt.get("selector_type") or "visual_template",
+            vt.get("selector_value"),
+            int(vt.get("score") or 96),
+        )
     center = (spec or {}).get("pick_center") or ""
+    client_center = (spec or {}).get("client_center") or ""
+    rel = (spec or {}).get("relative_coord") or ""
+    if not rel:
+        try:
+            from desktop_precise_locator import build_relative_coord_value
+
+            pp = pick.get("pick_point") or {}
+            rel = build_relative_coord_value(
+                spec or {},
+                int(pp.get("x") or 0),
+                int(pp.get("y") or 0),
+            )
+        except Exception:
+            rel = ""
+    if rel and (spec or {}).get("hwnd"):
+        _add("relative_coord", rel, 93)
+    if client_center and (spec or {}).get("hwnd"):
+        _add("client_coord", client_center, 94)
     if center:
-        _add("coordinate", center, 88)
+        _add("coordinate", center, 70)
     aid = (pick.get("automation_id") or "").strip()
     if aid:
         _add("automation_id", aid, 82)
@@ -1074,8 +1419,10 @@ def _normalize_recorded_selector(
     try:
         from desktop_locator import is_desktop_shell_spec
 
-        if is_desktop_shell_spec(spec) and pick.get("uia_path"):
+        if pick.get("uia_path"):
             return "uia_path", json.dumps(pick["uia_path"], ensure_ascii=False)
+        if is_desktop_shell_spec(spec) and pick.get("name"):
+            return "name", (pick.get("name") or "").strip()
     except ImportError:
         pass
     unreliable = (
@@ -1247,9 +1594,7 @@ def _hwnd_for_tk(widget: Any) -> int:
 
 
 def _picker_border_enabled() -> bool:
-    """全屏红框为多个 topmost 窗口，默认关闭以免 DWM 黑屏（DESKTOP_PICKER_BORDER=1 开启）。"""
-    raw = (os.environ.get("DESKTOP_PICKER_BORDER") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    return _PICKER_SCREEN_BORDER
 
 
 def _cursor_pos() -> Tuple[int, int]:
@@ -1459,6 +1804,20 @@ class _DesktopPickerUI:
         self._pick_inflight = False
         self._pick_timeout_after_id: Optional[str] = None
         self._pick_seq = 0
+        self._capture_mode_var = None
+
+    def _current_capture_mode(self) -> str:
+        if self._capture_mode_var is not None:
+            mode = (self._capture_mode_var.get() or CAPTURE_MODE_STANDARD).strip().lower()
+            if mode == CAPTURE_MODE_DEEP:
+                return CAPTURE_MODE_DEEP
+        return _session_capture_mode()
+
+    def _set_capture_mode(self, mode: str) -> None:
+        m = CAPTURE_MODE_DEEP if (mode or "").strip().lower() == CAPTURE_MODE_DEEP else CAPTURE_MODE_STANDARD
+        _set_session(capture_mode=m)
+        if self._capture_mode_var is not None:
+            self._capture_mode_var.set(m)
 
     def _exclude_hwnds(self) -> set:
         ex = set(self._toolbar_hwnds) | set(_PICKER_UI_HWNDS)
@@ -1564,23 +1923,14 @@ class _DesktopPickerUI:
         pick_seq = self._pick_seq
         px, py = int(x), int(y)
         exclude = self._exclude_hwnds()
-        _set_session(message="正在识别控件…", error="")
+        cap_mode = self._current_capture_mode()
+        _set_session(message="正在识别控件…", error="", capture_mode=cap_mode)
 
         def _worker() -> None:
             pick: Optional[Dict[str, Any]] = None
             err: Optional[BaseException] = None
             try:
-                # 纯坐标模式下不需要 COM/UIA，直接拾取（避免 CoInitialize 卡住）
-                if _pure_coordinate_picking():
-                    pick = _pick_control_at(px, py, exclude)
-                else:
-                    # 传统模式需要 COM 初始化
-                    import pythoncom
-                    pythoncom.CoInitialize()
-                    try:
-                        pick = _pick_control_at(px, py, exclude)
-                    finally:
-                        pythoncom.CoUninitialize()
+                pick = _pick_control_at(px, py, exclude, capture_mode=cap_mode)
             except BaseException as exc:
                 err = exc
 
@@ -1598,7 +1948,7 @@ class _DesktopPickerUI:
             else:
                 self._on_pick_worker_done(pick, err)
 
-        timeout_ms = int(_picker_pick_timeout_sec() * 1000)
+        timeout_ms = int(_picker_pick_timeout_sec(cap_mode) * 1000)
 
         def _on_pick_timeout(seq=pick_seq) -> None:
             self._pick_timeout_after_id = None
@@ -1609,7 +1959,10 @@ class _DesktopPickerUI:
             # 纯坐标模式应该永远不会超时（只用 Win32 API）
             # 如果还超时，可能是 COM/UIA 初始化问题，建议关闭 UIA 完全使用纯 Win32
             _set_session(
-                error="拾取超时：建议设置 DESKTOP_PICKER_PURE_COORDINATE=1 启用纯坐标模式（完全跳过 UIA），或检查 pywinauto 安装"
+                error=(
+                    "拾取超时：请关闭全屏遮挡窗口后重试，或对准应用内控件再 Ctrl+点击；"
+                    "若仍失败请检查 pywinauto 是否已安装"
+                )
             )
             self._sync_buttons()
 
@@ -1675,7 +2028,7 @@ class _DesktopPickerUI:
             except Exception as poll_exc:
                 _set_session(error=f"捕获轮询异常: {poll_exc}")
             if self._root and not self._stop_flag:
-                delay = 10 if self._capture_active() else 250
+                delay = 50 if self._capture_active() else 100
                 self._input_poll_after_id = self._root.after(delay, _tick)
 
         self._input_poll_after_id = self._root.after(50, _tick)
@@ -1990,9 +2343,9 @@ class _DesktopPickerUI:
             self._armed = True
             self._clear_hover_preview()
             _set_session(recording=True, paused=False, armed=True, error="")
-            if self._border:
+            if self._border and _picker_border_enabled():
                 self._border.show()
-            _set_session(message="录制中：按住 Ctrl 可预览，Ctrl + 点击录入")
+            _set_session(message="录制中：按住 Ctrl + 点击目标录入")
             _prewarm_desktop_icon_cache(self._desktop_spec)
             self._sync_buttons()
             return
@@ -2002,9 +2355,9 @@ class _DesktopPickerUI:
         self._armed = True
         self._clear_hover_preview()
         _set_session(recording=True, paused=False, armed=True, error="")
-        if self._border:
+        if self._border and _picker_border_enabled():
             self._border.show()
-        _set_session(message="录制中：按住 Ctrl 可预览，Ctrl + 点击录入")
+        _set_session(message="录制中：按住 Ctrl + 点击目标录入")
         _prewarm_desktop_icon_cache(self._desktop_spec)
         self._sync_buttons()
 
@@ -2109,13 +2462,6 @@ class _DesktopPickerUI:
                 ).pack(anchor="w", pady=(2, 0))
             tk.Label(
                 bar,
-                text="悬停预览：按住 Ctrl 移动鼠标显示边框",
-                fg=ui_sub,
-                bg=ui_bg,
-                font=("Segoe UI", 9),
-            ).pack(anchor="w", pady=(2, 0))
-            tk.Label(
-                bar,
                 text="双击捕获  Ctrl + Shift + 点击",
                 fg=ui_sub,
                 bg=ui_bg,
@@ -2127,7 +2473,47 @@ class _DesktopPickerUI:
                 fg=ui_sub,
                 bg=ui_bg,
                 font=("Segoe UI", 9),
-            ).pack(anchor="w", pady=(0, 6))
+            ).pack(anchor="w", pady=(0, 4))
+            mode_row = tk.Frame(bar, bg=ui_bg)
+            mode_row.pack(fill="x", pady=(0, 6))
+            tk.Label(
+                mode_row,
+                text="捕获模式",
+                fg=ui_sub,
+                bg=ui_bg,
+                font=("Segoe UI", 8),
+            ).pack(anchor="w")
+            init_mode = _session_capture_mode()
+            self._capture_mode_var = tk.StringVar(value=init_mode)
+            mode_menu = tk.OptionMenu(
+                mode_row,
+                self._capture_mode_var,
+                CAPTURE_MODE_CHOICES[0][1],
+            )
+            mode_menu.config(
+                bg="#f3f4f6",
+                fg=ui_fg,
+                highlightthickness=0,
+                font=("Segoe UI", 9),
+            )
+            mm = mode_menu["menu"]
+            mm.delete(0, "end")
+            mm.config(bg="#f9fafb", fg=ui_fg)
+
+            def _apply_mode(key: str, label: str) -> None:
+                self._set_capture_mode(key)
+                mode_menu.config(text=label)
+
+            for key, label in CAPTURE_MODE_CHOICES:
+                mm.add_command(
+                    label=label,
+                    command=lambda k=key, lb=label: _apply_mode(k, lb),
+                )
+            for key, label in CAPTURE_MODE_CHOICES:
+                if key == init_mode:
+                    mode_menu.config(text=label)
+                    break
+            mode_menu.pack(anchor="w", fill="x")
         title = tk.Label(
             bar,
             text="" if rec else "桌面拾取",
@@ -2143,7 +2529,7 @@ class _DesktopPickerUI:
                 "Ctrl + 点击 捕获桌面控件；浏览器内 Ctrl + 点击网页元素；ESC 结束"
                 if self._unified_mode
                 else (
-                    "Ctrl + 点击录入；按住 Ctrl 可预览；ESC 结束"
+                    "Ctrl + 点击录入；ESC 结束"
                     if rec
                     else "点「拾取控件」后 Ctrl + 点击目标"
                 )
@@ -2431,6 +2817,7 @@ def _picker_child_main(cfg_path: str) -> None:
         message="正在启动捕获器…",
         record_mode=bool(cfg.get("record_mode")),
         unified_mode=bool(cfg.get("unified_mode")),
+        capture_mode=(cfg.get("capture_mode") or CAPTURE_MODE_STANDARD),
         recording=auto_rec,
         armed=auto_rec,
         error="",
@@ -2466,6 +2853,7 @@ def _spawn_picker_process(
                 "record_mode": record_mode,
                 "unified_mode": unified_mode,
                 "prefer_web_clicks": prefer_web_clicks,
+                "capture_mode": CAPTURE_MODE_STANDARD,
                 "session_path": str(session_path),
             },
             ensure_ascii=False,
@@ -2531,6 +2919,7 @@ def start_desktop_picker(
             picker_closed=False,
             message="正在启动捕获器…",
             starting=True,
+            capture_mode=CAPTURE_MODE_STANDARD,
         )
         _persist_session_to_disk()
 

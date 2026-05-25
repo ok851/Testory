@@ -6,6 +6,10 @@ DESKTOP_DEFAULT_LAUNCH_PATH   默认启动 exe（launch_app 步骤 input 为空�
 DESKTOP_DEFAULT_ATTACH_TITLE_RE  默认附着窗口标题正则（attach_window / 空 spec）
 DESKTOP_APP_ALIASES           JSON，如 {"erp":"C:\\\\ERP\\\\client.exe","default":"notepad.exe"}
 DESKTOP_DEFAULT_BACKEND       uia | win32，默认 uia
+DESKTOP_STEP_RETRY            桌面指针步骤失败后的额外重试次数（默认 1）
+DESKTOP_FAILURE_SCREENSHOT    指针失败时保存虚拟桌面截图（默认 1）
+无人值守：本地版用 DESKTOP_EXECUTION_MODE=inprocess + desktop_automation_gateway；
+企业多机用 DEPLOYMENT_PROFILE=enterprise + DESKTOP_EXECUTION_MODE=remote。
 """
 
 from __future__ import annotations

@@ -16,7 +16,12 @@ class TestExecutionFactory(unittest.TestCase):
 
     @patch("execution_factory.sync_desktop_execute_step")
     def test_execute_desktop_step(self, mock_sync):
-        mock_sync.return_value = {"status": "success", "action": "click"}
+        mock_sync.return_value = {
+            "status": "success",
+            "action": "click",
+            "verified": True,
+            "pointer_executed": True,
+        }
         f = ExecutorFactory()
         out = f.execute_desktop_step(
             {"automation_layer": "desktop", "action": "click"},

@@ -24,7 +24,9 @@ _DESKTOP_ROOT_CLASSES = frozenset({"Progman", "WorkerW"})
 
 LVM_GETITEMCOUNT = 0x1004
 LVM_GETITEMRECT = 0x100E
+LVM_GETITEMTEXTW = 0x1073
 LVIR_BOUNDS = 0
+LVIF_TEXT = 0x0001
 
 # 单格图标合理上限，防止异常矩形盖住整屏
 _MAX_ICON_W = int(os.environ.get("DESKTOP_ICON_MAX_W", "320") or "320")
@@ -135,7 +137,44 @@ def _find_desktop_listview_hwnd() -> int:
     return 0
 
 
-def _collect_bounds_sync() -> List[Dict[str, int]]:
+def _listview_item_label(lv: int, index: int) -> str:
+    """ListView 项显示文本（桌面图标名称），纯 Win32。"""
+    import ctypes
+    from ctypes import wintypes
+
+    buf = ctypes.create_unicode_buffer(512)
+
+    class LVITEMW(ctypes.Structure):
+        _fields_ = [
+            ("mask", wintypes.UINT),
+            ("iItem", ctypes.c_int),
+            ("iSubItem", ctypes.c_int),
+            ("state", wintypes.UINT),
+            ("stateMask", wintypes.UINT),
+            ("pszText", ctypes.c_void_p),
+            ("cchTextMax", ctypes.c_int),
+            ("iImage", ctypes.c_int),
+            ("lParam", ctypes.c_void_p),
+            ("iIndent", ctypes.c_int),
+            ("iGroupId", ctypes.c_int),
+            ("cColumns", ctypes.c_uint),
+            ("puColumns", ctypes.c_void_p),
+        ]
+
+    item = LVITEMW()
+    item.mask = LVIF_TEXT
+    item.iItem = int(index)
+    item.iSubItem = 0
+    item.pszText = ctypes.cast(buf, ctypes.c_void_p)
+    item.cchTextMax = len(buf)
+    try:
+        _user32().SendMessageW(int(lv), LVM_GETITEMTEXTW, 0, ctypes.byref(item))
+        return (buf.value or "").strip()
+    except Exception:
+        return ""
+
+
+def _collect_bounds_sync() -> List[Dict[str, object]]:
     import ctypes
 
     lv = _find_desktop_listview_hwnd()
@@ -155,7 +194,7 @@ def _collect_bounds_sync() -> List[Dict[str, int]]:
 
     u = _user32()
     count = int(u.SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0) or 0)
-    rows: List[Dict[str, int]] = []
+    rows: List[Dict[str, object]] = []
     for idx in range(count):
         rc = RECT()
         rc.left = LVIR_BOUNDS
@@ -167,17 +206,53 @@ def _collect_bounds_sync() -> List[Dict[str, int]]:
         br = POINT(rc.right, rc.bottom)
         u.ClientToScreen(lv, ctypes.byref(tl))
         u.ClientToScreen(lv, ctypes.byref(br))
-        row = {
+        row: Dict[str, object] = {
             "left": int(tl.x),
             "top": int(tl.y),
             "right": int(br.x),
             "bottom": int(br.y),
+            "name": _listview_item_label(lv, idx),
         }
         if sanitize_icon_rect(
-            (row["left"], row["top"], row["right"], row["bottom"])
+            (int(row["left"]), int(row["top"]), int(row["right"]), int(row["bottom"]))
         ):
             rows.append(row)
     return rows
+
+
+def desktop_icon_hit_at_win32(
+    x: int,
+    y: int,
+    *,
+    allow_sync: bool = True,
+) -> Optional[Tuple[int, int, int, int, str]]:
+    """屏幕坐标命中桌面图标（Win32 ListView，无 UIA，拾取线程可同步构建缓存）。"""
+    bounds = refresh_win32_desktop_icon_cache(allow_sync=allow_sync)
+    if not bounds:
+        bounds = refresh_win32_desktop_icon_cache(force=True, allow_sync=True)
+    best: Optional[Dict[str, object]] = None
+    best_area: Optional[int] = None
+    for b in bounds:
+        if not _point_in_rect(x, y, b):  # type: ignore[arg-type]
+            continue
+        area = max(
+            1,
+            (int(b["right"]) - int(b["left"]))
+            * (int(b["bottom"]) - int(b["top"])),
+        )
+        if best is None or area < (best_area or area + 1):
+            best = b
+            best_area = area
+    if not best:
+        return None
+    name = str(best.get("name") or "").strip()
+    return (
+        int(best["left"]),
+        int(best["top"]),
+        int(best["right"]),
+        int(best["bottom"]),
+        name,
+    )
 
 
 def refresh_win32_desktop_icon_cache(

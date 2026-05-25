@@ -364,6 +364,97 @@
             max-width: 96vw;
         }
 
+        .modal-content.modal-content--desktop-capture {
+            width: min(820px, 96vw);
+            max-width: 96vw;
+            padding: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            max-height: 92vh;
+        }
+        .desktop-capture-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            padding: 14px 18px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .desktop-capture-name {
+            flex: 1;
+            min-width: 180px;
+            padding: 8px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+        }
+        .desktop-capture-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 0 18px;
+        }
+        .desktop-capture-tab {
+            padding: 10px 16px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 14px;
+            color: #6b7280;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+        }
+        .desktop-capture-tab.active {
+            color: #dc2626;
+            border-bottom-color: #dc2626;
+            font-weight: 600;
+        }
+        .desktop-capture-panel {
+            display: none;
+            padding: 16px 18px;
+            min-height: 280px;
+            max-height: 50vh;
+            overflow: auto;
+        }
+        .desktop-capture-panel.active {
+            display: block;
+        }
+        .desktop-capture-preview-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 260px;
+            background: #f9fafb;
+            border-radius: 8px;
+            position: relative;
+        }
+        .desktop-capture-preview-wrap img {
+            max-width: 100%;
+            max-height: 42vh;
+            object-fit: contain;
+        }
+        .desktop-capture-uia-line {
+            font-family: ui-monospace, Consolas, monospace;
+            font-size: 12px;
+            padding: 6px 8px;
+            margin: 4px 0;
+            background: #f3f4f6;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+        .desktop-capture-verify-row {
+            display: flex;
+            justify-content: flex-end;
+            padding: 8px 18px 0;
+        }
+        .desktop-capture-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 18px;
+            border-top: 1px solid #e5e7eb;
+        }
+
         .steps-api-urlbar {
             display: flex;
             align-items: stretch;
@@ -861,7 +952,7 @@
                 <button type="button" onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" data-i18n="steps_import_side">
                     🧪 从 Selenium IDE 导入
                 </button>
-                <button type="button" onclick="toggleElementCapture({ recordToCase: true, shiftKey: !!(event &amp;&amp; event.shiftKey) })" class="btn btn-primary" id="elementCaptureRecordBtn" title="默认仅桌面捕获（Ctrl+点击目标）；Shift+点击本按钮可同时打开用例网页拾取">🧲 元素捕获 / 录制</button>
+                <button type="button" onclick="toggleElementCapture({ recordToCase: true, shiftKey: captureBtnShiftKey(event) })" class="btn btn-primary" id="elementCaptureRecordBtn" title="默认仅桌面捕获（Ctrl+点击目标）；Shift+点击本按钮可同时打开用例网页拾取">🧲 元素捕获 / 录制</button>
             </div>
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
@@ -925,7 +1016,7 @@
                         <div id="stepDesktopAppList" class="desktop-pick-list" style="overflow:auto;max-height:180px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;"></div>
                     </div>
                 </div>
-                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">请使用工具栏「元素捕获 / 录制」或定位旁的「拾取元素」捕获控件（桌面与网页均需按住 Ctrl 并点击目标）。</small>
+                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">请使用工具栏「元素捕获 / 录制」捕获控件：桌面按住 Ctrl 并点击目标；网页请 Shift+点击该按钮后 Ctrl+点击页面元素。</small>
             </div>
             <div class="form-group">
                 <label for="stepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -951,8 +1042,7 @@
             </div>
             <div class="form-group">
                 <label for="stepSelectorType" data-i18n="steps_label_locator">定位方式</label>
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <select id="stepSelectorType" style="max-width:220px;">
+                <select id="stepSelectorType" style="max-width:220px;">
                         <option value="css" data-i18n-opt="steps_loc_css">CSS选择器</option>
                         <option value="xpath" data-i18n-opt="steps_loc_xpath">XPath</option>
                         <option value="id" data-i18n-opt="steps_loc_id">ID</option>
@@ -967,8 +1057,6 @@
                         <option value="data" data-i18n-opt="steps_loc_data">Data属性</option>
                         <option value="aria" data-i18n-opt="steps_loc_aria">ARIA标签</option>
                     </select>
-                    <button type="button" class="btn btn-primary" id="pickCreateBtn" onclick="toggleElementCapture({ formTarget: 'create', shiftKey: !!(event &amp;&amp; event.shiftKey) })" data-i18n="steps_pick">🧲 拾取元素</button>
-                </div>
             </div>
             <div class="form-group">
                 <label for="stepSelectorValue" data-i18n="steps_label_sel_val">选择器值</label>
@@ -1291,6 +1379,42 @@
         </div>
     </div>
     
+    <!-- 桌面元素捕获结果（预览 + 精准定位） -->
+    <div id="desktopCaptureResultModal" class="modal" style="z-index: 10050;">
+        <div class="modal-content modal-content--desktop-capture">
+            <div class="desktop-capture-toolbar">
+                <button type="button" class="btn btn-secondary btn-sm" id="desktopCaptureRecaptureBtn">重新捕获</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="desktopCaptureSimilarBtn" title="后续版本支持">捕获相似元素</button>
+                <label style="margin-left:auto;font-size:13px;color:#6b7280;">元素名称</label>
+                <input type="text" id="desktopCaptureElementName" class="desktop-capture-name" placeholder="列表项目_控制面板" />
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:0 18px;">
+                <div class="desktop-capture-tabs">
+                    <button type="button" class="desktop-capture-tab active" data-dc-tab="preview">预览</button>
+                    <button type="button" class="desktop-capture-tab" data-dc-tab="precise">精准定位</button>
+                </div>
+                <button type="button" class="btn btn-secondary btn-sm" id="desktopCaptureVerifyBtn">校验元素</button>
+            </div>
+            <div id="desktopCaptureVerifyMsg" style="display:none;padding:0 18px 8px;font-size:13px;"></div>
+            <div id="desktopCapturePanelPreview" class="desktop-capture-panel active">
+                <div class="desktop-capture-preview-wrap">
+                    <img id="desktopCapturePreviewImg" alt="元素预览" style="display:none;" />
+                    <span id="desktopCapturePreviewPlaceholder" style="color:#9ca3af;font-size:13px;">无区域截图（可安装 mss 或仍用 UIA 精准链执行）</span>
+                </div>
+            </div>
+            <div id="desktopCapturePanelPrecise" class="desktop-capture-panel">
+                <div id="desktopCaptureUiaPathList"></div>
+            </div>
+            <div class="desktop-capture-footer">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="window.open('/recording-tutorial','_blank')">帮助</button>
+                <div style="display:flex;gap:8px;">
+                    <button type="button" class="btn btn-secondary" id="desktopCaptureSaveContinueBtn">保存并继续</button>
+                    <button type="button" class="btn btn-primary" id="desktopCaptureDoneBtn" style="background:#dc2626;border-color:#dc2626;">完成</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Playwright Codegen：粘贴导入 -->
     <div id="codegenImportModal" class="modal">
         <div class="modal-content" style="max-width: 720px; border-radius: 14px;">
@@ -2515,8 +2639,6 @@ function changePage(page) {
             if (specGrp) specGrp.style.display = layer === 'desktop' ? 'block' : 'none';
             rebuildActionSelect(isEdit ? 'editStepAction' : 'stepAction', layer);
             rebuildSelectorTypeSelect(isEdit ? 'editStepSelectorType' : 'stepSelectorType', layer);
-            const pickBtn = document.getElementById(isEdit ? 'pickEditBtn' : 'pickCreateBtn');
-            if (pickBtn) pickBtn.style.display = isEdit ? 'none' : '';
             if (layer === 'desktop') {
                 applyDesktopEnvHints(mode, await loadDesktopEnvConfig());
                 refreshDesktopSnapshot(mode, false);
@@ -2578,16 +2700,203 @@ function changePage(page) {
             throw new Error('服务器返回非 JSON（HTTP ' + response.status + '）：' + snippet);
         }
 
+        let _desktopCapturePendingPick = null;
+        let _desktopCaptureFormMode = 'create';
+
+        function captureBtnShiftKey(ev) {
+            return !!(ev && ev.shiftKey);
+        }
+
+        function formatUiaPathLinesForDisplay(nodes) {
+            if (!nodes || !nodes.length) return [];
+            return nodes.map(function (n) {
+                const tag = (n.control_type || 'Control').trim() || 'Control';
+                const attrs = [];
+                const cls = (n.class_name || '').trim();
+                if (cls) {
+                    attrs.push((cls.indexOf('|') >= 0 ? 'regex:cls="' : 'cls="') + cls + '"');
+                }
+                const nm = (n.name || '').trim();
+                if (nm) attrs.push('uia-name="' + nm + '"');
+                const aid = (n.automation_id || '').trim();
+                if (aid) attrs.push('automation_id="' + aid + '"');
+                if (tag === 'Window' && attrs.indexOf('app="explorer"') < 0) {
+                    attrs.unshift('app="explorer"');
+                }
+                return '<' + tag + (attrs.length ? ' ' + attrs.join(' ') : '') + ' />';
+            });
+        }
+
+        function buildLocatorCandidatesFromPick(pick, spec) {
+            if (pick && pick.locator_candidates) {
+                return typeof pick.locator_candidates === 'string'
+                    ? pick.locator_candidates
+                    : JSON.stringify(pick.locator_candidates);
+            }
+            const cands = [];
+            function add(st, sv, score) {
+                if (!sv) return;
+                if (cands.some(function (c) { return c.selector_type === st && c.selector_value === sv; })) return;
+                cands.push({ selector_type: st, selector_value: sv, score: score });
+            }
+            const uia = pick && pick.uia_path;
+            if (Array.isArray(uia) && uia.length) {
+                add('uia_path', JSON.stringify(uia), 98);
+            }
+            const vt = pick && pick.visual_template;
+            if (vt && vt.selector_value) {
+                add(vt.selector_type || 'visual_template', vt.selector_value, vt.score || 96);
+            }
+            const sp = spec || (pick && pick.desktop_spec) || {};
+            if (sp.client_center && sp.hwnd) add('client_coord', sp.client_center, 94);
+            if (sp.pick_center) add('coordinate', sp.pick_center, 70);
+            if (pick && pick.automation_id) add('automation_id', pick.automation_id, 82);
+            if (pick && pick.name) add('name', pick.name, 72);
+            return cands.length ? JSON.stringify(cands) : '';
+        }
+
+        function commitDesktopCaptureToForm(closeModal) {
+            const pick = _desktopCapturePendingPick;
+            if (!pick) return;
+            const mode = _desktopCaptureFormMode || 'create';
+            const isEdit = mode === 'edit';
+            const nameInput = document.getElementById('desktopCaptureElementName');
+            const label = (nameInput && nameInput.value.trim()) || pick.label || pick.name || '控件';
+            pick.label = label;
+            applyDesktopPickToForm(mode, pick);
+            if (closeModal !== false) {
+                const modal = document.getElementById('desktopCaptureResultModal');
+                if (modal) modal.style.display = 'none';
+            }
+            _desktopCapturePendingPick = null;
+        }
+
+        function openDesktopCaptureResultModal(mode, pick) {
+            if (!pick) return;
+            _desktopCaptureFormMode = mode || 'create';
+            _desktopCapturePendingPick = Object.assign({}, pick);
+            const modal = document.getElementById('desktopCaptureResultModal');
+            if (!modal) {
+                applyDesktopPickToForm(mode, pick);
+                return;
+            }
+            const nameEl = document.getElementById('desktopCaptureElementName');
+            if (nameEl) {
+                nameEl.value = pick.label || pick.name || pick.automation_id || '';
+            }
+            const img = document.getElementById('desktopCapturePreviewImg');
+            const ph = document.getElementById('desktopCapturePreviewPlaceholder');
+            const b64 = pick.preview_image_b64 || '';
+            if (img && ph) {
+                if (b64) {
+                    img.src = 'data:image/png;base64,' + b64;
+                    img.style.display = 'block';
+                    ph.style.display = 'none';
+                } else {
+                    img.style.display = 'none';
+                    img.removeAttribute('src');
+                    ph.style.display = 'block';
+                }
+            }
+            const uiaList = document.getElementById('desktopCaptureUiaPathList');
+            if (uiaList) {
+                const nodes = pick.uia_path || (pick.desktop_spec && pick.desktop_spec.uia_path) || [];
+                const lines = formatUiaPathLinesForDisplay(nodes);
+                if (!lines.length) {
+                    uiaList.innerHTML = '<p style="color:#9ca3af;font-size:13px;">无 UIA 路径，将使用坐标回退（不推荐）</p>';
+                } else {
+                    uiaList.innerHTML = lines.map(function (line) {
+                        return '<div class="desktop-capture-uia-line"><input type="checkbox" checked disabled style="margin-right:8px;" />'
+                            + line.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+                    }).join('');
+                }
+            }
+            const msg = document.getElementById('desktopCaptureVerifyMsg');
+            if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+            document.querySelectorAll('.desktop-capture-tab').forEach(function (btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-dc-tab') === 'preview');
+            });
+            document.getElementById('desktopCapturePanelPreview').classList.add('active');
+            document.getElementById('desktopCapturePanelPrecise').classList.remove('active');
+            modal.style.display = 'flex';
+        }
+
+        async function verifyDesktopCapturedElement() {
+            const pick = _desktopCapturePendingPick;
+            if (!pick) return;
+            const msgEl = document.getElementById('desktopCaptureVerifyMsg');
+            const spec = Object.assign({}, pick.desktop_spec || {});
+            if (pick.uia_path && !spec.uia_path) spec.uia_path = pick.uia_path;
+            const body = {
+                selector_type: pick.selector_type || 'uia_path',
+                selector_value: pick.selector_value || '',
+                desktop_spec: spec,
+                locator_candidates: buildLocatorCandidatesFromPick(pick, spec),
+            };
+            try {
+                const r = await fetchApi('/api/desktop/verify-element', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await r.json();
+                if (msgEl) {
+                    msgEl.style.display = 'block';
+                    if (data.success) {
+                        msgEl.style.color = '#059669';
+                        msgEl.textContent = data.message || ('校验成功：' + (data.name || data.resolved_via || ''));
+                    } else {
+                        msgEl.style.color = '#dc2626';
+                        msgEl.textContent = data.error || '校验失败';
+                    }
+                }
+            } catch (e) {
+                if (msgEl) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = '#dc2626';
+                    msgEl.textContent = (e && e.message) || '校验请求失败';
+                }
+            }
+        }
+
         function applyDesktopPickToForm(mode, pick) {
             if (!pick) return;
             const isEdit = mode === 'edit';
             const selType = document.getElementById(isEdit ? 'editStepSelectorType' : 'stepSelectorType');
             const selVal = document.getElementById(isEdit ? 'editStepSelectorValue' : 'stepSelectorValue');
-            if (selType && pick.selector_type) selType.value = pick.selector_type;
-            if (selVal) selVal.value = pick.selector_value || '';
-            if (pick.pick_point && selType && selVal && pick.selector_type === 'coordinate') {
-                selType.value = 'coordinate';
+            const locCands = document.getElementById(isEdit ? 'editStepLocatorCandidates' : 'stepLocatorCandidates');
+            let st = pick.selector_type || 'automation_id';
+            let sv = pick.selector_value || '';
+            if (Array.isArray(pick.uia_path) && pick.uia_path.length) {
+                st = 'uia_path';
+                sv = JSON.stringify(pick.uia_path);
+            }
+            if (selType) selType.value = st;
+            if (selVal) selVal.value = sv;
+            if (pick.pick_point && selType && selVal && st === 'coordinate') {
                 selVal.value = pick.pick_point.x + ',' + pick.pick_point.y;
+            }
+            const spec = Object.assign({}, pick.desktop_spec || {});
+            if (pick.uia_path && !spec.uia_path) spec.uia_path = pick.uia_path;
+            if (pick.rectangle) {
+                const r = pick.rectangle;
+                spec.pick_center = Math.round((Number(r.left) + Number(r.right)) / 2) + ','
+                    + Math.round((Number(r.top) + Number(r.bottom)) / 2);
+            }
+            const isShell = (spec.surface || '').toLowerCase() === 'desktop_shell'
+                || (
+                    Array.isArray(pick.uia_path)
+                    && pick.uia_path.length > 0
+                    && pick.uia_path.some(function (n) {
+                        return n && (n.control_type === 'ListItem' || (n.class_name || '').indexOf('SysListView') >= 0);
+                    })
+                );
+            if (isShell) {
+                delete spec.hwnd;
+                delete spec.pid;
+            }
+            if (locCands) {
+                locCands.value = buildLocatorCandidatesFromPick(pick, spec);
             }
             const act = document.getElementById(isEdit ? 'editStepAction' : 'stepAction');
             const recordAction = pick.record_action || 'click';
@@ -2603,17 +2912,11 @@ function changePage(page) {
                 if (vSel) vSel.value = pick.input_value || pick.compare_type || 'auto';
             }
             const desc = document.getElementById(isEdit ? 'editStepDescription' : 'stepDescription');
+            const label = pick.label || pick.name || pick.automation_id || '控件';
             if (desc && !String(desc.value || '').trim()) {
-                desc.value = '拾取：' + (pick.label || pick.name || pick.automation_id || '控件');
+                desc.value = '拾取：' + label;
             }
             if (pick.desktop_spec || pick.uia_path || pick.rectangle) {
-                const spec = Object.assign({}, pick.desktop_spec || {});
-                if (pick.uia_path && !spec.uia_path) spec.uia_path = pick.uia_path;
-                if (pick.rectangle) {
-                    const r = pick.rectangle;
-                    spec.pick_center = Math.round((Number(r.left) + Number(r.right)) / 2) + ','
-                        + Math.round((Number(r.top) + Number(r.bottom)) / 2);
-                }
                 setDesktopSpecField(mode, spec);
             }
         }
@@ -2786,8 +3089,8 @@ function changePage(page) {
                         );
                         if (layerEl) layerEl.value = 'desktop';
                         onAutomationLayerChange(_elementCaptureFormTarget);
-                        applyDesktopPickToForm(_elementCaptureFormTarget, desk.last_pick);
-                        showToast('已填入桌面：' + (desk.last_pick.label || '控件'), 'success');
+                        openDesktopCaptureResultModal(_elementCaptureFormTarget, desk.last_pick);
+                        showToast('桌面元素已捕获，请确认后点「完成」', 'success');
                     }
 
                     const webEl = normalizeWebPickElement(
@@ -2997,8 +3300,6 @@ function changePage(page) {
             if (stepClickRepeatGroup) stepClickRepeatGroup.style.display = 'none';
             const stepBatchInputGroup = document.getElementById('stepBatchInputGroup');
             if (stepBatchInputGroup) stepBatchInputGroup.style.display = 'none';
-            const pickCreateBtn = document.getElementById('pickCreateBtn');
-            if (pickCreateBtn) pickCreateBtn.style.display = '';
             // 默认隐藏所有特殊字段
             compareTypeField.style.display = 'none';
             swipeDirectionField.style.display = 'none';
@@ -3038,7 +3339,6 @@ function changePage(page) {
                 inputValueField.style.display = 'none';
                 scrollFields.style.display = 'none';
                 if (stepBatchInputGroup) stepBatchInputGroup.style.display = 'block';
-                if (pickCreateBtn) pickCreateBtn.style.display = 'none';
             } else if (action === 'extract_text') {
                 // 提取文本操作需要选择器和预期文本
                 inputValueField.style.display = 'block';
@@ -3324,10 +3624,6 @@ function changePage(page) {
         }
 
         function setPickButtonsLoading(loading) {
-            const pickBtn = document.getElementById('pickCreateBtn');
-            if (pickBtn) {
-                pickBtn.textContent = loading ? t('steps_pick_stop') : t('steps_pick');
-            }
             const recBtn = document.getElementById('elementCaptureRecordBtn');
             if (recBtn) {
                 recBtn.textContent = loading ? '停止捕获' : '🧲 元素捕获 / 录制';
@@ -3347,15 +3643,6 @@ function changePage(page) {
                 cardNthId: t === 'edit' ? 'editCardNth' : 'stepCardNth',
                 cardNthWrapId: t === 'edit' ? 'editCardNthWrap' : 'stepCardNthWrap'
             };
-        }
-        
-        function startVisualSelection(target = 'create') {
-            selectionTarget = target === 'edit' ? 'edit' : 'create';
-            toggleElementCapture({ formTarget: selectionTarget });
-        }
-
-        function stopVisualSelection() {
-            stopElementCaptureSession();
         }
         
         function fillElementToForm(elementInfo, target = 'create') {
@@ -4433,6 +4720,38 @@ function changePage(page) {
                 if (!document.hidden) syncRunCaseButtonState();
             });
             runCaseButtonSyncTimer = setInterval(syncRunCaseButtonState, 3500);
+
+            document.querySelectorAll('.desktop-capture-tab').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    const tab = btn.getAttribute('data-dc-tab');
+                    document.querySelectorAll('.desktop-capture-tab').forEach(function (b) {
+                        b.classList.toggle('active', b === btn);
+                    });
+                    document.getElementById('desktopCapturePanelPreview').classList.toggle('active', tab === 'preview');
+                    document.getElementById('desktopCapturePanelPrecise').classList.toggle('active', tab === 'precise');
+                });
+            });
+            const dcDone = document.getElementById('desktopCaptureDoneBtn');
+            if (dcDone) dcDone.addEventListener('click', function () { commitDesktopCaptureToForm(true); showToast('已写入步骤表单', 'success'); });
+            const dcCont = document.getElementById('desktopCaptureSaveContinueBtn');
+            if (dcCont) dcCont.addEventListener('click', function () {
+                commitDesktopCaptureToForm(false);
+                showToast('已写入表单，可继续捕获', 'success');
+            });
+            const dcVerify = document.getElementById('desktopCaptureVerifyBtn');
+            if (dcVerify) dcVerify.addEventListener('click', verifyDesktopCapturedElement);
+            const dcRecap = document.getElementById('desktopCaptureRecaptureBtn');
+            if (dcRecap) dcRecap.addEventListener('click', function () {
+                const modal = document.getElementById('desktopCaptureResultModal');
+                if (modal) modal.style.display = 'none';
+                toggleElementCapture({ formTarget: _desktopCaptureFormMode || 'create' });
+            });
+            const dcModal = document.getElementById('desktopCaptureResultModal');
+            if (dcModal) {
+                dcModal.addEventListener('click', function (ev) {
+                    if (ev.target === dcModal) dcModal.style.display = 'none';
+                });
+            }
         });
 
         window.addEventListener('ui-preferences-updated', function (ev) {

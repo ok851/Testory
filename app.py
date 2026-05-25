@@ -1829,92 +1829,37 @@ def api_links():
     links = sync_get_all_links()
     return jsonify({'success': True, 'links': links})
 
-# API: 启动可视化选择
+def _legacy_visual_picker_removed():
+    """旧版网页拾取 API 已收敛至统一元素捕获。"""
+    return jsonify({
+        'success': False,
+        'error': '该接口已移除，请使用 /api/element-picker/start|stop|status',
+        'deprecated': True,
+    }), 410
+
+
+# API: 启动可视化选择（已废弃）
 @app.route('/api/start_visual_selection', methods=['POST'])
 @api_error_handler
 @log_api_request
 def api_start_visual_selection():
-    try:
-        # 获取请求数据，使用silent=True避免解析失败时返回400错误
-        data = request.get_json(silent=True) or {}
-        case_id = data.get('case_id')
-        target_url = (data.get('url', '') or '').strip()
+    return _legacy_visual_picker_removed()
 
-        # 优先使用前端传入 URL；若为空或无效，后端基于 case_id 兜底解析
-        fixed_url = None
-        if target_url:
-            fixed_url, url_err = _validate_and_fix_url(target_url)
-            if url_err:
-                uat_logger.warning(f"可视化选择传入URL无效，将尝试按用例解析: {url_err}")
 
-        if not fixed_url and case_id:
-            try:
-                parsed_case_id = int(case_id)
-            except Exception:
-                parsed_case_id = None
-            if parsed_case_id:
-                case_info = db.get_test_case_v2(parsed_case_id)
-                case_steps = db.get_case_steps(parsed_case_id)
-                resolved_url, source = _resolve_case_navigation_url(
-                    case=case_info, case_id=parsed_case_id, steps=case_steps
-                )
-                if resolved_url:
-                    fixed_url = resolved_url
-                    uat_logger.info(f"可视化选择URL已按用例兜底解析: {source} -> {fixed_url}")
-
-        if not fixed_url:
-            # 无 URL 时不要悄悄停在 about:blank，直接提示用户
-            return jsonify({'success': False, 'error': '未找到可用导航URL，请先配置用例URL或导航步骤URL'}), 400
-
-        # 启动可视化选择功能，并传递目标URL
-        sync_enable_element_selection(fixed_url)
-        return jsonify({'success': True, 'message': '可视化选择已启动'})
-    except Exception as e:
-        msg = str(e)
-        # 用户手动关闭拾取窗口属于正常结束，不作为错误提示
-        if "Target page, context or browser has been closed" in msg:
-            try:
-                sync_disable_element_selection()
-            except Exception:
-                pass
-            uat_logger.info("拾取窗口已关闭，按已停止拾取处理")
-            return jsonify({'success': True, 'stopped': True, 'message': '已停止拾取'})
-        if "目标地址不可达，请检查网络或服务是否启动" in msg:
-            uat_logger.warning(f"可视化选择目标不可达: {msg}")
-            return jsonify({'success': False, 'error': msg}), 400
-        uat_logger.error(f"启动可视化选择失败: {e}")
-        return jsonify({'success': False, 'error': msg})
-
-# API: 停止可视化选择
+# API: 停止可视化选择（已废弃）
 @app.route('/api/stop_visual_selection', methods=['POST'])
 @api_error_handler
 @log_api_request
 def api_stop_visual_selection():
-    try:
-        # 停止可视化选择功能
-        sync_disable_element_selection()
-        return jsonify({'success': True, 'message': '可视化选择已停止'})
-    except Exception as e:
-        uat_logger.error(f"停止可视化选择失败: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+    return _legacy_visual_picker_removed()
 
-# API: 检查选择的元素
+
+# API: 检查选择的元素（已废弃）
 @app.route('/api/check_selected_element', methods=['GET'])
 @api_error_handler
 @log_api_request
 def api_check_selected_element():
-    try:
-        # 获取选择的元素
-        selected_element = sync_get_selected_element()
-        if isinstance(selected_element, dict) and selected_element.get('_picker_closed'):
-            return jsonify({'success': True, 'selected_element': None, 'picker_closed': True})
-        if selected_element:
-            return jsonify({'success': True, 'selected_element': selected_element})
-        else:
-            return jsonify({'success': True, 'selected_element': None})
-    except Exception as e:
-        uat_logger.error(f"检查选择元素失败: {e}")
-        return jsonify({'success': False, 'error': str(e)})
+    return _legacy_visual_picker_removed()
 
 # API: 提取元素数据
 @app.route('/api/extract_element_data', methods=['POST'])
@@ -4296,6 +4241,35 @@ def api_browser_inspect():
     return jsonify({'success': True, 'data': payload})
 
 
+@app.route('/api/desktop/verify-element', methods=['POST'])
+@app.route('/api/desktop/verify_element', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_verify_element():
+    """校验桌面元素是否可解析（UIA 精准链，不依赖遮挡/Z 序）。"""
+    data = request.get_json(silent=True) or {}
+    spec, err = _parse_desktop_spec_body(data)
+    if err:
+        return jsonify({'success': False, 'error': err}), 400
+    try:
+        from desktop_automation import sync_desktop_verify_element
+
+        result = sync_desktop_verify_element(
+            data.get('selector_type') or '',
+            data.get('selector_value') or '',
+            spec or {},
+            data.get('locator_candidates'),
+        )
+        if result.get('success'):
+            return jsonify({'success': True, **result})
+        return jsonify({'success': False, 'error': result.get('error') or '校验失败'}), 400
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_verify_element', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/desktop/inspect', methods=['POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
@@ -5329,35 +5303,26 @@ def api_browser_ai_analyze():
     })
 
 
-# API: 启用元素选择模式
+# API: 启用元素选择模式（已废弃，转发提示）
 @app.route('/api/enable_element_selection', methods=['POST'])
 @api_error_handler
 @log_api_request
 def api_enable_element_selection():
-    # 与 start_visual_selection 统一，避免旧接口直启导致 about:blank
-    return api_start_visual_selection()
+    return _legacy_visual_picker_removed()
 
-# API: 禁用元素选择模式
+# API: 禁用元素选择模式（已废弃）
 @app.route('/api/disable_element_selection', methods=['POST'])
 @api_error_handler
 @log_api_request
 def api_disable_element_selection():
-    try:
-        sync_disable_element_selection()
-        return jsonify({'success': True, 'message': '元素选择模式已禁用'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    return _legacy_visual_picker_removed()
 
-# API: 获取选中的元素信息
+# API: 获取选中的元素信息（已废弃）
 @app.route('/api/get_selected_element', methods=['GET'])
 @api_error_handler
 @log_api_request
 def api_get_selected_element():
-    try:
-        element_info = sync_get_selected_element()
-        return jsonify({'success': True, 'element': element_info})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    return _legacy_visual_picker_removed()
 
 # API: 从选定元素提取JSON数据
 @app.route('/api/extract_json_from_selected_element', methods=['GET'])
@@ -6874,8 +6839,10 @@ def api_run_case(case_id):
                     factory = get_executor_factory()
                     if factory.is_desktop_step(step):
                         try:
+                            desk_step = dict(step)
+                            desk_step["_case_name"] = (case.get("name") or "").strip()
                             desk_result = factory.execute_desktop_step(
-                                step,
+                                desk_step,
                                 selector_value=selector_value,
                                 input_value=input_value,
                             )
@@ -6883,25 +6850,9 @@ def api_run_case(case_id):
                             if _case_run_cancelled(user_id):
                                 raise Exception("用户已停止执行")
                             raise
-                        desk_status = str(
-                            (desk_result or {}).get("status") or "success"
-                        ).strip().lower()
-                        if desk_status not in ("success", "ok", "passed"):
-                            raise RuntimeError(
-                                (desk_result or {}).get("error")
-                                or "桌面步骤执行失败"
-                            )
-                        if action in ("click", "double_click", "right_click"):
-                            if not (desk_result or {}).get("verified"):
-                                raise RuntimeError(
-                                    (desk_result or {}).get("error")
-                                    or "桌面指针步骤未通过执行校验（可能未命中目标控件）"
-                                )
-                            if not (desk_result or {}).get("pointer_executed"):
-                                raise RuntimeError(
-                                    (desk_result or {}).get("error")
-                                    or "桌面指针步骤未真正执行（pointer_executed=false）"
-                                )
+                        from step_executor import validate_desktop_step_result
+
+                        validate_desktop_step_result(desk_result, action)
                         step_status = 'success'
                         step_error = ''
                         step_screenshot = (desk_result or {}).get('screenshot') or ''

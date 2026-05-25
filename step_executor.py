@@ -69,6 +69,36 @@ def is_desktop_step(step: Dict[str, Any]) -> bool:
     return normalize_automation_layer(step) == "desktop"
 
 
+DESKTOP_POINTER_ACTIONS = frozenset({"click", "double_click", "right_click"})
+
+
+def validate_desktop_step_result(result: Any, action: str) -> Dict[str, Any]:
+    """
+    统一桌面步骤成功闸门：status 成功；指针步骤另要求 verified 与 pointer_executed。
+    所有执行入口（单用例、批量、脚本）应调用此函数。
+    """
+    act = (action or "").strip().lower()
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            f"桌面步骤返回无效结果（期望 dict，得到 {type(result).__name__}）"
+        )
+    status = str(result.get("status") or "success").strip().lower()
+    if status not in ("success", "ok", "passed"):
+        raise RuntimeError(result.get("error") or "桌面步骤执行失败")
+    if act in DESKTOP_POINTER_ACTIONS:
+        if not result.get("verified"):
+            raise RuntimeError(
+                result.get("error")
+                or "桌面指针步骤未通过执行校验（可能未命中目标控件）"
+            )
+        if not result.get("pointer_executed"):
+            raise RuntimeError(
+                result.get("error")
+                or "桌面指针步骤未真正执行（pointer_executed=false）"
+            )
+    return result
+
+
 def sync_execute_step_by_layer(
     step: Dict[str, Any],
     *,
@@ -85,7 +115,8 @@ def sync_execute_step_by_layer(
         raise ValueError(err)
 
     if layer == "desktop":
-        return sync_desktop_execute_step(step)
+        result = sync_desktop_execute_step(step)
+        return validate_desktop_step_result(result, action)
 
     if web_executor:
         web_executor(step)
@@ -100,6 +131,17 @@ async def async_execute_step_by_layer(
     """
     批量/Playwright 路径：桌面步骤走 sync；Web 步骤走 automation.execute_single_step。
     """
-    from execution_factory import get_executor_factory
+    import asyncio
 
-    return await get_executor_factory().execute_step_async(step, automation)
+    exec_step = enrich_execution_step(step)
+    action = (exec_step.get("action") or "").strip()
+    err = validate_step_for_layer(action, normalize_automation_layer(exec_step))
+    if err:
+        raise ValueError(err)
+
+    if is_desktop_step(exec_step):
+        result = await asyncio.to_thread(sync_desktop_execute_step, exec_step)
+        return [validate_desktop_step_result(result, action)]
+
+    results = await automation.execute_single_step(exec_step)
+    return results if isinstance(results, list) else [results]
