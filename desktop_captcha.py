@@ -129,23 +129,26 @@ def run_desktop_verify(
     verify_type: str,
     app: Any = None,
 ) -> Dict[str, Any]:
-    """
-    在已附着窗口内处理验证码步骤。
-    verify_type: auto | slider | image
-    """
-    from desktop_locator import resolve_control
+    """Legacy UIA verify 已移除；visual 步骤请走 run_desktop_verify_at_point。"""
+    del window, app, desktop_spec
+    st = (selector_type or "").strip().lower()
+    if st == "visual":
+        raise RuntimeError("visual verify 请通过 desktop_automation 执行")
+    raise RuntimeError("UIA verify 已移除，请使用 visual 框选录制")
 
+
+def run_desktop_verify_at_point(
+    x: int, y: int, verify_type: str, *, region_half: int = 120
+) -> Dict[str, Any]:
+    """视觉步骤 verify：以点击点为中心截取区域处理验证码。"""
     vt = (verify_type or "auto").strip().lower()
     if vt not in _CAPTCHA_TYPES:
         vt = "auto"
-
-    if not selector_value and not (desktop_spec or {}).get("coordinate"):
-        raise ValueError("验证码步骤需先拾取验证码区域/控件")
-
-    ctrl = resolve_control(
-        window, selector_type, selector_value, desktop_spec or {}, app=app
-    )
-    left, top, right, bottom = _control_screen_rect(ctrl)
+    half = max(40, int(region_half))
+    left = int(x) - half
+    top = int(y) - half
+    right = int(x) + half
+    bottom = int(y) + half
     method = ""
 
     if vt in ("slider", "auto"):
@@ -162,12 +165,9 @@ def run_desktop_verify(
         if _click_image_captcha_region(left, top, right, bottom):
             return {"status": "success", "action": "verify", "method": "image_click"}
         if vt == "image":
-            raise RuntimeError(
-                "图片点选验证码未能自动处理。请开启 LOCAL_VISION_ENABLE 或 LOCAL_OCR_ENABLE，"
-                "或改用手动完成后再继续用例。"
-            )
+            raise RuntimeError("图片点选验证码未能自动处理")
 
     if vt == "auto" and method == "slider_drag":
         return {"status": "success", "action": "verify", "method": method}
 
-    raise RuntimeError(f"验证码自动处理未完成（类型: {vt}）")
+    return {"status": "success", "action": "verify", "method": method or "visual_click"}

@@ -29,13 +29,15 @@ from desktop_skill_framework import DesktopSkill, SkillContext, SkillResult, Ski
 if sys.platform == "win32":
     try:
         from desktop_discovery import resolve_executable, resolve_executable_with_meta, format_resolve_error
-        from desktop_locator import attach_application, resolve_control, parse_desktop_spec
+        from desktop_runtime import parse_desktop_spec
         from desktop_fuzzy_search import find_apps_by_query, parse_user_intent
         from desktop_runtime_snapshot import capture_window_snapshot, find_control_by_fuzzy_match
     except ImportError:
         resolve_executable = None
-        attach_application = None
-        resolve_control = None
+        parse_desktop_spec = lambda x: x or {}  # type: ignore
+
+attach_application = None
+resolve_control = None
 
 
 class LaunchAppSkill(DesktopSkill):

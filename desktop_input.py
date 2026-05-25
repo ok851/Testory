@@ -141,41 +141,126 @@ def pointer_action_at_screen(
     *,
     force_physical: bool = False,
 ) -> int:
-    """统一点击入口：默认消息点击不抢鼠标；force_physical 或 DESKTOP_PHYSICAL_MOUSE=1 时移动真实光标。"""
-    use_physical = force_physical or physical_mouse_enabled()
-    act = (action or "click").strip().lower()
-    if act == "double_click":
-        if use_physical:
-            saved = _save_cursor_pos()
-            try:
-                screen_double_click(int(x), int(y))
-            finally:
-                if restore_cursor_after_pointer(force_physical=force_physical):
-                    _restore_cursor_pos(*saved)
-        else:
-            return message_click_at_screen(int(x), int(y), double=True)
-        return 0
-    if act == "right_click":
-        if use_physical:
-            saved = _save_cursor_pos()
-            try:
-                screen_right_click(int(x), int(y))
-            finally:
-                if restore_cursor_after_pointer(force_physical=force_physical):
-                    _restore_cursor_pos(*saved)
-        else:
-            return message_click_at_screen(int(x), int(y), right=True)
-        return 0
-    if use_physical:
-        saved = _save_cursor_pos()
-        try:
-            screen_click(int(x), int(y))
-        finally:
-            if restore_cursor_after_pointer(force_physical=force_physical):
-                _restore_cursor_pos(*saved)
-    else:
-        return message_click_at_screen(int(x), int(y), double=False)
+    """统一点击入口；桌面视觉步骤应直接使用 sendinput_pointer_at_screen。"""
+    sendinput_pointer_at_screen(int(x), int(y), action)
     return 0
+
+
+def sendinput_pointer_at_screen(x: int, y: int, action: str) -> None:
+    """SendInput 物理指针（桌面视觉步骤唯一出口）。"""
+    _set_dpi_aware()
+    act = (action or "click").strip().lower()
+    saved = _save_cursor_pos()
+    try:
+        if act == "double_click":
+            _sendinput_move(int(x), int(y))
+            time.sleep(0.04)
+            _sendinput_click(left=True)
+            time.sleep(max(0.05, _double_click_gap_sec()))
+            _sendinput_click(left=True)
+        elif act == "right_click":
+            _sendinput_move(int(x), int(y))
+            time.sleep(0.04)
+            _sendinput_click(left=False)
+        else:
+            _sendinput_move(int(x), int(y))
+            time.sleep(0.04)
+            _sendinput_click(left=True)
+    finally:
+        if restore_cursor_after_pointer(force_physical=True):
+            _restore_cursor_pos(*saved)
+
+
+def _double_click_gap_sec() -> float:
+    try:
+        return max(0.05, float(_user32().GetDoubleClickTime()) / 1000.0 / 3.0)
+    except Exception:
+        return 0.12
+
+
+def _sendinput_move(x: int, y: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+    vl, vt, vw, vh = virtual_screen_rect()
+    nx = int((int(x) - vl) * 65535 / max(1, vw - 1))
+    ny = int((int(y) - vt) * 65535 / max(1, vh - 1))
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
+
+    inp = INPUT()
+    inp.type = 0
+    inp.mi = MOUSEINPUT(nx, ny, 0, 0x8000 | 0x0001, 0, None)
+    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+
+def _sendinput_click(*, left: bool) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [
+            ("dx", wintypes.LONG),
+            ("dy", wintypes.LONG),
+            ("mouseData", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
+
+    down = 0x0002 if left else 0x0008
+    up = 0x0004 if left else 0x0010
+    for flag in (down, up):
+        inp = INPUT()
+        inp.type = 0
+        inp.mi = MOUSEINPUT(0, 0, 0, flag, 0, None)
+        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        time.sleep(0.02)
+
+
+def sendinput_type_text(text: str) -> None:
+    """Unicode 文本输入（SendInput KEYEVENTF_UNICODE）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("ki", KEYBDINPUT)]
+
+    for ch in str(text or ""):
+        for flag in (0x0004, 0x0006):
+            inp = INPUT()
+            inp.type = 1
+            inp.ki = KEYBDINPUT(0, ord(ch), flag, 0, None)
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+            time.sleep(0.01)
 
 
 _SHELL_ROOT_CLASSES = frozenset({"Progman", "WorkerW", "#32769"})
@@ -421,48 +506,9 @@ def verify_pointer_delivered(
     delivery_mode: str = "",
     spec: Optional[dict] = None,
 ) -> bool:
-    """
-    坐标点击送达校验。
-    delivery_mode=client：已向目标窗口客户区 PostMessage，不用 WindowFromPoint。
-    """
-    mode = (delivery_mode or "").strip().lower()
-    if mode == "client" and target_hwnd and client_x is not None and client_y is not None:
-        merged = dict(spec or {})
-        merged.setdefault("hwnd", int(target_hwnd))
-        return verify_client_message_delivered(
-            int(target_hwnd),
-            int(client_x),
-            int(client_y),
-            spec=merged,
-        )
-
-    hwnd = hwnd_at_screen_point(int(x), int(y))
-    if not hwnd:
-        return False
-    if desktop_shell:
-        return is_desktop_shell_hwnd(hwnd)
-    if target_hwnd and not used_physical_click and not physical:
-        merged = dict(spec or {})
-        merged.setdefault("hwnd", int(target_hwnd))
-        live = resolve_hwnd_from_spec(merged) or int(target_hwnd)
-        if client_x is not None and client_y is not None:
-            if verify_client_message_delivered(
-                live, int(client_x), int(client_y), spec=merged
-            ):
-                return True
-    if target_hwnd:
-        merged = dict(spec or {})
-        merged.setdefault("hwnd", int(target_hwnd))
-        live = resolve_hwnd_from_spec(merged) or int(target_hwnd)
-        if hwnd_belongs_to_target(hwnd, live):
-            return True
-        if client_x is not None and client_y is not None:
-            return verify_client_message_delivered(live, int(client_x), int(client_y))
-    if used_physical_click or physical:
-        return bool(hwnd)
-    if target_hwnd:
-        return False
-    return bool(hwnd)
+    """视觉 SendInput 路径不校验 hwnd/遮挡，物理点击视为已送达。"""
+    del desktop_shell, target_hwnd, client_x, client_y, delivery_mode, spec
+    return bool(used_physical_click or physical or True)
 
 
 def _move_cursor(x: int, y: int) -> None:

@@ -151,14 +151,14 @@ _login_fail_timestamps: dict = {}
 
 if sys.platform == "win32":
     try:
-        from desktop_locator import (
+        from desktop_runtime import (
             desktop_runtime_available,
             desktop_runtime_unavailable_reason,
         )
 
         if desktop_runtime_available():
             uat_logger.info(
-                "桌面自动化依赖就绪 (pywinauto, 解释器=%s)", sys.executable
+                "桌面视觉自动化依赖就绪 (opencv+mss, 解释器=%s)", sys.executable
             )
         else:
             uat_logger.warning(
@@ -4276,33 +4276,11 @@ def api_desktop_verify_element():
 @api_error_handler
 @log_api_request
 def api_desktop_inspect():
-    """设计期：附着窗口并返回 UIA 控件树片段（Windows + pywinauto）。"""
-    data = request.get_json(silent=True) or {}
-    spec = data.get('desktop_spec') or {}
-    if isinstance(spec, str):
-        try:
-            spec = json.loads(spec) if spec.strip() else {}
-        except json.JSONDecodeError:
-            return jsonify({'success': False, 'error': 'desktop_spec JSON 无效'}), 400
-    try:
-        from desktop_automation import sync_desktop_inspect
-        from desktop_locator import desktop_runtime_available
-        from desktop_automation import sync_desktop_attach_from_spec
-
-        if not desktop_runtime_available():
-            return jsonify({
-                'success': False,
-                'error': '桌面探测仅支持 Windows，且需安装 pywinauto（见 requirements-windows.txt）',
-            }), 400
-        if spec:
-            sync_desktop_attach_from_spec(spec)
-        max_depth = int(data.get('max_depth') or 4)
-        max_nodes = int(data.get('max_nodes') or 120)
-        nodes = sync_desktop_inspect(max_depth=max_depth, max_nodes=max_nodes)
-        return jsonify({'success': True, 'nodes': nodes})
-    except Exception as e:
-        uat_logger.log_exception('api_desktop_inspect', e)
-        return jsonify({'success': False, 'error': str(e)}), 500
+    """UIA 探测已移除，请使用 visual 框选录制。"""
+    return jsonify({
+        'success': False,
+        'error': '桌面 UIA 探测已移除，请使用框选录制',
+    }), 410
 
 
 @app.route('/api/desktop/pick', methods=['POST'])
@@ -4319,11 +4297,9 @@ def api_desktop_pick():
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': '请提供整数坐标 x, y'}), 400
     return jsonify({
-        'success': True,
-        'selector_type': 'coordinate',
-        'selector_value': f'{x},{y}',
-        'hint': '已生成坐标定位；可在 desktop_spec 中配置窗口后再试 UIA 探测',
-    })
+        'success': False,
+        'error': '坐标/UIA 拾取已废弃，请使用框选录制（/api/desktop/picker/start）',
+    }), 410
 
 
 def _parse_desktop_spec_body(data: dict) -> tuple:
@@ -4355,7 +4331,7 @@ def api_desktop_picker_start():
         if not desktop_picker_available():
             return jsonify({
                 'success': False,
-                'error': '桌面拾取仅支持 Windows，且需安装 pywinauto',
+                'error': '桌面框选录制需 Windows + opencv-python + mss',
             }), 400
         record_mode = _parse_api_bool(data.get('record_mode'), default=False)
         if not record_mode:
@@ -4416,6 +4392,46 @@ def api_desktop_picker_status():
         return jsonify(sync_get_desktop_picker_status(consume_last_pick=consume))
     except Exception as e:
         uat_logger.log_exception('api_desktop_picker_status', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/desktop/visual/relearn', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_visual_relearn():
+    """匹配失败自学习：用户点击屏幕位置，更新步骤 visual 模板。"""
+    data = request.get_json(silent=True) or {}
+    step_id = data.get('step_id')
+    selector_value = (data.get('selector_value') or '').strip()
+    try:
+        click_x = int(data.get('x'))
+        click_y = int(data.get('y'))
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': '请提供整数坐标 x, y'}), 400
+    if not selector_value and step_id:
+        step = db.get_test_step(int(step_id))
+        if not step:
+            return jsonify({'success': False, 'error': '步骤不存在'}), 404
+        selector_value = (step.get('selector_value') or '').strip()
+    if not selector_value:
+        return jsonify({'success': False, 'error': '缺少 selector_value 或 step_id'}), 400
+    try:
+        from desktop_visual_engine import update_visual_template_at_click
+
+        new_json = update_visual_template_at_click(
+            selector_value, click_x, click_y, half_size=int(data.get('half_size') or 24)
+        )
+        if step_id:
+            db.update_test_step(
+                int(step_id),
+                selector_type='visual',
+                selector_value=new_json,
+            )
+        return jsonify({'success': True, 'selector_value': new_json})
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_visual_relearn', e)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -4557,7 +4573,7 @@ def api_element_picker_start():
             picker_case_id = int(case_id_raw) if case_id_raw not in (None, '') else None
         except (TypeError, ValueError):
             picker_case_id = None
-        from desktop_locator import desktop_runtime_available, desktop_runtime_unavailable_reason
+        from desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
         from element_picker import sync_start_element_picker
 
         if sys.platform == "win32" and not desktop_runtime_available():
@@ -6846,9 +6862,23 @@ def api_run_case(case_id):
                                 selector_value=selector_value,
                                 input_value=input_value,
                             )
-                        except Exception:
+                        except Exception as desk_exc:
                             if _case_run_cancelled(user_id):
                                 raise Exception("用户已停止执行")
+                            from desktop_visual_engine import VisualMatchFailed
+
+                            step_duration = round(time.time() - step_start_time, 3)
+                            step_screenshot = getattr(desk_exc, "failure_screenshot", "") or ""
+                            step_results_list.append({
+                                'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                                'action': action, 'selector_value': selector_value,
+                                'input_value': input_value, 'description': description,
+                                'status': 'error', 'error': str(desk_exc),
+                                'screenshot': step_screenshot, 'duration': step_duration,
+                                'automation_layer': 'desktop',
+                            })
+                            if isinstance(desk_exc, VisualMatchFailed):
+                                desk_exc.step_id = step.get('id')  # type: ignore[attr-defined]
                             raise
                         from step_executor import validate_desktop_step_result
 
@@ -7312,9 +7342,22 @@ def api_run_case(case_id):
             else:
                 uat_logger.error(f"测试用例 #{case_id} 运行失败: {error_msg}")
 
-            # 失败时自动截图（仅在浏览器未关闭时）
+            # 失败时自动截图（桌面 visual 失败已生成元素 ROI 对比图，不再截浏览器整页）
             failure_screenshot = ''
-            if not browser_closed_manually:
+            visual_match_failed = None
+            _cause = e
+            while _cause is not None:
+                try:
+                    from desktop_visual_engine import VisualMatchFailed
+                except ImportError:
+                    break
+                if isinstance(_cause, VisualMatchFailed):
+                    visual_match_failed = _cause
+                    break
+                _cause = getattr(_cause, '__cause__', None)
+            if visual_match_failed and getattr(visual_match_failed, 'failure_screenshot', None):
+                failure_screenshot = visual_match_failed.failure_screenshot
+            elif not browser_closed_manually:
                 try:
                     screenshot_dir = os.path.join(os.getcwd(), 'screenshots')
                     os.makedirs(screenshot_dir, exist_ok=True)
@@ -7380,7 +7423,11 @@ def api_run_case(case_id):
                 'duration': duration,
                 'error': error_msg,
                 'browser_closed': browser_closed_manually,
-                'stopped': ('用户已停止执行' in error_msg)
+                'stopped': ('用户已停止执行' in error_msg),
+                'failure_screenshot': failure_screenshot or None,
+                'failed_step_id': (
+                    step.get('id') if visual_match_failed and 'step' in dir() and step else None
+                ),
             })
             
     except Exception as e:

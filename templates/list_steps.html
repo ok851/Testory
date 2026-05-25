@@ -454,6 +454,35 @@
             padding: 14px 18px;
             border-top: 1px solid #e5e7eb;
         }
+        .visual-step-preview {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-top: 4px;
+        }
+        .visual-step-preview img {
+            width: 64px;
+            height: 64px;
+            object-fit: contain;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            background: #f8fafc;
+        }
+        .visual-step-preview-meta { font-size: 12px; color: #64748b; line-height: 1.5; }
+        .visual-selector-preview-wrap {
+            margin-top: 8px;
+            padding: 10px;
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+        .visual-selector-preview-wrap img {
+            max-width: 120px;
+            max-height: 80px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fff;
+        }
 
         .steps-api-urlbar {
             display: flex;
@@ -952,7 +981,7 @@
                 <button type="button" onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" data-i18n="steps_import_side">
                     🧪 从 Selenium IDE 导入
                 </button>
-                <button type="button" onclick="toggleElementCapture({ recordToCase: true, shiftKey: captureBtnShiftKey(event) })" class="btn btn-primary" id="elementCaptureRecordBtn" title="默认仅桌面捕获（Ctrl+点击目标）；Shift+点击本按钮可同时打开用例网页拾取">🧲 元素捕获 / 录制</button>
+                <button type="button" onclick="toggleElementCapture({ recordToCase: true, shiftKey: captureBtnShiftKey(event) })" class="btn btn-primary" id="elementCaptureRecordBtn" title="桌面：先切到目标窗口，再点工具条「开始框选」拖拽录制；Shift+点击可同时打开网页拾取">🧲 框选录制 / 元素捕获</button>
             </div>
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
@@ -1016,7 +1045,7 @@
                         <div id="stepDesktopAppList" class="desktop-pick-list" style="overflow:auto;max-height:180px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;"></div>
                     </div>
                 </div>
-                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">请使用工具栏「元素捕获 / 录制」捕获控件：桌面按住 Ctrl 并点击目标；网页请 Shift+点击该按钮后 Ctrl+点击页面元素。</small>
+                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">桌面录制：启动后仅显示小工具条（不挡屏），请先切换到目标窗口，再点「开始框选」后拖拽框选；网页请 Shift+点击该按钮。</small>
             </div>
             <div class="form-group">
                 <label for="stepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -1061,6 +1090,12 @@
             <div class="form-group">
                 <label for="stepSelectorValue" data-i18n="steps_label_sel_val">选择器值</label>
                 <input type="text" id="stepSelectorValue" data-i18n-placeholder="steps_ph_selector" placeholder="">
+                <input type="hidden" id="stepVisualPayload" value="">
+                <div id="stepVisualPreviewWrap" class="visual-selector-preview-wrap" style="display:none;">
+                    <div style="font-size:12px;color:#64748b;margin-bottom:6px;">视觉模板预览（已自动保存，无需编辑乱码字段）</div>
+                    <img id="stepVisualPreviewImg" alt="visual template" />
+                    <div id="stepVisualPreviewMeta" style="font-size:12px;color:#64748b;margin-top:6px;"></div>
+                </motion.div>
                 <input type="hidden" id="stepLocatorCandidates" value="">
                 <input type="hidden" id="stepPickedCardBaseXpath" value="">
                 <div id="stepCardNthWrap" style="display:none;margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
@@ -1259,6 +1294,12 @@
             <div class="form-group">
                 <label for="editStepSelectorValue" data-i18n="steps_label_sel_val">选择器值</label>
                 <input type="text" id="editStepSelectorValue" data-i18n-placeholder="steps_ph_selector" placeholder="">
+                <input type="hidden" id="editStepVisualPayload" value="">
+                <div id="editStepVisualPreviewWrap" class="visual-selector-preview-wrap" style="display:none;">
+                    <div style="font-size:12px;color:#64748b;margin-bottom:6px;">视觉模板预览（已自动保存，无需编辑乱码字段）</div>
+                    <img id="editStepVisualPreviewImg" alt="visual template" />
+                    <div id="editStepVisualPreviewMeta" style="font-size:12px;color:#64748b;margin-top:6px;"></div>
+                </div>
                 <input type="hidden" id="editStepLocatorCandidates" value="">
                 <input type="hidden" id="editPickedCardBaseXpath" value="">
                 <div id="editCardNthWrap" style="display:none;margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
@@ -1399,7 +1440,7 @@
             <div id="desktopCapturePanelPreview" class="desktop-capture-panel active">
                 <div class="desktop-capture-preview-wrap">
                     <img id="desktopCapturePreviewImg" alt="元素预览" style="display:none;" />
-                    <span id="desktopCapturePreviewPlaceholder" style="color:#9ca3af;font-size:13px;">无区域截图（可安装 mss 或仍用 UIA 精准链执行）</span>
+                    <span id="desktopCapturePreviewPlaceholder" style="color:#9ca3af;font-size:13px;">无模板预览（visual 步骤将存为截图模板）</span>
                 </div>
             </div>
             <div id="desktopCapturePanelPrecise" class="desktop-capture-panel">
@@ -1410,6 +1451,31 @@
                 <div style="display:flex;gap:8px;">
                     <button type="button" class="btn btn-secondary" id="desktopCaptureSaveContinueBtn">保存并继续</button>
                     <button type="button" class="btn btn-primary" id="desktopCaptureDoneBtn" style="background:#dc2626;border-color:#dc2626;">完成</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 视觉自学习：匹配失败时更新模板 -->
+    <div id="visualRelearnModal" class="modal" style="z-index: 10060; display:none;">
+        <div class="modal-content" style="max-width: 480px; border-radius: 12px;">
+            <div class="modal-header"><h3>视觉匹配失败 — 自学习</h3></div>
+            <div class="modal-body" style="padding: 18px;">
+                <p id="visualRelearnErr" style="font-size:13px;color:#64748b;margin-bottom:12px;"></p>
+                <div id="visualRelearnFailImgWrap" style="display:none;margin-bottom:12px;">
+                    <div style="font-size:12px;color:#64748b;margin-bottom:6px;">失败时屏幕 ROI 对比（左：模板，右：当前）</div>
+                    <img id="visualRelearnFailImg" alt="failure compare" style="max-width:100%;border:1px solid #e5e7eb;border-radius:6px;" />
+                </div>
+                <p style="font-size:13px;margin-bottom:12px;">输入目标在当前屏幕上的坐标，系统将裁切新模板并更新步骤。</p>
+                <input type="hidden" id="visualRelearnStepId" />
+                <input type="hidden" id="visualRelearnSelectorValue" />
+                <label style="display:block;margin-bottom:6px;font-size:13px;">X 坐标</label>
+                <input type="number" id="visualRelearnX" class="form-control" style="width:100%;margin-bottom:10px;" />
+                <label style="display:block;margin-bottom:6px;font-size:13px;">Y 坐标</label>
+                <input type="number" id="visualRelearnY" class="form-control" style="width:100%;margin-bottom:14px;" />
+                <div style="display:flex;gap:8px;justify-content:flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeVisualRelearnModal()">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="submitVisualRelearn()">更新模板</button>
                 </div>
             </div>
         </div>
@@ -1825,14 +1891,17 @@
                         const layerTag = ((step.automation_layer || 'web').toLowerCase() === 'desktop')
                             ? '<span style="font-size:11px;color:#0369a1;font-weight:600;margin-right:6px;">🖥 桌面</span>'
                             : '<span style="font-size:11px;color:#15803d;font-weight:600;margin-right:6px;">🌐 Web</span>';
+                        const isVisualStep = (step.selector_type || '').toLowerCase() === 'visual';
+                        const visualCardHtml = isVisualStep ? renderVisualStepCardHtml(step.selector_value) : '';
                         stepItem.innerHTML = `
                             <div class="step-number">${actualStepNumber}</div>
                             <div class="step-content">
                                 <h4>${layerTag}${escapeHtml(step.description || actionText)}${clickRepBadge}</h4>
                                 <div class="step-details">
                                     ${selectorMissingOnCard ? `<div style="color:#b45309;font-size:13px;"><strong>${lblSel}</strong> ${escapeHtml(t('steps_card_selector_missing'))}</div>` : ''}
-                                    ${(step.selector_value || showBatchLoc) ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
-                                    ${step.selector_value ? `<div><strong>${lblSel}</strong> ${escapeHtml(step.selector_value)}</div>` : ''}
+                                    ${(step.selector_value || showBatchLoc) && !isVisualStep ? `<div><strong>${lblLoc}</strong> ${escapeHtml(step.selector_type || '')}</div>` : ''}
+                                    ${isVisualStep ? `<div><strong>${lblLoc}</strong> visual（截图模板）</div>${visualCardHtml}` : ''}
+                                    ${!isVisualStep && step.selector_value ? `<div><strong>${lblSel}</strong> ${escapeHtml(truncateMiddle(step.selector_value, 120))}</div>` : ''}
                                     ${navigateUrlRow}
                                     ${apiCardRow}
                                     ${showInputRow ? `<div><strong>${lblSecondary}</strong> ${step.action === 'batch_input' ? '<pre style="margin:4px 0 0;font-size:12px;white-space:pre-wrap;max-height:120px;overflow:auto;">' + escapeHtml(truncateMiddle(step.input_value, 400)) + '</pre>' : escapeHtml(step.input_value)}</div>` : ''}
@@ -2109,6 +2178,8 @@ function changePage(page) {
             document.getElementById('stepAction').value = 'click';
             document.getElementById('stepSelectorType').value = 'css';
             document.getElementById('stepSelectorValue').value = '';
+            const sp = document.getElementById('stepVisualPayload');
+            if (sp) sp.value = '';
             document.getElementById('stepInputValue').value = '';
             const sbi = document.getElementById('stepBatchInput');
             if (sbi) sbi.value = '';
@@ -2155,7 +2226,15 @@ function changePage(page) {
             onAutomationLayerChange('edit');
             document.getElementById('editStepAction').value = step.action;
             document.getElementById('editStepSelectorType').value = step.selector_type || 'css';
-            document.getElementById('editStepSelectorValue').value = step.selector_value || '';
+            const isVisualEdit = (step.selector_type || '').toLowerCase() === 'visual';
+            if (isVisualEdit) {
+                setVisualStepPayload('edit', step.selector_value || '');
+            } else {
+                const hp = document.getElementById('editStepVisualPayload');
+                if (hp) hp.value = '';
+                document.getElementById('editStepSelectorValue').value = step.selector_value || '';
+                updateVisualSelectorFieldUI('edit');
+            }
             if (layerEl && layerEl.value === 'desktop' && _ds && _ds.pick_center) {
                 const sv = String(step.selector_value || '');
                 const wt = String(_ds.window_title || '');
@@ -2175,6 +2254,7 @@ function changePage(page) {
             
             // 更新选择器帮助文本
             updateEditSelectorHelp();
+            updateVisualSelectorFieldUI('edit');
             
             // 处理对比方式选择
             if (step.action === 'extract_text') {
@@ -2239,6 +2319,9 @@ function changePage(page) {
         }
         
         function selectorTypeHelpText(selectorType) {
+            if (selectorType === 'visual') {
+                return '框选录制的截图模板（JSON 已自动保存，界面显示缩略图即可）';
+            }
             const key = 'steps_help_' + selectorType;
             const msg = typeof t === 'function' ? t(key) : '';
             return (msg && msg !== key) ? msg : (typeof t === 'function' ? t('steps_help_default') : '');
@@ -2248,6 +2331,7 @@ function changePage(page) {
         function updateSelectorHelp() {
             const selectorType = document.getElementById('stepSelectorType').value;
             document.getElementById('selectorHelp').textContent = selectorTypeHelpText(selectorType);
+            updateVisualSelectorFieldUI('create');
         }
         
         // 绑定选择器类型变化事件
@@ -2257,6 +2341,7 @@ function changePage(page) {
         function updateEditSelectorHelp() {
             const selectorType = document.getElementById('editStepSelectorType').value;
             document.getElementById('editSelectorHelp').textContent = selectorTypeHelpText(selectorType);
+            updateVisualSelectorFieldUI('edit');
         }
         
         // 绑定编辑模态框的选择器类型变化事件
@@ -2275,9 +2360,88 @@ function changePage(page) {
             ['hotkey', '快捷键'], ['wait', '等待'], ['screenshot', '截图'], ['assert', '断言'], ['verify', '验证']
         ];
         const DESKTOP_SELECTOR_TYPES = [
-            ['automation_id', 'AutomationId'], ['name', '控件名称'], ['control_type', '控件类型'],
-            ['uia_path', 'UIA路径JSON'], ['coordinate', '坐标 x,y'], ['class_name', '类名']
+            ['visual', '视觉模板（框选截图）']
         ];
+
+        function getVisualPayloadFieldId(mode) {
+            return mode === 'edit' ? 'editStepVisualPayload' : 'stepVisualPayload';
+        }
+
+        function getVisualStepPayloadValue(mode) {
+            const stEl = document.getElementById(mode === 'edit' ? 'editStepSelectorType' : 'stepSelectorType');
+            if (((stEl && stEl.value) || '').toLowerCase() !== 'visual') {
+                const valEl = document.getElementById(mode === 'edit' ? 'editStepSelectorValue' : 'stepSelectorValue');
+                return (valEl && valEl.value) ? String(valEl.value).trim() : '';
+            }
+            const hidden = document.getElementById(getVisualPayloadFieldId(mode));
+            if (hidden && String(hidden.value || '').trim()) {
+                return String(hidden.value).trim();
+            }
+            const valEl = document.getElementById(mode === 'edit' ? 'editStepSelectorValue' : 'stepSelectorValue');
+            return (valEl && valEl.value) ? String(valEl.value).trim() : '';
+        }
+
+        function setVisualStepPayload(mode, jsonStr) {
+            const hidden = document.getElementById(getVisualPayloadFieldId(mode));
+            const valEl = document.getElementById(mode === 'edit' ? 'editStepSelectorValue' : 'stepSelectorValue');
+            const raw = jsonStr || '';
+            if (hidden) hidden.value = raw;
+            if (valEl) {
+                if (raw) {
+                    valEl.value = '';
+                } else {
+                    valEl.value = '';
+                }
+            }
+            updateVisualSelectorFieldUI(mode);
+        }
+
+        function parseVisualStepPayload(selectorValue) {
+            if (!selectorValue) return null;
+            try {
+                const data = typeof selectorValue === 'string' ? JSON.parse(selectorValue) : selectorValue;
+                if (!data || !data.template_image_base64) return null;
+                return data;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function renderVisualStepCardHtml(selectorValue) {
+            const data = parseVisualStepPayload(selectorValue);
+            if (!data) return '';
+            const b64 = data.template_image_base64;
+            const off = data.click_offset || {};
+            const size = data.template_size || {};
+            const th = data.match_threshold != null ? data.match_threshold : '—';
+            const meta = `模板 ${size.w || '?'}×${size.h || '?'} · 阈值 ${th} · 点击偏移 (${off.x || 0},${off.y || 0})`;
+            return `<div class="visual-step-preview"><img src="data:image/png;base64,${b64}" alt="visual" /><div class="visual-step-preview-meta">${escapeHtml(meta)}</div></div>`;
+        }
+
+        function updateVisualSelectorFieldUI(mode) {
+            const isEdit = mode === 'edit';
+            const stEl = document.getElementById(isEdit ? 'editStepSelectorType' : 'stepSelectorType');
+            const valEl = document.getElementById(isEdit ? 'editStepSelectorValue' : 'stepSelectorValue');
+            const wrap = document.getElementById(isEdit ? 'editStepVisualPreviewWrap' : 'stepVisualPreviewWrap');
+            const img = document.getElementById(isEdit ? 'editStepVisualPreviewImg' : 'stepVisualPreviewImg');
+            const meta = document.getElementById(isEdit ? 'editStepVisualPreviewMeta' : 'stepVisualPreviewMeta');
+            if (!stEl || !valEl) return;
+            const isVisual = (stEl.value || '').toLowerCase() === 'visual';
+            const data = isVisual ? parseVisualStepPayload(getVisualStepPayloadValue(mode)) : null;
+            if (isVisual && data) {
+                valEl.style.display = 'none';
+                if (wrap) wrap.style.display = 'block';
+                if (img) img.src = 'data:image/png;base64,' + data.template_image_base64;
+                if (meta) {
+                    const off = data.click_offset || {};
+                    const size = data.template_size || {};
+                    meta.textContent = `模板 ${size.w || '?'}×${size.h || '?'}，匹配阈值 ${data.match_threshold ?? 0.72}，点击偏移 (${off.x || 0}, ${off.y || 0})`;
+                }
+            } else {
+                valEl.style.display = '';
+                if (wrap) wrap.style.display = 'none';
+            }
+        }
 
         function rebuildActionSelect(selectId, layer) {
             const sel = document.getElementById(selectId);
@@ -2296,7 +2460,7 @@ function changePage(page) {
             if (layer === 'desktop') {
                 sel.innerHTML = DESKTOP_SELECTOR_TYPES.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
                 if (DESKTOP_SELECTOR_TYPES.some(([v]) => v === prev)) sel.value = prev;
-                else sel.value = 'automation_id';
+                else sel.value = 'visual';
             } else {
                 sel.innerHTML = `
                     <option value="css">CSS</option><option value="xpath">XPath</option>
@@ -2771,6 +2935,61 @@ function changePage(page) {
             _desktopCapturePendingPick = null;
         }
 
+        function closeVisualRelearnModal() {
+            const m = document.getElementById('visualRelearnModal');
+            if (m) m.style.display = 'none';
+            const imgWrap = document.getElementById('visualRelearnFailImgWrap');
+            if (imgWrap) imgWrap.style.display = 'none';
+        }
+
+        function offerVisualRelearn(stepId, selectorValue, errMsg, failureScreenshot) {
+            const shortErr = String(errMsg || '视觉匹配失败').slice(0, 240);
+            showToast(shortErr, 'error');
+            const m = document.getElementById('visualRelearnModal');
+            if (!m) {
+                alert(shortErr + '\n\n请重新框选录制或手动更新模板。');
+                return;
+            }
+            document.getElementById('visualRelearnStepId').value = stepId || '';
+            document.getElementById('visualRelearnSelectorValue').value = '';
+            document.getElementById('visualRelearnErr').textContent = shortErr;
+            document.getElementById('visualRelearnX').value = '';
+            document.getElementById('visualRelearnY').value = '';
+            const imgWrap = document.getElementById('visualRelearnFailImgWrap');
+            const img = document.getElementById('visualRelearnFailImg');
+            if (imgWrap && img && failureScreenshot) {
+                img.src = failureScreenshot;
+                imgWrap.style.display = 'block';
+            } else if (imgWrap) {
+                imgWrap.style.display = 'none';
+            }
+            m.style.display = 'flex';
+        }
+
+        async function submitVisualRelearn() {
+            const stepId = document.getElementById('visualRelearnStepId').value;
+            const x = parseInt(document.getElementById('visualRelearnX').value, 10);
+            const y = parseInt(document.getElementById('visualRelearnY').value, 10);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                showToast('请输入有效的屏幕坐标', 'warning');
+                return;
+            }
+            try {
+                const r = await fetch('/api/desktop/visual/relearn', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ step_id: stepId || undefined, x: x, y: y }),
+                });
+                const data = await r.json();
+                if (!data.success) throw new Error(data.error || '更新失败');
+                closeVisualRelearnModal();
+                showToast('视觉模板已更新，请重新运行用例', 'success');
+                if (currentCaseId) loadSteps(currentCaseId);
+            } catch (e) {
+                showToast('自学习失败：' + (e.message || e), 'error');
+            }
+        }
+
         function openDesktopCaptureResultModal(mode, pick) {
             if (!pick) return;
             _desktopCaptureFormMode = mode || 'create';
@@ -2787,9 +3006,16 @@ function changePage(page) {
             const img = document.getElementById('desktopCapturePreviewImg');
             const ph = document.getElementById('desktopCapturePreviewPlaceholder');
             const b64 = pick.preview_image_b64 || '';
+            let visualB64 = b64;
+            if (!visualB64 && (pick.selector_type || '') === 'visual' && pick.selector_value) {
+                try {
+                    const vj = JSON.parse(pick.selector_value);
+                    visualB64 = vj.template_image_base64 || '';
+                } catch (e) { /* ignore */ }
+            }
             if (img && ph) {
-                if (b64) {
-                    img.src = 'data:image/png;base64,' + b64;
+                if (visualB64) {
+                    img.src = 'data:image/png;base64,' + visualB64;
                     img.style.display = 'block';
                     ph.style.display = 'none';
                 } else {
@@ -2865,14 +3091,23 @@ function changePage(page) {
             const selType = document.getElementById(isEdit ? 'editStepSelectorType' : 'stepSelectorType');
             const selVal = document.getElementById(isEdit ? 'editStepSelectorValue' : 'stepSelectorValue');
             const locCands = document.getElementById(isEdit ? 'editStepLocatorCandidates' : 'stepLocatorCandidates');
-            let st = pick.selector_type || 'automation_id';
+            let st = pick.selector_type || 'visual';
             let sv = pick.selector_value || '';
-            if (Array.isArray(pick.uia_path) && pick.uia_path.length) {
+            if (st === 'visual' && sv) {
+                /* 纯视觉步骤：直接使用 selector_value JSON */
+            } else if (Array.isArray(pick.uia_path) && pick.uia_path.length) {
                 st = 'uia_path';
                 sv = JSON.stringify(pick.uia_path);
             }
             if (selType) selType.value = st;
-            if (selVal) selVal.value = sv;
+            if (st === 'visual' && sv) {
+                setVisualStepPayload(mode, sv);
+            } else if (selVal) {
+                const hp = document.getElementById(getVisualPayloadFieldId(mode));
+                if (hp) hp.value = '';
+                selVal.value = sv;
+                updateVisualSelectorFieldUI(mode);
+            }
             if (pick.pick_point && selType && selVal && st === 'coordinate') {
                 selVal.value = pick.pick_point.x + ',' + pick.pick_point.y;
             }
@@ -2919,6 +3154,7 @@ function changePage(page) {
             if (pick.desktop_spec || pick.uia_path || pick.rectangle) {
                 setDesktopSpecField(mode, spec);
             }
+            updateVisualSelectorFieldUI(mode);
         }
 
         async function appendDesktopRecordedSteps(steps) {
@@ -2930,7 +3166,7 @@ function changePage(page) {
                     case_id: currentCaseId,
                     action: st.action || 'click',
                     automation_layer: 'desktop',
-                    selector_type: st.selector_type || 'automation_id',
+                    selector_type: st.selector_type || 'visual',
                     selector_value: st.selector_value || '',
                     input_value: st.input_value || '',
                     compare_type: st.compare_type || (st.action === 'verify' ? (st.input_value || 'auto') : ''),
@@ -3017,6 +3253,7 @@ function changePage(page) {
             _elementCaptureActive = true;
             _lastDeskCaptureMsg = '';
             const startedAt = Date.now();
+            const STARTUP_GRACE_MS = 15000;
             _elementCapturePollTimer = setInterval(async function () {
                 try {
                     const r = await fetchApi('/api/element-picker/status?consume=1', {
@@ -3024,7 +3261,18 @@ function changePage(page) {
                     }, 1);
                     const data = await parseApiJsonResponse(r);
                     if (!data.success) return;
-                    const deskLive = !data.picker_closed && !!(data.active || (data.desktop && data.desktop.active));
+                    const desk = data.desktop || {};
+                    const deskStarting = !!(desk.starting || (desk.message || '').indexOf('启动') >= 0);
+                    const deskLive = !data.picker_closed && !!(data.active || desk.active);
+                    if (
+                        !deskLive
+                        && _elementCaptureActive
+                        && !data.picker_closed
+                        && Date.now() - startedAt < STARTUP_GRACE_MS
+                        && (deskStarting || (desk.message || '').indexOf('启动') >= 0)
+                    ) {
+                        return;
+                    }
                     if (!deskLive && _elementCaptureActive) {
                         showToast('捕获器已结束', 'info');
                         stopElementCapturePoll();
@@ -3033,6 +3281,9 @@ function changePage(page) {
                         return;
                     }
                     if (data.picker_closed) {
+                        if (Date.now() - startedAt < STARTUP_GRACE_MS) {
+                            return;
+                        }
                         const deskClose = data.desktop || {};
                         const flushSteps = data.new_recorded_steps
                             || deskClose.new_recorded_steps
@@ -3061,7 +3312,6 @@ function changePage(page) {
                     }
                     if (data.error) showToast(data.error, 'error');
 
-                    const desk = data.desktop || {};
                     if (desk.error) showToast(desk.error, 'warning');
                     if (
                         desk.message
@@ -3223,8 +3473,8 @@ function changePage(page) {
                 const web = data.web || {};
                 const desk = data.desktop || {};
                 let msg = recordMode
-                    ? '元素录制：按住 Ctrl，在目标上按下并松开鼠标左键完成捕获；ESC 结束'
-                    : '元素捕获：按住 Ctrl，在目标上按下并松开鼠标左键；ESC 结束';
+                    ? '框选录制：请先切换到目标窗口，再点悬浮条「开始框选(F2)」后拖拽框选；ESC 结束'
+                    : '框选录制：先切到目标窗口，点「开始框选」后拖拽；ESC 结束';
                 if (web.success && web.mode === 'navigate') {
                     msg += '；已打开网页：' + (web.url || pickerUrl || '');
                 } else if (web.success && web.mode === 'attach') {
@@ -3683,7 +3933,7 @@ function changePage(page) {
         async function createStep() {
             const action = document.getElementById('stepAction').value;
             const selectorType = document.getElementById('stepSelectorType').value;
-            let selectorValue = document.getElementById('stepSelectorValue').value.trim();
+            let selectorValue = getVisualStepPayloadValue('create');
             const locatorCandidates = document.getElementById('stepLocatorCandidates').value || '';
             let inputValue = document.getElementById('stepInputValue').value.trim();
             const description = document.getElementById('stepDescription').value.trim();
@@ -3783,22 +4033,25 @@ function changePage(page) {
         async function editStep(stepId) {
             try {
                 const response = await fetchApi(`/api/steps/${stepId}`);
-                const data = await response.json();
-                
+                const data = await parseApiJsonResponse(response);
                 if (data.step) {
-                    showEditStepModal(data.step);
+                    try {
+                        showEditStepModal(data.step);
+                    } catch (modalErr) {
+                        showToast('打开编辑窗口失败：' + (modalErr.message || modalErr), 'error');
+                    }
                 } else {
-                    alert(t('steps_fail_get_step'));
+                    showToast(t('steps_fail_get_step'), 'error');
                 }
             } catch (error) {
-                alert(t('steps_fail_get_step_err').replace('{msg}', formatFetchError(error)));
+                showToast(t('steps_fail_get_step_err').replace('{msg}', formatFetchError(error)), 'error');
             }
         }
         
         async function updateStep() {
             const action = document.getElementById('editStepAction').value;
             const selectorType = document.getElementById('editStepSelectorType').value;
-            let selectorValue = document.getElementById('editStepSelectorValue').value.trim();
+            let selectorValue = getVisualStepPayloadValue('edit');
             const locatorCandidates = document.getElementById('editStepLocatorCandidates').value || '';
             let inputValue = document.getElementById('editStepInputValue').value.trim();
             const description = document.getElementById('editStepDescription').value.trim();
@@ -3965,7 +4218,7 @@ function changePage(page) {
                 if (!response.ok) {
                     throw new Error(t('steps_run_server_err').replace('{status}', String(response.status)).replace('{text}', response.statusText || ''));
                 }
-                const data = await response.json();
+                const data = await parseApiJsonResponse(response);
 
                 bar.style.width = '100%';
                 pct.textContent = '100%';
@@ -3981,7 +4234,11 @@ function changePage(page) {
                         if (txt) txt.textContent = t('steps_toast_stopped');
                         showToast(t('steps_toast_stopped'), 'warning');
                     } else {
-                        alert(t('steps_run_fail_alert').replace('{err}', data.error || t('index_err_unknown')));
+                        if (/视觉匹配|visual|自学习|重新框选/i.test(errMsg)) {
+                            offerVisualRelearn(data.failed_step_id, null, errMsg, data.failure_screenshot);
+                        } else {
+                            alert(t('steps_run_fail_alert').replace('{err}', errMsg || t('index_err_unknown')));
+                        }
                     }
                 }
             } catch (error) {

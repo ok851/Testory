@@ -37,14 +37,14 @@ def element_picker_available() -> bool:
 
 def _desktop_picker_unavailable_message() -> str:
     try:
-        from desktop_locator import desktop_runtime_unavailable_reason
+        from desktop_runtime import desktop_runtime_unavailable_reason
 
         reason = desktop_runtime_unavailable_reason()
         if reason:
             return reason
     except ImportError:
         pass
-    return "桌面捕获环境未就绪（请检查 pywinauto / 权限）"
+    return "桌面框选录制环境未就绪（请检查 opencv-python / mss / 权限）"
 
 
 def start_element_picker(
