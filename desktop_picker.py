@@ -306,23 +306,50 @@ def _picker_child_main(cfg_path: str) -> None:
         active=True,
         picker_closed=False,
         starting=False,
-        message="框选录制已启动：请先切换到目标窗口",
+        message="捕获器待命：请点悬浮条「开始捕获」或 F2，再点目标元素",
         record_mode=bool(cfg.get("record_mode")),
         unified_mode=bool(cfg.get("unified_mode")),
         capture_mode=CAPTURE_MODE_VISUAL,
         recording=auto_rec,
-        armed=True,
+        armed=False,
         error="",
     )
 
     def _on_record(data: Dict[str, Any]) -> None:
-        from desktop_visual_picker import build_visual_recorded_step
+        from desktop_visual_picker import (
+            build_visual_recorded_step,
+            schedule_uia_snapshot_enrichment,
+        )
 
         pick = data.get("pick") or {}
+        click_x = int(data.get("click_x") or (pick.get("pick_point") or {}).get("x") or 0)
+        click_y = int(data.get("click_y") or (pick.get("pick_point") or {}).get("y") or 0)
         step = build_visual_recorded_step(
             pick,
             action=str(data.get("action") or cfg.get("record_action") or "click"),
         )
+
+        def _merge_uia(enriched_pick: Dict[str, Any]) -> None:
+            new_step = build_visual_recorded_step(
+                enriched_pick,
+                action=str(data.get("action") or cfg.get("record_action") or "click"),
+            )
+            with _session_lock:
+                recorded = list(_session.get("recorded_steps") or [])
+                if recorded:
+                    recorded[-1] = new_step
+                    _session["recorded_steps"] = recorded
+                _session["last_pick"] = {
+                    **enriched_pick,
+                    "record_action": step.get("action"),
+                }
+                _session["message"] = (
+                    f"已录制第 {len(recorded)} 步（结构+视觉）"
+                    if enriched_pick.get("element_snapshot")
+                    else _session.get("message", "")
+                )
+            _flush_persist_session_to_disk()
+
         with _session_lock:
             recorded = list(_session.get("recorded_steps") or [])
             recorded.append(step)
@@ -330,6 +357,9 @@ def _picker_child_main(cfg_path: str) -> None:
             _session["last_pick"] = {**pick, "record_action": step.get("action")}
             _session["message"] = f"已录制第 {len(recorded)} 步（visual）"
         _flush_persist_session_to_disk()
+        schedule_uia_snapshot_enrichment(
+            pick, click_x, click_y, on_done=_merge_uia
+        )
 
     def _on_message(msg: str) -> None:
         _set_session(message=msg, error="")
@@ -343,6 +373,10 @@ def _picker_child_main(cfg_path: str) -> None:
         _set_session(active=False, picker_closed=True, recording=False, armed=False)
         _flush_persist_session_to_disk()
 
+    def _on_armed(armed: bool) -> None:
+        _set_session(armed=bool(armed))
+        _flush_persist_session_to_disk()
+
     from desktop_visual_picker import VisualRegionPickerOverlay
 
     VisualRegionPickerOverlay(
@@ -350,6 +384,7 @@ def _picker_child_main(cfg_path: str) -> None:
         on_message=_on_message,
         on_error=_on_error,
         on_close=_on_close,
+        on_armed_change=_on_armed,
         default_action=str(cfg.get("record_action") or "click"),
     ).run()
 
@@ -461,13 +496,17 @@ def start_desktop_picker(
                 err = (_load_session_from_disk() or {}).get("error") or "框选录制进程已退出"
                 return {"success": False, "error": err}
             snap = _session_snapshot()
-            if snap.get("active") and (snap.get("recording") or snap.get("armed")):
+            if snap.get("active"):
                 break
         if _picker_proc and _picker_proc.poll() is not None:
             err = (_load_session_from_disk() or {}).get("error") or "框选录制进程已退出"
             return {"success": False, "error": err}
         if _picker_proc and _picker_proc.poll() is None:
-            _set_session(starting=False, recording=bool(record_mode or unified_mode), armed=True)
+            _set_session(
+                starting=False,
+                recording=bool(record_mode or unified_mode),
+                armed=False,
+            )
             _persist_session_to_disk()
             return {
                 "success": True,

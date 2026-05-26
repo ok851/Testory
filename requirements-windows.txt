@@ -1,5 +1,6 @@
 # Windows 桌面自动化依赖（与 requirements.txt 一并安装）
 -r requirements.txt
+pywin32>=306
 pywinauto>=0.6.8
 pyperclip>=1.8.2
 pyautogui>=0.9.54

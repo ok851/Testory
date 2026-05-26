@@ -10,6 +10,16 @@ class TestDesktopStepRouter(unittest.TestCase):
         self.assertEqual(normalize_automation_layer({}), "web")
         self.assertEqual(normalize_automation_layer({"automation_layer": "desktop"}), "desktop")
 
+    def test_normalize_desktop_only_action_overrides_web_layer(self):
+        step = {"automation_layer": "web", "action": "launch_app"}
+        self.assertEqual(normalize_automation_layer(step), "desktop")
+        self.assertTrue(is_desktop_step(step))
+
+    def test_normalize_visual_overrides_web_layer(self):
+        step = {"automation_layer": "web", "action": "click", "selector_type": "visual"}
+        self.assertEqual(normalize_automation_layer(step), "desktop")
+        self.assertTrue(is_desktop_step(step))
+
     def test_is_desktop_step(self):
         self.assertFalse(is_desktop_step({"automation_layer": "web"}))
         self.assertTrue(is_desktop_step({"automation_layer": "desktop", "action": "click"}))

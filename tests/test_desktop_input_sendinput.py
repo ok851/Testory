@@ -1,24 +1,28 @@
 # -*- coding: utf-8 -*-
-"""SendInput 结构 smoke（不移动真实鼠标）。"""
+"""指针执行 smoke（默认 PostMessage，不调用 SendInput）。"""
 
 import unittest
 from unittest.mock import patch
 
 
 class TestSendInput(unittest.TestCase):
+    @patch("desktop_input.message_click_at_screen", return_value=1)
+    @patch("desktop_input.physical_mouse_enabled", return_value=False)
+    def test_postmessage_when_not_physical(self, _phys, mock_msg):
+        from desktop_input import sendinput_pointer_at_screen
+
+        sendinput_pointer_at_screen(100, 200, "click")
+        mock_msg.assert_called_once()
+
     @patch("desktop_input._user32")
-    def test_sendinput_pointer_click(self, mock_u32):
+    @patch("desktop_input.physical_mouse_enabled", return_value=True)
+    @patch("desktop_input.should_focus_desktop_before_pointer", return_value=False)
+    @patch("desktop_input.restore_cursor_after_pointer", return_value=False)
+    def test_sendinput_when_physical(self, _restore, _focus, _phys, mock_u32):
         from desktop_input import sendinput_pointer_at_screen
 
         sendinput_pointer_at_screen(100, 200, "click")
         self.assertTrue(mock_u32().SendInput.called)
-
-    @patch("desktop_input._user32")
-    def test_sendinput_double_click(self, mock_u32):
-        from desktop_input import sendinput_pointer_at_screen
-
-        sendinput_pointer_at_screen(100, 200, "double_click")
-        self.assertGreaterEqual(mock_u32().SendInput.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -93,6 +93,13 @@ def message_click_at_screen(
         user32.PostMessageW(hwnd, 0x0204, 2, lparam)  # WM_RBUTTONDOWN
         user32.PostMessageW(hwnd, 0x0205, 0, lparam)  # WM_RBUTTONUP
     elif double:
+        gap = max(0.12, min(0.45, float(os.environ.get("DESKTOP_SHELL_DBLCLICK_GAP", "0.18") or 0.18)))
+        for i in range(2):
+            user32.PostMessageW(hwnd, 0x0201, 1, lparam)  # WM_LBUTTONDOWN
+            time.sleep(0.03)
+            user32.PostMessageW(hwnd, 0x0202, 0, lparam)  # WM_LBUTTONUP
+            if i == 0:
+                time.sleep(gap)
         user32.PostMessageW(hwnd, 0x0203, 1, lparam)  # WM_LBUTTONDBLCLK
     else:
         user32.PostMessageW(hwnd, 0x0201, 1, lparam)  # WM_LBUTTONDOWN
@@ -146,10 +153,26 @@ def pointer_action_at_screen(
     return 0
 
 
-def sendinput_pointer_at_screen(x: int, y: int, action: str) -> None:
-    """SendInput 物理指针（桌面视觉步骤唯一出口）。"""
+def sendinput_pointer_at_screen(
+    x: int, y: int, action: str, *, step: Optional[dict] = None
+) -> None:
+    """
+    桌面指针执行出口。
+    - DESKTOP_PHYSICAL_MOUSE=0（默认）：PostMessage 到坐标下窗口，不移动光标。
+    - DESKTOP_PHYSICAL_MOUSE=1：SendInput 物理点击（桌面图标类步骤会先尝试置前桌面）。
+    """
     _set_dpi_aware()
     act = (action or "click").strip().lower()
+    if not physical_mouse_enabled():
+        message_click_at_screen(
+            int(x),
+            int(y),
+            double=(act == "double_click"),
+            right=(act == "right_click"),
+        )
+        return
+    if should_focus_desktop_before_pointer(step):
+        focus_desktop_surface()
     saved = _save_cursor_pos()
     try:
         if act == "double_click":
@@ -172,10 +195,64 @@ def sendinput_pointer_at_screen(x: int, y: int, action: str) -> None:
 
 
 def _double_click_gap_sec() -> float:
+    """两次单击间隔：过短会导致资源管理器不识别为双击打开。"""
     try:
-        return max(0.05, float(_user32().GetDoubleClickTime()) / 1000.0 / 3.0)
+        sys_ms = float(_user32().GetDoubleClickTime())
+        return max(0.12, min(0.45, sys_ms / 1000.0 * 0.42))
     except Exception:
-        return 0.12
+        return 0.18
+
+
+def focus_desktop_surface() -> bool:
+    """
+    将 Program Manager / 桌面 ListView 置前，避免浏览器或其它窗口挡住图标坐标。
+ 返回是否找到桌面宿主窗口。
+    """
+    user32 = _user32()
+    for cls, title in (("Progman", "Program Manager"), ("WorkerW", None)):
+        try:
+            hwnd = int(user32.FindWindowW(cls, title) or 0)
+            if hwnd and is_valid_hwnd(hwnd):
+                focus_hwnd(hwnd)
+                time.sleep(0.15)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def should_focus_desktop_before_pointer(step: Optional[dict] = None) -> bool:
+    if not physical_mouse_enabled():
+        return False
+    raw = (os.environ.get("DESKTOP_FOCUS_BEFORE_CLICK") or "1").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if not step:
+        return True
+    spec = step.get("desktop_spec") if isinstance(step.get("desktop_spec"), dict) else {}
+    if isinstance(step.get("desktop_spec"), str):
+        try:
+            import json
+
+            spec = json.loads(step.get("desktop_spec") or "{}")
+        except Exception:
+            spec = {}
+    if spec.get("desktop_shell") or spec.get("hybrid_capture"):
+        return True
+    desc = (step.get("description") or "").lower()
+    if "listitem" in desc or "控制面板" in desc or "桌面" in desc:
+        return True
+    try:
+        from desktop_hybrid_locator import element_snapshot_for_step
+
+        snap = element_snapshot_for_step(step)
+        if snap:
+            anchor = ((snap.get("selector") or snap).get("anchor_props") or "")
+            if "listitem" in str(anchor).lower():
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def _sendinput_move(x: int, y: int) -> None:
@@ -690,15 +767,23 @@ def _any_new_app_foreground(fg_before: int) -> bool:
     return bool(_t or cls)
 
 
-def _explorer_window_opened(fg_before: int, keyword: str = "") -> bool:
-    """桌面文件夹类图标：资源管理器(CabinetWClass)打开即视为生效。"""
+def _explorer_window_opened(
+    fg_before: int,
+    keyword: str = "",
+    *,
+    hwnds_before: Optional[set] = None,
+) -> bool:
+    """桌面文件夹类图标：新出现的资源管理器(CabinetWClass)窗口视为生效。"""
     keys = _effect_keywords(keyword)
-    saw_cabinet = False
+    known = hwnds_before or set()
+    saw_new_cabinet = False
     for hwnd, title, cls in _enum_visible_windows():
         if cls not in _EXPLORER_WINDOW_CLASSES or cls in ("Progman", "WorkerW"):
             continue
         if cls == "CabinetWClass" or cls == "ExploreWClass":
-            saw_cabinet = True
+            if hwnd in known:
+                continue
+            saw_new_cabinet = True
             if not keys:
                 if hwnd != fg_before:
                     return True
@@ -707,14 +792,14 @@ def _explorer_window_opened(fg_before: int, keyword: str = "") -> bool:
                     if key in title:
                         return True
     fg = get_foreground_hwnd()
-    if fg and fg != fg_before:
+    if fg and fg != fg_before and fg not in known:
         _t, cls = _hwnd_title_class(fg)
         if cls in ("CabinetWClass", "ExploreWClass"):
             if not keys or _title_matches(keyword, [_t]):
                 return True
-    if keys and saw_cabinet:
+    if keys and saw_new_cabinet:
         for hwnd, _title, cls in _enum_visible_windows():
-            if cls == "CabinetWClass" and hwnd != fg_before:
+            if cls == "CabinetWClass" and hwnd not in known and hwnd != fg_before:
                 return True
     return False
 
@@ -738,25 +823,33 @@ def wait_for_desktop_effect(
     poll: float = 0.25,
     desktop_shell: bool = False,
     require_verify: bool = True,
+    titles_before: Optional[set] = None,
+    hwnds_before: Optional[set] = None,
 ) -> bool:
     """
-    操作后等待界面变化：标题匹配；桌面图标另接受资源管理器窗口。
+    操作后等待界面变化：仅匹配操作后新出现的窗口标题，避免误判已打开窗口。
     """
     if not require_verify:
         return True
     if not (keyword or "").strip() and not desktop_shell:
         return False
+    baseline_titles = titles_before if titles_before is not None else set(_enum_visible_window_titles())
+    baseline_hwnds = hwnds_before if hwnds_before is not None else {h for h, _t, _c in _enum_visible_windows()}
     deadline = time.time() + max(0.5, float(timeout))
     while time.time() < deadline:
-        if (keyword or "").strip() and _title_matches(keyword, _enum_visible_window_titles()):
+        current_rows = _enum_visible_windows()
+        new_titles = [t for _h, t, _c in current_rows if t and t not in baseline_titles]
+        if (keyword or "").strip() and _title_matches(keyword, new_titles):
             return True
-        if desktop_shell and _explorer_window_opened(fg_before, keyword):
+        if desktop_shell and _explorer_window_opened(
+            fg_before, keyword, hwnds_before=baseline_hwnds
+        ):
             return True
         if desktop_shell and not (keyword or "").strip():
             if _any_new_app_foreground(fg_before):
                 return True
         fg = get_foreground_hwnd()
-        if fg and fg != fg_before and (keyword or "").strip():
+        if fg and fg != fg_before and fg not in baseline_hwnds and (keyword or "").strip():
             fg_title, _cls = _hwnd_title_class(fg)
             if fg_title and _title_matches(keyword, [fg_title]):
                 return True

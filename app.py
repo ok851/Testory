@@ -4264,7 +4264,11 @@ def api_desktop_verify_element():
         )
         if result.get('success'):
             return jsonify({'success': True, **result})
-        return jsonify({'success': False, 'error': result.get('error') or '校验失败'}), 400
+        fail_body = {'success': False, 'error': result.get('error') or '校验失败'}
+        if result.get('need_relearn'):
+            fail_body['need_relearn'] = True
+            fail_body['best_score'] = float(result.get('best_score') or 0.0)
+        return jsonify(fail_body), 400
     except Exception as e:
         uat_logger.log_exception('api_desktop_verify_element', e)
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4556,14 +4560,26 @@ def api_element_picker_start():
     web_attach_existing = _parse_api_bool(
         data.get('web_attach_existing'), default=False
     )
+    capture_channel = (
+        (data.get('capture_channel') or data.get('channel') or 'desktop')
+        .strip()
+        .lower()
+    )
+    if capture_channel not in ('desktop', 'web'):
+        capture_channel = 'desktop'
     enable_web = _parse_api_bool(
         data.get('enable_web'),
-        default=bool(web_navigate or web_attach_existing),
+        default=capture_channel == 'web' or bool(web_navigate or web_attach_existing),
     )
     web_url = ''
     web_fallback_url = ''
     resolved_url, _ = _resolve_element_picker_web_url(data)
-    if web_navigate:
+    if capture_channel == 'web':
+        web_url = ''
+        web_fallback_url = ''
+        web_navigate = False
+        web_attach_existing = True
+    elif web_navigate:
         web_url = resolved_url or ''
     elif enable_web:
         web_fallback_url = resolved_url or ''
@@ -4573,29 +4589,47 @@ def api_element_picker_start():
             picker_case_id = int(case_id_raw) if case_id_raw not in (None, '') else None
         except (TypeError, ValueError):
             picker_case_id = None
-        from desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
         from element_picker import sync_start_element_picker
 
-        if sys.platform == "win32" and not desktop_runtime_available():
-            reason = desktop_runtime_unavailable_reason()
-            if reason:
-                return jsonify(
-                    {
-                        "success": False,
-                        "error": reason,
-                        "python_executable": sys.executable,
-                    }
-                ), 400
+        if capture_channel == 'desktop':
+            from desktop_runtime import (
+                desktop_runtime_available,
+                desktop_runtime_unavailable_reason,
+            )
 
+            if sys.platform == "win32" and not desktop_runtime_available():
+                reason = desktop_runtime_unavailable_reason()
+                if reason:
+                    return jsonify(
+                        {
+                            "success": False,
+                            "error": reason,
+                            "python_executable": sys.executable,
+                        }
+                    ), 400
+
+        platform_origin = (request.host_url or '').rstrip('/')
+        web_capture_mode = (
+            (data.get('web_capture_mode') or data.get('mode') or 'cdp').strip().lower()
+        )
+        if web_capture_mode not in ('cdp', 'extension', 'legacy_inject'):
+            web_capture_mode = 'cdp'
+        browser = (data.get('browser') or 'edge').strip().lower()
+        start_url = (data.get('start_url') or data.get('url') or resolved_url or '').strip()
         result = sync_start_element_picker(
             desktop_spec=spec or {},
             record_mode=record_mode,
+            capture_channel=capture_channel,
             web_url=web_url or '',
             web_fallback_url=web_fallback_url or '',
             enable_web=enable_web,
             web_navigate=web_navigate,
             web_attach_existing=web_attach_existing,
             case_id=picker_case_id,
+            platform_origin=platform_origin,
+            web_capture_mode=web_capture_mode,
+            browser=browser,
+            start_url=start_url,
         )
         status = 200 if result.get('success') else 400
         return jsonify(result), status
@@ -4676,6 +4710,423 @@ def api_element_picker_status():
     except Exception as e:
         uat_logger.log_exception('api_element_picker_status', e)
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _web_dom_picker_cors(resp):
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    return resp
+
+
+# --- 网页捕获（CDP / 扩展，与 desktop API 分离）---
+
+
+@app.route('/api/web-capture/session/start', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_session_start():
+    data = request.get_json(silent=True) or {}
+    from web_capture.session import start_session
+
+    mode = (data.get('mode') or data.get('web_capture_mode') or 'cdp').strip().lower()
+    result = start_session(
+        mode=mode,
+        record_mode=_parse_api_bool(data.get('record_mode'), default=False),
+        case_id=int(data.get('case_id') or 0) or None,
+        platform_origin=(request.host_url or '').rstrip('/'),
+        browser=(data.get('browser') or 'edge').strip().lower(),
+        start_url=(data.get('start_url') or data.get('url') or '').strip(),
+    )
+    return jsonify(result), (200 if result.get('success') else 400)
+
+
+@app.route('/api/web-capture/browser/launch', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_browser_launch():
+    data = request.get_json(silent=True) or {}
+    from web_capture import cdp_browser
+
+    result = cdp_browser.launch_debug_browser(
+        browser=(data.get('browser') or 'edge').strip().lower(),
+        port=data.get('port'),
+        url=(data.get('url') or '').strip(),
+    )
+    if result.get('success'):
+        cdp_browser.connect_playwright_over_cdp(result.get('debug_port'))
+    return jsonify(result), (200 if result.get('success') else 400)
+
+
+@app.route('/api/web-capture/browser/pages', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_browser_pages():
+    from web_capture import cdp_browser
+
+    return jsonify(cdp_browser.list_pages())
+
+
+@app.route('/api/web-capture/browser/attach', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_browser_attach():
+    data = request.get_json(silent=True) or {}
+    from web_capture import cdp_browser
+
+    result = cdp_browser.attach_page(
+        page_index=int(data.get('page_index') or 0),
+        target_id=(data.get('target_id') or '').strip(),
+    )
+    return jsonify(result), (200 if result.get('success') else 400)
+
+
+@app.route('/api/web-capture/pick', methods=['POST', 'OPTIONS'])
+def api_web_capture_pick():
+    if request.method == 'OPTIONS':
+        return _web_dom_picker_cors(Response('', status=204))
+    from web_capture.session import report_pick
+
+    data = request.get_json(silent=True) or {}
+    session_id = (
+        data.get('session_id') or data.get('session') or request.args.get('session') or ''
+    ).strip()
+    payload = data.get('payload') if isinstance(data.get('payload'), dict) else data
+    result = report_pick(session_id, payload or {})
+    return _web_dom_picker_cors(jsonify(result)), (200 if result.get('success') else 400)
+
+
+@app.route('/api/web-capture/locator/test', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_locator_test():
+    import asyncio
+
+    data = request.get_json(silent=True) or {}
+    from web_capture import cdp_browser
+    from web_capture.validator import evaluate_locator_async
+
+    page = cdp_browser.get_active_page()
+    if not page:
+        conn = cdp_browser.connect_playwright_over_cdp()
+        if not conn.get('success'):
+            return jsonify({'success': False, 'error': conn.get('error')}), 400
+        page = cdp_browser.get_active_page()
+    result = asyncio.run(
+        evaluate_locator_async(
+            page,
+            (data.get('selector_type') or 'css').strip(),
+            (data.get('selector_value') or '').strip(),
+        )
+    )
+    return jsonify(result)
+
+
+@app.route('/api/web-capture/verify', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_verify():
+    import asyncio
+
+    data = request.get_json(silent=True) or {}
+    from web_capture import cdp_browser
+    from web_capture.validator import verify_element_async
+
+    page = cdp_browser.get_active_page()
+    if not page:
+        conn = cdp_browser.connect_playwright_over_cdp()
+        if not conn.get('success'):
+            return jsonify({'success': False, 'error': conn.get('error')}), 400
+        page = cdp_browser.get_active_page()
+    result = asyncio.run(
+        verify_element_async(
+            page,
+            (data.get('selector_type') or 'css').strip(),
+            (data.get('selector_value') or '').strip(),
+        )
+    )
+    return jsonify(result)
+
+
+@app.route('/api/web-capture/similar', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_similar():
+    import asyncio
+
+    data = request.get_json(silent=True) or {}
+    from web_capture import cdp_browser
+    from web_capture.similar import find_similar_elements_async
+
+    page = cdp_browser.get_active_page()
+    if not page:
+        return jsonify({'success': False, 'error': '无 CDP 页面'}), 400
+    result = asyncio.run(
+        find_similar_elements_async(
+            page,
+            (data.get('selector_type') or 'css').strip(),
+            (data.get('selector_value') or '').strip(),
+        )
+    )
+    return jsonify(result)
+
+
+@app.route('/api/web-capture/highlight', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_highlight():
+    data = request.get_json(silent=True) or {}
+    from web_capture import cdp_browser
+    from web_capture.cdp_picker import arm_picker, inject_all_frames
+
+    page = cdp_browser.get_active_page()
+    if not page:
+        return jsonify({'success': False, 'error': '无 CDP 页面'}), 400
+    sid = (data.get('session_id') or '').strip()
+    api_base = (request.host_url or '').rstrip('/')
+    inject_all_frames(page, api_base=api_base, session_id=sid)
+    return jsonify(arm_picker(page))
+
+
+@app.route('/api/web-capture/extension/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_web_capture_extension_status():
+    from web_capture.extension_bridge import get_extension_status
+
+    return jsonify(get_extension_status())
+
+
+@app.route('/api/web-capture/extension/install', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_extension_install():
+    import subprocess
+    import sys
+
+    root = os.path.dirname(os.path.abspath(__file__))
+    script = os.path.join(root, 'tools', 'install_web_extension.py')
+    if not os.path.isfile(script):
+        return jsonify({'success': False, 'error': '安装脚本不存在'}), 404
+    try:
+        proc = subprocess.run(
+            [sys.executable, script, '--prepare'],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=root,
+        )
+        return jsonify(
+            {
+                'success': proc.returncode == 0,
+                'stdout': proc.stdout[-2000:] if proc.stdout else '',
+                'stderr': proc.stderr[-2000:] if proc.stderr else '',
+            }
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/web-capture/highlight.js', methods=['GET'])
+def api_web_capture_highlight_js():
+    from web_capture.cdp_picker import get_highlight_js
+    from web_capture.session import validate_session_id
+
+    session_id = (request.args.get('session') or '').strip()
+    if not validate_session_id(session_id):
+        return _web_dom_picker_cors(
+            Response('// invalid session\n', status=404, mimetype='application/javascript')
+        )
+    api_base = (request.host_url or '').rstrip('/')
+    body = get_highlight_js(api_base, session_id)
+    return _web_dom_picker_cors(
+        Response(body, mimetype='application/javascript; charset=utf-8')
+    )
+
+
+@app.route('/api/web-dom-picker/inject.js', methods=['GET'])
+def api_web_dom_picker_inject_js():
+    """目标页加载的捕获脚本（凭 session 校验，无需登录 Cookie）。"""
+    from pathlib import Path
+
+    from web_dom_picker import validate_session_id
+
+    session_id = (request.args.get('session') or '').strip()
+    if not validate_session_id(session_id):
+        return _web_dom_picker_cors(
+            Response('// invalid or expired web dom picker session\n', status=404, mimetype='application/javascript')
+        )
+    js_path = Path(__file__).resolve().parent / 'static' / 'js' / 'web_dom_picker_inject.js'
+    try:
+        raw = js_path.read_text(encoding='utf-8')
+    except OSError:
+        return _web_dom_picker_cors(
+            Response('// inject script missing\n', status=500, mimetype='application/javascript')
+        )
+    api_base = (request.host_url or '').rstrip('/')
+    body = raw.replace('__API_BASE__', api_base).replace('__SESSION__', session_id)
+    return _web_dom_picker_cors(
+        Response(body, mimetype='application/javascript; charset=utf-8')
+    )
+
+
+@app.route('/api/web-dom-picker/pick', methods=['POST', 'OPTIONS'])
+def api_web_dom_picker_pick():
+    if request.method == 'OPTIONS':
+        return _web_dom_picker_cors(Response('', status=204))
+    from web_dom_picker import sync_report_web_dom_pick
+
+    data = request.get_json(silent=True) or {}
+    session_id = (
+        data.get('session_id') or data.get('session') or request.args.get('session') or ''
+    ).strip()
+    payload = data.get('payload') if isinstance(data.get('payload'), dict) else data
+    result = sync_report_web_dom_pick(session_id, payload or {})
+    return _web_dom_picker_cors(jsonify(result)), (200 if result.get('success') else 400)
+
+
+@app.route('/api/web-dom-picker/close', methods=['POST', 'OPTIONS'])
+def api_web_dom_picker_close():
+    if request.method == 'OPTIONS':
+        return _web_dom_picker_cors(Response('', status=204))
+    from web_dom_picker import close_web_dom_picker_session
+
+    data = request.get_json(silent=True) or {}
+    session_id = (data.get('session') or '').strip()
+    result = close_web_dom_picker_session(session_id)
+    return _web_dom_picker_cors(jsonify(result)), (200 if result.get('success') else 400)
+
+
+def _web_capture_proxy_fetch_html(target_url: str, session_id: str, api_base: str) -> tuple:
+    """拉取待测页 HTML 并注入捕获脚本（同源代理，供预览 iframe 内高亮拾取）。"""
+    import re
+    from html import escape as html_escape
+    from urllib.parse import urlparse
+    from urllib.request import Request, urlopen
+
+    parsed = urlparse(target_url)
+    if parsed.scheme not in ('http', 'https'):
+        return None, '仅支持 http/https 地址'
+    req = Request(
+        target_url,
+        headers={'User-Agent': 'UAT-WebCapture/1.0', 'Accept': 'text/html,*/*'},
+    )
+    try:
+        with urlopen(req, timeout=25) as resp:
+            raw = resp.read()
+            ctype = (resp.headers.get('Content-Type') or '').lower()
+    except Exception as exc:
+        return None, f'无法加载页面: {exc}'
+
+    charset = 'utf-8'
+    m = re.search(r'charset=([^\s;]+)', ctype)
+    if m:
+        charset = m.group(1).strip('\'"')
+    try:
+        html = raw.decode(charset, errors='replace')
+    except LookupError:
+        html = raw.decode('utf-8', errors='replace')
+
+    base_href = html_escape(target_url, quote=True)
+    api_base = (api_base or '').rstrip('/')
+    inject = (
+        f'<base href="{base_href}">\n'
+        f'<script src="{api_base}/api/web-dom-picker/inject.js?session={html_escape(session_id, quote=True)}"></script>\n'
+    )
+    low = html.lower()
+    if '</head>' in low:
+        html = re.sub(r'</head>', inject + '</head>', html, count=1, flags=re.IGNORECASE)
+    elif '</body>' in low:
+        html = re.sub(r'</body>', inject + '</body>', html, count=1, flags=re.IGNORECASE)
+    else:
+        html = inject + html
+    return html, None
+
+
+@app.route('/web-capture/workspace')
+@login_required
+def web_capture_workspace():
+    """网页捕获器工作区（独立窗口，内含预览与 DOM 拾取）。"""
+    from web_dom_picker import validate_session_id
+
+    session_id = (request.args.get('session') or '').strip()
+    if not validate_session_id(session_id):
+        return render_template(
+            'web_capture_workspace.html',
+            error='捕获会话无效或已结束。请返回步骤页重新点击「网页捕获」。',
+        )
+    initial_url = (request.args.get('url') or '').strip()
+    case_id = request.args.get('case_id')
+    if not initial_url and case_id:
+        try:
+            initial_url, _ = _resolve_element_picker_web_url({'case_id': case_id})
+        except Exception:
+            initial_url = ''
+    return render_template(
+        'web_capture_workspace.html',
+        error='',
+        session_id=session_id,
+        api_base=(request.host_url or '').rstrip('/'),
+        initial_url=initial_url or '',
+    )
+
+
+@app.route('/web-capture/workspace-v2')
+@login_required
+def web_capture_workspace_v2():
+    """CDP 网页捕获工作区（调试浏览器 + 状态面板）。"""
+    from web_capture.session import validate_session_id
+
+    session_id = (request.args.get('session') or '').strip()
+    if not validate_session_id(session_id):
+        return render_template(
+            'web_capture_workspace_v2.html',
+            error='捕获会话无效或已结束。请返回步骤页重新点击「网页捕获」。',
+            session_id='',
+            api_base='',
+            cdp_port=0,
+        )
+    from web_capture.session import get_session_debug_snapshot
+
+    snap = get_session_debug_snapshot()
+    return render_template(
+        'web_capture_workspace_v2.html',
+        error='',
+        session_id=session_id,
+        api_base=(request.host_url or '').rstrip('/'),
+        cdp_port=int(snap.get('cdp_port') or 0),
+        mode=snap.get('mode') or 'cdp',
+    )
+
+
+@app.route('/web-capture/proxy')
+def web_capture_proxy():
+    """捕获预览代理：注入拾取脚本，使 iframe 内可悬停高亮。"""
+    from web_dom_picker import validate_session_id
+
+    session_id = (request.args.get('session') or '').strip()
+    target_url = (request.args.get('url') or '').strip()
+    if not validate_session_id(session_id):
+        return Response('捕获会话无效', status=403)
+    if not target_url:
+        return Response('缺少 url 参数', status=400)
+    fixed, err = _validate_and_fix_url(target_url)
+    if err or not fixed:
+        return Response(err or 'URL 无效', status=400)
+    api_base = (request.host_url or '').rstrip('/')
+    html, fetch_err = _web_capture_proxy_fetch_html(fixed, session_id, api_base)
+    if fetch_err:
+        return Response(fetch_err, status=502, mimetype='text/plain; charset=utf-8')
+    return Response(html, mimetype='text/html; charset=utf-8')
 
 
 @app.route('/api/desktop/config', methods=['GET'])
@@ -5759,6 +6210,13 @@ def api_update_step(step_id):
     desktop_spec = data.get('desktop_spec') if 'desktop_spec' in data else None
     if desktop_spec is not None and not isinstance(desktop_spec, str):
         desktop_spec = json.dumps(desktop_spec, ensure_ascii=False)
+    _sel_eff = (
+        (selector_type if selector_type is not None else step_row.get('selector_type') or '')
+        .strip()
+        .lower()
+    )
+    if _sel_eff == 'visual':
+        automation_layer = 'desktop'
 
     success = db.update_test_step(step_id, action, selector_type, selector_value,
                                    input_value, description, step_order, enter_iframe, iframe_selector, compare_type,
@@ -6686,8 +7144,17 @@ def api_run_case(case_id):
         from execution_factory import get_executor_factory
 
         env_msg = get_executor_factory().validate_case_environment(steps)
-        if env_msg and ("不支持" in env_msg or "需 Windows" in env_msg):
-            return jsonify({'success': False, 'error': env_msg}), 400
+        if env_msg and ("不支持" in env_msg or "需 Windows" in env_msg or "缺少依赖" in env_msg):
+            from desktop_runtime import desktop_runtime_unavailable_reason
+
+            detail = desktop_runtime_unavailable_reason()
+            return jsonify({
+                'success': False,
+                'error': env_msg,
+                'error_detail': detail or env_msg,
+                'python_executable': sys.executable,
+                'platform': sys.platform,
+            }), 400
         if env_msg:
             uat_logger.warning("混排运行环境提示: %s", env_msg)
     except ImportError:
@@ -6749,14 +7216,18 @@ def api_run_case(case_id):
                 uat_logger.info("检测到元素捕获仍在运行，执行前已自动关闭")
         except Exception:
             pass
+        try:
+            from web_dom_picker import get_web_dom_picker_status, sync_stop_web_dom_picker
+
+            if get_web_dom_picker_status().get('active'):
+                uat_logger.info("检测到网页 DOM 捕获会话，执行前自动关闭")
+                sync_stop_web_dom_picker()
+        except Exception:
+            pass
         if bool(getattr(automation, '_selection_mode_active', False)):
-            uat_logger.info("检测到 Web 拾取器会话仍在，执行前自动关闭并重建执行浏览器")
+            uat_logger.info("检测到旧版 Web 拾取器会话仍在，执行前自动关闭")
             try:
                 sync_disable_element_selection()
-            except Exception:
-                pass
-            try:
-                sync_close_browser()
             except Exception:
                 pass
             try:
@@ -6851,12 +7322,16 @@ def api_run_case(case_id):
 
                 try:
                     from execution_factory import get_executor_factory
+                    from step_executor import enrich_execution_step, is_desktop_step
 
                     factory = get_executor_factory()
-                    if factory.is_desktop_step(step):
+                    exec_step = enrich_execution_step(step)
+                    if is_desktop_step(exec_step):
                         try:
-                            desk_step = dict(step)
+                            desk_step = dict(exec_step)
                             desk_step["_case_name"] = (case.get("name") or "").strip()
+                            desk_step["selector_value"] = selector_value
+                            desk_step["input_value"] = input_value
                             desk_result = factory.execute_desktop_step(
                                 desk_step,
                                 selector_value=selector_value,
@@ -6910,6 +7385,15 @@ def api_run_case(case_id):
                 except ImportError:
                     pass
 
+                from desktop_automation import normalize_automation_layer as _norm_layer
+
+                if _norm_layer(step) == "desktop":
+                    raise Exception(
+                        f"桌面步骤未进入桌面执行器（action={action}，"
+                        f"automation_layer={step.get('automation_layer')!r}）。"
+                        f"请确认步骤自动化层为「桌面」后重试。"
+                    )
+
                 _ensure_browser_for_web_step()
                 
                 if action == 'navigate':
@@ -6925,23 +7409,23 @@ def api_run_case(case_id):
                     else:
                         uat_logger.warning("导航步骤URL为空，跳过")
                 elif action == 'click':
-                            if selector_value:
-                                try:
-                                    _repeat = _norm_click_repeat_count(step.get('click_repeat_count'))
-                                    for _r in range(_repeat):
-                                        with _case_run_lock:
-                                            if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
-                                                raise Exception("用户已停止执行")
-                                        sync_click_element(
-                                            selector_value,
-                                            selector_type,
-                                            iframe_selector=iframe_for_step,
-                                            locator_candidates=locator_candidates,
-                                        )
-                                except Exception as click_error:
-                                    uat_logger.error(f"执行点击操作时出错: {click_error}")
-                                    # 直接抛出错误，视为测试用例执行失败
-                                    raise
+                            if not selector_value:
+                                raise Exception("点击步骤缺少选择器")
+                            try:
+                                _repeat = _norm_click_repeat_count(step.get('click_repeat_count'))
+                                for _r in range(_repeat):
+                                    with _case_run_lock:
+                                        if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
+                                            raise Exception("用户已停止执行")
+                                    sync_click_element(
+                                        selector_value,
+                                        selector_type,
+                                        iframe_selector=iframe_for_step,
+                                        locator_candidates=locator_candidates,
+                                    )
+                            except Exception as click_error:
+                                uat_logger.error(f"执行点击操作时出错: {click_error}")
+                                raise
                 elif action == 'input':
                     if selector_value:
                         try:
@@ -7195,6 +7679,17 @@ def api_run_case(case_id):
                         uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
                         # 直接抛出错误，视为测试用例执行失败
                         raise
+                else:
+                    from desktop_automation import normalize_automation_layer as _norm_al_web
+
+                    _layer_web = _norm_al_web(step)
+                    _st_web = (selector_type or '').strip().lower()
+                    if _layer_web == 'desktop' or _st_web == 'visual':
+                        raise RuntimeError(
+                            f"步骤 #{step.get('id')} 为桌面/visual 步骤，但未通过桌面执行器完成"
+                            f"（action={action!r}，automation_layer={step.get('automation_layer')!r}）。"
+                            "请在步骤编辑器中确认自动化层为「桌面」并保存后重试。"
+                        )
 
                 # 🔥 修复：步骤执行到这里说明成功，更新状态为 success
                 step_status = 'success'
@@ -7215,6 +7710,9 @@ def api_run_case(case_id):
                     message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
                 )
             
+            if not steps:
+                raise RuntimeError("用例没有可执行的步骤")
+
             # 计算执行时间
             duration = round(time.time() - start_time, 2)
             
@@ -7417,6 +7915,9 @@ def api_run_case(case_id):
                 except Exception:
                     pass
             
+            _failed_sid = None
+            if visual_match_failed and 'step' in dir() and step:
+                _failed_sid = step.get('id')
             return jsonify({
                 'success': False,
                 'status': 'error',
@@ -7425,8 +7926,12 @@ def api_run_case(case_id):
                 'browser_closed': browser_closed_manually,
                 'stopped': ('用户已停止执行' in error_msg),
                 'failure_screenshot': failure_screenshot or None,
-                'failed_step_id': (
-                    step.get('id') if visual_match_failed and 'step' in dir() and step else None
+                'failed_step_id': _failed_sid,
+                'need_relearn': bool(
+                    visual_match_failed and getattr(visual_match_failed, 'need_relearn', False)
+                ),
+                'best_score': float(
+                    getattr(visual_match_failed, 'best_score', 0.0) if visual_match_failed else 0.0
                 ),
             })
             
@@ -9596,17 +10101,31 @@ def api_health():
 @app.route('/api/health/ready', methods=['GET'])
 def api_health_ready():
     """就绪探针：校验 SQLite 可连接（编排/负载均衡建议用此 URL）。"""
-    if not db.ping():
-        return jsonify({
-            'status': 'unready',
-            'database': 'unavailable',
-            'timestamp': datetime.datetime.now().isoformat(),
-        }), 503
-    return jsonify({
-        'status': 'ready',
-        'database': 'ok',
+    payload = {
         'timestamp': datetime.datetime.now().isoformat(),
-    })
+    }
+    if sys.platform == 'win32':
+        try:
+            from desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
+
+            payload['desktop_runtime'] = {
+                'available': bool(desktop_runtime_available()),
+                'reason': desktop_runtime_unavailable_reason() or None,
+                'python_executable': sys.executable,
+            }
+        except Exception as exc:
+            payload['desktop_runtime'] = {
+                'available': False,
+                'reason': str(exc),
+                'python_executable': sys.executable,
+            }
+    if not db.ping():
+        payload['status'] = 'unready'
+        payload['database'] = 'unavailable'
+        return jsonify(payload), 503
+    payload['status'] = 'ready'
+    payload['database'] = 'ok'
+    return jsonify(payload)
 
 
 # ==================== 通知配置 API ====================

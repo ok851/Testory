@@ -35,10 +35,14 @@ class VisualMatchFailed(RuntimeError):
         *,
         failure_screenshot: Optional[str] = None,
         selector_value: Optional[str] = None,
+        need_relearn: bool = False,
+        best_score: float = 0.0,
     ) -> None:
         super().__init__(message)
         self.failure_screenshot = failure_screenshot
         self.selector_value = selector_value
+        self.need_relearn = need_relearn
+        self.best_score = best_score
 
 
 @dataclass
@@ -52,25 +56,33 @@ class VisualStepPayload:
     template_height: int
     record_virtual_left: int = 0
     record_virtual_top: int = 0
+    search_anchor_x: int = 0
+    search_anchor_y: int = 0
+    element_snapshot: Optional[Dict[str, Any]] = None
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "template_image_base64": self.template_image_base64,
-                "click_offset": {"x": self.click_offset_x, "y": self.click_offset_y},
-                "match_threshold": self.match_threshold,
-                "match_method": self.match_method,
-                "template_size": {
-                    "w": self.template_width,
-                    "h": self.template_height,
-                },
-                "record_virtual_origin": {
-                    "left": self.record_virtual_left,
-                    "top": self.record_virtual_top,
-                },
+        body: Dict[str, Any] = {
+            "template_image_base64": self.template_image_base64,
+            "click_offset": {"x": self.click_offset_x, "y": self.click_offset_y},
+            "match_threshold": self.match_threshold,
+            "match_method": self.match_method,
+            "template_size": {
+                "w": self.template_width,
+                "h": self.template_height,
             },
-            ensure_ascii=False,
-        )
+            "record_virtual_origin": {
+                "left": self.record_virtual_left,
+                "top": self.record_virtual_top,
+            },
+        }
+        if self.search_anchor_x or self.search_anchor_y:
+            body["search_anchor"] = {
+                "x": self.search_anchor_x,
+                "y": self.search_anchor_y,
+            }
+        if self.element_snapshot:
+            body["element_snapshot"] = self.element_snapshot
+        return json.dumps(body, ensure_ascii=False)
 
     @classmethod
     def from_json(cls, raw: str) -> "VisualStepPayload":
@@ -83,8 +95,12 @@ class VisualStepPayload:
         off = data.get("click_offset") or {}
         size = data.get("template_size") or {}
         origin = data.get("record_virtual_origin") or {}
+        anchor = data.get("search_anchor") or {}
         if not b64:
             raise ValueError("visual 步骤缺少 template_image_base64")
+        snap = data.get("element_snapshot")
+        ax = int(anchor.get("x", 0) or 0)
+        ay = int(anchor.get("y", 0) or 0)
         return cls(
             template_image_base64=b64,
             click_offset_x=int(off.get("x", 0)),
@@ -92,11 +108,32 @@ class VisualStepPayload:
             match_threshold=float(
                 data.get("match_threshold", data.get("threshold", 0.75))
             ),
-            match_method=str(data.get("match_method") or "orb").lower(),
+            match_method=str(data.get("match_method") or "auto").lower(),
             template_width=int(size.get("w", 0)),
             template_height=int(size.get("h", 0)),
             record_virtual_left=int(origin.get("left", 0)),
             record_virtual_top=int(origin.get("top", 0)),
+            search_anchor_x=ax,
+            search_anchor_y=ay,
+            element_snapshot=snap if isinstance(snap, dict) else None,
+        )
+
+    def merge_element_snapshot(self, snap: Optional[Dict[str, Any]]) -> "VisualStepPayload":
+        if not snap:
+            return self
+        return VisualStepPayload(
+            template_image_base64=self.template_image_base64,
+            click_offset_x=self.click_offset_x,
+            click_offset_y=self.click_offset_y,
+            match_threshold=self.match_threshold,
+            match_method=self.match_method,
+            template_width=self.template_width,
+            template_height=self.template_height,
+            record_virtual_left=self.record_virtual_left,
+            record_virtual_top=self.record_virtual_top,
+            search_anchor_x=self.search_anchor_x,
+            search_anchor_y=self.search_anchor_y,
+            element_snapshot=snap,
         )
 
 
@@ -106,6 +143,20 @@ class VisualMatchResult:
     top: int
     score: float
     method: str
+
+
+def _payload_has_element_snapshot(step: Dict[str, Any]) -> bool:
+    st = (step.get("selector_type") or "").strip().lower()
+    if st != VISUAL_SELECTOR_TYPE:
+        return False
+    sv = (step.get("selector_value") or "").strip()
+    if not sv:
+        return False
+    try:
+        data = json.loads(sv)
+        return bool(isinstance(data, dict) and data.get("element_snapshot"))
+    except json.JSONDecodeError:
+        return False
 
 
 def is_legacy_desktop_step(step: Dict[str, Any]) -> bool:
@@ -186,7 +237,7 @@ def _bgr_from_png(png: bytes):
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 
-def refine_template_by_corners(bgr_roi, *, max_side: int = 48) -> Tuple[Any, int, int]:
+def refine_template_by_corners(bgr_roi, *, max_side: int = 64) -> Tuple[Any, int, int]:
     import cv2
 
     if bgr_roi is None or bgr_roi.size == 0:
@@ -211,7 +262,7 @@ def refine_template_by_corners(bgr_roi, *, max_side: int = 48) -> Tuple[Any, int
     return bgr_roi[0:side, 0:side], 0, 0
 
 
-def shrink_template_bgr(bgr, max_side: int = 128):
+def shrink_template_bgr(bgr, max_side: int = 192):
     import cv2
 
     h, w = bgr.shape[:2]
@@ -242,6 +293,7 @@ def build_visual_step_payload(
     click_y: int,
     *,
     match_threshold: float = 0.72,
+    element_snapshot: Optional[Dict[str, Any]] = None,
 ) -> VisualStepPayload:
     png = capture_region_png(left, top, right, bottom, padding=0)
     bgr = _bgr_from_png(png)
@@ -264,6 +316,9 @@ def build_visual_step_payload(
         template_height=rh,
         record_virtual_left=vl,
         record_virtual_top=vt,
+        search_anchor_x=int(click_x),
+        search_anchor_y=int(click_y),
+        element_snapshot=element_snapshot,
     )
 
 
@@ -312,7 +367,7 @@ def _template_match(template_bgr, scene_bgr) -> Optional[VisualMatchResult]:
     tpl = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
     scn = cv2.cvtColor(scene_bgr, cv2.COLOR_BGR2GRAY)
     best: Optional[VisualMatchResult] = None
-    for scale in (0.85, 1.0, 1.15):
+    for scale in (0.75, 0.85, 1.0, 1.15, 1.25):
         th, tw = tpl.shape[:2]
         nw = max(4, int(tw * scale))
         nh = max(4, int(th * scale))
@@ -357,12 +412,29 @@ def find_best_template_match(
     return max(candidates, key=lambda h: h.score)
 
 
+def _min_score_for_hit(threshold: float, method: str, *, roi: bool = False) -> float:
+    th = float(threshold)
+    if method == "template":
+        if roi:
+            return max(0.52, th - 0.12)
+        return max(0.58, th - 0.08)
+    return max(0.40, th * 0.55)
+
+
+def _need_relearn_score(best_score: float, threshold: float, method: str) -> bool:
+    min_score = _min_score_for_hit(threshold, method)
+    edge_low = max(0.55, min_score - 0.12)
+    return edge_low <= best_score < min_score
+
+
 def locate_template_on_screen(
     template_png: bytes,
     screen_png: bytes,
     *,
     match_method: str = "auto",
     threshold: float = 0.72,
+    roi_origin: Optional[Tuple[int, int]] = None,
+    roi_search: bool = False,
 ) -> VisualMatchResult:
     tpl = _bgr_from_png(template_png)
     scene = _bgr_from_png(screen_png)
@@ -373,13 +445,29 @@ def locate_template_on_screen(
     )
     if hit is None:
         raise VisualMatchFailed(f"视觉匹配失败（未找到特征，threshold={threshold}）")
-    if hit.method == "template":
-        min_score = max(0.65, float(threshold) - 0.02)
-    else:
-        min_score = max(0.45, threshold * 0.6)
+    in_roi = bool(roi_search or roi_origin is not None)
+    min_score = _min_score_for_hit(threshold, hit.method, roi=in_roi)
     if hit.score < min_score:
+        if (match_method or "auto").lower() in ("auto", "orb") and hit.method == "template":
+            orb_only = _orb_match(tpl, scene)
+            if orb_only is not None:
+                orb_min = _min_score_for_hit(threshold, "orb", roi=in_roi)
+                if orb_only.score >= orb_min:
+                    hit = orb_only
+                    min_score = orb_min
+    if hit.score < min_score:
+        need_relearn = _need_relearn_score(hit.score, threshold, hit.method)
         raise VisualMatchFailed(
-            f"视觉匹配失败（score={hit.score:.3f} < {min_score:.3f}，method={hit.method}）"
+            f"视觉匹配失败（score={hit.score:.3f} < {min_score:.3f}，method={hit.method}）",
+            need_relearn=need_relearn,
+            best_score=hit.score,
+        )
+    if roi_origin:
+        hit = VisualMatchResult(
+            left=hit.left + roi_origin[0],
+            top=hit.top + roi_origin[1],
+            score=hit.score,
+            method=hit.method,
         )
     return hit
 
@@ -391,11 +479,12 @@ def _roi_around_center(
     height: int,
     *,
     padding_factor: float = 2.5,
+    min_side: int = 300,
 ) -> Tuple[int, int, int, int]:
     vl, vt, vw, vh = virtual_screen_rect()
-    pad = max(48, int(max(width, height) * padding_factor))
-    half_w = max(width // 2 + pad, pad)
-    half_h = max(height // 2 + pad, pad)
+    pad = max(min_side // 2, int(max(width, height) * padding_factor))
+    half_w = max(min_side // 2, width // 2 + pad)
+    half_h = max(min_side // 2, height // 2 + pad)
     left = max(vl, int(center_x) - half_w)
     top = max(vt, int(center_y) - half_h)
     right = min(vl + vw, int(center_x) + half_w)
@@ -425,7 +514,10 @@ def build_visual_failure_artifact_png(payload: VisualStepPayload) -> bytes:
     best = find_best_template_match(
         tpl_png, screen_png, match_method=payload.match_method
     )
-    if best:
+    if payload.search_anchor_x or payload.search_anchor_y:
+        center_x = int(payload.search_anchor_x)
+        center_y = int(payload.search_anchor_y)
+    elif best:
         center_x = vl + best.left + tw // 2
         center_y = vt + best.top + th // 2
     else:
@@ -457,15 +549,68 @@ def build_visual_failure_artifact_png(payload: VisualStepPayload) -> bytes:
     return encode_png_bgr(combined)
 
 
-def resolve_visual_click_point(payload: VisualStepPayload) -> Tuple[int, int, float]:
+def _resolve_visual_on_roi(
+    payload: VisualStepPayload,
+    anchor_x: int,
+    anchor_y: int,
+    *,
+    expand: float = 1.0,
+) -> Tuple[int, int, float]:
     tpl_png = base64.b64decode(payload.template_image_base64)
-    screen_png = capture_virtual_desktop_png()
+    tw = payload.template_width or 48
+    th = payload.template_height or 48
+    factor = 2.5 * expand
+    left, top, right, bottom = _roi_around_center(
+        anchor_x, anchor_y, tw, th, padding_factor=factor, min_side=300
+    )
+    roi_png = capture_region_png(left, top, right, bottom, padding=0)
     hit = locate_template_on_screen(
         tpl_png,
-        screen_png,
+        roi_png,
         match_method=payload.match_method,
         threshold=payload.match_threshold,
+        roi_search=True,
     )
+    abs_left = left + hit.left
+    abs_top = top + hit.top
+    x = abs_left + payload.click_offset_x
+    y = abs_top + payload.click_offset_y
+    return int(x), int(y), hit.score
+
+
+def resolve_visual_click_point(
+    payload: VisualStepPayload,
+    *,
+    anchor_x: Optional[int] = None,
+    anchor_y: Optional[int] = None,
+) -> Tuple[int, int, float]:
+    ax = int(anchor_x if anchor_x is not None else payload.search_anchor_x)
+    ay = int(anchor_y if anchor_y is not None else payload.search_anchor_y)
+    tpl_png = base64.b64decode(payload.template_image_base64)
+    tw = payload.template_width or 48
+    th = payload.template_height or 48
+
+    if ax or ay:
+        try:
+            return _resolve_visual_on_roi(payload, ax, ay, expand=1.0)
+        except VisualMatchFailed:
+            try:
+                return _resolve_visual_on_roi(payload, ax, ay, expand=1.5)
+            except VisualMatchFailed:
+                pass
+
+    screen_png = capture_virtual_desktop_png()
+    try:
+        hit = locate_template_on_screen(
+            tpl_png,
+            screen_png,
+            match_method=payload.match_method,
+            threshold=payload.match_threshold,
+        )
+    except VisualMatchFailed as exc:
+        if ax or ay:
+            raise
+        raise
     x = hit.left + payload.click_offset_x
     y = hit.top + payload.click_offset_y
     vl, vt = virtual_screen_origin()
@@ -503,5 +648,8 @@ def update_visual_template_at_click(
         template_height=rh,
         record_virtual_left=vl,
         record_virtual_top=vt,
+        search_anchor_x=int(click_x),
+        search_anchor_y=int(click_y),
+        element_snapshot=payload.element_snapshot,
     )
     return new_payload.to_json()

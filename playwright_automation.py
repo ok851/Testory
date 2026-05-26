@@ -542,6 +542,7 @@ class PlaywrightAutomation:
         self._platform_origin = ""
         self._recording_session_clear_cb = None
         self._selection_mode_active = False
+        self._web_dom_capture_active = False
         self.current_iframe = None  # {'selector', 'selector_type', 'iframe'} 由 enter_iframe 设置
         self._failure_diag_ring: Optional[deque] = None  # console / pageerror / requestfailed
         self._execution_context: Optional[ExecutionContext] = None
@@ -2609,9 +2610,31 @@ class PlaywrightAutomation:
                 uat_logger.warning(f"[TIER_FILL] 坐标降级键入失败: {ex}")
         return False
 
+    async def _try_web_capture_cdp_click(
+        self, selector: str, selector_type: str, *, double: bool = False
+    ) -> bool:
+        try:
+            from web_capture.cdp_executor import cdp_exec_enabled, click_async
+            from web_capture import cdp_browser
+
+            if not cdp_exec_enabled():
+                return False
+            if not cdp_browser.get_active_page():
+                port = int(os.environ.get("WEB_CAPTURE_CDP_PORT", "9222") or 9222)
+                conn = cdp_browser.connect_playwright_over_cdp(port)
+                if not conn.get("success"):
+                    return False
+            await click_async(selector_type, selector, double=double)
+            return True
+        except Exception as ex:
+            uat_logger.debug("[WEB_CAPTURE_CDP] click fallback: %s", ex)
+            return False
+
     async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None):
         """点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）。
         locator_candidates: 录制器生成的 JSON 或列表，主选择器失败时按 score 降级重试。"""
+        if await self._try_web_capture_cdp_click(selector, selector_type):
+            return
         target_page = page if page is not None else self.page
         if target_page is None:
             raise Exception("浏览器未启动")
@@ -10258,6 +10281,248 @@ class PlaywrightAutomation:
             await self.page.goto(target, wait_until='load', timeout=timeout)
             await self._wait_pick_page_ready(after_nav=True, timeout_ms=int(timeout))
 
+    async def _format_dom_pick_from_payload(
+        self, raw_element_info: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """将页面拾取 payload 格式化为前端步骤表单结构（网页 DOM 捕获器专用）。"""
+        if not raw_element_info or not isinstance(raw_element_info, dict):
+            return None
+        try:
+            page_name = await self.page.title() if self.page and not self.page.is_closed() else ""
+        except Exception:
+            page_name = ""
+
+        element = raw_element_info.get("elementInfo", {}) or {}
+        css_selector = raw_element_info.get("selector", "") or ""
+        text_content = (element.get("textContent") or "").strip()
+        attrs = element.get("attributes", {}) or {}
+
+        selector_type = "css"
+        selector_value = css_selector
+
+        element_id = element.get("id", "") or ""
+        data_testid = (
+            attrs.get("data-testid")
+            or attrs.get("data-test")
+            or attrs.get("data-id")
+            or ""
+        )
+
+        if data_testid:
+            selector_type = "data"
+            selector_value = f"testid={data_testid}"
+        elif element_id and not _looks_dynamic_dom_id(element_id):
+            selector_type = "id"
+            selector_value = element_id
+        elif _stable_class_tokens(element.get("className", "")):
+            selector_type = "css"
+            selector_value = "." + ".".join(
+                _stable_class_tokens(element.get("className", ""))
+            )
+        elif text_content and len(text_content) > 5:
+            selector_type = "partial_text"
+            selector_value = text_content
+
+        class_name = element.get("className", "") or ""
+        class_tokens_raw = [c.strip() for c in str(class_name).split() if c.strip()]
+        class_set = {c.lower() for c in class_tokens_raw}
+        is_card_list_container = (
+            "card-list" in class_set
+            or any(
+                ("list" in c.lower() or "container" in c.lower())
+                for c in class_tokens_raw
+            )
+        )
+        card_item_xpath = ""
+        if is_card_list_container:
+            stable_root_classes = _stable_class_tokens(class_name)
+            if stable_root_classes:
+                root_pred = " and ".join(
+                    [f"contains(@class,'{c}')" for c in stable_root_classes[:2]]
+                )
+                root_xpath = f"//*[{root_pred}]"
+            else:
+                root_xpath = (
+                    "//*[contains(@class,'card-list') or contains(@class,'list-container')]"
+                )
+            card_item_xpath = (
+                f"{root_xpath}"
+                "//*[contains(@class,'outer-card') or contains(@class,'card') "
+                "or contains(@class,'item') or @role='listitem']"
+            )
+            selector_type = "xpath"
+            selector_value = card_item_xpath
+
+        locator_candidates = _picker_locator_candidates(
+            css_selector, text_content, class_name, element_id
+        )
+        try:
+            if css_selector and self.page and not self.page.is_closed():
+                loc = self.page.locator(css_selector).first
+                await loc.wait_for(state="attached", timeout=2800)
+                png_raw = await loc.screenshot(type="png")
+                png_small = prepare_template_png_bytes_for_storage(png_raw)
+                frac = await self.page.evaluate(
+                    """(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return null;
+                    const r = el.getBoundingClientRect();
+                    const vw = window.innerWidth || 1, vh = window.innerHeight || 1;
+                    return { fx: (r.left + r.width/2) / vw, fy: (r.top + r.height/2) / vh };
+                }""",
+                    css_selector,
+                )
+                extras = []
+                if png_small and len(png_small) >= 80:
+                    extras.append(build_visual_candidate_png_b64(png_small, score=48))
+                if isinstance(frac, dict) and frac.get("fx") is not None and frac.get("fy") is not None:
+                    extras.append(
+                        build_viewport_coord_candidate(
+                            float(frac["fx"]), float(frac["fy"]), score=24
+                        )
+                    )
+                if extras:
+                    locator_candidates = merge_candidates_json(
+                        locator_candidates or "[]", extras
+                    )
+        except Exception as _tier_e:
+            uat_logger.debug(f"[WEB_DOM_PICKER] locator 附加跳过: {_tier_e}")
+
+        return {
+            "selector_type": selector_type,
+            "selector_value": selector_value,
+            "text_content": text_content,
+            "page_name": page_name,
+            "tag_name": (element.get("tagName") or "").lower(),
+            "css_selector": css_selector,
+            "id": element_id,
+            "class_name": class_name,
+            "locator_candidates": locator_candidates,
+            "is_card_list_container": is_card_list_container,
+            "card_item_xpath": card_item_xpath,
+            "dynamic_id_ignored": bool(
+                element_id and _looks_dynamic_dom_id(element_id)
+            ),
+        }
+
+    async def _inject_web_dom_frame_bridges(self) -> None:
+        """遗留：iframe 桥已迁移至 web_capture CDP/扩展路径。"""
+        return
+
+    async def attach_web_dom_capture(self) -> bool:
+        """遗留 API：请使用 /api/element-picker/start capture_channel=web（CDP）。"""
+        uat_logger.info("[WEB_DOM_PICKER] attach_web_dom_capture 已弃用，请使用 web_capture CDP 模式")
+        return False
+
+    async def disable_web_dom_capture(self) -> bool:
+        """移除网页 DOM 捕获器 UI。"""
+        if self.page is None:
+            self._web_dom_capture_active = False
+            return True
+        try:
+            await self.page.evaluate("""
+                (() => {
+                    try {
+                        if (window.uatWebDomPicker && window.uatWebDomPicker.panel) {
+                            const p = window.uatWebDomPicker.panel;
+                            if (p.parentNode) p.parentNode.removeChild(p);
+                        }
+                        const ov = document.getElementById('uat-web-dom-picker-overlay');
+                        if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+                        window.uatWebDomPickerClosed = true;
+                        if (window.uatWebDomPicker) {
+                            window.uatWebDomPicker.armed = false;
+                            window.uatWebDomPicker.closed = true;
+                        }
+                    } catch (_) {}
+                })()
+            """)
+        except Exception as e:
+            if "Target page, context or browser has been closed" not in str(e):
+                uat_logger.warning(f"[WEB_DOM_PICKER] 禁用清理异常: {e}")
+        self._web_dom_capture_active = False
+        return True
+
+    async def is_web_dom_picker_closed(self) -> bool:
+        if self.page is None:
+            return True
+        try:
+            if self.page.is_closed():
+                return True
+        except Exception:
+            return True
+        try:
+            return bool(
+                await self.page.evaluate("""
+                    (() => {
+                        if (window.uatWebDomPickerClosed) return true;
+                        const p = window.uatWebDomPicker && window.uatWebDomPicker.panel;
+                        if (!p) return true;
+                        return !p.isConnected;
+                    })()
+                """)
+            )
+        except Exception:
+            return True
+
+    async def consume_web_dom_pick(self, *, peek_only: bool = False) -> Optional[Dict[str, Any]]:
+        """遗留：拾取结果经 /api/web-capture/pick 回传平台。"""
+        return None
+        if self.page is None:
+            return None
+        try:
+            if self.page.is_closed():
+                return {"_picker_closed": True}
+        except Exception:
+            return {"_picker_closed": True}
+
+        try:
+            await self.page.evaluate("""
+                (() => {
+                    try {
+                        const st = window.uatWebDomPicker;
+                        const enabled = !!(st && st.armed);
+                        const fs = document.querySelectorAll('iframe');
+                        for (const f of fs) {
+                            if (f && f.contentWindow) {
+                                f.contentWindow.postMessage({
+                                    __uatWebDomPicker: true,
+                                    type: 'picker_state',
+                                    enabled
+                                }, '*');
+                            }
+                        }
+                    } catch (_) {}
+                })()
+            """)
+        except Exception:
+            pass
+
+        try:
+            await self._inject_web_dom_frame_bridges()
+        except Exception:
+            pass
+
+        clear_flag = "false" if peek_only else "true"
+        raw = await self.page.evaluate(
+            f"""
+            (() => {{
+                if (!(window.uatWebDomPicker && window.uatWebDomPicker.selectedElementPayload)) {{
+                    return null;
+                }}
+                const p = window.uatWebDomPicker.selectedElementPayload;
+                if ({clear_flag}) {{
+                    window.uatWebDomPicker.selectedElementPayload = null;
+                    window.uatWebDomPicker.selectedElement = null;
+                }}
+                return p;
+            }})()
+            """
+        )
+        if not raw:
+            return None
+        return await self._format_dom_pick_from_payload(raw)
+
     async def enable_element_selection(
         self, url='', auto_arm: bool = False, *, launch_if_needed: bool = True
     ):
@@ -10314,10 +10579,10 @@ class PlaywrightAutomation:
                         "无可用浏览器会话，跳过网页拾取（未请求 launch_if_needed）"
                     )
                     return False
-                if not nav:
-                    uat_logger.info("未提供 URL，拒绝启动空白浏览器用于拾取")
-                    return False
-                uat_logger.info("启动新的浏览器实例")
+                uat_logger.info(
+                    "启动新的浏览器实例用于拾取"
+                    + (f"，随后导航: {nav}" if nav else "（不自动导航，保留当前/空白页）")
+                )
                 await self.start_browser(headless=False)
             else:
                 # 复用已存在的浏览器实例,切换到当前页面
@@ -11819,6 +12084,35 @@ def sync_disable_element_selection():
     async def run():
         return await automation.disable_element_selection()
     return worker.execute(run)
+
+
+def sync_attach_web_dom_capture():
+    async def run():
+        return await automation.attach_web_dom_capture()
+
+    return worker.execute(run)
+
+
+def sync_disable_web_dom_capture():
+    async def run():
+        return await automation.disable_web_dom_capture()
+
+    return worker.execute(run)
+
+
+def sync_consume_web_dom_pick(*, peek_only: bool = False):
+    async def run():
+        return await automation.consume_web_dom_pick(peek_only=peek_only)
+
+    return worker.execute(run)
+
+
+def sync_is_web_dom_picker_closed():
+    async def run():
+        return await automation.is_web_dom_picker_closed()
+
+    return worker.execute(run)
+
 
 def sync_get_selected_element():
     async def run():

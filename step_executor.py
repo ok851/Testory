@@ -13,7 +13,11 @@ from desktop_automation import (
     sync_desktop_execute_step,
     validate_step_for_layer,
 )
-from desktop_runtime import desktop_runtime_available, parse_desktop_spec
+from desktop_runtime import (
+    desktop_runtime_available,
+    desktop_runtime_unavailable_reason,
+    parse_desktop_spec,
+)
 
 try:
     from playwright_automation import resolve_playwright_headless
@@ -40,9 +44,11 @@ def ensure_mixed_run_environment(steps: List[Dict[str, Any]]) -> Optional[str]:
     if not case_steps_include_desktop(steps):
         return None
     if not desktop_runtime_available():
-        return (
-            "用例包含桌面自动化步骤，但当前环境不支持（需 Windows 且已安装 opencv-python、mss）。"
+        detail = desktop_runtime_unavailable_reason()
+        base = (
+            "用例包含桌面自动化步骤，但当前环境不支持（需 Windows 且已安装 opencv-python、mss、numpy）。"
         )
+        return detail or base
     if resolve_playwright_headless(True):
         return (
             "用例包含桌面与 Web 混排步骤：请将 PLAYWRIGHT_HEADLESS 设为 0，"

@@ -44,11 +44,22 @@ class TestVisualEngine(unittest.TestCase):
             match_method="orb",
             template_width=40,
             template_height=40,
+            search_anchor_x=100,
+            search_anchor_y=200,
+            element_snapshot={"selector": {"anchor_props": "ListItem"}},
         )
         raw = p.to_json()
         p2 = VisualStepPayload.from_json(raw)
         self.assertEqual(p2.click_offset_x, 5)
         self.assertEqual(p2.match_threshold, 0.8)
+        self.assertEqual(p2.search_anchor_x, 100)
+        self.assertIsNotNone(p2.element_snapshot)
+
+    def test_need_relearn_band(self):
+        from desktop_visual_engine import _need_relearn_score
+
+        self.assertTrue(_need_relearn_score(0.60, 0.72, "template"))
+        self.assertFalse(_need_relearn_score(0.40, 0.72, "template"))
 
     def test_template_match_on_synthetic_scene(self):
         import cv2

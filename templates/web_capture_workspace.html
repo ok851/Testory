@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页元素捕获</title>
+    <style>
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #f1f5f9; color: #111827; }
+        .wc-shell { display: flex; flex-direction: column; height: 100vh; }
+        .wc-panel {
+            flex: 0 0 auto; background: #fff; border-bottom: 1px solid #e5e7eb;
+            padding: 14px 16px; box-shadow: 0 2px 8px rgba(0,0,0,.06);
+        }
+        .wc-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .wc-hdr h1 { margin: 0; font-size: 16px; font-weight: 700; }
+        .wc-badge { font-size: 10px; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 2px 6px; border-radius: 4px; }
+        .wc-state { display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 8px; border-radius: 6px; background: #f1f5f9; color: #6b7280; margin-bottom: 8px; }
+        .wc-state.on { background: #ecfdf5; color: #16a34a; }
+        .wc-hint { font-size: 12px; color: #6b7280; line-height: 1.45; margin: 0 0 10px; }
+        .wc-url-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .wc-url-row input {
+            flex: 1 1 280px; min-width: 200px; padding: 8px 10px; border: 1px solid #d1d5db;
+            border-radius: 8px; font-size: 13px;
+        }
+        .wc-btn {
+            border: none; border-radius: 8px; padding: 8px 14px; font-size: 12px; font-weight: 600;
+            cursor: pointer; color: #fff;
+        }
+        .wc-btn-primary { background: #dc2626; }
+        .wc-btn-primary:hover { background: #b91c1c; }
+        .wc-btn-secondary { background: #475569; }
+        .wc-btn-ghost { background: #f8fafc; color: #374151; border: 1px solid #e5e7eb; }
+        .wc-frame-wrap { flex: 1 1 auto; position: relative; min-height: 0; background: #e2e8f0; }
+        #wcFrame { width: 100%; height: 100%; border: none; display: block; background: #fff; }
+        .wc-empty {
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            color: #64748b; font-size: 14px; pointer-events: none; text-align: center; padding: 24px;
+        }
+        .wc-err { color: #dc2626; padding: 24px; }
+    </style>
+</head>
+<body>
+<div class="wc-shell">
+    {% if error %}
+    <p class="wc-err">{{ error }}</p>
+    {% else %}
+    <div class="wc-panel">
+        <div class="wc-hdr">
+            <h1>网页元素捕获</h1>
+            <span class="wc-badge">DOM</span>
+        </div>
+        <div id="wcStateLbl" class="wc-state">● 捕获器已启动</div>
+        <p class="wc-hint">
+            输入待测地址后点「加载并捕获」：预览区内将注入捕获器，点「开始捕获」后悬停高亮边框、单击拾取。
+            拾取结果会自动回传步骤页（与 Playwright 无关）。
+        </p>
+        <div class="wc-url-row">
+            <input type="url" id="wcUrlInput" placeholder="https://待测系统地址" value="{{ initial_url or '' }}" />
+            <button type="button" class="wc-btn wc-btn-primary" id="wcLoadBtn">加载并捕获</button>
+            <button type="button" class="wc-btn wc-btn-ghost" id="wcReloadBtn">刷新</button>
+            <button type="button" class="wc-btn wc-btn-secondary" id="wcCloseBtn">结束捕获</button>
+        </div>
+    </div>
+    <div class="wc-frame-wrap">
+        <div class="wc-empty" id="wcEmptyHint">请在上方输入 URL 并点击「加载并捕获」</div>
+        <iframe id="wcFrame" title="捕获预览" style="display:none;"></iframe>
+    </div>
+    {% endif %}
+</div>
+{% if not error %}
+<script>
+(function () {
+    var SESSION = {{ session_id|tojson }};
+    var API_BASE = {{ api_base|tojson }};
+    var frame = document.getElementById('wcFrame');
+    var emptyHint = document.getElementById('wcEmptyHint');
+    var urlInput = document.getElementById('wcUrlInput');
+    var stateLbl = document.getElementById('wcStateLbl');
+
+    function proxyUrl(target) {
+        return API_BASE + '/web-capture/proxy?session=' + encodeURIComponent(SESSION)
+            + '&url=' + encodeURIComponent(target);
+    }
+
+    function loadTarget() {
+        var raw = (urlInput.value || '').trim();
+        if (!raw) {
+            alert('请输入待测页面 URL');
+            return;
+        }
+        if (!/^https?:\/\//i.test(raw)) {
+            raw = 'http://' + raw;
+            urlInput.value = raw;
+        }
+        frame.style.display = 'block';
+        if (emptyHint) emptyHint.style.display = 'none';
+        frame.src = proxyUrl(raw);
+        if (stateLbl) {
+            stateLbl.textContent = '● 预览已加载 — 在下方页面使用左上角「开始捕获」';
+            stateLbl.classList.add('on');
+        }
+    }
+
+    document.getElementById('wcLoadBtn').addEventListener('click', loadTarget);
+    document.getElementById('wcReloadBtn').addEventListener('click', function () {
+        if (frame.src) frame.src = frame.src;
+        else loadTarget();
+    });
+    document.getElementById('wcCloseBtn').addEventListener('click', function () {
+        fetch(API_BASE + '/api/web-dom-picker/close', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: SESSION })
+        }).finally(function () { window.close(); });
+    });
+
+    if ((urlInput.value || '').trim()) {
+        loadTarget();
+    }
+})();
+</script>
+{% endif %}
+</body>
+</html>

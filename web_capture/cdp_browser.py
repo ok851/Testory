@@ -1,0 +1,379 @@
+# -*- coding: utf-8 -*-
+"""CDP 浏览器检测、启动与 Playwright 连接。"""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.request import urlopen
+
+_lock = threading.Lock()
+_state: Dict[str, Any] = {
+    "browser_process": None,
+    "debug_port": 0,
+    "browser_kind": "",
+    "executable": "",
+    "playwright": None,
+    "browser": None,
+    "context": None,
+    "page": None,
+    "cdp_ws": "",
+    "user_data_dir": "",
+}
+
+
+def _set(**kwargs: Any) -> None:
+    with _lock:
+        _state.update(kwargs)
+
+
+def _snap() -> Dict[str, Any]:
+    with _lock:
+        return dict(_state)
+
+
+def pick_free_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = int(s.getsockname()[1])
+    s.close()
+    return port
+
+
+def fetch_cdp_ws(debug_port: int) -> Optional[str]:
+    url = f"http://127.0.0.1:{debug_port}/json/version"
+    try:
+        with urlopen(url, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        return (data.get("webSocketDebuggerUrl") or "").strip() or None
+    except Exception:
+        return None
+
+
+def fetch_cdp_pages(debug_port: int) -> List[Dict[str, Any]]:
+    url = f"http://127.0.0.1:{debug_port}/json/list"
+    try:
+        with urlopen(url, timeout=3.0) as resp:
+            raw = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for i, item in enumerate(raw):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") not in ("page", "webview"):
+                continue
+            out.append(
+                {
+                    "index": len(out),
+                    "id": item.get("id") or "",
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                    "webSocketDebuggerUrl": item.get("webSocketDebuggerUrl") or "",
+                }
+            )
+        return out
+    except Exception:
+        return []
+
+
+def _registry_browser_path(kind: str) -> Optional[str]:
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+
+        if kind == "edge":
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe",
+            )
+        else:
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+            )
+        path, _ = winreg.QueryValueEx(key, "")
+        winreg.CloseKey(key)
+        return path if path and os.path.isfile(path) else None
+    except Exception:
+        return None
+
+
+def detect_browser_executable(kind: str = "edge") -> Optional[str]:
+    k = (kind or "edge").strip().lower()
+    reg = _registry_browser_path("edge" if k == "edge" else "chrome")
+    if reg:
+        return reg
+    candidates = []
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    local = os.environ.get("LOCALAPPDATA", "")
+    if k == "edge":
+        candidates.extend(
+            [
+                os.path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+                os.path.join(pfx86, "Microsoft", "Edge", "Application", "msedge.exe"),
+                os.path.join(local, "Microsoft", "Edge", "Application", "msedge.exe"),
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                os.path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(pfx86, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+            ]
+        )
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def launch_debug_browser(
+    *,
+    browser: str = "edge",
+    port: Optional[int] = None,
+    url: str = "",
+    user_data_dir: str = "",
+) -> Dict[str, Any]:
+    """启动带 remote-debugging-port 的 Chrome/Edge。"""
+    snap = _snap()
+    if snap.get("browser_process") and snap.get("debug_port"):
+        proc = snap["browser_process"]
+        try:
+            if proc.poll() is None:
+                return {
+                    "success": True,
+                    "already_running": True,
+                    "debug_port": snap["debug_port"],
+                    "executable": snap.get("executable") or "",
+                }
+        except Exception:
+            pass
+
+    exe = detect_browser_executable(browser)
+    if not exe:
+        return {"success": False, "error": f"未找到 {browser} 可执行文件"}
+
+    debug_port = int(port or os.environ.get("WEB_CAPTURE_CDP_PORT", "9222") or 9222)
+    if not port:
+        for _ in range(5):
+            if fetch_cdp_ws(debug_port):
+                break
+            if _ == 0:
+                pass
+            else:
+                debug_port = pick_free_port()
+
+    udir = user_data_dir or os.path.join(
+        os.environ.get("TEMP", "."),
+        f"uat-cdp-profile-{os.getpid()}",
+    )
+    os.makedirs(udir, exist_ok=True)
+    args = [
+        exe,
+        f"--remote-debugging-port={debug_port}",
+        f"--user-data-dir={udir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-popup-blocking",
+    ]
+    if url:
+        args.append(url)
+    else:
+        args.append("about:blank")
+
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+            if sys.platform == "win32"
+            else 0,
+        )
+    except Exception as exc:
+        return {"success": False, "error": str(exc) or "启动浏览器失败"}
+
+    ws = None
+    for _ in range(80):
+        ws = fetch_cdp_ws(debug_port)
+        if ws:
+            break
+        time.sleep(0.1)
+
+    _set(
+        browser_process=proc,
+        debug_port=debug_port,
+        browser_kind=browser,
+        executable=exe,
+        cdp_ws=ws or "",
+        user_data_dir=udir,
+        playwright=None,
+        browser=None,
+        context=None,
+        page=None,
+    )
+    if not ws:
+        return {
+            "success": False,
+            "error": f"浏览器已启动但无法连接 CDP 端口 {debug_port}",
+            "debug_port": debug_port,
+        }
+    return {
+        "success": True,
+        "debug_port": debug_port,
+        "cdp_ws": ws,
+        "executable": exe,
+        "user_data_dir": udir,
+    }
+
+
+def connect_playwright_over_cdp(debug_port: Optional[int] = None) -> Dict[str, Any]:
+    snap = _snap()
+    port = int(debug_port or snap.get("debug_port") or 0)
+    if not port:
+        return {"success": False, "error": "未指定 CDP 端口"}
+    ws = fetch_cdp_ws(port)
+    if not ws:
+        return {"success": False, "error": f"无法连接 localhost:{port}"}
+
+    try:
+        from playwright.sync_api import sync_playwright
+
+        if snap.get("playwright"):
+            try:
+                snap["playwright"].stop()
+            except Exception:
+                pass
+        pw = sync_playwright().start()
+        browser = pw.chromium.connect_over_cdp(ws)
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        page = context.pages[0] if context.pages else context.new_page()
+        _set(
+            playwright=pw,
+            browser=browser,
+            context=context,
+            page=page,
+            cdp_ws=ws,
+            debug_port=port,
+        )
+        return {
+            "success": True,
+            "debug_port": port,
+            "page_url": page.url,
+            "pages_count": len(context.pages),
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc) or "Playwright CDP 连接失败"}
+
+
+def list_pages() -> Dict[str, Any]:
+    snap = _snap()
+    port = int(snap.get("debug_port") or 0)
+    pages = fetch_cdp_pages(port) if port else []
+    ctx = snap.get("context")
+    if ctx:
+        try:
+            for i, p in enumerate(ctx.pages):
+                if i < len(pages):
+                    pages[i]["playwright_index"] = i
+                else:
+                    pages.append(
+                        {
+                            "index": len(pages),
+                            "playwright_index": i,
+                            "title": "",
+                            "url": p.url,
+                            "id": "",
+                        }
+                    )
+        except Exception:
+            pass
+    return {"success": True, "pages": pages, "debug_port": port}
+
+
+def attach_page(*, page_index: int = 0, target_id: str = "") -> Dict[str, Any]:
+    snap = _snap()
+    ctx = snap.get("context")
+    browser = snap.get("browser")
+    if not browser:
+        conn = connect_playwright_over_cdp()
+        if not conn.get("success"):
+            return conn
+        snap = _snap()
+        ctx = snap.get("context")
+        browser = snap.get("browser")
+    if not ctx:
+        return {"success": False, "error": "无浏览器上下文"}
+
+    try:
+        if target_id:
+            port = int(snap.get("debug_port") or 0)
+            for item in fetch_cdp_pages(port):
+                if item.get("id") == target_id:
+                    page_index = int(item.get("playwright_index", item.get("index", 0)))
+                    break
+        pages = ctx.pages
+        if not pages:
+            page = ctx.new_page()
+        elif page_index < 0 or page_index >= len(pages):
+            page = pages[0]
+        else:
+            page = pages[page_index]
+        _set(page=page)
+        return {"success": True, "page_url": page.url, "page_index": page_index}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+def get_active_page():
+    snap = _snap()
+    return snap.get("page")
+
+
+def disconnect(*, stop_browser: bool = False) -> Dict[str, Any]:
+    snap = _snap()
+    try:
+        if snap.get("browser"):
+            snap["browser"].close()
+    except Exception:
+        pass
+    try:
+        if snap.get("playwright"):
+            snap["playwright"].stop()
+    except Exception:
+        pass
+    proc = snap.get("browser_process")
+    if stop_browser and proc:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    _set(
+        browser_process=None if stop_browser else proc,
+        playwright=None,
+        browser=None,
+        context=None,
+        page=None,
+    )
+    return {"success": True}
+
+
+def navigate(url: str) -> Dict[str, Any]:
+    page = get_active_page()
+    if not page:
+        return {"success": False, "error": "未附加页面"}
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        return {"success": True, "page_url": page.url}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}

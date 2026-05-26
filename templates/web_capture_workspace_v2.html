@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>网页元素捕获 (CDP)</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #f8fafc; color: #111827; }
+        h1 { font-size: 18px; margin: 0 0 12px; }
+        .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; max-width: 640px; }
+        .status { padding: 10px 12px; border-radius: 8px; background: #ecfdf5; color: #166534; font-size: 13px; margin-bottom: 12px; }
+        .err { background: #fef2f2; color: #991b1b; }
+        .btn { display: inline-block; padding: 8px 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; margin-right: 8px; }
+        .btn-primary { background: #dc2626; color: #fff; }
+        .btn-secondary { background: #e5e7eb; color: #111827; }
+        code { font-size: 12px; word-break: break-all; }
+        ol { font-size: 13px; line-height: 1.6; color: #475569; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>网页元素捕获 <span style="font-size:11px;background:#fef2f2;color:#dc2626;padding:2px 6px;border-radius:4px;">CDP</span></h1>
+        {% if error %}
+        <div class="status err">{{ error }}</div>
+        {% else %}
+        <div class="status" id="wcStatus">会话已连接。请在已打开的调试浏览器中：点浮动面板「开始捕获」→ 悬停高亮 → 单击元素。</div>
+        <p style="font-size:13px;color:#64748b;">会话 ID: <code>{{ session_id }}</code></p>
+        {% if cdp_port %}<p style="font-size:13px;">CDP 端口: <strong>{{ cdp_port }}</strong></p>{% endif %}
+        <ol>
+            <li>若未弹出 Edge/Chrome，请返回步骤页重新点击「网页捕获」。</li>
+            <li>在浏览器地址栏打开待测页面。</li>
+            <li>使用页面左上角「UAT 网页捕获」面板开始拾取。</li>
+            <li>拾取成功后，步骤页将自动打开<strong>元素编辑器</strong>。</li>
+        </ol>
+        <button type="button" class="btn btn-primary" id="wcRearmBtn">重新注入捕获脚本</button>
+        <button type="button" class="btn btn-secondary" onclick="window.close()">关闭窗口</button>
+        {% endif %}
+    </div>
+    {% if not error %}
+    <script>
+        const SESSION = {{ session_id|tojson }};
+        const API_BASE = {{ api_base|tojson }};
+        document.getElementById('wcRearmBtn').addEventListener('click', async function () {
+            const r = await fetch(API_BASE + '/api/web-capture/highlight', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ session_id: SESSION })
+            });
+            const j = await r.json();
+            document.getElementById('wcStatus').textContent = j.success ? '已重新注入捕获脚本' : (j.error || '注入失败');
+        });
+    </script>
+    {% endif %}
+</body>
+</html>

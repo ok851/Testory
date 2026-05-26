@@ -348,6 +348,26 @@
         .modal.active {
             display: flex;
         }
+
+        /* 步骤弹窗挂到 body，避免 .container overflow:hidden 裁剪 */
+        #desktopCaptureResultModal,
+        #webCaptureResultModal,
+        #webCaptureSessionModal,
+        #editStepModal,
+        #createStepModal,
+        #visualRelearnModal {
+            position: fixed;
+            z-index: 10050;
+        }
+        #webCaptureSessionModal { z-index: 10045; }
+        #createStepModal { z-index: 10000; }
+        #editStepModal { z-index: 10001; }
+        #visualRelearnModal { z-index: 10060; }
+
+        .step-actions .btn {
+            -webkit-user-drag: none;
+            user-select: none;
+        }
         
         .modal-content {
             background: white;
@@ -981,7 +1001,8 @@
                 <button type="button" onclick="showSeleniumIdeImportModal()" class="btn btn-success" id="seleniumIdeImportBtn" data-i18n="steps_import_side">
                     🧪 从 Selenium IDE 导入
                 </button>
-                <button type="button" onclick="toggleElementCapture({ recordToCase: true, shiftKey: captureBtnShiftKey(event) })" class="btn btn-primary" id="elementCaptureRecordBtn" title="桌面：先切到目标窗口，再点工具条「开始框选」拖拽录制；Shift+点击可同时打开网页拾取">🧲 框选录制 / 元素捕获</button>
+                <button type="button" onclick="toggleElementCapture({ recordToCase: true, captureChannel: 'desktop' })" class="btn btn-primary" id="elementCaptureRecordBtn" title="Windows 原生应用：悬浮条智能点选生成 UIA/视觉定位；勿在浏览器内用此模式拾取网页 DOM">🖥️ 桌面捕获 / 录制</button>
+                <button type="button" onclick="toggleElementCapture({ recordToCase: true, captureChannel: 'web' })" class="btn btn-info" id="elementWebCaptureBtn" title="打开网页捕获器窗口，在预览页悬停高亮并单击拾取 DOM 元素">🌐 网页捕获</button>
             </div>
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
@@ -1045,7 +1066,7 @@
                         <div id="stepDesktopAppList" class="desktop-pick-list" style="overflow:auto;max-height:180px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;"></div>
                     </div>
                 </div>
-                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">桌面录制：启动后仅显示小工具条（不挡屏），请先切换到目标窗口，再点「开始框选」后拖拽框选；网页请 Shift+点击该按钮。</small>
+                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">桌面录制：悬浮条默认<strong>智能点选</strong>（单击图标/按钮，自动 UIA 结构 + 视觉模板）；「区域框选」仅作视觉补充。网页请 Shift+点击该按钮。</small>
             </div>
             <div class="form-group">
                 <label for="stepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -1247,7 +1268,7 @@
                         <div id="editDesktopAppList" class="desktop-pick-list" style="overflow:auto;max-height:180px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa;"></div>
                     </div>
                 </div>
-                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">点选窗口或应用即可配置；捕获元素请用工具栏「元素捕获 / 录制」。</small>
+                <small style="color:#666;font-size:12px;line-height:1.5;display:block;margin-top:8px;">点选窗口或应用即可配置；网页用工具栏「网页捕获」，Windows 原生窗口用「桌面捕获 / 录制」。</small>
             </div>
             <div class="form-group">
                 <label for="editStepAction" data-i18n="steps_label_action">操作类型 *</label>
@@ -1425,14 +1446,21 @@
         <div class="modal-content modal-content--desktop-capture">
             <div class="desktop-capture-toolbar">
                 <button type="button" class="btn btn-secondary btn-sm" id="desktopCaptureRecaptureBtn">重新捕获</button>
-                <button type="button" class="btn btn-secondary btn-sm" id="desktopCaptureSimilarBtn" title="后续版本支持">捕获相似元素</button>
-                <label style="margin-left:auto;font-size:13px;color:#6b7280;">元素名称</label>
+                <label style="font-size:13px;color:#6b7280;">操作类型</label>
+                <select id="desktopCaptureAction" class="desktop-capture-name" style="max-width:140px;margin-right:12px;">
+                    <option value="click">点击</option>
+                    <option value="double_click">双击</option>
+                    <option value="right_click">右键点击</option>
+                    <option value="input">输入</option>
+                    <option value="verify">验证</option>
+                </select>
+                <label style="font-size:13px;color:#6b7280;">元素名称</label>
                 <input type="text" id="desktopCaptureElementName" class="desktop-capture-name" placeholder="列表项目_控制面板" />
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between;padding:0 18px;">
                 <div class="desktop-capture-tabs">
                     <button type="button" class="desktop-capture-tab active" data-dc-tab="preview">预览</button>
-                    <button type="button" class="desktop-capture-tab" data-dc-tab="precise">精准定位</button>
+                    <button type="button" class="desktop-capture-tab" data-dc-tab="precise">结构定位信息（自动生成）</button>
                 </div>
                 <button type="button" class="btn btn-secondary btn-sm" id="desktopCaptureVerifyBtn">校验元素</button>
             </div>
@@ -1441,6 +1469,22 @@
                 <div class="desktop-capture-preview-wrap">
                     <img id="desktopCapturePreviewImg" alt="元素预览" style="display:none;" />
                     <span id="desktopCapturePreviewPlaceholder" style="color:#9ca3af;font-size:13px;">无模板预览（visual 步骤将存为截图模板）</span>
+                </div>
+                <div id="desktopCaptureInputValueWrap" style="display:none;margin-top:10px;">
+                    <label style="font-size:12px;color:#64748b;">输入内容（input 步骤）
+                        <input type="text" id="desktopCaptureInputValue" style="width:100%;margin-top:4px;box-sizing:border-box;" placeholder="要键入的文本" />
+                    </label>
+                </div>
+                <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;max-width:420px;">
+                    <label style="font-size:12px;color:#64748b;">匹配阈值
+                        <input type="number" id="desktopCaptureMatchThreshold" min="0.5" max="0.95" step="0.01" value="0.72" style="width:100%;margin-top:4px;" />
+                    </label>
+                    <label style="font-size:12px;color:#64748b;">点击偏移 X
+                        <input type="number" id="desktopCaptureOffsetX" min="0" value="0" style="width:100%;margin-top:4px;" />
+                    </label>
+                    <label style="font-size:12px;color:#64748b;">点击偏移 Y
+                        <input type="number" id="desktopCaptureOffsetY" min="0" value="0" style="width:100%;margin-top:4px;" />
+                    </label>
                 </div>
             </div>
             <div id="desktopCapturePanelPrecise" class="desktop-capture-panel">
@@ -1451,6 +1495,83 @@
                 <div style="display:flex;gap:8px;">
                     <button type="button" class="btn btn-secondary" id="desktopCaptureSaveContinueBtn">保存并继续</button>
                     <button type="button" class="btn btn-primary" id="desktopCaptureDoneBtn" style="background:#dc2626;border-color:#dc2626;">完成</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 网页 DOM 捕获会话（与 Playwright 无关，通过书签在待测页拾取） -->
+    <div id="webCaptureSessionModal" class="modal" style="z-index: 10045; display:none;">
+        <div class="modal-content modal-content--desktop-capture" style="max-width:520px;">
+            <div class="desktop-capture-toolbar" style="border:none;padding-bottom:0;">
+                <span style="font-size:15px;font-weight:700;color:#111827;">网页元素捕获</span>
+                <span style="margin-left:8px;font-size:10px;font-weight:700;color:#dc2626;background:#fef2f2;padding:2px 6px;border-radius:4px;">DOM</span>
+            </div>
+            <p style="font-size:13px;color:#6b7280;line-height:1.5;margin:12px 0 14px;">
+                捕获器应在<strong>新打开的「网页元素捕获」窗口</strong>中运行。若未看到，请允许弹出窗口后点下方按钮。
+                在捕获窗口加载待测 URL，预览页左上角点「开始捕获」→ 悬停高亮 → 单击元素。
+            </p>
+            <div style="margin-bottom:12px;">
+                <button type="button" class="btn btn-primary" id="webCaptureReopenWorkspaceBtn" style="background:#dc2626;border-color:#dc2626;">重新打开捕获器窗口</button>
+            </div>
+            <details style="font-size:12px;color:#64748b;margin-bottom:12px;">
+                <summary style="cursor:pointer;">备用：捕获书签（无法使用弹出窗口时）</summary>
+                <ol style="line-height:1.6;margin:8px 0 0 18px;padding:0;">
+                    <li>将下方按钮拖到书签栏</li>
+                    <li>在待测页点击该书签后拾取</li>
+                </ol>
+            </details>
+            <div style="margin-bottom:12px;">
+                <a id="webCaptureBookmarkletLink" href="#" class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;text-decoration:none;display:inline-block;"
+                   onclick="return false;">📌 捕获书签（拖到书签栏）</a>
+                <button type="button" class="btn btn-secondary btn-sm" id="webCaptureCopyBookmarkletBtn" style="margin-left:8px;">复制书签代码</button>
+            </div>
+            <p id="webCaptureInjectUrlHint" style="font-size:11px;color:#9ca3af;word-break:break-all;margin-bottom:14px;"></p>
+            <div class="desktop-capture-footer" style="border-top:1px solid #e5e7eb;padding-top:12px;">
+                <button type="button" class="btn btn-secondary" onclick="closeWebCaptureSessionModal()">关闭说明</button>
+                <button type="button" class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;" onclick="stopElementCaptureSession()">停止网页捕获</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 网页捕获结果 / 元素编辑器（与桌面 #desktopCaptureResultModal 独立） -->
+    <div id="webCaptureResultModal" class="modal" style="z-index: 10052; display:none;">
+        <div class="modal-content modal-content--desktop-capture">
+            <div class="desktop-capture-toolbar">
+                <button type="button" class="btn btn-secondary btn-sm" id="webCaptureRecaptureBtn">重新捕获</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="webCaptureSimilarBtn">捕获相似元素</button>
+                <label style="font-size:13px;color:#6b7280;">元素名称</label>
+                <input type="text" id="webCaptureElementName" class="desktop-capture-name" placeholder="input_搜索框" />
+            </div>
+            <div id="webCaptureStatusBar" style="margin:0 18px 8px;padding:8px 12px;border-radius:6px;font-size:13px;background:#ecfdf5;color:#166534;display:none;"></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:0 18px;">
+                <div class="desktop-capture-tabs">
+                    <button type="button" class="desktop-capture-tab active" data-wc-tab="preview">预览</button>
+                    <button type="button" class="desktop-capture-tab" data-wc-tab="precise">精准定位</button>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button type="button" class="btn btn-secondary btn-sm" id="webCaptureTestLocatorBtn">精准定位</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="webCaptureVerifyBtn">校验元素</button>
+                </div>
+            </div>
+            <div id="webCaptureVerifyMsg" style="display:none;padding:0 18px 8px;font-size:13px;"></div>
+            <div id="webCapturePanelPreview" class="desktop-capture-panel active">
+                <div class="desktop-capture-preview-wrap">
+                    <img id="webCapturePreviewImg" alt="元素预览" style="display:none;max-width:100%;" />
+                    <span id="webCapturePreviewPlaceholder" style="color:#9ca3af;font-size:13px;">拾取后将显示元素截图</span>
+                </div>
+                <p id="webCapturePageUrl" style="font-size:11px;color:#9ca3af;word-break:break-all;margin-top:8px;"></p>
+            </div>
+            <div id="webCapturePanelPrecise" class="desktop-capture-panel">
+                <div id="webCaptureDomPathList" style="font-size:12px;margin-bottom:10px;"></div>
+                <div id="webCaptureAttrTable" style="max-height:220px;overflow:auto;font-size:12px;"></div>
+                <div id="webCaptureSimilarList" style="display:none;margin-top:10px;max-height:160px;overflow:auto;font-size:12px;"></div>
+            </div>
+            <div class="desktop-capture-footer">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="window.open('/recording-tutorial','_blank')">帮助</button>
+                <div style="display:flex;gap:8px;">
+                    <button type="button" class="btn btn-secondary" id="webCaptureSaveContinueBtn">保存并继续</button>
+                    <button type="button" class="btn btn-primary" id="webCaptureDoneBtn" style="background:#dc2626;border-color:#dc2626;">完成</button>
                 </div>
             </div>
         </div>
@@ -1908,8 +2029,8 @@
                                 </div>
                             </div>
                             <div class="step-actions">
-                                <button type="button" onclick="editStep(${step.id})" class="btn btn-sm btn-secondary">${btnEd}</button>
-                                <button type="button" onclick="deleteStep(${step.id})" class="btn btn-sm btn-danger">${btnDel}</button>
+                                <button type="button" draggable="false" onmousedown="event.stopPropagation()" onclick="event.stopPropagation(); editStep(${step.id});" class="btn btn-sm btn-secondary">${btnEd}</button>
+                                <button type="button" draggable="false" onmousedown="event.stopPropagation()" onclick="event.stopPropagation(); deleteStep(${step.id});" class="btn btn-sm btn-danger">${btnDel}</button>
                             </div>
                         `;
                         
@@ -2211,20 +2332,26 @@ function changePage(page) {
             document.getElementById('createStepModal').classList.remove('active');
         }
         
-        function showEditStepModal(step) {
+        async function showEditStepModal(step) {
             currentEditingStepId = step.id;
-            document.getElementById('editStepModal').classList.add('active');
+            const modal = document.getElementById('editStepModal');
+            if (!modal) throw new Error('编辑弹窗未加载');
+            modal.classList.add('active');
             const layerEl = document.getElementById('editStepAutomationLayer');
-            if (layerEl) {
-                layerEl.value = ((step.automation_layer || 'web').toLowerCase() === 'desktop') ? 'desktop' : 'web';
-            }
+            const layer = ((step.automation_layer || 'web').toLowerCase() === 'desktop') ? 'desktop' : 'web';
+            if (layerEl) layerEl.value = layer;
             let _ds = step.desktop_spec;
             if (typeof _ds === 'string' && _ds.trim()) {
                 try { _ds = JSON.parse(_ds); } catch (e) { _ds = null; }
             }
             setDesktopSpecField('edit', _ds && typeof _ds === 'object' ? _ds : null);
-            onAutomationLayerChange('edit');
-            document.getElementById('editStepAction').value = step.action;
+            await onAutomationLayerChange('edit', {
+                preserveAction: step.action,
+                preserveSelectorType: step.selector_type || (layer === 'desktop' ? 'visual' : 'css'),
+                skipDesktopSnapshot: false,
+            });
+            const actionEl = document.getElementById('editStepAction');
+            if (actionEl) actionEl.value = step.action;
             document.getElementById('editStepSelectorType').value = step.selector_type || 'css';
             const isVisualEdit = (step.selector_type || '').toLowerCase() === 'visual';
             if (isVisualEdit) {
@@ -2443,20 +2570,20 @@ function changePage(page) {
             }
         }
 
-        function rebuildActionSelect(selectId, layer) {
+        function rebuildActionSelect(selectId, layer, preserveValue) {
             const sel = document.getElementById(selectId);
             if (!sel) return;
-            const prev = sel.value;
+            const prev = preserveValue != null && preserveValue !== '' ? preserveValue : sel.value;
             const list = layer === 'desktop' ? DESKTOP_STEP_ACTIONS : WEB_STEP_ACTIONS;
             sel.innerHTML = list.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
             if (list.some(([v]) => v === prev)) sel.value = prev;
             else sel.value = list[0][0];
         }
 
-        function rebuildSelectorTypeSelect(selectId, layer) {
+        function rebuildSelectorTypeSelect(selectId, layer, preserveValue) {
             const sel = document.getElementById(selectId);
             if (!sel) return;
-            const prev = sel.value;
+            const prev = preserveValue != null && preserveValue !== '' ? preserveValue : sel.value;
             if (layer === 'desktop') {
                 sel.innerHTML = DESKTOP_SELECTOR_TYPES.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
                 if (DESKTOP_SELECTOR_TYPES.some(([v]) => v === prev)) sel.value = prev;
@@ -2795,17 +2922,28 @@ function changePage(page) {
             }
         }
 
-        async function onAutomationLayerChange(mode) {
+        async function onAutomationLayerChange(mode, opts) {
+            opts = opts || {};
             const isEdit = mode === 'edit';
             const layerEl = document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer');
             const layer = (layerEl && layerEl.value) || 'web';
             const specGrp = document.getElementById(isEdit ? 'editStepDesktopSpecGroup' : 'stepDesktopSpecGroup');
             if (specGrp) specGrp.style.display = layer === 'desktop' ? 'block' : 'none';
-            rebuildActionSelect(isEdit ? 'editStepAction' : 'stepAction', layer);
-            rebuildSelectorTypeSelect(isEdit ? 'editStepSelectorType' : 'stepSelectorType', layer);
+            rebuildActionSelect(
+                isEdit ? 'editStepAction' : 'stepAction',
+                layer,
+                opts.preserveAction
+            );
+            rebuildSelectorTypeSelect(
+                isEdit ? 'editStepSelectorType' : 'stepSelectorType',
+                layer,
+                opts.preserveSelectorType
+            );
             if (layer === 'desktop') {
                 applyDesktopEnvHints(mode, await loadDesktopEnvConfig());
-                refreshDesktopSnapshot(mode, false);
+                if (!opts.skipDesktopSnapshot) {
+                    refreshDesktopSnapshot(mode, false);
+                }
             }
             if (isEdit) toggleEditActionFields();
             else toggleActionFields();
@@ -2816,6 +2954,7 @@ function changePage(page) {
         let _elementCaptureFormTarget = null;
         let _elementCaptureRecordToCase = false;
         let _elementCaptureStarting = false;
+        let _elementCaptureChannel = 'desktop';
         let _lastDeskCaptureMsg = '';
 
         function formatFetchError(err) {
@@ -2866,9 +3005,313 @@ function changePage(page) {
 
         let _desktopCapturePendingPick = null;
         let _desktopCaptureFormMode = 'create';
+        let _structureSnapshotPollTimer = null;
+        let _desktopCaptureAwaitingRecapture = false;
+
+        function stopStructureSnapshotPoll() {
+            if (_structureSnapshotPollTimer) {
+                clearInterval(_structureSnapshotPollTimer);
+                _structureSnapshotPollTimer = null;
+            }
+        }
+
+        function isDesktopCaptureResultModalOpen() {
+            const modal = document.getElementById('desktopCaptureResultModal');
+            return !!(modal && modal.classList.contains('active') && modal.style.display === 'flex');
+        }
+
+        function mergeDesktopPickUpdates(basePick, patch) {
+            if (!basePick || !patch) return basePick;
+            const merged = Object.assign({}, basePick, patch);
+            if (patch.preview_image_b64) {
+                merged.preview_image_b64 = patch.preview_image_b64;
+            }
+            if (patch.element_snapshot) {
+                merged.element_snapshot = patch.element_snapshot;
+            }
+            if (patch.selector_value) {
+                try {
+                    const cur = JSON.parse(merged.selector_value || '{}');
+                    const inc = JSON.parse(patch.selector_value || '{}');
+                    if (inc.template_image_base64) {
+                        cur.template_image_base64 = inc.template_image_base64;
+                    }
+                    if (inc.element_snapshot) {
+                        cur.element_snapshot = inc.element_snapshot;
+                    }
+                    if (inc.match_threshold != null) {
+                        cur.match_threshold = inc.match_threshold;
+                    }
+                    merged.selector_value = JSON.stringify(cur);
+                } catch (e) {
+                    merged.selector_value = patch.selector_value;
+                }
+            }
+            if (patch.locator_candidates) {
+                merged.locator_candidates = patch.locator_candidates;
+            }
+            return merged;
+        }
+
+        function syncDesktopCaptureFooterButtons() {
+            const isEdit = _desktopCaptureFormMode === 'edit' && !!currentEditingStepId;
+            const cont = document.getElementById('desktopCaptureSaveContinueBtn');
+            const done = document.getElementById('desktopCaptureDoneBtn');
+            if (!cont || !done) return;
+            if (isEdit) {
+                cont.textContent = '保存';
+                cont.className = 'btn btn-primary';
+                cont.style.background = '';
+                cont.style.borderColor = '';
+                done.textContent = '取消';
+                done.className = 'btn btn-secondary';
+                done.style.background = '';
+                done.style.borderColor = '';
+            } else {
+                cont.textContent = '保存并继续';
+                cont.className = 'btn btn-secondary';
+                cont.style.background = '';
+                cont.style.borderColor = '';
+                done.textContent = '完成';
+                done.className = 'btn btn-primary';
+                done.style.background = '#dc2626';
+                done.style.borderColor = '#dc2626';
+            }
+        }
+
+        function refreshDesktopCaptureResultModalUI(pick) {
+            if (!pick) return;
+            const nameEl = document.getElementById('desktopCaptureElementName');
+            if (nameEl && !(nameEl.value || '').trim()) {
+                nameEl.value = pick.label || pick.name || pick.automation_id || '';
+            }
+            const actEl = document.getElementById('desktopCaptureAction');
+            if (actEl && pick.record_action) {
+                const ra = pick.record_action || pick.action || 'click';
+                if (actEl.querySelector('option[value="' + ra + '"]')) actEl.value = ra;
+            }
+            const inpWrap = document.getElementById('desktopCaptureInputValueWrap');
+            const inpEl = document.getElementById('desktopCaptureInputValue');
+            if (inpWrap && actEl) {
+                inpWrap.style.display = actEl.value === 'input' ? 'block' : 'none';
+                if (inpEl && pick.input_value) inpEl.value = pick.input_value;
+            }
+            const img = document.getElementById('desktopCapturePreviewImg');
+            const ph = document.getElementById('desktopCapturePreviewPlaceholder');
+            let visualB64 = pick.preview_image_b64 || '';
+            if (!visualB64 && (pick.selector_type || '') === 'visual' && pick.selector_value) {
+                try {
+                    const vj = JSON.parse(pick.selector_value);
+                    visualB64 = vj.template_image_base64 || '';
+                } catch (e) { /* ignore */ }
+            }
+            if (img && ph) {
+                if (visualB64) {
+                    img.src = 'data:image/png;base64,' + visualB64;
+                    img.style.display = 'block';
+                    ph.style.display = 'none';
+                } else if (!img.getAttribute('src')) {
+                    img.style.display = 'none';
+                    ph.style.display = 'block';
+                }
+            }
+            const thEl = document.getElementById('desktopCaptureMatchThreshold');
+            const oxEl = document.getElementById('desktopCaptureOffsetX');
+            const oyEl = document.getElementById('desktopCaptureOffsetY');
+            const meta = pick._visual_meta || {};
+            if (thEl && meta.match_threshold != null) thEl.value = String(meta.match_threshold);
+            if (oxEl && meta.click_offset) oxEl.value = String(meta.click_offset.x != null ? meta.click_offset.x : 0);
+            if (oyEl && meta.click_offset) oyEl.value = String(meta.click_offset.y != null ? meta.click_offset.y : 0);
+            let snapPending = !pick.element_snapshot;
+            if (snapPending && (pick.selector_type || '') === 'visual' && pick.selector_value) {
+                try {
+                    const vj = JSON.parse(pick.selector_value);
+                    snapPending = !vj.element_snapshot;
+                } catch (e) { snapPending = true; }
+            }
+            renderDesktopCaptureStructurePanel(pick, snapPending);
+        }
+
+        function renderDesktopCaptureStructurePanel(pick, loading) {
+            const uiaList = document.getElementById('desktopCaptureUiaPathList');
+            if (!uiaList) return;
+            if (loading) {
+                uiaList.innerHTML = '<p style="color:#6b7280;font-size:13px;">正在生成结构定位信息…</p>';
+                return;
+            }
+            const snap = (pick && pick.element_snapshot) || {};
+            const sel = snap.selector || {};
+            const nodes = (pick && pick.uia_path)
+                || (sel.parent_chain ? formatElementSnapshotAsUiaLines(sel) : [])
+                || (pick && pick.desktop_spec && pick.desktop_spec.uia_path) || [];
+            const lines = formatUiaPathLinesForDisplay(nodes);
+            const kc = sel.key_candidates || [];
+            let html = '';
+            if (lines.length) {
+                html += '<div style="font-size:12px;color:#6b7280;margin-bottom:8px;">父级链</div>';
+                html += lines.map(function (line) {
+                    return '<div class="desktop-capture-uia-line"><input type="checkbox" checked disabled style="margin-right:8px;" />'
+                        + line.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
+                }).join('');
+            }
+            if (kc.length) {
+                html += '<div style="font-size:12px;color:#6b7280;margin:12px 0 6px;">关键属性</div>';
+                html += '<table class="data-table" style="font-size:12px;width:100%;"><thead><tr>'
+                    + '<th>属性</th><th>值</th><th>匹配</th></tr></thead><tbody>';
+                html += kc.map(function (row) {
+                    const prop = (row.property || '').replace(/</g, '&lt;');
+                    const val = (row.value || '').replace(/</g, '&lt;');
+                    const match = (row.match || 'equals').replace(/</g, '&lt;');
+                    return '<tr><td>' + prop + '</td><td>' + val + '</td><td>' + match + '</td></tr>';
+                }).join('');
+                html += '</tbody></table>';
+            }
+            if (!html) {
+                html = '<p style="color:#9ca3af;font-size:13px;">当前仅视觉定位，可重新捕获尝试生成结构信息</p>';
+            }
+            uiaList.innerHTML = html;
+        }
+
+        function startStructureSnapshotPoll(pick) {
+            stopStructureSnapshotPoll();
+            if (!pick) return;
+            const started = Date.now();
+            _structureSnapshotPollTimer = setInterval(async function () {
+                if (!isDesktopCaptureResultModalOpen() && !_desktopCaptureAwaitingRecapture) {
+                    stopStructureSnapshotPoll();
+                    return;
+                }
+                if (Date.now() - started > 20000) {
+                    stopStructureSnapshotPoll();
+                    if (_desktopCapturePendingPick) {
+                        renderDesktopCaptureStructurePanel(_desktopCapturePendingPick, false);
+                    }
+                    return;
+                }
+                try {
+                    const r = await fetchApi('/api/element-picker/status?consume=0', {
+                        headers: { 'Accept': 'application/json' },
+                    }, 1);
+                    const data = await parseApiJsonResponse(r);
+                    const lp = data && data.desktop && data.desktop.last_pick;
+                    if (!lp) return;
+                    const prev = _desktopCapturePendingPick || pick;
+                    const merged = mergeDesktopPickUpdates(prev, lp);
+                    const hadPreview = !!(prev.preview_image_b64 || (function () {
+                        try {
+                            return JSON.parse(prev.selector_value || '{}').template_image_base64;
+                        } catch (e) { return ''; }
+                    })());
+                    const hasPreview = !!(merged.preview_image_b64 || (function () {
+                        try {
+                            return JSON.parse(merged.selector_value || '{}').template_image_base64;
+                        } catch (e) { return ''; }
+                    })());
+                    const hadSnap = !!(prev.element_snapshot || (function () {
+                        try {
+                            return JSON.parse(prev.selector_value || '{}').element_snapshot;
+                        } catch (e) { return null; }
+                    })());
+                    const hasSnap = !!(merged.element_snapshot || (function () {
+                        try {
+                            return JSON.parse(merged.selector_value || '{}').element_snapshot;
+                        } catch (e) { return null; }
+                    })());
+                    if (!hadPreview && hasPreview || !hadSnap && hasSnap
+                        || merged.selector_value !== prev.selector_value) {
+                        _desktopCapturePendingPick = merged;
+                        refreshDesktopCaptureResultModalUI(merged);
+                    }
+                    if (hasSnap && hasPreview) {
+                        stopStructureSnapshotPoll();
+                    }
+                } catch (e) { /* ignore transient poll errors */ }
+            }, 500);
+        }
 
         function captureBtnShiftKey(ev) {
             return !!(ev && ev.shiftKey);
+        }
+
+        function stepToDesktopPick(step) {
+            if (!step) return null;
+            let sv = step.selector_value || '';
+            let data = null;
+            try {
+                data = typeof sv === 'string' ? JSON.parse(sv) : sv;
+            } catch (e) {
+                data = null;
+            }
+            const pick = {
+                selector_type: step.selector_type || 'visual',
+                selector_value: sv,
+                label: step.description || '',
+                name: step.description || '',
+                input_value: step.input_value || '',
+                record_action: step.action || 'click',
+            };
+            if (data && typeof data === 'object') {
+                if (data.template_image_base64) {
+                    pick.preview_image_b64 = data.template_image_base64;
+                }
+                if (data.element_snapshot) {
+                    pick.element_snapshot = data.element_snapshot;
+                    const sel = data.element_snapshot.selector || {};
+                    const kc = sel.key_candidates || [];
+                    if (kc.length && kc[0].value) {
+                        pick.label = 'ListItem_' + kc[0].value;
+                        pick.name = kc[0].value;
+                    }
+                    pick.uia_path = formatElementSnapshotAsUiaLines(sel);
+                }
+                const anchor = data.search_anchor || {};
+                if (anchor.x != null && anchor.y != null) {
+                    pick.pick_point = { x: anchor.x, y: anchor.y };
+                }
+                pick._visual_meta = {
+                    match_threshold: data.match_threshold,
+                    click_offset: data.click_offset || {},
+                };
+            }
+            let ds = step.desktop_spec;
+            if (typeof ds === 'string' && ds.trim()) {
+                try { ds = JSON.parse(ds); } catch (e) { ds = {}; }
+            }
+            if (ds && typeof ds === 'object') pick.desktop_spec = ds;
+            return pick;
+        }
+
+        function formatElementSnapshotAsUiaLines(selector) {
+            if (!selector || !selector.parent_chain) return [];
+            const nodes = selector.parent_chain || [];
+            const lines = nodes.map(function (n) {
+                const tag = (n.control_type || 'Control').trim() || 'Control';
+                const attrs = [];
+                const cls = (n.class_name || '').trim();
+                if (cls) attrs.push('cls="' + cls + '"');
+                const nm = (n.name || '').trim();
+                if (nm) attrs.push('uia-name="' + nm + '"');
+                const aid = (n.automation_id || '').trim();
+                if (aid) attrs.push('automation_id="' + aid + '"');
+                if (tag === 'Window' && n.app) attrs.unshift('app="' + n.app + '"');
+                return { control_type: tag, class_name: cls, name: nm, automation_id: aid };
+            });
+            const kc = selector.key_candidates || [];
+            if (kc.length) {
+                const last = kc[0];
+                const lastNode = lines.length ? lines[lines.length - 1] : null;
+                const lastCt = lastNode ? String(lastNode.control_type || '').toLowerCase() : '';
+                const dup = lastNode && lastCt.indexOf('listitem') >= 0
+                    && (lastNode.name || '') === (last.value || '');
+                if (!dup) {
+                    lines.push({
+                        control_type: selector.anchor_props || 'ListItem',
+                        name: last.value || '',
+                        automation_id: (kc[1] && kc[1].value) || '',
+                    });
+                }
+            }
+            return lines;
         }
 
         function formatUiaPathLinesForDisplay(nodes) {
@@ -2919,20 +3362,45 @@ function changePage(page) {
             return cands.length ? JSON.stringify(cands) : '';
         }
 
-        function commitDesktopCaptureToForm(closeModal) {
-            const pick = _desktopCapturePendingPick;
-            if (!pick) return;
-            const mode = _desktopCaptureFormMode || 'create';
-            const isEdit = mode === 'edit';
-            const nameInput = document.getElementById('desktopCaptureElementName');
-            const label = (nameInput && nameInput.value.trim()) || pick.label || pick.name || '控件';
-            pick.label = label;
-            applyDesktopPickToForm(mode, pick);
-            if (closeModal !== false) {
-                const modal = document.getElementById('desktopCaptureResultModal');
-                if (modal) modal.style.display = 'none';
+        function applyVisualMetaFromCaptureForm(pick) {
+            if (!pick || (pick.selector_type || '') !== 'visual') return pick;
+            let data = {};
+            try {
+                data = JSON.parse(pick.selector_value || '{}');
+            } catch (e) {
+                return pick;
             }
-            _desktopCapturePendingPick = null;
+            const thEl = document.getElementById('desktopCaptureMatchThreshold');
+            const oxEl = document.getElementById('desktopCaptureOffsetX');
+            const oyEl = document.getElementById('desktopCaptureOffsetY');
+            if (thEl) data.match_threshold = parseFloat(thEl.value) || 0.72;
+            if (oxEl && oyEl) {
+                data.click_offset = {
+                    x: parseInt(oxEl.value, 10) || 0,
+                    y: parseInt(oyEl.value, 10) || 0,
+                };
+            }
+            if (pick.element_snapshot) {
+                data.element_snapshot = pick.element_snapshot;
+            } else if (data.element_snapshot && typeof data.element_snapshot === 'object') {
+                pick.element_snapshot = data.element_snapshot;
+            }
+            pick.selector_value = JSON.stringify(data);
+            return pick;
+        }
+
+        async function saveDesktopCaptureEditStep(options) {
+            if (!_desktopCapturePendingPick || !currentEditingStepId) return false;
+            return persistDesktopCapturePick('edit', _desktopCapturePendingPick, options || { closeModal: true });
+        }
+
+        async function commitDesktopCaptureToForm(closeModal) {
+            if (!_desktopCapturePendingPick) return;
+            const mode = _desktopCaptureFormMode || 'create';
+            await persistDesktopCapturePick(mode, _desktopCapturePendingPick, {
+                closeModal: closeModal !== false,
+                reload: mode === 'edit',
+            });
         }
 
         function closeVisualRelearnModal() {
@@ -2942,16 +3410,21 @@ function changePage(page) {
             if (imgWrap) imgWrap.style.display = 'none';
         }
 
-        function offerVisualRelearn(stepId, selectorValue, errMsg, failureScreenshot) {
+        function offerVisualRelearn(stepId, selectorValue, errMsg, failureScreenshot, extra) {
+            extra = extra || {};
             const shortErr = String(errMsg || '视觉匹配失败').slice(0, 240);
-            showToast(shortErr, 'error');
+            if (extra.need_relearn || (extra.best_score && extra.best_score > 0.55)) {
+                showToast(shortErr + '（可自学习更新模板）', 'warning');
+            } else {
+                showToast(shortErr, 'error');
+            }
             const m = document.getElementById('visualRelearnModal');
             if (!m) {
                 alert(shortErr + '\n\n请重新框选录制或手动更新模板。');
                 return;
             }
             document.getElementById('visualRelearnStepId').value = stepId || '';
-            document.getElementById('visualRelearnSelectorValue').value = '';
+            document.getElementById('visualRelearnSelectorValue').value = selectorValue || '';
             document.getElementById('visualRelearnErr').textContent = shortErr;
             document.getElementById('visualRelearnX').value = '';
             document.getElementById('visualRelearnY').value = '';
@@ -2974,11 +3447,17 @@ function changePage(page) {
                 showToast('请输入有效的屏幕坐标', 'warning');
                 return;
             }
+            const selectorValue = (document.getElementById('visualRelearnSelectorValue') || {}).value || '';
             try {
                 const r = await fetch('/api/desktop/visual/relearn', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ step_id: stepId || undefined, x: x, y: y }),
+                    body: JSON.stringify({
+                        step_id: stepId || undefined,
+                        selector_value: selectorValue || undefined,
+                        x: x,
+                        y: y,
+                    }),
                 });
                 const data = await r.json();
                 if (!data.success) throw new Error(data.error || '更新失败');
@@ -2990,8 +3469,147 @@ function changePage(page) {
             }
         }
 
+        function mountStepModalsToBody() {
+            ['desktopCaptureResultModal', 'webCaptureResultModal', 'webCaptureSessionModal', 'editStepModal', 'createStepModal', 'visualRelearnModal'].forEach(function (id) {
+                const el = document.getElementById(id);
+                if (el && el.parentElement !== document.body) {
+                    document.body.appendChild(el);
+                }
+            });
+        }
+
+        function ensureDesktopAutomationLayer(mode) {
+            const layerEl = document.getElementById(mode === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer');
+            if (!layerEl) return;
+            layerEl.value = 'desktop';
+            const actEl = document.getElementById(mode === 'edit' ? 'editStepAction' : 'stepAction');
+            const preserveAction = (actEl && actEl.value) ? actEl.value : 'click';
+            if (typeof onAutomationLayerChange === 'function') {
+                onAutomationLayerChange(mode, {
+                    preserveAction: preserveAction,
+                    preserveSelectorType: 'visual',
+                    skipDesktopSnapshot: true,
+                });
+            }
+        }
+
+        function closeOtherStepModals() {
+            ['createStepModal', 'editStepModal', 'visualRelearnModal'].forEach(function (id) {
+                const m = document.getElementById(id);
+                if (m) {
+                    m.classList.remove('active');
+                    m.style.display = '';
+                }
+            });
+        }
+
+        function closeDesktopCaptureResultModal() {
+            stopStructureSnapshotPoll();
+            _desktopCaptureAwaitingRecapture = false;
+            const modal = document.getElementById('desktopCaptureResultModal');
+            if (modal) {
+                modal.classList.remove('active');
+                modal.style.display = '';
+            }
+            _desktopCapturePendingPick = null;
+        }
+
+        async function persistDesktopCapturePick(mode, pick, options) {
+            options = options || {};
+            if (!pick) return false;
+            const pick2 = applyVisualMetaFromCaptureForm(Object.assign({}, pick));
+            const sv = (pick2.selector_value || '').trim();
+            if (!sv || sv.indexOf('template_image_base64') < 0) {
+                showToast('视觉模板数据无效，请重新捕获', 'error');
+                return false;
+            }
+            const nameInput = document.getElementById('desktopCaptureElementName');
+            const label = (nameInput && nameInput.value.trim()) || pick2.label || pick2.name || '控件';
+            pick2.label = label;
+            const capActEl = document.getElementById('desktopCaptureAction');
+            const action = (
+                (capActEl && capActEl.value)
+                || pick2.record_action
+                || (document.getElementById(mode === 'edit' ? 'editStepAction' : 'stepAction') || {}).value
+                || 'click'
+            ).trim();
+            pick2.record_action = action;
+            let description = (document.getElementById(mode === 'edit' ? 'editStepDescription' : 'stepDescription') || {}).value || '';
+            description = String(description).trim() || label;
+            const spec = Object.assign({}, pick2.desktop_spec || {});
+            if (pick2.rectangle) {
+                const r = pick2.rectangle;
+                spec.pick_center = Math.round((Number(r.left) + Number(r.right)) / 2) + ','
+                    + Math.round((Number(r.top) + Number(r.bottom)) / 2);
+            }
+            if (pick2.element_snapshot) {
+                spec.hybrid_capture = true;
+            }
+            const locCands = buildLocatorCandidatesFromPick(pick2, spec);
+            let clickRepeatCount = 1;
+            if (action === 'click') {
+                const repEl = document.getElementById(mode === 'edit' ? 'editStepClickRepeat' : 'stepClickRepeat');
+                const r = parseInt((repEl && repEl.value) || '1', 10);
+                clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
+            }
+            const putBody = {
+                action: action,
+                selector_type: 'visual',
+                selector_value: sv,
+                automation_layer: 'desktop',
+                input_value: (function () {
+                    const inp = document.getElementById('desktopCaptureInputValue');
+                    if (action === 'input' && inp) return String(inp.value || '').trim();
+                    if (action === 'verify') return (pick2.input_value || 'auto').trim();
+                    return (pick2.input_value || '').trim();
+                })(),
+                description: description,
+                locator_candidates: locCands,
+                compare_type: action === 'verify' ? (pick2.input_value || 'auto') : '',
+                click_repeat_count: clickRepeatCount,
+                desktop_spec: spec,
+            };
+            if (mode === 'edit' && currentEditingStepId) {
+                try {
+                    showLoading(t('steps_upd_loading') || '正在保存…');
+                    const response = await fetchApi(`/api/steps/${currentEditingStepId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+                        body: JSON.stringify(putBody),
+                    });
+                    const data = await parseApiJsonResponse(response);
+                    hideLoading();
+                    if (!data.success) {
+                        showToast((data.error || '保存失败'), 'error');
+                        return false;
+                    }
+                    applyDesktopPickToForm('edit', pick2);
+                    ensureDesktopAutomationLayer('edit');
+                    if (options.closeModal !== false) {
+                        closeDesktopCaptureResultModal();
+                    }
+                    showToast(t('steps_toast_upd_ok') || '步骤已保存', 'success');
+                    if (options.reload !== false && currentCaseId) {
+                        await loadSteps(true);
+                    }
+                    return true;
+                } catch (e) {
+                    hideLoading();
+                    showToast('保存失败：' + (e.message || e), 'error');
+                    return false;
+                }
+            }
+            applyDesktopPickToForm(mode === 'edit' ? 'edit' : 'create', pick2);
+            ensureDesktopAutomationLayer(mode === 'edit' ? 'edit' : 'create');
+            if (options.closeModal !== false) {
+                closeDesktopCaptureResultModal();
+            }
+            return true;
+        }
+
         function openDesktopCaptureResultModal(mode, pick) {
             if (!pick) return;
+            mountStepModalsToBody();
             _desktopCaptureFormMode = mode || 'create';
             _desktopCapturePendingPick = Object.assign({}, pick);
             const modal = document.getElementById('desktopCaptureResultModal');
@@ -2999,44 +3617,17 @@ function changePage(page) {
                 applyDesktopPickToForm(mode, pick);
                 return;
             }
+            closeOtherStepModals();
+            if (mode === 'edit') {
+                currentEditingStepId = currentEditingStepId || pick.step_id || null;
+            }
+            syncDesktopCaptureFooterButtons();
             const nameEl = document.getElementById('desktopCaptureElementName');
             if (nameEl) {
                 nameEl.value = pick.label || pick.name || pick.automation_id || '';
             }
-            const img = document.getElementById('desktopCapturePreviewImg');
-            const ph = document.getElementById('desktopCapturePreviewPlaceholder');
-            const b64 = pick.preview_image_b64 || '';
-            let visualB64 = b64;
-            if (!visualB64 && (pick.selector_type || '') === 'visual' && pick.selector_value) {
-                try {
-                    const vj = JSON.parse(pick.selector_value);
-                    visualB64 = vj.template_image_base64 || '';
-                } catch (e) { /* ignore */ }
-            }
-            if (img && ph) {
-                if (visualB64) {
-                    img.src = 'data:image/png;base64,' + visualB64;
-                    img.style.display = 'block';
-                    ph.style.display = 'none';
-                } else {
-                    img.style.display = 'none';
-                    img.removeAttribute('src');
-                    ph.style.display = 'block';
-                }
-            }
-            const uiaList = document.getElementById('desktopCaptureUiaPathList');
-            if (uiaList) {
-                const nodes = pick.uia_path || (pick.desktop_spec && pick.desktop_spec.uia_path) || [];
-                const lines = formatUiaPathLinesForDisplay(nodes);
-                if (!lines.length) {
-                    uiaList.innerHTML = '<p style="color:#9ca3af;font-size:13px;">无 UIA 路径，将使用坐标回退（不推荐）</p>';
-                } else {
-                    uiaList.innerHTML = lines.map(function (line) {
-                        return '<div class="desktop-capture-uia-line"><input type="checkbox" checked disabled style="margin-right:8px;" />'
-                            + line.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
-                    }).join('');
-                }
-            }
+            refreshDesktopCaptureResultModalUI(pick);
+            startStructureSnapshotPoll(pick);
             const msg = document.getElementById('desktopCaptureVerifyMsg');
             if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
             document.querySelectorAll('.desktop-capture-tab').forEach(function (btn) {
@@ -3044,17 +3635,24 @@ function changePage(page) {
             });
             document.getElementById('desktopCapturePanelPreview').classList.add('active');
             document.getElementById('desktopCapturePanelPrecise').classList.remove('active');
+            modal.classList.add('active');
             modal.style.display = 'flex';
+            _desktopCaptureAwaitingRecapture = false;
+            try {
+                modal.focus();
+            } catch (e) { /* ignore */ }
         }
 
         async function verifyDesktopCapturedElement() {
-            const pick = _desktopCapturePendingPick;
-            if (!pick) return;
+            if (!_desktopCapturePendingPick) return;
+            const pick = applyVisualMetaFromCaptureForm(
+                Object.assign({}, _desktopCapturePendingPick)
+            );
             const msgEl = document.getElementById('desktopCaptureVerifyMsg');
             const spec = Object.assign({}, pick.desktop_spec || {});
             if (pick.uia_path && !spec.uia_path) spec.uia_path = pick.uia_path;
             const body = {
-                selector_type: pick.selector_type || 'uia_path',
+                selector_type: pick.selector_type || 'visual',
                 selector_value: pick.selector_value || '',
                 desktop_spec: spec,
                 locator_candidates: buildLocatorCandidatesFromPick(pick, spec),
@@ -3066,12 +3664,24 @@ function changePage(page) {
                     body: JSON.stringify(body),
                 });
                 const data = await r.json();
+                _desktopCapturePendingPick = pick;
                 if (msgEl) {
                     msgEl.style.display = 'block';
                     if (data.success) {
                         msgEl.style.color = '#059669';
-                        msgEl.textContent = data.message || ('校验成功：' + (data.name || data.resolved_via || ''));
+                        const via = data.resolved_via || '';
+                        if (via === 'uia') {
+                            msgEl.textContent = data.message || '结构定位校验成功';
+                        } else if (data.message && data.message.indexOf('结构定位未命中') >= 0) {
+                            msgEl.style.color = '#b45309';
+                            msgEl.textContent = data.message;
+                        } else {
+                            msgEl.textContent = data.message || ('校验成功：' + (data.name || via || ''));
+                        }
                     } else {
+                        if (data.need_relearn) {
+                            offerVisualRelearn(currentEditingStepId, pick.selector_value, data.error, null, data);
+                        }
                         msgEl.style.color = '#dc2626';
                         msgEl.textContent = data.error || '校验失败';
                     }
@@ -3088,6 +3698,11 @@ function changePage(page) {
         function applyDesktopPickToForm(mode, pick) {
             if (!pick) return;
             const isEdit = mode === 'edit';
+            const isVisualPick = (pick.selector_type || '').toLowerCase() === 'visual'
+                || !!(pick.selector_value && String(pick.selector_value).indexOf('template_image_base64') >= 0);
+            if (isVisualPick) {
+                ensureDesktopAutomationLayer(mode);
+            }
             const selType = document.getElementById(isEdit ? 'editStepSelectorType' : 'stepSelectorType');
             const selVal = document.getElementById(isEdit ? 'editStepSelectorValue' : 'stepSelectorValue');
             const locCands = document.getElementById(isEdit ? 'editStepLocatorCandidates' : 'stepLocatorCandidates');
@@ -3196,12 +3811,309 @@ function changePage(page) {
             _elementCaptureFormTarget = null;
             _elementCaptureRecordToCase = false;
             _elementCaptureActive = false;
+            _elementCaptureChannel = 'desktop';
+        }
+
+        let _webCaptureBookmarklet = '';
+        let _webCaptureWorkspaceWin = null;
+
+        function openWebCaptureWorkspace(webMeta) {
+            const sid = (webMeta && webMeta.session_id) || '';
+            let wsUrl = (webMeta && webMeta.workspace_url) || '';
+            if (!wsUrl && sid) {
+                wsUrl = '/web-capture/workspace?session=' + encodeURIComponent(sid);
+            }
+            if (currentCaseId) {
+                wsUrl += (wsUrl.indexOf('?') >= 0 ? '&' : '?') + 'case_id=' + encodeURIComponent(currentCaseId);
+            }
+            if (_webCaptureWorkspaceWin && !_webCaptureWorkspaceWin.closed) {
+                try {
+                    _webCaptureWorkspaceWin.focus();
+                    _webCaptureWorkspaceWin.location.href = wsUrl;
+                } catch (e) { /* ignore */ }
+                return true;
+            }
+            _webCaptureWorkspaceWin = window.open(
+                wsUrl,
+                'uat_web_capture_' + (sid || 'wc'),
+                'width=1280,height=860,resizable=yes,scrollbars=yes'
+            );
+            if (!_webCaptureWorkspaceWin) {
+                return false;
+            }
+            return true;
+        }
+
+        function openWebCaptureSessionModal(webMeta) {
+            mountStepModalsToBody();
+            const modal = document.getElementById('webCaptureSessionModal');
+            if (!modal) return;
+            window._lastWebCaptureMeta = webMeta || {};
+            const bm = (webMeta && webMeta.bookmarklet) || '';
+            _webCaptureBookmarklet = bm;
+            const link = document.getElementById('webCaptureBookmarkletLink');
+            if (link) {
+                link.href = bm || '#';
+                link.setAttribute('draggable', 'true');
+            }
+            const hint = document.getElementById('webCaptureInjectUrlHint');
+            if (hint) {
+                hint.textContent = (webMeta && webMeta.inject_url)
+                    ? ('注入脚本：' + webMeta.inject_url)
+                    : '';
+            }
+            closeOtherStepModals();
+            modal.style.display = 'flex';
+            modal.classList.add('active');
+        }
+
+        function closeWebCaptureSessionModal() {
+            const modal = document.getElementById('webCaptureSessionModal');
+            if (!modal) return;
+            modal.style.display = 'none';
+            modal.classList.remove('active');
+        }
+
+        let _webCapturePendingPick = null;
+        let _webCaptureFormMode = 'create';
+        let _webCaptureAwaitingRecapture = false;
+
+        function closeWebCaptureResultModal() {
+            const modal = document.getElementById('webCaptureResultModal');
+            if (modal) {
+                modal.classList.remove('active');
+                modal.style.display = 'none';
+            }
+            _webCapturePendingPick = null;
+        }
+
+        function refreshWebCaptureResultModalUI(pick) {
+            if (!pick) return;
+            const bar = document.getElementById('webCaptureStatusBar');
+            const mc = pick.match_count;
+            if (bar) {
+                bar.style.display = 'block';
+                if (mc === 1 || pick.locator_unique) {
+                    bar.style.background = '#ecfdf5';
+                    bar.style.color = '#166534';
+                    bar.textContent = '✓ 已找到 1 个元素';
+                } else if (mc > 1) {
+                    bar.style.background = '#fffbeb';
+                    bar.style.color = '#b45309';
+                    bar.textContent = '⚠ 已找到 ' + mc + ' 个元素（建议收紧定位条件）';
+                } else {
+                    bar.style.background = '#fef2f2';
+                    bar.style.color = '#991b1b';
+                    bar.textContent = pick.locator_message || '未验证唯一性';
+                }
+            }
+            const img = document.getElementById('webCapturePreviewImg');
+            const ph = document.getElementById('webCapturePreviewPlaceholder');
+            const b64 = pick.preview_image_b64 || '';
+            if (img && b64) {
+                img.src = 'data:image/png;base64,' + b64;
+                img.style.display = 'block';
+                if (ph) ph.style.display = 'none';
+            } else if (img) {
+                img.style.display = 'none';
+                if (ph) ph.style.display = 'inline';
+            }
+            const urlEl = document.getElementById('webCapturePageUrl');
+            if (urlEl) urlEl.textContent = pick.source_url || pick.page_name || '';
+            const pathEl = document.getElementById('webCaptureDomPathList');
+            if (pathEl) {
+                const chain = pick.dom_path || [];
+                pathEl.innerHTML = chain.length
+                    ? chain.map(function (n) {
+                        return '<div>&lt;' + (n.tag || '?') + '&gt;' + (n.id ? ' #' + n.id : '') + '</div>';
+                    }).join('')
+                    : '<span style="color:#9ca3af;">无 DOM 路径</span>';
+            }
+            const attrEl = document.getElementById('webCaptureAttrTable');
+            if (attrEl) {
+                const rows = pick.key_candidates || [];
+                if (!rows.length) {
+                    attrEl.innerHTML = '<span style="color:#9ca3af;">无属性</span>';
+                } else {
+                    attrEl.innerHTML = '<table style="width:100%;border-collapse:collapse;"><tr><th>属性</th><th>匹配</th><th>值</th></tr>'
+                        + rows.map(function (r) {
+                            return '<tr><td>' + (r.property || '') + '</td><td>' + (r.match || 'equals') + '</td><td>' + (r.value || '') + '</td></tr>';
+                        }).join('') + '</table>';
+                }
+            }
+        }
+
+        function openWebCaptureResultModal(mode, pick) {
+            if (!pick) return;
+            mountStepModalsToBody();
+            _webCaptureFormMode = mode || 'create';
+            _webCapturePendingPick = Object.assign({}, pick);
+            const modal = document.getElementById('webCaptureResultModal');
+            if (!modal) {
+                fillElementToForm(pick, mode);
+                return;
+            }
+            closeOtherStepModals();
+            closeWebCaptureSessionModal();
+            const nameEl = document.getElementById('webCaptureElementName');
+            if (nameEl) {
+                const tag = pick.tag_name || 'el';
+                const txt = (pick.text_content || '').slice(0, 20);
+                nameEl.value = pick.name || (tag + (txt ? '_' + txt : ''));
+            }
+            refreshWebCaptureResultModalUI(pick);
+            document.querySelectorAll('[data-wc-tab]').forEach(function (btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-wc-tab') === 'preview');
+            });
+            document.getElementById('webCapturePanelPreview').classList.add('active');
+            document.getElementById('webCapturePanelPrecise').classList.remove('active');
+            const msg = document.getElementById('webCaptureVerifyMsg');
+            if (msg) { msg.style.display = 'none'; msg.textContent = ''; }
+            modal.classList.add('active');
+            modal.style.display = 'flex';
+            _webCaptureAwaitingRecapture = false;
+        }
+
+        function applyWebCapturePickToForm(mode, pick) {
+            if (!pick) return;
+            fillElementToForm(pick, mode);
+            const layerEl = document.getElementById(mode === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer');
+            if (layerEl) layerEl.value = 'web';
+            onAutomationLayerChange(mode);
+        }
+
+        async function testWebCapturedLocator() {
+            if (!_webCapturePendingPick) return;
+            const pick = _webCapturePendingPick;
+            const msgEl = document.getElementById('webCaptureVerifyMsg');
+            try {
+                const r = await fetchApi('/api/web-capture/locator/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        selector_type: pick.selector_type || 'css',
+                        selector_value: pick.selector_value || '',
+                    }),
+                });
+                const data = await r.json();
+                pick.match_count = data.match_count;
+                pick.locator_unique = data.unique;
+                pick.locator_message = data.message;
+                _webCapturePendingPick = pick;
+                refreshWebCaptureResultModalUI(pick);
+                if (msgEl) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = data.unique ? '#059669' : '#b45309';
+                    msgEl.textContent = data.message || '';
+                }
+            } catch (e) {
+                if (msgEl) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = '#dc2626';
+                    msgEl.textContent = (e && e.message) || '测试失败';
+                }
+            }
+        }
+
+        async function verifyWebCapturedElement() {
+            if (!_webCapturePendingPick) return;
+            const pick = _webCapturePendingPick;
+            const msgEl = document.getElementById('webCaptureVerifyMsg');
+            try {
+                const r = await fetchApi('/api/web-capture/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        selector_type: pick.selector_type || 'css',
+                        selector_value: pick.selector_value || '',
+                    }),
+                });
+                const data = await r.json();
+                if (msgEl) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = data.exists && data.visible ? '#059669' : '#dc2626';
+                    msgEl.textContent = data.message || (data.error || '校验完成');
+                }
+            } catch (e) {
+                if (msgEl) {
+                    msgEl.style.display = 'block';
+                    msgEl.style.color = '#dc2626';
+                    msgEl.textContent = (e && e.message) || '校验失败';
+                }
+            }
+        }
+
+        async function loadWebSimilarElements() {
+            if (!_webCapturePendingPick) return;
+            const pick = _webCapturePendingPick;
+            const listEl = document.getElementById('webCaptureSimilarList');
+            try {
+                const r = await fetchApi('/api/web-capture/similar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        selector_type: pick.selector_type || 'css',
+                        selector_value: pick.selector_value || '',
+                    }),
+                });
+                const data = await r.json();
+                if (listEl) {
+                    listEl.style.display = 'block';
+                    const items = data.items || [];
+                    listEl.innerHTML = items.length
+                        ? items.map(function (it, i) {
+                            return '<div>#' + (it.index != null ? it.index : i) + ' ' + (it.text || '') + '</div>';
+                        }).join('')
+                        : '<span>无匹配项</span>';
+                }
+                document.querySelectorAll('[data-wc-tab]').forEach(function (btn) {
+                    btn.classList.toggle('active', btn.getAttribute('data-wc-tab') === 'precise');
+                });
+                document.getElementById('webCapturePanelPreview').classList.remove('active');
+                document.getElementById('webCapturePanelPrecise').classList.add('active');
+            } catch (e) {
+                showToast((e && e.message) || '加载相似元素失败', 'error');
+            }
+        }
+
+        function finishWebCaptureModal(saveContinue) {
+            if (!_webCapturePendingPick) {
+                closeWebCaptureResultModal();
+                return;
+            }
+            applyWebCapturePickToForm(_webCaptureFormMode, _webCapturePendingPick);
+            if (saveContinue) {
+                _webCaptureAwaitingRecapture = true;
+                showToast('已保存到表单，请在浏览器中继续拾取下一个元素', 'success');
+                closeWebCaptureResultModal();
+            } else {
+                closeWebCaptureResultModal();
+                showToast('网页元素已填入步骤表单', 'success');
+            }
+        }
+
+        function copyWebCaptureBookmarklet() {
+            const bm = _webCaptureBookmarklet || '';
+            if (!bm) {
+                showToast('无捕获书签代码', 'warning');
+                return;
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(bm).then(function () {
+                    showToast('已复制捕获书签，请在浏览器中新建书签并粘贴地址', 'success');
+                }).catch(function () {
+                    window.prompt('复制以下代码并新建浏览器书签：', bm);
+                });
+            } else {
+                window.prompt('复制以下代码并新建浏览器书签：', bm);
+            }
         }
 
         async function stopElementCaptureSession() {
             stopElementCapturePoll();
             isSelecting = false;
             setPickButtonsLoading(false);
+            closeWebCaptureSessionModal();
             try {
                 await fetchApi('/api/element-picker/stop', { method: 'POST' }, 1);
             } catch (e) { /* ignore */ }
@@ -3246,12 +4158,14 @@ function changePage(page) {
             return 0;
         }
 
-        function startElementCapturePoll(formTarget, recordToCase) {
+        function startElementCapturePoll(formTarget, recordToCase, captureChannel) {
             stopElementCapturePoll();
             _elementCaptureFormTarget = formTarget;
             _elementCaptureRecordToCase = !!recordToCase;
+            _elementCaptureChannel = captureChannel === 'web' ? 'web' : 'desktop';
             _elementCaptureActive = true;
             _lastDeskCaptureMsg = '';
+            const isWebChannel = _elementCaptureChannel === 'web';
             const startedAt = Date.now();
             const STARTUP_GRACE_MS = 15000;
             _elementCapturePollTimer = setInterval(async function () {
@@ -3261,20 +4175,29 @@ function changePage(page) {
                     }, 1);
                     const data = await parseApiJsonResponse(r);
                     if (!data.success) return;
+                    const channel = data.capture_channel || _elementCaptureChannel;
                     const desk = data.desktop || {};
                     const deskStarting = !!(desk.starting || (desk.message || '').indexOf('启动') >= 0);
-                    const deskLive = !data.picker_closed && !!(data.active || desk.active);
+                    const pickerLive = !data.picker_closed && !!data.active;
                     if (
-                        !deskLive
+                        !pickerLive
                         && _elementCaptureActive
                         && !data.picker_closed
                         && Date.now() - startedAt < STARTUP_GRACE_MS
+                        && !isWebChannel
                         && (deskStarting || (desk.message || '').indexOf('启动') >= 0)
                     ) {
                         return;
                     }
-                    if (!deskLive && _elementCaptureActive) {
-                        showToast('捕获器已结束', 'info');
+                    if (!pickerLive && _elementCaptureActive && !data.picker_closed) {
+                        if (Date.now() - startedAt < STARTUP_GRACE_MS) {
+                            return;
+                        }
+                    }
+                    if (!pickerLive && _elementCaptureActive && data.picker_closed) {
+                        /* fall through to picker_closed handler */
+                    } else if (!pickerLive && _elementCaptureActive) {
+                        showToast(isWebChannel ? '网页捕获已结束' : '桌面捕获已结束', 'info');
                         stopElementCapturePoll();
                         isSelecting = false;
                         setPickButtonsLoading(false);
@@ -3295,26 +4218,29 @@ function changePage(page) {
                             showToast('已补录 ' + flushSteps.length + ' 个桌面步骤', 'success');
                         }
                         const closeMsg = (data.error || deskClose.error) || '';
-                        showToast(
-                            (_elementCaptureRecordToCase ? '元素录制已结束' : '元素捕获已结束')
-                            + (closeMsg ? '：' + closeMsg : ''),
-                            closeMsg ? 'warning' : 'info'
-                        );
+                        const endLabel = isWebChannel
+                            ? (_elementCaptureRecordToCase ? '网页录制已结束' : '网页捕获已结束')
+                            : (_elementCaptureRecordToCase ? '桌面录制已结束' : '桌面捕获已结束');
+                        showToast(endLabel + (closeMsg ? '：' + closeMsg : ''), closeMsg ? 'warning' : 'info');
                         stopElementCapturePoll();
                         isSelecting = false;
                         setPickButtonsLoading(false);
                         return;
                     }
                     if (Date.now() - startedAt > 600000) {
-                        showToast('元素捕获超时，已自动停止', 'warning');
+                        showToast(
+                            isWebChannel ? '网页捕获超时，已自动停止' : '桌面捕获超时，已自动停止',
+                            'warning'
+                        );
                         await stopElementCaptureSession();
                         return;
                     }
                     if (data.error) showToast(data.error, 'error');
 
-                    if (desk.error) showToast(desk.error, 'warning');
+                    if (!isWebChannel && desk.error) showToast(desk.error, 'warning');
                     if (
-                        desk.message
+                        !isWebChannel
+                        && desk.message
                         && desk.message !== _lastDeskCaptureMsg
                         && /检测|识别|写入|已录/.test(desk.message)
                     ) {
@@ -3323,41 +4249,46 @@ function changePage(page) {
                     }
                     const newSteps = data.new_recorded_steps || desk.new_recorded_steps || [];
                     const savedIds = data.saved_step_ids || desk.saved_step_ids || [];
-                    if (desk.message && (newSteps.length || savedIds.length || desk.last_pick)) {
+                    if (!isWebChannel && desk.message && (newSteps.length || savedIds.length || desk.last_pick)) {
                         showToast(desk.message, 'info');
                     }
-                    if (_elementCaptureRecordToCase && (savedIds.length || newSteps.length)) {
+                    if (!isWebChannel && _elementCaptureRecordToCase && (savedIds.length || newSteps.length)) {
                         await loadSteps(true);
                         const n = savedIds.length || newSteps.length;
                         showToast('已录制 ' + n + ' 个桌面步骤', 'success');
-                    } else if (_elementCaptureRecordToCase && newSteps.length) {
+                    } else if (!isWebChannel && _elementCaptureRecordToCase && newSteps.length) {
                         const n = await appendDesktopRecordedSteps(newSteps);
                         if (n > 0) showToast('已录制 ' + n + ' 个桌面步骤', 'success');
-                    } else if (desk.last_pick && _elementCaptureFormTarget) {
+                    } else if (!isWebChannel && desk.last_pick && _elementCaptureFormTarget) {
                         const layerEl = document.getElementById(
                             _elementCaptureFormTarget === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer'
                         );
                         if (layerEl) layerEl.value = 'desktop';
                         onAutomationLayerChange(_elementCaptureFormTarget);
                         openDesktopCaptureResultModal(_elementCaptureFormTarget, desk.last_pick);
-                        showToast('桌面元素已捕获，请确认后点「完成」', 'success');
+                        const isEdit = _elementCaptureFormTarget === 'edit' && currentEditingStepId;
+                        if (_desktopCaptureAwaitingRecapture) {
+                            showToast('已更新捕获结果，请确认后保存', 'success');
+                        } else {
+                            showToast(
+                                isEdit ? '桌面元素已捕获，请确认后点「保存」' : '桌面元素已捕获，请确认后点「完成」',
+                                'success'
+                            );
+                        }
                     }
 
                     const webEl = normalizeWebPickElement(
                         (data.web && data.web.selected_element) || data.selected_element
                     );
-                    if (webEl) {
+                    if (webEl && !isWebChannel && channel === 'desktop') {
+                        showToast('当前为桌面捕获，网页拾取结果已忽略；请使用工具栏「网页捕获」', 'warning');
+                    } else if (webEl && isWebChannel) {
                         if (_elementCaptureRecordToCase) {
                             const n = await appendWebCapturedStep(webEl);
                             if (n) showToast('已录制网页步骤', 'success');
                         } else if (_elementCaptureFormTarget) {
-                            const layerEl = document.getElementById(
-                                _elementCaptureFormTarget === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer'
-                            );
-                            if (layerEl) layerEl.value = 'web';
-                            onAutomationLayerChange(_elementCaptureFormTarget);
-                            fillElementToForm(webEl, _elementCaptureFormTarget);
-                            showToast(t('steps_pick_updated') || '已填入网页元素', 'success');
+                            openWebCaptureResultModal(_elementCaptureFormTarget, webEl);
+                            showToast('网页元素已捕获，请在编辑器中确认', 'success');
                         }
                     }
                 } catch (e) {
@@ -3398,8 +4329,8 @@ function changePage(page) {
                         headers: { 'Accept': 'application/json' },
                     }, 1);
                     const sd = await parseApiJsonResponse(sr);
-                    const deskLive = !sd.picker_closed && !!(sd.active || (sd.desktop && sd.desktop.active));
-                    if (deskLive) {
+                    const pickerLive = !sd.picker_closed && !!sd.active;
+                    if (pickerLive) {
                         showToast('捕获器已在运行，请先点「停止捕获」或按 ESC', 'info');
                         return;
                     }
@@ -3421,10 +4352,9 @@ function changePage(page) {
                 showToast('未找到当前用例', 'error');
                 return;
             }
-            const pickerUrl = (opts.url || currentCaseUrl || await resolveCaseNavUrlForPicker() || '').trim();
-            const openWebBrowser = opts.openWebBrowser === true && !!pickerUrl;
-            const enableWebAttach = opts.enableWebAttach === true;
-            const enableWeb = openWebBrowser || enableWebAttach;
+            const captureChannel = (opts.captureChannel === 'web') ? 'web' : 'desktop';
+            const isWebCapture = captureChannel === 'web';
+            const enableWeb = isWebCapture;
             let desktopSpec = {};
             if (formTarget) {
                 const layerEl = document.getElementById(
@@ -3436,8 +4366,8 @@ function changePage(page) {
             }
             try {
                 isSelecting = true;
-                setCaptureStarting(true);
-                showToast('正在启动捕获器…', 'info');
+                setCaptureStarting(true, captureChannel);
+                showToast(isWebCapture ? '正在启动网页捕获…' : '正在启动桌面捕获…', 'info');
                 if (_elementCaptureActive) {
                     stopElementCapturePoll();
                     try {
@@ -3450,12 +4380,15 @@ function changePage(page) {
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                     body: JSON.stringify({
                         case_id: currentCaseId,
-                        url: openWebBrowser ? pickerUrl : '',
+                        capture_channel: captureChannel,
                         record_mode: recordMode,
-                        desktop_spec: desktopSpec,
+                        desktop_spec: isWebCapture ? {} : desktopSpec,
                         enable_web: enableWeb,
-                        web_navigate: openWebBrowser,
-                        web_attach_existing: enableWebAttach,
+                        web_navigate: false,
+                        web_attach_existing: isWebCapture,
+                        web_capture_mode: 'cdp',
+                        browser: 'edge',
+                        start_url: isWebCapture ? (await resolveCaseNavUrlForPicker()) : '',
                     }),
                 });
                 const data = await parseApiJsonResponse(r);
@@ -3472,25 +4405,38 @@ function changePage(page) {
                 }
                 const web = data.web || {};
                 const desk = data.desktop || {};
-                let msg = recordMode
-                    ? '框选录制：请先切换到目标窗口，再点悬浮条「开始框选(F2)」后拖拽框选；ESC 结束'
-                    : '框选录制：先切到目标窗口，点「开始框选」后拖拽；ESC 结束';
-                if (web.success && web.mode === 'navigate') {
-                    msg += '；已打开网页：' + (web.url || pickerUrl || '');
-                } else if (web.success && web.mode === 'attach') {
-                    msg += '；已附着当前 Playwright 浏览器页';
-                } else if (!enableWeb || web.skipped) {
-                    msg += '（仅桌面捕获，未打开浏览器；网页请 Shift+点击本按钮）';
-                } else if (web.error) {
-                    msg += '（网页：' + web.error + '）';
-                }
-                if (desk.error && !desk.success) {
-                    showToast(desk.error, 'warning');
+                let msg;
+                if (isWebCapture) {
+                    if (web.success) {
+                        window._lastWebCaptureMeta = web;
+                        const opened = openWebCaptureWorkspace(web);
+                        openWebCaptureSessionModal(web);
+                        if (opened) {
+                            msg = 'CDP 调试浏览器已启动；在页面左上角点「开始捕获」后单击元素';
+                        } else {
+                            showToast('无法打开捕获器窗口，请允许弹出窗口或使用备用书签', 'warning');
+                            msg = '请点「重新打开捕获器窗口」或查看弹窗说明';
+                        }
+                    } else {
+                        msg = web.error || web.hint || '网页捕获启动失败';
+                        showToast(msg, 'error');
+                        isSelecting = false;
+                        setCaptureStarting(false);
+                        setPickButtonsLoading(false);
+                        return;
+                    }
+                } else {
+                    msg = recordMode
+                        ? '桌面捕获：切换到目标窗口，悬浮条「智能点选」后单击（F2 开始）；ESC 结束'
+                        : '桌面捕获：目标窗口内「智能点选」单击元素；勿在 Chrome 内拾取网页';
+                    if (desk.error && !desk.success) {
+                        showToast(desk.error, 'warning');
+                    }
                 }
                 showToast(msg, 'success');
                 setCaptureStarting(false);
-                setPickButtonsLoading(true);
-                startElementCapturePoll(formTarget, recordToCase);
+                setPickButtonsLoading(true, captureChannel);
+                startElementCapturePoll(formTarget, recordToCase, captureChannel);
             } catch (e) {
                 showToast('启动失败：' + formatFetchError(e), 'error');
                 isSelecting = false;
@@ -3503,22 +4449,30 @@ function changePage(page) {
 
         async function toggleElementCapture(opts) {
             if (_elementCaptureActive || isSelecting) {
-                showToast('正在停止元素捕获…', 'info');
+                showToast('正在停止捕获…', 'info');
                 await stopElementCaptureSession();
                 return;
             }
             opts = opts || {};
-            if (opts.openWebBrowser == null && !!opts.shiftKey) {
-                opts.openWebBrowser = true;
+            if (!opts.captureChannel) {
+                opts.captureChannel = 'desktop';
             }
             await startElementCapture(opts);
         }
 
         function startDesktopPicker(mode, recordMode) {
-            toggleElementCapture({ formTarget: mode, recordToCase: !!recordMode, recordMode: !!recordMode });
+            toggleElementCapture({
+                formTarget: mode,
+                recordToCase: !!recordMode,
+                recordMode: !!recordMode,
+                captureChannel: 'desktop',
+            });
         }
         function startDesktopCaseRecorder() {
-            toggleElementCapture({ recordToCase: true, recordMode: true });
+            toggleElementCapture({ recordToCase: true, recordMode: true, captureChannel: 'desktop' });
+        }
+        function startWebPicker(mode) {
+            toggleElementCapture({ formTarget: mode, recordToCase: false, captureChannel: 'web' });
         }
         async function stopDesktopPickerSession() {
             return stopElementCaptureSession();
@@ -3736,10 +4690,17 @@ function changePage(page) {
         }
         
         function toggleEditActionFields() {
-            const action = document.getElementById('editStepAction').value;
-            const selectorTypeField = document.querySelector('label[for="editStepSelectorType"]').parentElement;
-            const selectorValueField = document.querySelector('label[for="editStepSelectorValue"]').parentElement;
-            const inputValueField = document.querySelector('label[for="editStepInputValue"]').parentElement;
+            const actionEl = document.getElementById('editStepAction');
+            if (!actionEl) return;
+            const action = actionEl.value;
+            const layer = ((document.getElementById('editStepAutomationLayer') || {}).value || 'web');
+            const selectorTypeLabel = document.querySelector('label[for="editStepSelectorType"]');
+            const selectorValueLabel = document.querySelector('label[for="editStepSelectorValue"]');
+            const inputValueLabel = document.querySelector('label[for="editStepInputValue"]');
+            const selectorTypeField = selectorTypeLabel ? selectorTypeLabel.parentElement : null;
+            const selectorValueField = selectorValueLabel ? selectorValueLabel.parentElement : null;
+            const inputValueField = inputValueLabel ? inputValueLabel.parentElement : null;
+            if (!selectorTypeField || !selectorValueField || !inputValueField) return;
             const editScrollFields = document.getElementById('editScrollFields');
             const editCompareTypeField = document.getElementById('editStepCompareType');
             const editSwipeDirectionField = document.getElementById('editSwipeDirection');
@@ -3759,14 +4720,35 @@ function changePage(page) {
             inputValueField.style.display = 'block';
             document.querySelector('label[for="editStepSelectorValue"]').textContent = t('steps_label_sel_val');
             document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_label_in_val');
-            editScrollFields.style.display = 'none';
-            editCompareTypeField.style.display = 'none';
-            editSwipeDirectionField.style.display = 'none';
-            editSwipeDistanceField.style.display = 'none';
-            editAssertTypeField.style.display = 'none';
-            editAssertAttrField.style.display = 'none';
-            editAssertOperatorField.style.display = 'none';
-            editVerifyTypeField.style.display = 'none';
+            if (editScrollFields) editScrollFields.style.display = 'none';
+            if (editCompareTypeField) editCompareTypeField.style.display = 'none';
+            if (editSwipeDirectionField) editSwipeDirectionField.style.display = 'none';
+            if (editSwipeDistanceField) editSwipeDistanceField.style.display = 'none';
+            if (editAssertTypeField) editAssertTypeField.style.display = 'none';
+            if (editAssertAttrField) editAssertAttrField.style.display = 'none';
+            if (editAssertOperatorField) editAssertOperatorField.style.display = 'none';
+            if (editVerifyTypeField) editVerifyTypeField.style.display = 'none';
+
+            if (layer === 'desktop') {
+                if (action === 'launch_app' || action === 'attach_window') {
+                    selectorTypeField.style.display = 'none';
+                    selectorValueField.style.display = 'none';
+                    inputValueField.style.display = 'block';
+                    applyDesktopEnvHints('edit', _desktopEnvConfigCache || {});
+                } else if (action === 'hotkey' || action === 'wait' || action === 'screenshot') {
+                    selectorTypeField.style.display = 'none';
+                    selectorValueField.style.display = 'none';
+                    inputValueField.style.display = action === 'screenshot' ? 'none' : 'block';
+                    applyDesktopEnvHints('edit', _desktopEnvConfigCache || {});
+                } else if (action === 'click' || action === 'double_click' || action === 'right_click' || action === 'input' || action === 'verify' || action === 'assert') {
+                    selectorTypeField.style.display = 'block';
+                    selectorValueField.style.display = 'block';
+                    inputValueField.style.display = (action === 'click' || action === 'double_click' || action === 'right_click') ? 'none' : 'block';
+                    if (editStepClickRepeatGroup && action === 'click') editStepClickRepeatGroup.style.display = 'block';
+                }
+                updateEditSelectorHelp();
+                return;
+            }
             
             if (action === 'navigate') {
                 // 导航操作只需要URL输入框
@@ -3863,21 +4845,41 @@ function changePage(page) {
         let isSelecting = false;
         let selectionTarget = 'create'; // create | edit
         
-        function setCaptureStarting(starting) {
-            const recBtn = document.getElementById('elementCaptureRecordBtn');
-            if (recBtn) {
-                if (starting) {
-                    recBtn.textContent = '正在启动…';
-                    recBtn.disabled = true;
-                }
+        function _captureBtnLabels(channel) {
+            const ch = channel === 'web' ? 'web' : 'desktop';
+            if (ch === 'web') {
+                return { idle: '🌐 网页捕获', loading: '停止网页捕获', starting: '正在启动…' };
+            }
+            return { idle: '🖥️ 桌面捕获 / 录制', loading: '停止桌面捕获', starting: '正在启动…' };
+        }
+
+        function setCaptureStarting(starting, channel) {
+            const labels = _captureBtnLabels(channel || _elementCaptureChannel);
+            const btnId = (channel || _elementCaptureChannel) === 'web'
+                ? 'elementWebCaptureBtn'
+                : 'elementCaptureRecordBtn';
+            const btn = document.getElementById(btnId);
+            if (btn && starting) {
+                btn.textContent = labels.starting;
+                btn.disabled = true;
             }
         }
 
-        function setPickButtonsLoading(loading) {
-            const recBtn = document.getElementById('elementCaptureRecordBtn');
-            if (recBtn) {
-                recBtn.textContent = loading ? '停止捕获' : '🧲 元素捕获 / 录制';
-                recBtn.disabled = false;
+        function setPickButtonsLoading(loading, channel) {
+            const ch = channel || _elementCaptureChannel;
+            const deskBtn = document.getElementById('elementCaptureRecordBtn');
+            const webBtn = document.getElementById('elementWebCaptureBtn');
+            const deskLabels = _captureBtnLabels('desktop');
+            const webLabels = _captureBtnLabels('web');
+            if (deskBtn) {
+                const active = loading && ch === 'desktop';
+                deskBtn.textContent = active ? deskLabels.loading : deskLabels.idle;
+                deskBtn.disabled = loading && ch === 'web';
+            }
+            if (webBtn) {
+                const active = loading && ch === 'web';
+                webBtn.textContent = active ? webLabels.loading : webLabels.idle;
+                webBtn.disabled = loading && ch === 'desktop';
             }
         }
         
@@ -4031,22 +5033,44 @@ function changePage(page) {
         }
         
         async function editStep(stepId) {
+            const sid = parseInt(stepId, 10);
+            if (!Number.isFinite(sid)) return;
             try {
-                const response = await fetchApi(`/api/steps/${stepId}`);
+                showLoading('正在加载步骤…');
+                const response = await fetchApi(`/api/steps/${sid}`);
                 const data = await parseApiJsonResponse(response);
-                if (data.step) {
-                    try {
-                        showEditStepModal(data.step);
-                    } catch (modalErr) {
-                        showToast('打开编辑窗口失败：' + (modalErr.message || modalErr), 'error');
-                    }
-                } else {
+                hideLoading();
+                if (!data.step) {
                     showToast(t('steps_fail_get_step'), 'error');
+                    return;
+                }
+                const st = data.step;
+                currentEditingStepId = st.id;
+                const layer = ((st.automation_layer || 'web').toLowerCase() === 'desktop');
+                const isVisual = ((st.selector_type || '').toLowerCase() === 'visual');
+                const sv = (st.selector_value || '');
+                const hasVisualPayload = isVisual && sv.indexOf('template_image_base64') >= 0;
+                if (isVisual && (layer || hasVisualPayload)) {
+                    const pick = stepToDesktopPick(st);
+                    if (pick) {
+                        pick.step_id = st.id;
+                        requestAnimationFrame(function () {
+                            openDesktopCaptureResultModal('edit', pick);
+                        });
+                        return;
+                    }
+                }
+                try {
+                    await showEditStepModal(st);
+                } catch (modalErr) {
+                    showToast('打开编辑窗口失败：' + (modalErr.message || modalErr), 'error');
                 }
             } catch (error) {
+                hideLoading();
                 showToast(t('steps_fail_get_step_err').replace('{msg}', formatFetchError(error)), 'error');
             }
         }
+        window.editStep = editStep;
         
         async function updateStep() {
             const action = document.getElementById('editStepAction').value;
@@ -4215,27 +5239,27 @@ function changePage(page) {
                 }, 800);
 
                 const response = await fetch(`/api/cases/${currentCaseId}/run`, { method: 'POST' });
-                if (!response.ok) {
-                    throw new Error(t('steps_run_server_err').replace('{status}', String(response.status)).replace('{text}', response.statusText || ''));
-                }
                 const data = await parseApiJsonResponse(response);
 
                 bar.style.width = '100%';
                 pct.textContent = '100%';
                 txt.textContent = data.success ? t('steps_run_done_ok') : t('steps_run_done_end');
 
-                if (data.success) {
+                if (response.ok && data.success) {
                     alert(t('steps_run_ok_alert').replace('{status}', String(data.status != null ? data.status : '')).replace('{dur}', String(data.duration != null ? data.duration : '')));
                 } else {
-                    const errMsg = (data.error || '');
+                    let errMsg = (data.error || data.error_detail || '');
+                    if (data.python_executable && /缺少依赖|opencv|mss|numpy|不支持/i.test(errMsg)) {
+                        errMsg = errMsg + '\n\nPython: ' + data.python_executable;
+                    }
                     const stopped = data.stopped || data.status === 'stopped' || errMsg.includes('用户已停止执行') || /stopped|cancel/i.test(errMsg);
                     if (stopped) {
                         const txt = document.getElementById('runCaseProgressText');
                         if (txt) txt.textContent = t('steps_toast_stopped');
                         showToast(t('steps_toast_stopped'), 'warning');
                     } else {
-                        if (/视觉匹配|visual|自学习|重新框选/i.test(errMsg)) {
-                            offerVisualRelearn(data.failed_step_id, null, errMsg, data.failure_screenshot);
+                        if (/视觉匹配|visual|自学习|重新框选/i.test(errMsg) || data.need_relearn) {
+                            offerVisualRelearn(data.failed_step_id, null, errMsg, data.failure_screenshot, data);
                         } else {
                             alert(t('steps_run_fail_alert').replace('{err}', errMsg || t('index_err_unknown')));
                         }
@@ -4304,6 +5328,10 @@ function changePage(page) {
         
         // 处理拖动开始
         function handleDragStart(e) {
+            if (e.target && e.target.closest && e.target.closest('.step-actions')) {
+                e.preventDefault();
+                return;
+            }
             draggedElement = this;
             draggedStepId = parseInt(this.getAttribute('data-step-id'));
             isDragging = true;
@@ -4986,27 +6014,108 @@ function changePage(page) {
                     });
                     document.getElementById('desktopCapturePanelPreview').classList.toggle('active', tab === 'preview');
                     document.getElementById('desktopCapturePanelPrecise').classList.toggle('active', tab === 'precise');
+                    const vmsg = document.getElementById('desktopCaptureVerifyMsg');
+                    if (vmsg) {
+                        vmsg.style.display = 'none';
+                        vmsg.textContent = '';
+                    }
                 });
             });
+            mountStepModalsToBody();
+            const webBmCopy = document.getElementById('webCaptureCopyBookmarkletBtn');
+            if (webBmCopy) webBmCopy.addEventListener('click', copyWebCaptureBookmarklet);
+            const webReopen = document.getElementById('webCaptureReopenWorkspaceBtn');
+            if (webReopen) {
+                webReopen.addEventListener('click', function () {
+                    const sid = (_webCaptureBookmarklet && window._lastWebCaptureMeta)
+                        ? window._lastWebCaptureMeta.session_id
+                        : '';
+                    openWebCaptureWorkspace(window._lastWebCaptureMeta || { session_id: sid });
+                });
+            }
+            document.getElementById('webCaptureRecaptureBtn') && document.getElementById('webCaptureRecaptureBtn').addEventListener('click', function () {
+                _webCaptureAwaitingRecapture = true;
+                closeWebCaptureResultModal();
+                openWebCaptureWorkspace(window._lastWebCaptureMeta || {});
+                showToast('请在调试浏览器中重新拾取元素', 'info');
+            });
+            document.getElementById('webCaptureTestLocatorBtn') && document.getElementById('webCaptureTestLocatorBtn').addEventListener('click', testWebCapturedLocator);
+            document.getElementById('webCaptureVerifyBtn') && document.getElementById('webCaptureVerifyBtn').addEventListener('click', verifyWebCapturedElement);
+            document.getElementById('webCaptureSimilarBtn') && document.getElementById('webCaptureSimilarBtn').addEventListener('click', loadWebSimilarElements);
+            document.getElementById('webCaptureDoneBtn') && document.getElementById('webCaptureDoneBtn').addEventListener('click', function () { finishWebCaptureModal(false); });
+            document.getElementById('webCaptureSaveContinueBtn') && document.getElementById('webCaptureSaveContinueBtn').addEventListener('click', function () { finishWebCaptureModal(true); });
+            document.querySelectorAll('[data-wc-tab]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    const tab = btn.getAttribute('data-wc-tab');
+                    document.querySelectorAll('[data-wc-tab]').forEach(function (b) {
+                        b.classList.toggle('active', b.getAttribute('data-wc-tab') === tab);
+                    });
+                    document.getElementById('webCapturePanelPreview').classList.toggle('active', tab === 'preview');
+                    document.getElementById('webCapturePanelPrecise').classList.toggle('active', tab === 'precise');
+                });
+            });
+            const wcModal = document.getElementById('webCaptureResultModal');
+            if (wcModal) {
+                wcModal.addEventListener('click', function (ev) {
+                    if (ev.target === wcModal) closeWebCaptureResultModal();
+                });
+            }
+            const dcAction = document.getElementById('desktopCaptureAction');
+            if (dcAction) {
+                dcAction.addEventListener('change', function () {
+                    const wrap = document.getElementById('desktopCaptureInputValueWrap');
+                    if (wrap) wrap.style.display = dcAction.value === 'input' ? 'block' : 'none';
+                });
+            }
             const dcDone = document.getElementById('desktopCaptureDoneBtn');
-            if (dcDone) dcDone.addEventListener('click', function () { commitDesktopCaptureToForm(true); showToast('已写入步骤表单', 'success'); });
+            if (dcDone) dcDone.addEventListener('click', async function () {
+                const isEdit = _desktopCaptureFormMode === 'edit' && currentEditingStepId;
+                if (isEdit) {
+                    closeDesktopCaptureResultModal();
+                    return;
+                }
+                await commitDesktopCaptureToForm(true);
+                showToast('已写入步骤表单', 'success');
+            });
             const dcCont = document.getElementById('desktopCaptureSaveContinueBtn');
-            if (dcCont) dcCont.addEventListener('click', function () {
-                commitDesktopCaptureToForm(false);
-                showToast('已写入表单，可继续捕获', 'success');
+            if (dcCont) dcCont.addEventListener('click', async function () {
+                const isEdit = _desktopCaptureFormMode === 'edit' && currentEditingStepId;
+                if (isEdit) {
+                    const ok = await saveDesktopCaptureEditStep({ closeModal: true });
+                    if (ok) showToast('步骤已保存', 'success');
+                } else {
+                    await commitDesktopCaptureToForm(false);
+                    showToast('已写入表单，可继续捕获', 'success');
+                }
             });
             const dcVerify = document.getElementById('desktopCaptureVerifyBtn');
             if (dcVerify) dcVerify.addEventListener('click', verifyDesktopCapturedElement);
             const dcRecap = document.getElementById('desktopCaptureRecaptureBtn');
-            if (dcRecap) dcRecap.addEventListener('click', function () {
+            if (dcRecap) dcRecap.addEventListener('click', async function () {
                 const modal = document.getElementById('desktopCaptureResultModal');
-                if (modal) modal.style.display = 'none';
-                toggleElementCapture({ formTarget: _desktopCaptureFormMode || 'create' });
+                if (modal) {
+                    modal.classList.remove('active');
+                    modal.style.display = 'none';
+                }
+                stopStructureSnapshotPoll();
+                _desktopCaptureAwaitingRecapture = true;
+                const mode = _desktopCaptureFormMode || 'create';
+                if (_elementCaptureActive || isSelecting) {
+                    await stopElementCaptureSession();
+                }
+                showToast('请按住 Ctrl 并点击目标完成重新捕获', 'info');
+                await startElementCapture({
+                    formTarget: mode,
+                    recordToCase: false,
+                    captureChannel: 'desktop',
+                });
             });
             const dcModal = document.getElementById('desktopCaptureResultModal');
             if (dcModal) {
                 dcModal.addEventListener('click', function (ev) {
-                    if (ev.target === dcModal) dcModal.style.display = 'none';
+                    if (ev.target === dcModal) {
+                        closeDesktopCaptureResultModal();
+                    }
                 });
             }
         });

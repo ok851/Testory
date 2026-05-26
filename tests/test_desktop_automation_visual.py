@@ -6,12 +6,17 @@ from unittest.mock import MagicMock, patch
 
 
 class TestDesktopAutomationVisual(unittest.TestCase):
+    @patch("desktop_automation.wait_for_desktop_effect", return_value=True)
     @patch("desktop_automation.sendinput_pointer_at_screen")
-    @patch("desktop_automation.resolve_visual_click_point", return_value=(100, 200, 0.92))
+    @patch("desktop_hybrid_locator.resolve_desktop_click_point")
     @patch("desktop_automation.desktop_runtime_available", return_value=True)
-    def test_perform_visual_click(self, _rt, _resolve, sendinput):
+    def test_perform_visual_click(self, _rt, mock_resolve, sendinput, _effect):
         from desktop_automation import DesktopAutomation
+        from desktop_hybrid_locator import DesktopResolveResult
 
+        mock_resolve.return_value = DesktopResolveResult(
+            x=100, y=200, score=0.92, resolved_via="visual"
+        )
         auto = DesktopAutomation()
         step = {
             "action": "click",
@@ -26,7 +31,7 @@ class TestDesktopAutomationVisual(unittest.TestCase):
 
     @patch("desktop_automation.sendinput_pointer_at_screen")
     @patch(
-        "desktop_automation.resolve_visual_click_point",
+        "desktop_hybrid_locator.resolve_desktop_click_point",
         side_effect=__import__(
             "desktop_visual_engine", fromlist=["VisualMatchFailed"]
         ).VisualMatchFailed("score too low"),
