@@ -17,7 +17,16 @@ def _highlight_script_path() -> Path:
     return Path(__file__).resolve().parent.parent / "static" / "js" / "web_capture_highlight.js"
 
 
-def get_highlight_js(api_base: str = "", session_id: str = "") -> str:
+def get_browser_toolbar_js(api_base: str = "", session_id: str = "") -> str:
+    p = Path(__file__).resolve().parent.parent / "static" / "js" / "web_capture_browser_toolbar.js"
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError:
+        raw = "// web_capture_browser_toolbar.js missing\n"
+    return raw.replace("__API_BASE__", api_base or "").replace("__SESSION__", session_id or "")
+
+
+def get_highlight_js(api_base: str = "", session_id: str = "", *, page_only: bool = False) -> str:
     global _HIGHLIGHT_JS
     if _HIGHLIGHT_JS is None:
         p = _highlight_script_path()
@@ -29,6 +38,7 @@ def get_highlight_js(api_base: str = "", session_id: str = "") -> str:
         _HIGHLIGHT_JS.replace("__API_BASE__", api_base or "")
         .replace("__SESSION__", session_id or "")
         .replace("__PICK_MODE__", "http")
+        .replace("__PAGE_ONLY__", "1" if page_only else "0")
     )
 
 

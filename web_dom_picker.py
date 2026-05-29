@@ -35,13 +35,13 @@ def start_web_dom_picker(
     record_mode: bool = False,
     case_id: Optional[int] = None,
     platform_origin: str = "",
-    web_capture_mode: str = "cdp",
+    web_capture_mode: str = "extension",
     browser: str = "edge",
     start_url: str = "",
 ) -> Dict[str, Any]:
-    mode = (web_capture_mode or "cdp").strip().lower()
+    mode = (web_capture_mode or "extension").strip().lower()
     if mode not in ("cdp", "extension", "legacy_inject"):
-        mode = "cdp"
+        mode = "extension"
     return start_session(
         mode=mode,
         record_mode=record_mode,

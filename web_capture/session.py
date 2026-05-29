@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""网页捕获会话（cdp / extension / legacy_inject）。"""
+"""网页捕获会话（extension / legacy_inject / cdp 运维）。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ _lock = threading.Lock()
 _session: Dict[str, Any] = {
     "active": False,
     "session_id": "",
-    "mode": "cdp",
+    "mode": "extension",
     "record_mode": False,
     "case_id": 0,
     "platform_origin": "",
@@ -20,6 +20,8 @@ _session: Dict[str, Any] = {
     "error": "",
     "message": "",
     "cdp_port": 0,
+    "armed": False,
+    "preferred_browser": "",
 }
 
 
@@ -46,9 +48,9 @@ def validate_session_id(session_id: str) -> bool:
     return bool(snap.get("active")) and snap.get("session_id") == sid
 
 
-def _build_bookmarklet(platform_origin: str, session_id: str) -> str:
+def build_bookmarklet(platform_origin: str, session_id: str) -> str:
     base = (platform_origin or "").rstrip("/")
-    inject_url = f"{base}/api/web-dom-picker/inject.js?session={session_id}"
+    inject_url = f"{base}/api/web-capture/highlight.js?session={session_id}&page_only=1"
     escaped = inject_url.replace("\\", "\\\\").replace("'", "\\'")
     return (
         "javascript:(function(){"
@@ -60,9 +62,43 @@ def _build_bookmarklet(platform_origin: str, session_id: str) -> str:
     )
 
 
+def _build_bookmarklet(platform_origin: str, session_id: str) -> str:
+    return build_bookmarklet(platform_origin, session_id)
+
+
+def _toolbar_url(origin: str, session_id: str) -> str:
+    if not origin or not session_id:
+        return ""
+    return f"{origin.rstrip('/')}/web-capture/toolbar?session={session_id}"
+
+
+def capture_shell_url(origin: str, session_id: str) -> str:
+    """捕获专用浏览器启动页（同页加载悬浮窗脚本，不依赖扩展注入 about:blank）。"""
+    if not origin or not session_id:
+        return ""
+    return f"{origin.rstrip('/')}/web-capture/shell?session={session_id}"
+
+
+def _ingest_extension_pick() -> None:
+    """将扩展 WebSocket 拾取合并进会话（若存在）。"""
+    try:
+        from web_capture.extension_bridge import consume_extension_pick
+
+        payload = consume_extension_pick()
+        if not payload:
+            return
+        snap = _snap()
+        sid = str(snap.get("session_id") or "")
+        if not sid:
+            return
+        report_pick(sid, payload)
+    except Exception:
+        pass
+
+
 def start_session(
     *,
-    mode: str = "cdp",
+    mode: str = "extension",
     record_mode: bool = False,
     case_id: Optional[int] = None,
     platform_origin: str = "",
@@ -70,9 +106,9 @@ def start_session(
     start_url: str = "",
 ) -> Dict[str, Any]:
     stop_session(fast=True)
-    m = (mode or "cdp").strip().lower()
+    m = (mode or "extension").strip().lower()
     if m not in ("cdp", "extension", "legacy_inject"):
-        m = "cdp"
+        m = "extension"
     origin = (platform_origin or "").strip().rstrip("/")
     session_id = secrets.token_hex(16)
     _set(
@@ -87,25 +123,58 @@ def start_session(
         error="",
         message="网页捕获已就绪",
         cdp_port=0,
+        armed=False,
     )
 
-    workspace_v2 = f"{origin}/web-capture/workspace-v2?session={session_id}" if origin else ""
+    toolbar_url = _toolbar_url(origin, session_id)
     workspace_legacy = f"{origin}/web-capture/workspace?session={session_id}" if origin else ""
-    inject_url = f"{origin}/api/web-dom-picker/inject.js?session={session_id}" if origin else ""
+    inject_url = (
+        f"{origin}/api/web-capture/highlight.js?session={session_id}&page_only=1" if origin else ""
+    )
     bookmarklet = _build_bookmarklet(origin, session_id) if origin else ""
 
     out: Dict[str, Any] = {
         "success": True,
         "mode": m,
         "session_id": session_id,
-        "workspace_url": workspace_v2,
+        "workspace_url": toolbar_url,
+        "toolbar_url": toolbar_url,
         "workspace_url_legacy": workspace_legacy,
         "inject_url": inject_url,
         "bookmarklet": bookmarklet,
         "web_capture_mode": m,
     }
 
-    if m == "cdp":
+    if m == "extension":
+        from web_capture.extension_bridge import ensure_bridge_started
+        from web_capture.plugin_market import (
+            browser_label,
+            get_capture_browser_options,
+            get_preferred_browser_for_capture,
+        )
+
+        bridge = ensure_bridge_started(session_id=session_id)
+        out.update(bridge)
+        browsers = get_capture_browser_options()
+        preferred = get_preferred_browser_for_capture()
+        out["capture_browsers"] = browsers
+        out["preferred_browser"] = preferred
+        out["preferred_browser_label"] = browser_label(preferred) if preferred else ""
+        _set(preferred_browser=browser or preferred)
+        out["hint"] = "已在浏览器打开捕获悬浮窗，请在其中点「开始捕获」"
+        out["message"] = "网页捕获器已就绪"
+        boot = bootstrap_extension_capture(browser=browser)
+        out["browser_bootstrap"] = boot
+        if boot.get("success"):
+            if boot.get("message"):
+                out["message"] = boot["message"]
+                out["hint"] = boot["message"]
+            out["browser"] = boot.get("browser") or preferred
+            out["browser_label"] = boot.get("browser_label") or browser_label(preferred)
+        else:
+            out["warning"] = boot.get("error") or "未能打开捕获浏览器"
+            out["hint"] = boot.get("error") or out["hint"]
+    elif m == "cdp":
         from web_capture.cdp_picker import start_cdp_pick_session
 
         cdp_res = start_cdp_pick_session(
@@ -121,13 +190,10 @@ def start_session(
             _set(active=False, error=cdp_res.get("error") or "CDP 启动失败")
             out["success"] = False
         else:
-            out["hint"] = "调试浏览器已打开：悬停高亮 → 单击拾取元素"
-    elif m == "extension":
-        from web_capture.extension_bridge import ensure_bridge_started
-
-        bridge = ensure_bridge_started(session_id=session_id)
-        out.update(bridge)
-        out["hint"] = "请确保已安装并启用 UAT 浏览器助手扩展"
+            out["hint"] = "CDP 调试模式（运维）"
+            out["workspace_url"] = (
+                f"{origin}/web-capture/workspace-v2?session={session_id}" if origin else ""
+            )
     else:
         out["hint"] = "在捕获窗口加载 URL 后点「开始捕获」，或使用书签在真实页面拾取"
         out["workspace_url"] = workspace_legacy
@@ -136,25 +202,119 @@ def start_session(
     return out
 
 
+def bootstrap_extension_capture(browser: str = "") -> Dict[str, Any]:
+    """打开捕获浏览器并在页面注入可拖动悬浮窗（待命，不武装）。"""
+    import time
+
+    from web_capture.extension_bridge import broadcast_show_toolbar, get_extension_status
+    from web_capture.plugin_market import browser_label, ensure_uat_capture_browser
+
+    snap = _snap()
+    sid = str(snap.get("session_id") or "")
+    origin = str(snap.get("platform_origin") or "")
+    if not sid:
+        return {"success": False, "error": "捕获会话无效"}
+
+    shell_url = capture_shell_url(origin, sid)
+    browser_ready = ensure_uat_capture_browser(browser, shell_url=shell_url)
+    if not browser_ready.get("success"):
+        return browser_ready
+
+    for _ in range(12):
+        if get_extension_status().get("extension_connected"):
+            break
+        time.sleep(0.35)
+
+    broadcast_show_toolbar(api_base=origin, session_id=sid)
+    label = browser_ready.get("browser_label") or browser_label(browser)
+    return {
+        "success": True,
+        "browser": browser_ready.get("browser") or browser,
+        "browser_label": label,
+        "launched": bool(browser_ready.get("launched")),
+        "message": f"已在{label or '浏览器'}中打开捕获悬浮窗，请打开待测页后点「开始捕获」",
+    }
+
+
+def arm_session(session_id: str, *, api_base: str = "", browser: str = "") -> Dict[str, Any]:
+    if not validate_session_id(session_id):
+        return {"success": False, "error": "捕获会话无效或已结束"}
+    origin = api_base or _snap().get("platform_origin") or ""
+    _set(armed=True, message="捕获中：请在浏览器页面悬停并单击元素")
+    snap = _snap()
+    mode = snap.get("mode") or "extension"
+    if mode == "extension":
+        import time
+
+        from web_capture.extension_bridge import broadcast_arm, get_extension_status
+        from web_capture.plugin_market import browser_label
+
+        for _ in range(6):
+            if get_extension_status().get("extension_connected"):
+                break
+            time.sleep(0.35)
+
+        if not get_extension_status().get("extension_connected"):
+            _set(armed=False)
+            return {
+                "success": False,
+                "error": "捕获浏览器扩展未连接，请返回平台重新点击「网页捕获」",
+            }
+
+        result = broadcast_arm(api_base=origin, session_id=session_id)
+        connected = bool(get_extension_status().get("extension_connected"))
+        result["extension_connected"] = connected
+        result["browser"] = browser or snap.get("preferred_browser") or ""
+        result["browser_label"] = browser_label(result["browser"])
+        if connected:
+            result["message"] = "捕获已启动，请悬停高亮后单击元素"
+        else:
+            result["message"] = "捕获指令已发送，若仍无高亮请再次点击「开始捕获」"
+        return result
+    if mode == "cdp":
+        from web_capture import cdp_browser
+        from web_capture.cdp_picker import arm_picker, inject_all_frames
+
+        page = cdp_browser.get_active_page()
+        if not page:
+            return {"success": False, "error": "无 CDP 页面"}
+        inject_all_frames(page, api_base=origin, session_id=session_id)
+        res = arm_picker(page)
+        return res if res.get("success") else {"success": True, "message": "CDP 已武装"}
+    return {"success": True, "message": "已武装；请在待测页使用书签注入后拾取"}
+
+
+def disarm_session(session_id: str) -> Dict[str, Any]:
+    if not validate_session_id(session_id):
+        return {"success": False, "error": "捕获会话无效或已结束"}
+    _set(armed=False, message="网页捕获已就绪")
+    try:
+        from web_capture.extension_bridge import broadcast_disarm
+
+        broadcast_disarm()
+    except Exception:
+        pass
+    return {"success": True}
+
+
 def report_pick(session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not validate_session_id(session_id):
         return {"success": False, "error": "捕获会话无效或已结束"}
     if not isinstance(payload, dict):
         return {"success": False, "error": "无效的拾取数据"}
     snap = _snap()
-    mode = snap.get("mode") or "cdp"
+    mode = snap.get("mode") or "extension"
     try:
+        from web_capture.locator_generator import format_dom_pick_payload
+
+        formatted = format_dom_pick_payload(payload, capture_mode=mode)
         if mode == "cdp":
-            from web_capture.cdp_picker import process_cdp_pick_payload
+            from web_capture.cdp_picker import _enrich_pick_from_cdp_page
 
-            formatted = process_cdp_pick_payload(payload, capture_mode="cdp")
-        else:
-            from web_capture.locator_generator import format_dom_pick_payload
-
-            formatted = format_dom_pick_payload(payload, capture_mode=mode)
+            formatted = _enrich_pick_from_cdp_page(formatted)
     except Exception as exc:
         return {"success": False, "error": str(exc) or "格式化拾取结果失败"}
-    _set(last_pick=formatted, picker_closed=False, message="已捕获网页元素")
+    _set(last_pick=formatted, picker_closed=False, message="已捕获网页元素", armed=False)
     return {"success": True, "selected_element": formatted}
 
 
@@ -174,11 +334,20 @@ def stop_session(*, fast: bool = False) -> Dict[str, Any]:
             cdp_browser.disconnect(stop_browser=False)
         except Exception:
             pass
-    _set(active=False, picker_closed=True)
+    if snap.get("mode") == "extension":
+        try:
+            from web_capture.extension_bridge import broadcast_disarm, broadcast_hide_toolbar
+
+            broadcast_disarm()
+            broadcast_hide_toolbar()
+        except Exception:
+            pass
+    _set(active=False, picker_closed=True, armed=False)
     return {"success": True, "stopped": True, "fast": fast}
 
 
 def get_session_status(*, consume_last_pick: bool = False) -> Dict[str, Any]:
+    _ingest_extension_pick()
     snap = _snap()
     selected = snap.get("last_pick")
     out_pick = selected
@@ -189,30 +358,29 @@ def get_session_status(*, consume_last_pick: bool = False) -> Dict[str, Any]:
     picker_closed = bool(snap.get("picker_closed")) or (
         not snap.get("active") and out_pick is None
     )
+    origin = snap.get("platform_origin") or ""
+    sid = snap.get("session_id") or ""
 
     return {
         "success": True,
         "active": active,
         "picker_closed": picker_closed,
+        "armed": bool(snap.get("armed")),
         "selected_element": out_pick,
-        "session_id": snap.get("session_id") or "",
-        "mode": snap.get("mode") or "cdp",
-        "web_capture_mode": snap.get("mode") or "cdp",
+        "session_id": sid,
+        "mode": snap.get("mode") or "extension",
+        "web_capture_mode": snap.get("mode") or "extension",
         "record_mode": bool(snap.get("record_mode")),
         "case_id": int(snap.get("case_id") or 0),
         "message": snap.get("message") or "",
         "error": snap.get("error") or "",
         "cdp_port": int(snap.get("cdp_port") or 0),
         "inject_url": (
-            f"{snap.get('platform_origin', '')}/api/web-dom-picker/inject.js"
-            f"?session={snap.get('session_id', '')}"
-            if snap.get("platform_origin") and snap.get("session_id")
+            f"{origin}/api/web-capture/highlight.js?session={sid}&page_only=1"
+            if origin and sid
             else ""
         ),
-        "workspace_url": (
-            f"{snap.get('platform_origin', '')}/web-capture/workspace-v2"
-            f"?session={snap.get('session_id', '')}"
-            if snap.get("platform_origin") and snap.get("session_id")
-            else ""
-        ),
+        "workspace_url": _toolbar_url(origin, sid),
+        "toolbar_url": _toolbar_url(origin, sid),
+        "bookmarklet": _build_bookmarklet(origin, sid) if origin and sid else "",
     }

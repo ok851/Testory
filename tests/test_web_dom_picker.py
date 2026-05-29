@@ -16,7 +16,8 @@ def test_start_always_succeeds_without_playwright():
     assert out["success"] is True
     assert out.get("session_id")
     assert out.get("bookmarklet", "").startswith("javascript:")
-    assert "/web-capture/workspace" in (out.get("workspace_url") or "")
+    assert "/web-capture/toolbar" in (out.get("workspace_url") or out.get("toolbar_url") or "")
+    assert "highlight.js" in (out.get("bookmarklet") or "")
     assert validate_session_id(out["session_id"])
 
 

@@ -349,8 +349,72 @@
             display: flex;
         }
 
+        #webCaptureFloatingPanel {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 420px;
+            max-width: calc(100vw - 32px);
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+            z-index: 10055;
+            display: none;
+            flex-direction: column;
+            border: 1px solid #e5e7eb;
+            animation: slideInRight 0.3s ease-out;
+        }
+        #webCaptureFloatingPanel.active {
+            display: flex;
+        }
+        .wc-fp-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px 8px;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .wc-fp-title { font-size: 14px; font-weight: 700; color: #111827; }
+        .wc-fp-badge {
+            font-size: 10px; font-weight: 700; color: #dc2626;
+            background: #fef2f2; padding: 2px 6px; border-radius: 4px; margin-left: 6px;
+        }
+        .wc-fp-close {
+            border: none; background: transparent; color: #9ca3af;
+            font-size: 18px; cursor: pointer; line-height: 1; padding: 2px 6px;
+        }
+        .wc-fp-body { padding: 10px 14px 12px; }
+        .wc-fp-state {
+            display: inline-block; font-size: 12px; font-weight: 600;
+            padding: 4px 10px; border-radius: 6px; margin-bottom: 8px;
+            background: #f1f5f9; color: #6b7280;
+        }
+        .wc-fp-state.on { background: #ecfdf5; color: #16a34a; }
+        .wc-fp-status { font-size: 12px; color: #475569; line-height: 1.45; min-height: 32px; margin-bottom: 10px; }
+        .wc-fp-browser-row {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 12px;
+        }
+        .wc-fp-browser-row label { color: #64748b; white-space: nowrap; }
+        .wc-fp-browser-row select {
+            flex: 1; padding: 5px 8px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 12px;
+        }
+        .wc-fp-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 14px; }
+        .wc-fp-btn {
+            border: none; border-radius: 8px; padding: 8px 14px;
+            font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        .wc-fp-btn-primary { background: #dc2626; color: #fff; }
+        .wc-fp-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .wc-fp-btn-secondary { background: #e5e7eb; color: #111827; }
+        .wc-fp-ext {
+            font-size: 11px; padding: 6px 8px; border-radius: 6px; margin-bottom: 8px;
+            background: #ecfdf5; border: 1px solid #bbf7d0; color: #166534;
+        }
+        .wc-fp-ext.warn { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+
         /* 步骤弹窗挂到 body，避免 .container overflow:hidden 裁剪 */
         #desktopCaptureResultModal,
+        #webCaptureFloatingPanel,
         #webCaptureResultModal,
         #webCaptureSessionModal,
         #editStepModal,
@@ -1002,7 +1066,7 @@
                     🧪 从 Selenium IDE 导入
                 </button>
                 <button type="button" onclick="toggleElementCapture({ recordToCase: true, captureChannel: 'desktop' })" class="btn btn-primary" id="elementCaptureRecordBtn" title="Windows 原生应用：悬浮条智能点选生成 UIA/视觉定位；勿在浏览器内用此模式拾取网页 DOM">🖥️ 桌面捕获 / 录制</button>
-                <button type="button" onclick="toggleElementCapture({ recordToCase: true, captureChannel: 'web' })" class="btn btn-info" id="elementWebCaptureBtn" title="打开网页捕获器窗口，在预览页悬停高亮并单击拾取 DOM 元素">🌐 网页捕获</button>
+                <button type="button" onclick="toggleElementCapture({ recordToCase: true, captureChannel: 'web' })" class="btn btn-info" id="elementWebCaptureBtn" title="打开网页捕获器，在自有浏览器中悬停高亮并拾取 DOM 元素">🌐 网页捕获</button>
             </div>
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
@@ -1531,6 +1595,31 @@
                 <button type="button" class="btn btn-secondary" onclick="closeWebCaptureSessionModal()">关闭说明</button>
                 <button type="button" class="btn btn-primary" style="background:#dc2626;border-color:#dc2626;" onclick="stopElementCaptureSession()">停止网页捕获</button>
             </div>
+        </div>
+    </div>
+
+    <!-- 网页捕获器（通用浮层，各浏览器共用 UI，后台调用对应插件） -->
+    <div id="webCaptureFloatingPanel">
+        <div class="wc-fp-header">
+            <div>
+                <span class="wc-fp-title">网页元素捕获</span>
+                <span class="wc-fp-badge">DOM</span>
+            </div>
+            <button type="button" class="wc-fp-close" id="webCaptureFloatingCloseBtn" title="收起">×</button>
+        </div>
+        <div class="wc-fp-body">
+            <div id="wcFpStatePill" class="wc-fp-state">● 待命</div>
+            <div id="wcFpExtStatus" class="wc-fp-ext">检测插件中…</div>
+            <div class="wc-fp-browser-row" id="wcFpBrowserRow">
+                <label for="wcFpBrowserSelect">捕获浏览器</label>
+                <select id="wcFpBrowserSelect"></select>
+            </div>
+            <div id="wcFpStatusText" class="wc-fp-status">点「开始捕获」将打开所选浏览器的捕获窗口，在其中打开待测页后悬停单击元素。</div>
+        </div>
+        <div class="wc-fp-actions">
+            <button type="button" class="wc-fp-btn wc-fp-btn-primary" id="wcFpArmBtn">开始捕获</button>
+            <button type="button" class="wc-fp-btn wc-fp-btn-secondary" id="wcFpDisarmBtn" disabled>停止捕获</button>
+            <button type="button" class="wc-fp-btn wc-fp-btn-secondary" id="wcFpEndBtn">结束捕获</button>
         </div>
     </div>
 
@@ -3470,7 +3559,7 @@ function changePage(page) {
         }
 
         function mountStepModalsToBody() {
-            ['desktopCaptureResultModal', 'webCaptureResultModal', 'webCaptureSessionModal', 'editStepModal', 'createStepModal', 'visualRelearnModal'].forEach(function (id) {
+            ['desktopCaptureResultModal', 'webCaptureFloatingPanel', 'webCaptureResultModal', 'webCaptureSessionModal', 'editStepModal', 'createStepModal', 'visualRelearnModal'].forEach(function (id) {
                 const el = document.getElementById(id);
                 if (el && el.parentElement !== document.body) {
                     document.body.appendChild(el);
@@ -3815,33 +3904,143 @@ function changePage(page) {
         }
 
         let _webCaptureBookmarklet = '';
-        let _webCaptureWorkspaceWin = null;
+        let _wcSessionId = '';
+        let _wcArmed = false;
+        let _wcExtStatusTimer = null;
+
+        function _wcBrowserLabel(id) {
+            const map = { edge: 'Microsoft Edge', chrome: 'Google Chrome', firefox: 'Mozilla Firefox' };
+            return map[id] || id || '';
+        }
+
+        function populateWebCaptureBrowserSelect(webMeta) {
+            const sel = document.getElementById('wcFpBrowserSelect');
+            const row = document.getElementById('wcFpBrowserRow');
+            if (!sel) return;
+            const browsers = (webMeta && webMeta.capture_browsers) || [];
+            sel.innerHTML = '';
+            if (!browsers.length) {
+                if (row) row.style.display = 'none';
+                return;
+            }
+            if (row) row.style.display = 'flex';
+            const preferred = (webMeta && webMeta.preferred_browser) || browsers[0].id;
+            browsers.forEach(function (b) {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.label || _wcBrowserLabel(b.id);
+                if (b.id === preferred) opt.selected = true;
+                sel.appendChild(opt);
+            });
+        }
+
+        function setWebCaptureFloatingArmed(on) {
+            _wcArmed = !!on;
+            const pill = document.getElementById('wcFpStatePill');
+            const armBtn = document.getElementById('wcFpArmBtn');
+            const disarmBtn = document.getElementById('wcFpDisarmBtn');
+            const browserSel = document.getElementById('wcFpBrowserSelect');
+            if (pill) {
+                pill.textContent = _wcArmed ? '● 捕获中' : '● 待命';
+                pill.classList.toggle('on', _wcArmed);
+            }
+            if (armBtn) armBtn.disabled = _wcArmed;
+            if (disarmBtn) disarmBtn.disabled = !_wcArmed;
+            if (browserSel) browserSel.disabled = _wcArmed;
+        }
+
+        async function refreshWebCaptureExtStatus() {
+            const extEl = document.getElementById('wcFpExtStatus');
+            if (!extEl) return;
+            try {
+                const r = await fetch('/api/web-capture/extension/status', { credentials: 'include' });
+                const j = await r.json();
+                if (j.extension_connected) {
+                    extEl.textContent = '捕获插件已连接';
+                    extEl.className = 'wc-fp-ext';
+                } else {
+                    const sel = document.getElementById('wcFpBrowserSelect');
+                    const label = sel && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : '对应浏览器';
+                    extEl.textContent = '开始捕获时将打开「' + label + '」并加载插件';
+                    extEl.className = 'wc-fp-ext';
+                }
+            } catch (e) {
+                extEl.textContent = '插件状态检测失败';
+                extEl.className = 'wc-fp-ext warn';
+            }
+        }
+
+        async function armWebCaptureFloating() {
+            if (!_wcSessionId) {
+                showToast('捕获会话无效，请重新点击「网页捕获」', 'error');
+                return;
+            }
+            const sel = document.getElementById('wcFpBrowserSelect');
+            const browser = sel ? sel.value : '';
+            const statusEl = document.getElementById('wcFpStatusText');
+            try {
+                const r = await fetchApi('/api/web-capture/arm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: _wcSessionId, browser: browser }),
+                });
+                const j = await parseApiJsonResponse(r);
+                if (j.success) {
+                    setWebCaptureFloatingArmed(true);
+                    if (statusEl) {
+                        statusEl.textContent = j.message || '请在捕获浏览器中悬停并单击元素';
+                        if (j.warning) statusEl.textContent += '（' + j.warning + '）';
+                    }
+                    refreshWebCaptureExtStatus();
+                } else {
+                    showToast(j.error || '开始捕获失败', 'error');
+                }
+            } catch (e) {
+                showToast('开始捕获失败：' + formatFetchError(e), 'error');
+            }
+        }
+
+        async function disarmWebCaptureFloating() {
+            if (!_wcSessionId) return;
+            try {
+                await fetchApi('/api/web-capture/disarm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: _wcSessionId }),
+                });
+            } catch (e) { /* ignore */ }
+            setWebCaptureFloatingArmed(false);
+            const statusEl = document.getElementById('wcFpStatusText');
+            if (statusEl) statusEl.textContent = '已停止捕获，可再次点「开始捕获」。';
+        }
+
+        function closeWebCaptureFloatingPanel() {
+            const panel = document.getElementById('webCaptureFloatingPanel');
+            if (panel) panel.classList.remove('active');
+            if (_wcExtStatusTimer) {
+                clearInterval(_wcExtStatusTimer);
+                _wcExtStatusTimer = null;
+            }
+            setWebCaptureFloatingArmed(false);
+        }
+
+        function showWebCaptureFloatingPanel(webMeta) {
+            window._lastWebCaptureMeta = webMeta || {};
+            _wcSessionId = (webMeta && webMeta.session_id) || '';
+            closeWebCaptureFloatingPanel();
+            return true;
+        }
+
+        function openWebCapturerToolbar(webMeta) {
+            return showWebCaptureFloatingPanel(webMeta);
+        }
+
+        function closeWebCaptureToolbarModal() {
+            closeWebCaptureFloatingPanel();
+        }
 
         function openWebCaptureWorkspace(webMeta) {
-            const sid = (webMeta && webMeta.session_id) || '';
-            let wsUrl = (webMeta && webMeta.workspace_url) || '';
-            if (!wsUrl && sid) {
-                wsUrl = '/web-capture/workspace?session=' + encodeURIComponent(sid);
-            }
-            if (currentCaseId) {
-                wsUrl += (wsUrl.indexOf('?') >= 0 ? '&' : '?') + 'case_id=' + encodeURIComponent(currentCaseId);
-            }
-            if (_webCaptureWorkspaceWin && !_webCaptureWorkspaceWin.closed) {
-                try {
-                    _webCaptureWorkspaceWin.focus();
-                    _webCaptureWorkspaceWin.location.href = wsUrl;
-                } catch (e) { /* ignore */ }
-                return true;
-            }
-            _webCaptureWorkspaceWin = window.open(
-                wsUrl,
-                'uat_web_capture_' + (sid || 'wc'),
-                'width=1280,height=860,resizable=yes,scrollbars=yes'
-            );
-            if (!_webCaptureWorkspaceWin) {
-                return false;
-            }
-            return true;
+            return openWebCapturerToolbar(webMeta);
         }
 
         function openWebCaptureSessionModal(webMeta) {
@@ -4114,6 +4313,7 @@ function changePage(page) {
             isSelecting = false;
             setPickButtonsLoading(false);
             closeWebCaptureSessionModal();
+            closeWebCaptureFloatingPanel();
             try {
                 await fetchApi('/api/element-picker/stop', { method: 'POST' }, 1);
             } catch (e) { /* ignore */ }
@@ -4386,9 +4586,8 @@ function changePage(page) {
                         enable_web: enableWeb,
                         web_navigate: false,
                         web_attach_existing: isWebCapture,
-                        web_capture_mode: 'cdp',
+                        web_capture_mode: 'extension',
                         browser: 'edge',
-                        start_url: isWebCapture ? (await resolveCaseNavUrlForPicker()) : '',
                     }),
                 });
                 const data = await parseApiJsonResponse(r);
@@ -4409,14 +4608,11 @@ function changePage(page) {
                 if (isWebCapture) {
                     if (web.success) {
                         window._lastWebCaptureMeta = web;
-                        const opened = openWebCaptureWorkspace(web);
-                        openWebCaptureSessionModal(web);
-                        if (opened) {
-                            msg = 'CDP 调试浏览器已启动；在页面左上角点「开始捕获」后单击元素';
-                        } else {
-                            showToast('无法打开捕获器窗口，请允许弹出窗口或使用备用书签', 'warning');
-                            msg = '请点「重新打开捕获器窗口」或查看弹窗说明';
+                        openWebCapturerToolbar(web);
+                        if (web.warning) {
+                            showToast(web.warning, 'warning');
                         }
+                        msg = web.message || web.hint || '已在浏览器打开捕获悬浮窗，请在其中点「开始捕获」';
                     } else {
                         msg = web.error || web.hint || '网页捕获启动失败';
                         showToast(msg, 'error');
@@ -6030,14 +6226,14 @@ function changePage(page) {
                     const sid = (_webCaptureBookmarklet && window._lastWebCaptureMeta)
                         ? window._lastWebCaptureMeta.session_id
                         : '';
-                    openWebCaptureWorkspace(window._lastWebCaptureMeta || { session_id: sid });
+                    openWebCapturerToolbar(window._lastWebCaptureMeta || { session_id: sid });
                 });
             }
             document.getElementById('webCaptureRecaptureBtn') && document.getElementById('webCaptureRecaptureBtn').addEventListener('click', function () {
                 _webCaptureAwaitingRecapture = true;
                 closeWebCaptureResultModal();
-                openWebCaptureWorkspace(window._lastWebCaptureMeta || {});
-                showToast('请在调试浏览器中重新拾取元素', 'info');
+                openWebCapturerToolbar(window._lastWebCaptureMeta || {});
+                showToast('请在浏览器悬浮窗点「开始捕获」，然后重新拾取', 'info');
             });
             document.getElementById('webCaptureTestLocatorBtn') && document.getElementById('webCaptureTestLocatorBtn').addEventListener('click', testWebCapturedLocator);
             document.getElementById('webCaptureVerifyBtn') && document.getElementById('webCaptureVerifyBtn').addEventListener('click', verifyWebCapturedElement);
@@ -6053,6 +6249,26 @@ function changePage(page) {
                     document.getElementById('webCapturePanelPreview').classList.toggle('active', tab === 'preview');
                     document.getElementById('webCapturePanelPrecise').classList.toggle('active', tab === 'precise');
                 });
+            });
+            const wcFpArm = document.getElementById('wcFpArmBtn');
+            const wcFpDisarm = document.getElementById('wcFpDisarmBtn');
+            const wcFpEnd = document.getElementById('wcFpEndBtn');
+            const wcFpClose = document.getElementById('webCaptureFloatingCloseBtn');
+            if (wcFpArm) wcFpArm.addEventListener('click', armWebCaptureFloating);
+            if (wcFpDisarm) wcFpDisarm.addEventListener('click', disarmWebCaptureFloating);
+            if (wcFpEnd) wcFpEnd.addEventListener('click', function () { stopElementCaptureSession(); });
+            if (wcFpClose) wcFpClose.addEventListener('click', closeWebCaptureFloatingPanel);
+            document.addEventListener('keydown', function (e) {
+                const panel = document.getElementById('webCaptureFloatingPanel');
+                if (!panel || !panel.classList.contains('active')) return;
+                if (e.key === 'F2') {
+                    e.preventDefault();
+                    if (_wcArmed) disarmWebCaptureFloating();
+                    else armWebCaptureFloating();
+                }
+                if (e.key === 'Escape' && _wcArmed) {
+                    disarmWebCaptureFloating();
+                }
             });
             const wcModal = document.getElementById('webCaptureResultModal');
             if (wcModal) {

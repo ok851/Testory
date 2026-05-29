@@ -24,18 +24,71 @@ def looks_dynamic_dom_id(v: str) -> bool:
     return False
 
 
+def looks_dynamic_class(token: str) -> bool:
+    t = str(token or "").strip()
+    if not t:
+        return True
+    low = t.lower()
+    if re.search(r"\d{4,}", t):
+        return True
+    if re.search(r"[a-f0-9]{8,}", low):
+        return True
+    if re.match(r"^(css|sc|jsx|emotion)-[a-z0-9]+$", low):
+        return True
+    if re.match(r"^v-[a-f0-9]{6,}$", low):
+        return True
+    if re.match(r"^(ng|ember|react)-", low) and re.search(r"\d{4,}", t):
+        return True
+    return False
+
+
 def stable_class_tokens(class_name: str) -> List[str]:
     out: List[str] = []
     for token in str(class_name or "").split():
         t = token.strip()
         if not t or len(t) <= 2:
             continue
-        if re.search(r"\d{4,}", t):
-            continue
-        if re.search(r"[a-f0-9]{8,}", t.lower()):
+        if looks_dynamic_class(t):
             continue
         out.append(t)
     return out[:3]
+
+
+def _candidate_key(selector_type: str, selector_value: str) -> str:
+    return f"{(selector_type or '').lower()}|{selector_value or ''}"
+
+
+def select_primary_locator(
+    candidates: List[Dict[str, Any]],
+    verified_counts: Optional[Dict[str, int]] = None,
+) -> tuple[str, str, int]:
+    """按评分与页面内唯一性验证结果选择主定位。"""
+    if not candidates:
+        return "css", "", 0
+    counts = verified_counts or {}
+    ranked: List[tuple[float, Dict[str, Any], int]] = []
+    for c in candidates:
+        st = str(c.get("selector_type") or "css")
+        sv = str(c.get("selector_value") or "")
+        key = _candidate_key(st, sv)
+        count = counts.get(key)
+        if count is None:
+            count = counts.get(f"{st}:{sv}")
+        score = float(c.get("score") or 0)
+        if st == "id":
+            if count is not None and count != 1:
+                score -= 60
+            elif count == 1:
+                score += 5
+        elif count == 1:
+            score += 25
+        elif count is not None and count > 1:
+            score -= 35
+        ranked.append((score, c, int(count or -1)))
+    ranked.sort(key=lambda x: -x[0])
+    best = ranked[0][1]
+    match_count = ranked[0][2] if ranked[0][2] >= 0 else 0
+    return str(best.get("selector_type") or "css"), str(best.get("selector_value") or ""), match_count
 
 
 def _escape_xpath(s: str) -> str:
@@ -220,9 +273,18 @@ def format_dom_pick_payload(raw: Dict[str, Any], *, capture_mode: str = "cdp") -
     if not candidates:
         candidates = [{"selector_type": "css", "selector_value": css_selector, "score": 50}]
 
-    primary = candidates[0]
-    selector_type = primary["selector_type"]
-    selector_value = primary["selector_value"]
+    verified_raw = raw.get("verified_counts") or {}
+    verified_counts: Dict[str, int] = {}
+    if isinstance(verified_raw, dict):
+        for k, v in verified_raw.items():
+            try:
+                verified_counts[str(k)] = int(v)
+            except (TypeError, ValueError):
+                pass
+
+    selector_type, selector_value, match_count = select_primary_locator(
+        candidates, verified_counts
+    )
     if (
         text_content
         and len(text_content) > 5
@@ -232,9 +294,12 @@ def format_dom_pick_payload(raw: Dict[str, Any], *, capture_mode: str = "cdp") -
     ):
         for c in candidates:
             if c.get("selector_type") == "partial_text":
-                selector_type = "partial_text"
-                selector_value = c["selector_value"]
-                break
+                pk = _candidate_key("partial_text", str(c.get("selector_value") or ""))
+                pc = verified_counts.get(pk, -1)
+                if pc != 0:
+                    selector_type = "partial_text"
+                    selector_value = c["selector_value"]
+                    break
 
     class_name = element.get("className", "") or ""
     class_tokens_raw = [c.strip() for c in str(class_name).split() if c.strip()]
@@ -271,9 +336,24 @@ def format_dom_pick_payload(raw: Dict[str, Any], *, capture_mode: str = "cdp") -
     page_name = str(raw.get("page_name") or raw.get("page_title") or "")
     locator_candidates_json = json.dumps(candidates, ensure_ascii=False)
 
+    structural_css = str(raw.get("structural_css") or element.get("structural_css") or "").strip()
+    if structural_css and selector_type == "css" and not verified_counts:
+        for c in candidates:
+            if c.get("selector_type") == "css" and c.get("selector_value") == structural_css:
+                selector_value = structural_css
+                break
+
+    locator_unique = match_count == 1
+    locator_message = (
+        f"已找到 {match_count} 个元素" if match_count > 0 else "未在页面验证唯一性"
+    )
+
     base = {
         "selector_type": selector_type,
         "selector_value": selector_value,
+        "match_count": match_count if match_count >= 0 else None,
+        "locator_unique": locator_unique if match_count >= 0 else None,
+        "locator_message": locator_message,
         "text_content": text_content,
         "page_name": page_name,
         "tag_name": (element.get("tagName") or "").lower(),

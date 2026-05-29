@@ -6,16 +6,15 @@
     if (msg.type === 'arm_picker' && window.__uatWebCaptureArm) {
       window.__uatWebCaptureArm();
     }
+    if (msg.type === 'disarm_picker' && window.__uatWebCaptureDisarm) {
+      window.__uatWebCaptureDisarm();
+    }
   });
 
-  if (!window.__uatWebCaptureHighlightLoaded) {
-    const s = document.createElement('script');
-    s.src = chrome.runtime.getURL ? '' : '';
-    /* 扩展模式：由平台在首次连接时通过 scripting.executeScript 注入 highlight；
-       此处仅监听 postMessage 拾取 */
-    window.addEventListener('message', (ev) => {
-      if (!ev.data || ev.data.__uatWebCapturePick !== true) return;
+  window.addEventListener('message', (ev) => {
+    if (!ev.data || ev.data.__uatWebCapturePick !== true) return;
+    try {
       chrome.runtime.sendMessage({ type: 'pick', payload: ev.data.payload });
-    });
-  }
+    } catch (e) { /* ignore */ }
+  });
 })();

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>网页元素捕获</title>
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0;
+            font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+            background: #ffffff; color: #111827;
+            user-select: none;
+        }
+        .wc-root { padding: 14px 16px 16px; min-width: 400px; }
+        .wc-hdr { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .wc-hdr h1 { margin: 0; font-size: 15px; font-weight: 700; }
+        .wc-badge {
+            font-size: 10px; font-weight: 700; color: #dc2626;
+            background: #fef2f2; padding: 2px 6px; border-radius: 4px;
+        }
+        .wc-hint {
+            font-size: 12px; color: #6b7280; line-height: 1.5; margin: 0 0 10px;
+        }
+        .wc-state {
+            display: inline-block; font-size: 12px; font-weight: 600;
+            padding: 5px 10px; border-radius: 6px; margin-bottom: 8px;
+            background: #f1f5f9; color: #6b7280;
+        }
+        .wc-state.on { background: #ecfdf5; color: #16a34a; }
+        .wc-status {
+            font-size: 12px; color: #475569; line-height: 1.45;
+            min-height: 36px; margin-bottom: 12px;
+        }
+        .wc-ext {
+            font-size: 11px; padding: 6px 8px; border-radius: 6px; margin-bottom: 10px;
+            background: #f8fafc; border: 1px solid #e5e7eb; color: #64748b;
+        }
+        .wc-ext.ok { background: #ecfdf5; border-color: #bbf7d0; color: #166534; }
+        .wc-ext.warn { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+        .wc-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .wc-btn {
+            border: none; border-radius: 8px; padding: 8px 16px;
+            font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        .wc-btn-primary { background: #dc2626; color: #fff; }
+        .wc-btn-primary:hover { background: #b91c1c; }
+        .wc-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .wc-btn-secondary { background: #e5e7eb; color: #111827; }
+        .wc-btn-secondary:hover { background: #d1d5db; }
+        details { font-size: 12px; color: #64748b; margin-top: 4px; }
+        summary { cursor: pointer; margin-bottom: 6px; }
+        .wc-bm-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+        .wc-bm-link {
+            display: inline-block; text-decoration: none; color: #fff;
+            background: #dc2626; padding: 6px 12px; border-radius: 6px; font-size: 12px;
+        }
+        code { font-size: 10px; word-break: break-all; color: #9ca3af; }
+    </style>
+</head>
+<body>
+<div class="wc-root">
+    {% if error %}
+    <p style="color:#dc2626;font-size:13px;">{{ error }}</p>
+    {% else %}
+    <div class="wc-hdr">
+        <h1>网页元素捕获</h1>
+        <span class="wc-badge">DOM</span>
+    </div>
+    <p class="wc-hint">点「开始捕获」后，平台会打开<strong>捕获专用浏览器</strong>。请在该窗口打开待测页，悬停高亮后单击元素（也可按 <strong>F2</strong>）。</p>
+    <div id="wcStatePill" class="wc-state">● 待命（未开始捕获）</div>
+    <div id="wcExtStatus" class="wc-ext warn">扩展：检测中…</div>
+    <div id="wcStatusText" class="wc-status">待命：点「开始捕获」将打开捕获浏览器；打开待测页后即可悬停拾取。</div>
+    <div class="wc-actions">
+        <button type="button" class="wc-btn wc-btn-primary" id="wcArmBtn">开始捕获</button>
+        <button type="button" class="wc-btn wc-btn-secondary" id="wcDisarmBtn" disabled>停止捕获</button>
+        <button type="button" class="wc-btn wc-btn-secondary" id="wcCloseBtn">结束捕获</button>
+    </div>
+    <details style="font-size:12px;color:#64748b;margin-top:4px;">
+        <summary style="cursor:pointer;">未安装扩展？</summary>
+        <p style="margin:8px 0 0;line-height:1.5;">请打开平台右上角用户菜单 → <a href="/plugin-market" target="_blank" style="color:#dc2626;">插件市场</a>，一键安装对应浏览器插件。</p>
+    </details>
+    {% endif %}
+</div>
+{% if not error %}
+<script>
+(function () {
+    const SESSION = {{ session_id|tojson }};
+    const API_BASE = {{ api_base|tojson }};
+    let armed = false;
+
+    const statePill = document.getElementById('wcStatePill');
+    const statusText = document.getElementById('wcStatusText');
+    const extStatus = document.getElementById('wcExtStatus');
+    const armBtn = document.getElementById('wcArmBtn');
+    const disarmBtn = document.getElementById('wcDisarmBtn');
+
+    function setArmed(on) {
+        armed = !!on;
+        if (statePill) {
+            statePill.textContent = armed ? '● 捕获中' : '● 待命（未开始捕获）';
+            statePill.classList.toggle('on', armed);
+        }
+        if (armBtn) armBtn.disabled = armed;
+        if (disarmBtn) disarmBtn.disabled = !armed;
+        if (statusText && armed) {
+            statusText.textContent = '捕获中：请在浏览器页面悬停高亮，单击确认拾取。';
+        } else if (statusText && !armed) {
+            statusText.textContent = '默认待命：点「开始捕获」或 F2 后，在浏览器页面悬停并单击目标元素。';
+        }
+    }
+
+    async function refreshExtStatus() {
+        try {
+            const r = await fetch(API_BASE + '/api/web-capture/extension/status', { credentials: 'include' });
+            const j = await r.json();
+            if (!extStatus) return;
+            if (j.extension_connected) {
+                extStatus.textContent = '捕获插件已连接';
+                extStatus.className = 'wc-ext ok';
+            } else {
+                extStatus.textContent = '点「开始捕获」将自动打开浏览器并加载插件';
+                extStatus.className = 'wc-ext ok';
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    async function armCapture() {
+        try {
+            const r = await fetch(API_BASE + '/api/web-capture/arm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ session_id: SESSION })
+            });
+            const j = await r.json();
+            if (j.success) {
+                setArmed(true);
+                if (statusText) {
+                    statusText.textContent = j.message || '捕获中：请在捕获浏览器中悬停并单击元素';
+                }
+                if (j.warning && statusText) {
+                    statusText.textContent += '（' + j.warning + '）';
+                }
+                refreshExtStatus();
+            } else {
+                alert(j.error || '武装失败');
+            }
+        } catch (e) {
+            alert('武装失败：' + e);
+        }
+    }
+
+    async function disarmCapture() {
+        try {
+            await fetch(API_BASE + '/api/web-capture/disarm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ session_id: SESSION })
+            });
+        } catch (e) { /* ignore */ }
+        setArmed(false);
+    }
+
+    async function closeCapture() {
+        try {
+            await fetch(API_BASE + '/api/element-picker/stop', {
+                method: 'POST', credentials: 'include'
+            });
+        } catch (e) { /* ignore */ }
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ __uatWebCaptureClose: true }, '*');
+            } else {
+                window.close();
+            }
+        } catch (e2) { /* ignore */ }
+    }
+
+    armBtn && armBtn.addEventListener('click', armCapture);
+    disarmBtn && disarmBtn.addEventListener('click', disarmCapture);
+    document.getElementById('wcCloseBtn') && document.getElementById('wcCloseBtn').addEventListener('click', closeCapture);
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'F2') {
+            e.preventDefault();
+            if (armed) disarmCapture();
+            else armCapture();
+        }
+        if (e.key === 'Escape') {
+            if (armed) disarmCapture();
+        }
+    });
+
+    window.addEventListener('message', function (ev) {
+        if (!ev.data || ev.data.__uatWebCaptureHover !== true) return;
+        if (statusText && armed) {
+            statusText.textContent = '指向：' + (ev.data.label || '元素') + ' — 单击确认捕获';
+        }
+    });
+
+    refreshExtStatus();
+    setInterval(refreshExtStatus, 3000);
+})();
+</script>
+{% endif %}
+</body>
+</html>

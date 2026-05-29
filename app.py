@@ -1100,6 +1100,69 @@ def profile_page():
 def settings_center_page():
     return render_template('settings.html')
 
+
+@app.route('/plugin-market')
+@login_required
+def plugin_market_page():
+    return render_template('plugin_market.html')
+
+
+@app.route('/api/plugin-market/catalog', methods=['GET'])
+@login_required
+@api_error_handler
+def api_plugin_market_catalog():
+    from web_capture.plugin_market import get_plugin_catalog
+
+    origin = (request.host_url or '').rstrip('/')
+    return jsonify({'success': True, 'plugins': get_plugin_catalog(platform_origin=origin)})
+
+
+@app.route('/api/plugin-market/install', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_plugin_market_install():
+    data = request.get_json(silent=True) or {}
+    from web_capture.plugin_market import install_plugin
+
+    plugin_id = (data.get('plugin_id') or data.get('id') or '').strip()
+    if not plugin_id and data.get('browser'):
+        plugin_id = f"web-capture-{(data.get('browser') or '').strip().lower()}"
+    result = install_plugin(plugin_id)
+    return jsonify(result), (200 if result.get('success') else 400)
+
+
+@app.route('/api/plugin-market/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_plugin_market_status():
+    from web_capture.plugin_market import get_plugin_catalog, get_preferred_browser_for_capture
+
+    origin = (request.host_url or '').rstrip('/')
+    plugins = get_plugin_catalog(platform_origin=origin)
+    installed = [p for p in plugins if p.get('installed')]
+    return jsonify({
+        'success': True,
+        'plugins': plugins,
+        'preferred_browser': get_preferred_browser_for_capture(),
+        'has_capture_plugin': bool(installed),
+    })
+
+
+@app.route('/api/plugin-market/prepare', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_plugin_market_prepare():
+    """兼容旧接口：转为一键安装。"""
+    data = request.get_json(silent=True) or {}
+    from web_capture.plugin_market import install_plugin
+
+    browser = (data.get('browser') or 'chrome').strip().lower()
+    result = install_plugin(f"web-capture-{browser}")
+    return jsonify(result), (200 if result.get('success') else 400)
+
+
 @app.route('/schedules')
 @login_required
 @feature_required('schedule')
@@ -4947,10 +5010,89 @@ def api_web_capture_highlight_js():
             Response('// invalid session\n', status=404, mimetype='application/javascript')
         )
     api_base = (request.host_url or '').rstrip('/')
-    body = get_highlight_js(api_base, session_id)
+    page_only = (request.args.get('page_only') or '').strip() in ('1', 'true', 'yes')
+    body = get_highlight_js(api_base, session_id, page_only=page_only)
     return _web_dom_picker_cors(
         Response(body, mimetype='application/javascript; charset=utf-8')
     )
+
+
+@app.route('/api/web-capture/toolbar.js', methods=['GET'])
+def api_web_capture_toolbar_js():
+    from web_capture.cdp_picker import get_browser_toolbar_js
+    from web_capture.session import validate_session_id
+
+    session_id = (request.args.get('session') or '').strip()
+    if not validate_session_id(session_id):
+        return _web_dom_picker_cors(
+            Response('// invalid session\n', status=404, mimetype='application/javascript')
+        )
+    api_base = (request.host_url or '').rstrip('/')
+    body = get_browser_toolbar_js(api_base, session_id)
+    return _web_dom_picker_cors(
+        Response(body, mimetype='application/javascript; charset=utf-8')
+    )
+
+
+@app.route('/api/web-capture/arm', methods=['POST', 'OPTIONS'])
+def api_web_capture_arm():
+    if request.method == 'OPTIONS':
+        return _web_dom_picker_cors(Response('', status=204))
+    data = request.get_json(silent=True) or {}
+    from web_capture.session import arm_session, validate_session_id
+
+    session_id = (data.get('session_id') or '').strip()
+    if not validate_session_id(session_id):
+        return _web_dom_picker_cors(jsonify({'success': False, 'error': '捕获会话无效或已结束'})), 404
+    api_base = (request.host_url or '').rstrip('/')
+    browser = (data.get('browser') or '').strip().lower()
+    result = arm_session(session_id, api_base=api_base, browser=browser)
+    return _web_dom_picker_cors(jsonify(result)), (200 if result.get('success') else 400)
+
+
+@app.route('/api/web-capture/disarm', methods=['POST', 'OPTIONS'])
+def api_web_capture_disarm():
+    if request.method == 'OPTIONS':
+        return _web_dom_picker_cors(Response('', status=204))
+    data = request.get_json(silent=True) or {}
+    from web_capture.session import disarm_session, validate_session_id
+
+    session_id = (data.get('session_id') or '').strip()
+    if not validate_session_id(session_id):
+        return _web_dom_picker_cors(jsonify({'success': False, 'error': '捕获会话无效或已结束'})), 404
+    result = disarm_session(session_id)
+    return _web_dom_picker_cors(jsonify(result)), (200 if result.get('success') else 400)
+
+
+@app.route('/api/web-capture/stop', methods=['POST', 'OPTIONS'])
+def api_web_capture_stop():
+    if request.method == 'OPTIONS':
+        return _web_dom_picker_cors(Response('', status=204))
+    data = request.get_json(silent=True) or {}
+    from web_capture.session import stop_session, validate_session_id
+
+    session_id = (data.get('session_id') or '').strip()
+    if not validate_session_id(session_id):
+        return _web_dom_picker_cors(jsonify({'success': False, 'error': '捕获会话无效或已结束'})), 404
+    stop_session(fast=True)
+    try:
+        from element_picker import sync_stop_element_picker
+
+        sync_stop_element_picker()
+    except Exception:
+        pass
+    return _web_dom_picker_cors(jsonify({'success': True, 'message': '网页捕获已结束'}))
+
+
+@app.route('/api/web-capture/arm-status', methods=['GET'])
+def api_web_capture_arm_status():
+    from web_capture.session import validate_session_id, get_session_debug_snapshot
+
+    session_id = (request.args.get('session') or '').strip()
+    if not validate_session_id(session_id):
+        return _web_dom_picker_cors(jsonify({'success': False, 'armed': False})), 404
+    snap = get_session_debug_snapshot()
+    return _web_dom_picker_cors(jsonify({'success': True, 'armed': bool(snap.get('armed'))}))
 
 
 @app.route('/api/web-dom-picker/inject.js', methods=['GET'])
@@ -5077,6 +5219,54 @@ def web_capture_workspace():
         session_id=session_id,
         api_base=(request.host_url or '').rstrip('/'),
         initial_url=initial_url or '',
+    )
+
+
+@app.route('/web-capture/shell')
+def web_capture_shell():
+    """捕获浏览器启动页（独立配置无平台 Cookie，凭 session 校验）。"""
+    from web_capture.session import validate_session_id
+
+    session_id = (request.args.get('session') or '').strip()
+    api_base = (request.host_url or '').rstrip('/')
+    if not validate_session_id(session_id):
+        return (
+            '<!DOCTYPE html><html><body style="font-family:sans-serif;padding:24px;">'
+            '<p>捕获会话无效或已结束，请返回步骤页重新点击「网页捕获」。</p></body></html>',
+            404,
+        )
+    return render_template(
+        'web_capture_shell.html',
+        session_id=session_id,
+        api_base=api_base,
+    )
+
+
+@app.route('/web-capture/toolbar')
+@login_required
+def web_capture_toolbar():
+    """网页元素捕获器（唯一控制窗口，对齐桌面 Tk 工具条）。"""
+    from web_capture.session import validate_session_id, get_session_debug_snapshot, get_session_status
+
+    session_id = (request.args.get('session') or '').strip()
+    api_base = (request.host_url or '').rstrip('/')
+    if not validate_session_id(session_id):
+        return render_template(
+            'web_capture_toolbar.html',
+            error='捕获会话无效或已结束。请返回步骤页重新点击「网页捕获」。',
+            session_id='',
+            api_base=api_base,
+            bookmarklet='',
+        )
+    snap = get_session_debug_snapshot()
+    status = get_session_status()
+    return render_template(
+        'web_capture_toolbar.html',
+        error='',
+        session_id=session_id,
+        api_base=api_base,
+        bookmarklet=status.get('bookmarklet') or '',
+        mode=snap.get('mode') or 'extension',
     )
 
 

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页元素捕获</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 48px 28px;
+            font-family: "Segoe UI", system-ui, sans-serif;
+            background: linear-gradient(160deg, #f8fafc 0%, #eef2ff 100%);
+            color: #475569;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        h1 { margin: 0 0 12px; font-size: 20px; color: #111827; }
+        p { margin: 0 0 10px; line-height: 1.6; font-size: 14px; }
+        .tip {
+            margin-top: 20px; padding: 12px 14px; border-radius: 8px;
+            background: #fff; border: 1px solid #e2e8f0; font-size: 13px;
+        }
+        strong { color: #dc2626; }
+    </style>
+</head>
+<body>
+    <h1>网页元素捕获</h1>
+    <p>捕获悬浮窗应显示在页面左上角（可拖动）。</p>
+    <p>请在本窗口<strong>地址栏输入待测 URL 并回车</strong>，悬浮窗会随页面自动保留；然后点 <strong>「开始捕获」</strong>。</p>
+    <div class="tip">若未看到悬浮窗，请返回平台重新点击「网页捕获」，或确认已在插件市场安装对应浏览器插件。</div>
+    <script src="{{ api_base }}/api/web-capture/toolbar.js?session={{ session_id }}"></script>
+</body>
+</html>

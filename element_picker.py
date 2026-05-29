@@ -41,7 +41,7 @@ def _start_web_channel_picker(
     record_mode: bool = False,
     case_id: Optional[int] = None,
     platform_origin: str = "",
-    web_capture_mode: str = "cdp",
+    web_capture_mode: str = "extension",
     browser: str = "edge",
     start_url: str = "",
 ) -> Dict[str, Any]:
@@ -82,7 +82,7 @@ def start_element_picker(
     web_attach_existing: bool = True,
     case_id: Optional[int] = None,
     platform_origin: str = "",
-    web_capture_mode: str = "cdp",
+    web_capture_mode: str = "extension",
     browser: str = "edge",
     start_url: str = "",
 ) -> Dict[str, Any]:
