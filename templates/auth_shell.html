@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ product_name }}{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}">
+    {% block auth_head %}{% endblock %}
+</head>
+<body class="testory-auth-page">
+    <header class="testory-auth-top">
+        <a href="/" class="testory-logo testory-logo-lg">
+            <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}">
+            <span class="testory-logo-word">{{ product_name }}<small>{{ product_tagline }}</small></span>
+        </a>
+        {% block auth_top_right %}{% endblock %}
+    </header>
+    <main class="testory-auth-main">
+        {% block auth_content %}{% endblock %}
+    </main>
+</body>
+</html>

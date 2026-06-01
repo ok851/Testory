@@ -31,6 +31,14 @@ def main():
                         help='每月最大执行次数（默认: 企业版无限制，试用版500次）')
     parser.add_argument('--output', '-o', default='license.key',
                         help='输出文件名（默认: license.key）')
+    parser.add_argument('--binding-type', choices=['none', 'machine', 'instance'], default='none',
+                        help='绑定类型：none/machine/instance')
+    parser.add_argument('--binding-id', default='',
+                        help='绑定的 machine_id 或 instance_id')
+    parser.add_argument('--seat-count', type=int, default=0,
+                        help='团队席位数（写入 License）')
+    parser.add_argument('--license-id', default='',
+                        help='平台 License ID（默认自动生成）')
 
     args = parser.parse_args()
 
@@ -59,7 +67,11 @@ def main():
         license_type=license_type,
         issued_to=args.to,
         expires_days=args.days,
-        custom_limits=custom_limits if custom_limits else None
+        custom_limits=custom_limits if custom_limits else None,
+        license_id=args.license_id or "",
+        binding_type="" if args.binding_type == "none" else args.binding_type,
+        binding_id=args.binding_id,
+        seat_count=args.seat_count,
     )
 
     # 保存到文件

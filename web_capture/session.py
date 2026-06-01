@@ -161,7 +161,7 @@ def start_session(
         out["preferred_browser"] = preferred
         out["preferred_browser_label"] = browser_label(preferred) if preferred else ""
         _set(preferred_browser=browser or preferred)
-        out["hint"] = "已在浏览器打开捕获悬浮窗，请在其中点「开始捕获」"
+        out["hint"] = "已在平台显示捕获悬浮窗，请打开待测页后点「开始捕获」"
         out["message"] = "网页捕获器已就绪"
         boot = bootstrap_extension_capture(browser=browser)
         out["browser_bootstrap"] = boot
@@ -203,10 +203,10 @@ def start_session(
 
 
 def bootstrap_extension_capture(browser: str = "") -> Dict[str, Any]:
-    """打开捕获浏览器并在页面注入可拖动悬浮窗（待命，不武装）。"""
+    """打开捕获浏览器（控制面板在平台悬浮窗，不在浏览器内注入）。"""
     import time
 
-    from web_capture.extension_bridge import broadcast_show_toolbar, get_extension_status
+    from web_capture.extension_bridge import get_extension_status
     from web_capture.plugin_market import browser_label, ensure_uat_capture_browser
 
     snap = _snap()
@@ -225,14 +225,13 @@ def bootstrap_extension_capture(browser: str = "") -> Dict[str, Any]:
             break
         time.sleep(0.35)
 
-    broadcast_show_toolbar(api_base=origin, session_id=sid)
     label = browser_ready.get("browser_label") or browser_label(browser)
     return {
         "success": True,
         "browser": browser_ready.get("browser") or browser,
         "browser_label": label,
         "launched": bool(browser_ready.get("launched")),
-        "message": f"已在{label or '浏览器'}中打开捕获悬浮窗，请打开待测页后点「开始捕获」",
+        "message": f"已打开{label or '浏览器'}，请使用平台悬浮窗点「开始捕获」",
     }
 
 
@@ -315,6 +314,113 @@ def report_pick(session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         return {"success": False, "error": str(exc) or "格式化拾取结果失败"}
     _set(last_pick=formatted, picker_closed=False, message="已捕获网页元素", armed=False)
+    try:
+        from web_capture.extension_bridge import broadcast_disarm
+
+        broadcast_disarm()
+    except Exception:
+        pass
+    return {"success": True, "selected_element": formatted}
+
+
+def capture_browser_chrome(session_id: str, target: str) -> Dict[str, Any]:
+    """捕获浏览器原生控件（地址栏/标签页等，无法 DOM 拾取）。"""
+    if not validate_session_id(session_id):
+        return {"success": False, "error": "捕获会话无效或已结束"}
+    t = (target or "").strip().lower()
+    if t not in ("address_bar", "tab", "back", "forward", "reload"):
+        return {"success": False, "error": "不支持的浏览器控件类型"}
+
+    tab: Dict[str, Any] = {}
+    snap = _snap()
+    mode = snap.get("mode") or "extension"
+    if mode == "extension":
+        try:
+            from web_capture.extension_bridge import get_active_capture_tab
+
+            tab = get_active_capture_tab()
+        except Exception:
+            tab = {}
+    elif mode == "cdp":
+        try:
+            from web_capture import cdp_browser
+
+            page = cdp_browser.get_active_page()
+            if page:
+                tab = {"url": page.url or "", "title": ""}
+        except Exception:
+            tab = {}
+
+    url = str(tab.get("url") or "").strip()
+    title = str(tab.get("title") or "").strip()
+    blocked_prefix = ("chrome://", "edge://", "about:", "devtools://")
+    if t in ("address_bar", "tab") and (not url or url.startswith(blocked_prefix)):
+        return {
+            "success": False,
+            "error": "当前标签页无可用 URL，请先在捕获浏览器中打开待测 http(s) 页面",
+        }
+
+    if t == "address_bar":
+        formatted: Dict[str, Any] = {
+            "capture_kind": "browser_chrome",
+            "chrome_target": "address_bar",
+            "name": "navigate_地址栏",
+            "suggested_action": "navigate",
+            "input_value": url,
+            "source_url": url,
+            "page_name": url,
+            "selector_type": "css",
+            "selector_value": "",
+            "tag_name": "address_bar",
+            "description": "浏览器地址栏（导航到当前页 URL）",
+            "locator_message": "浏览器原生控件，执行时将导航到捕获时的 URL",
+        }
+    elif t == "tab":
+        formatted = {
+            "capture_kind": "browser_chrome",
+            "chrome_target": "tab",
+            "name": "tab_" + (title[:24] or "当前标签页"),
+            "suggested_action": "navigate",
+            "input_value": url,
+            "source_url": url,
+            "page_name": title or url,
+            "selector_type": "css",
+            "selector_value": "",
+            "tag_name": "browser_tab",
+            "description": "浏览器标签页「" + (title or url) + "」",
+            "tab_title": title,
+            "tab_url": url,
+            "locator_message": "浏览器标签页，执行时将导航到该页 URL",
+        }
+    else:
+        action_map = {
+            "back": ("browser_back", "浏览器后退"),
+            "forward": ("browser_forward", "浏览器前进"),
+            "reload": ("browser_reload", "浏览器刷新"),
+        }
+        act, label = action_map[t]
+        formatted = {
+            "capture_kind": "browser_chrome",
+            "chrome_target": t,
+            "name": act,
+            "suggested_action": act,
+            "input_value": "",
+            "source_url": url,
+            "page_name": title or url,
+            "selector_type": "css",
+            "selector_value": "",
+            "tag_name": t,
+            "description": label,
+            "locator_message": label + "（浏览器原生控件）",
+        }
+
+    _set(armed=False, message="已捕获浏览器控件")
+    try:
+        from web_capture.extension_bridge import broadcast_disarm
+
+        broadcast_disarm()
+    except Exception:
+        pass
     return {"success": True, "selected_element": formatted}
 
 
@@ -336,10 +442,9 @@ def stop_session(*, fast: bool = False) -> Dict[str, Any]:
             pass
     if snap.get("mode") == "extension":
         try:
-            from web_capture.extension_bridge import broadcast_disarm, broadcast_hide_toolbar
+            from web_capture.extension_bridge import broadcast_disarm
 
             broadcast_disarm()
-            broadcast_hide_toolbar()
         except Exception:
             pass
     _set(active=False, picker_closed=True, armed=False)

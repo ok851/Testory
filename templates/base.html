@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}AI自动化测试平台{% endblock %}</title>
+    <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}">
     <script>
         (function () {
             try {
@@ -38,14 +41,19 @@
     </style>
     {% block head %}{% endblock %}
 </head>
-<body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}">
+<body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}{% if is_client %} testory-desktop-client{% endif %}">
     <!-- 统一导航栏 -->
     <nav class="bg-white dark:bg-gray-900 shadow-md border-b border-gray-100 dark:border-gray-800">
         <div class="container mx-auto px-4 py-3 flex justify-between items-center">
             <!-- 左侧：Logo -->
             <div class="flex items-center gap-3">
-                <i class="fas fa-robot text-blue-600 dark:text-blue-400 text-2xl"></i>
-                <h1 class="text-xl font-bold text-gray-800 dark:text-gray-100" data-i18n="app_title">AI自动化测试平台</h1>
+                <a href="/" class="testory-logo">
+                    <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}">
+                    <span class="testory-logo-word">{{ product_name }}<small>{{ product_tagline }}</small></span>
+                </a>
+                {% if is_client %}
+                <span class="testory-desktop-badge hidden sm:inline-flex">桌面客户端</span>
+                {% endif %}
             </div>
             <!-- 右侧：功能按钮 + 用户信息 -->
             <div class="flex items-center gap-2">
@@ -101,12 +109,25 @@
                             <a href="/license" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
                                 <i class="fas fa-key mr-2 text-gray-400"></i><span data-i18n="menu_license">授权管理</span>
                             </a>
-                            <a href="/pricing" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                            {% if hide_billing_ui %}
+                            {% if website_url %}
+                            <a href="#" onclick="openWebsiteUpgrade(); return false;" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                                <i class="fas fa-external-link-alt mr-2 text-gray-400"></i>升级订阅（官网）
+                            </a>
+                            {% endif %}
+                            {% else %}
+                            <a href="/pricing" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navPricingLink">
                                 <i class="fas fa-tags mr-2 text-gray-400"></i><span data-i18n="menu_pricing">定价</span>
                             </a>
-                            <a href="/payment/orders" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                            <a href="/payment/orders" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navOrdersLink">
                                 <i class="fas fa-receipt mr-2 text-gray-400"></i><span data-i18n="menu_orders">我的订单</span>
                             </a>
+                            {% endif %}
+                            {% if is_client %}
+                            <a href="/client-setup" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                                <i class="fas fa-server mr-2 text-gray-400"></i>团队服务器
+                            </a>
+                            {% endif %}
                             <a href="/sso-settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="ssoSettingsLink" style="display: none;">
                                 <i class="fas fa-shield-alt mr-2 text-gray-400"></i><span data-i18n="menu_sso">SSO 设置</span>
                             </a>
@@ -145,7 +166,8 @@
     <script>
         window.UITranslations = {
             zh: {
-                app_title: 'AI自动化测试平台',
+                app_title: 'Testory',
+                app_tagline: 'AI 自动化测试平台',
                 nav_home_title: '首页',
                 nav_project: '项目',
                 nav_project_title: '项目管理',
@@ -284,7 +306,7 @@
                 settings_lang_zh: '简体中文',
                 settings_lang_en: 'English',
                 settings_saved: '已应用',
-                index_hero_title: '欢迎使用AI自动化测试平台',
+                index_hero_title: '欢迎使用 Testory',
                 index_hero_subtitle: '高效、便捷的自动化测试解决方案',
                 index_btn_manage_projects: '管理项目',
                 index_btn_new_project: '新建项目',
@@ -314,7 +336,7 @@
                 index_ph_desc: '请输入项目描述',
                 index_btn_cancel: '取消',
                 index_btn_create: '创建项目',
-                index_footer_copyright: '© 2026 AI自动化测试平台. 保留所有权利',
+                index_footer_copyright: '© Testory. 保留所有权利',
                 index_err_name_required: '项目名称不能为空',
                 index_creating: '创建中...',
                 index_ok_created: '项目创建成功！',
@@ -910,7 +932,8 @@
                 payment_unknown: '未知错误'
             },
             en: {
-                app_title: 'AI Automation Testing Platform',
+                app_title: 'Testory',
+                app_tagline: 'AI Test Automation',
                 nav_home_title: 'Home',
                 nav_project: 'Projects',
                 nav_project_title: 'Project management',
@@ -1830,6 +1853,25 @@
                     console.log('[DEBUG] Hiding button: ' + btnText);
                 }
             });
+        }
+
+        // 桌面客户端：跳转官网支付（须已登录）
+        async function openWebsiteUpgrade(plan) {
+            try {
+                const resp = await fetch('/api/client/payment-link', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ plan: plan || '' }),
+                });
+                const data = await resp.json();
+                if (data.success && data.url) {
+                    window.open(data.url, '_blank');
+                    return;
+                }
+                alert(data.error || '无法打开支付页，请确认已登录');
+            } catch (e) {
+                alert('网络错误：' + e);
+            }
         }
 
         // 处理注销

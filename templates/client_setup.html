@@ -1,0 +1,99 @@
+{% extends "auth_shell.html" %}
+{% block title %}首次配置 · {{ product_name }}{% endblock %}
+
+{% block auth_top_right %}
+{% if setup_complete %}
+<a href="/" style="color:#a5b4fc;font-size:0.9rem">进入工作台 →</a>
+{% endif %}
+{% endblock %}
+
+{% block auth_content %}
+<div class="testory-auth-card" style="width:min(520px,100%)">
+    <div class="testory-auth-card-header">
+        <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" width="56" height="56" style="margin:0 auto">
+        <h1>欢迎使用 {{ product_name }}</h1>
+        <p class="sub">连接团队服务器 · 自动化在本机执行 · 数据保存在服务器</p>
+        <div class="testory-auth-steps" aria-hidden="true">
+            <span class="testory-auth-step active"></span>
+            <span class="testory-auth-step"></span>
+            <span class="testory-auth-step"></span>
+        </div>
+    </div>
+    <div class="testory-auth-card-body">
+        <div id="setupError" class="testory-auth-error"><span id="setupErrorText"></span></div>
+        <div class="testory-field" style="margin-bottom:0.85rem">
+            <label for="teamServerUrl">团队服务器地址</label>
+            <input id="teamServerUrl" type="url" placeholder="https://uat.company.com 或 http://192.168.1.10:5000" value="{{ team_server_url or '' }}">
+        </div>
+        <div class="testory-field" style="margin-bottom:0.85rem">
+            <label for="setupUsername">用户名</label>
+            <input id="setupUsername" type="text" autocomplete="username">
+        </div>
+        <div class="testory-field" style="margin-bottom:0.85rem">
+            <label for="setupPassword">密码</label>
+            <input id="setupPassword" type="password" autocomplete="current-password">
+        </div>
+        <div class="testory-field" style="margin-bottom:0.85rem">
+            <label for="setupLicense">License Key（可选）</label>
+            <textarea id="setupLicense" rows="3" placeholder="购买后在官网获得，粘贴于此激活" style="font-family:monospace;font-size:0.8rem"></textarea>
+        </div>
+        <p style="font-size:0.75rem;color:#64748b;margin:0 0 1rem">本机设备 ID：<code style="color:#a5b4fc">{{ identity.machine_id }}</code></p>
+        <button id="btnSaveSetup" class="testory-btn-primary">保存并连接</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block auth_head %}
+<script>
+document.getElementById('btnSaveSetup').addEventListener('click', async () => {
+    const err = document.getElementById('setupError');
+    const errText = document.getElementById('setupErrorText');
+    err.classList.remove('show');
+    const btn = document.getElementById('btnSaveSetup');
+    btn.disabled = true;
+    btn.textContent = '连接中…';
+    const team_server_url = document.getElementById('teamServerUrl').value.trim();
+    const username = document.getElementById('setupUsername').value.trim();
+    const password = document.getElementById('setupPassword').value;
+    try {
+        await fetch('/api/client/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ team_server_url, setup_complete: false })
+        });
+        const r = await fetch('/api/client/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ team_server_url, username, password })
+        });
+        const d = await r.json();
+        if (!d.success) {
+            errText.textContent = d.error || '登录失败';
+            err.classList.add('show');
+            btn.disabled = false;
+            btn.textContent = '保存并连接';
+            return;
+        }
+        const lic = document.getElementById('setupLicense').value.trim();
+        if (lic) {
+            await fetch('/api/client/license/activate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ license: lic })
+            });
+        }
+        await fetch('/api/client/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ setup_complete: true })
+        });
+        window.location.href = '/';
+    } catch (e) {
+        errText.textContent = e.message || '连接失败';
+        err.classList.add('show');
+        btn.disabled = false;
+        btn.textContent = '保存并连接';
+    }
+});
+</script>
+{% endblock %}

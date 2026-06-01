@@ -557,9 +557,36 @@
             }
         }
 
-        // 显示升级模态框
+        // 显示升级模态框 / 跳转官网支付
+        async function openWebsiteUpgrade(plan) {
+            try {
+                const resp = await fetch('/api/client/payment-link', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ plan: plan || '' }),
+                });
+                const data = await resp.json();
+                if (data.success && data.url) {
+                    window.open(data.url, '_blank');
+                    return;
+                }
+                Swal.fire({
+                    icon: 'warning',
+                    title: '无法打开支付页',
+                    text: data.error || '请确认已登录并配置了官网地址',
+                    confirmButtonText: '确定'
+                });
+            } catch (e) {
+                Swal.fire({ icon: 'error', title: '网络错误', text: String(e) });
+            }
+        }
+
         function showUpgradeModal() {
+            {% if hide_billing_ui and website_url %}
+            openWebsiteUpgrade();
+            {% else %}
             document.getElementById('upgradeModal').classList.remove('hidden');
+            {% endif %}
         }
 
         // 关闭升级模态框
@@ -569,12 +596,16 @@
 
         // 选择套餐
         function selectPlan(plan) {
+            {% if hide_billing_ui and website_url %}
+            openWebsiteUpgrade(plan);
+            {% else %}
             Swal.fire({
                 icon: 'info',
                 title: typeof t === 'function' ? t('pricing_sales_title') : '',
                 html: typeof t === 'function' ? t('pricing_sales_intro') + '<br><br>sales@example.com · 400-xxx-xxxx' : '',
                 confirmButtonText: typeof t === 'function' ? t('pricing_sales_ok') : 'OK'
             });
+            {% endif %}
         }
 
         function initLicensePage() {

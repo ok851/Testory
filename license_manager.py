@@ -37,6 +37,10 @@ class LicenseInfo:
     max_executions_per_day: int  # 每日最大执行次数
     features: list            # 可用功能列表
     signature: str = ""       # 签名（用于验证）
+    license_id: str = ""      # 平台签发 ID
+    binding_type: str = ""    # none | machine | instance
+    binding_id: str = ""      # machine_id 或 instance_id
+    seat_count: int = 0       # 团队席位（0=按 max_users）
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -48,7 +52,18 @@ class LicenseInfo:
         # 兼容旧版数据：将 max_executions_per_month 映射到 max_executions_per_day
         if 'max_executions_per_month' in data and 'max_executions_per_day' not in data:
             data['max_executions_per_day'] = data.pop('max_executions_per_month')
-        return cls(**data)
+        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        filtered = {k: v for k, v in data.items() if k in known}
+        defaults = {
+            'signature': '',
+            'license_id': '',
+            'binding_type': '',
+            'binding_id': '',
+            'seat_count': 0,
+        }
+        for k, v in defaults.items():
+            filtered.setdefault(k, v)
+        return cls(**filtered)
 
 
 # 对外展示用名称（与 LicenseType 枚举值对应）
@@ -142,7 +157,11 @@ class LicenseManager:
         return license_info.signature == expected
 
     def generate_license(self, license_type: LicenseType, issued_to: str,
-                        expires_days: int = 365, custom_limits: Dict[str, Any] = None) -> str:
+                        expires_days: int = 365, custom_limits: Dict[str, Any] = None,
+                        license_id: str = "",
+                        binding_type: str = "",
+                        binding_id: str = "",
+                        seat_count: int = 0) -> str:
         """
         生成 License
 
@@ -151,6 +170,10 @@ class LicenseManager:
             issued_to: 授权对象
             expires_days: 有效期天数
             custom_limits: 自定义限制（可选）
+            license_id: 平台签发 ID（创始人后台）
+            binding_type: none | machine | instance
+            binding_id: 绑定的 machine_id 或 instance_id
+            seat_count: 团队席位数
 
         Returns:
             License 字符串
@@ -162,6 +185,10 @@ class LicenseManager:
         if custom_limits:
             limits.update(custom_limits)
 
+        if not license_id:
+            import uuid
+            license_id = f"lic_{uuid.uuid4().hex[:16]}"
+
         license_info = LicenseInfo(
             license_type=license_type.value,
             issued_to=issued_to,
@@ -171,7 +198,11 @@ class LicenseManager:
             max_projects=limits['max_projects'],
             max_cases_per_project=limits['max_cases_per_project'],
             max_executions_per_day=limits.get('max_executions_per_day', limits.get('max_executions_per_month', 10)),
-            features=limits['features']
+            features=limits['features'],
+            license_id=license_id,
+            binding_type=(binding_type or "").strip(),
+            binding_id=(binding_id or "").strip(),
+            seat_count=int(seat_count or 0),
         )
 
         # 生成签名
@@ -230,6 +261,15 @@ class LicenseManager:
                     'license_type': license_info.license_type,
                     'message': f'License 已过期（过期时间: {license_info.expires_at}）',
                     'info': license_info
+                }
+
+            bind_err = self.check_binding(license_info)
+            if bind_err:
+                return {
+                    'valid': False,
+                    'license_type': license_info.license_type,
+                    'message': bind_err,
+                    'info': license_info,
                 }
 
             # 缓存验证结果
@@ -356,6 +396,54 @@ class LicenseManager:
             }
 
         return {'allowed': True, 'message': '', 'limit': limit_value, 'current': current_value}
+
+    def check_binding(self, license_info: LicenseInfo) -> Optional[str]:
+        """校验 License 绑定（machine / instance）。"""
+        btype = (license_info.binding_type or "").strip().lower()
+        bid = (license_info.binding_id or "").strip()
+        if not btype or btype == "none" or not bid:
+            return None
+        try:
+            from instance_identity import get_instance_id, get_machine_id
+        except ImportError:
+            return None
+        if btype == "machine":
+            if get_machine_id() != bid:
+                return f"License 已绑定其他设备（期望 {bid[:8]}…）"
+        elif btype == "instance":
+            if get_instance_id() != bid:
+                return f"License 已绑定其他服务器实例（期望 {bid[:8]}…）"
+        return None
+
+    def activate_license_key(
+        self,
+        license_str: str,
+        binding_type: str = "",
+        binding_id: str = "",
+    ) -> Dict[str, Any]:
+        """激活 License；若未绑定则写入 binding。"""
+        result = self.validate_license(license_str)
+        if not result["valid"]:
+            return result
+        info = result["info"]
+        if info and not (info.binding_type or "").strip():
+            try:
+                json_data = base64.b64decode(license_str.encode()).decode()
+                data = json.loads(json_data)
+                if binding_type and binding_id:
+                    data["binding_type"] = binding_type
+                    data["binding_id"] = binding_id
+                    renewed = LicenseInfo.from_dict(data)
+                    renewed.signature = self._generate_signature(renewed.to_dict())
+                    license_str = base64.b64encode(
+                        json.dumps(renewed.to_dict(), ensure_ascii=False).encode()
+                    ).decode()
+            except Exception:
+                pass
+        if self.save_license(license_str):
+            self._cached_license = None
+            return self.validate_license(license_str)
+        return {"valid": False, "message": "保存 License 失败", "info": None}
 
 
 # 全局 License 管理器实例

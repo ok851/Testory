@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}License 管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>License 管理</h1>
+    <p class="subtitle">签发、查看与吊销客户授权密钥</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>签发新 License</h2>
+        <p>生成后将显示 Key，请复制并安全交付给客户</p>
+    </div>
+    <div class="card-body">
+        <div class="form-grid form-grid-wide">
+            <div class="form-group">
+                <label for="license_type">授权类型</label>
+                <select id="license_type">
+                    <option value="professional">团队版 (professional)</option>
+                    <option value="enterprise">企业版 (enterprise)</option>
+                    <option value="free">免费版 (free)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="issued_to">授权对象</label>
+                <input id="issued_to" type="text" placeholder="公司名或个人姓名">
+            </div>
+            <div class="form-group">
+                <label for="expires_days">有效天数</label>
+                <input id="expires_days" type="number" value="365" min="1">
+            </div>
+            <div class="form-group">
+                <label for="seat_count">团队席位数</label>
+                <input id="seat_count" type="number" placeholder="0 表示默认" min="0">
+            </div>
+            <div class="form-group">
+                <label for="binding_type">绑定类型</label>
+                <select id="binding_type">
+                    <option value="">不预绑定</option>
+                    <option value="instance">服务器实例 (instance)</option>
+                    <option value="machine">单设备 (machine)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="binding_id">绑定 ID（可选）</label>
+                <input id="binding_id" type="text" placeholder="inst_… 或 mach_…">
+            </div>
+        </div>
+        <div class="form-actions" style="margin-top: 1rem;">
+            <button type="button" class="btn btn-primary" id="btnCreateLicense">签发 License</button>
+        </div>
+        <pre id="newKey" class="key-output" aria-live="polite"></pre>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>已签发列表</h2>
+        <p>共 {{ licenses|length }} 条记录</p>
+    </div>
+    <div class="table-wrap">
+        {% if licenses %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>License ID</th>
+                    <th>类型</th>
+                    <th>授权对象</th>
+                    <th>绑定</th>
+                    <th>到期日</th>
+                    <th>状态</th>
+                    <th class="actions">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for lic in licenses %}
+                <tr>
+                    <td class="mono">{{ lic.license_id }}</td>
+                    <td><span class="badge badge-indigo">{{ lic.license_type }}</span></td>
+                    <td>{{ lic.issued_to }}</td>
+                    <td class="mono">
+                        {% if lic.binding_type %}
+                            {{ lic.binding_type }}{% if lic.binding_id %} · {{ lic.binding_id[:12] }}…{% endif %}
+                        {% else %}
+                            <span class="link-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ lic.expires_at[:10] if lic.expires_at else '—' }}</td>
+                    <td>
+                        {% if lic.revoked %}
+                            <span class="badge badge-danger">已吊销</span>
+                        {% else %}
+                            <span class="badge badge-success">有效</span>
+                        {% endif %}
+                    </td>
+                    <td class="actions">
+                        {% if not lic.revoked %}
+                        <button type="button" class="btn btn-danger btn-sm btn-revoke" data-id="{{ lic.license_id }}">吊销</button>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="table-empty">暂无 License，请在上方签发第一条授权。</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function createLicense() {
+    const btn = document.getElementById('btnCreateLicense');
+    btn.disabled = true;
+    btn.textContent = '签发中…';
+    try {
+        const r = await fetch('/api/licenses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                license_type: document.getElementById('license_type').value,
+                issued_to: document.getElementById('issued_to').value,
+                expires_days: document.getElementById('expires_days').value,
+                binding_type: document.getElementById('binding_type').value,
+                binding_id: document.getElementById('binding_id').value,
+                seat_count: document.getElementById('seat_count').value,
+            }),
+        });
+        const d = await r.json();
+        if (d.success) {
+            document.getElementById('newKey').textContent = d.license_key || '';
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            alert(d.error || '签发失败');
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '签发 License';
+    }
+}
+
+document.getElementById('btnCreateLicense').addEventListener('click', createLicense);
+
+document.querySelectorAll('.btn-revoke').forEach((el) => {
+    el.addEventListener('click', async () => {
+        const id = el.dataset.id;
+        if (!confirm('确认吊销 License「' + id + '」？此操作不可撤销。')) return;
+        await fetch('/api/licenses/' + encodeURIComponent(id) + '/revoke', { method: 'POST' });
+        location.reload();
+    });
+});
+</script>
+{% endblock %}

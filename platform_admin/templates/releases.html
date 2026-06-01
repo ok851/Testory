@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}安装包发布{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>安装包与版本</h1>
+    <p class="subtitle">上传 Windows 安装包后，用户可在官网一键下载到本地电脑</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>上传安装包（推荐）</h2>
+        <p>文件保存在控制面本地，官网下载地址：<a href="{{ website_url }}/download/latest" target="_blank" rel="noopener">{{ website_url }}/download/latest</a></p>
+    </div>
+    <div class="card-body">
+        <div class="form-grid form-grid-wide">
+            <div class="form-group">
+                <label for="upload_version">版本号</label>
+                <input id="upload_version" type="text" placeholder="例如 1.2.0">
+            </div>
+            <div class="form-group span-2">
+                <label for="upload_file">安装包文件 (.exe / .msi)</label>
+                <input id="upload_file" type="file" accept=".exe,.msi,.zip">
+            </div>
+        </div>
+        <div class="form-actions" style="margin-top: 1rem;">
+            <button type="button" class="btn btn-primary" id="btnUploadRelease">上传并发布</button>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>或填写外部下载地址</h2>
+        <p>若安装包托管在 CDN，可仅登记版本与 URL</p>
+    </div>
+    <div class="card-body">
+        <div class="form-grid form-grid-wide">
+            <div class="form-group">
+                <label for="version">版本号</label>
+                <input id="version" type="text" placeholder="例如 1.2.0">
+            </div>
+            <div class="form-group span-2">
+                <label for="download_url">下载 URL</label>
+                <input id="download_url" type="url" placeholder="https://cdn.example.com/Testory_Setup.exe">
+            </div>
+        </div>
+        <div class="form-actions" style="margin-top: 1rem;">
+            <button type="button" class="btn btn-secondary" id="btnAddRelease">登记外部地址</button>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>版本列表</h2>
+        <p>共 {{ releases|length }} 个版本 · 最新版对外提供官网直链下载</p>
+    </div>
+    <div class="table-wrap">
+        {% if releases %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>版本</th>
+                    <th>渠道</th>
+                    <th>安装包</th>
+                    <th>大小</th>
+                    <th>下载量</th>
+                    <th>官网链接</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for r in releases %}
+                <tr>
+                    <td><strong>{{ r.version }}</strong>{% if loop.first %} <span class="badge badge-success">最新</span>{% endif %}</td>
+                    <td><span class="badge badge-neutral">{{ r.channel }}</span></td>
+                    <td>
+                        {% if r.local_filename %}
+                            {{ r.original_filename or r.local_filename }}
+                        {% elif r.download_url %}
+                            <a href="{{ r.download_url }}" target="_blank" rel="noopener">外部链接</a>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>{% if r.file_size_bytes %}{{ '%.1f'|format(r.file_size_bytes / 1048576) }} MB{% else %}—{% endif %}</td>
+                    <td>{{ r.download_count }}</td>
+                    <td class="mono">{% if loop.first %}<a href="{{ website_url }}/download/latest" target="_blank">/download/latest</a>{% else %}—{% endif %}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="table-empty">暂无发布记录，请上传第一个安装包。</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('btnUploadRelease').addEventListener('click', async () => {
+    const version = document.getElementById('upload_version').value.trim();
+    const fileInput = document.getElementById('upload_file');
+    if (!version || !fileInput.files.length) {
+        alert('请填写版本号并选择安装包文件');
+        return;
+    }
+    const btn = document.getElementById('btnUploadRelease');
+    btn.disabled = true;
+    try {
+        const fd = new FormData();
+        fd.append('version', version);
+        fd.append('file', fileInput.files[0]);
+        const resp = await fetch('/api/releases/upload', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!data.success) {
+            alert(data.error || '上传失败');
+            return;
+        }
+        location.reload();
+    } finally {
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('btnAddRelease').addEventListener('click', async () => {
+    const version = document.getElementById('version').value.trim();
+    const download_url = document.getElementById('download_url').value.trim();
+    if (!version) {
+        alert('请填写版本号');
+        return;
+    }
+    const btn = document.getElementById('btnAddRelease');
+    btn.disabled = true;
+    try {
+        await fetch('/api/releases', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ version, download_url }),
+        });
+        location.reload();
+    } finally {
+        btn.disabled = false;
+    }
+});
+</script>
+{% endblock %}

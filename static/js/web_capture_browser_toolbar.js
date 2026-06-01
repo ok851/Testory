@@ -166,13 +166,28 @@
     }
 
     window.__uatWebCaptureShowToolbar = function () {
-        if (!host || !host.isConnected) buildToolbar();
-        else syncArmStatus();
+        if (!host || !host.isConnected) {
+            window.__uatWebCaptureToolbarLoaded = false;
+            host = null;
+            shadow = null;
+            buildToolbar();
+        } else {
+            syncArmStatus();
+        }
     };
 
     window.__uatWebCaptureHideToolbar = function () {
         removeToolbar();
     };
+
+    window.addEventListener('pageshow', function () {
+        if (!host || !host.isConnected) {
+            window.__uatWebCaptureToolbarLoaded = false;
+            host = null;
+            shadow = null;
+            buildToolbar();
+        }
+    });
 
     buildToolbar();
 })();

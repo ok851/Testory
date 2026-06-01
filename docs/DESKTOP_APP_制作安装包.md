@@ -27,6 +27,19 @@ cd D:\mkst_baixiang\Python_Code\NewUITestPlatform\NewUITestPlatform
 
 完成后 **只把这一个 exe 发给用户**。
 
+## 团队版：连接共享服务器
+
+桌面安装包默认 `DEPLOYMENT_MODE=client`（见 `packaging/uat_desktop.py`）。用户首次启动需在 **团队服务器** 页面填写服务器地址与账号；数据保存在服务器，自动化仍在本机执行。详见 [ARCHITECTURE_CLIENT_SERVER.md](ARCHITECTURE_CLIENT_SERVER.md)。
+
+团队服务器单独部署：
+
+```powershell
+$env:DEPLOYMENT_MODE = "server"
+python app.py
+```
+
+创始人 License / 安装包统计：`python -m platform_admin.app`（默认端口 5100）。
+
 ## 原理（方便排查）
 
 | 部分 | 文件 |

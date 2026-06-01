@@ -1,0 +1,238 @@
+/* Testory 统一品牌样式 — 桌面客户端 / Web 应用 */
+:root {
+  --testory-indigo: #6366f1;
+  --testory-violet: #8b5cf6;
+  --testory-cyan: #06b6d4;
+  --testory-emerald: #34d399;
+  --testory-bg-deep: #050816;
+  --testory-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 45%, #06b6d4 100%);
+  --testory-gradient-soft: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(6, 182, 212, 0.08));
+}
+
+.testory-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.testory-logo img,
+.testory-logo svg {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.testory-logo-lg img,
+.testory-logo-lg svg {
+  width: 48px;
+  height: 48px;
+}
+
+.testory-logo-word {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.testory-logo-word small {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 500;
+  opacity: 0.65;
+  letter-spacing: 0.02em;
+}
+
+html.dark .testory-logo-word {
+  background: linear-gradient(120deg, #e0e7ff, #c4b5fd, #67e8f9);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+html:not(.dark) .testory-logo-word {
+  color: #0f172a;
+}
+
+html:not(.dark) .testory-logo-word small {
+  color: #64748b;
+}
+
+/* 桌面客户端：更紧凑的顶栏 */
+body.testory-desktop-client nav.bg-white,
+body.testory-desktop-client nav {
+  border-bottom-color: rgba(99, 102, 241, 0.15) !important;
+}
+
+body.testory-desktop-client .testory-desktop-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--testory-gradient-soft);
+  color: #6366f1;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+html.dark body.testory-desktop-client .testory-desktop-badge {
+  color: #a5b4fc;
+}
+
+/* 登录 / 首次配置独立壳 */
+.testory-auth-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--testory-bg-deep);
+  color: #f1f5f9;
+  font-family: "DM Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.testory-auth-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 50% 40% at 20% 15%, rgba(99, 102, 241, 0.25), transparent 55%),
+    radial-gradient(ellipse 45% 35% at 85% 10%, rgba(139, 92, 246, 0.18), transparent 50%),
+    radial-gradient(ellipse 40% 30% at 60% 85%, rgba(6, 182, 212, 0.12), transparent 55%);
+  pointer-events: none;
+}
+
+.testory-auth-top {
+  position: relative;
+  z-index: 1;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.testory-auth-main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.testory-auth-card {
+  width: min(440px, 100%);
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 18px;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.testory-auth-card-header {
+  padding: 2rem 2rem 1.25rem;
+  text-align: center;
+}
+
+.testory-auth-card-body {
+  padding: 0 2rem 2rem;
+}
+
+.testory-auth-card h1 {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.testory-auth-card p.sub {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.testory-field label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin-bottom: 0.35rem;
+}
+
+.testory-field input,
+.testory-field textarea {
+  width: 100%;
+  padding: 0.72rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(5, 8, 22, 0.55);
+  color: #f1f5f9;
+  font-size: 0.95rem;
+}
+
+.testory-field input:focus,
+.testory-field textarea:focus {
+  outline: none;
+  border-color: rgba(129, 140, 248, 0.65);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+.testory-btn-primary {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: none;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #fff;
+  cursor: pointer;
+  background: var(--testory-gradient);
+  transition: opacity 0.2s, transform 0.15s;
+}
+
+.testory-btn-primary:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+
+.testory-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.testory-auth-error {
+  display: none;
+  margin-bottom: 1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+.testory-auth-error.show {
+  display: block;
+}
+
+.testory-auth-steps {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.testory-auth-step {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.35);
+}
+
+.testory-auth-step.active {
+  background: #818cf8;
+  box-shadow: 0 0 0 4px rgba(129, 140, 248, 0.2);
+}

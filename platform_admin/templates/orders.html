@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}订单记录{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>订单与付费记录</h1>
+    <p class="subtitle">官网支付订单与线下收款登记</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>录入订单</h2>
+        <p>用于线下收款、对公转账等场景的登记</p>
+    </div>
+    <div class="card-body">
+        <div class="form-grid form-grid-wide">
+            <div class="form-group">
+                <label for="customer_name">客户名称</label>
+                <input id="customer_name" type="text" placeholder="公司或个人">
+            </div>
+            <div class="form-group">
+                <label for="plan_type">方案类型</label>
+                <select id="plan_type">
+                    <option value="professional">团队版 (professional)</option>
+                    <option value="enterprise">企业版 (enterprise)</option>
+                    <option value="free">免费版 (free)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="amount">金额 (元)</label>
+                <input id="amount" type="number" value="0" min="0" step="0.01">
+            </div>
+        </div>
+        <div class="form-actions" style="margin-top: 1rem;">
+            <button type="button" class="btn btn-primary" id="btnAddOrder">录入订单（已付）</button>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>订单列表</h2>
+        <p>共 {{ orders|length }} 条记录</p>
+    </div>
+    <div class="table-wrap">
+        {% if orders %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>订单号</th>
+                    <th>用户</th>
+                    <th>方案</th>
+                    <th>周期</th>
+                    <th>金额</th>
+                    <th>状态</th>
+                    <th>关联 License</th>
+                    <th>创建时间</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for o in orders %}
+                <tr>
+                    <td class="mono">{{ o.order_no }}</td>
+                    <td>
+                        {{ o.username or o.customer_name or '—' }}
+                        {% if o.email %}<br><span style="font-size:0.75rem;color:var(--muted)">{{ o.email }}</span>{% endif %}
+                    </td>
+                    <td><span class="badge badge-indigo">{{ o.plan_type }}</span></td>
+                    <td>{{ o.period or '—' }}</td>
+                    <td>¥{{ '%.2f'|format(o.amount or 0) }}</td>
+                    <td>
+                        {% if o.status == 'paid' %}
+                            <span class="badge badge-success">已付</span>
+                        {% elif o.status == 'pending' %}
+                            <span class="badge badge-warning">待付</span>
+                        {% else %}
+                            <span class="badge badge-neutral">{{ o.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="mono">{{ o.license_id or '—' }}</td>
+                    <td>{{ o.created_at }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="table-empty">暂无订单记录。</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('btnAddOrder').addEventListener('click', async () => {
+    const btn = document.getElementById('btnAddOrder');
+    btn.disabled = true;
+    try {
+        await fetch('/api/orders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                customer_name: document.getElementById('customer_name').value,
+                plan_type: document.getElementById('plan_type').value,
+                amount: document.getElementById('amount').value,
+                status: 'paid',
+            }),
+        });
+        location.reload();
+    } finally {
+        btn.disabled = false;
+    }
+});
+</script>
+{% endblock %}

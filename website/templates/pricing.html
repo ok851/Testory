@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>订阅与支付 · {{ product_name }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+</head>
+<body>
+<div class="bg-canvas"></div>
+<div class="grid-overlay"></div>
+
+<header class="site-nav">
+    <div class="nav-inner">
+        <a href="{{ url_for('index') }}" class="nav-brand">
+            <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" class="nav-logo-mark" width="36" height="36">
+            <span>{{ product_name }}</span>
+        </a>
+        <nav class="nav-links">
+            <a href="{{ url_for('index') }}#pricing">定价</a>
+            <a href="{{ url_for('download_latest') }}">下载</a>
+        </nav>
+    </div>
+</header>
+
+<section class="section" style="padding-top:7rem">
+    <div class="container" style="max-width:960px">
+        <div class="section-header">
+            <span class="section-tag">Checkout</span>
+            <h2>订阅与支付</h2>
+            <p>请在 Testory 桌面客户端或团队服务器中<strong>先登录账号</strong>，再通过软件内「升级订阅」跳转至本页完成支付。</p>
+        </div>
+
+        {% if need_login %}
+        <div class="download-section" style="text-align:left;max-width:640px;margin:0 auto">
+            <h3 style="margin-bottom:0.75rem">尚未识别登录身份</h3>
+            <p>支付需与软件账号绑定。请打开 Testory → 登录 → 在「授权管理」或用户菜单中点击「升级订阅」，系统将自动携带安全凭证打开本页。</p>
+            <p style="margin-top:1rem"><a href="{{ url_for('index') }}#download" class="btn btn-primary">下载客户端</a></p>
+        </div>
+        {% else %}
+        <div class="card-like" style="background:var(--surface);border:1px solid var(--border);border-radius:1rem;padding:1.5rem;margin-bottom:1.5rem">
+            <p style="margin:0;color:var(--muted)">当前登录用户</p>
+            <p style="margin:0.25rem 0 0;font-size:1.25rem;font-weight:600">{{ pay_user.username }}</p>
+            {% if pay_user.email %}<p style="margin:0.25rem 0 0;color:var(--muted)">{{ pay_user.email }}</p>{% endif %}
+        </div>
+
+        <div class="pricing-grid">
+            <div class="price-card{% if selected_plan == 'professional' %} featured{% endif %}" data-plan="professional">
+                <h3>团队版</h3>
+                <p class="desc">小型测试团队 · 协作与高级能力</p>
+                <div class="price-amount">¥99<small>/月起</small></div>
+                <ul class="price-features">
+                    <li>更高项目与用例配额</li>
+                    <li>定时调度 · 缺陷管理</li>
+                    <li>团队服务器协作</li>
+                </ul>
+            </div>
+            <div class="price-card{% if selected_plan == 'enterprise' %} featured{% endif %}" data-plan="enterprise">
+                <h3>企业版</h3>
+                <p class="desc">SSO · 审计 · 私有化</p>
+                <div class="price-amount">¥299<small>/月起</small></div>
+                <ul class="price-features">
+                    <li>团队版全部能力</li>
+                    <li>SSO 与审计日志</li>
+                    <li>专属技术支持</li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="max-width:480px;margin:2rem auto 0">
+            <label style="display:block;margin-bottom:0.5rem;font-weight:500">计费周期</label>
+            <select id="period" style="width:100%;padding:0.75rem;border-radius:0.5rem;border:1px solid var(--border);background:var(--surface);color:inherit">
+                <option value="monthly">按月订阅</option>
+                <option value="yearly">按年订阅（更优惠）</option>
+            </select>
+            <button type="button" id="btnPay" class="btn btn-primary btn-lg" style="width:100%;margin-top:1.25rem">确认并支付</button>
+            <p id="payMsg" class="form-msg" style="margin-top:1rem"></p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<script>
+(function () {
+    const selectedPlan = {{ selected_plan|tojson }};
+    let currentPlan = selectedPlan || 'professional';
+    document.querySelectorAll('[data-plan]').forEach(el => {
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', () => {
+            currentPlan = el.dataset.plan;
+            document.querySelectorAll('[data-plan]').forEach(c => c.classList.remove('featured'));
+            el.classList.add('featured');
+        });
+    });
+    const btn = document.getElementById('btnPay');
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const msg = document.getElementById('payMsg');
+        msg.textContent = '正在创建订单…';
+        msg.className = 'form-msg';
+        try {
+            const period = document.getElementById('period').value;
+            const createResp = await fetch('/api/checkout/create-order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ plan_type: currentPlan, period }),
+            });
+            const createData = await createResp.json();
+            if (!createData.success) {
+                msg.textContent = createData.error || '创建订单失败';
+                msg.classList.add('error');
+                return;
+            }
+            msg.textContent = '正在处理支付（演示环境）…';
+            const orderNo = createData.order.order_no;
+            const payResp = await fetch('/api/checkout/pay/' + encodeURIComponent(orderNo), { method: 'POST' });
+            const payData = await payResp.json();
+            if (!payData.success) {
+                msg.textContent = payData.error || '支付失败';
+                msg.classList.add('error');
+                return;
+            }
+            msg.innerHTML = '支付成功！License Key 已签发，请返回 Testory 在「授权管理」中激活。<br><code style="word-break:break-all">' + (payData.license_key || '') + '</code>';
+            msg.classList.add('success');
+        } catch (e) {
+            msg.textContent = '网络错误，请稍后重试';
+            msg.classList.add('error');
+        } finally {
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
+</body>
+</html>

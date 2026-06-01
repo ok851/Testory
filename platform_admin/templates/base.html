@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}控制面{% endblock %} · Testory</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+<header class="topnav">
+    <a href="{{ url_for('dashboard') }}" class="topnav-brand">
+        <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="Testory" class="topnav-mark-img" width="28" height="28">
+        <span>Testory 控制面</span>
+    </a>
+    <nav class="topnav-links">
+        <a href="{{ url_for('dashboard') }}" class="topnav-link{% if active_page|default('') == 'dashboard' %} active{% endif %}">运营概览</a>
+        <a href="{{ url_for('licenses_page') }}" class="topnav-link{% if active_page|default('') == 'licenses' %} active{% endif %}">License</a>
+        <a href="{{ url_for('releases_page') }}" class="topnav-link{% if active_page|default('') == 'releases' %} active{% endif %}">安装包</a>
+        <a href="{{ url_for('orders_page') }}" class="topnav-link{% if active_page|default('') == 'orders' %} active{% endif %}">订单</a>
+        <a href="{{ url_for('users_page') }}" class="topnav-link{% if active_page|default('') == 'users' %} active{% endif %}">用户</a>
+    </nav>
+    <div class="topnav-right">
+        <a href="{{ url_for('logout') }}" class="topnav-link logout">退出登录</a>
+    </div>
+</header>
+<main class="page-main">
+    {% block content %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

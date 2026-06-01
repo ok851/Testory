@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}产品用户{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>产品用户</h1>
+    <p class="subtitle">在桌面客户端或团队服务器登录后自动同步到此列表，用于核对官网支付身份</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>用户列表</h2>
+        <p>共 {{ users|length }} 位用户 · 支付前须先在软件中登录</p>
+    </div>
+    <div class="table-wrap">
+        {% if users %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>用户名</th>
+                    <th>邮箱</th>
+                    <th>团队服务器</th>
+                    <th>License 档位</th>
+                    <th>最近登录</th>
+                    <th>首次同步</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for u in users %}
+                <tr>
+                    <td><strong>{{ u.username }}</strong><br><span class="mono" style="font-size:0.75rem;color:var(--muted)">ID {{ u.external_user_id }}</span></td>
+                    <td>{{ u.email or '—' }}</td>
+                    <td class="mono">{{ u.team_server_url or '—' }}</td>
+                    <td><span class="badge badge-indigo">{{ u.license_type or 'free' }}</span></td>
+                    <td>{{ u.last_login_at or '—' }}</td>
+                    <td>{{ u.created_at }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="table-empty">暂无产品用户。用户首次在客户端登录后将自动出现在此列表。</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

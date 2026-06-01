@@ -11,6 +11,7 @@ from web_capture import cdp_browser
 from web_capture.locator_generator import format_dom_pick_payload
 
 _HIGHLIGHT_JS: Optional[str] = None
+_CDP_HOOKS_REGISTERED: set = set()
 
 
 def _highlight_script_path() -> Path:
@@ -57,6 +58,7 @@ def inject_picker(page, *, api_base: str = "", session_id: str = "") -> bool:
 
 def inject_all_frames(page, *, api_base: str = "", session_id: str = "") -> int:
     n = 0
+    setup_cdp_navigation_hooks(page, api_base=api_base, session_id=session_id)
     if inject_picker(page, api_base=api_base, session_id=session_id):
         n += 1
     for frame in page.frames:
@@ -68,6 +70,24 @@ def inject_all_frames(page, *, api_base: str = "", session_id: str = "") -> int:
         except Exception:
             pass
     return n
+
+
+def setup_cdp_navigation_hooks(page, *, api_base: str = "", session_id: str = "") -> None:
+    """在浏览器上下文注册高亮 init 脚本，使导航后拾取脚本自动恢复。"""
+    try:
+        ctx_id = id(page.context)
+    except Exception:
+        return
+    key = f"{ctx_id}:{session_id}"
+    if key in _CDP_HOOKS_REGISTERED:
+        return
+    highlight_js = get_highlight_js(api_base, session_id)
+    try:
+        ctx = page.context
+        ctx.add_init_script(highlight_js)
+        _CDP_HOOKS_REGISTERED.add(key)
+    except Exception:
+        pass
 
 
 def arm_picker(page) -> Dict[str, Any]:

@@ -271,14 +271,20 @@ def get_element_picker_status(*, consume_last_pick: bool = False) -> Dict[str, A
                     "success": True,
                     "selected_element": sel,
                     "picker_closed": True,
+                    "armed": bool(wst.get("armed")),
                 }
             elif sel:
-                web = {"success": True, "selected_element": sel}
+                web = {
+                    "success": True,
+                    "selected_element": sel,
+                    "armed": bool(wst.get("armed")),
+                }
             else:
                 web = {
                     "success": bool(wst.get("success", True)),
                     "selected_element": None,
                     "active": bool(wst.get("active")),
+                    "armed": bool(wst.get("armed")),
                     "error": wst.get("error") or "",
                 }
         except Exception as exc:

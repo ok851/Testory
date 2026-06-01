@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 48" role="img" aria-label="Testory">
+  <defs>
+    <linearGradient id="testory-grad" x1="0" y1="0" x2="48" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="50%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="testory-text" x1="0" y1="0" x2="100%" y2="0">
+      <stop offset="0%" stop-color="#e0e7ff"/>
+      <stop offset="55%" stop-color="#c4b5fd"/>
+      <stop offset="100%" stop-color="#67e8f9"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="4" width="40" height="40" rx="11" fill="url(#testory-grad)"/>
+  <path fill="#fff" d="M11 14h18v6H21v14h-4V20H11z"/>
+  <circle cx="33" cy="33" r="5" fill="#34d399" stroke="#050816" stroke-width="1.5"/>
+  <text x="52" y="33" font-family="Outfit, Segoe UI, PingFang SC, sans-serif" font-size="26" font-weight="700" fill="url(#testory-text)">Testory</text>
+</svg>

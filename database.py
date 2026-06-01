@@ -622,6 +622,10 @@ class Database:
         # 创建缺陷管理相关表
         self._create_defect_tables(cursor)
 
+        # PC 端转型：工作空间、执行队列、客户端节点
+        self._create_deployment_tables(cursor)
+        self._ensure_default_workspace(cursor)
+
         # 清理「用例已删除但运行历史仍在」的遗留数据，避免测试报表统计偏高
         try:
             n_orphan = self._cleanup_orphan_run_history(cursor)
@@ -662,6 +666,10 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_test_steps_case_order ON test_steps(case_id, step_order)",
             "CREATE INDEX IF NOT EXISTS idx_ai_context_memory_tenant ON ai_context_memory(tenant_id)",
             "CREATE INDEX IF NOT EXISTS idx_ai_context_memory_user ON ai_context_memory(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_execution_jobs_status ON execution_jobs(status)",
+            "CREATE INDEX IF NOT EXISTS idx_execution_jobs_case ON execution_jobs(case_id)",
+            "CREATE INDEX IF NOT EXISTS idx_client_nodes_machine ON client_nodes(machine_id)",
+            "CREATE INDEX IF NOT EXISTS idx_workspaces_name ON workspaces(name)",
         ]
         
         for index_sql in indexes:
@@ -2321,17 +2329,8 @@ class Database:
         return None
 
     def get_user_tenant_id(self, user_id: int) -> Optional[int]:
-        """多租户隔离：取用户所属租户；无则 None。"""
-        conn = self._sqlite_connect()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT tenant_id FROM users WHERE id = ?", (user_id,))
-            row = cursor.fetchone()
-            if not row or row[0] is None:
-                return None
-            return int(row[0])
-        finally:
-            conn.close()
+        """兼容旧名：返回工作空间 ID（原 tenant_id）。"""
+        return self.get_user_workspace_id(user_id)
 
     def insert_ai_context_memory(
         self,
@@ -3961,3 +3960,388 @@ class Database:
             "os_version": row[4] or "",
             "status": row[5] or "unknown",
         }
+
+    # ==================== 工作空间（原 tenants 语义） ====================
+
+    def _create_deployment_tables(self, cursor) -> None:
+        """工作空间、远程执行任务、桌面客户端节点、实例设置。"""
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                display_name TEXT,
+                instance_id TEXT,
+                plan_type TEXT NOT NULL DEFAULT 'free',
+                max_users INTEGER DEFAULT 5,
+                max_projects INTEGER DEFAULT 10,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS instance_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS client_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                machine_id TEXT NOT NULL UNIQUE,
+                machine_name TEXT,
+                user_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'offline',
+                last_seen_at TIMESTAMP,
+                capabilities_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS execution_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                assigned_machine_id TEXT,
+                run_history_id INTEGER,
+                error TEXT,
+                result_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES test_cases (id),
+                FOREIGN KEY (user_id) REFERENCES users (id),
+                FOREIGN KEY (run_history_id) REFERENCES run_history (id)
+            )
+        ''')
+
+    def _ensure_default_workspace(self, cursor) -> None:
+        """单实例团队服务器默认工作空间 id=1。"""
+        cursor.execute("SELECT COUNT(*) FROM workspaces")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(
+                """
+                INSERT INTO workspaces (id, name, display_name, plan_type, is_active)
+                VALUES (1, 'default', '默认工作空间', 'free', 1)
+                """
+            )
+
+    def get_default_workspace_id(self) -> int:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM workspaces WHERE is_active = 1 ORDER BY id LIMIT 1")
+            row = cursor.fetchone()
+            return int(row[0]) if row else 1
+        finally:
+            conn.close()
+
+    def get_workspace(self, workspace_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, name, display_name, instance_id, plan_type, max_users, max_projects, is_active, created_at
+                FROM workspaces WHERE id = ?
+                """,
+                (workspace_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "name": row[1],
+                "display_name": row[2],
+                "instance_id": row[3],
+                "plan_type": row[4],
+                "max_users": row[5],
+                "max_projects": row[6],
+                "is_active": bool(row[7]),
+                "created_at": _bj_iso(row[8]),
+            }
+        finally:
+            conn.close()
+
+    def get_user_workspace_id(self, user_id: int) -> Optional[int]:
+        """workspace_id 优先；兼容旧 tenant_id 列。"""
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT tenant_id FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row and row[0] is not None:
+                return int(row[0])
+            return self.get_default_workspace_id()
+        finally:
+            conn.close()
+
+    def set_instance_setting(self, key: str, value: str) -> None:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (key, value, _utc_now_sql()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_instance_setting(self, key: str, default: str = "") -> str:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM instance_settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row[0] if row else default
+        finally:
+            conn.close()
+
+    # ==================== 客户端执行节点 ====================
+
+    def upsert_client_node(
+        self,
+        machine_id: str,
+        machine_name: str = "",
+        user_id: Optional[int] = None,
+        status: str = "online",
+        capabilities: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        import json as _json
+
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            caps = _json.dumps(capabilities or {}, ensure_ascii=False)
+            now = _utc_now_sql()
+            cursor.execute("SELECT id FROM client_nodes WHERE machine_id = ?", (machine_id,))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute(
+                    """
+                    UPDATE client_nodes
+                    SET machine_name = ?, user_id = ?, status = ?, last_seen_at = ?, capabilities_json = ?
+                    WHERE machine_id = ?
+                    """,
+                    (machine_name, user_id, status, now, caps, machine_id),
+                )
+                node_id = int(row[0])
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO client_nodes (machine_id, machine_name, user_id, status, last_seen_at, capabilities_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (machine_id, machine_name, user_id, status, now, caps),
+                )
+                node_id = int(cursor.lastrowid)
+            conn.commit()
+            return node_id
+        finally:
+            conn.close()
+
+    def list_client_nodes(self, online_only: bool = False) -> List[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT id, machine_id, machine_name, user_id, status, last_seen_at, capabilities_json, created_at
+                FROM client_nodes
+            """
+            if online_only:
+                sql += " WHERE status = 'online'"
+            sql += " ORDER BY last_seen_at DESC"
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            out = []
+            for row in rows:
+                out.append({
+                    "id": row[0],
+                    "machine_id": row[1],
+                    "machine_name": row[2],
+                    "user_id": row[3],
+                    "status": row[4],
+                    "last_seen_at": _bj_iso(row[5]) if row[5] else None,
+                    "capabilities": row[6] or "{}",
+                    "created_at": _bj_iso(row[7]),
+                })
+            return out
+        finally:
+            conn.close()
+
+    # ==================== 远程执行任务 ====================
+
+    def create_execution_job(self, case_id: int, user_id: int) -> int:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO execution_jobs (case_id, user_id, status, created_at)
+                VALUES (?, ?, 'pending', ?)
+                """,
+                (case_id, user_id, _utc_now_sql()),
+            )
+            job_id = int(cursor.lastrowid)
+            conn.commit()
+            return job_id
+        finally:
+            conn.close()
+
+    def get_execution_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, case_id, user_id, status, assigned_machine_id, run_history_id,
+                       error, result_json, created_at, started_at, finished_at
+                FROM execution_jobs WHERE id = ?
+                """,
+                (job_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "case_id": row[1],
+                "user_id": row[2],
+                "status": row[3],
+                "assigned_machine_id": row[4],
+                "run_history_id": row[5],
+                "error": row[6] or "",
+                "result_json": row[7] or "",
+                "created_at": _bj_iso(row[8]),
+                "started_at": _bj_iso(row[9]) if row[9] else None,
+                "finished_at": _bj_iso(row[10]) if row[10] else None,
+            }
+        finally:
+            conn.close()
+
+    def claim_execution_job(self, machine_id: str, machine_name: str = "") -> Optional[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id FROM execution_jobs
+                WHERE status = 'pending'
+                ORDER BY id ASC LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            job_id = int(row[0])
+            now = _utc_now_sql()
+            cursor.execute(
+                """
+                UPDATE execution_jobs
+                SET status = 'running', assigned_machine_id = ?, started_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (machine_id, now, job_id),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            now = _utc_now_sql()
+            cursor.execute("SELECT id FROM client_nodes WHERE machine_id = ?", (machine_id,))
+            node_row = cursor.fetchone()
+            if node_row:
+                cursor.execute(
+                    """
+                    UPDATE client_nodes
+                    SET machine_name = ?, status = 'online', last_seen_at = ?
+                    WHERE machine_id = ?
+                    """,
+                    (machine_name, now, machine_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO client_nodes (machine_id, machine_name, status, last_seen_at, capabilities_json)
+                    VALUES (?, ?, 'online', ?, '{}')
+                    """,
+                    (machine_id, machine_name, now),
+                )
+            conn.commit()
+            return self.get_execution_job(job_id)
+        finally:
+            conn.close()
+
+    def complete_execution_job(
+        self,
+        job_id: int,
+        status: str,
+        run_history_id: Optional[int] = None,
+        error: str = "",
+        result_json: str = "",
+    ) -> bool:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE execution_jobs
+                SET status = ?, run_history_id = ?, error = ?, result_json = ?, finished_at = ?
+                WHERE id = ?
+                """,
+                (status, run_history_id, error, result_json, _utc_now_sql(), job_id),
+            )
+            ok = cursor.rowcount > 0
+            conn.commit()
+            return ok
+        finally:
+            conn.close()
+
+    def list_execution_jobs(self, limit: int = 50, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        try:
+            cursor = conn.cursor()
+            if status:
+                cursor.execute(
+                    """
+                    SELECT id, case_id, user_id, status, assigned_machine_id, run_history_id,
+                           error, created_at, started_at, finished_at
+                    FROM execution_jobs WHERE status = ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (status, limit),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, case_id, user_id, status, assigned_machine_id, run_history_id,
+                           error, created_at, started_at, finished_at
+                    FROM execution_jobs ORDER BY id DESC LIMIT ?
+                    """,
+                    (limit,),
+                )
+            rows = cursor.fetchall()
+            out = []
+            for row in rows:
+                out.append({
+                    "id": row[0],
+                    "case_id": row[1],
+                    "user_id": row[2],
+                    "status": row[3],
+                    "assigned_machine_id": row[4],
+                    "run_history_id": row[5],
+                    "error": row[6] or "",
+                    "created_at": _bj_iso(row[7]),
+                    "started_at": _bj_iso(row[8]) if row[8] else None,
+                    "finished_at": _bj_iso(row[9]) if row[9] else None,
+                })
+            return out
+        finally:
+            conn.close()

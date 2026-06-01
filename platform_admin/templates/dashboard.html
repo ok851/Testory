@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}运营概览{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>运营概览</h1>
+    <p class="subtitle">License、下载与订单的核心指标一览</p>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card accent-indigo">
+        <p class="label">有效 License</p>
+        <p class="value">{{ stats.active_licenses }}</p>
+    </div>
+    <div class="stat-card accent-emerald">
+        <p class="label">累计激活</p>
+        <p class="value">{{ stats.activations }}</p>
+    </div>
+    <div class="stat-card accent-amber">
+        <p class="label">安装包下载</p>
+        <p class="value">{{ stats.total_downloads }}</p>
+    </div>
+    <div class="stat-card accent-slate">
+        <p class="label">订单总数</p>
+        <p class="value">{{ stats.orders }}</p>
+    </div>
+    <div class="stat-card accent-rose">
+        <p class="label">已付金额</p>
+        <p class="value">¥{{ '%.2f'|format(stats.revenue) }}</p>
+    </div>
+    <div class="stat-card accent-indigo">
+        <p class="label">产品用户</p>
+        <p class="value">{{ stats.product_users }}</p>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h2>快捷入口</h2>
+        <p>常用管理操作</p>
+    </div>
+    <div class="card-body">
+        <div class="form-actions">
+            <a href="{{ url_for('licenses_page') }}" class="btn btn-primary">签发 License</a>
+            <a href="{{ url_for('releases_page') }}" class="btn btn-secondary">发布安装包</a>
+            <a href="{{ url_for('users_page') }}" class="btn btn-secondary">查看产品用户</a>
+            <a href="{{ url_for('orders_page') }}" class="btn btn-secondary">订单记录</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

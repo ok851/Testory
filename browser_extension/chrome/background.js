@@ -1,15 +1,31 @@
 const WS_URL = 'ws://127.0.0.1:19222';
-const TOOLBAR_LOADER_ID = 'uat-wc-toolbar-loader';
 
 let socket = null;
 let lastArm = null;
-let lastToolbar = null;
+let activeTabInfo = { id: 0, url: '', title: '' };
+
+async function refreshActiveTabInfo() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const tab = tabs && tabs[0];
+    if (!tab) return;
+    activeTabInfo = {
+      id: tab.id || 0,
+      url: tab.url || '',
+      title: tab.title || '',
+    };
+    if (socket && socket.readyState === 1) {
+      socket.send(JSON.stringify({ type: 'tab_info', tab: activeTabInfo }));
+    }
+  } catch (e) { /* ignore */ }
+}
 
 function connect() {
   try {
     socket = new WebSocket(WS_URL);
     socket.onopen = () => {
       console.log('[UAT] extension bridge connected');
+      refreshActiveTabInfo();
       pingLoop();
     };
     socket.onclose = () => setTimeout(connect, 3000);
@@ -17,20 +33,17 @@ function connect() {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.type === 'pong') { /* keepalive */ }
-        if (msg.type === 'show_toolbar') {
-          enablePersistentToolbar(msg.api_base, msg.session_id);
-        }
-        if (msg.type === 'hide_toolbar') {
-          disablePersistentToolbar();
-        }
         if (msg.type === 'arm_picker') {
           lastArm = { apiBase: msg.api_base, sessionId: msg.session_id };
+          persistArmSession();
           armCaptureTabs(msg.api_base, msg.session_id);
         }
         if (msg.type === 'disarm_picker') {
           lastArm = null;
+          persistArmSession();
           disarmAllTabs();
         }
+        /* show_toolbar / hide_toolbar 已废弃：捕获控制统一在平台悬浮窗 */
       } catch (e) { /* ignore */ }
     };
   } catch (e) {
@@ -44,147 +57,17 @@ function pingLoop() {
   setTimeout(pingLoop, 4000);
 }
 
-function isShellUrl(url) {
-  return !!(url && typeof url === 'string' && url.includes('/web-capture/shell'));
-}
-
-function isToolbarInjectableUrl(url) {
+function isHighlightInjectableUrl(url) {
   if (!url || typeof url !== 'string') return false;
-  if (isShellUrl(url)) return true;
   if (!/^https?:/i.test(url)) return false;
   if (url.includes('/web-capture/toolbar')) return false;
   return true;
-}
-
-function isHighlightInjectableUrl(url) {
-  return isToolbarInjectableUrl(url);
-}
-
-function shellPageUrl(apiBase, sessionId) {
-  return `${apiBase}/web-capture/shell?session=${encodeURIComponent(sessionId)}`;
 }
 
 async function fetchScriptText(url) {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('fetch failed ' + resp.status);
   return resp.text();
-}
-
-function injectToolbarCode(code) {
-  try {
-    if (window.__uatWebCaptureShowToolbar) {
-      window.__uatWebCaptureShowToolbar();
-      return;
-    }
-    if (window.__uatWebCaptureToolbarLoaded) return;
-    const s = document.createElement('script');
-    s.textContent = code;
-    (document.head || document.documentElement).appendChild(s);
-  } catch (e) {
-    console.warn('[UAT] injectToolbarCode', e);
-  }
-}
-
-async function injectToolbarIntoTab(tabId) {
-  if (!lastToolbar || !tabId) return;
-  const { apiBase, sessionId } = lastToolbar;
-  const scriptUrl = `${apiBase}/api/web-capture/toolbar.js?session=${encodeURIComponent(sessionId)}&_=${Date.now()}`;
-  let scriptText = '';
-  try {
-    scriptText = await fetchScriptText(scriptUrl);
-  } catch (e) {
-    console.warn('[UAT] toolbar.js fetch error', e);
-    return;
-  }
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: false },
-      world: 'MAIN',
-      func: injectToolbarCode,
-      args: [scriptText],
-    });
-  } catch (err) {
-    console.warn('[UAT] injectToolbarIntoTab failed', tabId, err);
-  }
-}
-
-async function registerToolbarLoader() {
-  try {
-    await chrome.scripting.unregisterContentScripts({ ids: [TOOLBAR_LOADER_ID] });
-  } catch (e) { /* ignore */ }
-  await chrome.scripting.registerContentScripts([{
-    id: TOOLBAR_LOADER_ID,
-    matches: ['http://*/*', 'https://*/*'],
-    js: ['content_toolbar.js'],
-    runAt: 'document_idle',
-    allFrames: false,
-  }]);
-}
-
-async function enablePersistentToolbar(apiBase, sessionId) {
-  if (!apiBase || !sessionId) return;
-  lastToolbar = { apiBase, sessionId };
-  try {
-    await chrome.storage.session.set({ uatLastToolbar: lastToolbar });
-  } catch (e) { /* ignore */ }
-
-  await registerToolbarLoader();
-
-  let pool = await chrome.tabs.query({ lastFocusedWindow: true });
-  if (!pool.length) pool = await chrome.tabs.query({});
-
-  let injected = 0;
-  for (const tab of pool) {
-    if (!tab.id || !isToolbarInjectableUrl(tab.url)) continue;
-    await injectToolbarIntoTab(tab.id);
-    injected++;
-  }
-
-  if (injected === 0) {
-    await openShellFallback(shellPageUrl(apiBase, sessionId), pool);
-  }
-}
-
-async function openShellFallback(shellUrl, pool) {
-  const tabs = pool && pool.length ? pool : await chrome.tabs.query({ lastFocusedWindow: true });
-  const candidate = (tabs || []).find((t) => {
-    const u = t.url || '';
-    return !u || u === 'about:blank' || u === 'chrome://newtab/' || u.startsWith('edge://newtab');
-  });
-  try {
-    if (candidate && candidate.id) {
-      await chrome.tabs.update(candidate.id, { url: shellUrl, active: true });
-    } else {
-      await chrome.tabs.create({ url: shellUrl, active: true });
-    }
-  } catch (e) {
-    console.warn('[UAT] openShellFallback', e);
-  }
-}
-
-async function hideToolbarOnTabs() {
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (!tab.id) continue;
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: false },
-        world: 'MAIN',
-        func: () => { if (window.__uatWebCaptureHideToolbar) window.__uatWebCaptureHideToolbar(); },
-      });
-    } catch (e) { /* ignore */ }
-  }
-}
-
-async function disablePersistentToolbar() {
-  lastToolbar = null;
-  try {
-    await chrome.storage.session.remove('uatLastToolbar');
-  } catch (e) { /* ignore */ }
-  try {
-    await chrome.scripting.unregisterContentScripts({ ids: [TOOLBAR_LOADER_ID] });
-  } catch (e) { /* ignore */ }
-  await hideToolbarOnTabs();
 }
 
 async function armCaptureTabs(apiBase, sessionId) {
@@ -244,34 +127,84 @@ async function disarmAllTabs() {
   }
 }
 
-async function restoreToolbarSession() {
+async function restoreArmSession() {
   try {
-    const data = await chrome.storage.session.get('uatLastToolbar');
-    if (data && data.uatLastToolbar) {
-      lastToolbar = data.uatLastToolbar;
-      await registerToolbarLoader();
+    const data = await chrome.storage.session.get('uatLastArm');
+    if (data && data.uatLastArm) {
+      lastArm = data.uatLastArm;
     }
   } catch (e) { /* ignore */ }
 }
 
-connect();
-restoreToolbarSession();
+function persistArmSession() {
+  try {
+    if (lastArm) {
+      chrome.storage.session.set({ uatLastArm: lastArm });
+    } else {
+      chrome.storage.session.remove('uatLastArm');
+    }
+  } catch (e) { /* ignore */ }
+}
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== 'complete') return;
-  if (lastToolbar && isToolbarInjectableUrl(tab.url)) {
-    injectToolbarIntoTab(tabId);
+function handleTabNavigation(tabId, tabUrl) {
+  if (!lastArm || !tabId || !isHighlightInjectableUrl(tabUrl)) return;
+  armCaptureTabs(lastArm.apiBase, lastArm.sessionId);
+}
+
+connect();
+restoreArmSession();
+refreshActiveTabInfo();
+
+chrome.tabs.onActivated.addListener(() => { refreshActiveTabInfo(); });
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') {
+    refreshActiveTabInfo();
   }
-  if (lastArm && isHighlightInjectableUrl(tab.url)) {
-    armCaptureTabs(lastArm.apiBase, lastArm.sessionId);
+  if (changeInfo.status === 'complete' || changeInfo.url) {
+    chrome.tabs.get(tabId, (tab) => {
+      if (chrome.runtime.lastError || !tab) return;
+      handleTabNavigation(tabId, tab.url || changeInfo.url || '');
+    });
   }
 });
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'uat_wc_page_ready' && lastToolbar && sender.tab && sender.tab.id) {
-    injectToolbarIntoTab(sender.tab.id).then(() => sendResponse({ ok: true }));
-    return true;
+async function cleanupLegacyBrowserToolbar() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: false },
+        world: 'MAIN',
+        func: () => {
+          if (window.__uatWebCaptureHideToolbar) window.__uatWebCaptureHideToolbar();
+          const host = document.getElementById('uat-web-capture-toolbar-host');
+          if (host && host.parentNode) host.parentNode.removeChild(host);
+          window.__uatWebCaptureToolbarLoaded = false;
+        },
+      });
+    } catch (e) { /* ignore */ }
   }
+}
+cleanupLegacyBrowserToolbar();
+
+chrome.webNavigation.onCompleted.addListener((details) => {
+  if (details.frameId !== 0) return;
+  chrome.tabs.get(details.tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    handleTabNavigation(details.tabId, tab.url || '');
+  });
+});
+
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+  if (details.frameId !== 0) return;
+  chrome.tabs.get(details.tabId, (tab) => {
+    if (chrome.runtime.lastError || !tab) return;
+    handleTabNavigation(details.tabId, tab.url || '');
+  });
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'pick' && socket && socket.readyState === 1) {
     socket.send(JSON.stringify({ type: 'pick', payload: msg.payload, tabId: sender.tab && sender.tab.id }));
     sendResponse({ ok: true });

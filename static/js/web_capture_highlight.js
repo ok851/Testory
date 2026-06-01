@@ -44,21 +44,62 @@
         return keep.length ? '.' + keep.join('.') : '';
     }
 
-    function resolveTargetAt(x, y) {
-        var el = document.elementFromPoint(x, y);
-        if (!el) return null;
-        if (el.shadowRoot && el.shadowRoot.elementFromPoint) {
-            var inner = el.shadowRoot.elementFromPoint(x, y);
-            if (inner) return inner;
-        }
+    function scorePickTarget(el) {
+        if (!el || el.nodeType !== 1) return -1000;
+        var tag = (el.tagName || '').toLowerCase();
+        if (tag === 'html' || tag === 'body') return -100;
+        if (el.id === 'uat-web-capture-overlay') return -100;
+        if (el.id === 'uat-web-capture-toolbar-host') return -100;
+        var r = el.getBoundingClientRect();
+        if (!r || (r.width < 1 && r.height < 1)) return -80;
+        var area = Math.max(r.width * r.height, 1);
+        var score = 0;
+        if (/^(a|button|input|select|textarea|label|summary)$/i.test(tag)) score += 40;
+        if (el.getAttribute('role')) score += 25;
+        if (el.getAttribute('href') || el.getAttribute('onclick') || el.tabIndex >= 0) score += 10;
         try {
-            var path = el.composedPath ? el.composedPath() : [el];
-            for (var i = 0; i < path.length; i++) {
-                var n = path[i];
-                if (n && n.nodeType === 1 && n.id !== 'uat-web-capture-overlay') return n;
-            }
+            if (el.closest && el.closest('nav,[role="navigation"],header,[role="banner"],.navbar,.nav,.menu')) score += 20;
         } catch (e) { /* ignore */ }
-        return el.id === 'uat-web-capture-overlay' ? null : el;
+        score -= Math.min(30, Math.log(area) * 2);
+        return score;
+    }
+
+    function resolveTargetAt(x, y) {
+        var list = [];
+        try {
+            if (document.elementsFromPoint) {
+                list = document.elementsFromPoint(x, y) || [];
+            } else {
+                var one = document.elementFromPoint(x, y);
+                if (one) list = [one];
+            }
+        } catch (e) {
+            return null;
+        }
+        var best = null;
+        var bestScore = -9999;
+        for (var i = 0; i < list.length; i++) {
+            var el = list[i];
+            if (!el || el.nodeType !== 1) continue;
+            if (el.id === 'uat-web-capture-overlay') continue;
+            if (el.shadowRoot && el.shadowRoot.elementFromPoint) {
+                var inner = el.shadowRoot.elementFromPoint(x, y);
+                if (inner && inner.nodeType === 1) {
+                    var innerScore = scorePickTarget(inner);
+                    if (innerScore > bestScore) {
+                        bestScore = innerScore;
+                        best = inner;
+                    }
+                }
+            }
+            var sc = scorePickTarget(el);
+            if (sc > bestScore) {
+                bestScore = sc;
+                best = el;
+            }
+        }
+        if (best) return best;
+        return null;
     }
 
     function elementLabel(el) {

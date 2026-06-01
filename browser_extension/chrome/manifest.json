@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "UAT Web Capture Assistant",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "NewUITestPlatform 网页元素捕获与执行助手",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

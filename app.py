@@ -123,6 +123,14 @@ from test_report import TestReportGenerator
 from report_exporter import ReportExporter
 from logger import uat_logger
 from license_manager import license_manager, LicenseType
+from deployment_hooks import (
+    guard_billing_route,
+    init_server_instance,
+    patch_run_case_for_server,
+    register_deployment_hooks,
+)
+from deployment_config import is_client_mode, should_delegate_execution_to_clients
+from client_run_helpers import load_case_and_steps, sync_run_to_team_server
 from cloud_llm_gateway import CloudLLMGateway
 from ai_local_inference import local_ai_service
 from ai_step_normalization import (
@@ -1071,6 +1079,9 @@ def _ensure_admin():
 
 _ensure_admin()
 
+register_deployment_hooks(app, Database, UserModel)
+init_server_instance(Database)
+
 # 主页路由
 @app.route('/')
 @login_required
@@ -1201,6 +1212,19 @@ def api_login():
     login_user(user, remember=True)
     _db.update_user_last_login(user_data['id'])
     uat_logger.info(f"用户 {username} 登录成功")
+    try:
+        from client_config_store import get_team_server_url
+        from deployment_config import is_client_mode
+        from platform_sync import sync_product_user
+
+        sync_product_user(
+            user_data["id"],
+            username,
+            email=user_data.get("email") or "",
+            team_server_url=get_team_server_url() if is_client_mode() else "",
+        )
+    except Exception:
+        pass
     return jsonify({'success': True, 'user': {'id': user_data['id'], 'username': username, 'role': user_data['role']}})
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -1229,6 +1253,10 @@ def api_me():
             'id': current_user.id, 
             'username': current_user.username, 
             'role': current_user.role
+        },
+        'deployment': {
+            'mode': __import__('deployment_config').get_deployment_mode().value,
+            'team_server_url': __import__('client_config_store').get_team_server_url() if is_client_mode() else '',
         },
         'license': {
             'type': license_info.license_type,
@@ -4848,6 +4876,22 @@ def api_web_capture_browser_attach():
     return jsonify(result), (200 if result.get('success') else 400)
 
 
+@app.route('/api/web-capture/browser/chrome-capture', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_web_capture_browser_chrome_capture():
+    data = request.get_json(silent=True) or {}
+    from web_capture.session import capture_browser_chrome, validate_session_id
+
+    session_id = (data.get('session_id') or '').strip()
+    if not validate_session_id(session_id):
+        return jsonify({'success': False, 'error': '捕获会话无效或已结束'}), 404
+    target = (data.get('target') or '').strip().lower()
+    result = capture_browser_chrome(session_id, target)
+    return jsonify(result), (200 if result.get('success') else 400)
+
+
 @app.route('/api/web-capture/pick', methods=['POST', 'OPTIONS'])
 def api_web_capture_pick():
     if request.method == 'OPTIONS':
@@ -7305,9 +7349,15 @@ def api_run_case(case_id):
     uat_logger.info(f"📊 [LICENSE] 用户 {user_id} 今日执行次数: {new_count}")
 
     # 获取测试用例信息
-    case = db.get_test_case_v2(case_id)
+    case, steps = load_case_and_steps(case_id, db)
     if not case:
         return jsonify({'error': '测试用例不存在'}), 404
+
+    if should_delegate_execution_to_clients() and not getattr(
+        __import__('flask').g, 'force_local_run', False
+    ):
+        job_resp = patch_run_case_for_server(db, case_id, user_id)
+        return jsonify(job_resp), 202
 
     if _app_case_type(case) == 'api':
         return jsonify({
@@ -7315,8 +7365,7 @@ def api_run_case(case_id):
             'error': '这是接口用例，请在「接口测试」模块中执行，或调用 POST /api/api-cases/<用例ID>/run。',
         }), 400
 
-    # 获取测试步骤
-    steps = db.get_case_steps(case_id)
+    # steps 已由 load_case_and_steps 加载
     if any((s.get('action') or '').strip() == 'api_request' for s in steps):
         return jsonify({
             'success': False,
@@ -7931,6 +7980,9 @@ def api_run_case(case_id):
                         )
                 except Exception as _mem_run_e:
                     uat_logger.debug("memory ingest successful run: %s", _mem_run_e)
+                sync_run_to_team_server(
+                    case_id, 'success', duration, step_results=step_results_list
+                )
             except Exception as history_error:
                 uat_logger.warning(f"保存运行历史记录失败: {history_error}")
             
@@ -10039,18 +10091,32 @@ def api_upload_license():
     if not result['valid']:
         return jsonify({'success': False, 'error': result['message']}), 400
 
-    # 保存 License
-    if license_manager.save_license(license_str):
-        return jsonify({
-            'success': True,
-            'message': 'License 激活成功',
-            'license': {
-                'type': result['info'].license_type,
-                'expires_at': result['info'].expires_at
-            }
-        })
-    else:
-        return jsonify({'success': False, 'error': 'License 保存失败'}), 500
+    from deployment_config import is_client_mode, is_server_mode
+    from instance_identity import get_instance_id, get_machine_id
+
+    binding_type = ""
+    binding_id = ""
+    if is_server_mode():
+        binding_type = "instance"
+        binding_id = get_instance_id()
+    elif is_client_mode():
+        binding_type = "machine"
+        binding_id = get_machine_id()
+
+    result = license_manager.activate_license_key(license_str, binding_type, binding_id)
+    if not result['valid']:
+        return jsonify({'success': False, 'error': result['message']}), 400
+
+    info = result.get('info')
+    return jsonify({
+        'success': True,
+        'message': 'License 激活成功',
+        'license': {
+            'type': info.license_type if info else '',
+            'expires_at': info.expires_at if info else '',
+            'license_id': info.license_id if info else '',
+        }
+    })
 
 
 # ==================== 审计日志 API ====================
@@ -10724,6 +10790,9 @@ def api_sso_ldap_login():
 @app.route('/pricing')
 def pricing_page():
     """返回定价页面"""
+    blocked = guard_billing_route()
+    if blocked:
+        return blocked
     return render_template('pricing.html')
 
 
@@ -10938,6 +11007,9 @@ def api_mock_complete_payment(order_no):
 @app.route('/payment/<order_no>')
 @login_required
 def payment_page(order_no):
+    blocked = guard_billing_route()
+    if blocked:
+        return blocked
     """支付页面"""
     return render_template('payment.html', order_no=order_no)
 
@@ -10946,6 +11018,9 @@ def payment_page(order_no):
 @login_required
 def payment_orders_page():
     """订单列表页面"""
+    blocked = guard_billing_route()
+    if blocked:
+        return blocked
     return render_template('payment_orders.html')
 
 
@@ -11442,6 +11517,40 @@ def api_download_file(filename):
     if not os.path.isfile(candidate):
         abort(404)
     return send_from_directory(export_dir, safe_name, as_attachment=True)
+
+
+def _run_case_worker_sync(case_id: int, user_id: int) -> dict:
+    """Worker / 内部 API 同步执行用例（跳过 server 入队）。"""
+    with app.test_request_context(
+        f"/api/cases/{case_id}/run",
+        method="POST",
+        json={},
+    ):
+        from flask import g
+        from flask_login import login_user
+
+        g.force_local_run = True
+        user_data = Database().get_user_by_id(user_id)
+        if user_data:
+            login_user(UserModel(user_data))
+        try:
+            resp = api_run_case(case_id)
+            if isinstance(resp, tuple):
+                rv, _code = resp
+                if hasattr(rv, "get_json"):
+                    return rv.get_json() or {}
+                return {"success": False, "error": "empty response"}
+            if hasattr(resp, "get_json"):
+                return resp.get_json() or {}
+            return {"success": False, "error": "unexpected response"}
+        finally:
+            g.force_local_run = False
+
+
+from deployment_hooks import start_background_workers, wire_internal_runner  # noqa: E402
+
+wire_internal_runner(app, _run_case_worker_sync)
+start_background_workers()
 
 
 if __name__ == '__main__':

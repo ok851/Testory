@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Testory — AI 驱动的 Web 与桌面混排自动化测试平台。自然语言生成用例、元素智能采集、团队协作与私有化部署。">
+    <title>{{ product_name }} — AI 自动化测试平台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+</head>
+<body>
+<div class="bg-canvas"></div>
+<div class="grid-overlay"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<header class="site-nav" id="top">
+    <div class="nav-inner">
+        <a href="#top" class="nav-brand">
+            <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" class="nav-logo-mark" width="36" height="36">
+            <span>{{ product_name }}</span>
+        </a>
+        <nav class="nav-links">
+            <a href="#features">产品能力</a>
+            <a href="#showcase">解决方案</a>
+            <a href="#pricing">定价</a>
+            <a href="#download">下载</a>
+            <a href="#faq">FAQ</a>
+            <a href="#contact">联系我们</a>
+        </nav>
+        <div class="nav-actions">
+            <a href="{{ url_for('download_latest') }}" class="btn btn-ghost">免费下载</a>
+            <a href="{{ url_for('pricing_page') }}" class="btn btn-primary">升级订阅</a>
+        </div>
+        <button type="button" class="nav-toggle" aria-label="菜单">☰</button>
+    </div>
+</header>
+
+<section class="hero">
+    <div class="container hero-grid">
+        <div class="hero-copy">
+            <div class="hero-badge">
+                <span class="dot"></span>
+                Web + 桌面混排 · AI 原生测试平台
+            </div>
+            <h1>
+                让测试自动化<br>
+                <span class="gradient">像对话一样自然</span>
+            </h1>
+            <p class="hero-desc">
+                {{ product_tagline }}。从自然语言生成用例、智能元素采集，到混排执行与团队协同一条链路，覆盖真实业务场景。
+            </p>
+            <div class="hero-cta">
+                <a href="{{ url_for('download_latest') }}" class="btn btn-primary btn-lg">立即下载 Windows 客户端</a>
+                <a href="#showcase" class="btn btn-ghost btn-lg">了解产品能力</a>
+            </div>
+            <div class="hero-stats">
+                <div class="hero-stat">
+                    <strong>Web + 桌面</strong>
+                    <span>同一用例混排执行</span>
+                </div>
+                <div class="hero-stat">
+                    <strong>AI 驱动</strong>
+                    <span>生成 · 修复 · 自愈</span>
+                </div>
+                <div class="hero-stat">
+                    <strong>团队协同</strong>
+                    <span>共享服务器 + 桌面客户端</span>
+                </div>
+            </div>
+        </div>
+        <div class="hero-visual">
+            <div class="hero-mock">
+                <div class="mock-bar"><span></span><span></span><span></span></div>
+                <div class="mock-body">
+                    <div class="mock-row">
+                        <div class="mock-chip w40 accent"></div>
+                        <div class="mock-chip w60"></div>
+                    </div>
+                    <div class="mock-line"></div>
+                    <div class="mock-line"></div>
+                    <div class="mock-line"></div>
+                    <div class="mock-row" style="margin-top:1rem">
+                        <div class="mock-chip"></div>
+                    </div>
+                    <div class="mock-row">
+                        <div class="mock-chip w60"></div>
+                        <div class="mock-chip w40"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="float-card float-card-1">
+                <span class="label">✓ 用例执行成功</span><br>
+                12 步骤 · 38.2s
+            </div>
+            <div class="float-card float-card-2">
+                <span class="label">AI</span> 已生成 6 条步骤
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section" id="features">
+    <div class="container">
+        <div class="section-header reveal">
+            <span class="section-tag">Product</span>
+            <h2>为真实业务而生的测试能力</h2>
+            <p>不只是 Web 自动化——ERP、客户端、浏览器在同一套平台里完成端到端验证</p>
+        </div>
+        <div class="features-grid">
+            <article class="feature-card reveal">
+                <div class="feature-icon purple">🌐</div>
+                <h3>Web 自动化</h3>
+                <p>Playwright 驱动，支持多浏览器、iframe、断言与数据提取，步骤可视化编辑。</p>
+            </article>
+            <article class="feature-card reveal">
+                <div class="feature-icon cyan">🖥️</div>
+                <h3>桌面自动化</h3>
+                <p>Windows 原生 UIA + 视觉定位，Web 与 ERP 客户端可在同一用例中混排。</p>
+            </article>
+            <article class="feature-card reveal">
+                <div class="feature-icon violet">✨</div>
+                <h3>AI 用例生成</h3>
+                <p>自然语言描述需求，自动生成可执行步骤；失败时 AI 辅助诊断与修复。</p>
+            </article>
+            <article class="feature-card reveal">
+                <div class="feature-icon emerald">🎯</div>
+                <h3>智能元素采集</h3>
+                <p>CDP、Chrome 扩展与桌面拾取器，一键捕获定位器并写入步骤。</p>
+            </article>
+            <article class="feature-card reveal">
+                <div class="feature-icon amber">📊</div>
+                <h3>数据驱动 & 报告</h3>
+                <p>CSV/Excel 参数化批量执行，运行历史、图表报告与 PDF/Excel 导出。</p>
+            </article>
+            <article class="feature-card reveal">
+                <div class="feature-icon rose">👥</div>
+                <h3>团队协作</h3>
+                <p>团队服务器集中管理用例与历史，桌面客户端本地执行，数据实时共享。</p>
+            </article>
+        </div>
+    </div>
+</section>
+
+<section class="section" id="showcase">
+    <div class="container">
+        <div class="section-header reveal">
+            <span class="section-tag">Solutions</span>
+            <h2>一条链路，覆盖多种测试场景</h2>
+            <p>从个人探索到企业级私有化，灵活部署、按需扩展</p>
+        </div>
+        <div class="showcase-wrap reveal">
+            <div class="showcase-tabs">
+                <button type="button" class="tab-btn active" data-tab="tab-web">
+                    <strong>Web 回归测试</strong>
+                    <span>浏览器端到端</span>
+                </button>
+                <button type="button" class="tab-btn" data-tab="tab-desktop">
+                    <strong>桌面 + Web 混排</strong>
+                    <span>跨系统业务流</span>
+                </button>
+                <button type="button" class="tab-btn" data-tab="tab-ai">
+                    <strong>AI 辅助测试</strong>
+                    <span>提效与自愈</span>
+                </button>
+                <button type="button" class="tab-btn" data-tab="tab-team">
+                    <strong>团队与企业</strong>
+                    <span>协作与合规</span>
+                </button>
+            </div>
+            <div class="showcase-panel">
+                <div id="tab-web" class="tab-content active">
+                    <h3>Web 回归与接口测试</h3>
+                    <p>适用于 SaaS、管理后台、电商等 Web 应用的持续回归。</p>
+                    <ul class="showcase-list">
+                        <li>Playwright 多引擎：Chromium / Chrome / Edge / Firefox</li>
+                        <li>接口用例与 Web 用例分模块管理</li>
+                        <li>定时调度、Webhook 与邮件通知</li>
+                        <li>运行历史与步骤级结果追溯</li>
+                    </ul>
+                </div>
+                <div id="tab-desktop" class="tab-content">
+                    <h3>Web + 桌面混排自动化</h3>
+                    <p>登录 Web 下单、切换 ERP 客户端审核——真实业务流一次跑通。</p>
+                    <ul class="showcase-list">
+                        <li>桌面步骤与 Web 步骤同一用例编排</li>
+                        <li>「选择当前窗口」零配置 attach</li>
+                        <li>视觉 + UIA 混合定位，适配国产化客户端</li>
+                        <li>Windows 桌面客户端本地执行，稳定可靠</li>
+                    </ul>
+                </div>
+                <div id="tab-ai" class="tab-content">
+                    <h3>AI 驱动的测试生产力</h3>
+                    <p>从需求文档到可执行用例，缩短 80% 的脚本编写时间。</p>
+                    <ul class="showcase-list">
+                        <li>自然语言 / 需求文档生成测试场景</li>
+                        <li>对话式修改步骤与断言</li>
+                        <li>失败 bundle 分析与修复建议</li>
+                        <li>支持本地 Ollama 与云端大模型</li>
+                    </ul>
+                </div>
+                <div id="tab-team" class="tab-content">
+                    <h3>团队版与企业版</h3>
+                    <p>小团队快速上线，大企业私有化交付与合规审计。</p>
+                    <ul class="showcase-list">
+                        <li>团队服务器 + 多桌面客户端协作</li>
+                        <li>项目成员权限：查看 / 编辑 / 负责人</li>
+                        <li>企业版：SSO、审计日志、缺陷管理</li>
+                        <li>支持内网部署与 License 离线激活</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section">
+    <div class="container">
+        <div class="section-header reveal">
+            <span class="section-tag">Workflow</span>
+            <h2>三步开始自动化</h2>
+            <p>下载安装 → 连接团队服务器 → 创建并运行第一个用例</p>
+        </div>
+        <div class="steps-row reveal">
+            <div class="step-card">
+                <h3>安装桌面客户端</h3>
+                <p>Windows 一键安装包，内置浏览器运行时，无需单独配置 Python。</p>
+            </div>
+            <div class="step-card">
+                <h3>采集并编排步骤</h3>
+                <p>可视化拾取元素，或让 AI 根据页面/需求生成步骤，支持导入导出。</p>
+            </div>
+            <div class="step-card">
+                <h3>执行与协作</h3>
+                <p>本机运行自动化，结果同步至团队服务器，全团队可见历史与报告。</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section" id="pricing">
+    <div class="container">
+        <div class="section-header reveal">
+            <span class="section-tag">Pricing</span>
+            <h2>灵活定价，按需成长</h2>
+            <p>从个人学习到团队订阅，再到企业私有化——总有一款适合您</p>
+        </div>
+        <div class="pricing-grid reveal">
+            <div class="price-card">
+                <h3>免费版</h3>
+                <p class="desc">个人学习 · 体验核心能力</p>
+                <div class="price-amount">¥0<small>/永久</small></div>
+                <ul class="price-features">
+                    <li>3 个项目</li>
+                    <li>50 用例 / 项目</li>
+                    <li>10 次执行 / 天</li>
+                    <li>基础报告</li>
+                    <li class="off">定时任务</li>
+                    <li class="off">团队协作</li>
+                </ul>
+                <a href="#download" class="btn btn-ghost" style="width:100%">免费下载</a>
+            </div>
+            <div class="price-card featured">
+                <span class="price-badge">最受欢迎</span>
+                <h3>团队版</h3>
+                <p class="desc">小型测试团队 · 协作与高级能力</p>
+                <div class="price-amount">¥99<small>/月起</small></div>
+                <ul class="price-features">
+                    <li>10 项目 · 更高配额</li>
+                    <li>数据驱动 · 定时调度</li>
+                    <li>缺陷管理 · Webhook</li>
+                    <li>团队服务器协作</li>
+                    <li>PDF/Excel 报告导出</li>
+                </ul>
+                <p class="desc" style="margin-top:0.75rem;font-size:0.85rem">须在软件中登录后，从客户端跳转官网支付</p>
+                <a href="{{ url_for('pricing_page') }}" class="btn btn-primary" style="width:100%">了解订阅</a>
+            </div>
+            <div class="price-card">
+                <h3>企业版</h3>
+                <p class="desc">私有化 · SSO · 审计合规</p>
+                <div class="price-amount">定制<small>/年</small></div>
+                <ul class="price-features">
+                    <li>团队版全部能力</li>
+                    <li>SSO 单点登录</li>
+                    <li>审计日志 · API 集成</li>
+                    <li>私有化 / 专有云部署</li>
+                    <li>专属技术支持</li>
+                </ul>
+                <a href="#contact" class="btn btn-ghost" style="width:100%">获取报价</a>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section" id="download">
+    <div class="container reveal">
+        <div class="download-section">
+            <h2>下载 Testory 桌面客户端</h2>
+            <p>点击即可将安装包保存到本地电脑 · 适用于 Windows 10/11 · 支持 Web + 桌面混排自动化</p>
+            {% if latest_release and latest_release.has_file %}
+            <a href="{{ download_url }}" class="btn btn-primary btn-lg">
+                下载 v{{ latest_release.version }}（Windows）
+            </a>
+            <p class="download-meta">
+                {% if latest_release.file_size_label %}{{ latest_release.file_size_label }} · {% endif %}
+                已有 {{ latest_release.download_count }} 次下载 · 安装后配置团队服务器即可协作
+            </p>
+            {% else %}
+            <a href="#contact" class="btn btn-primary btn-lg">联系获取安装包</a>
+            <p class="download-meta">管理员上传安装包后，此按钮将直接触发本地下载</p>
+            {% endif %}
+            <p class="download-meta" style="margin-top:0.75rem">
+                订阅与支付：请先在软件中登录，再通过「升级订阅」跳转官网完成付款
+            </p>
+        </div>
+    </div>
+</section>
+
+<section class="section" id="faq">
+    <div class="container">
+        <div class="section-header reveal">
+            <span class="section-tag">FAQ</span>
+            <h2>常见问题</h2>
+        </div>
+        <div class="faq-list reveal">
+            <div class="faq-item">
+                <button type="button" class="faq-q">桌面客户端和团队服务器是什么关系？</button>
+                <div class="faq-a">团队服务器集中存储项目、用例与执行历史；桌面客户端负责在本机运行 Playwright 与桌面自动化。多人安装客户端并连接同一服务器，即可共享同一份测试数据。</div>
+            </div>
+            <div class="faq-item">
+                <button type="button" class="faq-q">是否支持 Linux 或 macOS？</button>
+                <div class="faq-a">Web 用例可在 Linux 服务器上通过团队服务器模式运行调度；含桌面步骤的混排用例需在 Windows 客户端上执行。macOS 客户端在规划中。</div>
+            </div>
+            <div class="faq-item">
+                <button type="button" class="faq-q">如何购买团队版或企业版？</button>
+                <div class="faq-a">在 Testory 桌面客户端或团队服务器中登录账号，打开「授权管理」或用户菜单中的「升级订阅」，系统将跳转至官网支付页。支付完成后在软件内输入 License Key 激活即可。</div>
+            </div>
+            <div class="faq-item">
+                <button type="button" class="faq-q">如何激活 License？</button>
+                <div class="faq-a">购买后您将收到 License Key。团队版在团队服务器激活并绑定实例 ID；个人版在桌面客户端激活并绑定设备。支持离线签名校验。</div>
+            </div>
+            <div class="faq-item">
+                <button type="button" class="faq-q">AI 功能是否需要联网？</button>
+                <div class="faq-a">支持本地 Ollama 离线推理；也可配置云端大模型网关。具体策略取决于您的部署环境与 License 档位。</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section" id="contact">
+    <div class="container">
+        <div class="section-header reveal">
+            <span class="section-tag">Contact</span>
+            <h2>联系我们</h2>
+            <p>预约演示、商务合作或技术支持，欢迎留言</p>
+        </div>
+        <div class="contact-grid reveal">
+            <div class="contact-info">
+                <h3>与我们对话</h3>
+                <p>无论是产品咨询、企业采购还是私有化部署方案，我们的团队都会在 1–2 个工作日内回复您。</p>
+                <div class="contact-detail">
+                    <span>✉️</span>
+                    <span>16608943238@163.com</span>
+                </div>
+                {% if contact_phone %}
+                <div class="contact-detail">
+                    <span>📞</span>
+                    <span>16608943238</span>
+                </div>
+                {% endif %}
+                <div class="contact-detail">
+                    <span>🕐</span>
+                    <span>工作日 9:00 – 18:00（北京时间）</span>
+                </div>
+            </div>
+            <form class="contact-form" id="contactForm">
+                <div class="form-row">
+                    <label for="name">姓名 *</label>
+                    <input id="name" name="name" type="text" required placeholder="您的姓名">
+                </div>
+                <div class="form-row">
+                    <label for="email">邮箱 *</label>
+                    <input id="email" name="email" type="email" required placeholder="name@company.com">
+                </div>
+                <div class="form-row">
+                    <label for="company">公司 / 团队</label>
+                    <input id="company" name="company" type="text" placeholder="选填">
+                </div>
+                <div class="form-row">
+                    <label for="message">留言 *</label>
+                    <textarea id="message" name="message" required placeholder="请描述您的场景或需求…"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">发送留言</button>
+                <div id="formMsg" class="form-msg"></div>
+            </form>
+        </div>
+    </div>
+</section>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <a href="#top" class="nav-brand">
+                    <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" class="nav-logo-mark" width="32" height="32">
+                    <span>{{ product_name }}</span>
+                </a>
+                <p>AI 驱动的 Web · 桌面混排自动化测试平台，让质量保障更高效、更智能。</p>
+            </div>
+            <div class="footer-col">
+                <h4>产品</h4>
+                <a href="#features">产品能力</a>
+                <a href="#showcase">解决方案</a>
+                <a href="#pricing">定价方案</a>
+                <a href="{{ url_for('download_latest') }}">下载客户端</a>
+            </div>
+            <div class="footer-col">
+                <h4>资源</h4>
+                <a href="#faq">常见问题</a>
+                <a href="#contact">联系我们</a>
+                <a href="#contact">预约演示</a>
+            </div>
+            <div class="footer-col">
+                <h4>部署</h4>
+                <a href="{{ url_for('download_latest') }}">Windows 客户端</a>
+                <a href="#contact">团队服务器</a>
+                <a href="#contact">企业私有化</a>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>© {{ year }} Testory. All rights reserved.</span>
+            <span>AI 自动化测试平台 · 赋能每一次发布</span>
+        </div>
+    </div>
+</footer>
+
+<script src="{{ url_for('static', filename='js/site.js') }}"></script>
+</body>
+</html>

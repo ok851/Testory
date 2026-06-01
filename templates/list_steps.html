@@ -363,6 +363,7 @@
             flex-direction: column;
             border: 1px solid #e5e7eb;
             animation: slideInRight 0.3s ease-out;
+            touch-action: none;
         }
         #webCaptureFloatingPanel.active {
             display: flex;
@@ -373,7 +374,10 @@
             justify-content: space-between;
             padding: 12px 14px 8px;
             border-bottom: 1px solid #f1f5f9;
+            cursor: move;
+            user-select: none;
         }
+        .wc-fp-header .wc-fp-close { cursor: pointer; }
         .wc-fp-title { font-size: 14px; font-weight: 700; color: #111827; }
         .wc-fp-badge {
             font-size: 10px; font-weight: 700; color: #dc2626;
@@ -1614,7 +1618,7 @@
                 <label for="wcFpBrowserSelect">捕获浏览器</label>
                 <select id="wcFpBrowserSelect"></select>
             </div>
-            <div id="wcFpStatusText" class="wc-fp-status">点「开始捕获」将打开所选浏览器的捕获窗口，在其中打开待测页后悬停单击元素。</div>
+            <div id="wcFpStatusText" class="wc-fp-status">在平台悬浮窗点「开始捕获」，然后在捕获浏览器中打开待测页并悬停单击元素。</div>
         </div>
         <div class="wc-fp-actions">
             <button type="button" class="wc-fp-btn wc-fp-btn-primary" id="wcFpArmBtn">开始捕获</button>
@@ -3970,6 +3974,58 @@ function changePage(page) {
             }
         }
 
+        function syncWebCaptureFloatingArmedFromBackend(armed, message) {
+            const isArmed = !!armed;
+            if (_wcArmed === isArmed) return;
+            setWebCaptureFloatingArmed(isArmed);
+            const statusEl = document.getElementById('wcFpStatusText');
+            if (statusEl && message) {
+                statusEl.textContent = message;
+            } else if (statusEl && !isArmed) {
+                statusEl.textContent = '已停止捕获，可再次点「开始捕获」。';
+            }
+        }
+
+        function applyWebChromePickToForm(mode, pick) {
+            if (!pick) return;
+            const suggested = pick.suggested_action || 'click';
+            const layerEl = document.getElementById(mode === 'edit' ? 'editStepAutomationLayer' : 'stepAutomationLayer');
+            if (layerEl) layerEl.value = 'web';
+            onAutomationLayerChange(mode);
+            if (suggested === 'navigate') {
+                const actionEl = document.getElementById(mode === 'edit' ? 'editStepAction' : 'stepAction');
+                if (actionEl) actionEl.value = 'navigate';
+                if (mode === 'edit') toggleEditActionFields();
+                else toggleActionFields();
+                const inputEl = document.getElementById(mode === 'edit' ? 'editStepInputValue' : 'stepInputValue');
+                if (inputEl) inputEl.value = pick.input_value || pick.tab_url || pick.source_url || '';
+                const descEl = document.getElementById(mode === 'edit' ? 'editStepDescription' : 'stepDescription');
+                if (descEl && pick.description) descEl.value = pick.description;
+                showToast('已写入导航步骤（' + (pick.description || '浏览器控件') + '）', 'success');
+                return;
+            }
+            const descEl = document.getElementById(mode === 'edit' ? 'editStepDescription' : 'stepDescription');
+            if (descEl) descEl.value = pick.description || pick.name || '';
+            showToast('浏览器控件「' + (pick.description || pick.name || '') + '」已写入描述，请补充对应动作', 'info');
+        }
+
+        async function handleWebCapturedPick(webEl) {
+            syncWebCaptureFloatingArmedFromBackend(false, '已捕获元素，可再次点「开始捕获」继续拾取。');
+            if (_elementCaptureRecordToCase) {
+                const n = await appendWebCapturedStep(webEl);
+                if (n) showToast('已录制网页步骤', 'success');
+            } else if (_elementCaptureFormTarget) {
+                if (webEl.capture_kind === 'browser_chrome') {
+                    applyWebChromePickToForm(_elementCaptureFormTarget, webEl);
+                } else {
+                    openWebCaptureResultModal(_elementCaptureFormTarget, webEl);
+                    showToast('网页元素已捕获，请在编辑器中确认', 'success');
+                }
+            } else if (webEl.capture_kind === 'browser_chrome') {
+                showToast(webEl.description || '已捕获浏览器控件', 'success');
+            }
+        }
+
         async function armWebCaptureFloating() {
             if (!_wcSessionId) {
                 showToast('捕获会话无效，请重新点击「网页捕获」', 'error');
@@ -4024,10 +4080,102 @@ function changePage(page) {
             setWebCaptureFloatingArmed(false);
         }
 
+        function resetWebCaptureFloatingPanelPosition() {
+            const panel = document.getElementById('webCaptureFloatingPanel');
+            if (!panel) return;
+            panel.style.left = '';
+            panel.style.top = '';
+            panel.style.right = '24px';
+            panel.style.bottom = '24px';
+            try { sessionStorage.removeItem('wcFpPos'); } catch (e) { /* ignore */ }
+        }
+
+        function restoreWebCaptureFloatingPanelPosition() {
+            const panel = document.getElementById('webCaptureFloatingPanel');
+            if (!panel) return;
+            try {
+                const raw = sessionStorage.getItem('wcFpPos');
+                if (!raw) return;
+                const pos = JSON.parse(raw);
+                if (typeof pos.left !== 'number' || typeof pos.top !== 'number') return;
+                panel.style.left = Math.max(8, pos.left) + 'px';
+                panel.style.top = Math.max(8, pos.top) + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+            } catch (e) { /* ignore */ }
+        }
+
+        function initWebCaptureFloatingPanelDrag() {
+            const panel = document.getElementById('webCaptureFloatingPanel');
+            const header = panel && panel.querySelector('.wc-fp-header');
+            if (!panel || !header || header.dataset.wcDragBound === '1') return;
+            header.dataset.wcDragBound = '1';
+            const drag = { active: false, ox: 0, oy: 0 };
+
+            function clampPanelPosition(left, top) {
+                const maxLeft = Math.max(8, window.innerWidth - panel.offsetWidth - 8);
+                const maxTop = Math.max(8, window.innerHeight - panel.offsetHeight - 8);
+                return {
+                    left: Math.max(8, Math.min(maxLeft, left)),
+                    top: Math.max(8, Math.min(maxTop, top)),
+                };
+            }
+
+            function savePanelPosition() {
+                try {
+                    sessionStorage.setItem('wcFpPos', JSON.stringify({
+                        left: parseInt(panel.style.left, 10) || 0,
+                        top: parseInt(panel.style.top, 10) || 0,
+                    }));
+                } catch (e) { /* ignore */ }
+            }
+
+            header.addEventListener('mousedown', function (e) {
+                if (e.button !== 0 || (e.target && e.target.closest && e.target.closest('.wc-fp-close'))) return;
+                const rect = panel.getBoundingClientRect();
+                panel.style.left = rect.left + 'px';
+                panel.style.top = rect.top + 'px';
+                panel.style.right = 'auto';
+                panel.style.bottom = 'auto';
+                drag.active = true;
+                drag.ox = e.clientX - rect.left;
+                drag.oy = e.clientY - rect.top;
+                e.preventDefault();
+            });
+
+            window.addEventListener('mousemove', function (e) {
+                if (!drag.active) return;
+                const p = clampPanelPosition(e.clientX - drag.ox, e.clientY - drag.oy);
+                panel.style.left = p.left + 'px';
+                panel.style.top = p.top + 'px';
+            });
+
+            window.addEventListener('mouseup', function () {
+                if (!drag.active) return;
+                drag.active = false;
+                savePanelPosition();
+            });
+        }
+
         function showWebCaptureFloatingPanel(webMeta) {
             window._lastWebCaptureMeta = webMeta || {};
             _wcSessionId = (webMeta && webMeta.session_id) || '';
-            closeWebCaptureFloatingPanel();
+            mountStepModalsToBody();
+            const panel = document.getElementById('webCaptureFloatingPanel');
+            if (!panel) return false;
+            populateWebCaptureBrowserSelect(webMeta);
+            const statusEl = document.getElementById('wcFpStatusText');
+            if (statusEl) {
+                statusEl.textContent = (webMeta && (webMeta.hint || webMeta.message))
+                    || '在平台悬浮窗点「开始捕获」，然后在捕获浏览器中打开待测页并悬停单击元素。';
+            }
+            setWebCaptureFloatingArmed(false);
+            restoreWebCaptureFloatingPanelPosition();
+            initWebCaptureFloatingPanelDrag();
+            panel.classList.add('active');
+            refreshWebCaptureExtStatus();
+            if (_wcExtStatusTimer) clearInterval(_wcExtStatusTimer);
+            _wcExtStatusTimer = setInterval(refreshWebCaptureExtStatus, 4000);
             return true;
         }
 
@@ -4321,6 +4469,7 @@ function changePage(page) {
 
         function normalizeWebPickElement(raw) {
             if (!raw || typeof raw !== 'object') return null;
+            if (raw.capture_kind === 'browser_chrome') return raw;
             if (raw.selector_type && raw.selector_value) return raw;
             const sel = raw.selector || {};
             const info = raw.elementInfo || {};
@@ -4335,14 +4484,15 @@ function changePage(page) {
 
         async function appendWebCapturedStep(el) {
             if (!el || !currentCaseId) return 0;
+            const suggested = el.suggested_action || 'click';
             const body = {
                 case_id: currentCaseId,
-                action: 'click',
+                action: suggested === 'navigate' ? 'navigate' : 'click',
                 automation_layer: 'web',
                 selector_type: el.selector_type || 'css',
                 selector_value: el.selector_value || '',
-                input_value: '',
-                description: '捕获：' + (el.tag_name || el.selector_value || '元素'),
+                input_value: suggested === 'navigate' ? (el.input_value || el.tab_url || el.source_url || '') : '',
+                description: el.description || ('捕获：' + (el.tag_name || el.selector_value || '元素')),
                 locator_candidates: el.locator_candidates || '',
             };
             const r = await fetchApi('/api/steps', {
@@ -4437,6 +4587,16 @@ function changePage(page) {
                     }
                     if (data.error) showToast(data.error, 'error');
 
+                    if (isWebChannel) {
+                        const webSt = data.web || {};
+                        if (typeof webSt.armed === 'boolean') {
+                            syncWebCaptureFloatingArmedFromBackend(
+                                webSt.armed,
+                                webSt.armed ? '请在捕获浏览器中悬停并单击元素' : ''
+                            );
+                        }
+                    }
+
                     if (!isWebChannel && desk.error) showToast(desk.error, 'warning');
                     if (
                         !isWebChannel
@@ -4483,13 +4643,7 @@ function changePage(page) {
                     if (webEl && !isWebChannel && channel === 'desktop') {
                         showToast('当前为桌面捕获，网页拾取结果已忽略；请使用工具栏「网页捕获」', 'warning');
                     } else if (webEl && isWebChannel) {
-                        if (_elementCaptureRecordToCase) {
-                            const n = await appendWebCapturedStep(webEl);
-                            if (n) showToast('已录制网页步骤', 'success');
-                        } else if (_elementCaptureFormTarget) {
-                            openWebCaptureResultModal(_elementCaptureFormTarget, webEl);
-                            showToast('网页元素已捕获，请在编辑器中确认', 'success');
-                        }
+                        await handleWebCapturedPick(webEl);
                     }
                 } catch (e) {
                     console.error('element capture poll', e);
@@ -4612,7 +4766,7 @@ function changePage(page) {
                         if (web.warning) {
                             showToast(web.warning, 'warning');
                         }
-                        msg = web.message || web.hint || '已在浏览器打开捕获悬浮窗，请在其中点「开始捕获」';
+                        msg = web.message || web.hint || '已打开捕获浏览器，请使用平台悬浮窗点「开始捕获」';
                     } else {
                         msg = web.error || web.hint || '网页捕获启动失败';
                         showToast(msg, 'error');
@@ -6258,6 +6412,7 @@ function changePage(page) {
             if (wcFpDisarm) wcFpDisarm.addEventListener('click', disarmWebCaptureFloating);
             if (wcFpEnd) wcFpEnd.addEventListener('click', function () { stopElementCaptureSession(); });
             if (wcFpClose) wcFpClose.addEventListener('click', closeWebCaptureFloatingPanel);
+            initWebCaptureFloatingPanelDrag();
             document.addEventListener('keydown', function (e) {
                 const panel = document.getElementById('webCaptureFloatingPanel');
                 if (!panel || !panel.classList.contains('active')) return;

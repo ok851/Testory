@@ -20,6 +20,7 @@ _bridge_state: Dict[str, Any] = {
     "toolbar_request": None,
     "disarm_request": False,
     "hide_toolbar_request": False,
+    "active_tab": {},
 }
 _server_thread: Optional[threading.Thread] = None
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -59,13 +60,22 @@ def ensure_bridge_started(*, session_id: str = "") -> Dict[str, Any]:
 def get_extension_status() -> Dict[str, Any]:
     with _bridge_lock:
         clients = int(_bridge_state.get("clients") or 0)
+        tab = dict(_bridge_state.get("active_tab") or {})
         return {
             "success": True,
             "bridge_running": bool(_bridge_state.get("started")),
             "ws_port": int(_bridge_state.get("port") or _ws_port()),
             "connected_clients": clients,
             "extension_connected": clients > 0,
+            "active_tab_url": tab.get("url") or "",
+            "active_tab_title": tab.get("title") or "",
         }
+
+
+def get_active_capture_tab() -> Dict[str, Any]:
+    with _bridge_lock:
+        tab = _bridge_state.get("active_tab")
+        return dict(tab) if isinstance(tab, dict) else {}
 
 
 def consume_extension_pick() -> Optional[Dict[str, Any]]:
@@ -180,6 +190,9 @@ def _run_ws_server(port: int) -> None:
                 if mtype == "pick" and isinstance(msg.get("payload"), dict):
                     with _bridge_lock:
                         _bridge_state["last_extension_pick"] = msg["payload"]
+                elif mtype == "tab_info" and isinstance(msg.get("tab"), dict):
+                    with _bridge_lock:
+                        _bridge_state["active_tab"] = msg["tab"]
                 elif mtype == "ping":
                     await ws.send(json.dumps({"type": "pong"}))
                     await _maybe_push_pending(ws)
