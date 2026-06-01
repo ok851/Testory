@@ -1,4 +1,4 @@
-# 将安装目录或 setup.exe 打包为 .intunewin（需 Microsoft Win32 Content Prep Tool）
+﻿# 将安装目录或 setup.exe 打包为 .intunewin（需 Microsoft Win32 Content Prep Tool）
 # 下载: https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool
 param(
     [Parameter(Mandatory = $true)]

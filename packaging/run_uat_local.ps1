@@ -1,4 +1,4 @@
-# HuFirst UAT 本地版一键启动（Windows）
+﻿# HuFirst UAT 本地版一键启动（Windows）
 # 用法：在 PowerShell 中执行  .\packaging\run_uat_local.ps1
 
 $ErrorActionPreference = "Stop"

@@ -1,4 +1,4 @@
-# Intune Win32 应用 — 安装脚本（以 SYSTEM 或用户上下文运行）
+﻿# Intune Win32 应用 — 安装脚本（以 SYSTEM 或用户上下文运行）
 # 将 $Installer 指向已签名的 setup.exe 或 MSI
 param(
     [string] $Installer = "$PSScriptRoot\..\uat_platform_setup.exe",

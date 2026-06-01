@@ -1,10 +1,12 @@
-# 桌面版启动（安装包快捷方式应调用本脚本）
+﻿# 桌面版启动（安装包快捷方式应调用本脚本）
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
-$pyw = Join-Path $Root ".venv\Scripts\pythonw.exe"
-$py = Join-Path $Root ".venv\Scripts\python.exe"
+$pyw = Join-Path $Root ".venv\pythonw.exe"
+$py = Join-Path $Root ".venv\python.exe"
+$pywLegacy = Join-Path $Root ".venv\Scripts\pythonw.exe"
+$pyLegacy = Join-Path $Root ".venv\Scripts\python.exe"
 $launcher = Join-Path $Root "packaging\uat_desktop.py"
 
 function Show-Err($msg) {
@@ -21,6 +23,10 @@ if (Test-Path $pyw) {
     & $pyw $launcher
 } elseif (Test-Path $py) {
     & $py $launcher
+} elseif (Test-Path $pywLegacy) {
+    & $pywLegacy $launcher
+} elseif (Test-Path $pyLegacy) {
+    & $pyLegacy $launcher
 } else {
     Show-Err "未找到内置运行环境，请使用完整安装包安装。"
     exit 1

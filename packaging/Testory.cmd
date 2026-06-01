@@ -4,8 +4,10 @@ setlocal
 set "ROOT=%~dp0.."
 cd /d "%ROOT%"
 
-set "PYW=%ROOT%\.venv\Scripts\pythonw.exe"
-set "PY=%ROOT%\.venv\Scripts\python.exe"
+set "PYW=%ROOT%\.venv\pythonw.exe"
+set "PY=%ROOT%\.venv\python.exe"
+set "PYW_LEGACY=%ROOT%\.venv\Scripts\pythonw.exe"
+set "PY_LEGACY=%ROOT%\.venv\Scripts\python.exe"
 set "LAUNCHER=%ROOT%\packaging\uat_desktop.py"
 
 if not exist "%LAUNCHER%" (
@@ -20,6 +22,16 @@ if exist "%PYW%" (
 
 if exist "%PY%" (
     "%PY%" "%LAUNCHER%"
+    exit /b %ERRORLEVEL%
+)
+
+if exist "%PYW_LEGACY%" (
+    "%PYW_LEGACY%" "%LAUNCHER%"
+    exit /b %ERRORLEVEL%
+)
+
+if exist "%PY_LEGACY%" (
+    "%PY_LEGACY%" "%LAUNCHER%"
     exit /b %ERRORLEVEL%
 )
 

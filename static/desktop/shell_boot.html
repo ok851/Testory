@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Testory</title>
+  <style>
+    :root {
+      --bg: #050816;
+      --accent: #6366f1;
+      --accent2: #06b6d4;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(99,102,241,.25), transparent 45%),
+                  radial-gradient(circle at 80% 0%, rgba(6,182,212,.18), transparent 40%),
+                  var(--bg);
+      color: var(--text);
+      user-select: none;
+    }
+    .wrap {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.25rem;
+    }
+    .logo {
+      width: 72px;
+      height: 72px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6 45%, #06b6d4);
+      box-shadow: 0 12px 40px rgba(99, 102, 241, 0.35);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      font-size: 2rem;
+      letter-spacing: -0.04em;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: 3px solid rgba(148, 163, 184, 0.25);
+      border-top-color: var(--accent2);
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">T</div>
+    <h1>Testory</h1>
+    <p id="status">正在启动本地服务…</p>
+    <div class="spinner" aria-hidden="true"></div>
+  </div>
+</body>
+</html>

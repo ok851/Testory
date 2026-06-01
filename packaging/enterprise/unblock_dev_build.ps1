@@ -1,4 +1,4 @@
-# 仅用于开发/内网测试：移除 MOTW，不能替代代码签名
+﻿# 仅用于开发/内网测试：移除 MOTW，不能替代代码签名
 param(
     [Parameter(Mandatory = $true)]
     [string] $Path

@@ -16,7 +16,7 @@ a = Analysis(
     [str(launcher)],
     pathex=[str(root)],
     binaries=[],
-    datas=[],
+    datas=[(str(packaging / "testory_runtime.py"), ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

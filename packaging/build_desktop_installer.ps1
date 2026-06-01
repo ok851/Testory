@@ -1,11 +1,17 @@
-# 一键生成「用户零配置」桌面安装包（自动下载 Inno Setup、内置 Python/Chromium/WebView2）
-# 必须在项目根目录执行:
-#   cd D:\...\NewUITestPlatform\NewUITestPlatform
+﻿# Build full offline desktop installer (Inno Setup + portable Python + Chromium + WebView2)
+# Run from project root:
 #   .\packaging\build_desktop_installer.ps1
+# Optional:
+#   .\packaging\build_desktop_installer.ps1 -InnoOnly
+#   .\packaging\build_desktop_installer.ps1 -IsccPath "D:\Inno Setup 6\ISCC.exe"
+
+param(
+    [string] $IsccPath = "",
+    [switch] $InnoOnly
+)
 
 $ErrorActionPreference = "Stop"
 
-# 若在 dist 发布副本内误运行，转发到项目根目录
 if ($PSScriptRoot -match '[\\/]dist[\\/]') {
     $walk = $PSScriptRoot
     while ($walk) {
@@ -13,7 +19,7 @@ if ($PSScriptRoot -match '[\\/]dist[\\/]') {
             $realRoot = Split-Path $walk -Parent
             $realScript = Join-Path $realRoot "packaging\build_desktop_installer.ps1"
             if (Test-Path $realScript) {
-                Write-Host "检测到在 dist 发布目录内运行，已转发到项目根目录..." -ForegroundColor Yellow
+                Write-Host "Redirecting to project root script..." -ForegroundColor Yellow
                 & $realScript
                 exit $LASTEXITCODE
             }
@@ -22,7 +28,7 @@ if ($PSScriptRoot -match '[\\/]dist[\\/]') {
         if (-not $parent -or $parent -eq $walk) { break }
         $walk = $parent
     }
-    throw "请在项目根目录运行: .\packaging\build_desktop_installer.ps1"
+    throw "Run from project root: .\packaging\build_desktop_installer.ps1"
 }
 
 . "$PSScriptRoot\tools\Get-ProjectRoot.ps1"
@@ -30,12 +36,26 @@ $Root = Get-ProjectRoot -StartPath $MyInvocation.MyCommand.Path
 Set-Location $Root
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host " Testory 全量离线安装包构建" -ForegroundColor Cyan
-Write-Host " 项目根: $Root" -ForegroundColor DarkGray
-Write-Host " （体积较大属正常，用户侧零下载）" -ForegroundColor Cyan
+Write-Host " Testory offline installer build" -ForegroundColor Cyan
+Write-Host " Project root: $Root" -ForegroundColor DarkGray
+Write-Host " Large output size is expected (fully offline bundle)." -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
-& "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root
+if (-not $InnoOnly) {
+    & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root
+} else {
+    Write-Host " Skip prepare (-InnoOnly); using existing dist\uat_release" -ForegroundColor Yellow
+    if (-not (Test-Path (Join-Path $Root "dist\uat_release\Testory.exe"))) {
+        throw "dist\uat_release not ready. Run without -InnoOnly first."
+    }
+}
+
+if ($IsccPath) {
+    if (-not (Test-Path -LiteralPath $IsccPath)) {
+        throw "ISCC not found: $IsccPath"
+    }
+    $env:INNO_SETUP_ISCC = (Resolve-Path -LiteralPath $IsccPath).Path
+}
 
 $iscc = & "$Root\packaging\tools\Ensure-InnoSetup.ps1" -ProjectRoot $Root
 & $iscc "$Root\packaging\inno\uat_platform.iss"
@@ -45,14 +65,14 @@ $setup = Join-Path $Root "dist\testory_setup.exe"
 if (Test-Path $setup) {
     $mb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
     Write-Host ""
-    Write-Host "构建完成: $setup  (约 $mb MB)" -ForegroundColor Green
-    Write-Host "发给用户仅此一个文件；无需 Inno、Python、WebView2 手动安装。" -ForegroundColor Green
+    Write-Host "Done: $setup (about $mb MB)" -ForegroundColor Green
+    Write-Host "Ship this single file to end users." -ForegroundColor Green
 } else {
     $setupLegacy = Join-Path $Root "dist\uat_platform_setup.exe"
     if (Test-Path $setupLegacy) {
-        Write-Host "构建完成: $setupLegacy" -ForegroundColor Green
+        Write-Host "Done: $setupLegacy" -ForegroundColor Green
     } else {
-        Write-Host "未找到输出文件 dist\testory_setup.exe，请检查 Inno 日志。" -ForegroundColor Red
+        Write-Host "Missing dist\testory_setup.exe - check Inno Setup log." -ForegroundColor Red
         exit 1
     }
 }

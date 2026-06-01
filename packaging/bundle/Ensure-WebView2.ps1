@@ -1,4 +1,4 @@
-# 下载 WebView2 安装程序，打入最终用户安装包（离线机也可装界面）
+﻿# 下载 WebView2 安装程序，打入最终用户安装包（离线机也可装界面）
 param(
     [string] $ProjectRoot = "",
     [string] $RedistDir = ""

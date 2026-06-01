@@ -1,10 +1,11 @@
-# 准备「用户零配置」离线发布目录 dist\uat_release（Python + 依赖 + Chromium + 配置模板）
+﻿# 准备「用户零配置」离线发布目录 dist\uat_release（Python + 依赖 + Chromium + 配置模板）
 param(
     [string] $Root = "",
     [string] $OutDir = "dist\uat_release"
 )
 
 $ErrorActionPreference = "Stop"
+$env:PYTHONUTF8 = "1"
 
 # 若在 dist\...\uat_release 副本内误运行，自动转发到项目根目录的真实脚本
 if ($PSScriptRoot -match '[\\/]dist[\\/]') {
@@ -65,36 +66,37 @@ if (-not (Test-Path $rootVenvPy)) {
 }
 $py = (Resolve-Path $rootVenvPy).Path
 
-Write-Host "[0/7] 生成应用图标（须先于文件复制，以便打入 uat_release）..."
+Write-Host "[0/7] Generate app icons..."
+& $py -m pip install -q Pillow
 & $py "$Root\packaging\generate_brand_icons.py"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "[1/7] 安装构建依赖（项目 .venv）..."
+Write-Host "[1/7] Install build dependencies (project .venv)..."
 & $py -m pip install -q -r (Join-Path $Root "requirements.txt")
+if ($LASTEXITCODE -ne 0) { throw "pip install failed: requirements.txt" }
 & $py -m pip install -q -r (Join-Path $Root "requirements-windows.txt")
+if ($LASTEXITCODE -ne 0) { throw "pip install failed: requirements-windows.txt" }
 & $py -m playwright install chromium
+if ($LASTEXITCODE -ne 0) { throw "playwright install chromium failed" }
 
 Write-Host "[2/7] 复制程序文件..."
 & "$Root\packaging\enterprise\stage_release.ps1" -Root $Root -OutDir $OutDir
 $release = Join-Path $Root $OutDir
 
-Write-Host "[3/7] 在安装目录内创建独立 Python 环境（用户机无需安装 Python）..."
-Push-Location $release
-try {
-    if (Test-Path ".venv") { Remove-Item -Recurse -Force ".venv" }
-    & $BuildPython -m venv .venv
-    $rpy = Join-Path $release ".venv\Scripts\python.exe"
-    if (-not (Test-Path $rpy)) {
-        throw "在发布目录创建 venv 失败: $rpy"
-    }
-    & $rpy -m pip install --upgrade pip wheel -q
-    & $rpy -m pip install -q -r requirements.txt
-    & $rpy -m pip install -q -r requirements-windows.txt
+Write-Host "[3/7] Create portable Python in release dir..."
+& "$Root\packaging\bundle\Ensure-PortablePython.ps1" `
+    -ReleaseDir $release `
+    -BuildPython $BuildPython `
+    -ProjectRoot $Root | Out-Null
+$rpy = Join-Path $release ".venv\python.exe"
+if (-not (Test-Path $rpy)) {
+    throw "Portable Python missing: $rpy"
+}
 
-    Write-Host "[4/7] 内置 Playwright Chromium（用户无需 playwright install）..."
-    & $rpy -m playwright install chromium
-} finally {
-    Pop-Location
+Write-Host "[4/7] 内置 Playwright Chromium（用户无需 playwright install）..."
+& $rpy -m playwright install chromium
+if ($LASTEXITCODE -ne 0) {
+    throw "playwright install chromium 失败"
 }
 
 $srcBrowsers = Join-Path $env:LOCALAPPDATA "ms-playwright"
@@ -131,6 +133,7 @@ Write-Host "[7/7] 构建 Testory.exe 启动器..."
 foreach ($must in @(
     (Join-Path $release "Testory.exe"),
     (Join-Path $release "Testory.ico"),
+    (Join-Path $release ".venv\python.exe"),
     (Join-Path $release "packaging\uat_desktop.py"),
     (Join-Path $release "static\brand\app.ico")
 )) {

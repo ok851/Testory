@@ -12,16 +12,26 @@ Testory 桌面版入口（安装包 / 快捷方式应指向本文件）。
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
+
+# 安装包通过 pythonw packaging\uat_desktop.py 启动时，需把安装根目录加入 sys.path
+_install_root = Path(__file__).resolve().parent.parent
+if (_install_root / "app.py").is_file():
+    _root_str = str(_install_root)
+    if _root_str not in sys.path:
+        sys.path.insert(0, _root_str)
+
 import shutil
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Optional
 
 from desktop_user_data import ensure_user_data_dirs
+from packaging.desktop_shell import run_native_shell
+from packaging.testory_runtime import resolve_bundled_python, verify_bundled_python
 
 APP_TITLE = "Testory"
 DEFAULT_PORT = 5000
@@ -37,15 +47,10 @@ def install_root() -> Path:
 
 
 def resolve_python(root: Path) -> Path:
-    """优先使用安装目录内的 .venv，保证用户机器无需单独装 Python。"""
-    if sys.platform == "win32":
-        for name in ("pythonw.exe", "python.exe"):
-            cand = root / ".venv" / "Scripts" / name
-            if cand.is_file():
-                return cand
-    venv_py = root / ".venv" / "bin" / "python"
-    if venv_py.is_file():
-        return venv_py
+    """优先使用安装目录内的可移植 Python，保证用户机器无需单独装 Python。"""
+    bundled = resolve_bundled_python(root)
+    if bundled is not None:
+        return bundled
     return Path(sys.executable)
 
 
@@ -59,6 +64,15 @@ def apply_local_env(root: Path, port: int) -> Path:
     os.environ.setdefault("UAT_DESKTOP_MODE", "1")
     os.environ.setdefault("DEPLOYMENT_MODE", "client")
     os.environ.setdefault("SKIP_ENV_EXAMPLE_SYNC", "1")
+    os.environ["PYTHONNOUSERSITE"] = "1"
+    root_str = str(root.resolve())
+    existing = os.environ.get("PYTHONPATH", "").strip()
+    if existing:
+        parts = [p for p in existing.split(os.pathsep) if p]
+        if root_str not in parts:
+            os.environ["PYTHONPATH"] = root_str + os.pathsep + existing
+    else:
+        os.environ["PYTHONPATH"] = root_str
 
     user_data = ensure_user_data_dirs(root)
     os.environ["UAT_DATA_DIR"] = str(user_data)
@@ -95,8 +109,8 @@ def _no_window_flags() -> int:
 
 
 def start_backend(root: Path, python: Path, port: int, user_data: Path) -> subprocess.Popen:
-    env = os.environ.copy()
     apply_local_env(root, port)
+    env = os.environ.copy()
     log_dir = user_data / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "backend_startup.log"
@@ -177,7 +191,15 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
     os.chdir(root)
     ensure_dotenv(root)
     user_data = apply_local_env(root, port)
-    python = resolve_python(root)
+    python, runtime_err = verify_bundled_python(root)
+    if runtime_err:
+        if resolve_bundled_python(root) is None:
+            python = Path(sys.executable)
+        else:
+            _show_error(runtime_err)
+            return 1
+    elif python is None:
+        python = resolve_python(root)
 
     if not (root / "app.py").is_file():
         _show_error(f"未找到程序文件：{root / 'app.py'}\n请重新安装。")
@@ -186,22 +208,21 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
     proc: Optional[subprocess.Popen] = None
     try:
         proc = start_backend(root, python, port, user_data)
-        if not wait_until_ready(port, proc):
-            _show_error(_startup_failed_message(root, user_data, port, proc))
-            return 1
 
-        try:
-            import webview
-        except ImportError:
-            _show_error(
-                "缺少桌面界面组件 pywebview。\n"
-                "请重新执行完整安装包制作流程并安装。"
-            )
-            return 1
+        def _backend_ready() -> bool:
+            if proc is None:
+                return False
+            if proc.poll() is not None:
+                return False
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/api/health", timeout=2
+                ) as resp:
+                    return resp.status == 200
+            except (urllib.error.URLError, OSError, TimeoutError):
+                return False
 
-        url = f"http://127.0.0.1:{port}/"
-
-        def on_closed() -> None:
+        def _on_closed() -> None:
             if proc and proc.poll() is None:
                 proc.terminate()
                 try:
@@ -209,16 +230,15 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
                 except subprocess.TimeoutExpired:
                     proc.kill()
 
-        window = webview.create_window(
-            APP_TITLE,
-            url,
-            width=1360,
-            height=860,
-            min_size=(1024, 640),
-            text_select=True,
+        return run_native_shell(
+            root=root,
+            app_url=f"http://127.0.0.1:{port}/",
+            wait_until_ready=_backend_ready,
+            startup_failed_message=lambda: _startup_failed_message(
+                root, user_data, port, proc
+            ),
+            on_closed=_on_closed,
         )
-        webview.start(on_closed, gui="edgechromium" if sys.platform == "win32" else None)
-        return 0
     except Exception as e:
         _log_error(root, user_data, e)
         _show_error(f"启动失败：{e}\n\n详见 {user_data / 'logs' / 'desktop_launch.log'}")
@@ -229,6 +249,14 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
 
 
 def main() -> None:
+    if "--probe" in sys.argv:
+        # 供 Testory.exe 捕获启动失败原因（仅做导入自检，不真正启动 UI）
+        root = install_root()
+        os.chdir(root)
+        ensure_dotenv(root)
+        apply_local_env(root, DEFAULT_PORT)
+        print("probe ok")
+        raise SystemExit(0)
     port = int(os.environ.get("FLASK_RUN_PORT", DEFAULT_PORT))
     raise SystemExit(run_desktop(port))
 

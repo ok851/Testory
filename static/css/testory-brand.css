@@ -59,6 +59,26 @@ html:not(.dark) .testory-logo-word small {
   color: #64748b;
 }
 
+body.testory-desktop-client {
+  overscroll-behavior: none;
+}
+
+/* 桌面客户端：顶栏作为应用标题栏区域（WebView2 无系统菜单栏时的常见做法） */
+body.testory-desktop-client > nav.testory-desktop-titlebar {
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+}
+
+body.testory-desktop-client > nav.testory-desktop-titlebar a,
+body.testory-desktop-client > nav.testory-desktop-titlebar button,
+body.testory-desktop-client > nav.testory-desktop-titlebar input,
+body.testory-desktop-client > nav.testory-desktop-titlebar select,
+body.testory-desktop-client > nav.testory-desktop-titlebar label {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* 桌面客户端：更紧凑的顶栏 */
 body.testory-desktop-client nav.bg-white,
 body.testory-desktop-client nav {

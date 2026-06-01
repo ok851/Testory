@@ -1,4 +1,4 @@
-# Intune 检测规则 — 已安装且版本不低于清单要求时返回 0
+﻿# Intune 检测规则 — 已安装且版本不低于清单要求时返回 0
 param(
     [string] $MinVersion = "1.0.0",
     [string] $InstallRoot = "${env:ProgramFiles}\HuFirst\UATPlatform"

@@ -5,11 +5,11 @@ uvicorn[standard]==0.27.1
 Flask-CORS==4.0.0
 Flask-Login==0.6.3
 Werkzeug==3.0.1
-# playwright 1.40 pins greenlet==3.0.1 — 无 cp313 Windows wheel，会走源码编译（需 MSVC）。3.13 使用带预编译依赖的较新版本。
+# playwright 1.40 pins greenlet==3.0.1; on cp313 use newer playwright with prebuilt wheels.
 playwright>=1.48.0,<2; python_version >= "3.13"
 playwright==1.40.0; python_version < "3.13"
-# numpy 1.26.x has no cp313 wheels on Windows → pip builds from sdist and needs MSVC/GCC.
-# Python 3.13+：使用带官方 wheel 的 numpy 2.x / 较新 opencv（无需本机编译器）。
+# numpy 1.26.x has no cp313 wheels on Windows; pip may build from sdist (needs MSVC/GCC).
+# Python 3.13+: use numpy 2.x / newer opencv with official wheels.
 numpy>=2.1.0,<3; python_version >= "3.13"
 numpy==1.26.4; python_version < "3.13"
 opencv-python>=4.12.0.88,<5; python_version >= "3.13"
@@ -17,17 +17,23 @@ opencv-python==4.10.0.84; python_version < "3.13"
 APScheduler==3.10.4
 openpyxl==3.1.2
 reportlab==4.4.10
-# Postman 风格接口前后置脚本（Duktape JS）
+# Postman-style pre/post scripts (Duktape JS)
 dukpy>=0.4.0
-# 需求文档提取（PDF / Word）
+# Requirement doc extraction (PDF / Word)
 pypdf>=4.0.0
 python-docx>=1.1.0
-# Windows 桌面自动化（可选，完整能力见 requirements-windows.txt）
+# Windows desktop automation (see requirements-windows.txt)
 pywin32>=306; sys_platform == "win32"
 pywinauto>=0.6.8; sys_platform == "win32"
 pyperclip>=1.8.2
 pyautogui>=0.9.54; sys_platform == "win32"
 mss>=9.0.0; sys_platform == "win32"
 psutil>=5.9.0
-# 网页捕获扩展 WebSocket 桥
+# HTTP client (app.py and many modules; must be in offline bundle)
+requests>=2.31.0
+urllib3>=2.0.0,<3
+certifi>=2024.2.2
+charset-normalizer>=3.3.0
+idna>=3.6
+# Web capture extension WebSocket bridge
 websockets>=12.0

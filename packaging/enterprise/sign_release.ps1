@@ -1,4 +1,4 @@
-# 对发行包进行 Authenticode 代码签名（需已安装 SignTool 与有效代码签名证书）
+﻿# 对发行包进行 Authenticode 代码签名（需已安装 SignTool 与有效代码签名证书）
 # 用法:
 #   .\packaging\enterprise\sign_release.ps1 -FilePath dist\uat_platform_setup.exe
 #   .\packaging\enterprise\sign_release.ps1 -FilePath dist\*.exe -PfxPath C:\certs\codesign.pfx -PfxPassword (Read-Host -AsSecureString)

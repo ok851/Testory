@@ -1,4 +1,4 @@
-# Windows 桌面自动化依赖（与 requirements.txt 一并安装）
+# Windows desktop dependencies (install with requirements.txt)
 -r requirements.txt
 pywin32>=306
 pywinauto>=0.6.8
@@ -6,5 +6,5 @@ pyperclip>=1.8.2
 pyautogui>=0.9.54
 mss>=9.0.0
 psutil>=5.9.0
-# 桌面版独立窗口（安装包入口 packaging/uat_desktop.py）
+# Desktop shell window (packaging/uat_desktop.py)
 pywebview>=5.0

@@ -1,4 +1,4 @@
-# 构建 Testory.exe 启动器并复制到离线发布目录
+﻿# 构建 Testory.exe 启动器并复制到离线发布目录
 param(
     [Parameter(Mandatory = $true)][string] $Root,
     [Parameter(Mandatory = $true)][string] $ReleaseDir
@@ -7,7 +7,10 @@ param(
 $ErrorActionPreference = "Stop"
 $py = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $py)) {
-    throw "未找到构建用 Python: $py"
+    $py = Join-Path $Root ".venv\python.exe"
+}
+if (-not (Test-Path $py)) {
+    throw "Build Python not found under $Root\.venv"
 }
 
 $icon = Join-Path $Root "packaging\inno\testory.ico"
