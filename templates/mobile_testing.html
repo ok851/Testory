@@ -9,7 +9,7 @@
     <header class="ms-page-header">
         <div>
             <h1 class="ms-title"><i class="fas fa-mobile-alt text-emerald-500"></i> 移动端测试</h1>
-            <p class="ms-subtitle">USB 真机投屏 · 点屏录步骤 · Airtest 图像识别 · Appium / ADB</p>
+            <p class="ms-subtitle">模拟器优先 · 高帧率投屏 · 点屏录步骤 · 真机兼容（USB/无线）</p>
         </div>
         <div class="ms-header-actions">
             <span id="msConnectBadge" class="ms-connect-badge">未连接</span>
@@ -23,10 +23,35 @@
     </div>
     {% else %}
     <div class="ms-layout">
-        <!-- 左侧：项目 / 用例 / 步骤 -->
         <aside class="ms-panel ms-panel--left">
+            <div class="ms-panel-scroll">
             <section class="ms-section">
-                <h2 class="ms-section-title">设备</h2>
+                <h2 class="ms-section-title"><i class="fas fa-desktop text-emerald-500"></i> 模拟器（推荐）</h2>
+                <label class="ms-label">AVD 实例</label>
+                <select id="msEmulatorAvdSelect" class="ms-input"></select>
+                <p id="msEmulatorHelp" class="ms-muted ms-emulator-help"></p>
+                <div class="ms-row ms-row--wrap">
+                    <button type="button" id="msBtnEmulatorStart" class="ms-btn ms-btn--primary">启动模拟器</button>
+                    <button type="button" id="msBtnEmulatorStop" class="ms-btn ms-btn--ghost">停止</button>
+                </div>
+                <details class="ms-setup-panel">
+                    <summary class="ms-setup-summary"><i class="fas fa-book"></i> 如何安装 Android SDK / 模拟器？</summary>
+                    <p class="ms-muted ms-setup-hint">
+                        <strong>Android SDK 是什么？</strong> 就是在电脑上运行「虚拟 Android 手机」的工具包，由 Google 提供，通常随 <strong>Android Studio</strong> 一起安装（免费）。
+                        <br><br>
+                        <strong>第一次配置（约 15 分钟）：</strong><br>
+                        1. 下载安装 <a href="https://developer.android.com/studio" target="_blank" rel="noopener">Android Studio</a><br>
+                        2. 打开后进入 <strong>Device Manager → Create Device</strong>，选 Pixel 6 等型号，下载一个 System Image，完成创建<br>
+                        3. 在本项目 <code>.env</code> 增加一行（路径按你电脑用户名改）：<br>
+                        <code>ANDROID_HOME=C:\Users\你的用户名\AppData\Local\Android\Sdk</code><br>
+                        4. 重启 <code>python app.py</code>，回到本页点「启动模拟器」<br><br>
+                        高帧率画布还需安装 <a href="https://github.com/Genymobile/scrcpy/releases" target="_blank" rel="noopener">scrcpy</a>，并把 <code>scrcpy-server</code> 放到 scrcpy.exe 同目录。
+                    </p>
+                </details>
+            </section>
+
+            <section class="ms-section">
+                <h2 class="ms-section-title">设备连接</h2>
                 <div class="ms-row">
                     <select id="msDeviceSelect" class="ms-input"></select>
                     <button type="button" id="msBtnRefreshDevices" class="ms-btn ms-btn--ghost" title="刷新">⟳</button>
@@ -36,6 +61,27 @@
                     <button type="button" id="msBtnDisconnect" class="ms-btn ms-btn--ghost">断开</button>
                 </div>
                 <p id="msDeviceHelp" class="ms-device-help ms-muted"></p>
+
+                <details class="ms-wireless-panel" id="msRealDevicePanel">
+                    <summary class="ms-wireless-summary"><i class="fas fa-plug"></i> 真机兼容（USB / 无线）</summary>
+                    <p class="ms-muted ms-wireless-hint">真机投屏为预览模式（约 5–15 fps）。无线：开发者选项 → 无线调试 → 使用配对码。</p>
+                    <label class="ms-label">手机 IP</label>
+                    <input type="text" id="msWirelessIp" class="ms-input" placeholder="192.168.1.5" autocomplete="off">
+                    <div class="ms-row ms-row--wrap">
+                        <div class="ms-field-grow">
+                            <label class="ms-label">配对端口</label>
+                            <input type="text" id="msWirelessPairPort" class="ms-input" placeholder="39077" autocomplete="off">
+                        </div>
+                        <div class="ms-field-grow">
+                            <label class="ms-label">6 位配对码</label>
+                            <input type="text" id="msWirelessCode" class="ms-input" placeholder="123456" maxlength="6" inputmode="numeric" autocomplete="off">
+                        </div>
+                    </div>
+                    <label class="ms-label">调试端口</label>
+                    <input type="text" id="msWirelessConnectPort" class="ms-input" placeholder="无线调试页「IP 地址和端口」" autocomplete="off">
+                    <button type="button" id="msBtnWirelessConnect" class="ms-btn ms-btn--ghost ms-btn--block">无线配对并连接</button>
+                </details>
+
                 <label class="ms-label">外框型号（展示用）</label>
                 <select id="msFramePreset" class="ms-input"></select>
                 <label class="ms-label">前台应用（自动识别，可改）</label>
@@ -81,11 +127,11 @@
                 <button type="button" id="msBtnAi" class="ms-btn ms-btn--indigo">生成并追加步骤</button>
                 <textarea id="msAiPreview" class="ms-textarea ms-ai-preview" rows="6" style="display:none;" readonly></textarea>
             </section>
+            </div>
 
             <p id="msStatus" class="ms-status"></p>
         </aside>
 
-        <!-- 右侧：虚拟手机 -->
         <main class="ms-panel ms-panel--right">
             <div class="ms-phone-toolbar">
                 <span id="msDeviceDim" class="ms-muted">分辨率 —</span>
@@ -96,14 +142,14 @@
                     <div id="msScreenInner" class="ms-screen-inner">
                         <canvas id="msMirrorCanvas" class="ms-mirror-canvas" aria-label="设备画面，可点击与滑动"></canvas>
                         <div id="msMirrorPlaceholder" class="ms-mirror-placeholder">
-                            <i class="fas fa-plug fa-2x mb-3 opacity-40"></i>
-                            <p>USB 连接手机后，点左侧「一键连接」</p>
-                            <p class="ms-muted" style="font-size:12px;">连接成功后，在本画面用鼠标单击/拖拽即可操作手机</p>
+                            <i class="fas fa-desktop fa-2x mb-3 opacity-40"></i>
+                            <p>启动模拟器或连接真机后，点「一键连接」</p>
+                            <p class="ms-muted" style="font-size:12px;">模拟器：高帧率 scrcpy 画布 · 真机：预览模式</p>
                         </div>
                     </div>
                 </div>
             </div>
-            <p class="ms-hint">操控模式：单击=点击，拖拽=滑动。「元素」模式点屏写入 UiAutomator 定位；「图像」模式写入 Airtest 风格模板步骤（tap_image）。</p>
+            <p class="ms-hint">操控模式：单击=点击，拖拽=滑动。「元素」模式点屏写入 UiAutomator；「图像」模式写入 tap_image。</p>
         </main>
     </div>
     {% endif %}
@@ -111,7 +157,8 @@
 {% endblock %}
 {% block scripts %}
 {% if mobile_disabled %}
-<script>window.__MOBILE_STUDIO_DISABLED__ = true; window.__MOBILE_STUDIO_DISABLED_REASON__ = {{ mobile_disabled_reason|tojson }};</script>
+<script id="__mobileStudioDisabledJson" type="application/json">{{ {'disabled': true, 'reason': mobile_disabled_reason}|tojson }}</script>
 {% endif %}
+<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}"></script>
 <script src="{{ url_for('static', filename='js/mobile_studio.js') }}"></script>
 {% endblock %}

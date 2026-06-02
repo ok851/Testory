@@ -119,10 +119,97 @@ def scrcpy_path() -> str:
 
 
 def mirror_fps() -> int:
+    """画布投屏目标帧率（adb screencap 受网络/USB 带宽限制，无线通常 5–15 实际帧）。"""
     try:
-        return max(1, min(30, int(os.environ.get("MOBILE_MIRROR_FPS", "8"))))
+        return max(1, min(120, int(os.environ.get("MOBILE_MIRROR_FPS", "8"))))
     except ValueError:
         return 8
+
+
+def mirror_max_width() -> int:
+    """投屏 JPEG 最大宽度（0=不缩放，原始 PNG）。"""
+    try:
+        return max(0, min(2160, int(os.environ.get("MOBILE_MIRROR_MAX_WIDTH", "720"))))
+    except ValueError:
+        return 720
+
+
+def mirror_jpeg_quality() -> int:
+    try:
+        return max(40, min(95, int(os.environ.get("MOBILE_MIRROR_JPEG_QUALITY", "75"))))
+    except ValueError:
+        return 75
+
+
+def mirror_format() -> str:
+    """jpeg（默认，体积小）或 png。"""
+    raw = (os.environ.get("MOBILE_MIRROR_FORMAT") or "jpeg").strip().lower()
+    return raw if raw in ("jpeg", "jpg", "png") else "jpeg"
+
+
+def android_sdk_home() -> str:
+    """Android SDK 根目录（emulator / avdmanager）。"""
+    for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        val = (os.environ.get(key) or "").strip()
+        if val and Path(val).is_dir():
+            return val
+    cfg = _load_mobile_defaults()
+    cfg_path = (cfg.get("android_sdk_home") or "").strip()
+    if cfg_path and Path(cfg_path).is_dir():
+        return cfg_path
+    user = os.environ.get("LOCALAPPDATA") or os.environ.get("USERPROFILE") or ""
+    if user:
+        default = Path(user) / "AppData" / "Local" / "Android" / "Sdk"
+        if default.is_dir():
+            return str(default)
+    return ""
+
+
+def emulator_mode_enabled() -> bool:
+    """模拟器优先模式（默认开启）。"""
+    return _truthy("MOBILE_EMULATOR_MODE", "1")
+
+
+def mirror_backend() -> str:
+    """
+    投屏后端：auto | scrcpy_ws | screencap
+    auto — 模拟器( emulator-* ) 用 scrcpy_ws，真机用 screencap
+    """
+    raw = (os.environ.get("MOBILE_MIRROR_BACKEND") or "auto").strip().lower()
+    if raw not in ("auto", "scrcpy_ws", "screencap"):
+        return "auto"
+    return raw
+
+
+def scrcpy_bridge_port() -> int:
+    try:
+        return max(1024, min(65535, int(os.environ.get("MOBILE_SCRCPY_BRIDGE_PORT", "8767"))))
+    except ValueError:
+        return 8767
+
+
+def scrcpy_bridge_url() -> str:
+    host = (os.environ.get("MOBILE_SCRCPY_BRIDGE_HOST") or "127.0.0.1").strip()
+    return f"ws://{host}:{scrcpy_bridge_port()}"
+
+
+def resolve_mirror_backend(udid: str = "") -> str:
+    """根据设备 serial 解析实际投屏后端。"""
+    backend = mirror_backend()
+    if backend != "auto":
+        return backend
+    serial = (udid or "").strip()
+    if serial.startswith("emulator-"):
+        return "scrcpy_ws"
+    if ":" in serial and serial.split(":")[0].replace(".", "").isdigit():
+        return "screencap"
+    return "screencap"
+
+
+def default_emulator_avd() -> str:
+    return (os.environ.get("MOBILE_EMULATOR_AVD") or "").strip() or (
+        _load_mobile_defaults().get("emulator_avd") or ""
+    ).strip()
 
 
 def default_device_name() -> str:
@@ -236,6 +323,15 @@ def public_config() -> Dict[str, Any]:
         "adb_plugin_installed": adb_path_source() == "plugin",
         "scrcpy_path": scrcpy_path(),
         "mirror_fps": mirror_fps(),
+        "mirror_max_width": mirror_max_width(),
+        "mirror_jpeg_quality": mirror_jpeg_quality(),
+        "mirror_format": mirror_format(),
+        "mirror_backend": mirror_backend(),
+        "emulator_mode": emulator_mode_enabled(),
+        "android_sdk_home": android_sdk_home(),
+        "scrcpy_bridge_url": scrcpy_bridge_url(),
+        "scrcpy_bridge_port": scrcpy_bridge_port(),
+        "default_emulator_avd": default_emulator_avd(),
         "device_name": default_device_name(),
         "app_package": default_app_package(),
         "app_activity": default_app_activity(),
@@ -249,7 +345,7 @@ def public_config() -> Dict[str, Any]:
             {"id": "airtest", "label": "图像模板（OpenCV / tap_image，点屏录制可用）"},
         ],
         "hint": (
-            "插入 USB 并开启调试后，在「移动端测试」页点击「一键连接」即可；"
-            "Appium 仅在运行自动化步骤时需要（可稍后启动）。"
+            "推荐：在「模拟器」区启动本机 AVD，高帧率投屏；真机 USB/无线请展开「真机兼容」连接。"
+            "Appium 仅在运行自动化步骤时需要。"
         ),
     }

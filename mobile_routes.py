@@ -12,7 +12,10 @@ from flask import jsonify, request
 from flask_login import current_user, login_required
 
 from mobile_device_manager import (
-    capture_screenshot_png,
+    adb_connect_wireless,
+    adb_disconnect_device,
+    adb_pair_wireless,
+    capture_screenshot_frame,
     check_mobile_health,
     get_device_info,
     get_foreground_app,
@@ -24,9 +27,22 @@ from mobile_device_manager import (
 from mobile_device_profiles import get_frame_preset, list_frame_presets
 from mobile_adb_control import adb_press_back, adb_press_home, adb_swipe, smart_tap
 from mobile_env_config import auto_connect_on_studio, mobile_driver_mode
-from mobile_env_config import mobile_enabled, mobile_runtime_available, public_config, save_mobile_defaults
+from mobile_env_config import (
+    mobile_enabled,
+    mobile_runtime_available,
+    public_config,
+    resolve_mirror_backend,
+    save_mobile_defaults,
+    scrcpy_bridge_url,
+)
+from mobile_emulator_manager import (
+    emulator_status,
+    list_running_emulators,
+    start_avd,
+    stop_avd,
+)
 from mobile_executor import get_mobile_executor
-from mobile_mirror import get_mirror_session, start_scrcpy_mirror, stop_mirror
+from mobile_mirror import disconnect_all_mirrors, get_mirror_session, start_scrcpy_mirror, stop_mirror
 
 try:
     from uat_logger import uat_logger
@@ -249,6 +265,26 @@ def execute_mobile_case(
             pass
 
 
+def _mirror_payload(udid: str, session_id: str) -> Dict[str, Any]:
+    backend = resolve_mirror_backend(udid)
+    payload: Dict[str, Any] = {
+        "mirror_backend": backend,
+        "mirror_frame_url": f"/api/mobile/mirror/frame?session_id={session_id}&udid={udid}",
+    }
+    if backend == "scrcpy_ws":
+        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started
+
+        ensure_bridge_started()
+        health = bridge_health()
+        if not health.get("scrcpy_server_ready"):
+            payload["mirror_backend"] = "screencap"
+            payload["mirror_fallback_reason"] = "未找到 scrcpy-server，已降级为截图投屏"
+            return payload
+        payload["mirror_ws_url"] = f"{scrcpy_bridge_url()}/?serial={udid}"
+        payload["bridge"] = health
+    return payload
+
+
 def register_mobile_routes(app, *, api_error_handler, log_api_request, role_required=None):
     """注册移动端 API 到 Flask app。"""
 
@@ -344,15 +380,13 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "success": True,
             "udid": resolved_udid,
             "session_id": mirror.get("session_id"),
-            "mirror_frame_url": (
-                f"/api/mobile/mirror/frame?session_id={mirror.get('session_id')}"
-                f"&udid={resolved_udid}"
-            ),
+            **_mirror_payload(resolved_udid, mirror.get("session_id") or ""),
             "scrcpy_started": mirror.get("scrcpy_started"),
             "device": device_info,
             "suggested_app_package": suggested_pkg,
             "foreground": fg,
             "appium_connected": executor.is_connected,
+            "is_emulator": resolved_udid.startswith("emulator-"),
         })
 
     @app.route("/api/mobile/disconnect", methods=["POST"])
@@ -361,9 +395,17 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     def api_mobile_disconnect():
         body = request.get_json(silent=True) or {}
         session_id = (body.get("session_id") or "").strip()
+        udid = (body.get("udid") or "").strip()
+        from mobile_device_manager import get_connected_udid
+
+        if not udid:
+            udid = get_connected_udid() or ""
         if session_id:
             stop_mirror(session_id)
+        disconnect_all_mirrors()
         get_mobile_executor().disconnect()
+        if udid and ":" in udid:
+            adb_disconnect_device(udid)
         set_connected_udid(None)
         return jsonify({"success": True})
 
@@ -378,11 +420,72 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
 
         if not udid:
             udid = get_connected_udid() or ""
-        png = capture_screenshot_png(udid)
-        if not png:
+        frame, fmt = capture_screenshot_frame(udid)
+        if not frame:
             return jsonify({"success": False, "error": "无法获取设备截图"}), 503
-        b64 = base64.b64encode(png).decode("ascii")
-        return jsonify({"success": True, "format": "png", "data": b64})
+        b64 = base64.b64encode(frame).decode("ascii")
+        return jsonify({"success": True, "format": fmt, "data": b64})
+
+    @app.route("/api/mobile/wireless/connect", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_wireless_connect():
+        """
+        无线调试：可选 adb pair，再 adb connect，返回 udid 供一键投屏。
+        body: host, pair_port, pairing_code, connect_port
+        """
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        host = (body.get("host") or body.get("ip") or "").strip()
+        pairing_code = (body.get("pairing_code") or body.get("code") or "").strip()
+        pair_port = body.get("pair_port")
+        connect_port = body.get("connect_port") or body.get("debug_port")
+
+        if pairing_code:
+            if pair_port is None or str(pair_port).strip() == "":
+                return jsonify({"success": False, "error": "填写配对码时需同时提供配对端口"}), 400
+            ok, msg = adb_pair_wireless(host, int(pair_port), pairing_code)
+            if not ok:
+                return jsonify({"success": False, "error": msg, "stage": "pair"}), 400
+
+        if connect_port is None or str(connect_port).strip() == "":
+            return jsonify({
+                "success": False,
+                "error": "需要调试端口（无线调试页「IP 地址和端口」中的端口，非配对端口）",
+                "stage": "connect",
+            }), 400
+
+        ok, msg, udid = adb_connect_wireless(host, int(connect_port))
+        if not ok:
+            return jsonify({"success": False, "error": msg, "stage": "connect"}), 400
+
+        devices = list_usb_devices()
+        matched = next((d for d in devices if d.get("udid") == udid), None)
+        if not matched:
+            for d in devices:
+                if (d.get("udid") or "").startswith(host + ":"):
+                    matched = d
+                    udid = d.get("udid") or udid
+                    break
+        if matched and matched.get("state") != "device":
+            return jsonify({
+                "success": False,
+                "error": f"设备已连接但状态为 {matched.get('state')}，请在手机上允许无线调试",
+                "udid": udid,
+                "devices": devices,
+            }), 400
+
+        return jsonify({
+            "success": True,
+            "message": msg,
+            "udid": udid,
+            "devices": devices,
+            "paired": bool(pairing_code),
+        })
 
     @app.route("/api/mobile/tap-at", methods=["POST"])
     @login_required
@@ -628,6 +731,10 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         health = check_mobile_health()
         devices = health.get("devices") or []
         default_dev = pick_default_device()
+        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started
+
+        if mobile_enabled():
+            ensure_bridge_started()
         return jsonify({
             "success": True,
             **public_config(),
@@ -637,6 +744,8 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "frame_presets": list_frame_presets(),
             "auto_connect_default": auto_connect_on_studio(),
             "driver_mode": mobile_driver_mode(),
+            "emulator": emulator_status(),
+            "bridge": bridge_health(),
         })
 
     @app.route("/api/mobile/auto-connect", methods=["POST"])
@@ -668,7 +777,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if not dev or dev.get("state") != "device":
             return jsonify({
                 "success": False,
-                "error": "未发现已授权的 USB 设备。请开启 USB 调试并在手机上点「允许」。",
+                "error": "未发现已授权设备。请 USB/无线连接后在手机上允许调试，或先在下方完成无线配对。",
             }), 503
 
         udid = dev.get("udid") or ""
@@ -704,16 +813,65 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "udid": udid,
             "device": device_info,
             "session_id": mirror.get("session_id"),
-            "mirror_frame_url": (
-                f"/api/mobile/mirror/frame?session_id={mirror.get('session_id')}&udid={udid}"
-            ),
+            **_mirror_payload(udid, mirror.get("session_id") or ""),
             "scrcpy_started": mirror.get("scrcpy_started"),
             "appium_connected": appium_ok,
             "appium_error": appium_error or None,
             "apps": apps,
             "suggested_app_package": device_info.get("foreground_package") or "",
             "frame_preset": get_frame_preset(body.get("frame_preset") or "generic_19_9"),
+            "is_emulator": udid.startswith("emulator-"),
         })
+
+    @app.route("/api/mobile/emulator/status", methods=["GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_emulator_status():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        from mobile_scrcpy_bridge import bridge_health
+
+        return jsonify({"success": True, **emulator_status(), "bridge": bridge_health()})
+
+    @app.route("/api/mobile/emulator/start", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_emulator_start():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        avd_name = (body.get("avd_name") or body.get("name") or "").strip()
+        if not avd_name:
+            return jsonify({"success": False, "error": "需要 avd_name"}), 400
+        try:
+            port = int(body.get("port") or 5554)
+        except (TypeError, ValueError):
+            port = 5554
+        gpu = (body.get("gpu") or "host").strip()
+        no_window = bool(body.get("no_window"))
+        ok, msg, meta = start_avd(avd_name, port=port, gpu=gpu, no_window=no_window)
+        if not ok:
+            return jsonify({"success": False, "error": msg}), 503
+        return jsonify({"success": True, "message": msg, **meta, "devices": list_usb_devices()})
+
+    @app.route("/api/mobile/emulator/stop", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_emulator_stop():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        serial = (body.get("serial") or body.get("udid") or "").strip()
+        avd_name = (body.get("avd_name") or body.get("name") or "").strip()
+        ok, msg = stop_avd(serial=serial, avd_name=avd_name)
+        return jsonify({"success": ok, "message": msg, "devices": list_usb_devices()})
 
     @app.route("/api/mobile/apps", methods=["GET"])
     @login_required

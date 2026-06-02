@@ -2,3 +2,7 @@
 # Install: pip install -r requirements-mobile-optional.txt
 Appium-Python-Client>=4.0.0,<5
 selenium>=4.15.0,<5
+
+# Mobile emulator high-FPS mirror (scrcpy WebSocket bridge) uses websockets from
+# the main requirements.txt — no extra pip package needed for the bridge itself.
+# Optional: pip install uiautomator2        # 增强 ADB 点击稳定性（非必须）

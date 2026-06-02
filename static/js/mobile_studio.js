@@ -21,6 +21,10 @@
         framePreset: 'generic_19_9',
         connected: false,
         mirrorTimer: null,
+        mirrorAbort: null,
+        mirrorBackend: 'screencap',
+        mirrorWsUrl: '',
+        scrcpyPlayer: null,
         pointerDown: null,
         interactionMode: INTERACTION_CONTROL,
         alsoTapOnRecord: true,
@@ -45,40 +49,163 @@
     }
 
     function stopMirror() {
+        state.mirrorRunning = false;
+        if (state.scrcpyPlayer) {
+            state.scrcpyPlayer.stop();
+            state.scrcpyPlayer = null;
+        }
+        if (state.mirrorAbort) {
+            state.mirrorAbort.abort();
+            state.mirrorAbort = null;
+        }
         if (state.mirrorTimer) {
-            clearInterval(state.mirrorTimer);
+            clearTimeout(state.mirrorTimer);
             state.mirrorTimer = null;
         }
     }
 
-    function startMirror() {
-        stopMirror();
-        if (!state.mirrorUrl) return;
+    function resetMirrorUi() {
         const canvas = $('msMirrorCanvas');
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        const fps = (state.bootstrap && state.bootstrap.mirror_fps) || 8;
-        const interval = Math.max(80, Math.floor(1000 / fps));
-        state.mirrorTimer = setInterval(async function () {
+        const ph = $('msMirrorPlaceholder');
+        if (canvas) {
+            canvas.style.display = 'none';
             try {
-                const data = await apiJson(state.mirrorUrl);
-                if (!data.success || !data.data) return;
+                const ctx = canvas.getContext('2d');
+                if (ctx) ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
+            } catch (e) { /* ignore */ }
+        }
+        if (ph) ph.style.display = '';
+        const dim = $('msDeviceDim');
+        if (dim) {
+            dim.textContent = '分辨率 —';
+            dim.removeAttribute('data-live-fps');
+        }
+    }
+
+    function showMirrorCanvas() {
+        const canvas = $('msMirrorCanvas');
+        const ph = $('msMirrorPlaceholder');
+        if (canvas) canvas.style.display = 'block';
+        if (ph) ph.style.display = 'none';
+    }
+
+    function startScrcpyWsMirror() {
+        const canvas = $('msMirrorCanvas');
+        if (!canvas || !state.mirrorWsUrl || !global.ScrcpyMirrorPlayer) {
+            startScreencapMirror();
+            return;
+        }
+        state.mirrorRunning = true;
+        state.scrcpyPlayer = new global.ScrcpyMirrorPlayer({
+            canvas: canvas,
+            wsUrl: state.mirrorWsUrl,
+            onFps: function (fps) {
+                const dim = $('msDeviceDim');
+                if (!dim) return;
+                const base = state.deviceWidth + ' × ' + state.deviceHeight;
+                dim.textContent = base + ' · ' + fps + ' fps · scrcpy';
+            },
+            onError: function (msg) {
+                if (state.mirrorRunning) setStatus('投屏: ' + msg, 'warn');
+            },
+        });
+        state.scrcpyPlayer.start().then(function () {
+            showMirrorCanvas();
+            setStatus('高帧率投屏已启动（scrcpy）', 'ok');
+        }).catch(function (e) {
+            setStatus('scrcpy 投屏失败，降级为截图模式: ' + (e.message || e), 'warn');
+            state.scrcpyPlayer = null;
+            startScreencapMirror();
+        });
+    }
+
+    function startScreencapMirror() {
+        const ctx = canvas.getContext('2d');
+        const targetFps = (state.bootstrap && state.bootstrap.mirror_fps) || 8;
+        const minInterval = Math.max(16, Math.floor(1000 / Math.max(1, targetFps)));
+        state.mirrorRunning = true;
+        state.mirrorBusy = false;
+        state.mirrorFrameCount = 0;
+        state.mirrorLastFpsAt = Date.now();
+
+        function updateFpsLabel() {
+            const dim = $('msDeviceDim');
+            if (!dim || !state.deviceWidth) return;
+            const now = Date.now();
+            const elapsed = (now - state.mirrorLastFpsAt) / 1000;
+            if (elapsed >= 2) {
+                const fps = Math.round(state.mirrorFrameCount / elapsed);
+                state.mirrorFrameCount = 0;
+                state.mirrorLastFpsAt = now;
+                dim.setAttribute('data-live-fps', String(fps));
+            }
+            const live = dim.getAttribute('data-live-fps');
+            const base = state.deviceWidth + ' × ' + state.deviceHeight;
+            dim.textContent = live ? base + ' · ' + live + ' fps' : base;
+        }
+
+        async function tick() {
+            if (!state.mirrorRunning) return;
+            if (state.mirrorBusy) {
+                if (state.mirrorRunning) {
+                    state.mirrorTimer = setTimeout(tick, minInterval);
+                }
+                return;
+            }
+            const started = Date.now();
+            state.mirrorBusy = true;
+            const abort = new AbortController();
+            state.mirrorAbort = abort;
+            try {
+                const r = await fetch(state.mirrorUrl, {
+                    credentials: 'same-origin',
+                    signal: abort.signal,
+                });
+                const data = await r.json().catch(function () { return {}; });
+                if (!state.mirrorRunning) return;
+                if (!r.ok || !data.success || !data.data) return;
+                const mime = (data.format === 'jpeg' || data.format === 'jpg') ? 'jpeg' : 'png';
                 const img = new Image();
-                img.onload = function () {
-                    state.deviceWidth = img.width;
-                    state.deviceHeight = img.height;
+                await new Promise(function (resolve, reject) {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = 'data:image/' + mime + ';base64,' + data.data;
+                });
+                if (!state.mirrorRunning) return;
+                if (canvas.width !== img.width || canvas.height !== img.height) {
                     canvas.width = img.width;
                     canvas.height = img.height;
-                    ctx.drawImage(img, 0, 0);
-                    canvas.style.display = 'block';
-                    const ph = $('msMirrorPlaceholder');
-                    if (ph) ph.style.display = 'none';
-                    const dim = $('msDeviceDim');
-                    if (dim) dim.textContent = img.width + ' × ' + img.height;
-                };
-                img.src = 'data:image/png;base64,' + data.data;
-            } catch (e) { /* ignore frame errors */ }
-        }, interval);
+                }
+                ctx.drawImage(img, 0, 0);
+                canvas.style.display = 'block';
+                const ph = $('msMirrorPlaceholder');
+                if (ph) ph.style.display = 'none';
+                state.deviceWidth = img.width;
+                state.deviceHeight = img.height;
+                state.mirrorFrameCount += 1;
+                updateFpsLabel();
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;
+            } finally {
+                if (state.mirrorAbort === abort) state.mirrorAbort = null;
+                state.mirrorBusy = false;
+                if (!state.mirrorRunning) return;
+                const elapsed = Date.now() - started;
+                const delay = Math.max(0, minInterval - elapsed);
+                state.mirrorTimer = setTimeout(tick, delay);
+            }
+        }
+        tick();
+    }
+
+    function startMirror() {
+        stopMirror();
+        if (!state.mirrorUrl && !state.mirrorWsUrl) return;
+        if (state.mirrorBackend === 'scrcpy_ws' && state.mirrorWsUrl) {
+            startScrcpyWsMirror();
+            return;
+        }
+        startScreencapMirror();
     }
 
     function mapCanvasToDevice(clientX, clientY) {
@@ -320,7 +447,7 @@
         }
         if (!list.length) {
             var adbHint = (boot.adb_path ? 'adb 已就绪（' + boot.adb_path + '）。' : '');
-            el.textContent = adbHint + '未发现手机：请 USB 连接、选文件传输/MTP、开启 USB 调试后点 ⟳ 刷新。';
+            el.textContent = adbHint + '未发现设备：请在上方「模拟器」启动 AVD，或展开「真机兼容」无线/USB 连接。';
             return;
         }
         if (!authorized.length) {
@@ -329,6 +456,62 @@
             return;
         }
         el.textContent = '已识别 ' + authorized.length + ' 台设备，点击「一键连接」后在右侧画面用鼠标操作。';
+    }
+
+    function renderEmulatorPanel(emu) {
+        const sel = $('msEmulatorAvdSelect');
+        const help = $('msEmulatorHelp');
+        if (!sel) return;
+        const avds = (emu && emu.avds) || [];
+        if (!avds.length) {
+            sel.innerHTML = '<option value="">（未创建 AVD）</option>';
+        } else {
+            sel.innerHTML = avds.map(function (a) {
+                return '<option value="' + a.name + '">' + (a.label || a.name) + '</option>';
+            }).join('');
+            const def = (state.bootstrap && state.bootstrap.default_emulator_avd) || '';
+            if (def && avds.some(function (a) { return a.name === def; })) sel.value = def;
+        }
+        if (help) {
+            if (emu && emu.emulator_available) {
+                help.textContent = 'SDK: ' + (emu.android_sdk_home || '—') +
+                    ' · 运行中 ' + ((emu.running && emu.running.length) || 0) + ' 台';
+            } else {
+                help.textContent = (emu && emu.emulator_message) ||
+                    '请按下方说明安装 Android Studio 并配置 ANDROID_HOME';
+            }
+        }
+    }
+
+    async function startEmulator() {
+        const avd = ($('msEmulatorAvdSelect') || {}).value || '';
+        if (!avd) {
+            setStatus('请选择或创建 AVD', 'warn');
+            return;
+        }
+        setStatus('正在启动模拟器…', '');
+        const data = await apiJson('/api/mobile/emulator/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ avd_name: avd, gpu: 'host' }),
+        });
+        await bootstrap();
+        const devSel = $('msDeviceSelect');
+        if (devSel && data.serial) devSel.value = data.serial;
+        setStatus(data.message || '模拟器已启动', 'ok');
+    }
+
+    async function stopEmulator() {
+        const serial = ($('msDeviceSelect') || {}).value || '';
+        setStatus('正在停止模拟器…', '');
+        await apiJson('/api/mobile/emulator/stop', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serial: serial.startsWith('emulator-') ? serial : '' }),
+        });
+        if (state.connected) await disconnect();
+        await bootstrap();
+        setStatus('模拟器已停止', '');
     }
 
     async function bootstrap() {
@@ -345,11 +528,13 @@
         const devices = (data.health && data.health.devices) || data.devices || [];
         renderDeviceList(devices);
         updateDeviceHelp(data.health, devices);
-        if (data.health && data.health.adb_ok && data.adb_plugin_installed && data.adb_path) {
-            setStatus('adb 已自动配置（插件市场），连接手机后点「一键连接」', 'ok');
-        }
-        if (data.default_device && data.default_device.state === 'device') {
+        renderEmulatorPanel(data.emulator);
+        if (data.emulator && data.emulator.emulator_available && !(devices && devices.length)) {
+            setStatus('推荐：选择 AVD 并点击「启动模拟器」', 'ok');
+        } else if (data.default_device && data.default_device.state === 'device') {
             setStatus('检测到设备，可点击「一键连接」', 'ok');
+        } else if (data.health && data.health.adb_ok && data.adb_plugin_installed && data.adb_path) {
+            setStatus('adb 已就绪', 'ok');
         } else if (!data.health || !data.health.adb_ok) {
             setStatus((data.health && data.health.adb_message) || '请先配置 ADB', 'warn');
         } else if (devices.some(function (d) { return d.state === 'unauthorized'; })) {
@@ -357,6 +542,43 @@
         } else if (!devices.length) {
             setStatus('未检测到 USB 设备，请检查连接与开发者选项', 'warn');
         }
+    }
+
+    async function wirelessConnect() {
+        const host = (($('msWirelessIp') || {}).value || '').trim();
+        const pairPort = (($('msWirelessPairPort') || {}).value || '').trim();
+        const code = (($('msWirelessCode') || {}).value || '').trim();
+        const connectPort = (($('msWirelessConnectPort') || {}).value || '').trim();
+        if (!host) {
+            setStatus('请填写手机 IP', 'warn');
+            return;
+        }
+        if (!connectPort) {
+            setStatus('请填写调试端口（无线调试页「IP 地址和端口」）', 'warn');
+            return;
+        }
+        setStatus('正在无线配对/连接…', '');
+        const payload = { host: host, connect_port: connectPort };
+        if (code) {
+            if (!pairPort) {
+                setStatus('填写配对码时需同时填写配对端口', 'warn');
+                return;
+            }
+            payload.pair_port = parseInt(pairPort, 10);
+            payload.pairing_code = code;
+        }
+        const data = await apiJson('/api/mobile/wireless/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        await bootstrap();
+        const devSel = $('msDeviceSelect');
+        if (devSel && data.udid) {
+            devSel.value = data.udid;
+        }
+        setStatus(data.message || ('已连接 ' + data.udid), 'ok');
+        await autoConnect();
     }
 
     async function autoConnect() {
@@ -374,6 +596,8 @@
         });
         state.udid = data.udid || '';
         state.sessionId = data.session_id || '';
+        state.mirrorBackend = data.mirror_backend || 'screencap';
+        state.mirrorWsUrl = data.mirror_ws_url || '';
         state.mirrorUrl = data.mirror_frame_url || '';
         state.connected = true;
         if (data.device) {
@@ -391,28 +615,43 @@
         $('msConnectBadge').textContent = '已连接';
         $('msConnectBadge').className = 'ms-connect-badge ms-connect-badge--on';
         let msg = '已连接 ' + (data.device && data.device.model ? data.device.model : state.udid);
-        if (data.scrcpy_started) msg += ' · scrcpy 窗口已打开';
+        if (data.is_emulator && state.mirrorBackend === 'scrcpy_ws') msg += ' · 高帧率模拟器';
+        else if (data.is_emulator) msg += ' · 模拟器';
+        else msg += ' · 真机预览';
+        if (data.mirror_fallback_reason) msg += ' · ' + data.mirror_fallback_reason;
         if (data.appium_error) msg += ' · Appium: ' + data.appium_error;
         else if (data.appium_connected) msg += ' · Appium 已就绪';
+        if (data.scrcpy_started && state.mirrorBackend !== 'scrcpy_ws') msg += ' · scrcpy 外窗';
         setStatus(msg, 'ok');
         startMirror();
     }
 
     async function disconnect() {
         stopMirror();
+        resetMirrorUi();
         try {
             await apiJson('/api/mobile/disconnect', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: state.sessionId }),
+                body: JSON.stringify({ session_id: state.sessionId, udid: state.udid }),
             });
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+            setStatus((e && e.message) || '断开失败', 'err');
+            return;
+        }
         state.connected = false;
         state.sessionId = '';
         state.mirrorUrl = '';
-        $('msConnectBadge').textContent = '未连接';
-        $('msConnectBadge').className = 'ms-connect-badge';
+        state.mirrorWsUrl = '';
+        state.mirrorBackend = 'screencap';
+        state.udid = '';
+        const badge = $('msConnectBadge');
+        if (badge) {
+            badge.textContent = '未连接';
+            badge.className = 'ms-connect-badge';
+        }
         setStatus('已断开', '');
+        bootstrap().catch(function () { /* ignore refresh errors */ });
     }
 
     async function runCase() {
@@ -493,6 +732,24 @@
         $('msBtnRefreshDevices').addEventListener('click', function () {
             bootstrap().catch(function (e) { setStatus(e.message, 'err'); });
         });
+        const btnWireless = $('msBtnWirelessConnect');
+        if (btnWireless) {
+            btnWireless.addEventListener('click', function () {
+                wirelessConnect().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
+        const btnEmuStart = $('msBtnEmulatorStart');
+        if (btnEmuStart) {
+            btnEmuStart.addEventListener('click', function () {
+                startEmulator().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
+        const btnEmuStop = $('msBtnEmulatorStop');
+        if (btnEmuStop) {
+            btnEmuStop.addEventListener('click', function () {
+                stopEmulator().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
         $('msFramePreset').addEventListener('change', function () {
             applyFramePreset(this.value);
         });
@@ -536,6 +793,14 @@
     }
 
     async function init() {
+        var cfgEl = document.getElementById('__mobileStudioDisabledJson');
+        if (cfgEl) {
+            try {
+                var cfg = JSON.parse(cfgEl.textContent);
+                global.__MOBILE_STUDIO_DISABLED__ = !!cfg.disabled;
+                global.__MOBILE_STUDIO_DISABLED_REASON__ = cfg.reason || '';
+            } catch (e) {}
+        }
         if (global.__MOBILE_STUDIO_DISABLED__) {
             setStatus(global.__MOBILE_STUDIO_DISABLED_REASON__ || '移动端未启用', 'warn');
             return;

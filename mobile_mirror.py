@@ -13,7 +13,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from mobile_device_manager import capture_screenshot_png, set_connected_udid
+from mobile_device_manager import capture_screenshot_frame, set_connected_udid
 from mobile_env_config import mirror_fps, scrcpy_path
 
 try:
@@ -42,7 +42,8 @@ def start_scrcpy_mirror(udid: str) -> Dict[str, Any]:
     cmd = [scrcpy_exe]
     if udid:
         cmd.extend(["-s", udid])
-    cmd.extend(["--no-audio", "--max-size", "720", "--max-fps", "15"])
+    scrcpy_fps = max(15, min(60, mirror_fps()))
+    cmd.extend(["--no-audio", "--max-size", "720", "--max-fps", str(scrcpy_fps)])
     try:
         scrcpy_proc = subprocess.Popen(
             cmd,
@@ -78,6 +79,7 @@ def stop_mirror(session_id: str) -> None:
         sess = _sessions.pop(session_id, None)
     if not sess:
         return
+    sess["active"] = False
     proc = sess.get("scrcpy_proc")
     if proc is not None:
         try:
@@ -109,10 +111,10 @@ async def stream_mirror_frames(websocket: Any, session_id: str) -> None:
     try:
         await websocket.send('{"type":"ready","message":"mirror stream started"}')
         while sess.get("active"):
-            png = await asyncio.to_thread(capture_screenshot_png, udid)
+            png, fmt = await asyncio.to_thread(capture_screenshot_frame, udid)
             if png:
                 b64 = base64.b64encode(png).decode("ascii")
-                await websocket.send(f'{{"type":"frame","format":"png","data":"{b64}"}}')
+                await websocket.send(f'{{"type":"frame","format":"{fmt}","data":"{b64}"}}')
             await asyncio.sleep(interval)
             sess = get_mirror_session(session_id)
             if not sess:

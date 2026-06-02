@@ -1140,6 +1140,14 @@ try:
         log_api_request=log_api_request,
         role_required=role_required,
     )
+    try:
+        from mobile_env_config import mobile_enabled
+        from mobile_scrcpy_bridge import ensure_bridge_started
+
+        if mobile_enabled():
+            ensure_bridge_started()
+    except Exception:
+        pass
 except ImportError:
     pass
 
