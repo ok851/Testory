@@ -10,7 +10,7 @@
 <div class="card">
     <div class="card-header">
         <h2>签发新 License</h2>
-        <p>生成后将显示 Key，请复制并安全交付给客户</p>
+        <p>签发成功后可随时在列表中「查看详情」复制 Key</p>
     </div>
     <div class="card-body">
         <div class="form-grid form-grid-wide">
@@ -50,7 +50,6 @@
         <div class="form-actions" style="margin-top: 1rem;">
             <button type="button" class="btn btn-primary" id="btnCreateLicense">签发 License</button>
         </div>
-        <pre id="newKey" class="key-output" aria-live="polite"></pre>
     </div>
 </div>
 
@@ -95,6 +94,7 @@
                         {% endif %}
                     </td>
                     <td class="actions">
+                        <button type="button" class="btn btn-secondary btn-sm btn-view" data-id="{{ lic.license_id }}">查看</button>
                         {% if not lic.revoked %}
                         <button type="button" class="btn btn-danger btn-sm btn-revoke" data-id="{{ lic.license_id }}">吊销</button>
                         {% endif %}
@@ -108,10 +108,86 @@
         {% endif %}
     </div>
 </div>
+
+<div id="licenseModal" class="admin-modal-backdrop" aria-hidden="true">
+    <div class="admin-modal" role="dialog" aria-labelledby="licenseModalTitle">
+        <div class="admin-modal-header">
+            <h2 id="licenseModalTitle" style="margin:0;font-size:1.1rem">License 详情</h2>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCloseModal">关闭</button>
+        </div>
+        <div class="admin-modal-body">
+            <dl class="license-detail-grid" id="licenseDetailFields"></dl>
+            <label style="display:block;font-size:0.8125rem;font-weight:600;margin-bottom:0.35rem;color:var(--text-secondary)">License Key</label>
+            <pre id="licenseKeyBox" class="key-output" style="max-height:180px;display:block"></pre>
+            <div id="licenseActivations" style="margin-top:1rem;font-size:0.8125rem;color:var(--text-secondary)"></div>
+        </div>
+        <div class="admin-modal-footer">
+            <button type="button" class="btn btn-secondary" id="btnCopyKey">复制 Key</button>
+            <button type="button" class="btn btn-primary" id="btnCloseModal2">完成</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+const modal = document.getElementById('licenseModal');
+const keyBox = document.getElementById('licenseKeyBox');
+const detailFields = document.getElementById('licenseDetailFields');
+const activationsBox = document.getElementById('licenseActivations');
+let reloadAfterClose = false;
+
+function closeModal() {
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+    if (reloadAfterClose) {
+        reloadAfterClose = false;
+        location.reload();
+    }
+}
+
+function openModal() {
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+}
+
+function renderDetail(lic, activations) {
+    const rows = [
+        ['License ID', lic.license_id],
+        ['类型', lic.license_type],
+        ['授权对象', lic.issued_to || '—'],
+        ['绑定', lic.binding_type ? `${lic.binding_type} · ${lic.binding_id || ''}` : '—'],
+        ['到期', lic.expires_at ? lic.expires_at.slice(0, 10) : '—'],
+        ['签发时间', lic.created_at ? lic.created_at.replace('T', ' ').slice(0, 19) : '—'],
+        ['状态', lic.revoked ? '已吊销' : '有效'],
+    ];
+    detailFields.innerHTML = rows.map(([k, v]) =>
+        `<div class="license-detail-row"><dt>${k}</dt><dd>${v}</dd></div>`
+    ).join('');
+    keyBox.textContent = lic.license_key || '';
+    if (activations && activations.length) {
+        activationsBox.innerHTML = '<strong>激活记录</strong><ul style="margin:0.35rem 0 0 1rem;padding:0">' +
+            activations.map(a => `<li>${a.binding_type || '—'} · ${a.binding_id} · ${(a.activated_at || '').slice(0, 19).replace('T', ' ')}</li>`).join('') +
+            '</ul>';
+    } else {
+        activationsBox.innerHTML = '<span style="color:var(--text-secondary)">暂无上报的激活记录。</span>' +
+            '<p style="margin:0.35rem 0 0;font-size:0.75rem;color:var(--text-muted)">' +
+            '客户端/服务器激活后需配置 <code>PLATFORM_ADMIN_URL</code> 并能访问控制面，才会在此显示设备或实例绑定；' +
+            '重启已激活的 Testory 客户端后会自动补报一次。</p>';
+    }
+    openModal();
+}
+
+async function showLicense(id) {
+    const r = await fetch('/api/licenses/' + encodeURIComponent(id));
+    const d = await r.json();
+    if (!d.success) {
+        alert(d.error || '加载失败');
+        return;
+    }
+    renderDetail(d.license, d.activations || []);
+}
+
 async function createLicense() {
     const btn = document.getElementById('btnCreateLicense');
     btn.disabled = true;
@@ -131,8 +207,8 @@ async function createLicense() {
         });
         const d = await r.json();
         if (d.success) {
-            document.getElementById('newKey').textContent = d.license_key || '';
-            setTimeout(() => location.reload(), 1500);
+            reloadAfterClose = true;
+            await showLicense(d.license_id);
         } else {
             alert(d.error || '签发失败');
         }
@@ -143,6 +219,25 @@ async function createLicense() {
 }
 
 document.getElementById('btnCreateLicense').addEventListener('click', createLicense);
+document.getElementById('btnCloseModal').addEventListener('click', closeModal);
+document.getElementById('btnCloseModal2').addEventListener('click', closeModal);
+modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+document.getElementById('btnCopyKey').addEventListener('click', async () => {
+    const text = keyBox.textContent || '';
+    if (!text) return;
+    try {
+        await navigator.clipboard.writeText(text);
+        document.getElementById('btnCopyKey').textContent = '已复制';
+        setTimeout(() => { document.getElementById('btnCopyKey').textContent = '复制 Key'; }, 1500);
+    } catch (e) {
+        prompt('请手动复制 License Key：', text);
+    }
+});
+
+document.querySelectorAll('.btn-view').forEach((el) => {
+    el.addEventListener('click', () => showLicense(el.dataset.id));
+});
 
 document.querySelectorAll('.btn-revoke').forEach((el) => {
     el.addEventListener('click', async () => {

@@ -31,6 +31,11 @@ mss>=9.0.0; sys_platform == "win32"
 psutil>=5.9.0
 # HTTP client (app.py and many modules; must be in offline bundle)
 requests>=2.31.0
+# Optional captcha — NOT in main/offline installer (see requirements-captcha-optional.txt):
+#   pip install -r requirements-captcha-optional.txt
+#   or POST /api/captcha/optional-deps/install  {"component":"ddddocr"}
+#   then CAPTCHA_DDDDOCR_ENABLE=1 in .env and restart
+# VLM fallback: LOCAL_VISION_ENABLE=1 + ollama pull llava (CAPTCHA_VISION_FALLBACK=1, CAPTCHA_VISION_TIMEOUT=25)
 urllib3>=2.0.0,<3
 certifi>=2024.2.2
 charset-normalizer>=3.3.0

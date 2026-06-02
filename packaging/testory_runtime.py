@@ -16,6 +16,14 @@ def bundled_python_candidates(root: Path) -> list[Path]:
     """按优先级返回已存在的内置 Python 可执行文件。"""
     found: list[Path] = []
     seen: set[str] = set()
+
+    shell = root / "TestoryShell.exe"
+    if shell.is_file():
+        key = str(shell.resolve()).lower()
+        if key not in seen:
+            seen.add(key)
+            found.append(shell)
+
     for rel in _RUNTIME_DIRS:
         base = root / rel if "/" not in rel else root.joinpath(*rel.split("/"))
         for name in _RUNTIME_NAMES:

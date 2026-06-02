@@ -37,6 +37,22 @@ def is_client_mode() -> bool:
     return get_deployment_mode() == DeploymentMode.CLIENT
 
 
+def is_local_standalone_desktop() -> bool:
+    """桌面客户端选择「本机独立使用」，不连接团队服务器。"""
+    if not is_client_mode():
+        return is_standalone_mode()
+    try:
+        from client_config_store import load_client_config
+
+        return bool(load_client_config().get("local_standalone"))
+    except Exception:
+        return False
+
+
+def uses_team_server() -> bool:
+    return is_client_mode() and not is_local_standalone_desktop()
+
+
 def can_run_automation_locally() -> bool:
     """是否在本进程内启动 Playwright / 桌面自动化。"""
     mode = get_deployment_mode()
@@ -74,6 +90,8 @@ def deployment_context() -> Dict[str, Any]:
         "is_standalone": mode == DeploymentMode.STANDALONE,
         "is_server": mode == DeploymentMode.SERVER,
         "is_client": mode == DeploymentMode.CLIENT,
+        "is_local_standalone": is_local_standalone_desktop(),
+        "uses_team_server": uses_team_server(),
         "hide_billing_ui": hide_billing_ui(),
         "can_run_automation_locally": can_run_automation_locally(),
         "team_server_url": get_team_server_url(),

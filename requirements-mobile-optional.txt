@@ -1,0 +1,4 @@
+# Optional Android mobile automation dependencies
+# Install: pip install -r requirements-mobile-optional.txt
+Appium-Python-Client>=4.0.0,<5
+selenium>=4.15.0,<5

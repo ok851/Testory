@@ -15,6 +15,7 @@ from client_config_store import (
     mark_setup_complete,
     save_client_config,
     set_auth_token,
+    set_local_standalone,
     set_team_server_url,
 )
 from deployment_config import (
@@ -22,14 +23,21 @@ from deployment_config import (
     get_website_url,
     hide_billing_ui,
     is_client_mode,
+    is_local_standalone_desktop,
     is_server_mode,
     should_delegate_execution_to_clients,
+    uses_team_server,
 )
 from execution_remote import register_routes as register_execution_routes
 from execution_remote import start_client_worker
 from instance_identity import get_identity_info, get_instance_id, get_machine_id
 from license_manager import license_manager
-from platform_sync import build_website_payment_url, sync_product_user
+from platform_sync import (
+    build_website_payment_url,
+    report_current_license_activation,
+    report_license_activation,
+    sync_product_user,
+)
 from team_server_proxy import proxy_to_team_server, should_proxy_path
 
 
@@ -38,6 +46,12 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
     def inject_deployment():
         ctx = deployment_context()
         ctx["client_setup_complete"] = is_setup_complete() or not is_client_mode()
+        try:
+            from mobile_env_config import mobile_enabled
+
+            ctx["mobile_testing_enabled"] = mobile_enabled()
+        except ImportError:
+            ctx["mobile_testing_enabled"] = False
         return ctx
 
     @app.before_request
@@ -68,12 +82,13 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
             "/api/health",
             "/static/",
             "/api/auth/login",
+            "/api/auth/me",
         )
         if any(path.startswith(p) for p in allowed):
             return None
-        if path.startswith("/api/") and path.startswith("/api/client/"):
-            return None
         if not is_setup_complete() and not path.startswith("/api/"):
+            if is_local_standalone_desktop():
+                return redirect(url_for("login_page"))
             return redirect(url_for("client_setup_page"))
 
     register_execution_routes(app, db_factory, login_required)
@@ -112,6 +127,18 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
             mark_setup_complete(True)
         return jsonify({"success": True})
 
+    @app.route("/api/client/local-mode", methods=["POST"])
+    def api_client_local_mode():
+        """本机独立使用：不连接团队服务器，数据保存在本机。"""
+        set_local_standalone(True)
+        return jsonify(
+            {
+                "success": True,
+                "redirect": "/login",
+                "message": "已切换为本机独立模式，请使用本机管理员账号登录。",
+            }
+        )
+
     @app.route("/api/client/login", methods=["POST"])
     def api_client_login_to_server():
         data = request.get_json(silent=True) or {}
@@ -120,14 +147,16 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
         url = (data.get("team_server_url") or get_team_server_url()).strip().rstrip("/")
         if not url:
             return jsonify({"success": False, "error": "请先填写团队服务器地址"}), 400
+        if not username or not password:
+            return jsonify({"success": False, "error": "请填写用户名和密码"}), 400
         set_team_server_url(url)
         os.environ["TEAM_SERVER_URL"] = url
         try:
-            from team_server_client import login as ts_login
+            from team_server_client import TeamServerError, login as ts_login
 
             result = ts_login(username, password)
             if not result.get("success"):
-                return jsonify(result), 401
+                return jsonify({"success": False, "error": result.get("error") or "登录失败"}), 401
             db = db_factory()
             user_data = db.get_user_by_username(username)
             if user_data:
@@ -147,8 +176,10 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
                 )
             mark_setup_complete(True)
             return jsonify({"success": True, "user": result.get("user")})
+        except TeamServerError as e:
+            return jsonify({"success": False, "error": str(e)}), 401
         except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 502
+            return jsonify({"success": False, "error": f"无法连接团队服务器：{e}"}), 502
 
     @app.route("/api/client/license/activate", methods=["POST"])
     def api_client_license_activate():
@@ -163,28 +194,7 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
             return jsonify({"success": False, "error": result.get("message")}), 400
         info = result.get("info")
         if info and info.license_id:
-            try:
-                import urllib.request
-                import json
-
-                admin_url = (os.environ.get("PLATFORM_ADMIN_URL") or "").strip().rstrip("/")
-                if admin_url:
-                    payload = json.dumps(
-                        {
-                            "license_id": info.license_id,
-                            "binding_type": binding_type,
-                            "binding_id": binding_id,
-                        }
-                    ).encode("utf-8")
-                    req = urllib.request.Request(
-                        admin_url + "/api/licenses/activate",
-                        data=payload,
-                        headers={"Content-Type": "application/json"},
-                        method="POST",
-                    )
-                    urllib.request.urlopen(req, timeout=10)
-            except Exception:
-                pass
+            report_license_activation(info.license_id, binding_type, binding_id)
         return jsonify({"success": True, "message": result.get("message")})
 
     @app.route("/api/instance/info", methods=["GET"])
@@ -240,6 +250,7 @@ def init_server_instance(db_factory: Callable[[], Any]) -> None:
 
 
 def start_background_workers() -> None:
+    report_current_license_activation()
     if is_client_mode():
         url = get_team_server_url()
         if url and is_setup_complete():

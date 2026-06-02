@@ -61,6 +61,110 @@ html:not(.dark) .testory-logo-word small {
 
 body.testory-desktop-client {
   overscroll-behavior: none;
+  background: #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+html.dark body.testory-desktop-client {
+  background: rgb(15 23 42);
+}
+
+/* 桌面客户端：主内容区居中，形成应用窗口感而非整页网站 */
+body.testory-desktop-client .testory-desktop-main {
+  flex: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin-left: auto;
+  margin-right: auto;
+  background: #f8fafc;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06), 0 8px 32px rgba(15, 23, 42, 0.08);
+}
+
+html.dark body.testory-desktop-client .testory-desktop-main {
+  background: rgb(3 7 18);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.08), 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+/* 桌面客户端：收窄内容宽度，减少「整页网站」违和感 */
+body.testory-desktop-client #main-content,
+body.testory-desktop-client > main,
+body.testory-desktop-client .testory-desktop-main .hero-section,
+body.testory-desktop-client .testory-desktop-main > section {
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+body.testory-desktop-client .hero-section {
+  padding: 1.75rem 1.25rem !important;
+  border-radius: 0;
+  margin-top: 0;
+}
+
+body.testory-desktop-client .testory-desktop-main .hero-section {
+  padding: 2rem 1.5rem !important;
+}
+
+body.testory-desktop-client .hero-content h2 {
+  font-size: 1.75rem !important;
+  margin-bottom: 0.5rem !important;
+}
+
+body.testory-desktop-client .hero-content p {
+  font-size: 1rem !important;
+  margin-bottom: 1rem !important;
+}
+
+body.testory-desktop-client section.py-16 {
+  padding-top: 1.5rem !important;
+  padding-bottom: 1.5rem !important;
+}
+
+body.testory-desktop-client .testory-desktop-main footer {
+  padding-top: 1.25rem !important;
+  padding-bottom: 1.25rem !important;
+  font-size: 0.8125rem;
+}
+
+body.testory-desktop-client .container {
+  max-width: 100% !important;
+  padding-left: 1rem !important;
+  padding-right: 1rem !important;
+}
+
+body.testory-desktop-client nav .container {
+  max-width: 1120px !important;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+body.testory-desktop-client nav a {
+  padding-left: 0.45rem !important;
+  padding-right: 0.45rem !important;
+  font-size: 0.75rem !important;
+}
+
+body.testory-desktop-client nav a .mr-1 {
+  margin-right: 0.2rem !important;
+}
+
+body.testory-desktop-client .feature-card {
+  padding: 0.875rem !important;
+}
+
+body.testory-desktop-client .feature-card .text-4xl {
+  font-size: 1.75rem !important;
+  margin-bottom: 0.5rem !important;
+}
+
+body.testory-desktop-client .grid.gap-8 {
+  gap: 1rem !important;
+}
+
+body.testory-desktop-client .card {
+  padding: 1rem !important;
 }
 
 /* 桌面客户端：顶栏作为应用标题栏区域（WebView2 无系统菜单栏时的常见做法） */
@@ -219,6 +323,29 @@ html.dark body.testory-desktop-client .testory-desktop-badge {
 }
 
 .testory-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.testory-btn-secondary {
+  display: block;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+  color: #cbd5e1;
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.testory-btn-secondary:hover:not(:disabled) {
+  border-color: rgba(129, 140, 248, 0.55);
+  background: rgba(30, 41, 59, 0.85);
+}
+
+.testory-btn-secondary:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

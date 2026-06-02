@@ -346,9 +346,11 @@ def _infer_verify_type_for_captcha_action(description: str, goal: str = "") -> s
     zh = _norm_str(description) + _norm_str(goal)
     if any(k in zh for k in ("滑块", "拖动验证")) or "slider" in blob:
         return "slider"
+    if any(k in zh for k in ("曲线", "旋转", "滑动还原", "滑动曲线")) or "curve" in blob or "rotate" in blob:
+        return "auto"
     if any(k in zh for k in ("拼图", "点选验证", "图片验证码", "图形验证")) or "image captcha" in blob:
         return "image"
-    if any(k in zh for k in ("验证码", "人机验证", "智能验证", "安全验证")) or "captcha" in blob:
+    if any(k in zh for k in ("验证码", "人机验证", "智能验证", "安全验证", "天爱", "tianai")) or "captcha" in blob:
         return "auto"
     if "可见" in zh or re.search(r"\bvisible\b", blob):
         return "visible"
@@ -831,6 +833,7 @@ class LocalAIService:
         probe_url: Optional[str] = None,
         memory_context: Optional[str] = None,
         dom_context_pack: Optional[str] = None,
+        platform_type: str = "web",
     ) -> Dict[str, Any]:
         snap_t = (page_snapshot or "").strip()
         pr: List[Dict[str, Any]] = list(probe_registry) if probe_registry else []
@@ -844,6 +847,7 @@ class LocalAIService:
             page_snapshot=snap_t,
             memory_context=(memory_context or "").strip() or None,
             dom_context_pack=dom_t or None,
+            platform_type=(platform_type or "web").strip().lower(),
         )
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
@@ -1205,7 +1209,11 @@ class LocalAIService:
         page_snapshot: str = "",
         memory_context: Optional[str] = None,
         dom_context_pack: Optional[str] = None,
+        platform_type: str = "web",
     ) -> str:
+        platform = (platform_type or "web").strip().lower()
+        if platform == "android":
+            return self._build_android_prompt(goal, project_name, memory_context=memory_context)
         mem_block = ""
         if memory_context:
             mem_block = f"\nRetrieved similar context (may be from past runs; verify against the LIVE snapshot):\n{memory_context}\n\n"
@@ -1267,7 +1275,8 @@ class LocalAIService:
             "- wait: input_value MUST be a non-empty integer duration — SECONDS 1–120, OR milliseconds if value > 120 (e.g. 1500); never leave empty.\n"
             "- input: input_value MUST be the exact characters to type into the field (never empty). Put the typed text in input_value, not only in description (e.g. to search for X, input_value must be X).\n"
             "- verify: RESERVED for captcha / human-verification widgets only. input_value MUST be one of: "
-            "auto, slider, image (captcha kinds), or visible/exist/clickable for element state — NOT natural-language expected text.\n"
+            "auto, slider, image (captcha kinds), or visible/exist/clickable for element state — NOT natural-language expected text. "
+            "Use auto for tianai-captcha (TAC) and mixed types (curve slider, rotate, click-text); runtime auto-detects.\n"
             "- assert: use ONLY when the goal explicitly needs a check. Prefer fewer steps; do NOT add a trailing "
             "assert \"just in case\" if the user did not ask for verification.\n"
             "  For checks against the browser address bar / current page URL / query string (e.g. wd=…, http…, percent-encoded), "
@@ -1284,6 +1293,56 @@ class LocalAIService:
             "- Never omit JSON keys; use \"\" only where the rules above allow empty.\n"
             "- Never invent placeholder hosts like example.com / example.org unless the goal explicitly names them; "
             "use the real site implied by the goal (e.g. Baidu search → https://www.baidu.com/ ).\n"
+            "OUTPUT FORMAT: respond with that single JSON object only—no markdown, no prose."
+        )
+
+    @staticmethod
+    def _build_android_prompt(
+        goal: str,
+        project_name: str,
+        memory_context: Optional[str] = None,
+    ) -> str:
+        mem_block = ""
+        if memory_context:
+            mem_block = f"\nRetrieved similar context (verify against the target Android app):\n{memory_context}\n\n"
+        return (
+            "You are generating an Android native UI test case for Appium / UiAutomator2.\n"
+            "Each step MUST include:\n"
+            '  "automation_layer": "android",\n'
+            '  "strategy": "accessibility_id|id|xpath|class_name|android_uiautomator",\n'
+            '  "selector_type": same as strategy,\n'
+            '  "selector_value": "<locator>",\n'
+            '  "description": "<Chinese step description>"\n\n'
+            "Allowed actions: open_app, close_app, tap, input_text, swipe, wait, assert_text, assert_element, screenshot, tap_image, wait_image, assert_image.\n"
+            "Use open_app as first step when launching an app (put appPackage in input_value or mobile_spec).\n"
+            "Use tap not click; input_text not input.\n"
+            "Prefer accessibility_id from content-desc; avoid brittle xpath.\n"
+            "Do NOT use navigate, url, or CSS selectors.\n"
+            f"Project: {project_name or 'unknown'}\n"
+            f"Goal: {goal}\n"
+            f"{mem_block}"
+            "Output strict JSON with this schema:\n"
+            "{\n"
+            '  "case_name": "string",\n'
+            '  "case_url": "",\n'
+            '  "description": "string",\n'
+            '  "precondition": "string",\n'
+            '  "expected_result": "string",\n'
+            '  "steps": [\n'
+            "    {\n"
+            '      "action": "open_app|close_app|tap|input_text|swipe|wait|assert_text|assert_element|screenshot|tap_image|wait_image|assert_image",\n'
+            '      "automation_layer": "android",\n'
+            '      "strategy": "accessibility_id|id|xpath|class_name|android_uiautomator",\n'
+            '      "selector_type": "accessibility_id|id|xpath|class_name|android_uiautomator",\n'
+            '      "selector_value": "string",\n'
+            '      "input_value": "string",\n'
+            '      "description": "string",\n'
+            '      "compare_type": "text_contains|text_equals (assert_text only)",\n'
+            '      "mobile_spec": {"appPackage": "com.example.app", "appActivity": ".MainActivity"}\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "Usually 3–8 steps. Never omit JSON keys; use \"\" where empty is allowed.\n"
             "OUTPUT FORMAT: respond with that single JSON object only—no markdown, no prose."
         )
 
@@ -1421,6 +1480,7 @@ class LocalAIService:
             "then \"viewport_coord\" (selector_value: JSON {\"fx\":0..1,\"fy\":0..1} for click center in viewport). "
             "Use viewport_coord when snapshot provides stable geometry but CSS is volatile; avoid huge base64. "
             "verify: captcha/human-check only — input_value one of auto|slider|image|visible|exist|clickable, never a sentence. "
+            "Prefer auto for tianai-captcha (TAC): curve slider, rotate, click-text are auto-detected at runtime. "
             "assert: optional — only if the user asks for verification. For URL/address-bar/query checks use compare_type "
             "url_contains|url_equals with input_value as substring and EMPTY selector fields; for element text use text_* "
             "with a real snapshot selector. Never use bare tag-only CSS like \"button\" for named controls. "

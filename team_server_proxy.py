@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any, Tuple
 
-from deployment_config import is_client_mode
+from deployment_config import is_client_mode, uses_team_server
 from client_config_store import get_team_server_url, is_setup_complete
 from team_server_client import TeamServerError, request_json
 
 
 def should_proxy_path(path: str) -> bool:
-    if not is_client_mode():
+    if not is_client_mode() or not uses_team_server():
         return False
     if not is_setup_complete() and not get_team_server_url():
         return False

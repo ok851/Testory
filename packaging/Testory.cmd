@@ -9,10 +9,21 @@ set "PY=%ROOT%\.venv\python.exe"
 set "PYW_LEGACY=%ROOT%\.venv\Scripts\pythonw.exe"
 set "PY_LEGACY=%ROOT%\.venv\Scripts\python.exe"
 set "LAUNCHER=%ROOT%\packaging\uat_desktop.py"
+set "SHELL=%ROOT%\TestoryShell.exe"
 
 if not exist "%LAUNCHER%" (
     mshta "javascript:var s=new ActiveXObject('WScript.Shell');s.Popup('未找到程序文件，请重新安装 Testory。',0,'Testory',16);close()"
     exit /b 1
+)
+
+if exist "%ROOT%\Testory.exe" (
+    start "" "%ROOT%\Testory.exe"
+    exit /b 0
+)
+
+if exist "%SHELL%" (
+    "%SHELL%" "%LAUNCHER%"
+    exit /b %ERRORLEVEL%
 )
 
 if exist "%PYW%" (

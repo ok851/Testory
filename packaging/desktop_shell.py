@@ -17,6 +17,9 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from .win_app_icon import apply_window_icon_async, set_process_app_user_model_id
+
+
 APP_TITLE = "Testory"
 
 
@@ -55,12 +58,14 @@ def run_native_shell(
 
     splash = splash_boot_uri(root)
     gui = "edgechromium" if sys.platform == "win32" else None
+    set_process_app_user_model_id()
+    apply_window_icon_async(root, APP_TITLE)
 
     window = webview.create_window(
         APP_TITLE,
         url=splash,
-        width=1360,
-        height=860,
+        width=1280,
+        height=800,
         min_size=(1024, 640),
         text_select=True,
         confirm_close=False,

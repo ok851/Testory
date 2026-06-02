@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}移动端测试 - {{ product_name }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/mobile_studio.css') }}">
+{% endblock %}
+{% block body_class %}bg-slate-100 dark:bg-gray-950 min-h-screen{% endblock %}
+{% block content %}
+<div class="ms-page">
+    <header class="ms-page-header">
+        <div>
+            <h1 class="ms-title"><i class="fas fa-mobile-alt text-emerald-500"></i> 移动端测试</h1>
+            <p class="ms-subtitle">USB 真机投屏 · 点屏录步骤 · Airtest 图像识别 · Appium / ADB</p>
+        </div>
+        <div class="ms-header-actions">
+            <span id="msConnectBadge" class="ms-connect-badge">未连接</span>
+        </div>
+    </header>
+
+    {% if mobile_disabled %}
+    <div class="ms-disabled-banner">
+        <p>{{ mobile_disabled_reason }}</p>
+        <p class="ms-muted">在 .env 设置 <code>ENABLE_MOBILE=1</code> 并执行 <code>pip install -r requirements-mobile-optional.txt</code> 后重启服务。</p>
+    </div>
+    {% else %}
+    <div class="ms-layout">
+        <!-- 左侧：项目 / 用例 / 步骤 -->
+        <aside class="ms-panel ms-panel--left">
+            <section class="ms-section">
+                <h2 class="ms-section-title">设备</h2>
+                <div class="ms-row">
+                    <select id="msDeviceSelect" class="ms-input"></select>
+                    <button type="button" id="msBtnRefreshDevices" class="ms-btn ms-btn--ghost" title="刷新">⟳</button>
+                </div>
+                <div class="ms-row ms-row--wrap">
+                    <button type="button" id="msBtnConnect" class="ms-btn ms-btn--primary">一键连接</button>
+                    <button type="button" id="msBtnDisconnect" class="ms-btn ms-btn--ghost">断开</button>
+                </div>
+                <p id="msDeviceHelp" class="ms-device-help ms-muted"></p>
+                <label class="ms-label">外框型号（展示用）</label>
+                <select id="msFramePreset" class="ms-input"></select>
+                <label class="ms-label">前台应用（自动识别，可改）</label>
+                <select id="msAppSelect" class="ms-input"><option value="">连接后自动填充</option></select>
+            </section>
+
+            <section class="ms-section">
+                <h2 class="ms-section-title">项目与用例</h2>
+                <label class="ms-label">项目</label>
+                <select id="msProjectSelect" class="ms-input"></select>
+                <label class="ms-label">用例</label>
+                <select id="msCaseSelect" class="ms-input"></select>
+                <p id="msCaseMeta" class="ms-muted">选择用例后加载步骤</p>
+                <div class="ms-row ms-row--wrap">
+                    <button type="button" id="msBtnRun" class="ms-btn ms-btn--success">运行用例</button>
+                    <button type="button" id="msBtnOpenSteps" class="ms-btn ms-btn--ghost">完整编辑</button>
+                </div>
+            </section>
+
+            <section class="ms-section">
+                <h2 class="ms-section-title">点屏录制</h2>
+                <p class="ms-muted ms-record-hint">选择模式后在右侧画面上点击，自动追加到当前用例。</p>
+                <div class="ms-mode-group" role="group" aria-label="录制模式">
+                    <button type="button" id="msModeControl" class="ms-mode-btn ms-mode-btn--active" data-mode="control">操控</button>
+                    <button type="button" id="msModeElement" class="ms-mode-btn" data-mode="record_element">元素</button>
+                    <button type="button" id="msModeImage" class="ms-mode-btn" data-mode="record_image">图像</button>
+                </div>
+                <label class="ms-check">
+                    <input type="checkbox" id="msAlsoTapVisible" checked>
+                    <span>录制时同步点击设备</span>
+                </label>
+                <p id="msRecordMeta" class="ms-muted">当前：操控模式（单击点击、拖拽滑动）</p>
+            </section>
+
+            <section class="ms-section ms-section--grow">
+                <h2 class="ms-section-title">步骤列表</h2>
+                <div id="msStepsList" class="ms-steps-list"></div>
+            </section>
+
+            <section class="ms-section">
+                <h2 class="ms-section-title">AI 生成 Android 步骤</h2>
+                <textarea id="msAiGoal" class="ms-textarea" rows="3" placeholder="例如：打开应用，登录账号 test/123456，进入首页并截图"></textarea>
+                <button type="button" id="msBtnAi" class="ms-btn ms-btn--indigo">生成并追加步骤</button>
+                <textarea id="msAiPreview" class="ms-textarea ms-ai-preview" rows="6" style="display:none;" readonly></textarea>
+            </section>
+
+            <p id="msStatus" class="ms-status"></p>
+        </aside>
+
+        <!-- 右侧：虚拟手机 -->
+        <main class="ms-panel ms-panel--right">
+            <div class="ms-phone-toolbar">
+                <span id="msDeviceDim" class="ms-muted">分辨率 —</span>
+            </div>
+            <div class="ms-phone-stage">
+                <div id="msPhoneShell" class="ms-phone-shell">
+                    <div id="msPhoneNotch" class="ms-phone-notch ms-phone-notch--punch"></div>
+                    <div id="msScreenInner" class="ms-screen-inner">
+                        <canvas id="msMirrorCanvas" class="ms-mirror-canvas" aria-label="设备画面，可点击与滑动"></canvas>
+                        <div id="msMirrorPlaceholder" class="ms-mirror-placeholder">
+                            <i class="fas fa-plug fa-2x mb-3 opacity-40"></i>
+                            <p>USB 连接手机后，点左侧「一键连接」</p>
+                            <p class="ms-muted" style="font-size:12px;">连接成功后，在本画面用鼠标单击/拖拽即可操作手机</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p class="ms-hint">操控模式：单击=点击，拖拽=滑动。「元素」模式点屏写入 UiAutomator 定位；「图像」模式写入 Airtest 风格模板步骤（tap_image）。</p>
+        </main>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+{% if mobile_disabled %}
+<script>window.__MOBILE_STUDIO_DISABLED__ = true; window.__MOBILE_STUDIO_DISABLED_REASON__ = {{ mobile_disabled_reason|tojson }};</script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/mobile_studio.js') }}"></script>
+{% endblock %}

@@ -49,7 +49,8 @@ _TEST_CASES_SELECT = "id, project_id, name, url, description, created_at, precon
 _TEST_STEPS_SELECT = (
     "id, case_id, action, selector_type, selector_value, input_value, description, "
     "step_order, created_at, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, "
-    "compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec"
+    "compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec, "
+    "captcha_max_attempts, mobile_spec"
 )
 
 
@@ -323,6 +324,19 @@ class Database:
         # 桌面步骤扩展：窗口/进程/backend 等 JSON
         try:
             cursor.execute("ALTER TABLE test_steps ADD COLUMN desktop_spec TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        # verify 验证码步骤：最大自动验证次数（空则使用 .env CAPTCHA_SOLVE_RETRY）
+        try:
+            cursor.execute(
+                "ALTER TABLE test_steps ADD COLUMN captcha_max_attempts INTEGER"
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE test_steps ADD COLUMN mobile_spec TEXT")
         except sqlite3.OperationalError:
             pass
 
@@ -1411,7 +1425,8 @@ class Database:
                          enter_iframe: bool = False, iframe_selector: str = "", compare_type: str = "equals",
                          locator_candidates: str = "", click_repeat_count: int = 1,
                          api_spec: str = "", automation_layer: str = "web",
-                         desktop_spec: str = "") -> int:
+                         desktop_spec: str = "", mobile_spec: str = "",
+                         captcha_max_attempts: Optional[int] = None) -> int:
         """创建测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1430,7 +1445,7 @@ class Database:
         if crc > 99:
             crc = 99
         layer = (automation_layer or "web").strip().lower()
-        if layer not in ("web", "desktop"):
+        if layer not in ("web", "desktop", "android"):
             layer = "web"
         if desktop_spec is not None and not isinstance(desktop_spec, str):
             try:
@@ -1438,12 +1453,26 @@ class Database:
             except Exception:
                 desktop_spec = ""
         desktop_spec = desktop_spec or ""
+        if mobile_spec is not None and not isinstance(mobile_spec, str):
+            try:
+                mobile_spec = json.dumps(mobile_spec, ensure_ascii=False)
+            except Exception:
+                mobile_spec = ""
+        mobile_spec = mobile_spec or ""
+        cma = None
+        if captcha_max_attempts is not None:
+            try:
+                cma = int(captcha_max_attempts)
+            except (TypeError, ValueError):
+                cma = None
+            if cma is not None and (cma < 1 or cma > 20):
+                cma = max(1, min(cma, 20))
             
         cursor.execute(
             """INSERT INTO test_steps 
-               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc, api_spec or '', layer, desktop_spec)
+               (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates, click_repeat_count, api_spec, automation_layer, desktop_spec, captcha_max_attempts, mobile_spec) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (case_id, action, selector_type, selector_value, input_value, description, step_order, page_name, swipe_x, swipe_y, url, enter_iframe, iframe_selector, compare_type, locator_candidates or '', crc, api_spec or '', layer, desktop_spec, cma, mobile_spec)
         )
         step_id = cursor.lastrowid
             
@@ -1510,19 +1539,25 @@ class Database:
                     selector_type = 'xpath' if str(selector_value).startswith('//') or str(selector_value).startswith('/') else 'css'
                     
                 layer = (step.get("automation_layer") or "web").strip().lower()
-                if layer not in ("web", "desktop"):
+                if layer not in ("web", "desktop", "android"):
                     layer = "web"
                 ds = step.get("desktop_spec") or ""
+                ms = step.get("mobile_spec") or ""
                 if ds is not None and not isinstance(ds, str):
                     try:
                         ds = json.dumps(ds, ensure_ascii=False)
                     except Exception:
                         ds = ""
+                if ms is not None and not isinstance(ms, str):
+                    try:
+                        ms = json.dumps(ms, ensure_ascii=False)
+                    except Exception:
+                        ms = ""
                 cursor.execute(
                     """INSERT INTO test_steps 
-                       (case_id, action, selector_type, selector_value, input_value, description, step_order, locator_candidates, automation_layer, desktop_spec) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order, locator_candidates, layer, ds or "")
+                       (case_id, action, selector_type, selector_value, input_value, description, step_order, locator_candidates, automation_layer, desktop_spec, mobile_spec) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (case_id, action, selector_type, selector_value, input_value, desc, sort_order, locator_candidates, layer, ds or "", ms or "")
                 )
                 
             conn.commit()
@@ -1581,6 +1616,8 @@ class Database:
             'api_spec': row[18] if len(row) > 18 else '',
             'automation_layer': (row[19] if len(row) > 19 and row[19] else 'web') or 'web',
             'desktop_spec': row[20] if len(row) > 20 else '',
+            'captcha_max_attempts': row[21] if len(row) > 21 else None,
+            'mobile_spec': row[22] if len(row) > 22 else '',
         }
 
     def get_case_steps(self, case_id: int, page: int = 1, page_size: int = 9999) -> List[Dict[str, Any]]:
@@ -1631,7 +1668,9 @@ class Database:
                         enter_iframe: bool = None, iframe_selector: str = None, compare_type: str = None,
                         locator_candidates: str = None, click_repeat_count: int = None,
                         api_spec: str = None, url: str = None,
-                        automation_layer: str = None, desktop_spec: str = None) -> bool:
+                        automation_layer: str = None, desktop_spec: str = None,
+                        mobile_spec: str = None,
+                        captcha_max_attempts: int = None) -> bool:
         """更新测试步骤"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1701,7 +1740,7 @@ class Database:
 
         if automation_layer is not None:
             layer = (automation_layer or "web").strip().lower()
-            if layer not in ("web", "desktop"):
+            if layer not in ("web", "desktop", "android"):
                 layer = "web"
             updates.append("automation_layer = ?")
             params.append(layer)
@@ -1714,6 +1753,25 @@ class Database:
                     desktop_spec = ""
             updates.append("desktop_spec = ?")
             params.append(desktop_spec)
+
+        if mobile_spec is not None:
+            if not isinstance(mobile_spec, str):
+                try:
+                    mobile_spec = json.dumps(mobile_spec, ensure_ascii=False)
+                except Exception:
+                    mobile_spec = ""
+            updates.append("mobile_spec = ?")
+            params.append(mobile_spec)
+
+        if captcha_max_attempts is not None:
+            try:
+                cma = int(captcha_max_attempts)
+            except (TypeError, ValueError):
+                cma = None
+            if cma is not None:
+                cma = max(1, min(cma, 20))
+            updates.append("captcha_max_attempts = ?")
+            params.append(cma)
         
         if not updates:
             conn.close()

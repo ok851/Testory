@@ -1,0 +1,40 @@
+{
+  "id": "mobile-android-platform-tools",
+  "name": "Android Platform-Tools (adb)",
+  "version": "36.0.0",
+  "description": "Google 官方 adb/fastboot，供移动端测试识别 USB 设备、投屏与点按。安装后自动写入 ADB_PATH。",
+  "license": "Android Software Development Kit License",
+  "license_url": "https://developer.android.com/studio/terms",
+  "platforms": {
+    "windows": {
+      "filename": "platform-tools-windows.zip",
+      "zip_inner_dir": "platform-tools",
+      "adb_binary": "adb.exe",
+      "url": "https://dl.google.com/android/repository/platform-tools-latest-windows.zip",
+      "mirror_urls": [],
+      "sha256": "",
+      "size_mb_hint": 7
+    },
+    "linux": {
+      "filename": "platform-tools-linux.zip",
+      "zip_inner_dir": "platform-tools",
+      "adb_binary": "adb",
+      "url": "https://dl.google.com/android/repository/platform-tools-latest-linux.zip",
+      "sha256": "",
+      "size_mb_hint": 7
+    },
+    "darwin": {
+      "filename": "platform-tools-darwin.zip",
+      "zip_inner_dir": "platform-tools",
+      "adb_binary": "adb",
+      "url": "https://dl.google.com/android/repository/platform-tools-latest-darwin.zip",
+      "sha256": "",
+      "size_mb_hint": 7
+    }
+  },
+  "local_bundle_search": [
+    "plugin_bundles/{filename}",
+    "config/plugin_bundles/{filename}",
+    "static/plugin_bundles/{filename}"
+  ]
+}

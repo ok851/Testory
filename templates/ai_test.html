@@ -909,9 +909,25 @@
                     <option value="" data-i18n="aitest_new_case">+ 新建用例（不追加）</option>
                 </select>
             </label>
+            <label class="ctx-grow" style="flex:1 1 160px;"><span>平台类型</span>
+                <select id="aiPlatformTypeSelect" class="ai-pw-browser-select" onchange="aiOnPlatformTypeChange()">
+                    <option value="web">Web 浏览器</option>
+                    <option value="android">Android 真机</option>
+                </select>
+            </label>
             <label class="ctx-grow" style="flex:1 1 320px;"><span data-i18n="aitest_label_browser">自动化浏览器</span>
                 <select id="aiPlaywrightBrowserSelect" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 自动化浏览器；Chrome/Edge 需本机已安装（playwright install chrome / msedge）"></select>
             </label>
+        </div>
+
+        <div id="aiMobileDevicePanel" class="ai-studio-context-row" style="display:none;" aria-label="mobile devices">
+            <div style="flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="aiRefreshMobileDevices()">刷新 USB 设备</button>
+                <select id="aiMobileDeviceSelect" style="min-width:220px;min-height:36px;"></select>
+                <button type="button" class="btn btn-primary btn-sm" onclick="aiConnectMobileDevice()">连接设备</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="aiDisconnectMobileDevice()">断开</button>
+                <span id="aiMobileConnectStatus" style="font-size:12px;color:#64748b;"></span>
+            </div>
         </div>
 
         <div class="ai-agent-studio-grid">
@@ -985,6 +1001,7 @@
                 <div class="ai-browser-viewport ai--nav-mode" id="aiBrowserViewport">
                 <div class="ai-browser-embed-col">
                     <canvas id="aiBrowserRemoteCanvas" class="ai-browser-remote-canvas" hidden tabindex="0" aria-label="内置浏览器画面"></canvas>
+                    <canvas id="aiMobileMirrorCanvas" hidden style="max-width:100%;max-height:100%;background:#111;border-radius:8px;" aria-label="Android 设备画面"></canvas>
                     <iframe id="aiBrowserEmbed" class="ai-browser-embed" title="页面预览"
                         sandbox="allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
                         referrerpolicy="no-referrer-when-downgrade"
@@ -1739,10 +1756,7 @@
             } finally {
                 if (btnR) btnR.disabled = false;
             }
-            try {
-                const resp = await fetch('/api/navigate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u }), credentials: 'same-origin' });
-                await resp.json().catch(function() { return {}; });
-            } catch (e) {}
+            // 内置网关会话已承载页面，勿再调用 /api/navigate（会额外拉起主 Playwright 窗口）
             await updateBrowserStatusLine();
             return;
         }
@@ -1816,15 +1830,26 @@
         await updateBrowserStatusLine();
     }
 
-    function focusAiStageForAgentRun() {
+    function aiEmbeddedSessionActive() {
+        if (!aiRemoteCanvasState || !aiRemoteCanvasState.sessionId) return false;
+        if (aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1) return true;
+        return !!aiRemoteCanvasState.gatewaySessionOnly;
+    }
+
+    function focusAiStageForAgentRun(opts) {
+        opts = opts || {};
         var sec = document.getElementById('aiStageCenter') || document.querySelector('.ai-stage-center');
         if (sec) {
             try { sec.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
         }
+        if (opts.skipBrowserOpen) return;
         var u = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-        if (u && typeof openInternalBrowserPage === 'function') {
-            void openInternalBrowserPage(true);
+        if (!u || typeof openInternalBrowserPage !== 'function') return;
+        // 已连接内置网关时仅在中栏展示/导航远程 Chromium，避免再拉起主 Playwright
+        if (aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured && aiEmbeddedSessionActive()) {
+            return;
         }
+        void openInternalBrowserPage(true);
     }
 
     function toggleAiBrowserFullscreen(force) {
@@ -2856,7 +2881,7 @@
             return;
         }
         pushUndoSnapshot();
-        if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
+        if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun(opts);
         appendAiChat('user', goal);
         var goalInput = document.getElementById('aiMessageInput');
         if (goalInput) goalInput.value = '';
@@ -2872,7 +2897,7 @@
         var jobId = null;
         try {
             const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            const planPayload = { task_type: 'test_case_generation', execution_mode: executionMode, goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl };
+            const planPayload = { task_type: 'test_case_generation', execution_mode: executionMode, goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl, platform_type: (document.getElementById('aiPlatformTypeSelect') || {}).value || 'web' };
             if (aiRemoteCanvasState.sessionId) planPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
             jobId = await aiPostAiTaskAsyncStart('/api/ai/task/plan-async', planPayload, planCtl.signal);
             window.__aiCurrentBgJobId = jobId;
@@ -2940,7 +2965,11 @@
             return;
         }
         pushUndoSnapshot();
-        if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
+        if (typeof focusAiStageForAgentRun === 'function') {
+            focusAiStageForAgentRun({
+                skipBrowserOpen: !!(aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured && aiEmbeddedSessionActive())
+            });
+        }
         appendAiChat('user', message);
         document.getElementById('aiMessageInput').value = '';
         const btn = document.getElementById('aiContinueBtn');
@@ -3013,7 +3042,11 @@
             alert('请填写指令；或先在左栏「生成用例」得到预览后，展开「高级」使用「执行预览（网关）」且可留空指令。');
             return;
         }
-        if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
+        if (typeof focusAiStageForAgentRun === 'function') {
+            focusAiStageForAgentRun({
+                skipBrowserOpen: !!(aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured)
+            });
+        }
         appendAiChat('user', msg + (forceEx ? '（一键执行）' : ''));
         var gwInput = document.getElementById('aiMessageInput');
         if (gwInput && !forceEx) gwInput.value = '';
@@ -3134,7 +3167,6 @@
     }
 
     async function aiRunAgentWorkflow() {
-        if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun();
         try {
             await refreshEmbeddedGatewayStatus();
             var okGw = aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured;
@@ -3153,7 +3185,8 @@
                 appendAiChat('assistant', '连接内置浏览器时出错，将使用主 Playwright：' + (e && e.message ? e.message : String(e)));
             } catch (e2) {}
         }
-        await aiGeneratePreview({ executionMode: 'run_and_record' });
+        var skipMainBrowser = !!(aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured);
+        await aiGeneratePreview({ executionMode: 'run_and_record', skipBrowserOpen: skipMainBrowser });
     }
 
     function aiUndo() {
@@ -3605,6 +3638,127 @@
             });
         }
         document.addEventListener('pagehide', function() { flushPersistAiStudioToSession(); });
+
+        var _aiMobileMirrorTimer = null;
+        var _aiMobileSession = { sessionId: '', mirrorFrameUrl: '', connected: false };
+
+        function aiOnPlatformTypeChange() {
+            var pt = (document.getElementById('aiPlatformTypeSelect') || {}).value || 'web';
+            var panel = document.getElementById('aiMobileDevicePanel');
+            var browserRow = document.querySelector('.ai-browser-chrome');
+            var mobileCanvas = document.getElementById('aiMobileMirrorCanvas');
+            var remoteCanvas = document.getElementById('aiBrowserRemoteCanvas');
+            if (panel) panel.style.display = pt === 'android' ? 'flex' : 'none';
+            if (browserRow) browserRow.style.display = pt === 'android' ? 'none' : '';
+            if (mobileCanvas) mobileCanvas.hidden = pt !== 'android';
+            if (remoteCanvas && pt === 'android') remoteCanvas.hidden = true;
+            if (pt === 'android') aiRefreshMobileDevices();
+        }
+
+        async function aiRefreshMobileDevices() {
+            var sel = document.getElementById('aiMobileDeviceSelect');
+            var st = document.getElementById('aiMobileConnectStatus');
+            if (!sel) return;
+            sel.innerHTML = '<option value="">加载中…</option>';
+            try {
+                var r = await fetch('/api/mobile/devices', { credentials: 'same-origin' });
+                var data = await r.json();
+                if (!data.success) {
+                    if (st) st.textContent = data.error || '无法获取设备';
+                    sel.innerHTML = '<option value="">无设备</option>';
+                    return;
+                }
+                var devices = data.devices || [];
+                sel.innerHTML = devices.length ? devices.map(function(d) {
+                    return '<option value="' + (d.udid || '') + '">' + (d.display_name || d.udid) + ' (' + (d.state || '') + ')</option>';
+                }).join('') : '<option value="">未发现 USB 设备</option>';
+                if (st) st.textContent = devices.length ? '已发现 ' + devices.length + ' 台设备' : '请连接手机并开启 USB 调试';
+            } catch (e) {
+                if (st) st.textContent = '刷新失败：' + (e.message || e);
+            }
+        }
+
+        function aiStopMobileMirrorPoll() {
+            if (_aiMobileMirrorTimer) {
+                clearInterval(_aiMobileMirrorTimer);
+                _aiMobileMirrorTimer = null;
+            }
+        }
+
+        function aiStartMobileMirrorPoll() {
+            aiStopMobileMirrorPoll();
+            if (!_aiMobileSession.mirrorFrameUrl) return;
+            var canvas = document.getElementById('aiMobileMirrorCanvas');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            _aiMobileMirrorTimer = setInterval(async function() {
+                try {
+                    var r = await fetch(_aiMobileSession.mirrorFrameUrl, { credentials: 'same-origin' });
+                    var data = await r.json();
+                    if (!data.success || !data.data) return;
+                    var img = new Image();
+                    img.onload = function() {
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        ctx.drawImage(img, 0, 0);
+                        canvas.hidden = false;
+                    };
+                    img.src = 'data:image/png;base64,' + data.data;
+                } catch (e) { /* ignore transient */ }
+            }, 500);
+        }
+
+        async function aiConnectMobileDevice() {
+            var sel = document.getElementById('aiMobileDeviceSelect');
+            var st = document.getElementById('aiMobileConnectStatus');
+            var udid = sel ? (sel.value || '') : '';
+            if (!udid) {
+                if (st) st.textContent = '请先选择设备';
+                return;
+            }
+            if (st) st.textContent = '正在连接…';
+            try {
+                var r = await fetch('/api/mobile/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ udid: udid })
+                });
+                var data = await r.json();
+                if (!data.success) {
+                    if (st) st.textContent = data.error || '连接失败';
+                    return;
+                }
+                _aiMobileSession.sessionId = data.session_id || '';
+                _aiMobileSession.mirrorFrameUrl = data.mirror_frame_url || '';
+                _aiMobileSession.connected = true;
+                if (st) st.textContent = '已连接' + (data.scrcpy_started ? '（scrcpy 窗口已启动）' : '');
+                aiStartMobileMirrorPoll();
+            } catch (e) {
+                if (st) st.textContent = '连接失败：' + (e.message || e);
+            }
+        }
+
+        async function aiDisconnectMobileDevice() {
+            aiStopMobileMirrorPoll();
+            try {
+                await fetch('/api/mobile/disconnect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ session_id: _aiMobileSession.sessionId || '' })
+                });
+            } catch (e) { /* ignore */ }
+            _aiMobileSession = { sessionId: '', mirrorFrameUrl: '', connected: false };
+            var st = document.getElementById('aiMobileConnectStatus');
+            if (st) st.textContent = '已断开';
+            var canvas = document.getElementById('aiMobileMirrorCanvas');
+            if (canvas) { canvas.hidden = true; }
+        }
+        window.aiOnPlatformTypeChange = aiOnPlatformTypeChange;
+        window.aiRefreshMobileDevices = aiRefreshMobileDevices;
+        window.aiConnectMobileDevice = aiConnectMobileDevice;
+        window.aiDisconnectMobileDevice = aiDisconnectMobileDevice;
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) flushPersistAiStudioToSession();
         });

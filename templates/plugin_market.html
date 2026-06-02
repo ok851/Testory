@@ -14,7 +14,7 @@
 <section class="max-w-6xl mx-auto px-4 py-10">
     <div class="mb-8">
         <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-2" data-i18n="pm_title">插件市场</h1>
-        <p class="text-gray-600 dark:text-gray-400" data-i18n="pm_subtitle">一键安装网页捕获插件到软件目录，使用「网页捕获」时平台自动加载，无需手动配置浏览器。</p>
+        <p class="text-gray-600 dark:text-gray-400" data-i18n="pm_subtitle">一键安装扩展与运行组件：网页捕获插件、Android adb（移动端测试）。安装后平台自动识别路径。</p>
     </div>
 
     <div id="pmExtStatus" class="mb-6 hidden rounded-lg border px-4 py-3 text-sm"></div>
@@ -73,6 +73,9 @@
             + statusBadge(p)
             + '</div><p class="text-sm text-gray-500 dark:text-gray-400 mt-1">' + esc(p.description) + '</p></div></div>'
             + '<div class="mb-4">' + feats + '</div>'
+            + (p.adb_path ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">adb：' + esc(p.adb_path) + '<br><span class="text-emerald-600">已自动写入配置，无需修改 .env</span></p>' : '')
+            + (p.id === 'mobile-android-platform-tools' && !installed ? '<p class="text-xs text-gray-500 mb-2">安装后平台自动识别 adb。无法访问 Google 时，请将 zip 放到 <code>plugin_bundles/platform-tools-windows.zip</code> 或确保本机已装 Android SDK。</p>' : '')
+            + (p.sdk_platform_tools_ready && !installed ? '<p class="text-xs text-emerald-600 mb-2">检测到本机 SDK：' + esc(p.sdk_platform_tools_path || '') + '，安装时将直接复制。</p>' : '')
             + '<div class="flex flex-wrap gap-2 mt-auto">'
             + '<button type="button" class="pm-install px-4 py-2 text-sm rounded-lg font-medium ' + btnCls + '" data-id="' + esc(p.id) + '" ' + (installed ? 'disabled' : '') + '>' + btnLabel + '</button>'
             + '</div>'
@@ -85,12 +88,17 @@
         if (!statusBox) return;
         const installed = (plugins || []).filter(function (p) { return p.installed; });
         statusBox.classList.remove('hidden');
+        const mobile = installed.filter(function (p) { return p.category === 'mobile'; });
+        const capture = installed.filter(function (p) { return p.category === 'web_capture'; });
         if (installed.length) {
             statusBox.className = 'mb-6 rounded-lg border border-green-200 bg-green-50 text-green-800 px-4 py-3 text-sm';
-            statusBox.innerHTML = '<i class="fas fa-check-circle mr-2"></i>已安装 ' + installed.length + ' 个捕获插件，可直接使用「网页捕获」';
+            var parts = [];
+            if (capture.length) parts.push('网页捕获 ' + capture.length + ' 个');
+            if (mobile.length) parts.push('移动端组件 ' + mobile.length + ' 个');
+            statusBox.innerHTML = '<i class="fas fa-check-circle mr-2"></i>已安装：' + parts.join('，');
         } else {
             statusBox.className = 'mb-6 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 px-4 py-3 text-sm';
-            statusBox.innerHTML = '<i class="fas fa-info-circle mr-2"></i>请先安装至少一个浏览器捕获插件';
+            statusBox.innerHTML = '<i class="fas fa-info-circle mr-2"></i>可安装浏览器捕获插件和 Android adb（见 plugin_bundles/README.md）';
         }
     }
 

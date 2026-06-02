@@ -133,6 +133,7 @@ Write-Host "[7/7] 构建 Testory.exe 启动器..."
 foreach ($must in @(
     (Join-Path $release "Testory.exe"),
     (Join-Path $release "Testory.ico"),
+    (Join-Path $release "TestoryShell.exe"),
     (Join-Path $release ".venv\python.exe"),
     (Join-Path $release "packaging\uat_desktop.py"),
     (Join-Path $release "static\brand\app.ico")

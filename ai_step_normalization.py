@@ -169,19 +169,37 @@ def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
 
 def normalize_ai_step(step: dict) -> dict:
     layer = _str(step.get("automation_layer")).lower() or "web"
-    if layer not in ("web", "desktop"):
+    if layer not in ("web", "desktop", "android"):
         layer = "web"
     desktop_actions = {
         "launch_app", "attach_window", "click", "input", "wait", "verify",
         "extract_text", "assert", "hotkey", "screenshot", "double_click", "right_click",
     }
+    android_actions = {
+        "open_app", "close_app", "tap", "input_text", "swipe", "wait",
+        "assert_text", "assert_element", "screenshot", "click", "input", "verify", "assert",
+    }
     allowed_actions = {"navigate", "click", "input", "wait", "verify", "extract_text", "assert"}
     if layer == "desktop":
         allowed_actions = desktop_actions
+    elif layer == "android":
+        allowed_actions = android_actions
     action = _str(step.get("action")).lower()
+    if layer == "android":
+        alias = {"click": "tap", "input": "input_text", "fill": "input_text", "verify": "assert_element", "assert": "assert_text"}
+        action = alias.get(action, action)
     if action not in allowed_actions:
-        action = "launch_app" if layer == "desktop" else "click"
-    selector_type = _str(step.get("selector_type")).lower()
+        if layer == "desktop":
+            action = "launch_app"
+        elif layer == "android":
+            action = "open_app" if not _str(step.get("selector_value")) else "tap"
+        else:
+            action = "click"
+    strategy = _str(step.get("strategy")) or _str(step.get("selector_type")) or ""
+    if layer == "android":
+        selector_type = strategy or "accessibility_id"
+    else:
+        selector_type = _str(step.get("selector_type")).lower()
     selector_value = _str(step.get("selector_value"))
     input_value = _str(step.get("input_value"))
     description = _str(step.get("description"))
@@ -217,6 +235,17 @@ def normalize_ai_step(step: dict) -> dict:
         out["compare_type"] = compare_type
     if lc:
         out["locator_candidates"] = lc
+    if layer == "android":
+        out["strategy"] = selector_type or "accessibility_id"
+    ms = step.get("mobile_spec")
+    if ms is not None and layer == "android":
+        if isinstance(ms, str):
+            out["mobile_spec"] = ms
+        else:
+            try:
+                out["mobile_spec"] = json.dumps(ms, ensure_ascii=False)
+            except Exception:
+                out["mobile_spec"] = ""
     return out
 
 

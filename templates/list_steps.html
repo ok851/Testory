@@ -1113,8 +1113,17 @@
                 <select id="stepAutomationLayer" onchange="onAutomationLayerChange('create')">
                     <option value="web">Web 浏览器</option>
                     <option value="desktop">Windows 桌面</option>
+                    <option value="android">Android 真机</option>
                 </select>
-                <small style="color:#666;display:block;margin-top:4px;font-size:12px;">混排用例可在同一步骤列表中交替使用 Web 与桌面步骤</small>
+                <small style="color:#666;display:block;margin-top:4px;font-size:12px;">混排用例可在同一步骤列表中交替使用 Web、桌面与 Android 步骤（Android 与 Web 暂不可混排执行）</small>
+            </div>
+            <div class="form-group" id="stepMobileSpecGroup" style="display:none;">
+                <label for="stepMobileSpec">Android mobile_spec (JSON)</label>
+                <textarea id="stepMobileSpec" rows="3" placeholder='{"appPackage":"com.example.app","appActivity":".MainActivity","udid":""}' style="width:100%;font-family:monospace;font-size:12px;"></textarea>
+                <div style="margin-top:8px;">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="refreshMobileDevices('create')">刷新 USB 设备</button>
+                    <div id="stepMobileDeviceList" style="margin-top:8px;font-size:12px;color:#475569;"></div>
+                </div>
             </div>
             <div class="form-group" id="stepDesktopSpecGroup" style="display:none;">
                 <input type="hidden" id="stepDesktopSpec" value="">
@@ -1226,6 +1235,13 @@
                     <option value="image" data-i18n-opt="steps_vrf_image">点击图片文字</option>
                 </select>
             </div>
+            <div class="form-group" id="stepCaptchaMaxAttemptsGroup" style="display: none;">
+                <label for="stepCaptchaMaxAttempts">最大验证次数</label>
+                <input type="number" id="stepCaptchaMaxAttempts" min="1" max="20" value="3" style="max-width: 120px;">
+                <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
+                    同一张验证码上自动重试次数（不刷新换题）；留空则使用 .env 中 CAPTCHA_SOLVE_RETRY
+                </small>
+            </div>
             <!-- 断言类型配置 -->
             <div class="form-group" id="stepAssertType" style="display: none;">
                 <label for="stepAssertTypeSelect" data-i18n="steps_label_assert">断言类型</label>
@@ -1316,7 +1332,16 @@
                 <select id="editStepAutomationLayer" onchange="onAutomationLayerChange('edit')">
                     <option value="web">Web 浏览器</option>
                     <option value="desktop">Windows 桌面</option>
+                    <option value="android">Android 真机</option>
                 </select>
+            </div>
+            <div class="form-group" id="editStepMobileSpecGroup" style="display:none;">
+                <label for="editStepMobileSpec">Android mobile_spec (JSON)</label>
+                <textarea id="editStepMobileSpec" rows="3" placeholder='{"appPackage":"com.example.app","appActivity":".MainActivity","udid":""}' style="width:100%;font-family:monospace;font-size:12px;"></textarea>
+                <div style="margin-top:8px;">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="refreshMobileDevices('edit')">刷新 USB 设备</button>
+                    <div id="editMobileDeviceList" style="margin-top:8px;font-size:12px;color:#475569;"></div>
+                </div>
             </div>
             <div class="form-group" id="editStepDesktopSpecGroup" style="display:none;">
                 <input type="hidden" id="editStepDesktopSpec" value="">
@@ -1429,6 +1454,13 @@
                     <option value="slider" data-i18n-opt="steps_vrf_slider">滑动方块</option>
                     <option value="image" data-i18n-opt="steps_vrf_image">点击图片文字</option>
                 </select>
+            </div>
+            <div class="form-group" id="editStepCaptchaMaxAttemptsGroup" style="display: none;">
+                <label for="editStepCaptchaMaxAttempts">最大验证次数</label>
+                <input type="number" id="editStepCaptchaMaxAttempts" min="1" max="20" value="3" style="max-width: 120px;">
+                <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;">
+                    同一张验证码上自动重试次数（不刷新换题）；留空则使用 .env 中 CAPTCHA_SOLVE_RETRY
+                </small>
             </div>
             <!-- 断言类型配置 -->
             <div class="form-group" id="editStepAssertType" style="display: none;">
@@ -2431,17 +2463,25 @@ function changePage(page) {
             if (!modal) throw new Error('编辑弹窗未加载');
             modal.classList.add('active');
             const layerEl = document.getElementById('editStepAutomationLayer');
-            const layer = ((step.automation_layer || 'web').toLowerCase() === 'desktop') ? 'desktop' : 'web';
+            const layerRaw = (step.automation_layer || 'web').toLowerCase();
+            const layer = layerRaw === 'desktop' ? 'desktop' : (layerRaw === 'android' ? 'android' : 'web');
             if (layerEl) layerEl.value = layer;
             let _ds = step.desktop_spec;
             if (typeof _ds === 'string' && _ds.trim()) {
                 try { _ds = JSON.parse(_ds); } catch (e) { _ds = null; }
             }
             setDesktopSpecField('edit', _ds && typeof _ds === 'object' ? _ds : null);
+            let _ms = step.mobile_spec;
+            if (typeof _ms === 'string' && _ms.trim()) {
+                try { _ms = JSON.parse(_ms); } catch (e) { _ms = null; }
+            }
+            const msEl = document.getElementById('editStepMobileSpec');
+            if (msEl) msEl.value = _ms && typeof _ms === 'object' ? JSON.stringify(_ms, null, 2) : (typeof step.mobile_spec === 'string' ? step.mobile_spec : '');
             await onAutomationLayerChange('edit', {
                 preserveAction: step.action,
-                preserveSelectorType: step.selector_type || (layer === 'desktop' ? 'visual' : 'css'),
+                preserveSelectorType: step.selector_type || (layer === 'desktop' ? 'visual' : (layer === 'android' ? 'accessibility_id' : 'css')),
                 skipDesktopSnapshot: false,
+                skipMobileDevices: false,
             });
             const actionEl = document.getElementById('editStepAction');
             if (actionEl) actionEl.value = step.action;
@@ -2521,6 +2561,11 @@ function changePage(page) {
                 // 处理验证操作的验证类型选择
                 const verifyType = step.input_value || 'auto';
                 document.getElementById('editStepVerifyTypeSelect').value = verifyType;
+                const cmaEl = document.getElementById('editStepCaptchaMaxAttempts');
+                if (cmaEl) {
+                    const cma = step.captcha_max_attempts;
+                    cmaEl.value = (cma != null && cma !== '' && Number(cma) >= 1) ? String(Math.min(20, parseInt(cma, 10))) : '';
+                }
             }
             let crc = step.click_repeat_count;
             if (crc == null || crc === '') crc = 1;
@@ -2578,6 +2623,15 @@ function changePage(page) {
             ['launch_app', '启动应用'], ['attach_window', '附着窗口'], ['click', '点击'],
             ['double_click', '双击'], ['right_click', '右键点击'], ['input', '输入'],
             ['hotkey', '快捷键'], ['wait', '等待'], ['screenshot', '截图'], ['assert', '断言'], ['verify', '验证']
+        ];
+        const ANDROID_STEP_ACTIONS = [
+            ['open_app', '启动应用'], ['close_app', '关闭应用'], ['tap', '点击'],
+            ['input_text', '输入文本'], ['swipe', '滑动'], ['wait', '等待'],
+            ['assert_text', '断言文本'], ['assert_element', '断言元素'], ['screenshot', '截图']
+        ];
+        const MOBILE_SELECTOR_TYPES = [
+            ['accessibility_id', 'Accessibility ID'], ['id', 'Resource ID'],
+            ['xpath', 'XPath'], ['class_name', 'Class Name'], ['android_uiautomator', 'UiAutomator']
         ];
         const DESKTOP_SELECTOR_TYPES = [
             ['visual', '视觉模板（框选截图）']
@@ -2667,7 +2721,7 @@ function changePage(page) {
             const sel = document.getElementById(selectId);
             if (!sel) return;
             const prev = preserveValue != null && preserveValue !== '' ? preserveValue : sel.value;
-            const list = layer === 'desktop' ? DESKTOP_STEP_ACTIONS : WEB_STEP_ACTIONS;
+            const list = layer === 'desktop' ? DESKTOP_STEP_ACTIONS : (layer === 'android' ? ANDROID_STEP_ACTIONS : WEB_STEP_ACTIONS);
             sel.innerHTML = list.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
             if (list.some(([v]) => v === prev)) sel.value = prev;
             else sel.value = list[0][0];
@@ -2681,6 +2735,10 @@ function changePage(page) {
                 sel.innerHTML = DESKTOP_SELECTOR_TYPES.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
                 if (DESKTOP_SELECTOR_TYPES.some(([v]) => v === prev)) sel.value = prev;
                 else sel.value = 'visual';
+            } else if (layer === 'android') {
+                sel.innerHTML = MOBILE_SELECTOR_TYPES.map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
+                if (MOBILE_SELECTOR_TYPES.some(([v]) => v === prev)) sel.value = prev;
+                else sel.value = 'accessibility_id';
             } else {
                 sel.innerHTML = `
                     <option value="css">CSS</option><option value="xpath">XPath</option>
@@ -2691,6 +2749,47 @@ function changePage(page) {
         }
 
         let _desktopEnvConfigCache = null;
+        async function refreshMobileDevices(mode) {
+            const listId = mode === 'edit' ? 'editMobileDeviceList' : 'stepMobileDeviceList';
+            const el = document.getElementById(listId);
+            if (!el) return;
+            el.textContent = '正在扫描 USB 设备…';
+            try {
+                const r = await fetch('/api/mobile/devices', { credentials: 'same-origin' });
+                const data = await r.json();
+                if (!data.success) {
+                    el.textContent = data.error || '无法获取设备列表（请确认 ENABLE_MOBILE=1 且 adb 可用）';
+                    return;
+                }
+                const devices = data.devices || [];
+                if (!devices.length) {
+                    el.innerHTML = '未发现已授权设备。请开启 USB 调试并授权此电脑。';
+                    return;
+                }
+                el.innerHTML = devices.map(function (d) {
+                    return '<div style="margin:4px 0;"><button type="button" class="btn btn-xs btn-secondary" onclick="selectMobileDeviceUdid(\'' + mode + '\',\'' + (d.udid || '').replace(/'/g, '') + '\')">' + (d.display_name || d.udid) + ' (' + (d.state || '') + ')</button></div>';
+                }).join('');
+            } catch (e) {
+                el.textContent = '刷新失败：' + (e.message || e);
+            }
+        }
+
+        function selectMobileDeviceUdid(mode, udid) {
+            const fieldId = mode === 'edit' ? 'editStepMobileSpec' : 'stepMobileSpec';
+            const el = document.getElementById(fieldId);
+            if (!el) return;
+            let spec = {};
+            try { spec = JSON.parse(el.value || '{}'); } catch (e) { spec = {}; }
+            spec.udid = udid;
+            el.value = JSON.stringify(spec, null, 2);
+        }
+
+        function getMobileSpecForApi(mode) {
+            const el = document.getElementById(mode === 'edit' ? 'editStepMobileSpec' : 'stepMobileSpec');
+            if (!el || !String(el.value || '').trim()) return null;
+            try { return JSON.parse(el.value); } catch (e) { return null; }
+        }
+
         async function loadDesktopEnvConfig() {
             if (_desktopEnvConfigCache) return _desktopEnvConfigCache;
             try {
@@ -3021,7 +3120,9 @@ function changePage(page) {
             const layerEl = document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer');
             const layer = (layerEl && layerEl.value) || 'web';
             const specGrp = document.getElementById(isEdit ? 'editStepDesktopSpecGroup' : 'stepDesktopSpecGroup');
+            const mobGrp = document.getElementById(isEdit ? 'editStepMobileSpecGroup' : 'stepMobileSpecGroup');
             if (specGrp) specGrp.style.display = layer === 'desktop' ? 'block' : 'none';
+            if (mobGrp) mobGrp.style.display = layer === 'android' ? 'block' : 'none';
             rebuildActionSelect(
                 isEdit ? 'editStepAction' : 'stepAction',
                 layer,
@@ -3037,6 +3138,9 @@ function changePage(page) {
                 if (!opts.skipDesktopSnapshot) {
                     refreshDesktopSnapshot(mode, false);
                 }
+            }
+            if (layer === 'android' && !opts.skipMobileDevices) {
+                refreshMobileDevices(mode);
             }
             if (isEdit) toggleEditActionFields();
             else toggleActionFields();
@@ -4862,6 +4966,8 @@ function changePage(page) {
             assertAttrField.style.display = 'none';
             assertOperatorField.style.display = 'none';
             verifyTypeField.style.display = 'none';
+            const stepCaptchaMaxAttemptsGroup = document.getElementById('stepCaptchaMaxAttemptsGroup');
+            if (stepCaptchaMaxAttemptsGroup) stepCaptchaMaxAttemptsGroup.style.display = 'none';
             
             if (action === 'navigate') {
                 // 导航操作只需要URL输入框
@@ -4927,6 +5033,8 @@ function changePage(page) {
                 // 显示验证类型选择
                 const verifyTypeField = document.getElementById('stepVerifyType');
                 verifyTypeField.style.display = 'block';
+                const stepCaptchaMaxAttemptsGroup = document.getElementById('stepCaptchaMaxAttemptsGroup');
+                if (stepCaptchaMaxAttemptsGroup) stepCaptchaMaxAttemptsGroup.style.display = 'block';
             } else if (action === 'enter_iframe') {
                 // 进入iframe操作需要选择器类型和选择器值
                 selectorTypeField.style.display = 'block';
@@ -5078,6 +5186,8 @@ function changePage(page) {
             if (editAssertAttrField) editAssertAttrField.style.display = 'none';
             if (editAssertOperatorField) editAssertOperatorField.style.display = 'none';
             if (editVerifyTypeField) editVerifyTypeField.style.display = 'none';
+            const editStepCaptchaMaxAttemptsGroup = document.getElementById('editStepCaptchaMaxAttemptsGroup');
+            if (editStepCaptchaMaxAttemptsGroup) editStepCaptchaMaxAttemptsGroup.style.display = 'none';
 
             if (layer === 'desktop') {
                 if (action === 'launch_app' || action === 'attach_window') {
@@ -5155,6 +5265,8 @@ function changePage(page) {
                 // 显示验证类型选择
                 const editVerifyTypeField = document.getElementById('editStepVerifyType');
                 editVerifyTypeField.style.display = 'block';
+                const editStepCaptchaMaxAttemptsGroup = document.getElementById('editStepCaptchaMaxAttemptsGroup');
+                if (editStepCaptchaMaxAttemptsGroup) editStepCaptchaMaxAttemptsGroup.style.display = 'block';
             } else if (action === 'enter_iframe') {
                 // 进入iframe操作需要选择器类型和选择器值
                 selectorTypeField.style.display = 'block';
@@ -5335,6 +5447,12 @@ function changePage(page) {
                     const r = parseInt(document.getElementById('stepClickRepeat').value, 10);
                     clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
                 }
+                let captchaMaxAttempts = null;
+                if (action === 'verify') {
+                    const cmaRaw = (document.getElementById('stepCaptchaMaxAttempts') || {}).value;
+                    const cmaN = parseInt(cmaRaw, 10);
+                    if (Number.isFinite(cmaN) && cmaN >= 1) captchaMaxAttempts = Math.min(20, cmaN);
+                }
                 const postLayer = (document.getElementById('stepAutomationLayer') || {}).value || 'web';
                 const postBody = {
                         case_id: currentCaseId,
@@ -5346,11 +5464,16 @@ function changePage(page) {
                         description: description,
                         compare_type: compareType,
                         click_repeat_count: clickRepeatCount,
+                        captcha_max_attempts: captchaMaxAttempts,
                         automation_layer: postLayer,
                 };
                 if (postLayer === 'desktop') {
                     const ds = getDesktopSpecForApi('create');
                     if (ds) postBody.desktop_spec = ds;
+                }
+                if (postLayer === 'android') {
+                    const ms = getMobileSpecForApi('create');
+                    if (ms) postBody.mobile_spec = ms;
                 }
                 if (action === 'api_request') {
                     postBody.api_spec = '';
@@ -5475,6 +5598,12 @@ function changePage(page) {
                     const r = parseInt(document.getElementById('editStepClickRepeat').value, 10);
                     clickRepeatCount = Number.isFinite(r) && r >= 1 ? Math.min(99, r) : 1;
                 }
+                let captchaMaxAttempts = null;
+                if (action === 'verify') {
+                    const cmaRaw = (document.getElementById('editStepCaptchaMaxAttempts') || {}).value;
+                    const cmaN = parseInt(cmaRaw, 10);
+                    if (Number.isFinite(cmaN) && cmaN >= 1) captchaMaxAttempts = Math.min(20, cmaN);
+                }
                 const putLayer = (document.getElementById('editStepAutomationLayer') || {}).value || 'web';
                 const putBody = {
                         action: action,
@@ -5485,11 +5614,16 @@ function changePage(page) {
                         description: description,
                         compare_type: compareType,
                         click_repeat_count: clickRepeatCount,
+                        captcha_max_attempts: captchaMaxAttempts,
                         automation_layer: putLayer,
                 };
                 if (putLayer === 'desktop') {
                     const ds = getDesktopSpecForApi('edit');
                     if (ds) putBody.desktop_spec = ds;
+                }
+                if (putLayer === 'android') {
+                    const ms = getMobileSpecForApi('edit');
+                    if (ms) putBody.mobile_spec = ms;
                 }
                 const response = await fetch(`/api/steps/${currentEditingStepId}`, {
                     method: 'PUT',

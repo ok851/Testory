@@ -48,6 +48,7 @@ def openai_compatible_chat(
                     "no commentary. First non-whitespace character must be '{'. "
                     "Schema: AI-assisted web test plan with case_name, case_url, description, precondition, expected_result, steps[]. "
                     "Steps: use action assert (+compare_type) for text/URL expectations; use verify only for captcha/human checks with input_value auto|slider|image|visible|exist|clickable. "
+                    "For tianai-captcha (TAC) and mixed captcha types prefer verify auto (curve/rotate/click-text auto-detected). "
                     "Selectors must be real css/xpath from the page, never snapshot line numbers alone."
                 ),
             },

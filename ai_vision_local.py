@@ -147,3 +147,64 @@ def text_visible_in_screenshot(
     return False
 
 
+def captcha_vision_solve(
+    image_bytes: bytes,
+    instruction: str = "",
+    captcha_hint: str = "",
+    model: Optional[str] = None,
+    timeout_sec: Optional[int] = None,
+) -> str:
+    """
+    验证码 VLM 兜底：识别类型并返回结构化 JSON。
+    示例：{"type":"slider","distance":123} 或 {"type":"click","points":[{"x":50,"y":80}]}
+    """
+    if not image_bytes or not vision_enabled():
+        return ""
+    ins_parts = [
+        "You are a captcha-solving assistant. Analyze this captcha widget screenshot.",
+        "Identify the captcha type and the action needed to pass it.",
+        "Reply with ONLY a JSON object (no markdown), one of:",
+        '  {"type":"slider","distance":<pixels to drag horizontally>}',
+        '  {"type":"curve","distance":<pixels>}',
+        '  {"type":"rotate","angle":<degrees>}',
+        '  {"type":"click","points":[{"x":<px>,"y":<px>}, ...]}',
+        '  {"type":"unknown"}',
+        "Coordinates x,y are relative to the TOP-LEFT of the captcha image.",
+    ]
+    if instruction:
+        ins_parts.append(f"Page instruction text: {instruction[:500]}")
+    if captcha_hint:
+        ins_parts.append(f"Hint: {captcha_hint[:300]}")
+    ins = "\n".join(ins_parts)
+    to = timeout_sec if timeout_sec is not None else int(
+        (os.environ.get("CAPTCHA_VISION_TIMEOUT") or "25").strip() or "25"
+    )
+    to = max(5, min(to, 120))
+    try:
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        m = (model or _vision_model()).strip()
+        url = f"{_base_url()}/api/chat"
+        payload: Dict[str, Any] = {
+            "model": m,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": ins,
+                    "images": [b64],
+                }
+            ],
+            "stream": False,
+        }
+        resp = requests.post(url, json=payload, timeout=to)
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        text = _ollama_api_chat_assistant_text(data) if isinstance(data, dict) else ""
+        return (text or "").strip()
+    except RequestException as e:
+        uat_logger.warning("captcha vision solve timeout/error (%ss): %s", to, e)
+        return ""
+    except ValueError as e:
+        uat_logger.warning("captcha vision solve: %s", e)
+        return ""
+
+

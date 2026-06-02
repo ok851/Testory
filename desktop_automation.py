@@ -95,15 +95,24 @@ _DESKTOP_ONLY_ACTIONS = frozenset({
 
 
 def normalize_automation_layer(step: Dict[str, Any]) -> str:
-    action = (step.get("action") or "").strip()
+    action = (step.get("action") or "").strip().lower()
     if action in _DESKTOP_ONLY_ACTIONS:
         return "desktop"
     st = (step.get("selector_type") or "").strip().lower()
     if st == "visual":
         return "desktop"
     layer = (step.get("automation_layer") or "").strip().lower()
-    if layer in ("web", "desktop"):
+    if layer in ("web", "desktop", "android"):
         return layer
+    try:
+        from mobile_automation import _MOBILE_ONLY_ACTIONS, normalize_mobile_action
+
+        if normalize_mobile_action(action) in _MOBILE_ONLY_ACTIONS:
+            return "android"
+        if layer == "android":
+            return "android"
+    except ImportError:
+        pass
     if action in _DESKTOP_ACTIONS or action in ("fill",):
         return "desktop"
     return "web"
@@ -113,6 +122,13 @@ def validate_step_for_layer(action: str, layer: str) -> Optional[str]:
     act = (action or "").strip()
     if not act:
         return "步骤 action 不能为空"
+    if layer == "android":
+        try:
+            from mobile_automation import validate_step_for_mobile
+
+            return validate_step_for_mobile(act)
+        except ImportError:
+            return "移动端模块未安装"
     if layer == "desktop":
         if act in _WEB_ONLY_ACTIONS:
             return f"桌面步骤不允许 Web 专用动作：{act}"
@@ -122,6 +138,8 @@ def validate_step_for_layer(action: str, layer: str) -> Optional[str]:
             return None
     elif layer == "web" and act in ("launch_app", "attach_window"):
         return f"Web 步骤不允许桌面专用动作：{act}，请将自动化层切换为「桌面」"
+    elif layer == "web" and act in ("open_app", "close_app", "tap", "input_text"):
+        return f"Web 步骤不允许 Android 专用动作：{act}，请将自动化层切换为「Android」"
     return None
 
 

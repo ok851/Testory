@@ -187,6 +187,30 @@ class PlatformAdminDB:
         conn.close()
         return rows
 
+    def get_license(self, license_id: str) -> Optional[Dict[str, Any]]:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM licenses WHERE license_id = ?", (license_id,))
+        row = cur.fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def list_license_activations(self, license_id: str) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT license_id, binding_type, binding_id, activated_at
+            FROM license_activations
+            WHERE license_id = ?
+            ORDER BY id DESC
+            """,
+            (license_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
     def revoke_license(self, license_id: str) -> bool:
         conn = self._connect()
         cur = conn.cursor()
@@ -209,11 +233,29 @@ class PlatformAdminDB:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO license_activations (license_id, binding_type, binding_id)
-            VALUES (?, ?, ?)
+            SELECT id FROM license_activations
+            WHERE license_id = ? AND binding_id = ?
             """,
-            (license_id, binding_type, binding_id),
+            (license_id, binding_id),
         )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                """
+                UPDATE license_activations
+                SET binding_type = ?, activated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (binding_type, row[0]),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO license_activations (license_id, binding_type, binding_id)
+                VALUES (?, ?, ?)
+                """,
+                (license_id, binding_type, binding_id),
+            )
         conn.commit()
         conn.close()
 

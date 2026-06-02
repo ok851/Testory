@@ -20,7 +20,12 @@
         </div>
     </div>
     <div class="testory-auth-card-body">
-        <div id="setupError" class="testory-auth-error"><span id="setupErrorText"></span></div>
+        <div id="setupError" class="testory-auth-error" role="alert"><span id="setupErrorText"></span></div>
+        <div class="testory-setup-help" style="margin-bottom:1rem;padding:0.75rem 0.9rem;border-radius:10px;background:rgba(99,102,241,0.12);border:1px solid rgba(129,140,248,0.25);font-size:0.82rem;color:#c7d2fe;line-height:1.55">
+            <strong style="color:#e0e7ff">如何登录？</strong><br>
+            · <strong>团队模式</strong>：账号由管理员在<strong>团队服务器</strong>上创建（桌面端不提供注册）<br>
+            · <strong>本机独立</strong>：无需服务器，点击下方「本机独立使用」，再用首次启动生成的 <code style="color:#a5b4fc">admin</code> 账号登录（密码见日志）
+        </div>
         <div class="testory-field" style="margin-bottom:0.85rem">
             <label for="teamServerUrl">团队服务器地址</label>
             <input id="teamServerUrl" type="url" placeholder="https://uat.company.com 或 http://192.168.1.10:5000" value="{{ team_server_url or '' }}">
@@ -38,62 +43,120 @@
             <textarea id="setupLicense" rows="3" placeholder="购买后在官网获得，粘贴于此激活" style="font-family:monospace;font-size:0.8rem"></textarea>
         </div>
         <p style="font-size:0.75rem;color:#64748b;margin:0 0 1rem">本机设备 ID：<code style="color:#a5b4fc">{{ identity.machine_id }}</code></p>
-        <button id="btnSaveSetup" class="testory-btn-primary">保存并连接</button>
+        <button type="button" id="btnSaveSetup" class="testory-btn-primary">保存并连接</button>
+        <button type="button" id="btnLocalMode" class="testory-btn-secondary" style="width:100%;margin-top:0.65rem">本机独立使用（无需团队服务器）</button>
     </div>
 </div>
 {% endblock %}
 
-{% block auth_head %}
+{% block auth_scripts %}
 <script>
-document.getElementById('btnSaveSetup').addEventListener('click', async () => {
-    const err = document.getElementById('setupError');
-    const errText = document.getElementById('setupErrorText');
-    err.classList.remove('show');
-    const btn = document.getElementById('btnSaveSetup');
-    btn.disabled = true;
-    btn.textContent = '连接中…';
-    const team_server_url = document.getElementById('teamServerUrl').value.trim();
-    const username = document.getElementById('setupUsername').value.trim();
-    const password = document.getElementById('setupPassword').value;
-    try {
-        await fetch('/api/client/config', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ team_server_url, setup_complete: false })
-        });
-        const r = await fetch('/api/client/login', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ team_server_url, username, password })
-        });
-        const d = await r.json();
-        if (!d.success) {
-            errText.textContent = d.error || '登录失败';
-            err.classList.add('show');
-            btn.disabled = false;
-            btn.textContent = '保存并连接';
+(function () {
+    function showError(msg) {
+        const err = document.getElementById('setupError');
+        const errText = document.getElementById('setupErrorText');
+        errText.textContent = msg;
+        err.classList.add('show');
+    }
+
+    function clearError() {
+        document.getElementById('setupError').classList.remove('show');
+    }
+
+    async function parseJson(res) {
+        const text = await res.text();
+        try {
+            return JSON.parse(text);
+        } catch (e) {
+            throw new Error(text || ('HTTP ' + res.status));
+        }
+    }
+
+    document.getElementById('btnSaveSetup').addEventListener('click', async () => {
+        clearError();
+        const btn = document.getElementById('btnSaveSetup');
+        const team_server_url = document.getElementById('teamServerUrl').value.trim();
+        const username = document.getElementById('setupUsername').value.trim();
+        const password = document.getElementById('setupPassword').value;
+
+        if (!team_server_url) {
+            showError('请填写团队服务器地址，或选择「本机独立使用」。');
             return;
         }
-        const lic = document.getElementById('setupLicense').value.trim();
-        if (lic) {
-            await fetch('/api/client/license/activate', {
+        if (!username || !password) {
+            showError('请填写团队服务器上的用户名和密码。');
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = '连接中…';
+        try {
+            await fetch('/api/client/config', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ license: lic })
+                body: JSON.stringify({ team_server_url, setup_complete: false })
             });
+            const r = await fetch('/api/client/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ team_server_url, username, password })
+            });
+            const d = await parseJson(r);
+            if (!d.success) {
+                showError(d.error || '登录失败，请检查地址、用户名和密码');
+                return;
+            }
+            const lic = document.getElementById('setupLicense').value.trim();
+            if (lic) {
+                const lr = await fetch('/api/client/license/activate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ license: lic })
+                });
+                const ld = await parseJson(lr);
+                if (!ld.success) {
+                    showError(ld.error || 'License 激活失败');
+                    return;
+                }
+            }
+            await fetch('/api/client/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ setup_complete: true })
+            });
+            window.location.href = '/';
+        } catch (e) {
+            showError(e.message || '连接失败，请确认团队服务器地址可访问');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '保存并连接';
         }
-        await fetch('/api/client/config', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ setup_complete: true })
-        });
-        window.location.href = '/';
-    } catch (e) {
-        errText.textContent = e.message || '连接失败';
-        err.classList.add('show');
-        btn.disabled = false;
-        btn.textContent = '保存并连接';
-    }
-});
+    });
+
+    document.getElementById('btnLocalMode').addEventListener('click', async () => {
+        clearError();
+        const btn = document.getElementById('btnLocalMode');
+        btn.disabled = true;
+        btn.textContent = '正在切换…';
+        try {
+            const r = await fetch('/api/client/local-mode', { method: 'POST' });
+            const d = await parseJson(r);
+            if (!d.success) {
+                showError(d.error || '切换失败');
+                return;
+            }
+            window.location.href = d.redirect || '/login';
+        } catch (e) {
+            showError(e.message || '切换失败');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '本机独立使用（无需团队服务器）';
+        }
+    });
+
+    document.getElementById('setupPassword').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') document.getElementById('btnSaveSetup').click();
+    });
+})();
 </script>
 {% endblock %}

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""生成 Testory 应用图标（透明圆角，无黑边）。"""
+"""生成 Testory 应用图标（透明圆角，科技感）。"""
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -20,59 +21,85 @@ def _lerp(a: int, b: int, t: float) -> int:
 def render_testory_icon(size: int = 512):
     from PIL import Image, ImageDraw, ImageFont
 
-    margin = max(4, size // 32)
-    radius = size // 5
-    box = (margin, margin, size - margin, size - margin)
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    cx, cy = size // 2, size // 2
+    margin = max(6, size // 18)
+    radius = size // 4
 
-    grad = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    # 深色科技底 + 霓虹描边
     for y in range(size):
         t = y / max(1, size - 1)
-        row_color = (_lerp(109, 6, t), _lerp(40, 182, t), _lerp(217, 212, t), 255)
+        c1 = (_lerp(12, 4, t), _lerp(18, 8, t), _lerp(42, 28, t), 255)
         for x in range(size):
             tx = x / max(1, size - 1)
-            blend = (t + tx) / 2
-            grad.putpixel(
-                (x, y),
-                (_lerp(109, 6, blend), _lerp(40, 182, blend), _lerp(217, 212, blend), 255),
+            blend = (t * 0.55 + tx * 0.45)
+            col = (
+                _lerp(15, 8, blend),
+                _lerp(23, 12, blend),
+                _lerp(56, 36, blend),
+                255,
             )
+            img.putpixel((x, y), col)
 
     mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(box, radius=radius, fill=255)
-
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    img.paste(grad, mask=mask)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (margin, margin, size - margin, size - margin),
+        radius=radius,
+        fill=255,
+    )
+    bg = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    bg.paste(img, mask=mask)
+    img = bg
     draw = ImageDraw.Draw(img)
 
-    font_size = int(size * 0.46)
+    box = (margin, margin, size - margin, size - margin)
+    draw.rounded_rectangle(box, radius=radius, outline=(56, 189, 248, 180), width=max(2, size // 128))
+
+    # 六边形智能网络
+    hex_r = size * 0.22
+    hex_pts = []
+    for i in range(6):
+        ang = math.radians(60 * i - 30)
+        hex_pts.append((cx + hex_r * math.cos(ang), cy + hex_r * math.sin(ang)))
+    draw.polygon(hex_pts, outline=(99, 102, 241, 120), width=max(2, size // 160))
+    for i, (x, y) in enumerate(hex_pts):
+        draw.ellipse(
+            (x - size * 0.018, y - size * 0.018, x + size * 0.018, y + size * 0.018),
+            fill=(34, 211, 238, 220),
+        )
+        nxt = hex_pts[(i + 1) % 6]
+        draw.line([(x, y), nxt], fill=(129, 140, 248, 90), width=max(1, size // 200))
+
+    # 中心 T
+    font_size = int(size * 0.34)
     try:
-        font = ImageFont.truetype("segoeui.ttf", font_size)
+        font = ImageFont.truetype("segoeuib.ttf", font_size)
     except OSError:
         try:
-            font = ImageFont.truetype("arial.ttf", font_size)
+            font = ImageFont.truetype("segoeui.ttf", font_size)
         except OSError:
             font = ImageFont.load_default()
-
     letter = "T"
     bbox = draw.textbbox((0, 0), letter, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    tx = (size - tw) // 2 - bbox[0]
-    ty = (size - th) // 2 - bbox[1] - size // 40
-    draw.text((tx + 2, ty + 3), letter, fill=(0, 0, 0, 80), font=font)
-    draw.text((tx, ty), letter, fill=(255, 255, 255, 255), font=font)
+    tx = cx - tw // 2 - bbox[0]
+    ty = cy - th // 2 - bbox[1]
+    draw.text((tx + 1, ty + 2), letter, fill=(0, 0, 0, 120), font=font)
+    draw.text((tx, ty), letter, fill=(240, 249, 255, 255), font=font)
 
-    badge_r = size // 7
-    bx = size - margin - badge_r - size // 28
-    by = size - margin - badge_r - size // 28
+    # 右下角 AI 节点
+    badge_r = size // 9
+    bx = size - margin - badge_r - size // 24
+    by = size - margin - badge_r - size // 24
     draw.ellipse(
         (bx - badge_r, by - badge_r, bx + badge_r, by + badge_r),
-        fill=(34, 197, 94, 255),
+        fill=(16, 185, 129, 255),
+        outline=(110, 231, 183, 200),
+        width=max(1, size // 180),
     )
-    check_w = badge_r
-    draw.line(
-        [(bx - check_w // 2, by), (bx - check_w // 6, by + check_w // 2), (bx + check_w // 2, by - check_w // 3)],
-        fill=(255, 255, 255, 255),
-        width=max(2, size // 64),
-    )
+    dot = badge_r * 0.35
+    draw.ellipse((bx - dot, by - dot, bx + dot, by + dot), fill=(255, 255, 255, 240))
     return img
 
 

@@ -1,13 +1,16 @@
-﻿# Build full offline desktop installer (Inno Setup + portable Python + Chromium + WebView2)
+﻿# Build full offline desktop installer (portable Python + Chromium + WebView2 + Inno Setup)
 # Run from project root:
 #   .\packaging\build_desktop_installer.ps1
-# Optional:
-#   .\packaging\build_desktop_installer.ps1 -InnoOnly
-#   .\packaging\build_desktop_installer.ps1 -IsccPath "D:\Inno Setup 6\ISCC.exe"
+#
+# Options:
+#   -IsccPath "D:\Inno Setup 6\ISCC.exe"   explicit ISCC (optional if Inno is on PATH or default paths)
+#   -InnoOnly                              skip prepare; compile existing dist\uat_release only
+#   -PrepareOnly                           prepare dist\uat_release only; do NOT call ISCC (manual compile in Inno GUI)
 
 param(
     [string] $IsccPath = "",
-    [switch] $InnoOnly
+    [switch] $InnoOnly,
+    [switch] $PrepareOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,7 +23,7 @@ if ($PSScriptRoot -match '[\\/]dist[\\/]') {
             $realScript = Join-Path $realRoot "packaging\build_desktop_installer.ps1"
             if (Test-Path $realScript) {
                 Write-Host "Redirecting to project root script..." -ForegroundColor Yellow
-                & $realScript
+                & $realScript @PSBoundParameters
                 exit $LASTEXITCODE
             }
         }
@@ -35,10 +38,18 @@ if ($PSScriptRoot -match '[\\/]dist[\\/]') {
 $Root = Get-ProjectRoot -StartPath $MyInvocation.MyCommand.Path
 Set-Location $Root
 
+$iss = Join-Path $Root "packaging\inno\uat_platform.iss"
+
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Testory offline installer build" -ForegroundColor Cyan
 Write-Host " Project root: $Root" -ForegroundColor DarkGray
-Write-Host " Large output size is expected (fully offline bundle)." -ForegroundColor Cyan
+if ($PrepareOnly) {
+    Write-Host " Mode: prepare release only (manual Inno compile)" -ForegroundColor Yellow
+} elseif ($InnoOnly) {
+    Write-Host " Mode: Inno compile only" -ForegroundColor Yellow
+} else {
+    Write-Host " Mode: prepare + Inno compile" -ForegroundColor DarkGray
+}
 Write-Host "========================================" -ForegroundColor Cyan
 
 if (-not $InnoOnly) {
@@ -50,23 +61,39 @@ if (-not $InnoOnly) {
     }
 }
 
+if ($PrepareOnly) {
+    Write-Host ""
+    Write-Host "Release directory ready:" -ForegroundColor Green
+    Write-Host "  $(Join-Path $Root 'dist\uat_release')" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Next: open Inno Setup 6 and compile:" -ForegroundColor Cyan
+    Write-Host "  $iss" -ForegroundColor White
+    Write-Host "Output will be: $(Join-Path $Root 'dist\testory_setup.exe')" -ForegroundColor DarkGray
+    exit 0
+}
+
 if ($IsccPath) {
     if (-not (Test-Path -LiteralPath $IsccPath)) {
         throw "ISCC not found: $IsccPath"
     }
-    $env:INNO_SETUP_ISCC = (Resolve-Path -LiteralPath $IsccPath).Path
+    $IsccPath = (Resolve-Path -LiteralPath $IsccPath).Path
 }
 
-$iscc = & "$Root\packaging\tools\Ensure-InnoSetup.ps1" -ProjectRoot $Root
-& $iscc "$Root\packaging\inno\uat_platform.iss"
+Write-Host ""
+Write-Host "Compiling installer with Inno Setup..." -ForegroundColor Cyan
+$iscc = & "$Root\packaging\tools\Ensure-InnoSetup.ps1" -ProjectRoot $Root -IsccPath $IsccPath
+& $iscc $iss
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $setup = Join-Path $Root "dist\testory_setup.exe"
+$bin = Join-Path $Root "dist\testory_setup-1.bin"
 if (Test-Path $setup) {
     $mb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
     Write-Host ""
     Write-Host "Done: $setup (about $mb MB)" -ForegroundColor Green
-    Write-Host "Ship this single file to end users." -ForegroundColor Green
+    if (Test-Path $bin) {
+        Write-Host "Also ship: $bin" -ForegroundColor Green
+    }
 } else {
     $setupLegacy = Join-Path $Root "dist\uat_platform_setup.exe"
     if (Test-Path $setupLegacy) {

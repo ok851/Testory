@@ -256,6 +256,16 @@ def api_create_license():
     return jsonify({"success": True, "license_id": license_id, "license_key": key})
 
 
+@app.route("/api/licenses/<license_id>", methods=["GET"])
+@login_required
+def api_get_license(license_id: str):
+    lic = _db.get_license(license_id)
+    if not lic:
+        return jsonify({"success": False, "error": "未找到 License"}), 404
+    activations = _db.list_license_activations(license_id)
+    return jsonify({"success": True, "license": lic, "activations": activations})
+
+
 @app.route("/api/licenses/<license_id>/revoke", methods=["POST"])
 @login_required
 def api_revoke_license(license_id: str):

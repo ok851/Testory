@@ -6,7 +6,7 @@
     <div class="testory-auth-card-header">
         <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" width="56" height="56" style="margin:0 auto">
         <h1>登录 {{ product_name }}</h1>
-        <p class="sub">连接团队服务器，开始自动化测试</p>
+        <p class="sub">{% if is_local_standalone %}本机独立模式 · 数据保存在本机{% else %}连接团队服务器，开始自动化测试{% endif %}</p>
     </div>
     <div class="testory-auth-card-body">
         <div id="errorMsg" class="testory-auth-error">
@@ -25,12 +25,19 @@
                 <span id="btnText">登 录</span>
             </button>
         </form>
-        <p style="margin-top:1.25rem;text-align:center;font-size:0.8rem;color:#64748b">请使用团队服务器账号登录</p>
+        <p style="margin-top:1.25rem;text-align:center;font-size:0.8rem;color:#64748b">
+            {% if is_local_standalone %}
+            本机模式默认管理员 <code style="color:#a5b4fc">admin</code>，初始密码见
+            <code style="color:#a5b4fc">%LOCALAPPDATA%\Testory\logs\backend_startup.log</code>
+            {% else %}
+            请使用团队服务器账号登录（账号由管理员创建）
+            {% endif %}
+        </p>
     </div>
 </div>
 {% endblock %}
 
-{% block auth_head %}
+{% block auth_scripts %}
 <script>
 document.getElementById('loginForm').addEventListener('submit', async function(e) {
     e.preventDefault();

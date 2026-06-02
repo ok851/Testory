@@ -46,6 +46,28 @@ from api_http_helper import (
     substitute_env_placeholders,
 )
 from api_spec_pipeline import run_api_spec_pipeline
+from captcha_engine import (
+    build_human_drag_path,
+    captcha_allow_heuristic_slide,
+    captcha_container_selectors,
+    captcha_requires_user_scope,
+    captcha_worker_timeout,
+    captcha_distance_retry_offset,
+    clamp_slider_distance,
+    detect_captcha_type,
+    emit_captcha_status,
+    parse_instruction_targets,
+    png_image_width,
+    resolve_captcha_type,
+    scale_image_distance_to_track,
+    solve_captcha,
+    solve_click_targets,
+    solve_click_targets_for_chars,
+    solve_curve_offset,
+    solve_slider_gap,
+    solve_with_vision_fallback,
+)
+from captcha_recovery import CaptchaManualRequiredError, run_captcha_with_recovery
 
 # 🔥 添加全局执行锁，防止并发执行多个测试用例集
 _execution_lock = threading.Lock()
@@ -546,6 +568,67 @@ class PlaywrightAutomation:
         self.current_iframe = None  # {'selector', 'selector_type', 'iframe'} 由 enter_iframe 设置
         self._failure_diag_ring: Optional[deque] = None  # console / pageerror / requestfailed
         self._execution_context: Optional[ExecutionContext] = None
+        self._captcha_scope_locator = None  # verify 步骤用户拾取元素
+        self._captcha_widget_locator = None  # 向上解析的验证码组件根（提示/滑块/刷新）
+        self._captcha_max_attempts: Optional[int] = None  # 步骤级最大验证次数
+
+    async def _bind_captcha_scope(self, user_element) -> None:
+        """将后续验证码操作限定在用户拾取元素及其组件容器内。"""
+        self._captcha_scope_locator = user_element
+        widget = user_element.locator(
+            'xpath=ancestor-or-self::*['
+            'contains(@id,"captcha") or contains(@id,"tianai") or '
+            'contains(@class,"captcha-box") or contains(@class,"verification-box") or '
+            'contains(@class,"verify-box")'
+            '][1]'
+        )
+        try:
+            if await widget.count() > 0:
+                self._captcha_widget_locator = widget.first
+            else:
+                self._captcha_widget_locator = user_element
+        except Exception:
+            self._captcha_widget_locator = user_element
+        uat_logger.info("[CAPTCHA] 已绑定用户指定范围（仅在此容器内查找与操作）")
+
+    def _clear_captcha_scope(self) -> None:
+        self._captcha_scope_locator = None
+        self._captcha_widget_locator = None
+
+    def _captcha_scoped(self) -> bool:
+        return self._captcha_widget_locator is not None
+
+    def _captcha_root_locator(self, page):
+        """验证码操作根：优先用户组件容器。"""
+        if self._captcha_widget_locator is not None:
+            return self._captcha_widget_locator
+        return page.locator("#tianai-captcha, #captcha-box, .captcha-box").first
+
+    def _captcha_query(self, page, sub_selector: str):
+        return self._captcha_root_locator(page).locator(sub_selector)
+
+    async def _captcha_widget_element_handle(self, page):
+        root = self._captcha_root_locator(page)
+        try:
+            if await root.count() > 0:
+                return await root.element_handle()
+        except Exception:
+            pass
+        return None
+
+    async def _captcha_first_visible(self, page, selectors: tuple):
+        """在用户指定容器内查找首个可见元素；未绑定时才回退整页。"""
+        root = self._captcha_root_locator(page)
+        search_roots = [root] if self._captcha_scoped() else [root, page]
+        for container in search_roots:
+            for sel in selectors:
+                try:
+                    loc = container.locator(sel).first
+                    if await loc.count() > 0 and await loc.is_visible():
+                        return loc
+                except Exception:
+                    continue
+        return None
 
     def _invoke_on_case_failure(self, payload: Dict[str, Any]) -> None:
         ctx = getattr(self, "_execution_context", None)
@@ -6027,21 +6110,49 @@ class PlaywrightAutomation:
         iframe_context=None,
         page=None,
         locator_candidates=None,
+        captcha_max_attempts: Optional[int] = None,
     ):
         """验证元素。用于处理人机验证弹窗等场景。page: 可选，指定在哪个标签页执行（多标签并行时使用）
         
         如果没有提供selector，则自动识别并处理验证弹窗
         verify_type 可以是 'visible', 'exist', 'clickable' 或验证码类型: 'auto', 'slider', 'image'
         locator_candidates: 与 click/input 相同，主定位失败时按 score 尝试备选。
+        captcha_max_attempts: 步骤级最大自动验证次数（None 则用 CAPTCHA_SOLVE_RETRY）。
         """
         target_page = page if page is not None else self.page
         if target_page is None:
             raise Exception("浏览器未启动")
-        
-        # 检查是否为验证码类型
+
+        self._captcha_max_attempts = captcha_max_attempts
+        try:
+            return await self._verify_element_impl(
+                selector,
+                verify_type,
+                selector_type,
+                iframe_selector,
+                iframe_context,
+                target_page,
+                locator_candidates,
+            )
+        finally:
+            self._captcha_max_attempts = None
+
+    async def _verify_element_impl(
+        self,
+        selector: str = None,
+        verify_type: str = "visible",
+        selector_type: str = "css",
+        iframe_selector: str = None,
+        iframe_context=None,
+        target_page=None,
+        locator_candidates=None,
+    ):
         captcha_types = ['auto', 'slider', 'image']
         if verify_type in captcha_types:
-            uat_logger.info(f"🔍 [VERIFY_DEBUG] 开始处理验证码，类型: {verify_type}")
+            uat_logger.info(
+                f"🔍 [VERIFY_DEBUG] 开始处理验证码，类型: {verify_type}，"
+                f"最大验证次数={self._captcha_max_attempts if self._captcha_max_attempts else '全局(CAPTCHA_SOLVE_RETRY)'}"
+            )
             # 如果提供了选择器，则使用选择器定位并处理验证码
             if selector:
                 uat_logger.info(f"🔍 [VERIFY_DEBUG] 使用提供的选择器处理验证码: {selector}")
@@ -6065,183 +6176,55 @@ class PlaywrightAutomation:
                     uat_logger.info(f"✅ [VERIFY_DEBUG] 找到验证码元素: {selector}")
                 except Exception as e:
                     uat_logger.error(f"❌ [VERIFY_DEBUG] 等待验证码元素超时: {e}")
-                    # 尝试直接查找滑块，不依赖于容器元素
-                    uat_logger.info("🔍 [VERIFY_DEBUG] 尝试直接查找滑块")
-                    try:
-                        slider_handled = await self._handle_slider_captcha(target_page)
-                        if slider_handled:
-                            return True
-                        else:
-                            raise Exception("验证码处理失败: 未找到滑块验证码元素")
-                    except Exception as slider_error:
-                        uat_logger.error(f"❌ [VERIFY_DEBUG] 直接查找滑块失败: {slider_error}")
-                        raise Exception(f"验证码处理失败: 等待元素超时 - {e}")
-                
-                # 根据验证类型处理
-                if verify_type == 'slider' or verify_type == 'auto':
-                    # 处理滑动验证码
-                    uat_logger.info("🔍 [VERIFY_DEBUG] 处理滑动验证码")
-                    # 尝试在验证码元素内查找滑块
-                    try:
-                        # 使用与_handle_slider_captcha方法相同的滑块选择器列表
-                        slider_selectors = [
-                            # 滑块容器
-                            '.captcha-slider',
-                            '.slider-container',
-                            '.slide-container',
-                            '[class*="slider"]',
-                            '[class*="slide"]',
-                            '[class*="verify"]',
-                            '[class*="verifybox"]',
-                            '[class*="captcha"]',
-                            '[class*="geetest"]',
-                            '[class*="tcaptcha"]',
-                            '[class*="yidun"]',
-                            '.geetest_slider',
-                            '.tcaptcha-slider',
-                            '.yidun_slider',
-                            '.nc_wrapper',  # 网易易盾
-                            '.ac-slider',  # 阿里滑块
-                            # 滑块本身
-                            '.slider-handle',
-                            '.slide-handle',
-                            '.slider-btn',
-                            '.slide-btn',
-                            '.captcha-btn',
-                            '.geetest_slider_button',
-                            '.tcaptcha-drag-button',
-                            '.yidun_slider__handle',
-                            '.nc_iconfont',  # 网易易盾滑块
-                            '.ac-slider-handle',  # 阿里滑块
-                            '[class*="handle"]',
-                            '[class*="btn"]',
-                            '[class*="verify-move-block"]',
-                            '[class*="verify-drag-icon"]',
-                            '[class*="button"]',
-                            '[class*="drag"]',
-                            '[class*="slide"]',
-                            '[class*="slider"]',
-                            '[class*="move"]',
-                            '[class*="icon"]',
-                            # 通用元素
-                            'button',
-                            'div',
-                            'span',
-                            'i',
-                            # 组合选择器
-                            '[class*="slider"] button',
-                            '[class*="slide"] button',
-                            '[class*="captcha"] button',
-                            '[class*="verify"] button',
-                            '[class*="slider"] div',
-                            '[class*="slide"] div',
-                            '[class*="captcha"] div',
-                            '[class*="verify"] div',
-                        ]
-                        
-                        # 在验证码元素内尝试查找滑块
-                        slider_found = False
-                        for slider_selector in slider_selectors:
-                            try:
-                                uat_logger.info(f"🔍 [VERIFY_DEBUG] 在验证码元素内尝试查找滑块: {slider_selector}")
-                                slider_element = element.locator(slider_selector)
-                                if await slider_element.count() > 0:
-                                    slider_element = slider_element.first
-                                    if await slider_element.is_visible():
-                                        uat_logger.info(f"✅ [VERIFY_DEBUG] 在验证码元素内找到滑块: {slider_selector}")
-                                        slider_found = True
-                                        # 执行滑动操作
-                                        await self._perform_slider_action(target_page, slider_element)
-                                        # 等待验证完成，使用智能等待
-                                        try:
-                                            # 检查滑块是否还存在，如果不存在说明验证成功
-                                            await target_page.wait_for_selector('[data-slider="captcha"]', state='hidden', timeout=3000)
-                                        except Exception:
-                                            # 如果智能检测失败，使用短等待
-                                            await asyncio.sleep(1)
-                                        # 检查验证是否成功（优先看验证码组件是否消失）
-                                        if await self._captcha_appears_gone(target_page):
-                                            uat_logger.info("✅ 滑动验证码处理成功")
-                                            return True
-                                        # 某些场景组件不消失但已通过，给一次短暂缓冲再判定
-                                        await asyncio.sleep(1.0)
-                                        if await self._captcha_appears_gone(target_page):
-                                            uat_logger.info("✅ 滑动验证码处理成功(延迟判定)")
-                                            return True
-                                        raise Exception("验证码处理失败: 滑动操作已执行，但验证未完成")
-                            except Exception as e:
-                                uat_logger.debug(f"选择器 {slider_selector} 未找到滑块: {e}")
-                                continue
-                        
-                        if not slider_found:
-                            # 如果在验证码元素内未找到滑块，尝试调用专门的滑块处理方法
-                            uat_logger.info("🔍 [VERIFY_DEBUG] 在验证码元素内未找到滑块，尝试使用专门的滑块处理方法")
-                            try:
-                                # 尝试在整个页面中查找滑块，优先在指定容器内查找
-                                slider_handled = await self._handle_slider_captcha(target_page, selector)
-                                if slider_handled:
-                                    return True
-                                else:
-                                    # 如果专门的滑块处理方法返回False，抛出异常
-                                    raise Exception("验证码处理失败: 未找到滑块验证码元素或滑动操作未完成")
-                            except Exception as e:
-                                uat_logger.warning(f"⚠️ 专门的滑块处理方法失败: {e}")
-                                # 重新抛出异常
-                                raise
-                    except Exception as slider_error:
-                        uat_logger.warning(f"⚠️ 在验证码元素内查找滑块失败: {slider_error}")
-                        # 尝试调用专门的滑块处理方法
-                        uat_logger.info("🔍 [VERIFY_DEBUG] 尝试使用专门的滑块处理方法")
-                        try:
-                            # 尝试在整个页面中查找滑块，优先在指定容器内查找
-                            slider_handled = await self._handle_slider_captcha(target_page, selector)
-                            if slider_handled:
-                                return True
-                            else:
-                                # 如果专门的滑块处理方法返回False，抛出异常
-                                raise Exception("验证码处理失败: 未找到滑块验证码元素或滑动操作未完成")
-                        except Exception as e:
-                            uat_logger.warning(f"⚠️ 专门的滑块处理方法失败: {e}")
-                            # 回退到自动检测
-                            success = await self._auto_handle_verification_popup(target_page, verify_type)
-                            if not success:
-                                raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
-                            return success
-                elif verify_type == 'image' or verify_type == 'auto':
-                    # 处理图片验证码
-                    uat_logger.info("🔍 [VERIFY_DEBUG] 处理图片验证码")
-                    # 首先尝试在提供的选择器所定位的元素内查找图片验证码
-                    try:
-                        # 在验证码元素内查找图片（使用更多选择器）
-                        image_element = element.locator('img, [class*="image"], [class*="pic"], [class*="img"]').first
-                        await image_element.wait_for(state='visible', timeout=5000)
-                        # 执行图片验证操作
-                        await self._click_image_randomly(target_page, image_element)
-                        uat_logger.info("✅ 图片验证码处理成功")
+                    raise Exception(f"验证码处理失败: 等待用户指定元素超时 - {e}")
+
+                await self._bind_captcha_scope(element.first)
+                try:
+                    uat_logger.info("🔍 [VERIFY_DEBUG] 在用户指定范围内处理验证码")
+
+                    async def solve_once() -> bool:
+                        if verify_type == 'slider':
+                            return await self._handle_slider_captcha(target_page)
+                        if verify_type == 'image':
+                            return await self._handle_image_captcha(target_page)
+                        return await self._captcha_solve_once_core(target_page)
+
+                    async def screenshot_fn() -> bytes:
+                        return await self._screenshot_captcha_region_png(target_page)
+
+                    async def captcha_root():
+                        return self._captcha_widget_locator
+
+                    if verify_type in ('slider', 'image', 'auto'):
+                        ok = await run_captcha_with_recovery(
+                            target_page,
+                            solve_once,
+                            screenshot_fn=screenshot_fn,
+                            captcha_root=captcha_root,
+                            solve_attempts=self._captcha_max_attempts,
+                        )
+                        if not ok:
+                            raise Exception(
+                                f"验证码处理失败: 在用户指定范围内未能完成"
+                                f"{'滑块' if verify_type == 'slider' else '点选' if verify_type == 'image' else ''}验证"
+                            )
                         return True
-                    except Exception as image_error:
-                        uat_logger.warning(f"⚠️ 在验证码元素内查找图片失败: {image_error}")
-                        # 如果在验证码元素内查找图片失败，则尝试调用专门的图片处理方法
-                        success = await self._handle_image_captcha(target_page)
-                        if not success:
-                            # 如果是auto类型，尝试处理滑动验证码
-                            if verify_type == 'auto':
-                                uat_logger.info("🔍 [VERIFY_DEBUG] 图片验证码处理失败，尝试处理滑动验证码")
-                                success = await self._handle_slider_captcha(target_page)
-                                if not success:
-                                    raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
-                                return success
-                            else:
-                                raise Exception("验证码处理失败: 未找到图片验证码元素或验证操作未完成")
-                        return success
-                else:
-                    # 自动检测验证类型
-                    success = await self._auto_handle_verification_popup(target_page, verify_type)
-                    if not success:
-                        raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
-                    return success
+                    return await self._auto_handle_verification_popup(
+                        target_page,
+                        verify_type,
+                        captcha_already_visible=True,
+                        scope_bound=True,
+                    )
+                finally:
+                    self._clear_captcha_scope()
             else:
-                # 如果没有提供选择器，则自动识别并处理验证弹窗
+                if captcha_requires_user_scope():
+                    raise Exception(
+                        "验证码处理失败: 请在 verify 步骤中框选验证码区域（系统仅在用户指定范围内查找）"
+                    )
+                uat_logger.warning(
+                    "[VERIFY_DEBUG] 验证码步骤未拾取 selector，回退整页自动识别（CAPTCHA_REQUIRE_USER_SCOPE=0）"
+                )
                 success = await self._auto_handle_verification_popup(target_page, verify_type)
                 if not success:
                     raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
@@ -6297,174 +6280,187 @@ class PlaywrightAutomation:
             raise last_exc
         
     
-    async def _auto_handle_verification_popup(self, page, verify_type='auto'):
-        """自动识别并处理验证弹窗
-        
-        Args:
-            page: 页面对象
-            verify_type: 验证类型，可选值: 'auto', 'slider', 'image'
-        """
+    async def _auto_handle_verification_popup(
+        self,
+        page,
+        verify_type='auto',
+        captcha_already_visible: bool = False,
+        scope_bound: bool = False,
+    ):
+        """自动识别并处理验证弹窗（含同题重试；默认不刷新换题）。"""
         uat_logger.info(f"🔍 开始处理验证弹窗，类型: {verify_type}")
-        
-        if verify_type == 'auto':
-            # 自动检测验证类型
-            return await self._detect_and_handle_captcha(page)
-        elif verify_type == 'slider':
-            # 处理滑动方块验证码
-            return await self._handle_slider_captcha(page)
-        elif verify_type == 'image':
-            # 处理点击图片文字验证码
-            return await self._handle_image_captcha(page)
+        if scope_bound:
+            emit_captcha_status("正在用户指定范围内验证…")
         else:
-            uat_logger.warning(f"⚠️ 未知的验证类型: {verify_type}，使用自动检测")
-            return await self._detect_and_handle_captcha(page)
-    
-    async def _detect_and_handle_captcha(self, page):
-        """自动检测并处理验证码"""
-        uat_logger.info("🔍 自动检测验证码类型")
-        
-        # 智能等待验证弹窗出现
-        max_wait_time = 10  # 最大等待时间（秒）
-        start_time = time.time()
-        verification_found = False
-        
-        while time.time() - start_time < max_wait_time:
-            # 尝试查找常见的验证弹窗元素
-            try:
-                # 常见的验证弹窗选择器
-                verification_selectors = [
-                    '.captcha-box',
-                    '.verification-box',
-                    '.verify-box',
-                    '[class*="captcha"]',
-                    '[class*="verification"]',
-                    '[class*="verify"]',
-                    '.slider-container',
-                    '.slide-container',
-                    '.captcha-slider',
-                    '[class*="slider"]',
-                    '[class*="slide"]',
-                ]
-                
-                for selector in verification_selectors:
-                    element = page.locator(selector)
-                    if await element.count() > 0:
-                        first_element = element.first
-                        is_visible = await first_element.is_visible()
-                        if is_visible:
-                            uat_logger.info(f"✅ 验证弹窗已出现: {selector}")
-                            verification_found = True
+            emit_captcha_status("正在检测验证码窗口…")
+
+        if not scope_bound:
+            max_wait_time = 2.0 if captcha_already_visible else 8.0
+            start_time = time.time()
+            while time.time() - start_time < max_wait_time:
+                try:
+                    verification_selectors = list(captcha_container_selectors()) + [
+                        '#captcha', '#verification', '#verify',
+                    ]
+                    for sel in verification_selectors:
+                        element = page.locator(sel)
+                        if await element.count() > 0 and await element.first.is_visible():
+                            uat_logger.info(f"✅ 验证弹窗已出现: {sel}")
                             break
-                
-                if verification_found:
+                    else:
+                        await asyncio.sleep(0.5)
+                        continue
                     break
-            except Exception as e:
-                uat_logger.debug(f"等待验证弹窗时出错: {e}")
-            
-            # 短暂等待后重试
-            await asyncio.sleep(0.5)
-        
-        if not verification_found:
-            uat_logger.warning("⚠️ 未检测到验证弹窗，继续执行默认流程")
-        
-        # 首先尝试处理滑动验证码
+                except Exception as e:
+                    uat_logger.debug(f"等待验证弹窗: {e}")
+                    await asyncio.sleep(0.5)
+
+        async def solve_once() -> bool:
+            if verify_type == 'slider':
+                return await self._handle_slider_captcha(page)
+            if verify_type == 'image':
+                return await self._handle_image_captcha(page)
+            return await self._captcha_solve_once_core(page)
+
+        async def screenshot_fn() -> bytes:
+            return await self._screenshot_captcha_region_png(page)
+
+        async def captcha_root():
+            return self._captcha_widget_locator
+
         try:
-            slider_handled = await self._handle_slider_captcha(page)
-            if slider_handled:
-                uat_logger.info("✅ 滑动验证码处理成功")
+            return await run_captcha_with_recovery(
+                page,
+                solve_once,
+                screenshot_fn=screenshot_fn,
+                captcha_root=captcha_root if self._captcha_scoped() else None,
+                solve_attempts=self._captcha_max_attempts,
+            )
+        except CaptchaManualRequiredError:
+            raise
+
+    async def _captcha_solve_once_core(self, page) -> bool:
+        """单次验证码求解：按类型只跑对应处理器，避免多类型误触。"""
+        instruction = await self._extract_captcha_instruction_text(page)
+        captcha_html = await self._extract_captcha_html_snippet(page)
+        ctype = resolve_captcha_type(instruction, captcha_html)
+        uat_logger.info("[CAPTCHA] resolved type=%s instruction=%r", ctype, instruction[:80] if instruction else "")
+
+        if ctype in ("click_text", "click_icon"):
+            if await self._handle_click_text_captcha(page):
                 return True
-        except Exception as slider_error:
-            uat_logger.warning(f"⚠️ 处理滑动验证码时出错: {slider_error}")
-        
-        # 然后尝试处理图片验证码
-        try:
-            image_handled = await self._handle_image_captcha(page)
-            if image_handled:
-                uat_logger.info("✅ 图片验证码处理成功")
-                return True
-        except Exception as image_error:
-            uat_logger.warning(f"⚠️ 处理图片验证码时出错: {image_error}")
-        
-        # 最后尝试查找其他类型的验证弹窗
-        # 常见的验证弹窗选择器模式
-        verification_selectors = [
-            # 人机验证相关
-            '.captcha-box',
-            '.verification-box',
-            '.verify-box',
-            '#captcha',
-            '#verification',
-            '#verify',
-            '[class*="captcha"]',
-            '[class*="verification"]',
-            '[class*="verify"]',
-            '[id*="captcha"]',
-            '[id*="verification"]',
-            '[id*="verify"]',
-            # 验证按钮
-            'button:has-text("验证")',
-            'button:has-text("Verify")',
-            'button:has-text("确认")',
-            'button:has-text("Confirm")',
-            'button:has-text("提交")',
-            'button:has-text("Submit")',
-            'a:has-text("验证")',
-            'a:has-text("Verify")',
-            # iframe中的验证
-            'iframe[src*="captcha"]',
-            'iframe[src*="verify"]',
-            'iframe[src*="recaptcha"]',
-            # 其他常见验证元素
-            '.g-recaptcha',
-            '#g-recaptcha',
-            '[data-sitekey]',
-            '.hcaptcha',
-            '#hcaptcha',
-        ]
-        
-        # 尝试查找验证弹窗
-        found_verification = False
-        for selector in verification_selectors:
+            return await self._handle_image_captcha(page)
+
+        tianai_slider = await self._captcha_first_visible(
+            page, ("#slider-move-btn", ".slider-move-btn")
+        )
+        has_tianai = tianai_slider is not None
+        if has_tianai:
+            if ctype == "curve":
+                return await self._handle_curve_captcha(page)
+            return await self._handle_slider_captcha(page)
+
+        handlers = {
+            "curve": self._handle_curve_captcha,
+            "rotate": self._handle_rotate_captcha,
+            "click_text": self._handle_click_text_captcha,
+            "click_icon": self._handle_click_text_captcha,
+            "slider": self._handle_slider_captcha,
+            "concat": self._handle_slider_captcha,
+        }
+        if ctype in handlers:
             try:
-                uat_logger.info(f"🔍 尝试查找验证弹窗: {selector}")
-                element = page.locator(selector)
-                
-                # 检查元素是否存在且可见
-                if await element.count() > 0:
-                    first_element = element.first
-                    is_visible = await first_element.is_visible()
-                    if is_visible:
-                        uat_logger.info(f"✅ 找到验证弹窗: {selector}")
-                        found_verification = True
-                        
-                        # 尝试点击验证按钮
-                        try:
-                            await first_element.click(timeout=3000)
-                            uat_logger.info("✅ 已点击验证按钮")
-                            # 等待验证完成
-                            await asyncio.sleep(2)
-                        except Exception as click_error:
-                            uat_logger.warning(f"⚠️ 点击验证按钮失败: {click_error}")
-                            # 如果点击失败，尝试其他方式
-                            try:
-                                # 尝试等待验证弹窗消失
-                                await first_element.wait_for(state='hidden', timeout=5000)
-                                uat_logger.info("✅ 验证弹窗已消失")
-                            except Exception as wait_error:
-                                uat_logger.warning(f"⚠️ 等待验证弹窗消失失败: {wait_error}")
-                        
-                        break
+                ok = await handlers[ctype](page)
+                if ok:
+                    return True
+                if ctype in ("slider", "concat", "curve"):
+                    return False
+                return await self._handle_image_captcha(page)
             except Exception as e:
-                uat_logger.debug(f"选择器 {selector} 未找到验证弹窗: {e}")
+                uat_logger.warning("⚠️ 验证码处理器 %s: %s", ctype, e)
+                return False
+        try:
+            return await self._handle_slider_captcha(page)
+        except Exception as e:
+            uat_logger.warning("⚠️ 滑块: %s", e)
+            return False
+
+    async def _extract_captcha_html_snippet(self, page) -> str:
+        """仅提取验证码容器内的 HTML，避免整页导航干扰类型判断。"""
+        root = self._captcha_root_locator(page)
+        try:
+            if await root.count() > 0:
+                html = await root.evaluate("(el) => (el.innerHTML || '').slice(0, 4000)")
+                if html:
+                    return str(html).strip()
+        except Exception:
+            pass
+        if self._captcha_scoped():
+            return ""
+        try:
+            return (await page.evaluate("""() => {
+                const roots = [
+                    '#tianai-captcha', '#captcha-box', '.captcha-box',
+                    '.verification-box', '.verify-box', '[class*="captcha-box"]',
+                ];
+                for (const sel of roots) {
+                    const el = document.querySelector(sel);
+                    if (el && el.offsetParent !== null) {
+                        return (el.innerHTML || '').slice(0, 4000);
+                    }
+                }
+                return '';
+            }""") or "").strip()
+        except Exception:
+            return ""
+
+    async def _clamp_slider_distance_on_page(self, page, slider, slider_box, distance: Optional[int]) -> int:
+        if not distance or distance <= 0:
+            return 0
+        track_selectors = (
+            ".slider-move-track",
+            '[class*="slider-move-track"]',
+            ".slider-track",
+            '[class*="slider-track"]',
+            '[class*="verify-bar"]',
+            '[class*="slide-bar"]',
+        )
+        track_parent = self._captcha_root_locator(page) if self._captcha_scoped() else page
+        for sel in track_selectors:
+            try:
+                loc = track_parent.locator(sel).first
+                if await loc.count() > 0:
+                    tb = await loc.bounding_box()
+                    if tb and tb.get("width", 0) > 20:
+                        return clamp_slider_distance(
+                            int(distance), int(tb["width"]), int(slider_box["width"])
+                        )
+            except Exception:
                 continue
-        
-        if not found_verification:
-            uat_logger.error("❌ 未检测到验证弹窗，验证操作失败")
-            # 抛出异常，标记验证失败
-            raise Exception("验证码处理失败: 未找到验证弹窗或验证操作未完成")
-        
-        return True
-    
+        est_track = max(int(slider_box["width"] * 5), 200)
+        return clamp_slider_distance(int(distance), est_track, int(slider_box["width"]))
+
+    async def _try_tianai_slider_captcha(self, page) -> Optional[bool]:
+        """tianai 滑块优先路径。返回 True/False 表示已处理，None 表示未找到 tianai 控件。"""
+        slider = await self._captcha_first_visible(
+            page, ("#slider-move-btn", ".slider-move-btn")
+        )
+        if slider is None:
+            return None
+        instruction = await self._extract_captcha_instruction_text(page)
+        if detect_captcha_type(instruction) == "curve" or "曲线" in instruction:
+            return await self._handle_curve_captcha(page)
+        slider_box = await slider.bounding_box()
+        if not slider_box:
+            return False
+        distance = await self._captcha_engine_slider_distance(page, slider, slider_box)
+        distance = await self._clamp_slider_distance_on_page(page, slider, slider_box, distance)
+        if not distance or distance <= 0:
+            uat_logger.warning("[TIANAI] 无法计算缺口距离，拒绝盲目滑到底")
+            return False
+        uat_logger.info("[TIANAI] 计算拖动距离=%spx", distance)
+        return await self._drag_slider_by_distance(page, slider, distance)
+
     async def _handle_slider_captcha(self, page, selector=None):
         """处理滑动方块验证码
         
@@ -6473,6 +6469,14 @@ class PlaywrightAutomation:
             selector: 可选，验证码容器选择器，优先在该容器内查找滑块
         """
         uat_logger.info("🔍 处理滑动方块验证码")
+
+        tianai_result = await self._try_tianai_slider_captcha(page)
+        if tianai_result is not None:
+            return tianai_result
+
+        if self._captcha_scoped():
+            uat_logger.warning("[SLIDER] 用户指定范围内未找到可操作的滑块控件")
+            return False
         
         # 先走图像识别增强路径（更智能），失败再回退传统选择器逻辑
         try:
@@ -6484,8 +6488,15 @@ class PlaywrightAutomation:
                 uat_logger.info(f"🤖 [SLIDER_AI] 使用优化器处理平台: {platform}")
                 distance = await optimizer.calculate_smart_distance(page, slider, platform)
                 if distance and distance > 0:
+                    slider_box = await slider.bounding_box()
+                    if slider_box:
+                        distance = await self._clamp_slider_distance_on_page(
+                            page, slider, slider_box, distance
+                        )
+                if distance and distance > 0:
                     await optimizer.perform_optimized_swipe(page, slider, distance, platform)
-                    if await optimizer.verify_slider_success(page, platform):
+                    await asyncio.sleep(1.0)
+                    if await self._captcha_appears_gone(page) or await optimizer.verify_slider_success(page, platform):
                         uat_logger.info("✅ [SLIDER_AI] 图像识别滑块验证成功")
                         return True
                     uat_logger.warning("⚠️ [SLIDER_AI] 验证未确认通过，回退传统策略")
@@ -6623,44 +6634,12 @@ class PlaywrightAutomation:
                                                     
                                                     # 等待验证完成
                                                     uat_logger.info("⏳ 等待验证完成")
-                                                    await asyncio.sleep(2)
-                                                    
-                                                    # 尝试点击验证按钮或确认区域
-                                                    try:
-                                                        uat_logger.info("🔍 尝试找到并点击验证确认按钮")
-                                                        # 常见的验证确认按钮选择器
-                                                        confirm_selectors = [
-                                                            'button:has-text("验证")',
-                                                            'button:has-text("确认")',
-                                                            'button:has-text("Verify")',
-                                                            'button:has-text("Confirm")',
-                                                            '.verify-button',
-                                                            '.confirm-button',
-                                                            '.submit-button',
-                                                            '[class*="verify"] button',
-                                                            '[class*="confirm"] button',
-                                                            '[class*="submit"] button',
-                                                        ]
-                                                        
-                                                        for selector in confirm_selectors:
-                                                            try:
-                                                                confirm_button = page.locator(selector)
-                                                                if await confirm_button.count() > 0:
-                                                                    is_visible = await confirm_button.is_visible()
-                                                                    if is_visible:
-                                                                        uat_logger.info(f"✅ 找到验证确认按钮: {selector}")
-                                                                        await confirm_button.click()
-                                                                        uat_logger.info("✅ 点击验证确认按钮")
-                                                                        await asyncio.sleep(1)
-                                                                        break
-                                                            except Exception as e:
-                                                                uat_logger.debug(f"选择器 {selector} 未找到确认按钮: {e}")
-                                                                continue
-                                                    except Exception as e:
-                                                        uat_logger.debug(f"点击确认按钮失败: {e}")
-                                                    
-                                                    uat_logger.info("✅ 滑动验证完成")
-                                                    return True
+                                                    await asyncio.sleep(1.5)
+                                                    if await self._captcha_appears_gone(page):
+                                                        uat_logger.info("✅ 滑动验证完成")
+                                                        return True
+                                                    uat_logger.warning("⚠️ 滑动后验证码仍在，判定失败")
+                                                    continue
                                                 else:
                                                     uat_logger.error("❌ 无法计算滑动距离")
                                                     continue
@@ -6744,53 +6723,14 @@ class PlaywrightAutomation:
                                     
                                     # 等待验证完成
                                     uat_logger.info("⏳ 等待验证完成")
-                                    await asyncio.sleep(2)
-                                    
-                                    # 尝试点击验证按钮或确认区域
-                                    try:
-                                        uat_logger.info("🔍 尝试找到并点击验证确认按钮")
-                                        # 常见的验证确认按钮选择器
-                                        confirm_selectors = [
-                                            'button:has-text("验证")',
-                                            'button:has-text("确认")',
-                                            'button:has-text("Verify")',
-                                            'button:has-text("Confirm")',
-                                            '.verify-button',
-                                            '.confirm-button',
-                                            '.submit-button',
-                                            '[class*="verify"] button',
-                                            '[class*="confirm"] button',
-                                            '[class*="submit"] button',
-                                        ]
-                                        
-                                        for selector in confirm_selectors:
-                                            try:
-                                                confirm_button = page.locator(selector)
-                                                if await confirm_button.count() > 0:
-                                                    is_visible = await confirm_button.is_visible()
-                                                    if is_visible:
-                                                        uat_logger.info(f"✅ 找到验证确认按钮: {selector}")
-                                                        await confirm_button.click()
-                                                        uat_logger.info("✅ 点击验证确认按钮")
-                                                        await asyncio.sleep(1)
-                                                        break
-                                            except Exception as e:
-                                                uat_logger.debug(f"选择器 {selector} 未找到确认按钮: {e}")
-                                                continue
-                                    except Exception as e:
-                                        uat_logger.debug(f"点击确认按钮失败: {e}")
-                                    
-                                    uat_logger.info("✅ 滑动验证完成")
-                                    return True
-                            # 如果无法计算距离，使用默认的滑动操作
-                            uat_logger.info("⚠️ 无法计算滑动距离，使用默认的滑动操作")
-                            try:
-                                await self._perform_slider_action(page, slider)
-                                uat_logger.info("✅ 滑动验证完成")
-                                return True
-                            except Exception as slide_error:
-                                uat_logger.error(f"❌ 滑动验证失败: {slide_error}")
-                                raise
+                                    await asyncio.sleep(1.5)
+                                    if await self._captcha_appears_gone(page):
+                                        uat_logger.info("✅ 滑动验证完成")
+                                        return True
+                                    uat_logger.warning("⚠️ 滑动后验证码仍在，判定失败")
+                                    continue
+                            uat_logger.warning("⚠️ 无法计算滑动距离，跳过盲目拖动")
+                            continue
                         except Exception as slide_error:
                             uat_logger.error(f"❌ 滑动验证失败: {slide_error}")
                             continue
@@ -6801,6 +6741,57 @@ class PlaywrightAutomation:
         uat_logger.error("❌ 未找到滑块验证码元素")
         raise Exception("滑动验证失败: 未找到滑块验证码元素，可能的原因：1. 验证码未加载完成 2. 页面结构发生变化 3. 选择器不匹配")
     
+
+    async def _captcha_engine_slider_distance(self, page, slider, slider_box) -> Optional[int]:
+        """通过 captcha_engine 计算滑块缺口距离（含图像→轨道缩放）。"""
+        try:
+            bg_png = await self._screenshot_captcha_region_png(page)
+            slider_png = None
+            try:
+                slider_png = await slider.screenshot()
+            except Exception:
+                pass
+            if not bg_png:
+                return None
+            instruction = await self._extract_captcha_instruction_text(page)
+            captcha_html = await self._extract_captcha_html_snippet(page)
+            ctype = resolve_captcha_type(instruction, captcha_html)
+            dist: Optional[int] = None
+            if ctype == "curve":
+                dist = solve_curve_offset(bg_png)
+            if not dist or dist <= 0:
+                dist = solve_slider_gap(bg_png, slider_png)
+            if not dist or dist <= 0:
+                result = solve_captcha(
+                    bg_png, captcha_type=ctype or "slider", instruction=instruction, slider_png=slider_png
+                )
+                dist = result.distance if result and result.distance else None
+            if not dist or dist <= 0:
+                return None
+
+            track_w = 0
+            for sel in (".slider-move-track", '[class*="slider-move-track"]', ".slider-track", '[class*="verify-bar"]'):
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    tb = await loc.bounding_box()
+                    if tb and tb.get("width", 0) > 20:
+                        track_w = int(tb["width"])
+                        break
+            img_w = png_image_width(bg_png)
+            if track_w > 0 and img_w > 0:
+                scaled = scale_image_distance_to_track(
+                    int(dist), img_w, track_w, slider_width_px=int(slider_box.get("width", 0))
+                )
+                uat_logger.info(
+                    "[CAPTCHA_ENGINE] gap=%spx img_w=%s track_w=%s => drag=%spx",
+                    dist, img_w, track_w, scaled,
+                )
+                return scaled if scaled > 0 else None
+            uat_logger.info("[CAPTCHA_ENGINE] slider distance=%spx (unscaled)", dist)
+            return int(dist)
+        except Exception as e:
+            uat_logger.debug("captcha_engine slider distance failed: %s", e)
+            return None
 
     async def _perform_slider_action(self, page, slider):
         """执行滑块滑动操作
@@ -6835,7 +6826,9 @@ class PlaywrightAutomation:
             uat_logger.info(f"🎯 滑动起点: x={start_x}, y={start_y}")
             
             # 尝试识别拼图滑块并计算缺口位置
-            distance = await self._calculate_puzzle_distance(page, slider, slider_box)
+            distance = await self._captcha_engine_slider_distance(page, slider, slider_box)
+            if not distance or distance <= 0:
+                distance = await self._calculate_puzzle_distance(page, slider, slider_box)
             
             # 如果无法计算距离，尝试智能计算
             if not distance or distance <= 0:
@@ -6871,6 +6864,14 @@ class PlaywrightAutomation:
 
     async def _captcha_appears_gone(self, page) -> bool:
         """验证码是否已消失（用于滑块/点选后的成功判定）。"""
+        if self._captcha_scoped():
+            root = self._captcha_root_locator(page)
+            try:
+                if await root.count() == 0:
+                    return True
+                return not await root.is_visible()
+            except Exception:
+                return True
         selectors = [
             '[class*="captcha"]',
             '[class*="verify"]',
@@ -7051,67 +7052,17 @@ class PlaywrightAutomation:
             uat_logger.info("🖱️  按下鼠标")
             await asyncio.sleep(random.uniform(0.02, 0.08))  # 减少按下前的犹豫时间
             await page.mouse.down()
-            await asyncio.sleep(random.uniform(0.02, 0.05))  # 减少按下后的停顿时间
-            
-            # 计算滑动路径点 - 模拟人类的加速、匀速、减速过程
-            total_steps = random.randint(20, 30)  # 增加总步骤数，进一步提高精度
-            step_distance = distance / total_steps
-            
-            # 分阶段滑动，模拟人类行为
-            current_x = start_x
-            current_y = start_y
-            
-            for step in range(1, total_steps + 1):
-                # 计算当前步骤的目标位置
-                target_x = start_x + step_distance * step
-                
-                # 模拟人类的Y轴偏移 - 更自然的抖动
-                # 开始和结束时抖动较小，中间时抖动较大
-                if step < total_steps * 0.2 or step > total_steps * 0.8:
-                    # 开始和结束阶段，抖动较小
-                    jitter = random.randint(-1, 1)
-                else:
-                    # 中间阶段，抖动较大
-                    jitter = random.randint(-3, 3)
-                target_y = start_y + jitter
-                
-                # 模拟人类的移动速度变化
-                # 开始时较慢（加速），中间较快（匀速），结束时较慢（减速）
-                if step < total_steps * 0.3:
-                    # 加速阶段
-                    move_steps = random.randint(2, 3)
-                    sleep_time = random.uniform(0.04, 0.06)
-                elif step > total_steps * 0.7:
-                    # 减速阶段
-                    if step > total_steps * 0.9:
-                        # 最后10%的步骤，使用最多的步骤以获得最高精度
-                        move_steps = random.randint(20, 30)  # 进一步增加最后阶段的步骤数
-                        sleep_time = random.uniform(0.1, 0.2)  # 增加最后阶段的停留时间
-                    else:
-                        # 减速阶段的前半部分
-                        move_steps = random.randint(10, 15)  # 进一步增加减速阶段的步骤数
-                        sleep_time = random.uniform(0.05, 0.1)
-                else:
-                    # 匀速阶段
-                    move_steps = random.randint(3, 5)  # 增加匀速阶段的步骤数
-                    sleep_time = random.uniform(0.02, 0.05)
-                
-                # 移动到目标位置
-                await page.mouse.move(target_x, target_y, steps=move_steps)
-                await asyncio.sleep(sleep_time)
-            
-            # 最后的精确定位 - 确保滑块准确到达目标位置
-            final_target_x = start_x + distance
-            final_target_y = start_y + random.randint(-1, 1)  # 最后的微调
-            await page.mouse.move(final_target_x, final_target_y, steps=30)  # 使用更多步骤确保精度
-            await asyncio.sleep(random.uniform(0.1, 0.2))  # 增加停顿时间，确保完全到达目标位置
-            
-            # 释放鼠标 - 人类可能会有轻微的延迟
-            await asyncio.sleep(random.uniform(0.05, 0.1))  # 释放前的停顿
+            await asyncio.sleep(random.uniform(0.02, 0.05))
+
+            end_x = start_x + distance
+            path = build_human_drag_path(start_x, start_y, end_x, start_y)
+            for x, y in path[1:]:
+                await page.mouse.move(x, y)
+                await asyncio.sleep(random.uniform(0.008, 0.022))
+
+            await asyncio.sleep(random.uniform(0.05, 0.1))
             uat_logger.info("🖱️  释放鼠标")
             await page.mouse.up()
-            
-            # 释放后的停顿
             await asyncio.sleep(random.uniform(0.1, 0.2))
             
             return True
@@ -7510,20 +7461,355 @@ class PlaywrightAutomation:
             # 出错时返回None
             return None
 
+    async def _screenshot_captcha_region_png(self, page, container_selector: str = None) -> bytes:
+        """截取验证码区域 PNG 字节。"""
+        try:
+            if self._captcha_scoped():
+                root = self._captcha_root_locator(page)
+                if await root.count() > 0 and await root.is_visible():
+                    return await root.screenshot()
+                if self._captcha_scope_locator is not None:
+                    scope = self._captcha_scope_locator
+                    if await scope.count() > 0 and await scope.is_visible():
+                        return await scope.screenshot()
+                return b""
+            if container_selector:
+                loc = page.locator(container_selector).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    return await loc.screenshot()
+            for sel in captcha_container_selectors():
+                loc = page.locator(sel)
+                if await loc.count() > 0:
+                    first = loc.first
+                    if await first.is_visible():
+                        return await first.screenshot()
+            return await page.screenshot(full_page=False)
+        except Exception as e:
+            uat_logger.debug("captcha region screenshot failed: %s", e)
+            return b""
+
+    async def _drag_slider_by_distance(self, page, slider, distance: int) -> bool:
+        """使用 captcha_engine 人类轨迹拖动滑块。"""
+        slider_box = await slider.bounding_box()
+        if not slider_box or distance <= 0:
+            return False
+        distance = await self._clamp_slider_distance_on_page(page, slider, slider_box, distance)
+        if distance <= 0:
+            return False
+        retry_off = captcha_distance_retry_offset()
+        if retry_off:
+            distance = max(8, int(distance) + retry_off)
+            uat_logger.info("[CAPTCHA] 同题重试距离微调 %+dpx => %spx", retry_off, distance)
+        start_x = slider_box['x'] + slider_box['width'] / 2
+        start_y = slider_box['y'] + slider_box['height'] / 2
+        end_x = start_x + distance
+        path = build_human_drag_path(start_x, start_y, end_x, start_y)
+        await slider.scroll_into_view_if_needed()
+        await page.mouse.move(path[0][0], path[0][1])
+        await asyncio.sleep(random.uniform(0.1, 0.2))
+        await page.mouse.down()
+        for i, (x, y) in enumerate(path[1:]):
+            steps = 3 if i < len(path) - 4 else 5
+            await page.mouse.move(x, y, steps=steps)
+            await asyncio.sleep(random.uniform(0.006, 0.018))
+        await asyncio.sleep(random.uniform(0.05, 0.12))
+        await page.mouse.up()
+        await asyncio.sleep(1.0)
+        return await self._captcha_appears_gone(page)
+
+    async def _handle_curve_captcha(self, page) -> bool:
+        """处理滑动曲线类验证码（tianai 等）。"""
+        instruction = await self._extract_captcha_instruction_text(page)
+        captcha_html = await self._extract_captcha_html_snippet(page)
+        ctype = resolve_captcha_type(instruction, captcha_html)
+        if ctype in ("click_text", "click_icon"):
+            return False
+        if ctype not in ("curve", "concat", "slider", "unknown") and "曲线" not in instruction:
+            return False
+
+        uat_logger.info("🔍 [CURVE] 处理滑动曲线验证码")
+        slider_selectors = (
+            '#slider-move-btn', '.slider-move-btn',
+            '[class*="slider"] button', '[class*="slide"] button',
+            '.slider-handle', '.slide-handle',
+        )
+        slider = await self._captcha_first_visible(page, slider_selectors)
+        if slider is None:
+            return False
+
+        png = await self._screenshot_captcha_region_png(page)
+        distance = solve_curve_offset(png) if png else None
+        if distance is None and png:
+            result = solve_captcha(png, captcha_type="curve", instruction=instruction)
+            distance = result.distance
+        if not distance or distance <= 0:
+            return False
+        slider_box = await slider.bounding_box()
+        if slider_box:
+            track_w = 0
+            track_parent = self._captcha_root_locator(page) if self._captcha_scoped() else page
+            for sel in (".slider-move-track", '[class*="slider-move-track"]', ".slider-track"):
+                loc = track_parent.locator(sel).first
+                if await loc.count() > 0:
+                    tb = await loc.bounding_box()
+                    if tb:
+                        track_w = int(tb["width"])
+                        break
+            img_w = png_image_width(png) if png else 0
+            if track_w > 0 and img_w > 0:
+                distance = scale_image_distance_to_track(
+                    int(distance), img_w, track_w, slider_width_px=int(slider_box["width"])
+                )
+            else:
+                distance = await self._clamp_slider_distance_on_page(page, slider, slider_box, distance)
+        if not distance or distance <= 0:
+            uat_logger.warning("[CURVE] 拖动距离无效，跳过")
+            return False
+        uat_logger.info("[CURVE] 拖动距离=%spx", distance)
+        return await self._drag_slider_by_distance(page, slider, int(distance))
+
+    async def _handle_click_text_captcha(self, page) -> bool:
+        """文字/图标点选验证码：先解析答案序列，再按序在图中点击。"""
+        instruction = await self._extract_captcha_instruction_text(page)
+        targets = await self._extract_captcha_answer_sequence(page)
+        if not targets:
+            targets = self._parse_instruction_targets(instruction)
+        if not targets and resolve_captcha_type(instruction, "") not in ("click_text", "click_icon"):
+            return False
+
+        uat_logger.info("🔍 [CLICK_TEXT] 答案序列=%s (instruction=%r)", targets, instruction[:60] if instruction else "")
+        emit_captcha_status(f"需依次点击：{' → '.join(targets)}")
+
+        bg_selectors = (
+            "#tianai-captcha-bg-img",
+            "#tianai-captcha-slider-bg",
+            '[id*="captcha-bg"]',
+            '[class*="captcha"] img',
+            '[class*="verify"] img',
+            "img[class*='captcha']",
+            "img",
+        )
+        image = await self._captcha_first_visible(page, bg_selectors)
+        if image is None:
+            return False
+
+        image_box = await image.bounding_box()
+        if not image_box:
+            return False
+
+        png = await image.screenshot()
+        if not png or not targets:
+            return False
+
+        points = solve_click_targets_for_chars(png, targets)
+        if len(points) != len(targets):
+            ocr_ok = await self._click_image_by_ocr_instruction(page, image, targets=targets)
+            if ocr_ok:
+                return True
+            vis_ok = await self._click_image_by_vision(page, image, targets=targets)
+            if vis_ok:
+                return True
+            uat_logger.warning(
+                "[CLICK_TEXT] 未能在图中定位全部 %s 个目标（已定位 %s 个），拒绝盲点",
+                len(targets),
+                len(points),
+            )
+            return False
+
+        for i, (x, y) in enumerate(points):
+            await page.mouse.click(image_box["x"] + x, image_box["y"] + y)
+            uat_logger.info("[CLICK_TEXT] 第%s/%s 点击「%s」@(%s,%s)", i + 1, len(targets), targets[i], int(x), int(y))
+            await asyncio.sleep(random.uniform(0.22, 0.42))
+
+        await asyncio.sleep(0.35)
+        await self._click_captcha_confirm_button(page)
+        await asyncio.sleep(1.0)
+        return await self._captcha_appears_gone(page)
+
+    async def _click_captcha_confirm_button(self, page) -> None:
+        confirm_selectors = (
+            "#tianai-captcha-slider-btn",
+            "#tianai-captcha-submit-btn",
+            'button:has-text("确定")',
+            'button:has-text("确认")',
+            '[class*="captcha"] button:has-text("确定")',
+        )
+        search_in = self._captcha_root_locator(page) if self._captcha_scoped() else page
+        for csel in confirm_selectors:
+            try:
+                btn = search_in.locator(csel).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.click(timeout=2000)
+                    uat_logger.info("[CLICK_TEXT] 已点击确认按钮: %s", csel)
+                    return
+            except Exception:
+                continue
+
+    async def _extract_captcha_answer_sequence(self, page) -> List[str]:
+        """从验证码提示区读取需依次点击的文字（优先于整段 instruction）。"""
+        js = """(root) => {
+                if (!root) return [];
+                const splitChars = (s) => {
+                    const t = (s || '').trim().replace(/[“”"'「」]/g, '');
+                    if (!t) return [];
+                    if (/^[\\u4e00-\\u9fff]+$/.test(t) && t.length > 1) return [...t];
+                    return t.split(/[、，,\\s]+/).map(x => x.trim()).filter(x => x.length >= 1);
+                };
+
+                const wordNodes = root.querySelectorAll(
+                    '[class*="click-tip"] span, [class*="click-tip"] div, [class*="word"] span, [class*="char"] span, .click-word'
+                );
+                const fromNodes = [];
+                for (const n of wordNodes) {
+                    const t = (n.innerText || n.textContent || '').trim();
+                    if (t.length === 1 && /[\\u4e00-\\u9fff]/.test(t)) fromNodes.push(t);
+                }
+                if (fromNodes.length >= 2) return fromNodes;
+
+                const textEls = root.querySelectorAll('[class*="tip"], [class*="prompt"], [class*="title"], span, div, p');
+                for (const n of textEls) {
+                    const t = (n.innerText || n.textContent || '').trim();
+                    if (!t || t.length > 80) continue;
+                    const m = t.match(/请依次点击[：:\\s]+(.+)/);
+                    if (m) return splitChars(m[1]);
+                    if (t.startsWith('请依次点击')) return splitChars(t.replace(/^请依次点击[：:\\s]*/, ''));
+                }
+                return [];
+            }"""
+        root = self._captcha_root_locator(page)
+        try:
+            if await root.count() > 0:
+                chars = await root.evaluate(js)
+                if chars and isinstance(chars, list):
+                    out = [str(c).strip() for c in chars if str(c).strip()]
+                    if out:
+                        return out
+        except Exception as e:
+            uat_logger.debug("extract answer sequence failed: %s", e)
+        if self._captcha_scoped():
+            return []
+        try:
+            chars = await page.evaluate("""() => {
+                const roots = ['#tianai-captcha', '#captcha-box', '.captcha-box', '[class*="captcha-box"]'];
+                let root = null;
+                for (const sel of roots) {
+                    const el = document.querySelector(sel);
+                    if (el && el.offsetParent !== null) { root = el; break; }
+                }
+                if (!root) return [];
+                const splitChars = (s) => {
+                    const t = (s || '').trim().replace(/[“”"'「」]/g, '');
+                    if (!t) return [];
+                    if (/^[\\u4e00-\\u9fff]+$/.test(t) && t.length > 1) return [...t];
+                    return t.split(/[、，,\\s]+/).map(x => x.trim()).filter(x => x.length >= 1);
+                };
+                const wordNodes = root.querySelectorAll(
+                    '[class*="click-tip"] span, [class*="click-tip"] div, [class*="word"] span, [class*="char"] span, .click-word'
+                );
+                const fromNodes = [];
+                for (const n of wordNodes) {
+                    const t = (n.innerText || n.textContent || '').trim();
+                    if (t.length === 1 && /[\\u4e00-\\u9fff]/.test(t)) fromNodes.push(t);
+                }
+                if (fromNodes.length >= 2) return fromNodes;
+                const textEls = root.querySelectorAll('[class*="tip"], [class*="prompt"], [class*="title"], span, div, p');
+                for (const n of textEls) {
+                    const t = (n.innerText || n.textContent || '').trim();
+                    if (!t || t.length > 80) continue;
+                    const m = t.match(/请依次点击[：:\\s]+(.+)/);
+                    if (m) return splitChars(m[1]);
+                    if (t.startsWith('请依次点击')) return splitChars(t.replace(/^请依次点击[：:\\s]*/, ''));
+                }
+                return [];
+            }""")
+            if chars and isinstance(chars, list):
+                out = [str(c).strip() for c in chars if str(c).strip()]
+                if out:
+                    return out
+        except Exception as e:
+            uat_logger.debug("extract answer sequence failed: %s", e)
+        return []
+
+    async def _handle_rotate_captcha(self, page) -> bool:
+        """处理旋转验证码。"""
+        instruction = await self._extract_captcha_instruction_text(page)
+        if "旋转" not in instruction and "rotate" not in instruction.lower():
+            return False
+
+        uat_logger.info("🔍 [ROTATE] 处理旋转验证码")
+        slider_selectors = (
+            '#slider-move-btn', '.slider-move-btn',
+            '[class*="rotate"] [class*="slider"]',
+            '[class*="slider"] button', '.slider-handle',
+        )
+        slider = await self._captcha_first_visible(page, slider_selectors)
+        if slider is None:
+            return False
+
+        png = await self._screenshot_captcha_region_png(page)
+        result = solve_captcha(png, captcha_type="rotate", instruction=instruction) if png else None
+        angle = result.angle if result else None
+        if angle is None:
+            vis = solve_with_vision_fallback(png, instruction) if png else None
+            angle = vis.angle if vis else 90
+        # 将角度映射为水平拖动距离（经验比例）
+        distance = int(angle * 2.5)
+        return await self._drag_slider_by_distance(page, slider, max(30, distance))
+
     async def _handle_image_captcha(self, page):
         """处理点击图片文字验证码"""
+        if await self._handle_click_text_captcha(page):
+            return True
         uat_logger.info("🔍 处理点击图片文字验证码")
-        
-        # 常见的图片验证码选择器
-        image_captcha_selectors = [
+
+        image_captcha_selectors = (
+            '#tianai-captcha-bg-img',
+            '#tianai-captcha-slider-bg',
+            '[id*="captcha-bg"]',
             '.captcha-image',
             '.verify-image',
             '.image-captcha',
             '#captcha-image',
             '#verify-image',
-            '[class*="image"]',
+            '[class*="captcha"] img',
+            '[class*="verify"] img',
             '[class*="pic"]',
-            '[class*="img"]',
+            'img[class*="captcha"]',
+            'img[class*="verify"]',
+            '.captcha-container img',
+            '.verify-container img',
+            'img',
+        )
+
+        if self._captcha_scoped():
+            image = await self._captcha_first_visible(page, image_captcha_selectors)
+            if image is None:
+                uat_logger.warning("⚠️ 用户指定范围内未找到图片验证码元素")
+                return False
+            try:
+                ocr_ok = await self._click_image_by_ocr_instruction(page, image)
+                if ocr_ok and await self._captcha_appears_gone(page):
+                    return True
+                vis_ok = await self._click_image_by_vision(page, image)
+                if vis_ok and await self._captcha_appears_gone(page):
+                    return True
+            except Exception as e:
+                uat_logger.warning("⚠️ [IMAGE] 用户范围内点选失败: %s", e)
+            return False
+        
+        # 常见的图片验证码选择器（避免 [class*="image"] 误匹配页面其它图片）
+        image_captcha_selectors = [
+            '#tianai-captcha-bg-img',
+            '#tianai-captcha-slider-bg',
+            '[id*="captcha-bg"]',
+            '.captcha-image',
+            '.verify-image',
+            '.image-captcha',
+            '#captcha-image',
+            '#verify-image',
+            '[class*="captcha"] img',
+            '[class*="verify"] img',
+            '[class*="pic"]',
             'img[class*="captcha"]',
             'img[class*="verify"]',
             '.captcha-container img',
@@ -7547,14 +7833,15 @@ class PlaywrightAutomation:
                         # 先尝试 OCR 指令驱动点选，再尝试图像识别点选，最后回退随机点选
                         try:
                             ocr_ok = await self._click_image_by_ocr_instruction(page, image)
-                            if ocr_ok:
+                            if ocr_ok and await self._captcha_appears_gone(page):
                                 uat_logger.info("✅ [IMAGE_OCR] OCR指令驱动点选成功")
                                 return True
                             ai_ok = await self._click_image_by_vision(page, image)
-                            if not ai_ok:
-                                await self._click_image_randomly(page, image)
-                            uat_logger.info("✅ 图片验证操作完成")
-                            return True
+                            if ai_ok:
+                                uat_logger.info("✅ [IMAGE_VISION] 视觉点选成功")
+                                return True
+                            uat_logger.warning("⚠️ 无法在图中定位全部目标字符，跳过随机盲点")
+                            continue
                         except Exception as click_error:
                             uat_logger.error(f"❌ 图片验证失败: {click_error}")
                             continue
@@ -7566,173 +7853,148 @@ class PlaywrightAutomation:
         return False
 
     async def _extract_captcha_instruction_text(self, page) -> str:
-        """提取页面上验证码点击指令文本（如：请依次点击“苹果、香蕉”）。"""
-        try:
-            txt = await page.evaluate("""() => {
-                const sels = [
-                    '[class*="captcha"]',
-                    '[class*="verify"]',
-                    '[class*="yidun"]',
-                    '[class*="geetest"]',
-                    '[class*="tcaptcha"]',
-                    '[class*="question"]',
-                    '[class*="prompt"]',
-                ];
-                let best = '';
-                for (const s of sels) {
-                    const nodes = Array.from(document.querySelectorAll(s)).slice(0, 20);
+        """提取验证码容器内的指令文本（如：请依次点击「苹果、香蕉」）。"""
+        pick_js = """(root) => {
+                const pickFrom = (el) => {
+                    const nodes = el.querySelectorAll(
+                        '[class*="tip"], [class*="prompt"], [class*="title"], [class*="text"], span, div, p, label'
+                    );
+                    let best = '';
                     for (const n of nodes) {
                         const t = (n.innerText || n.textContent || '').trim();
-                        if (!t) continue;
-                        if (t.includes('点击') || t.includes('依次') || t.includes('选择')) {
-                            if (t.length > best.length) best = t;
+                        if (!t || t.length > 120) continue;
+                        if (t.includes('依次点击') || t.includes('请依次') || t.includes('请点击')
+                            || t.includes('拖动') || t.includes('曲线') || t.includes('旋转')
+                            || t.includes('滑动') || t.includes('点选')) {
+                            if (t.length < best.length || !best) best = t;
+                            if (t.includes('依次点击') || t.includes('请依次')) return t;
                         }
                     }
+                    return best;
+                };
+                return pickFrom(root);
+            }"""
+        root = self._captcha_root_locator(page)
+        try:
+            if await root.count() > 0:
+                txt = await root.evaluate(pick_js)
+                if txt:
+                    return str(txt).strip()
+        except Exception:
+            pass
+        if self._captcha_scoped():
+            return ""
+        try:
+            txt = await page.evaluate("""() => {
+                const roots = [
+                    '#tianai-captcha', '#captcha-box', '.captcha-box',
+                    '.verification-box', '.verify-box', '[class*="captcha-box"]',
+                ];
+                const pickFrom = (root) => {
+                    const nodes = root.querySelectorAll(
+                        '[class*="tip"], [class*="prompt"], [class*="title"], [class*="text"], span, div, p, label'
+                    );
+                    let best = '';
+                    for (const n of nodes) {
+                        const t = (n.innerText || n.textContent || '').trim();
+                        if (!t || t.length > 120) continue;
+                        if (t.includes('依次点击') || t.includes('请依次') || t.includes('请点击')
+                            || t.includes('拖动') || t.includes('曲线') || t.includes('旋转')
+                            || t.includes('滑动') || t.includes('点选')) {
+                            if (t.length < best.length || !best) best = t;
+                            if (t.includes('依次点击') || t.includes('请依次')) return t;
+                        }
+                    }
+                    return best;
+                };
+                for (const sel of roots) {
+                    const root = document.querySelector(sel);
+                    if (root && root.offsetParent !== null) {
+                        const t = pickFrom(root);
+                        if (t) return t;
+                    }
                 }
-                return best;
+                return '';
             }""")
             return (txt or "").strip()
         except Exception:
             return ""
 
     def _parse_instruction_targets(self, instruction: str) -> List[str]:
-        s = (instruction or "").strip()
-        if not s:
-            return []
-        m = re.search(r"(?:点击|选择|依次点击|请点击|请依次点击)\s*[：: ]?\s*[“\"'「]?(.*?)[”\"'」]?(?:$|。|，|,)", s)
-        body = m.group(1).strip() if m else s
-        body = body.replace("依次", "").replace("点击", "").replace("选择", "").strip()
-        if not body:
-            return []
-        parts = re.split(r"[、，,;\s]+", body)
-        out = []
-        for p in parts:
-            t = p.strip().strip("“”\"'「」")
-            if len(t) >= 1:
-                out.append(t)
-        return out[:5]
+        return parse_instruction_targets(instruction)
 
-    async def _click_image_by_ocr_instruction(self, page, image) -> bool:
-        """OCR 指令驱动点选：先识别提示词，再在图中匹配文字框并点击。"""
+    async def _click_image_by_ocr_instruction(self, page, image, targets: List[str] = None) -> bool:
+        """OCR 指令驱动点选：按答案序列在图中逐字匹配并点击。"""
         try:
-            pyt = importlib.import_module("pytesseract")
+            importlib.import_module("pytesseract")
         except Exception:
             uat_logger.info("ℹ️ [IMAGE_OCR] 未安装 pytesseract，跳过 OCR 路径")
             return False
 
         try:
             instruction = await self._extract_captcha_instruction_text(page)
-            targets = self._parse_instruction_targets(instruction)
             if not targets:
-                uat_logger.info("ℹ️ [IMAGE_OCR] 未提取到点击指令词，跳过 OCR 路径")
+                targets = await self._extract_captcha_answer_sequence(page)
+            if not targets:
+                targets = self._parse_instruction_targets(instruction)
+            if not targets:
+                uat_logger.info("ℹ️ [IMAGE_OCR] 未提取到点击答案序列")
                 return False
-            uat_logger.info(f"🔍 [IMAGE_OCR] 指令词: {targets}")
+            uat_logger.info("🔍 [IMAGE_OCR] 答案序列: %s", targets)
 
             image_box = await image.bounding_box()
             if not image_box:
                 return False
             png = await image.screenshot()
-            arr = np.frombuffer(png, dtype=np.uint8)
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is None:
-                return False
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-            data = pyt.image_to_data(gray, lang="chi_sim+eng", output_type=pyt.Output.DICT)
-            n = len(data.get("text", []))
-            ocr_boxes = []
-            for i in range(n):
-                txt = (data["text"][i] or "").strip()
-                if not txt:
-                    continue
-                try:
-                    conf = float(data["conf"][i])
-                except Exception:
-                    conf = 0.0
-                if conf < 20:
-                    continue
-                x, y, w, h = int(data["left"][i]), int(data["top"][i]), int(data["width"][i]), int(data["height"][i])
-                if w < 6 or h < 6:
-                    continue
-                ocr_boxes.append({"text": txt, "conf": conf, "x": x, "y": y, "w": w, "h": h})
-
-            if not ocr_boxes:
+            points = solve_click_targets_for_chars(png, targets)
+            if len(points) != len(targets):
                 return False
 
-            clicked_any = False
-            for target in targets:
-                # 找包含目标词的最佳框
-                candidates = [b for b in ocr_boxes if target in b["text"] or b["text"] in target]
-                if not candidates:
-                    continue
-                candidates.sort(key=lambda b: (b["conf"], b["w"] * b["h"]), reverse=True)
-                b = candidates[0]
-                click_x = image_box["x"] + b["x"] + b["w"] / 2
-                click_y = image_box["y"] + b["y"] + b["h"] / 2
-                await page.mouse.click(click_x, click_y)
-                clicked_any = True
-                uat_logger.info(f"🎯 [IMAGE_OCR] 点击目标词「{target}」位置")
-                await asyncio.sleep(0.8)
-                if await self._captcha_appears_gone(page):
-                    return True
+            for i, (x, y) in enumerate(points):
+                await page.mouse.click(image_box["x"] + x, image_box["y"] + y)
+                uat_logger.info("🎯 [IMAGE_OCR] 第%s/%s 点击「%s」", i + 1, len(targets), targets[i])
+                await asyncio.sleep(random.uniform(0.22, 0.42))
 
-            return clicked_any and await self._captcha_appears_gone(page)
+            await asyncio.sleep(0.35)
+            await self._click_captcha_confirm_button(page)
+            await asyncio.sleep(0.8)
+            return await self._captcha_appears_gone(page)
         except Exception as e:
             uat_logger.warning(f"⚠️ [IMAGE_OCR] OCR 指令点选失败: {e}")
             return False
 
-    async def _click_image_by_vision(self, page, image) -> bool:
-        """使用 OpenCV 在验证码图中找可疑文字块并点击。"""
+    async def _click_image_by_vision(self, page, image, targets: List[str] = None) -> bool:
+        """使用 captcha_engine 点选 + 可选 VLM 兜底（按答案序列，不部分点击）。"""
         try:
             image_box = await image.bounding_box()
             if not image_box:
                 return False
             png = await image.screenshot()
-            arr = np.frombuffer(png, dtype=np.uint8)
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is None:
-                return False
+            instruction = await self._extract_captcha_instruction_text(page)
+            if not targets:
+                targets = await self._extract_captcha_answer_sequence(page)
+            if not targets:
+                targets = self._parse_instruction_targets(instruction)
 
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            blur = cv2.GaussianBlur(gray, (3, 3), 0)
-            bin_img = cv2.adaptiveThreshold(
-                blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 8
-            )
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-            bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel, iterations=1)
-            contours, _ = cv2.findContours(bin_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours:
-                return False
+            points = solve_click_targets_for_chars(png, targets) if targets else []
+            if len(points) != len(targets):
+                vis = solve_with_vision_fallback(png, instruction or f"请依次点击：{'、'.join(targets)}")
+                if vis and vis.points and targets and len(vis.points) >= len(targets):
+                    points = vis.points[: len(targets)]
+                else:
+                    return False
 
-            h_img, w_img = gray.shape[:2]
-            candidates = []
-            for c in contours:
-                x, y, w, h = cv2.boundingRect(c)
-                area = w * h
-                if area < 80 or area > (w_img * h_img * 0.12):
-                    continue
-                ratio = w / max(h, 1)
-                if ratio < 0.2 or ratio > 12:
-                    continue
-                # 偏好靠上的文字区域（常见“请依次点击”目标字在上半部分）
-                score = area - (y * 0.8)
-                candidates.append((score, x, y, w, h))
-            if not candidates:
-                return False
-            candidates.sort(key=lambda t: t[0], reverse=True)
+            for i, (x, y) in enumerate(points[: len(targets)]):
+                await page.mouse.click(image_box["x"] + x, image_box["y"] + y)
+                uat_logger.info("🎯 [IMAGE_VISION] 第%s/%s 点击", i + 1, len(targets))
+                await asyncio.sleep(random.uniform(0.22, 0.42))
 
-            # 点击前3个最可能文本块中心，逐次判定是否通过
-            for _, x, y, w, h in candidates[:3]:
-                click_x = image_box["x"] + x + w / 2
-                click_y = image_box["y"] + y + h / 2
-                await page.mouse.click(click_x, click_y)
-                await asyncio.sleep(0.7)
-                if await self._captcha_appears_gone(page):
-                    uat_logger.info("✅ [IMAGE_AI] 图像识别点选后验证码已消失")
-                    return True
-            return False
+            await asyncio.sleep(0.35)
+            await self._click_captcha_confirm_button(page)
+            await asyncio.sleep(0.8)
+            return await self._captcha_appears_gone(page)
         except Exception as e:
-            uat_logger.debug(f"[IMAGE_AI] 视觉点选失败: {e}")
+            uat_logger.debug(f"[IMAGE_VLM] 视觉点选失败: {e}")
             return False
     
     async def _click_image_randomly(self, page, image):
@@ -9055,7 +9317,14 @@ class PlaywrightAutomation:
                     step_error = None
                     try:
                         # 执行验证操作
-                        await self.verify_element(selector, verify_type, step.get("selector_type", "css"), step.get("iframe_selector"), page=target_page)
+                        await self.verify_element(
+                            selector,
+                            verify_type,
+                            step.get("selector_type", "css"),
+                            step.get("iframe_selector"),
+                            page=target_page,
+                            captcha_max_attempts=step.get("captcha_max_attempts"),
+                        )
                         uat_logger.info(f"✅ [VERIFY_DEBUG] 验证操作成功")
                         # 标记为成功
                         step_status = "success"
@@ -9362,6 +9631,8 @@ class PlaywrightAutomation:
                     exec_step["verify_type"] = (str(vt).strip().lower() or "auto") if str(vt).strip() else "auto"
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
+                    if step.get("captcha_max_attempts") is not None:
+                        exec_step["captcha_max_attempts"] = step.get("captcha_max_attempts")
                 elif step["action"] == "assert":
                     exec_step["selector"] = step["selector_value"]
                     exec_step["selector_type"] = step.get("selector_type", "css")
@@ -9997,7 +10268,14 @@ class PlaywrightAutomation:
                 verify_type = (str(vt_raw).strip().lower() or "auto") if str(vt_raw).strip() else "auto"
                 selector_type = step.get("selector_type", "css")
                 iframe_selector = step.get("iframe_selector", "")
-                await self.verify_element(selector, verify_type, selector_type, iframe_selector, page=target_page)
+                await self.verify_element(
+                    selector,
+                    verify_type,
+                    selector_type,
+                    iframe_selector,
+                    page=target_page,
+                    captcha_max_attempts=step.get("captcha_max_attempts"),
+                )
                 results.append({"status": "success", "step": step})
 
             elif action == "assert":
@@ -11462,21 +11740,22 @@ class PlaywrightWorker:
                 # 获取任务,超时1秒
                 task = self.task_queue.get(timeout=1)
                 task_id, func, args, kwargs = task
+                inner_timeout = kwargs.pop("_inner_timeout", 60)
                 
                 try:
                     # 检查是否是协程函数
                     if asyncio.iscoroutinefunction(func):
-                        # 在事件循环中执行异步函数，添加1分钟超时控制
+                        # 在事件循环中执行异步函数
                         import functools
                         try:
                             result = self.loop.run_until_complete(
                                 asyncio.wait_for(
                                     func(*args, **kwargs),
-                                    timeout=60  # 1分钟超时
+                                    timeout=inner_timeout,
                                 )
                             )
                         except asyncio.TimeoutError:
-                            raise Exception("函数执行超过1分钟限制")
+                            raise Exception(f"函数执行超过{int(inner_timeout)}秒限制")
                     else:
                         # 执行同步函数
                         result = func(*args, **kwargs)
@@ -11496,20 +11775,22 @@ class PlaywrightWorker:
                 exc_info = traceback.format_exc()
                 print(f"工作线程错误: {e}\n{exc_info}")
     
-    def execute(self, func, *args, **kwargs):
+    def execute(self, func, *args, timeout=None, **kwargs):
         """在工作线程中执行函数"""
         # 确保工作线程已启动
         if not self.running or self.worker_thread is None or not self.worker_thread.is_alive():
             self._start_worker()
         
         task_id = str(time.time()) + str(id(func))
+        wait_timeout = 60 if timeout is None else max(1, int(timeout))
+        if "_inner_timeout" not in kwargs:
+            kwargs["_inner_timeout"] = wait_timeout
         self.task_queue.put((task_id, func, args, kwargs))
         
         # 等待结果
         while True:
             try:
-                # 修改为1分钟超时（60秒），更合理的执行时间限制
-                tid, status, result = self.result_queue.get(timeout=60)
+                tid, status, result = self.result_queue.get(timeout=wait_timeout)
                 if tid == task_id:
                     if status == "success":
                         return result
@@ -12006,6 +12287,7 @@ def sync_verify_element(
     selector_type: str = "css",
     iframe_selector: str = None,
     locator_candidates=None,
+    captcha_max_attempts: Optional[int] = None,
 ):
     async def run():
         return await automation.verify_element(
@@ -12014,8 +12296,10 @@ def sync_verify_element(
             selector_type,
             iframe_selector=iframe_selector,
             locator_candidates=locator_candidates,
+            captcha_max_attempts=captcha_max_attempts,
         )
-    return worker.execute(run)
+    inner_timeout = captcha_worker_timeout()
+    return worker.execute(run, timeout=inner_timeout, _inner_timeout=inner_timeout)
 
 def sync_get_page_elements():
     async def run():
@@ -12440,6 +12724,25 @@ class SliderCaptchaOptimizer:
                 'distance_ratio': 0.68,
                 'verify_text': ['验证通过']
             },
+            'aliyun': {
+                'handle_selectors': [
+                    '.ac-slider-handle',
+                    '.ac-slider .btn',
+                    'div[class*="ac-slider"] button'
+                ],
+                'distance_ratio': 0.72,
+                'verify_text': ['验证成功', '验证通过']
+            },
+            'tianai': {
+                'handle_selectors': [
+                    '#slider-move-btn',
+                    '.slider-move-btn',
+                    '[class*="tianai"] [class*="slider"]',
+                    'div[class*="slider-move"]',
+                ],
+                'distance_ratio': 0.78,
+                'verify_text': ['验证成功', '验证通过', '通过验证']
+            },
             'default': {
                 'handle_selectors': [
                     '.slider-handle',
@@ -12493,6 +12796,7 @@ class SliderCaptchaOptimizer:
             platform = await page.evaluate("""() => {
                 // 检测常见的验证码平台特征
                 const platforms = {
+                    'tianai': ['tianai', 'tac-', 'slider-move-btn', '天爱'],
                     'geetest': ['geetest', '极验'],
                     'tcaptcha': ['tcaptcha', '腾讯验证'],
                     'yidun': ['yidun', '易盾', '网易云验证'],
@@ -12551,6 +12855,13 @@ class SliderCaptchaOptimizer:
         except Exception as e:
             uat_logger.debug(f"图像识别策略失败: {e}")
         
+        if not captcha_allow_heuristic_slide():
+            uat_logger.warning(
+                "[DISTANCE_CALC] 缺口识别失败，拒绝启发式滑到底 "
+                "(如需启用容器比例/经验值，设置 CAPTCHA_ALLOW_HEURISTIC_SLIDE=1)"
+            )
+            return 0
+        
         # 策略2: 基于容器宽度的比例计算
         try:
             distance = await self._calculate_distance_by_container(page, slider, platform)
@@ -12578,33 +12889,19 @@ class SliderCaptchaOptimizer:
         return distance
     
     async def _calculate_distance_by_image_recognition(self, page, slider, slider_box) -> Optional[int]:
-        """通过图像识别计算缺口位置"""
+        """通过 captcha_engine 图像识别计算缺口位置。"""
         try:
-            # 截取验证码区域
-            screenshot = await page.screenshot(full_page=False)
-            
-            # 转换为OpenCV格式
-            img_array = np.frombuffer(screenshot, dtype=np.uint8)
-            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-            
-            # 获取滑块图片作为模板
-            slider_screenshot = await slider.screenshot()
-            template_array = np.frombuffer(slider_screenshot, dtype=np.uint8)
-            template = cv2.imdecode(template_array, cv2.IMREAD_COLOR)
-            
-            # 模板匹配查找滑块位置
-            result = cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-            
-            # 计算缺口位置（简化版，实际需要更复杂的图像处理）
-            # 这里使用启发式方法：缺口通常在滑块右侧一定距离
-            gap_distance = int(template.shape[1] * random.uniform(2.0, 3.0))
-            
-            return gap_distance
-            
+            bg_png = await page.screenshot(full_page=False)
+            slider_png = await slider.screenshot()
+            dist = solve_slider_gap(bg_png, slider_png)
+            if dist and 0 < dist < 800:
+                return dist
+            dist = solve_curve_offset(bg_png)
+            if dist and 0 < dist < 800:
+                return dist
         except Exception as e:
             uat_logger.debug(f"图像识别失败: {e}")
-            return None
+        return None
     
     async def _calculate_distance_by_container(self, page, slider, platform: str) -> Optional[int]:
         """基于容器宽度的比例计算"""

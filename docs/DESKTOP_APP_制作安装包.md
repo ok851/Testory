@@ -16,16 +16,23 @@
 ```powershell
 cd D:\mkst_baixiang\Python_Code\NewUITestPlatform\NewUITestPlatform
 .\packaging\build_desktop_installer.ps1
+# 非默认路径：-IsccPath "D:\Inno Setup 6\ISCC.exe"
+# 仅准备发布目录：-PrepareOnly（再在 Inno 图形界面编译 .iss）
 ```
 
 脚本会自动：
 
-1. 准备 `dist\uat_release`（代码 + 内置 `.venv` + `playwright-browsers` + 默认 `.env`）
+1. 准备 `dist\uat_release`（代码 + 内置 `.venv` + `playwright-browsers` + `Testory.exe`）
 2. 下载 WebView2 安装程序并打进包（用户机离线可装界面）
-3. 自动下载 Inno Setup 6 到 `packaging\tools` 并编译
-4. 输出 **`dist\uat_platform_setup.exe`**（可能 1～3GB，正常）
+3. 调用本机 Inno Setup 6 编译（或 `-PrepareOnly` 时跳过，由您手动编译）
+4. 输出 **`dist\testory_setup.exe`**（大体积时另有 `testory_setup-1.bin`，约 1～3GB 正常）
 
-完成后 **只把这一个 exe 发给用户**。
+完成后把 **testory_setup.exe（及同目录 .bin 分卷）** 发给用户。
+
+## 仅用 Inno 图形界面编译
+
+1. `.\packaging\build_desktop_installer.ps1 -PrepareOnly`
+2. Inno Setup 6 → 打开 `packaging\inno\uat_platform.iss` → 编译
 
 ## 团队版：连接共享服务器
 

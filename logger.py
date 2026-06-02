@@ -3,7 +3,15 @@ import os
 from datetime import datetime
 import json
 import traceback
+from pathlib import Path
 from typing import Optional, Dict, Any
+
+
+def _default_log_dir() -> str:
+    raw = os.environ.get("UAT_DATA_DIR", "").strip()
+    if raw:
+        return str(Path(raw) / "logs")
+    return "logs"
 
 class UATLogger:
     """AI自动化测试平台日志记录器"""
@@ -147,4 +155,4 @@ class UATLogger:
         return filtered
 
 # 创建全局日志记录器实例
-uat_logger = UATLogger()
+uat_logger = UATLogger(log_dir=_default_log_dir())

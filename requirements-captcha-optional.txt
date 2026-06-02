@@ -1,0 +1,9 @@
+# 人机验证码可选增强（勿打入主安装包 / 离线 bundle；约 200MB+ 因 ddddocr 依赖 onnxruntime）
+# 安装：pip install -r requirements-captcha-optional.txt
+# 或 API：POST /api/captcha/optional-deps/install  {"component":"ddddocr"}
+# 安装 ddddocr 后于 .env 设置 CAPTCHA_DDDDOCR_ENABLE=1 并重启应用
+#
+# pytesseract 还需系统安装 Tesseract-OCR（Windows 安装包并加入 PATH）
+# 中文点选：chi_sim 语言包
+ddddocr>=1.4.11
+pytesseract>=0.3.10

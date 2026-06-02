@@ -69,6 +69,11 @@
                 <a href="/api-testing" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-teal-600 text-white hover:bg-teal-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-i18n-title="nav_api_test_title" title="接口测试">
                     <i class="fas fa-plug mr-1"></i><span data-i18n="nav_api_test">接口测试</span>
                 </a>
+                {% if mobile_testing_enabled %}
+                <a href="/mobile-testing" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" title="Android 真机投屏与自动化">
+                    <i class="fas fa-mobile-alt mr-1"></i><span>移动端</span>
+                </a>
+                {% endif %}
                 <a href="/run-history" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-feature="basic" data-i18n-title="nav_history_title" title="运行历史">
                     <i class="fas fa-history mr-1"></i><span data-i18n="nav_history">历史</span>
                 </a>
@@ -161,7 +166,9 @@
         </div>
     </div>
 
+    {% if is_client %}<main id="main-content" class="testory-desktop-main">{% endif %}
     {% block content %}{% endblock %}
+    {% if is_client %}</main>{% endif %}
 
     <script>
         window.UITranslations = {

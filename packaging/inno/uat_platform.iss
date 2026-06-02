@@ -27,7 +27,7 @@ SetupIconFile=testory.ico
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=admin
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 ; 允许超大安装包
 DiskSpanning=yes

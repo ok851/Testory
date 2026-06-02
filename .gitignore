@@ -15,6 +15,9 @@ videos/
 exports/
 dist/
 packaging/tools/
+plugin_bundles/*.zip
+config/plugin_bundles/*.zip
+static/plugin_bundles/*.zip
 *.log
 agent-tools/
  

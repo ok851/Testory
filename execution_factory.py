@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-执行器工厂：统一步骤 → Web（Playwright）/ 桌面（pywinauto）分发。
+执行器工厂：统一步骤 → Web（Playwright）/ 桌面（pywinauto）/ Android（Appium）分发。
 """
 
 from __future__ import annotations
@@ -10,11 +10,13 @@ from typing import Any, Callable, Dict, List, Optional
 from desktop_automation import sync_desktop_execute_step
 from step_executor import (
     async_execute_step_by_layer,
+    case_steps_include_android,
     case_steps_include_desktop,
     case_steps_include_web,
     ensure_mixed_run_environment,
     enrich_execution_step,
     is_desktop_step,
+    is_mobile_step,
     normalize_automation_layer,
     validate_desktop_step_result,
     validate_step_for_layer,
@@ -30,6 +32,9 @@ class ExecutorFactory:
     def case_includes_desktop(self, steps: List[Dict[str, Any]]) -> bool:
         return case_steps_include_desktop(steps)
 
+    def case_includes_android(self, steps: List[Dict[str, Any]]) -> bool:
+        return case_steps_include_android(steps)
+
     def case_includes_web(self, steps: List[Dict[str, Any]]) -> bool:
         return case_steps_include_web(steps)
 
@@ -42,6 +47,9 @@ class ExecutorFactory:
 
     def is_desktop_step(self, step: Dict[str, Any]) -> bool:
         return is_desktop_step(step)
+
+    def is_mobile_step(self, step: Dict[str, Any]) -> bool:
+        return is_mobile_step(step)
 
     def execute_desktop_step(
         self,
@@ -63,6 +71,27 @@ class ExecutorFactory:
             result, (exec_step.get("action") or "").strip()
         )
 
+    def execute_mobile_step(
+        self,
+        step: Dict[str, Any],
+        *,
+        selector_value: str = "",
+        input_value: str = "",
+    ) -> Dict[str, Any]:
+        from mobile_automation import sync_mobile_execute_step, validate_mobile_step_result
+        from mobile_executor import get_mobile_executor
+
+        exec_step = self.prepare_step(step)
+        if selector_value:
+            exec_step["selector_value"] = selector_value
+        if input_value:
+            exec_step["input_value"] = input_value
+        err = self.validate_step(exec_step)
+        if err:
+            raise ValueError(err)
+        result = sync_mobile_execute_step(exec_step, get_mobile_executor())
+        return validate_mobile_step_result(result, (exec_step.get("action") or "").strip())
+
     def execute_step(
         self,
         step: Dict[str, Any],
@@ -72,10 +101,14 @@ class ExecutorFactory:
         input_value: str = "",
     ) -> Dict[str, Any]:
         """
-        同步执行单步。桌面返回结果 dict；Web 调用 web_executor 后返回 delegated 标记。
+        同步执行单步。桌面/Android 返回结果 dict；Web 调用 web_executor 后返回 delegated 标记。
         """
         if self.is_desktop_step(step):
             return self.execute_desktop_step(
+                step, selector_value=selector_value, input_value=input_value
+            )
+        if self.is_mobile_step(step):
+            return self.execute_mobile_step(
                 step, selector_value=selector_value, input_value=input_value
             )
         err = self.validate_step(step)
@@ -94,7 +127,7 @@ class ExecutorFactory:
     async def execute_step_async(
         self, step: Dict[str, Any], automation: Any
     ) -> List[Dict[str, Any]]:
-        """Playwright 批量路径：桌面 to_thread，Web 走 automation.execute_single_step。"""
+        """Playwright 批量路径：桌面/Android to_thread，Web 走 automation.execute_single_step。"""
         return await async_execute_step_by_layer(step, automation)
 
 

@@ -46,6 +46,35 @@
                 </div>
             </div>
 
+            <!-- 移动端配置 -->
+            <div class="bg-white dark:bg-gray-900 rounded-xl shadow border border-gray-200 dark:border-gray-700 p-6" id="mobileSettingsSection">
+                <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1 flex items-center gap-2">
+                    <i class="fas fa-mobile-alt text-green-500"></i>
+                    <span>移动端配置</span>
+                </h3>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">配置 Appium Server 与默认 Android 应用信息（需 ENABLE_MOBILE=1）。</p>
+                <div id="mobileSettingsDisabled" class="hidden text-sm text-amber-700 dark:text-amber-300 mb-4"></div>
+                <div class="space-y-3">
+                    <label class="block text-sm"><span class="text-gray-600 dark:text-gray-400">Appium Server URL</span>
+                        <input type="url" id="mobileAppiumUrl" class="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-800" placeholder="http://127.0.0.1:4723">
+                    </label>
+                    <label class="block text-sm"><span class="text-gray-600 dark:text-gray-400">默认 appPackage</span>
+                        <input type="text" id="mobileAppPackage" class="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-800" placeholder="com.example.app">
+                    </label>
+                    <label class="block text-sm"><span class="text-gray-600 dark:text-gray-400">默认 appActivity</span>
+                        <input type="text" id="mobileAppActivity" class="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-800" placeholder=".MainActivity">
+                    </label>
+                    <label class="block text-sm"><span class="text-gray-600 dark:text-gray-400">scrcpy 路径</span>
+                        <input type="text" id="mobileScrcpyPath" class="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-800" placeholder="scrcpy 或完整路径">
+                    </label>
+                    <div class="flex flex-wrap gap-2 pt-2">
+                        <button type="button" id="mobileSaveBtn" class="px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700">保存移动端配置</button>
+                        <button type="button" id="mobileHealthBtn" class="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 dark:border-gray-600">测试连接</button>
+                    </div>
+                    <pre id="mobileHealthResult" class="hidden mt-2 text-xs bg-gray-50 dark:bg-gray-800 p-3 rounded-lg overflow-auto max-h-40"></pre>
+                </div>
+            </div>
+
             <p id="settingsSaved" class="hidden text-sm text-green-600 dark:text-green-400" data-i18n="settings_saved">已应用</p>
         </div>
     </div>
@@ -124,14 +153,82 @@
                 showSaved();
             });
 
-            document.addEventListener('DOMContentLoaded', function () {
+            window.addEventListener('ui-preferences-updated', function () {
                 syncLangButtons();
                 syncThemeButtons();
             });
 
-            window.addEventListener('ui-preferences-updated', function () {
+            async function loadMobileSettings() {
+                var disabled = document.getElementById('mobileSettingsDisabled');
+                try {
+                    var r = await fetch('/api/mobile/config', { credentials: 'same-origin' });
+                    var data = await r.json();
+                    if (!data.enabled) {
+                        if (disabled) {
+                            disabled.textContent = data.unavailable_reason || '移动端测试未启用（ENABLE_MOBILE=0）';
+                            disabled.classList.remove('hidden');
+                        }
+                        return;
+                    }
+                    if (disabled) disabled.classList.add('hidden');
+                    var d = data.defaults || {};
+                    var u = document.getElementById('mobileAppiumUrl');
+                    var p = document.getElementById('mobileAppPackage');
+                    var a = document.getElementById('mobileAppActivity');
+                    var s = document.getElementById('mobileScrcpyPath');
+                    if (u) u.value = data.appium_server_url || d.appium_server_url || '';
+                    if (p) p.value = data.app_package || d.app_package || '';
+                    if (a) a.value = data.app_activity || d.app_activity || '';
+                    if (s) s.value = data.scrcpy_path || d.scrcpy_path || '';
+                } catch (e) {
+                    if (disabled) {
+                        disabled.textContent = '无法加载移动端配置';
+                        disabled.classList.remove('hidden');
+                    }
+                }
+            }
+
+            var saveBtn = document.getElementById('mobileSaveBtn');
+            if (saveBtn) saveBtn.addEventListener('click', async function () {
+                try {
+                    var r = await fetch('/api/mobile/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({
+                            appium_server_url: (document.getElementById('mobileAppiumUrl') || {}).value || '',
+                            app_package: (document.getElementById('mobileAppPackage') || {}).value || '',
+                            app_activity: (document.getElementById('mobileAppActivity') || {}).value || '',
+                            scrcpy_path: (document.getElementById('mobileScrcpyPath') || {}).value || ''
+                        })
+                    });
+                    var data = await r.json();
+                    if (data.success) showSaved();
+                } catch (e) { /* ignore */ }
+            });
+
+            var healthBtn = document.getElementById('mobileHealthBtn');
+            if (healthBtn) healthBtn.addEventListener('click', async function () {
+                var out = document.getElementById('mobileHealthResult');
+                try {
+                    var r = await fetch('/api/mobile/health', { credentials: 'same-origin' });
+                    var data = await r.json();
+                    if (out) {
+                        out.textContent = JSON.stringify(data, null, 2);
+                        out.classList.remove('hidden');
+                    }
+                } catch (e) {
+                    if (out) {
+                        out.textContent = String(e.message || e);
+                        out.classList.remove('hidden');
+                    }
+                }
+            });
+
+            document.addEventListener('DOMContentLoaded', function () {
                 syncLangButtons();
                 syncThemeButtons();
+                loadMobileSettings();
             });
         })();
     </script>

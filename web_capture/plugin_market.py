@@ -128,6 +128,16 @@ def is_plugin_installed(plugin_id: str) -> bool:
         return False
     if rec.get("type") == "bookmarklet":
         return bool(rec.get("installed"))
+    if rec.get("type") == "runtime_bundle":
+        if pid == "mobile-android-platform-tools":
+            try:
+                from mobile_plugin_bundles import get_installed_adb_path
+
+                return bool(get_installed_adb_path())
+            except Exception:
+                pass
+        install_dir = str(rec.get("install_dir") or "")
+        return bool(install_dir) and Path(install_dir).is_dir()
     install_dir = str(rec.get("install_dir") or "")
     return bool(install_dir) and _extension_files_valid(install_dir)
 
@@ -198,14 +208,39 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
     if installed:
         out["status_label"] = "已安装"
         out["status_tone"] = "ok"
+        if pid == "mobile-android-platform-tools":
+            try:
+                from mobile_plugin_bundles import get_installed_adb_path
+
+                ap = get_installed_adb_path()
+                if ap:
+                    out["adb_path"] = ap
+            except Exception:
+                pass
     else:
         out["status_label"] = "未安装"
         out["status_tone"] = "muted"
+        if pid == "mobile-android-platform-tools" and not plugin.get("local_bundle_ready"):
+            if not plugin.get("download_url_configured"):
+                out["status_label"] = "待配置安装包"
+                out["status_tone"] = "warn"
     return out
 
 
+def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
+    """网页捕获 + 移动端等全部可安装插件（安装与列表须共用此目录）。"""
+    items = list(_catalog_raw(platform_origin=platform_origin))
+    try:
+        from mobile_plugin_bundles import get_android_platform_tools_catalog_entry
+
+        items.append(get_android_platform_tools_catalog_entry())
+    except Exception:
+        pass
+    return items
+
+
 def get_plugin_catalog(*, platform_origin: str = "") -> List[Dict[str, Any]]:
-    return [enrich_plugin_status(p) for p in _catalog_raw(platform_origin=platform_origin)]
+    return [enrich_plugin_status(p) for p in _all_catalog_items(platform_origin=platform_origin)]
 
 
 def _copy_extension(browser: str, dest: str) -> None:
@@ -351,14 +386,24 @@ def ensure_capture_extension_ready() -> Dict[str, Any]:
 def install_plugin(plugin_id: str) -> Dict[str, Any]:
     """一键安装到软件目录并登记状态。"""
     pid = (plugin_id or "").strip()
-    catalog = {p["id"]: p for p in _catalog_raw()}
+    catalog = {p["id"]: p for p in _all_catalog_items()}
     meta = catalog.get(pid)
     if not meta:
-        return {"success": False, "error": "未知插件"}
+        return {"success": False, "error": f"未知插件: {pid or '(空)'}"}
 
     state = _load_state()
     plugins = state.setdefault("plugins", {})
     now = datetime.now(timezone.utc).isoformat()
+
+    if meta.get("type") == "runtime_bundle":
+        if pid == "mobile-android-platform-tools":
+            try:
+                from mobile_plugin_bundles import install_android_platform_tools
+
+                return install_android_platform_tools()
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+        return {"success": False, "error": "未知的运行时插件"}
 
     if meta.get("type") == "bookmarklet":
         plugins[pid] = {

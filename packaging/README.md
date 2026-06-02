@@ -7,10 +7,12 @@
 ```powershell
 cd <项目根目录>
 .\packaging\build_desktop_installer.ps1
+# 或指定 ISCC：-IsccPath "D:\Inno Setup 6\ISCC.exe"
+# 或仅准备发布目录：-PrepareOnly（再在 Inno 图形界面编译 .iss）
 ```
 
-- 构建机会自动下载 **Inno Setup**（仅用于编译，**不会**打进用户安装包）
-- 产物：`dist\uat_platform_setup.exe`（约 1～3GB 正常）
+- 构建机需本机安装 **Inno Setup 6**；脚本**只查找 ISCC，不会下载 Inno**
+- 产物：`dist\testory_setup.exe`（约 1～3GB 正常，可能有 `.bin` 分卷）
 
 说明：[docs/DESKTOP_APP_制作安装包.md](../docs/DESKTOP_APP_制作安装包.md) · [docs/DESKTOP_APP_用户使用说明.md](../docs/DESKTOP_APP_用户使用说明.md)
 

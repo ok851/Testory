@@ -6,15 +6,31 @@ try:
 
     from dotenv import load_dotenv
 
-    _env_path = Path(__file__).resolve().parent / ".env"
+    _app_root = Path(__file__).resolve().parent
+
+    def _pick_env_file() -> Path:
+        for key in ("TESTORY_ENV_FILE",):
+            raw = os.environ.get(key, "").strip()
+            if raw:
+                return Path(raw)
+        uat_data = os.environ.get("UAT_DATA_DIR", "").strip()
+        if uat_data:
+            return Path(uat_data) / ".env"
+        return _app_root / ".env"
+
+    _env_path = _pick_env_file()
     try:
         from env_example_sync import sync_env_from_example
 
-        sync_env_from_example(_env_path.parent)
+        # 桌面版 SKIP_ENV_EXAMPLE_SYNC=1；否则仅在可写目录合并 .env
+        sync_root = Path(os.environ.get("UAT_DATA_DIR", "").strip() or _app_root)
+        sync_env_from_example(sync_root)
     except Exception:
         pass
     if _env_path.is_file():
         load_dotenv(_env_path, encoding="utf-8-sig")
+    elif (_app_root / ".env").is_file():
+        load_dotenv(_app_root / ".env", encoding="utf-8-sig")
     else:
         load_dotenv(encoding="utf-8-sig")
 except ImportError:
@@ -778,6 +794,21 @@ def _ai_str(value) -> str:
     return str(value).strip()
 
 
+def _norm_captcha_max_attempts(raw, *, for_verify: bool = True) -> Optional[int]:
+    """verify 步骤最大自动验证次数：1–20；空/0 表示使用全局 CAPTCHA_SOLVE_RETRY。"""
+    if not for_verify:
+        return None
+    if raw is None or raw == '':
+        return None
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if n < 1:
+        return None
+    return max(1, min(n, 20))
+
+
 def _norm_click_repeat_count(raw) -> int:
     """点击步骤连续执行次数：1–99，非法或空视为 1。"""
     if raw is None or raw == '':
@@ -821,6 +852,22 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
     cmp_out = "equals"
     if action == "assert":
         cmp_out = _ai_str(step.get("compare_type")) or "text_contains"
+    layer = _ai_str(step.get("automation_layer")).lower() or "web"
+    if layer not in ("web", "desktop", "android"):
+        layer = "web"
+    strategy = _ai_str(step.get("strategy")) or _ai_str(step.get("selector_type")) or "accessibility_id"
+    if layer == "android" and not _ai_str(step.get("selector_type")):
+        st = strategy
+    ms = step.get("mobile_spec")
+    if ms is not None and not isinstance(ms, str):
+        try:
+            ms = json.dumps(ms, ensure_ascii=False)
+        except Exception:
+            ms = ""
+    elif ms is None:
+        ms = ""
+    else:
+        ms = str(ms).strip()
     return {
         "case_id": case_id,
         "action": action,
@@ -838,6 +885,8 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         "compare_type": cmp_out,
         "locator_candidates": lc,
         "click_repeat_count": crc,
+        "automation_layer": layer,
+        "mobile_spec": ms,
     }
 
 # ==================== Flask-Login 初始化 ====================
@@ -1081,6 +1130,18 @@ _ensure_admin()
 
 register_deployment_hooks(app, Database, UserModel)
 init_server_instance(Database)
+
+try:
+    from mobile_routes import register_mobile_routes
+
+    register_mobile_routes(
+        app,
+        api_error_handler=api_error_handler,
+        log_api_request=log_api_request,
+        role_required=role_required,
+    )
+except ImportError:
+    pass
 
 # 主页路由
 @app.route('/')
@@ -1403,6 +1464,29 @@ def ai_test_page():
     # 用于核对浏览器是否命中本仓库模板（与页内 #aiTestBuildMarker 文案一致）
     resp.headers['X-AI-Test-Template'] = 'playwright-ui-dedup-2026-04-24'
     return resp
+
+
+@app.route('/mobile-testing')
+@login_required
+def mobile_testing_page():
+    """Android 移动端测试：左侧项目/用例/步骤与点屏录制，右侧真机投屏与操控。"""
+    try:
+        from mobile_env_config import mobile_enabled, mobile_runtime_unavailable_reason
+
+        if not mobile_enabled():
+            return render_template(
+                'mobile_testing.html',
+                mobile_disabled=True,
+                mobile_disabled_reason=mobile_runtime_unavailable_reason()
+                or '请在 .env 中设置 ENABLE_MOBILE=1',
+            )
+    except ImportError:
+        return render_template(
+            'mobile_testing.html',
+            mobile_disabled=True,
+            mobile_disabled_reason='移动端模块未安装',
+        )
+    return render_template('mobile_testing.html', mobile_disabled=False, mobile_disabled_reason='')
 
 
 # 项目管理页面
@@ -2444,6 +2528,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
 
     data = data or {}
     task_type = (data.get('task_type') or 'test_case_generation').strip()
+    platform_type = (data.get('platform_type') or 'web').strip().lower()
     goal = (data.get('goal') or '').strip()
     project_name = (data.get('project_name') or '').strip()
     selected_model = (data.get('model') or '').strip() or _get_active_local_model()
@@ -2492,7 +2577,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         page_snapshot = ps or None
         probe_registry = pr if pr else None
         probe_url = (pu or target_page_url).strip() or None
-    elif run_execute:
+    elif run_execute and platform_type != 'android':
         if not target_page_url:
             return {
                 'success': False,
@@ -2505,7 +2590,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         if err:
             code = 400 if ("主浏览器未就绪" in err or "目标 URL 为空" in err) else 500
             return {'success': False, 'error': err, '_http': code}
-    elif (target_page_url or "").strip() and not embedded_sid and not _ai_url_probe_disabled():
+    elif (target_page_url or "").strip() and not embedded_sid and not _ai_url_probe_disabled() and platform_type != 'android':
         # 「仅规划」也抓取 LIVE：只要填写了目标 URL，就为主会话打开该页并探测，避免模型凭空写选择器。
         snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
             target_page_url, strict=False
@@ -2532,6 +2617,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
             probe_url=probe_url,
             memory_context=mem_ctx or None,
             dom_context_pack=dpack or None,
+            platform_type=platform_type,
         )
     except ValueError as e:
         return {
@@ -4330,6 +4416,33 @@ def api_browser_inspect():
         return jsonify({'success': False, 'error': '浏览器未启动，请先打开页面'}), 400
     payload = sync_get_interactive_page_snapshot(150)
     return jsonify({'success': True, 'data': payload})
+
+
+@app.route('/api/captcha/optional-deps', methods=['GET'])
+@login_required
+@api_error_handler
+def api_captcha_optional_deps():
+    """验证码可选组件状态（ddddocr 等，不随主安装包分发）。"""
+    from captcha_engine import get_ddddocr_install_info
+
+    return jsonify({'success': True, 'ddddocr': get_ddddocr_install_info()})
+
+
+@app.route('/api/captcha/optional-deps/install', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_captcha_optional_deps_install():
+    """一键安装验证码可选组件（如 ddddocr，约 200MB+）。"""
+    data = request.get_json(silent=True) or {}
+    component = (data.get('component') or 'ddddocr').strip().lower()
+    if component != 'ddddocr':
+        return jsonify({'success': False, 'error': f'未知组件: {component}'}), 400
+    from captcha_engine import install_ddddocr_subprocess
+
+    result = install_ddddocr_subprocess()
+    return jsonify({'success': bool(result.get('success')), **result})
 
 
 @app.route('/api/desktop/verify-element', methods=['POST'])
@@ -6366,6 +6479,7 @@ def api_create_step():
     if locator_candidates is not None and not isinstance(locator_candidates, str):
         locator_candidates = json.dumps(locator_candidates, ensure_ascii=False)
     click_repeat_count = _norm_click_repeat_count(data.get('click_repeat_count')) if action == 'click' else 1
+    captcha_max_attempts = _norm_captcha_max_attempts(data.get('captcha_max_attempts')) if action == 'verify' else None
     api_spec = data.get('api_spec', '')
     if api_spec is not None and not isinstance(api_spec, str):
         api_spec = json.dumps(api_spec, ensure_ascii=False)
@@ -6373,6 +6487,9 @@ def api_create_step():
     desktop_spec = data.get('desktop_spec', '')
     if desktop_spec is not None and not isinstance(desktop_spec, str):
         desktop_spec = json.dumps(desktop_spec, ensure_ascii=False)
+    mobile_spec = data.get('mobile_spec', '')
+    if mobile_spec is not None and not isinstance(mobile_spec, str):
+        mobile_spec = json.dumps(mobile_spec, ensure_ascii=False)
     
     if not case_id:
         return jsonify({'success': False, 'error': '用例ID不能为空'}), 400
@@ -6395,7 +6512,9 @@ def api_create_step():
                                   locator_candidates or '', click_repeat_count=click_repeat_count,
                                   api_spec=api_spec or '',
                                   automation_layer=automation_layer,
-                                  desktop_spec=desktop_spec or '')
+                                  desktop_spec=desktop_spec or '',
+                                  mobile_spec=mobile_spec or '',
+                                  captcha_max_attempts=captcha_max_attempts)
     return jsonify({'success': True, 'step_id': step_id})
 
 # API: 更新测试步骤
@@ -6437,6 +6556,16 @@ def api_update_step(step_id):
     else:
         click_repeat_count = None
 
+    if action is not None:
+        if action == 'verify':
+            captcha_max_attempts = _norm_captcha_max_attempts(data.get('captcha_max_attempts'))
+        else:
+            captcha_max_attempts = None
+    elif 'captcha_max_attempts' in data:
+        captcha_max_attempts = _norm_captcha_max_attempts(data.get('captcha_max_attempts'))
+    else:
+        captcha_max_attempts = None
+
     api_spec = data.get('api_spec') if 'api_spec' in data else None
     if api_spec is not None and not isinstance(api_spec, str):
         api_spec = json.dumps(api_spec, ensure_ascii=False)
@@ -6444,6 +6573,9 @@ def api_update_step(step_id):
     desktop_spec = data.get('desktop_spec') if 'desktop_spec' in data else None
     if desktop_spec is not None and not isinstance(desktop_spec, str):
         desktop_spec = json.dumps(desktop_spec, ensure_ascii=False)
+    mobile_spec = data.get('mobile_spec') if 'mobile_spec' in data else None
+    if mobile_spec is not None and not isinstance(mobile_spec, str):
+        mobile_spec = json.dumps(mobile_spec, ensure_ascii=False)
     _sel_eff = (
         (selector_type if selector_type is not None else step_row.get('selector_type') or '')
         .strip()
@@ -6455,7 +6587,9 @@ def api_update_step(step_id):
     success = db.update_test_step(step_id, action, selector_type, selector_value,
                                    input_value, description, step_order, enter_iframe, iframe_selector, compare_type,
                                    locator_candidates, click_repeat_count, api_spec=api_spec,
-                                   automation_layer=automation_layer, desktop_spec=desktop_spec)
+                                   automation_layer=automation_layer, desktop_spec=desktop_spec,
+                                   mobile_spec=mobile_spec,
+                                   captcha_max_attempts=captcha_max_attempts)
     
     if success:
         return jsonify({'success': True})
@@ -7383,7 +7517,13 @@ def api_run_case(case_id):
         from execution_factory import get_executor_factory
 
         env_msg = get_executor_factory().validate_case_environment(steps)
-        if env_msg and ("不支持" in env_msg or "需 Windows" in env_msg or "缺少依赖" in env_msg):
+        if env_msg and (
+            "不支持" in env_msg
+            or "需 Windows" in env_msg
+            or "缺少依赖" in env_msg
+            or "未启用" in env_msg
+            or "未安装" in env_msg
+        ):
             from desktop_runtime import desktop_runtime_unavailable_reason
 
             detail = desktop_runtime_unavailable_reason()
@@ -7432,6 +7572,52 @@ def api_run_case(case_id):
             'message': '准备执行...',
             'started_at': time.time(),
         }
+    try:
+        from captcha_engine import set_captcha_status_callback
+
+        set_captcha_status_callback(lambda msg: _case_job_update(user_id, message=msg))
+    except ImportError:
+        pass
+
+    try:
+        from step_executor import case_steps_include_android, case_steps_include_web
+        from mobile_routes import execute_mobile_case
+
+        if case_steps_include_android(steps) and not case_steps_include_web(steps):
+            try:
+                resp, status = execute_mobile_case(
+                    case_id,
+                    case,
+                    steps,
+                    db,
+                    user_id,
+                    start_time,
+                    job_update=lambda **kw: _case_job_update(user_id, **kw),
+                    job_cancelled=lambda: _case_run_cancelled(user_id),
+                )
+                with _case_run_lock:
+                    if user_id in _case_run_jobs:
+                        _case_run_jobs[user_id]["active"] = False
+                if machine_lock_acquired:
+                    try:
+                        from execution_lock import release as release_machine_lock
+
+                        release_machine_lock()
+                    except ImportError:
+                        pass
+                return resp, status
+            except Exception as mobile_early_exc:
+                uat_logger.error("Android 用例执行失败: %s", mobile_early_exc)
+                if machine_lock_acquired:
+                    try:
+                        from execution_lock import release as release_machine_lock
+
+                        release_machine_lock()
+                    except ImportError:
+                        pass
+                return jsonify({"success": False, "error": str(mobile_early_exc)}), 500
+    except ImportError:
+        pass
     
     # 提取的文本
     extracted_text = ""
@@ -7515,7 +7701,7 @@ def api_run_case(case_id):
                 sync_navigate_to(initial_nav_url)
 
         if not case_steps_include_web(steps):
-            uat_logger.info("纯桌面用例，跳过 Playwright 浏览器启动")
+            uat_logger.info("纯桌面/Android 用例，跳过 Playwright 浏览器启动")
 
         # 执行测试步骤
         try:
@@ -7561,7 +7747,7 @@ def api_run_case(case_id):
 
                 try:
                     from execution_factory import get_executor_factory
-                    from step_executor import enrich_execution_step, is_desktop_step
+                    from step_executor import enrich_execution_step, is_desktop_step, is_mobile_step
 
                     factory = get_executor_factory()
                     exec_step = enrich_execution_step(step)
@@ -7621,6 +7807,51 @@ def api_run_case(case_id):
                             message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
                         )
                         continue
+                    if is_mobile_step(exec_step):
+                        try:
+                            mob_step = dict(exec_step)
+                            mob_step["selector_value"] = selector_value
+                            mob_step["input_value"] = input_value
+                            mob_result = factory.execute_mobile_step(
+                                mob_step,
+                                selector_value=selector_value,
+                                input_value=input_value,
+                            )
+                        except Exception as mob_exc:
+                            if _case_run_cancelled(user_id):
+                                raise Exception("用户已停止执行")
+                            step_duration = round(time.time() - step_start_time, 3)
+                            step_screenshot = (getattr(mob_exc, "failure_screenshot", None) or "")
+                            step_results_list.append({
+                                'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                                'action': action, 'selector_value': selector_value,
+                                'input_value': input_value, 'description': description,
+                                'status': 'error', 'error': str(mob_exc),
+                                'screenshot': step_screenshot, 'duration': step_duration,
+                                'automation_layer': 'android',
+                            })
+                            raise
+                        from mobile_automation import validate_mobile_step_result
+
+                        validate_mobile_step_result(mob_result, action)
+                        step_status = 'success'
+                        step_error = ''
+                        step_screenshot = (mob_result or {}).get('screenshot') or ''
+                        step_duration = round(time.time() - step_start_time, 3)
+                        step_results_list.append({
+                            'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                            'action': action, 'selector_value': selector_value,
+                            'input_value': input_value, 'description': description,
+                            'status': step_status, 'error': step_error,
+                            'screenshot': step_screenshot, 'duration': step_duration,
+                            'automation_layer': 'android',
+                        })
+                        _case_job_update(
+                            user_id,
+                            completed_steps=len(step_results_list),
+                            message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
+                        )
+                        continue
                 except ImportError:
                     pass
 
@@ -7631,6 +7862,12 @@ def api_run_case(case_id):
                         f"桌面步骤未进入桌面执行器（action={action}，"
                         f"automation_layer={step.get('automation_layer')!r}）。"
                         f"请确认步骤自动化层为「桌面」后重试。"
+                    )
+                if _norm_layer(step) == "android":
+                    raise Exception(
+                        f"Android 步骤未进入移动端执行器（action={action}，"
+                        f"automation_layer={step.get('automation_layer')!r}）。"
+                        f"请确认 ENABLE_MOBILE=1 且已安装 Appium 依赖。"
                     )
 
                 _ensure_browser_for_web_step()
@@ -7854,6 +8091,7 @@ def api_run_case(case_id):
                             selector_type=selector_type,
                             iframe_selector=iframe_for_step,
                             locator_candidates=locator_candidates,
+                            captcha_max_attempts=step.get('captcha_max_attempts'),
                         )
                         # 验证后等待页面响应
                         sync_wait_for_timeout(1500)
@@ -8041,8 +8279,21 @@ def api_run_case(case_id):
                 })
 
             error_msg = str(e)
+            _captcha_manual = False
+            try:
+                from captcha_recovery import CaptchaManualRequiredError as _CMR
+
+                _cause_cap = e
+                while _cause_cap is not None:
+                    if isinstance(_cause_cap, _CMR):
+                        _captcha_manual = True
+                        error_msg = str(_cause_cap)
+                        break
+                    _cause_cap = getattr(_cause_cap, "__cause__", None)
+            except ImportError:
+                pass
             
-            # 将会话断开类错误单独归类（无头模式下也常见，并非一定是「人为关窗口」）
+            # 将会话断开类错误单独归类
             # 注意：不要用单词 page/target/context 等做子串匹配，否则 “timeout waiting for …” 等普通错误会被误判。
             _el = error_msg.lower()
             _disconnect_patterns = (
@@ -8097,6 +8348,17 @@ def api_run_case(case_id):
                 _cause = getattr(_cause, '__cause__', None)
             if visual_match_failed and getattr(visual_match_failed, 'failure_screenshot', None):
                 failure_screenshot = visual_match_failed.failure_screenshot
+            elif _captcha_manual:
+                _cap_shot = None
+                _c = e
+                while _c is not None:
+                    if getattr(_c, "screenshot_path", None):
+                        _cap_shot = _c.screenshot_path
+                        break
+                    _c = getattr(_c, "__cause__", None)
+                if _cap_shot:
+                    failure_screenshot = _cap_shot
+                    screenshots.append(_cap_shot)
             elif not browser_closed_manually:
                 try:
                     screenshot_dir = os.path.join(os.getcwd(), 'screenshots')
@@ -8151,7 +8413,7 @@ def api_run_case(case_id):
             except Exception as history_error:
                 uat_logger.error(f"保存运行历史记录失败: {history_error}")
             
-            if browser_started and not browser_closed_manually:
+            if browser_started and not browser_closed_manually and not _captcha_manual:
                 try:
                     sync_close_browser()
                 except Exception:
@@ -8214,6 +8476,12 @@ def api_run_case(case_id):
             'stopped': False,
         }), 500
     finally:
+        try:
+            from captcha_engine import set_captcha_status_callback
+
+            set_captcha_status_callback(None)
+        except ImportError:
+            pass
         if machine_lock_acquired:
             try:
                 from execution_lock import release as release_machine_lock
@@ -10035,24 +10303,37 @@ def api_activate_license():
     
     if not license_key:
         return jsonify({'success': False, 'error': '请输入 License 密钥'}), 400
-    
-    # 验证 License
-    result = license_manager.validate_license(license_key)
+
+    from deployment_config import is_client_mode, is_server_mode
+    from instance_identity import get_instance_id, get_machine_id
+    from platform_sync import report_license_activation
+
+    binding_type = ""
+    binding_id = ""
+    if is_server_mode():
+        binding_type = "instance"
+        binding_id = get_instance_id()
+    elif is_client_mode():
+        binding_type = "machine"
+        binding_id = get_machine_id()
+    else:
+        binding_type = "machine"
+        binding_id = get_machine_id()
+
+    result = license_manager.activate_license_key(license_key, binding_type, binding_id)
     if not result['valid']:
         return jsonify({'success': False, 'error': result['message']}), 400
-    
-    # 保存 License
-    if license_manager.save_license(license_key):
-        # 清除缓存，使新 license 立即生效
-        license_manager._cached_license = None
-        return jsonify({
-            'success': True,
-            'message': 'License 激活成功',
-            'license_type': result['info'].license_type,
-            'expires_at': result['info'].expires_at
-        })
-    else:
-        return jsonify({'success': False, 'error': 'License 保存失败'}), 500
+
+    info = result.get('info')
+    if info and info.license_id and binding_id:
+        report_license_activation(info.license_id, binding_type, binding_id)
+
+    return jsonify({
+        'success': True,
+        'message': 'License 激活成功',
+        'license_type': info.license_type if info else '',
+        'expires_at': info.expires_at if info else '',
+    })
 
 
 @app.route('/api/license', methods=['GET'])
@@ -10108,6 +10389,11 @@ def api_upload_license():
         return jsonify({'success': False, 'error': result['message']}), 400
 
     info = result.get('info')
+    if info and info.license_id and binding_id:
+        from platform_sync import report_license_activation
+
+        report_license_activation(info.license_id, binding_type, binding_id)
+
     return jsonify({
         'success': True,
         'message': 'License 激活成功',

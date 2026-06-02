@@ -57,11 +57,21 @@ def is_setup_complete() -> bool:
     cfg = load_client_config()
     if cfg.get("setup_complete"):
         return True
+    if cfg.get("local_standalone"):
+        return True
     return bool(get_team_server_url() and get_auth_token())
 
 
 def mark_setup_complete(complete: bool = True) -> None:
     save_client_config({"setup_complete": bool(complete)})
+
+
+def is_local_standalone() -> bool:
+    return bool(load_client_config().get("local_standalone"))
+
+
+def set_local_standalone(enabled: bool = True) -> None:
+    save_client_config({"local_standalone": bool(enabled), "setup_complete": bool(enabled)})
 
 
 def clear_client_config() -> None:

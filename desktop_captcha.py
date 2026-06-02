@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf-8
 """
 Windows 桌面验证码 / 人机校验（执行阶段）。
 
@@ -10,10 +10,22 @@ verify 步骤 input_value / compare_type 取值：
 
 from __future__ import annotations
 
-import json
-import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
+
+from captcha_engine import (
+    build_human_drag_path,
+    captcha_solve_attempts,
+    captcha_solve_retry_delay,
+    detect_captcha_type,
+    emit_captcha_status,
+    prepare_recognition_png,
+    solve_captcha,
+    solve_curve_offset,
+    solve_slider_gap,
+)
+from captcha_recovery import CaptchaManualRequiredError, save_captcha_failure_screenshot
+from logger import uat_logger
 
 _CAPTCHA_TYPES = frozenset({"auto", "slider", "image"})
 
@@ -29,12 +41,26 @@ def _grab_region_png(left: int, top: int, width: int, height: int) -> bytes:
         return mss.tools.to_png(shot.rgb, shot.size)
 
 
-def _control_screen_rect(ctrl: Any) -> Tuple[int, int, int, int]:
-    rect = ctrl.rectangle()
-    return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+def _region_changed(before: bytes, after: bytes, threshold: float = 0.02) -> bool:
+    if not before or not after or len(before) != len(after):
+        return True
+    try:
+        import numpy as np
+
+        a = np.frombuffer(before, dtype=np.uint8)
+        b = np.frombuffer(after, dtype=np.uint8)
+        diff = np.mean(np.abs(a.astype(np.int16) - b.astype(np.int16)))
+        return diff > threshold * 255
+    except Exception:
+        return before != after
 
 
-def _drag_slider_rect(left: int, top: int, right: int, bottom: int) -> None:
+def _prepare_desktop_png(raw_png: bytes) -> Tuple[bytes, float]:
+    """Desktop 截图缩放到 50% 左右再识别，坐标通过 multiplier 映射回屏幕。"""
+    return prepare_recognition_png(raw_png, for_desktop=True)
+
+
+def _drag_slider_rect(left: int, top: int, right: int, bottom: int) -> bool:
     import pyautogui  # type: ignore
 
     pyautogui.FAILSAFE = True
@@ -42,83 +68,95 @@ def _drag_slider_rect(left: int, top: int, right: int, bottom: int) -> None:
     h = max(bottom - top, 20)
     cy = top + h // 2
     sx = left + max(14, int(w * 0.06))
-    ex = left + int(w * 0.88)
-    pyautogui.moveTo(sx, cy, duration=0.15)
+    track_end = left + int(w * 0.92)
+
+    raw_png = _grab_region_png(left, top, w, h)
+    png, mult = _prepare_desktop_png(raw_png)
+    instruction = ""
+    ctype = detect_captcha_type(instruction)
+    distance: Optional[int] = None
+
+    emit_captcha_status("正在识别桌面滑块验证码…")
+    if ctype == "curve":
+        distance = solve_curve_offset(png)
+        if distance is not None:
+            distance = int(distance * mult)
+    if distance is None:
+        dist_raw = solve_slider_gap(png)
+        if dist_raw is not None:
+            distance = int(dist_raw * mult)
+    if distance is None or distance <= 0:
+        result = solve_captcha(
+            png, captcha_type=ctype or "slider", instruction=instruction, coord_multiplier=mult
+        )
+        distance = result.distance
+
+    if distance is None or distance <= 0:
+        uat_logger.warning("桌面滑块：无法计算缺口距离，跳过拖动")
+        return False
+
+    ex = min(sx + int(distance), track_end)
+
+    path = build_human_drag_path(sx, cy, ex, cy)
+    pyautogui.moveTo(path[0][0], path[0][1], duration=0.12)
     pyautogui.mouseDown()
-    steps = 28
-    for i in range(1, steps + 1):
-        x = sx + (ex - sx) * i // steps
-        pyautogui.moveTo(x, cy, duration=0.018)
+    for x, y in path[1:]:
+        pyautogui.moveTo(x, y, duration=0.012)
     pyautogui.mouseUp()
-    time.sleep(0.4)
-
-
-def _parse_click_points_from_vision(text: str) -> List[Tuple[int, int]]:
-    if not text:
-        return []
-    m = re.search(r"\[[\s\S]*?\]", text)
-    if not m:
-        return []
-    try:
-        data = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return []
-    pts: List[Tuple[int, int]] = []
-    if isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict) and "x" in item and "y" in item:
-                pts.append((int(item["x"]), int(item["y"])))
-    return pts
+    time.sleep(0.45)
+    return True
 
 
 def _click_image_captcha_region(left: int, top: int, right: int, bottom: int) -> bool:
-    """点选类验证码：视觉/OCR 解析点击坐标（相对区域左上角）。"""
     import pyautogui  # type: ignore
 
     w = right - left
     h = bottom - top
-    png = _grab_region_png(left, top, w, h)
+    before = _grab_region_png(left, top, w, h)
+    png, mult = _prepare_desktop_png(before)
+    emit_captcha_status("正在识别桌面点选验证码…")
+    result = solve_captcha(png, captcha_type="click_text", instruction="", coord_multiplier=mult)
 
-    try:
-        from ai_vision_local import ocr_enabled, ocr_region_png, vision_describe, vision_enabled
-    except ImportError:
-        ocr_enabled = lambda: False  # type: ignore
-        vision_enabled = lambda: False  # type: ignore
-        ocr_region_png = lambda b: ""  # type: ignore
-        vision_describe = lambda b, i: ""  # type: ignore
+    if result.points:
+        for x, y in result.points:
+            pyautogui.click(left + x, top + y)
+            time.sleep(0.35)
+        after = _grab_region_png(left, top, w, h)
+        return _region_changed(before, after)
+    return False
 
-    if vision_enabled():
-        ins = (
-            "这是桌面应用验证码区域截图。若为「按顺序点击图片中的文字/图标」类验证码，"
-            "仅回复 JSON 数组，元素为 {\"x\":像素,\"y\":像素}，坐标相对图片左上角。"
-            "若无法识别或仅为滑块，回复 {\"type\":\"unknown\"}。"
-        )
+
+def _desktop_captcha_with_retry(
+    left: int, top: int, right: int, bottom: int, vt: str
+) -> str:
+    """Desktop 验证码：同题多次求解，不刷新换题。"""
+    attempts = captcha_solve_attempts()
+    delay = captcha_solve_retry_delay()
+    last_png = b""
+    for i in range(attempts):
+        emit_captcha_status(f"桌面验证码处理中（{i + 1}/{attempts}）…")
+        if vt in ("slider", "auto"):
+            try:
+                _drag_slider_rect(left, top, right, bottom)
+                return "slider_drag"
+            except Exception as exc:
+                if vt == "slider" and i >= attempts - 1:
+                    raise RuntimeError(f"滑块验证码拖动失败: {exc}") from exc
+        if vt in ("image", "auto"):
+            if _click_image_captcha_region(left, top, right, bottom):
+                return "image_click"
         try:
-            out = vision_describe(png, ins)
-            if "slider" in (out or "").lower():
-                return False
-            pts = _parse_click_points_from_vision(out)
-            if pts:
-                for x, y in pts:
-                    pyautogui.click(left + x, top + y)
-                    time.sleep(0.35)
-                return True
+            w, h = right - left, bottom - top
+            last_png = _grab_region_png(left, top, w, h)
         except Exception:
             pass
-
-    if ocr_enabled():
-        text = ocr_region_png(png)
-        if text and len(text) >= 2:
-            # 无法可靠得到单字坐标时，在区域内均匀尝试几次点击（兜底）
-            cy = top + h // 2
-            cols = min(4, max(2, len(text.strip())))
-            for i in range(cols):
-                cx = left + int(w * (i + 1) / (cols + 1))
-                pyautogui.click(cx, cy)
-                time.sleep(0.25)
-            return True
-
-    return False
+        if i < attempts - 1:
+            time.sleep(delay)
+    shot = save_captcha_failure_screenshot(last_png, prefix="desktop_captcha_fail")
+    msg = "自动验证失败，请手动完成验证码后继续。桌面会话已保留。"
+    if shot:
+        msg += f" 失败截图：{shot}"
+    raise CaptchaManualRequiredError(msg, screenshot_path=shot)
 
 
 def run_desktop_verify(
@@ -129,7 +167,6 @@ def run_desktop_verify(
     verify_type: str,
     app: Any = None,
 ) -> Dict[str, Any]:
-    """Legacy UIA verify 已移除；visual 步骤请走 run_desktop_verify_at_point。"""
     del window, app, desktop_spec
     st = (selector_type or "").strip().lower()
     if st == "visual":
@@ -140,7 +177,6 @@ def run_desktop_verify(
 def run_desktop_verify_at_point(
     x: int, y: int, verify_type: str, *, region_half: int = 120
 ) -> Dict[str, Any]:
-    """视觉步骤 verify：以点击点为中心截取区域处理验证码。"""
     vt = (verify_type or "auto").strip().lower()
     if vt not in _CAPTCHA_TYPES:
         vt = "auto"
@@ -149,25 +185,6 @@ def run_desktop_verify_at_point(
     top = int(y) - half
     right = int(x) + half
     bottom = int(y) + half
-    method = ""
 
-    if vt in ("slider", "auto"):
-        try:
-            _drag_slider_rect(left, top, right, bottom)
-            method = "slider_drag"
-            if vt == "slider":
-                return {"status": "success", "action": "verify", "method": method}
-        except Exception as exc:
-            if vt == "slider":
-                raise RuntimeError(f"滑块验证码拖动失败: {exc}") from exc
-
-    if vt in ("image", "auto"):
-        if _click_image_captcha_region(left, top, right, bottom):
-            return {"status": "success", "action": "verify", "method": "image_click"}
-        if vt == "image":
-            raise RuntimeError("图片点选验证码未能自动处理")
-
-    if vt == "auto" and method == "slider_drag":
-        return {"status": "success", "action": "verify", "method": method}
-
-    return {"status": "success", "action": "verify", "method": method or "visual_click"}
+    method = _desktop_captcha_with_retry(left, top, right, bottom, vt)
+    return {"status": "success", "action": "verify", "method": method}

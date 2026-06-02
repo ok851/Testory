@@ -29,7 +29,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from desktop_user_data import ensure_user_data_dirs
+from desktop_user_data import ensure_user_data_dirs, resolve_env_file
 from packaging.desktop_shell import run_native_shell
 from packaging.testory_runtime import resolve_bundled_python, verify_bundled_python
 
@@ -85,21 +85,29 @@ def apply_local_env(root: Path, port: int) -> Path:
     return user_data
 
 
-def ensure_dotenv(root: Path) -> None:
-    env_path = root / ".env"
-    example = root / ".env.example"
+def ensure_dotenv(root: Path, user_data: Path) -> Path:
+    """在用户数据目录创建 .env（绝不写入只读的安装目录）。"""
+    env_path = resolve_env_file(root)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    os.environ["TESTORY_ENV_FILE"] = str(env_path)
+    os.environ["UAT_DATA_DIR"] = str(user_data)
     if env_path.is_file():
-        return
+        return env_path
+    example = root / ".env.example"
     if example.is_file():
         shutil.copy(example, env_path)
-        return
+        return env_path
     env_path.write_text(
-        "# Auto-created by uat_desktop\n"
+        "# Auto-created by Testory desktop launcher\n"
         "DEPLOYMENT_PROFILE=local\n"
         "DESKTOP_EXECUTION_MODE=inprocess\n"
-        "PLAYWRIGHT_HEADLESS=0\n",
+        "PLAYWRIGHT_HEADLESS=0\n"
+        "DEPLOYMENT_MODE=client\n"
+        "UAT_DESKTOP_MODE=1\n"
+        "PLATFORM_ADMIN_URL=http://127.0.0.1:5100\n",
         encoding="utf-8",
     )
+    return env_path
 
 
 def _no_window_flags() -> int:
@@ -188,9 +196,13 @@ def _startup_failed_message(root: Path, user_data: Path, port: int, proc: Option
 
 def run_desktop(port: int = DEFAULT_PORT) -> int:
     root = install_root()
+    if sys.platform == "win32":
+        from packaging.win_app_icon import set_process_app_user_model_id
+
+        set_process_app_user_model_id()
     os.chdir(root)
-    ensure_dotenv(root)
     user_data = apply_local_env(root, port)
+    ensure_dotenv(root, user_data)
     python, runtime_err = verify_bundled_python(root)
     if runtime_err:
         if resolve_bundled_python(root) is None:
@@ -250,11 +262,10 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
 
 def main() -> None:
     if "--probe" in sys.argv:
-        # 供 Testory.exe 捕获启动失败原因（仅做导入自检，不真正启动 UI）
         root = install_root()
         os.chdir(root)
-        ensure_dotenv(root)
-        apply_local_env(root, DEFAULT_PORT)
+        user_data = apply_local_env(root, DEFAULT_PORT)
+        ensure_dotenv(root, user_data)
         print("probe ok")
         raise SystemExit(0)
     port = int(os.environ.get("FLASK_RUN_PORT", DEFAULT_PORT))
