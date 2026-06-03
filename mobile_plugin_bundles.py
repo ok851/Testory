@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+import urllib.request
+from urllib.request import Request
 
 _ROOT = Path(__file__).resolve().parent
 _MANIFEST_PATH = _ROOT / "config" / "plugin_bundles" / "android_platform_tools.json"
@@ -129,7 +130,7 @@ def _resolve_download_url() -> str:
 
 
 def _collect_download_urls() -> List[str]:
-    """下载地址列表：.env → 官方 → manifest.mirror_urls（去重）。"""
+    """下载地址列表：国内镜像 → .env → 官方（去重）。"""
     seen: set = set()
     out: List[str] = []
 
@@ -142,13 +143,13 @@ def _collect_download_urls() -> List[str]:
         seen.add(u)
         out.append(u)
 
-    add(os.environ.get("ANDROID_PLATFORM_TOOLS_URL"))
     spec = _platform_spec()
-    add(spec.get("url"))
     mirrors = spec.get("mirror_urls")
     if isinstance(mirrors, list):
         for item in mirrors:
             add(str(item) if item else None)
+    add(os.environ.get("ANDROID_PLATFORM_TOOLS_URL"))
+    add(spec.get("url"))
     return out
 
 
@@ -214,8 +215,17 @@ def _verify_sha256(path: Path, expected: str) -> None:
 
 def _download_url(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    req = Request(url, headers={"User-Agent": "Testory-Platform-Tools-Installer/1.0"})
-    with urlopen(req, timeout=600) as resp:
+    url = (url or "").strip()
+    try:
+        url.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError("下载地址无效，请联系管理员检查网络或离线安装配置。") from exc
+    req = Request(
+        url,
+        headers={"User-Agent": "Testory-Platform-Tools-Installer/1.0", "Accept": "*/*"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=600) as resp:
         data = resp.read()
     if len(data) < 1024:
         raise RuntimeError("下载内容过小，可能不是有效的 zip 包")
@@ -299,7 +309,10 @@ def get_android_platform_tools_catalog_entry() -> Dict[str, Any]:
     }
 
 
-def install_android_platform_tools() -> Dict[str, Any]:
+def install_android_platform_tools(
+    *,
+    progress_cb: Optional[Any] = None,
+) -> Dict[str, Any]:
     """下载或复制 zip，解压并登记插件状态。"""
     from web_capture.plugin_market import _load_state, _save_state
 
@@ -307,23 +320,31 @@ def install_android_platform_tools() -> Dict[str, Any]:
     progress: List[Dict[str, Any]] = []
     tmp_zip: Optional[Path] = None
 
+    def _step(percent: int, label: str) -> None:
+        progress.append({"label": label, "percent": percent})
+        if progress_cb:
+            try:
+                progress_cb(percent, label)
+            except Exception:
+                pass
+
     try:
         local = _resolve_local_zip()
         sdk_src = _resolve_system_sdk_platform_tools()
         source_kind = "download"
 
         if local:
-            progress.append({"label": "使用本地 zip 安装包", "percent": 20})
+            _step(20, "使用本地安装包…")
             zip_path = local
             expected_sha = str(_platform_spec().get("sha256") or "").strip()
             _verify_sha256(zip_path, expected_sha)
-            progress.append({"label": "正在解压…", "percent": 70})
+            _step(70, "正在解压…")
             _extract_platform_tools_zip(zip_path, dest)
         elif sdk_src:
             progress.append({"label": "检测到本机 Android SDK", "percent": 30})
             _copy_platform_tools_dir(sdk_src, dest)
             source_kind = "sdk"
-            progress.append({"label": "已复制 platform-tools", "percent": 70})
+            _step(70, "已复制 adb 组件")
         else:
             urls = _collect_download_urls()
             if not urls:
@@ -331,16 +352,16 @@ def install_android_platform_tools() -> Dict[str, Any]:
                     "success": False,
                     "error": _offline_install_message(),
                 }
-            progress.append({"label": "正在下载 Platform-Tools…", "percent": 15})
+            _step(15, "正在下载 adb 组件…")
             fd, tmp_name = tempfile.mkstemp(suffix=".zip", prefix="testory_adb_")
             os.close(fd)
             tmp_zip = Path(tmp_name)
             used = _download_with_fallback(urls, tmp_zip)
-            progress.append({"label": f"下载完成（{used[:40]}…）", "percent": 45})
+            _step(45, "下载完成")
             zip_path = tmp_zip
             expected_sha = str(_platform_spec().get("sha256") or "").strip()
             _verify_sha256(zip_path, expected_sha)
-            progress.append({"label": "正在解压…", "percent": 70})
+            _step(70, "正在解压…")
             _extract_platform_tools_zip(zip_path, dest)
         adb_exe = resolve_adb_in_dir(dest)
         if not adb_exe:
@@ -353,7 +374,7 @@ def install_android_platform_tools() -> Dict[str, Any]:
             }
 
         _apply_adb_path(adb_exe)
-        progress.append({"label": "写入 ADB_PATH", "percent": 90})
+        _step(90, "保存配置…")
 
         state = _load_state()
         plugins = state.setdefault("plugins", {})
@@ -368,7 +389,7 @@ def install_android_platform_tools() -> Dict[str, Any]:
             "source": source_kind if not local else "local",
         }
         _save_state(state)
-        progress.append({"label": "安装完成", "percent": 100})
+        _step(100, "安装完成")
 
         return {
             "success": True,
@@ -377,7 +398,7 @@ def install_android_platform_tools() -> Dict[str, Any]:
             "install_dir": str(dest),
             "adb_path": adb_exe,
             "progress": progress,
-            "message": f"adb 已安装：{adb_exe}。请刷新「移动端测试」页并连接手机。",
+            "message": "adb 已安装。请打开「移动端测试」连接手机；若列表为空，请重新插拔 USB 并授权调试。",
         }
     except Exception as exc:
         msg = str(exc)

@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ai_multi_provider import dispatch_chat_completion_messages
 from logger import uat_logger
+from embedded_browser_client import embedded_gateway_enabled
 from openclaw_gateway_client import OpenClawGatewayClient, _tool_result_max_chars
 
 
@@ -52,8 +53,30 @@ def _max_tool_rounds() -> int:
         return 18
 
 
-def chat_tool_schemas() -> List[Dict[str, Any]]:
-    return [
+def _ai_allow_main_playwright_fallback() -> bool:
+    return (os.environ.get("AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def openclaw_execute_allowed(*, embedded_session_id: str = "") -> bool:
+    """
+    已配置内置画布网关且未允许主 Playwright 回退时，禁止 openclaw_execute（会另开浏览器）。
+    """
+    if not embedded_gateway_enabled():
+        return True
+    if _ai_allow_main_playwright_fallback():
+        return True
+    return False
+
+
+def chat_tool_schemas(*, allow_openclaw: bool = True) -> List[Dict[str, Any]]:
+    schemas: List[Dict[str, Any]] = []
+    if allow_openclaw:
+        schemas.append(
         {
             "type": "function",
             "function": {
@@ -95,7 +118,9 @@ def chat_tool_schemas() -> List[Dict[str, Any]]:
                     "required": ["instruction"],
                 },
             },
-        },
+        }
+        )
+    schemas.append(
         {
             "type": "function",
             "function": {
@@ -115,8 +140,9 @@ def chat_tool_schemas() -> List[Dict[str, Any]]:
                     "required": ["adjustment"],
                 },
             },
-        },
-    ]
+        }
+    )
+    return schemas
 
 
 def _build_system_prompt(
@@ -128,6 +154,7 @@ def _build_system_prompt(
     memory_context: str,
     interaction_note: str,
     test_scope: str,
+    embedded_session_id: str = "",
 ) -> str:
     plan_preview = json.dumps(current_plan or {}, ensure_ascii=False)
     if len(plan_preview) > 12000:
@@ -145,11 +172,31 @@ def _build_system_prompt(
         "你是资深 QA / 自动化架构师，负责对话式维护并扩展 AI 自动化测试用例计划。",
         "",
         "## OpenClaw 与多轮工具",
-        "当用户要「在真实浏览器里跑」「探索系统/模块」「走通流程」「验证一整条业务」时，必须调用 openclaw_execute。",
-        "openclaw_execute 可把 scope / environment_notes / acceptance_criteria / continuation_from 与 instruction 组合成一条长指令；"
-        "对大系统请分多轮调用：例如 (1) 登录与首页 (2) 核心业务模块A (3) 模块B 或报表/导出等，每轮用 continuation_from 摘要上一轮。",
-        "拿到 OpenClaw 文本结果后：提炼可落地的选择器、URL、断言文案；若当前计划与探索结果不一致，调用 refine_test_plan 合并。",
-        "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
+    ]
+    if embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
+        parts_oc = [
+            "【重要】平台已启用内置 AI 画布网关（embedded_browser_gateway），浏览器操作必须只通过 refine_test_plan 写入 steps，",
+            "由平台在画布 Chromium 中执行（与中栏实时画面同一会话）。禁止调用 openclaw_execute（会经 OpenClaw 另开独立浏览器，与画布重复）。",
+            "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改步骤（含 navigate/click/input/wait/assert）。",
+            "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
+        ]
+    elif (embedded_session_id or "").strip() and embedded_gateway_enabled():
+        parts_oc = [
+            "【重要】用户已连接内置 AI 画布（embedded 会话）。浏览器操作必须只在该画布 Chromium 中通过 steps 体现；",
+            "由平台在画布执行。禁止调用 openclaw_execute（会另开独立浏览器窗口，与画布重复）。",
+            "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改步骤（含 navigate/click/input/wait/assert）。",
+            "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
+        ]
+    else:
+        parts_oc = [
+            "当用户要「在真实浏览器里跑」「探索系统/模块」「走通流程」「验证一整条业务」时，可调用 openclaw_execute。",
+            "openclaw_execute 可把 scope / environment_notes / acceptance_criteria / continuation_from 与 instruction 组合成一条长指令；"
+            "对大系统请分多轮调用：例如 (1) 登录与首页 (2) 核心业务模块A (3) 模块B 等，每轮用 continuation_from 摘要上一轮。",
+            "拿到 OpenClaw 文本结果后：提炼可落地的选择器、URL、断言文案；若当前计划与探索结果不一致，调用 refine_test_plan 合并。",
+            "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
+        ]
+    parts.extend(parts_oc)
+    parts.extend([
         "",
         "## 输出用例质量",
         "最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
@@ -158,7 +205,7 @@ def _build_system_prompt(
         "",
         f"项目名: {project_name or 'unknown'}",
         f"当前计划 JSON:\n{plan_preview}",
-    ]
+    ])
     ts = (test_scope or "").strip()
     if ts:
         parts.append(f"【用户指定的测试范围/模块】（须在步骤与描述中落实）: {ts}")
@@ -255,6 +302,7 @@ class ChatToolLoopParams:
     dom_context_pack: Optional[str]
     interaction_context: Optional[Dict[str, Any]]
     test_scope: Optional[str] = None
+    embedded_session_id: Optional[str] = None
 
 
 def run_ai_chat_with_tools(
@@ -267,7 +315,9 @@ def run_ai_chat_with_tools(
 
     Caller should run apply_step_normalization_to_plan on generated_plan_dict.
     """
-    tools = chat_tool_schemas()
+    embed_sid = (params.embedded_session_id or "").strip()
+    allow_oc = openclaw_execute_allowed(embedded_session_id=embed_sid)
+    tools = chat_tool_schemas(allow_openclaw=allow_oc)
     oc_client = OpenClawGatewayClient()
 
     ic_note = ""
@@ -285,6 +335,7 @@ def run_ai_chat_with_tools(
         memory_context=params.memory_context or "",
         interaction_note=ic_note,
         test_scope=(params.test_scope or "").strip() if params.test_scope else "",
+        embedded_session_id=embed_sid,
     )
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -381,16 +432,32 @@ def run_ai_chat_with_tools(
             result_text = ""
 
             if name == "openclaw_execute":
-                instr = _compose_openclaw_instruction(args)
-                sid = (args.get("session_id") or "").strip()
-                if not instr.strip():
+                if not allow_oc:
                     result_text = json.dumps(
-                        {"ok": False, "error": "instruction 经拼装后仍为空；请填写主任务或 environment_notes/scope"},
+                        {
+                            "ok": False,
+                            "error": (
+                                "openclaw_execute 已禁用：已配置内置画布网关，请改用 refine_test_plan "
+                                "并在 AI 测试页通过画布执行步骤。"
+                            ),
+                        },
                         ensure_ascii=False,
                     )
+                    meta["tools_used"].append("openclaw_execute_blocked")
                 else:
-                    result_text = oc_client.execute_user_instruction(instr, sid)
-                meta["tools_used"].append("openclaw_execute")
+                    instr = _compose_openclaw_instruction(args)
+                    sid = (args.get("session_id") or "").strip()
+                    if not instr.strip():
+                        result_text = json.dumps(
+                            {
+                                "ok": False,
+                                "error": "instruction 经拼装后仍为空；请填写主任务或 environment_notes/scope",
+                            },
+                            ensure_ascii=False,
+                        )
+                    else:
+                        result_text = oc_client.execute_user_instruction(instr, sid)
+                    meta["tools_used"].append("openclaw_execute")
             elif name == "refine_test_plan":
                 adj = (args.get("adjustment") or "").strip()
                 if not adj:

@@ -1,5 +1,8 @@
 {
   "mobile_defaults": {
-    "adb_path": "C:\\Users\\hu\\AppData\\Local\\NewUITestPlatform\\extensions\\android\\platform-tools\\adb.exe"
+    "adb_path": "C:\\Users\\zxcyb\\AppData\\Local\\NewUITestPlatform\\extensions\\android\\sdk\\platform-tools\\adb.exe",
+    "scrcpy_path": "C:\\Users\\zxcyb\\AppData\\Local\\NewUITestPlatform\\extensions\\android\\scrcpy\\scrcpy.exe",
+    "android_sdk_home": "C:\\Users\\zxcyb\\AppData\\Local\\NewUITestPlatform\\extensions\\android\\sdk",
+    "emulator_avd": "Testory_Pixel7"
   }
 }

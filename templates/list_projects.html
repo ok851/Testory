@@ -368,9 +368,11 @@
             </div>
         </div>
         
+        {% if not is_client %}
         <div class="navigation">
             <a href="/" class="btn btn-secondary" data-i18n="proj_back_home">← 返回首页</a>
         </div>
+        {% endif %}
     </div>
 
     <div id="createProjectModal" class="modal">

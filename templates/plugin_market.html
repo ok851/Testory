@@ -35,8 +35,10 @@
 (function () {
     const API = {
         catalog: '/api/plugin-market/catalog',
-        install: '/api/plugin-market/install'
+        install: '/api/plugin-market/install',
+        job: '/api/plugin-market/install/job/'
     };
+    const STORAGE_KEY = 'pm_active_job_id';
 
     const grid = document.getElementById('pmGrid');
     const statusBox = document.getElementById('pmExtStatus');
@@ -57,8 +59,10 @@
 
     function renderCard(p) {
         const installed = !!p.installed;
-        const btnLabel = installed ? '已安装' : '安装';
-        const btnCls = installed
+        const repairNeeded = !!p.repair_needed;
+        const btnLabel = repairNeeded ? '创建虚拟手机' : (installed ? '已安装' : '安装');
+        const btnDisabled = installed && !repairNeeded;
+        const btnCls = btnDisabled
             ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 cursor-default'
             : 'bg-red-600 text-white hover:bg-red-700';
         const feats = (p.features || []).map(function (f) {
@@ -73,11 +77,16 @@
             + statusBadge(p)
             + '</div><p class="text-sm text-gray-500 dark:text-gray-400 mt-1">' + esc(p.description) + '</p></div></div>'
             + '<div class="mb-4">' + feats + '</div>'
-            + (p.adb_path ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">adb：' + esc(p.adb_path) + '<br><span class="text-emerald-600">已自动写入配置，无需修改 .env</span></p>' : '')
-            + (p.id === 'mobile-android-platform-tools' && !installed ? '<p class="text-xs text-gray-500 mb-2">安装后平台自动识别 adb。无法访问 Google 时，请将 zip 放到 <code>plugin_bundles/platform-tools-windows.zip</code> 或确保本机已装 Android SDK。</p>' : '')
+            + (p.adb_path ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">adb：' + esc(p.adb_path) + '<br><span class="text-emerald-600">环境已自动配置，无需手动设置</span></p>' : '')
+            + (p.id === 'mobile-android-platform-tools' && !installed ? '<p class="text-xs text-gray-500 mb-2">安装后自动识别手机连接。内网环境请联系管理员配置离线安装包。</p>' : '')
+            + (p.id === 'mobile-android-emulator-sdk' && !installed ? '<p class="text-xs text-gray-500 mb-2">一键安装模拟器与默认虚拟手机。系统镜像约 1–2GB，下载较慢属正常；可切换其他页面，本卡片会显示进度。建议同时安装「scrcpy 高帧率投屏」。</p>' : '')
+            + (p.id === 'mobile-android-emulator-sdk' && repairNeeded ? '<p class="text-xs text-amber-600 mb-2">模拟器组件已下载，默认虚拟手机 <strong>' + esc(p.default_avd || 'Testory_Pixel7') + '</strong> 尚未创建。请点击「创建虚拟手机」完成最后一步（约 1 分钟）。</p>' : '')
+            + (p.id === 'mobile-android-emulator-sdk' && !installed && p.java_ready === false ? '<p class="text-xs text-amber-600 mb-2">未检测到 Java。请先安装 Java 11+ 后重新打开本软件；完整安装包通常已内置 Java。</p>' : '')
+            + (p.id === 'mobile-scrcpy' && !installed ? '<p class="text-xs text-gray-500 mb-2">模拟器高帧率画面组件，建议与「Android 模拟器 SDK」一并安装。</p>' : '')
             + (p.sdk_platform_tools_ready && !installed ? '<p class="text-xs text-emerald-600 mb-2">检测到本机 SDK：' + esc(p.sdk_platform_tools_path || '') + '，安装时将直接复制。</p>' : '')
+            + (p.android_sdk_home && installed ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">SDK：' + esc(p.android_sdk_home) + '</p>' : '')
             + '<div class="flex flex-wrap gap-2 mt-auto">'
-            + '<button type="button" class="pm-install px-4 py-2 text-sm rounded-lg font-medium ' + btnCls + '" data-id="' + esc(p.id) + '" ' + (installed ? 'disabled' : '') + '>' + btnLabel + '</button>'
+            + '<button type="button" class="pm-install px-4 py-2 text-sm rounded-lg font-medium ' + btnCls + '" data-id="' + esc(p.id) + '" ' + (btnDisabled ? 'disabled' : '') + '>' + btnLabel + '</button>'
             + '</div>'
             + '<div class="pm-progress-wrap"><div class="pm-progress-track"><div class="pm-progress-bar"></div></div><p class="pm-progress-text">准备安装…</p></div>'
             + '<p class="pm-result text-xs text-green-600 dark:text-green-400 mt-3 hidden"></p>'
@@ -98,7 +107,7 @@
             statusBox.innerHTML = '<i class="fas fa-check-circle mr-2"></i>已安装：' + parts.join('，');
         } else {
             statusBox.className = 'mb-6 rounded-lg border border-gray-200 bg-gray-50 text-gray-700 px-4 py-3 text-sm';
-            statusBox.innerHTML = '<i class="fas fa-info-circle mr-2"></i>可安装浏览器捕获插件和 Android adb（见 plugin_bundles/README.md）';
+            statusBox.innerHTML = '<i class="fas fa-info-circle mr-2"></i>可安装网页捕获插件与 Android 移动端组件';
         }
     }
 
@@ -129,15 +138,118 @@
         return new Promise(function (r) { setTimeout(r, ms); });
     }
 
+    function saveJobId(jobId) {
+        try { sessionStorage.setItem(STORAGE_KEY, jobId); } catch (e) {}
+    }
+
+    function clearJobId() {
+        try { sessionStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    }
+
+    function parseJobResponse(body) {
+        if (!body || !body.ok) {
+            return { missing: true, error: (body && body.error) || '安装任务不存在或已过期' };
+        }
+        var job = body.job || {};
+        var ok = false;
+        if (job.state === 'done') {
+            if (job.install_ok === true) ok = true;
+            else if (job.install_ok === false) ok = false;
+            else if (job.success === false) ok = false;
+            else ok = true;
+        }
+        return {
+            missing: false,
+            state: job.state || '',
+            percent: job.percent || 0,
+            label: job.label || '',
+            error: job.error || '',
+            message: job.message || (job.result && job.result.message) || '',
+            pluginId: job.plugin_id || '',
+            installOk: ok
+        };
+    }
+
+    function showInstallResult(card, btn, resultEl, ok, text) {
+        hideProgress(card);
+        if (resultEl) {
+            resultEl.classList.remove('hidden');
+            resultEl.className = ok
+                ? 'pm-result text-xs text-green-600 dark:text-green-400 mt-3'
+                : 'pm-result text-xs text-red-600 mt-3';
+            resultEl.textContent = text || (ok ? '安装完成' : '安装失败');
+        }
+        if (btn) btn.disabled = !!ok;
+    }
+
+    async function pollInstallJob(jobId, card, btn, resultEl) {
+        let done = false;
+        while (!done) {
+            await sleep(1500);
+            const r = await fetch(API.job + encodeURIComponent(jobId), { credentials: 'include' });
+            const body = await r.json();
+            const info = parseJobResponse(body);
+            if (info.missing) {
+                done = true;
+                clearJobId();
+                showInstallResult(card, btn, resultEl, false, info.error);
+                return;
+            }
+            if (info.state === 'running') {
+                setProgress(card, info.percent, info.label || '后台安装中…');
+                continue;
+            }
+            done = true;
+            clearJobId();
+            if (info.state === 'done' && info.installOk !== false) {
+                showInstallResult(card, btn, resultEl, true, info.message);
+                await loadCatalog();
+            } else {
+                showInstallResult(card, btn, resultEl, false, info.error || '安装失败');
+            }
+        }
+    }
+
+    async function resumeJobIfAny() {
+        let jobId = '';
+        try { jobId = sessionStorage.getItem(STORAGE_KEY) || ''; } catch (e) {}
+        if (!jobId) return;
+        const r = await fetch(API.job + encodeURIComponent(jobId), { credentials: 'include' });
+        const info = parseJobResponse(await r.json());
+        if (info.missing) {
+            clearJobId();
+            return;
+        }
+        const card = document.querySelector('[data-plugin-id="' + info.pluginId + '"]');
+        if (!card) {
+            clearJobId();
+            return;
+        }
+        const btn = card.querySelector('.pm-install');
+        const resultEl = card.querySelector('.pm-result');
+        if (info.state === 'running') {
+            if (btn) btn.disabled = true;
+            setProgress(card, info.percent || 5, info.label || '后台安装中…');
+            pollInstallJob(jobId, card, btn, resultEl);
+            return;
+        }
+        clearJobId();
+        if (info.state === 'done' && info.installOk !== false) {
+            showInstallResult(card, btn, resultEl, true, info.message);
+            await loadCatalog();
+        } else if (info.state === 'failed') {
+            showInstallResult(card, btn, resultEl, false, info.error || '安装失败');
+        }
+    }
+
     async function doInstall(pluginId, btn) {
         const card = btn && btn.closest('[data-plugin-id]');
         const resultEl = card && card.querySelector('.pm-result');
         if (!card || !btn) return;
+        clearJobId();
         btn.disabled = true;
         if (resultEl) { resultEl.classList.add('hidden'); resultEl.textContent = ''; }
-        setProgress(card, 8, '准备安装…');
-        await sleep(120);
-        setProgress(card, 25, '正在写入软件目录…');
+        setProgress(card, 5, '正在启动安装…');
         try {
             const r = await fetch(API.install, {
                 method: 'POST',
@@ -145,9 +257,8 @@
                 credentials: 'include',
                 body: JSON.stringify({ plugin_id: pluginId })
             });
-            setProgress(card, 65, '正在登记插件…');
             const j = await r.json();
-            if (!j.success) {
+            if (!j.success && !j.async) {
                 hideProgress(card);
                 if (resultEl) {
                     resultEl.classList.remove('hidden');
@@ -155,6 +266,12 @@
                     resultEl.textContent = j.error || '安装失败';
                 }
                 btn.disabled = false;
+                return;
+            }
+            if (j.async && j.job_id) {
+                setProgress(card, 8, '后台安装中，可切换其他页面…');
+                saveJobId(j.job_id);
+                pollInstallJob(j.job_id, card, btn, resultEl);
                 return;
             }
             const steps = j.progress || [{ label: '完成', percent: 100 }];
@@ -173,6 +290,7 @@
             await loadCatalog();
         } catch (e) {
             hideProgress(card);
+            clearJobId();
             if (resultEl) {
                 resultEl.classList.remove('hidden');
                 resultEl.className = 'pm-result text-xs text-red-600 mt-3';
@@ -190,7 +308,7 @@
         });
     }
 
-    loadCatalog();
+    loadCatalog().then(function () { resumeJobIfAny(); });
 })();
 </script>
 {% endblock %}

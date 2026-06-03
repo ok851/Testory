@@ -54,7 +54,7 @@ html.dark .ms-title { color: #f1f5f9; }
 }
 .ms-layout {
     display: grid;
-    grid-template-columns: minmax(320px, 400px) 1fr;
+    grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
     gap: 1.25rem;
     align-items: start;
     min-height: calc(100vh - 8rem);
@@ -77,15 +77,17 @@ html.dark .ms-panel {
     flex-direction: column;
     max-height: calc(100vh - 6rem);
     overflow: hidden;
+    min-width: 0;
 }
 .ms-panel-scroll {
     flex: 1;
     min-height: 0;
+    min-width: 0;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    scroll-padding-bottom: 0.75rem;
+    scroll-padding: 0.75rem 0.5rem;
 }
 .ms-panel--left .ms-section--grow {
     flex: 0 1 auto;
@@ -99,8 +101,10 @@ html.dark .ms-panel {
     align-items: center;
 }
 .ms-section {
-    padding: 1rem 1.1rem;
+    padding: 1rem 1.15rem;
     border-bottom: 1px solid #f1f5f9;
+    min-width: 0;
+    box-sizing: border-box;
 }
 html.dark .ms-section { border-color: #1f2937; }
 .ms-section--grow {
@@ -267,9 +271,31 @@ html.dark .ms-panel--left .ms-status {
 }
 .ms-emulator-help {
     margin: 0.35rem 0 0.5rem;
+    padding: 0.5rem 0.55rem;
     font-size: 0.72rem;
-    line-height: 1.45;
-    white-space: pre-line;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-width: 100%;
+    box-sizing: border-box;
+    border-radius: 0.4rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+}
+html.dark .ms-emulator-help {
+    background: #0f172a;
+    border-color: #334155;
+}
+.ms-emulator-help--warn {
+    color: #b45309;
+    background: #fffbeb;
+    border-color: #fcd34d;
+}
+html.dark .ms-emulator-help--warn {
+    color: #fbbf24;
+    background: rgba(180, 83, 9, 0.15);
+    border-color: #b45309;
 }
 .ms-emulator-hint {
     margin: 0.5rem 0 0;
@@ -382,17 +408,37 @@ html.dark .ms-setup-panel {
 }
 .ms-device-help {
     font-size: 0.72rem;
-    line-height: 1.45;
+    line-height: 1.5;
     margin: 0.35rem 0 0;
-    padding: 0.45rem 0.5rem;
+    padding: 0.5rem 0.55rem;
     border-radius: 0.4rem;
     background: #f8fafc;
     border: 1px solid #e2e8f0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-width: 100%;
+    box-sizing: border-box;
+    white-space: pre-wrap;
 }
-.dark .ms-device-help {
+html.dark .ms-device-help {
     background: #0f172a;
     border-color: #334155;
 }
+.ms-device-help a {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
 .ms-device-help code {
     font-size: 0.68rem;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+}
+.ms-setup-hint,
+.ms-wireless-hint,
+.ms-setup-panel,
+.ms-wireless-panel {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-width: 100%;
+    box-sizing: border-box;
 }

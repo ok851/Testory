@@ -54,7 +54,58 @@
 {% endblock %}
 {% block body_class %}bg-gray-100 font-sans text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}
 {% block content %}
-    <!-- 英雄区域 -->
+    {% if is_client %}
+    <div class="testory-desktop-dashboard testory-desktop-only-show">
+        <div class="testory-desktop-dashboard__head">
+            <h1 data-i18n="index_hero_title">欢迎使用 Testory</h1>
+            <p data-i18n="index_desktop_sub">从下方入口开始自动化测试，或使用左侧导航切换模块。</p>
+        </div>
+        <div class="testory-dash-grid">
+            <a href="/list_projects" class="testory-dash-card">
+                <i class="fas fa-folder-open"></i>
+                <strong data-i18n="index_btn_manage_projects">管理项目</strong>
+                <span data-i18n="index_dash_proj_hint">创建用例、编辑步骤、执行测试</span>
+            </a>
+            <a href="/ai-test" class="testory-dash-card">
+                <i class="fas fa-brain"></i>
+                <strong data-i18n="nav_aitest">AI 测试</strong>
+                <span data-i18n="index_dash_ai_hint">对话生成用例、内置浏览器执行</span>
+            </a>
+            <a href="/api-testing" class="testory-dash-card">
+                <i class="fas fa-plug"></i>
+                <strong data-i18n="nav_api_test">接口测试</strong>
+                <span data-i18n="index_dash_api_hint">HTTP 步骤链与断言</span>
+            </a>
+            {% if mobile_testing_enabled %}
+            <a href="/mobile-testing" class="testory-dash-card">
+                <i class="fas fa-mobile-alt"></i>
+                <strong>移动端</strong>
+                <span>Android 投屏与自动化</span>
+            </a>
+            {% endif %}
+            <a href="/run-history" class="testory-dash-card">
+                <i class="fas fa-history"></i>
+                <strong data-i18n="nav_history">运行历史</strong>
+                <span data-i18n="index_dash_hist_hint">查看执行记录与日志</span>
+            </a>
+            <a href="/test_report" class="testory-dash-card">
+                <i class="fas fa-chart-bar"></i>
+                <strong data-i18n="nav_report">测试报告</strong>
+                <span data-i18n="index_dash_report_hint">汇总结果与导出</span>
+            </a>
+        </div>
+        <div class="testory-dash-section">
+            <h2 data-i18n="index_workflow_title">工作流程</h2>
+            <div class="testory-dash-steps">
+                <div class="testory-dash-step"><em>1</em><span data-i18n="index_step1_title">创建项目</span></div>
+                <div class="testory-dash-step"><em>2</em><span data-i18n="index_step2_title">创建测试用例</span></div>
+                <div class="testory-dash-step"><em>3</em><span data-i18n="index_step3_title">编辑测试用例</span></div>
+                <div class="testory-dash-step"><em>4</em><span data-i18n="index_step4_title">执行测试用例</span></div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    <!-- 英雄区域（Web 版营销页；桌面版由 CSS 隐藏） -->
     <section class="hero-section">
         <div class="hero-content">
             <h2 class="text-4xl font-bold mb-4" data-i18n="index_hero_title">欢迎使用 Testory</h2>

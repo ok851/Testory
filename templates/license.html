@@ -531,8 +531,11 @@
                     var lt = result.license_type || '';
                     var dt = result.expires_at ? new Date(result.expires_at).toLocaleDateString(licLocaleTag(), { timeZone: 'Asia/Shanghai' }) : '';
                     var msg = typeof t === 'function' ? licSub(t('lic_act_ok_txt'), { type: lt, date: dt }) : '';
+                    if (result.activation_sync_hint) {
+                        msg += (msg ? '\n\n' : '') + result.activation_sync_hint;
+                    }
                     Swal.fire({
-                        icon: 'success',
+                        icon: result.activation_synced === false && result.activation_sync_hint ? 'warning' : 'success',
                         title: typeof t === 'function' ? t('lic_swal_act_ok') : '',
                         text: msg,
                         confirmButtonText: typeof t === 'function' ? t('payment_ok') : 'OK'

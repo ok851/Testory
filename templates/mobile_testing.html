@@ -19,7 +19,7 @@
     {% if mobile_disabled %}
     <div class="ms-disabled-banner">
         <p>{{ mobile_disabled_reason }}</p>
-        <p class="ms-muted">在 .env 设置 <code>ENABLE_MOBILE=1</code> 并执行 <code>pip install -r requirements-mobile-optional.txt</code> 后重启服务。</p>
+        <p class="ms-muted">移动端测试未在本版本中启用，请联系管理员或软件供应商。</p>
     </div>
     {% else %}
     <div class="ms-layout">
@@ -37,15 +37,12 @@
                 <details class="ms-setup-panel">
                     <summary class="ms-setup-summary"><i class="fas fa-book"></i> 如何安装 Android SDK / 模拟器？</summary>
                     <p class="ms-muted ms-setup-hint">
-                        <strong>Android SDK 是什么？</strong> 就是在电脑上运行「虚拟 Android 手机」的工具包，由 Google 提供，通常随 <strong>Android Studio</strong> 一起安装（免费）。
-                        <br><br>
-                        <strong>第一次配置（约 15 分钟）：</strong><br>
-                        1. 下载安装 <a href="https://developer.android.com/studio" target="_blank" rel="noopener">Android Studio</a><br>
-                        2. 打开后进入 <strong>Device Manager → Create Device</strong>，选 Pixel 6 等型号，下载一个 System Image，完成创建<br>
-                        3. 在本项目 <code>.env</code> 增加一行（路径按你电脑用户名改）：<br>
-                        <code>ANDROID_HOME=C:\Users\你的用户名\AppData\Local\Android\Sdk</code><br>
-                        4. 重启 <code>python app.py</code>，回到本页点「启动模拟器」<br><br>
-                        高帧率画布还需安装 <a href="https://github.com/Genymobile/scrcpy/releases" target="_blank" rel="noopener">scrcpy</a>，并把 <code>scrcpy-server</code> 放到 scrcpy.exe 同目录。
+                        <strong>推荐（无需 Android Studio）：</strong><br>
+                        1. 安装 <strong>Java 11 或更高版本</strong>（可从 <a href="https://adoptium.net/" target="_blank" rel="noopener">adoptium.net</a> 下载）<br>
+                        2. 点击右上角用户菜单 → <strong>插件市场</strong> → 安装「<strong>Android 模拟器 SDK（命令行）</strong>」（首次约 2–4GB，请保持网络畅通）<br>
+                        3. 安装完成后<strong>完全退出并重新打开本软件</strong>，回到本页点击「启动模拟器」<br><br>
+                        <strong>备选：</strong> 若本机已安装 Android Studio，可在其 Device Manager 中创建虚拟手机，重新打开本软件后通常会自动识别。<br><br>
+                        <strong>更流畅的画面（推荐）：</strong> 在 <strong>插件市场</strong> 安装「<strong>scrcpy 高帧率投屏</strong>」（与模拟器 SDK 配套，一键完成）。
                     </p>
                 </details>
             </section>
@@ -143,8 +140,8 @@
                         <canvas id="msMirrorCanvas" class="ms-mirror-canvas" aria-label="设备画面，可点击与滑动"></canvas>
                         <div id="msMirrorPlaceholder" class="ms-mirror-placeholder">
                             <i class="fas fa-desktop fa-2x mb-3 opacity-40"></i>
-                            <p>启动模拟器或连接真机后，点「一键连接」</p>
-                            <p class="ms-muted" style="font-size:12px;">模拟器：高帧率 scrcpy 画布 · 真机：预览模式</p>
+                            <p>先点左侧「启动模拟器」，画面将显示在本区域（无额外弹窗）</p>
+                            <p class="ms-muted" style="font-size:12px;">模拟器：平台内高帧率画布 · 真机：点「一键连接」预览</p>
                         </div>
                     </div>
                 </div>

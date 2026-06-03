@@ -17,10 +17,9 @@ from pathlib import Path
 
 # 安装包通过 pythonw packaging\uat_desktop.py 启动时，需把安装根目录加入 sys.path
 _install_root = Path(__file__).resolve().parent.parent
-if (_install_root / "app.py").is_file():
-    _root_str = str(_install_root)
-    if _root_str not in sys.path:
-        sys.path.insert(0, _root_str)
+_root_str = str(_install_root)
+if _root_str not in sys.path:
+    sys.path.insert(0, _root_str)
 
 import shutil
 import subprocess
@@ -31,19 +30,49 @@ from typing import Optional
 
 from desktop_user_data import ensure_user_data_dirs, resolve_env_file
 from packaging.desktop_shell import run_native_shell
+from packaging.launch_checks import run_launch_preflight
 from packaging.testory_runtime import resolve_bundled_python, verify_bundled_python
 
 APP_TITLE = "Testory"
 DEFAULT_PORT = 5000
 
+_PROTECTED_BACKEND_REL = "runtime/testory_app/TestoryBackend.exe"
+
+
+def _backend_exe_path(root: Path) -> Optional[Path]:
+    """保护版：runtime\\testory_app\\TestoryBackend.exe；不依赖根目录 install_paths.py。"""
+    for rel in (_PROTECTED_BACKEND_REL, "runtime/testory_app/testory_backend.exe"):
+        p = root / rel.replace("/", os.sep)
+        if p.is_file():
+            return p
+    try:
+        from install_paths import protected_backend_exe
+
+        p = protected_backend_exe()
+        if p is not None and p.is_file():
+            return p
+    except ImportError:
+        pass
+    return None
+
 
 def install_root() -> Path:
-    """安装目录或开发时的项目根目录。"""
+    """安装目录或开发时的项目根目录（禁止误用 Path.cwd()）。"""
     here = Path(__file__).resolve().parent
     root = here.parent
     if (root / "app.py").is_file():
         return root
-    return Path.cwd()
+    if _backend_exe_path(root) is not None:
+        return root
+    if (here / "uat_desktop.py").is_file() and (root / "Testory.exe").is_file():
+        return root
+    try:
+        from install_paths import resolve_install_root
+
+        return resolve_install_root()
+    except ImportError:
+        pass
+    return root
 
 
 def resolve_python(root: Path) -> Path:
@@ -82,7 +111,41 @@ def apply_local_env(root: Path, port: int) -> Path:
     if bundled_browsers.is_dir():
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled_browsers)
         os.environ["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
+    os.environ.setdefault("EMBEDDED_BROWSER_GATEWAY_URL", "http://127.0.0.1:8765")
+    os.environ.setdefault("EMBEDDED_BROWSER_GATEWAY_SECRET", "hufirst-desktop-local")
+    os.environ.setdefault("EMBEDDED_BROWSER_PUBLIC_WS_BASE", "ws://127.0.0.1:8765")
+    os.environ.setdefault("EMBEDDED_BROWSER_AUTO_START_GATEWAY", "1")
+    os.environ.setdefault("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434")
     return user_data
+
+
+def _patch_user_env_missing_keys(env_path: Path) -> None:
+    """旧版用户 .env 可能缺少嵌入式网关等键，补全以免 AI/网页捕获不可用。"""
+    defaults = {
+        "EMBEDDED_BROWSER_GATEWAY_URL": "http://127.0.0.1:8765",
+        "EMBEDDED_BROWSER_GATEWAY_SECRET": "hufirst-desktop-local",
+        "EMBEDDED_BROWSER_PUBLIC_WS_BASE": "ws://127.0.0.1:8765",
+        "EMBEDDED_BROWSER_AUTO_START_GATEWAY": "1",
+        "DESKTOP_EXECUTION_MODE": "inprocess",
+        "DEPLOYMENT_PROFILE": "local",
+        "PLAYWRIGHT_HEADLESS": "0",
+        "LOCAL_LLM_BASE_URL": "http://127.0.0.1:11434",
+    }
+    try:
+        text = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
+    except OSError:
+        return
+    lines: list[str] = []
+    for key, val in defaults.items():
+        if f"{key}=" in text or f"{key} =" in text:
+            continue
+        lines.append(f"{key}={val}")
+    if not lines:
+        return
+    with env_path.open("a", encoding="utf-8") as fp:
+        fp.write("\n# Testory desktop runtime defaults (auto)\n")
+        fp.write("\n".join(lines))
+        fp.write("\n")
 
 
 def ensure_dotenv(root: Path, user_data: Path) -> Path:
@@ -92,10 +155,12 @@ def ensure_dotenv(root: Path, user_data: Path) -> Path:
     os.environ["TESTORY_ENV_FILE"] = str(env_path)
     os.environ["UAT_DATA_DIR"] = str(user_data)
     if env_path.is_file():
+        _patch_user_env_missing_keys(env_path)
         return env_path
     example = root / ".env.example"
     if example.is_file():
         shutil.copy(example, env_path)
+        _patch_user_env_missing_keys(env_path)
         return env_path
     env_path.write_text(
         "# Auto-created by Testory desktop launcher\n"
@@ -104,7 +169,12 @@ def ensure_dotenv(root: Path, user_data: Path) -> Path:
         "PLAYWRIGHT_HEADLESS=0\n"
         "DEPLOYMENT_MODE=client\n"
         "UAT_DESKTOP_MODE=1\n"
-        "PLATFORM_ADMIN_URL=http://127.0.0.1:5100\n",
+        "PLATFORM_ADMIN_URL=http://127.0.0.1:5100\n"
+        "EMBEDDED_BROWSER_GATEWAY_URL=http://127.0.0.1:8765\n"
+        "EMBEDDED_BROWSER_GATEWAY_SECRET=hufirst-desktop-local\n"
+        "EMBEDDED_BROWSER_PUBLIC_WS_BASE=ws://127.0.0.1:8765\n"
+        "EMBEDDED_BROWSER_AUTO_START_GATEWAY=1\n"
+        "LOCAL_LLM_BASE_URL=http://127.0.0.1:11434\n",
         encoding="utf-8",
     )
     return env_path
@@ -116,8 +186,19 @@ def _no_window_flags() -> int:
     return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
 
 
+def _backend_command(root: Path, python: Path) -> list:
+    exe = _backend_exe_path(root)
+    if exe is not None:
+        return [str(exe)]
+    legacy = root / "app.py"
+    if legacy.is_file():
+        return [str(python), str(legacy)]
+    return [str(python), str(root / "app.py")]
+
+
 def start_backend(root: Path, python: Path, port: int, user_data: Path) -> subprocess.Popen:
     apply_local_env(root, port)
+    os.environ["TESTORY_INSTALL_ROOT"] = str(root.resolve())
     env = os.environ.copy()
     log_dir = user_data / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -125,8 +206,9 @@ def start_backend(root: Path, python: Path, port: int, user_data: Path) -> subpr
     log_fp = open(log_path, "a", encoding="utf-8", buffering=1)
     log_fp.write(f"\n--- backend start {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
     log_fp.flush()
+    cmd = _backend_command(root, python)
     return subprocess.Popen(
-        [str(python), str(root / "app.py")],
+        cmd,
         cwd=str(root),
         env=env,
         stdout=log_fp,
@@ -201,6 +283,16 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
 
         set_process_app_user_model_id()
     os.chdir(root)
+
+    pre_errors, pre_warn = run_launch_preflight(root, port=port)
+    if pre_errors:
+        _show_error(
+            "Testory 安装不完整，无法启动：\n\n"
+            + "\n\n".join(f"• {e}" for e in pre_errors)
+            + f"\n\n安装目录：{root}"
+        )
+        return 1
+
     user_data = apply_local_env(root, port)
     ensure_dotenv(root, user_data)
     python, runtime_err = verify_bundled_python(root)
@@ -213,8 +305,12 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
     elif python is None:
         python = resolve_python(root)
 
-    if not (root / "app.py").is_file():
-        _show_error(f"未找到程序文件：{root / 'app.py'}\n请重新安装。")
+    has_backend = (root / "app.py").is_file() or (_backend_exe_path(root) is not None)
+    if not has_backend:
+        _show_error(
+            "未找到后端程序（app.py 或 runtime\\testory_app\\TestoryBackend.exe）。\n"
+            f"安装目录：{root}\n请重新安装完整安装包（需含 runtime 目录）。"
+        )
         return 1
 
     proc: Optional[subprocess.Popen] = None
@@ -264,8 +360,19 @@ def main() -> None:
     if "--probe" in sys.argv:
         root = install_root()
         os.chdir(root)
-        user_data = apply_local_env(root, DEFAULT_PORT)
-        ensure_dotenv(root, user_data)
+        apply_local_env(root, DEFAULT_PORT)
+        errs, warns = run_launch_preflight(root)
+        if errs:
+            print("probe failed:", file=sys.stderr)
+            for e in errs:
+                print(e, file=sys.stderr)
+            raise SystemExit(1)
+        for w in warns:
+            print("warn:", w, file=sys.stderr)
+        _, verr = verify_bundled_python(root)
+        if verr:
+            print(verr, file=sys.stderr)
+            raise SystemExit(1)
         print("probe ok")
         raise SystemExit(0)
     port = int(os.environ.get("FLASK_RUN_PORT", DEFAULT_PORT))

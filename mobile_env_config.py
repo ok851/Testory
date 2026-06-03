@@ -74,6 +74,15 @@ def adb_path() -> str:
     4) 回退字符串 adb（依赖系统 PATH）
     """
     try:
+        from mobile_emulator_sdk_bundles import get_installed_emulator_sdk_home, resolve_adb_in_sdk
+
+        if get_installed_emulator_sdk_home():
+            sdk_adb = resolve_adb_in_sdk()
+            if sdk_adb:
+                return sdk_adb
+    except Exception:
+        pass
+    try:
         from mobile_plugin_bundles import get_installed_adb_path
 
         bundled = get_installed_adb_path()
@@ -111,11 +120,22 @@ def adb_path_source() -> str:
 
 
 def scrcpy_path() -> str:
+    try:
+        from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+
+        bundled = get_installed_scrcpy_exe()
+        if bundled:
+            return bundled
+    except Exception:
+        pass
     cfg = _load_mobile_defaults()
     env_path = (os.environ.get("SCRCPY_PATH") or "").strip()
-    if env_path:
+    if env_path and Path(env_path).is_file():
         return env_path
-    return (cfg.get("scrcpy_path") or "scrcpy").strip() or "scrcpy"
+    cfg_path = (cfg.get("scrcpy_path") or "").strip()
+    if cfg_path and Path(cfg_path).is_file():
+        return cfg_path
+    return env_path or cfg_path or "scrcpy"
 
 
 def mirror_fps() -> int:
@@ -157,6 +177,14 @@ def android_sdk_home() -> str:
     cfg_path = (cfg.get("android_sdk_home") or "").strip()
     if cfg_path and Path(cfg_path).is_dir():
         return cfg_path
+    try:
+        from mobile_emulator_sdk_bundles import get_installed_emulator_sdk_home
+
+        plugin_sdk = get_installed_emulator_sdk_home()
+        if plugin_sdk:
+            return plugin_sdk
+    except Exception:
+        pass
     user = os.environ.get("LOCALAPPDATA") or os.environ.get("USERPROFILE") or ""
     if user:
         default = Path(user) / "AppData" / "Local" / "Android" / "Sdk"

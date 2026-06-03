@@ -18,11 +18,27 @@ from desktop_env_config import (
     desktop_execution_mode,
     is_local_deployment,
 )
+from subprocess_win import subprocess_creationflags_no_window
 
 _BOOTED = False
 _GATEWAY_PROC: Optional[subprocess.Popen] = None
 
-_ROOT = Path(__file__).resolve().parent
+try:
+    from install_paths import helper_executable, resolve_install_root
+
+    _ROOT = resolve_install_root()
+except ImportError:
+    _ROOT = Path(__file__).resolve().parent
+
+
+def _desktop_gateway_cmd() -> list:
+    try:
+        exe = helper_executable("TestoryDesktopGw")
+        if exe is not None and exe.is_file():
+            return [str(exe)]
+    except NameError:
+        pass
+    return [sys.executable, "-m", "desktop_automation_gateway"]
 
 
 def _port_listening(host: str, port: int, timeout: float = 0.4) -> bool:
@@ -62,16 +78,13 @@ def _start_gateway_process() -> None:
         return
     env = os.environ.copy()
     env["DESKTOP_GATEWAY_INPROCESS"] = "1"
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS  # type: ignore[attr-defined]
     _GATEWAY_PROC = subprocess.Popen(
-        [sys.executable, "-m", "desktop_automation_gateway"],
+        _desktop_gateway_cmd(),
         cwd=str(_ROOT),
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=creationflags,
+        creationflags=subprocess_creationflags_no_window(),
     )
 
 

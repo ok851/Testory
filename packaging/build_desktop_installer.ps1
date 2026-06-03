@@ -6,11 +6,13 @@
 #   -IsccPath "D:\Inno Setup 6\ISCC.exe"   explicit ISCC (optional if Inno is on PATH or default paths)
 #   -InnoOnly                              skip prepare; compile existing dist\uat_release only
 #   -PrepareOnly                           prepare dist\uat_release only; do NOT call ISCC (manual compile in Inno GUI)
+#   -Legacy                                ship plaintext .py (dev only); default is Protected onedir
 
 param(
     [string] $IsccPath = "",
     [switch] $InnoOnly,
-    [switch] $PrepareOnly
+    [switch] $PrepareOnly,
+    [switch] $Legacy
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,15 +52,27 @@ if ($PrepareOnly) {
 } else {
     Write-Host " Mode: prepare + Inno compile" -ForegroundColor DarkGray
 }
+if ($Legacy) {
+    Write-Host " Packaging: Legacy (plaintext .py in install dir)" -ForegroundColor Yellow
+} else {
+    Write-Host " Packaging: Protected (PyInstaller onedir, default)" -ForegroundColor Green
+}
 Write-Host "========================================" -ForegroundColor Cyan
 
 if (-not $InnoOnly) {
-    & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root
+    if ($Legacy) {
+        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root -Legacy
+    } else {
+        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root
+    }
 } else {
     Write-Host " Skip prepare (-InnoOnly); using existing dist\uat_release" -ForegroundColor Yellow
     if (-not (Test-Path (Join-Path $Root "dist\uat_release\Testory.exe"))) {
         throw "dist\uat_release not ready. Run without -InnoOnly first."
     }
+    Write-Host " Running release verify on existing dist\uat_release ..." -ForegroundColor DarkGray
+    & "$Root\packaging\bundle\verify_install_release.ps1" -ReleaseDir "dist\uat_release" -Root $Root
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 if ($PrepareOnly) {

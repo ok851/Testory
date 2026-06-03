@@ -4,6 +4,8 @@
 解析规则：整行去掉首尾空白后，若以 # 开头则去掉第一个 # 及其后空白，再按 KEY=VALUE 识别；
 KEY 须匹配 [A-Za-z_][A-Za-z0-9_]*；支持可选前缀 export 。
 
+本机功能开关：从 example 同步时，下列 KEY 若示例值为 0/off/空，会写入「开启」默认值（见 _LOCAL_ON_VALUES）。
+
 在 load_dotenv 之前生效的跳过开关（须由系统/IDE 注入，不能写在 .env 里）：
   SKIP_ENV_EXAMPLE_SYNC=1  — 不写 .env、不合并。
 """
@@ -15,6 +17,47 @@ import sys
 from pathlib import Path
 
 _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+_OFF_VALUES = frozenset({"0", "false", "no", "off", ""})
+
+# 从 .env.example 同步到 .env 时，若示例为关闭态则提升为本机推荐「开」值（不覆盖 .env 已有行）
+_LOCAL_ON_VALUES: dict[str, str] = {
+    "AI_CHAT_TOOLS_ENABLE": "1",
+    "AI_CHAT_TOOLS_OLLAMA_ENABLE": "1",
+    "AI_LOCATOR_RESOLVE_ENABLE": "1",
+    "AI_FAILURE_DIAG_ENABLE": "1",
+    "AI_STEP_FAILURE_DIAG": "1",
+    "AI_STEP_FAILURE_DIAG_LLM": "1",
+    "AI_DIAG_CDP_ENABLE": "1",
+    "AI_SELECTOR_FALLBACK": "1",
+    "LOCAL_AI_HEURISTIC_SELECTOR_REPAIR": "1",
+    "LOCAL_AI_SELECTOR_CLAMP": "1",
+    "LOCAL_VISION_ENABLE": "1",
+    "LOCAL_VISION_VERIFY": "1",
+    "LOCAL_VISION_RECOVERY": "1",
+    "LOCAL_OCR_ENABLE": "1",
+    "LOCAL_MEMORY_ENABLE": "1",
+    "ENABLE_MOBILE": "1",
+    "MOBILE_EMULATOR_MODE": "1",
+    "MOBILE_AUTO_CONNECT": "1",
+    "CAPTCHA_VISION_FALLBACK": "1",
+    "CAPTCHA_REQUIRE_USER_SCOPE": "1",
+    "EMBEDDED_SNAP_AFTER_STEP": "1",
+    "EMBEDDED_BROWSER_AUTO_START_GATEWAY": "1",
+    "LOCATOR_TIER_VISUAL_ENABLE": "1",
+    "LOCATOR_TIER_COORD_ENABLE": "1",
+    "DEPLOYMENT_PROFILE": "local",
+    "DESKTOP_EXECUTION_MODE": "inprocess",
+    "PLAYWRIGHT_HEADLESS": "0",
+}
+
+
+def _coerce_local_on_value(key: str, val: str) -> str:
+    if key not in _LOCAL_ON_VALUES:
+        return val.rstrip()
+    if val.strip().lower() in _OFF_VALUES:
+        return _LOCAL_ON_VALUES[key]
+    return val.rstrip()
 
 
 def _parse_assignment_line(line: str) -> tuple[str, str] | None:
@@ -34,7 +77,7 @@ def _parse_assignment_line(line: str) -> tuple[str, str] | None:
     key = key.strip()
     if not _KEY.match(key):
         return None
-    return key, val.rstrip()
+    return key, _coerce_local_on_value(key, val.rstrip())
 
 
 def _active_keys_in_env(text: str) -> set[str]:

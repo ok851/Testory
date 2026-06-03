@@ -1167,7 +1167,7 @@
                     <option value="assert" data-i18n-opt="steps_act_assert">断言操作</option>
                 </select>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="stepLocatorTypeGroup">
                 <label for="stepSelectorType" data-i18n="steps_label_locator">定位方式</label>
                 <select id="stepSelectorType" style="max-width:220px;">
                         <option value="css" data-i18n-opt="steps_loc_css">CSS选择器</option>
@@ -1185,7 +1185,7 @@
                         <option value="aria" data-i18n-opt="steps_loc_aria">ARIA标签</option>
                     </select>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="stepLocatorValueGroup">
                 <label for="stepSelectorValue" data-i18n="steps_label_sel_val">选择器值</label>
                 <input type="text" id="stepSelectorValue" data-i18n-placeholder="steps_ph_selector" placeholder="">
                 <input type="hidden" id="stepVisualPayload" value="">
@@ -1193,7 +1193,7 @@
                     <div style="font-size:12px;color:#64748b;margin-bottom:6px;">视觉模板预览（已自动保存，无需编辑乱码字段）</div>
                     <img id="stepVisualPreviewImg" alt="visual template" />
                     <div id="stepVisualPreviewMeta" style="font-size:12px;color:#64748b;margin-top:6px;"></div>
-                </motion.div>
+                </div>
                 <input type="hidden" id="stepLocatorCandidates" value="">
                 <input type="hidden" id="stepPickedCardBaseXpath" value="">
                 <div id="stepCardNthWrap" style="display:none;margin-top:8px;padding:8px 10px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;">
@@ -1210,7 +1210,7 @@
                 <input type="number" id="stepClickRepeat" min="1" max="99" value="1" style="max-width: 120px;">
                 <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;" data-i18n="steps_hint_click_repeat">仅「点击」有效</small>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="stepInputValueGroup">
                 <label for="stepInputValue" data-i18n="steps_label_in_val">输入值/预期文本</label>
                 <input type="text" id="stepInputValue" data-i18n-placeholder="steps_ph_input" placeholder="">
             </div>
@@ -1385,7 +1385,7 @@
                     <option value="assert" data-i18n-opt="steps_act_assert">断言操作</option>
                 </select>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="editLocatorTypeGroup">
                 <label for="editStepSelectorType" data-i18n="steps_label_locator">定位方式</label>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <select id="editStepSelectorType" style="max-width:220px;">
@@ -1405,7 +1405,7 @@
                     </select>
                 </div>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="editLocatorValueGroup">
                 <label for="editStepSelectorValue" data-i18n="steps_label_sel_val">选择器值</label>
                 <input type="text" id="editStepSelectorValue" data-i18n-placeholder="steps_ph_selector" placeholder="">
                 <input type="hidden" id="editStepVisualPayload" value="">
@@ -1430,7 +1430,7 @@
                 <input type="number" id="editStepClickRepeat" min="1" max="99" value="1" style="max-width: 120px;">
                 <small style="color: #666; display: block; margin-top: 5px; font-size: 12px;" data-i18n="steps_hint_click_repeat">仅「点击」有效</small>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="editInputValueGroup">
                 <label for="editStepInputValue" data-i18n="steps_label_in_val">输入值/预期文本</label>
                 <input type="text" id="editStepInputValue" data-i18n-placeholder="steps_ph_input" placeholder="">
             </div>
@@ -3050,6 +3050,8 @@ function changePage(page) {
                 inputLbl.textContent = '窗口标题（可选，推荐用「选择当前窗口」）';
             } else if (action === 'hotkey' && inputLbl) {
                 inputLbl.textContent = '快捷键（如 ^c 表示 Ctrl+C）';
+            } else if (action === 'wait' && inputLbl) {
+                inputLbl.textContent = t('steps_dyn_wait_sec');
             }
         }
 
@@ -4932,375 +4934,248 @@ function changePage(page) {
             return stopElementCaptureSession();
         }
         
-        function toggleActionFields() {
-            const action = document.getElementById('stepAction').value;
-            const selectorTypeField = document.querySelector('label[for="stepSelectorType"]').parentElement;
-            const selectorValueField = document.querySelector('label[for="stepSelectorValue"]').parentElement;
-            const inputValueField = document.querySelector('label[for="stepInputValue"]').parentElement;
-            
-            // 重置所有字段为默认状态
-            selectorTypeField.style.display = 'block';
-            selectorValueField.style.display = 'block';
-            inputValueField.style.display = 'block';
-            // 重置动态标签（从 enter_iframe / navigate 等切回时必须恢复，否则会一直显示 iframe/URL 等错误标题）
-            document.querySelector('label[for="stepSelectorValue"]').textContent = t('steps_label_sel_val');
-            document.querySelector('label[for="stepInputValue"]').textContent = t('steps_label_in_val');
-            
-            const scrollFields = document.getElementById('scrollFields');
-            const compareTypeField = document.getElementById('stepCompareType');
-            const swipeDirectionField = document.getElementById('swipeDirection');
-            const swipeDistanceField = document.getElementById('swipeDistance');
-            const assertTypeField = document.getElementById('stepAssertType');
-            const assertAttrField = document.getElementById('stepAssertAttr');
-            const assertOperatorField = document.getElementById('stepAssertOperator');
-            const verifyTypeField = document.getElementById('stepVerifyType');
-            const stepClickRepeatGroup = document.getElementById('stepClickRepeatGroup');
-            if (stepClickRepeatGroup) stepClickRepeatGroup.style.display = 'none';
-            const stepBatchInputGroup = document.getElementById('stepBatchInputGroup');
-            if (stepBatchInputGroup) stepBatchInputGroup.style.display = 'none';
-            // 默认隐藏所有特殊字段
-            compareTypeField.style.display = 'none';
-            swipeDirectionField.style.display = 'none';
-            swipeDistanceField.style.display = 'none';
-            assertTypeField.style.display = 'none';
-            assertAttrField.style.display = 'none';
-            assertOperatorField.style.display = 'none';
-            verifyTypeField.style.display = 'none';
-            const stepCaptchaMaxAttemptsGroup = document.getElementById('stepCaptchaMaxAttemptsGroup');
-            if (stepCaptchaMaxAttemptsGroup) stepCaptchaMaxAttemptsGroup.style.display = 'none';
-            
-            if (action === 'navigate') {
-                // 导航操作只需要URL输入框
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_url');
-            } else if (action === 'scroll') {
-                // 滚动操作需要上下左右四个输入框
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'none';
-                scrollFields.style.display = 'block';
-            } else if (action === 'swipe') {
-                // 滑动操作需要选择器、方向和距离
-                inputValueField.style.display = 'none';
-                scrollFields.style.display = 'none';
-                swipeDirectionField.style.display = 'block';
-                swipeDistanceField.style.display = 'block';
-            } else if (action === 'input') {
-                // 输入操作需要选择器和输入值
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_input_val');
-            } else if (action === 'batch_input') {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'none';
-                scrollFields.style.display = 'none';
-                if (stepBatchInputGroup) stepBatchInputGroup.style.display = 'block';
-            } else if (action === 'extract_text') {
-                // 提取文本操作需要选择器和预期文本
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_opt');
-                // 显示对比方式选择
-                const compareTypeField = document.getElementById('stepCompareType');
-                compareTypeField.style.display = 'block';
-            } else if (action === 'wait') {
-                // 等待操作只需要等待时间，不需要定位方式和选择器
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_wait_sec');
-            } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
-                // 点击相关操作只需要选择器，不需要输入值
-                inputValueField.style.display = 'none';
-                scrollFields.style.display = 'none';
-                if (stepClickRepeatGroup) stepClickRepeatGroup.style.display = action === 'click' ? 'block' : 'none';
-            } else if (action === 'hover') {
-                // 悬停操作需要选择器和悬停时间
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_hover_sec');
-            } else if (action === 'verify') {
-                // 验证操作需要选择器和验证类型
-                inputValueField.style.display = 'none';
-                scrollFields.style.display = 'none';
-                swipeDirectionField.style.display = 'none';
-                swipeDistanceField.style.display = 'none';
-                // 显示验证类型选择
-                const verifyTypeField = document.getElementById('stepVerifyType');
-                verifyTypeField.style.display = 'block';
-                const stepCaptchaMaxAttemptsGroup = document.getElementById('stepCaptchaMaxAttemptsGroup');
-                if (stepCaptchaMaxAttemptsGroup) stepCaptchaMaxAttemptsGroup.style.display = 'block';
-            } else if (action === 'enter_iframe') {
-                // 进入iframe操作需要选择器类型和选择器值
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
-                inputValueField.style.display = 'none';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepSelectorValue"]').textContent = t('steps_dyn_iframe_sel');
-            } else if (action === 'exit_iframe') {
-                // 跳出iframe操作不需要任何字段
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'none';
-                scrollFields.style.display = 'none';
-            } else if (action === 'select') {
-                // 下拉框选择操作需要选择器和选择值
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_select_val');
-            } else if (action === 'date') {
-                // 日期选择操作需要选择器和日期值
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_date_val');
-            } else if (action === 'assert') {
-                // 断言操作需要选择器、断言类型和预期值
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_val');
-                // 显示断言类型选择
-                assertTypeField.style.display = 'block';
-                toggleAssertOptions();
-            } else {
-                // 其他操作只需要选择器
-                inputValueField.style.display = 'block';
-                scrollFields.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_extra_opt');
-            }
-            updateSelectorHelp();
+        function _stepFormUi(isEdit) {
+            const p = isEdit ? 'edit' : 'step';
+            return {
+                isEdit: isEdit,
+                action: (document.getElementById(isEdit ? 'editStepAction' : 'stepAction') || {}).value || '',
+                layer: ((document.getElementById(isEdit ? 'editStepAutomationLayer' : 'stepAutomationLayer') || {}).value || 'web'),
+                locatorTypeGrp: document.getElementById(isEdit ? 'editLocatorTypeGroup' : 'stepLocatorTypeGroup'),
+                locatorValueGrp: document.getElementById(isEdit ? 'editLocatorValueGroup' : 'stepLocatorValueGroup'),
+                inputValueGrp: document.getElementById(isEdit ? 'editInputValueGroup' : 'stepInputValueGroup'),
+                lblSelVal: document.querySelector('label[for="' + p + 'SelectorValue"]'),
+                lblInVal: document.querySelector('label[for="' + p + 'InputValue"]'),
+                scrollFields: document.getElementById(isEdit ? 'editScrollFields' : 'scrollFields'),
+                compareType: document.getElementById(isEdit ? 'editStepCompareType' : 'stepCompareType'),
+                swipeDir: document.getElementById(isEdit ? 'editSwipeDirection' : 'swipeDirection'),
+                swipeDist: document.getElementById(isEdit ? 'editSwipeDistance' : 'swipeDistance'),
+                assertType: document.getElementById(isEdit ? 'editStepAssertType' : 'stepAssertType'),
+                assertAttr: document.getElementById(isEdit ? 'editStepAssertAttr' : 'stepAssertAttr'),
+                assertOp: document.getElementById(isEdit ? 'editStepAssertOperator' : 'stepAssertOperator'),
+                verifyType: document.getElementById(isEdit ? 'editStepVerifyType' : 'stepVerifyType'),
+                captchaMax: document.getElementById(isEdit ? 'editStepCaptchaMaxAttemptsGroup' : 'stepCaptchaMaxAttemptsGroup'),
+                clickRepeat: document.getElementById(isEdit ? 'editStepClickRepeatGroup' : 'stepClickRepeatGroup'),
+                batchInput: document.getElementById(isEdit ? 'editStepBatchInputGroup' : 'stepBatchInputGroup'),
+                selectorValueInput: document.getElementById(isEdit ? 'editStepSelectorValue' : 'stepSelectorValue'),
+            };
         }
-        
-        // 断言选项切换函数
-        function toggleAssertOptions() {
-            const assertType = document.getElementById('stepAssertTypeSelect').value;
-            const assertAttrField = document.getElementById('stepAssertAttr');
-            const assertOperatorField = document.getElementById('stepAssertOperator');
-            const inputValueField = document.querySelector('label[for="stepInputValue"]').parentElement;
-            const selectorTypeField = document.querySelector('label[for="stepSelectorType"]').parentElement;
-            const selectorValueField = document.querySelector('label[for="stepSelectorValue"]').parentElement;
-            
-            // 默认隐藏特殊字段，重置所有字段显示状态
-            assertAttrField.style.display = 'none';
-            assertOperatorField.style.display = 'none';
-            inputValueField.style.display = 'block';
-            selectorTypeField.style.display = 'block';
-            selectorValueField.style.display = 'block';
-            
-            if (assertType === 'element_attr') {
-                // 元素属性断言需要属性名称
-                assertAttrField.style.display = 'block';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_attr');
-            } else if (assertType === 'element_count') {
-                // 元素数量断言需要运算符
-                assertOperatorField.style.display = 'block';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_count');
-            } else if (assertType === 'element_exists' || assertType === 'element_visible') {
-                // 元素存在/可见不需要预期值
-                inputValueField.style.display = 'none';
-            } else if (assertType === 'url_equals' || assertType === 'url_contains') {
-                // URL断言不需要选择器
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_url');
-            } else {
-                document.querySelector('label[for="stepInputValue"]').textContent = t('steps_dyn_expected_text');
+
+        function _showGrp(el, on) {
+            if (el) el.style.display = on ? 'block' : 'none';
+        }
+
+        function _resetStepFormExtras(ui) {
+            _showGrp(ui.locatorTypeGrp, true);
+            _showGrp(ui.locatorValueGrp, true);
+            _showGrp(ui.inputValueGrp, true);
+            if (ui.lblSelVal) ui.lblSelVal.textContent = t('steps_label_sel_val');
+            if (ui.lblInVal) ui.lblInVal.textContent = t('steps_label_in_val');
+            _showGrp(ui.scrollFields, false);
+            _showGrp(ui.compareType, false);
+            _showGrp(ui.swipeDir, false);
+            _showGrp(ui.swipeDist, false);
+            _showGrp(ui.assertType, false);
+            _showGrp(ui.assertAttr, false);
+            _showGrp(ui.assertOp, false);
+            _showGrp(ui.verifyType, false);
+            _showGrp(ui.captchaMax, false);
+            _showGrp(ui.clickRepeat, false);
+            _showGrp(ui.batchInput, false);
+            if (ui.selectorValueInput) ui.selectorValueInput.style.display = '';
+        }
+
+        function applyAndroidActionFormHints(ui) {
+            const action = ui.action;
+            if (!ui.lblInVal) return;
+            if (action === 'wait') {
+                ui.lblInVal.textContent = t('steps_dyn_wait_sec');
+            } else if (action === 'open_app' || action === 'close_app') {
+                ui.lblInVal.textContent = '应用包名（可选 Activity，如 com.app/.Main）';
+            } else if (action === 'input_text') {
+                ui.lblInVal.textContent = t('steps_dyn_input_val');
+            } else if (action === 'assert_text') {
+                ui.lblInVal.textContent = t('steps_dyn_expected_text');
+            } else if (action === 'tap') {
+                ui.lblInVal.textContent = t('steps_dyn_extra_opt');
             }
         }
-        
-        // 编辑模式断言选项切换函数
-        function toggleEditAssertOptions() {
-            const assertType = document.getElementById('editStepAssertTypeSelect').value;
-            const assertAttrField = document.getElementById('editStepAssertAttr');
-            const assertOperatorField = document.getElementById('editStepAssertOperator');
-            const inputValueField = document.querySelector('label[for="editStepInputValue"]').parentElement;
-            const selectorTypeField = document.querySelector('label[for="editStepSelectorType"]').parentElement;
-            const selectorValueField = document.querySelector('label[for="editStepSelectorValue"]').parentElement;
-            
-            // 重置所有字段显示状态
-            assertAttrField.style.display = 'none';
-            assertOperatorField.style.display = 'none';
-            inputValueField.style.display = 'block';
-            selectorTypeField.style.display = 'block';
-            selectorValueField.style.display = 'block';
-            
-            if (assertType === 'element_attr') {
-                assertAttrField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_attr');
-            } else if (assertType === 'element_count') {
-                assertOperatorField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_count');
-            } else if (assertType === 'element_exists' || assertType === 'element_visible') {
-                inputValueField.style.display = 'none';
-            } else if (assertType === 'url_equals' || assertType === 'url_contains') {
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_url');
-            } else {
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_text');
-            }
-        }
-        
-        function toggleEditActionFields() {
-            const actionEl = document.getElementById('editStepAction');
-            if (!actionEl) return;
-            const action = actionEl.value;
-            const layer = ((document.getElementById('editStepAutomationLayer') || {}).value || 'web');
-            const selectorTypeLabel = document.querySelector('label[for="editStepSelectorType"]');
-            const selectorValueLabel = document.querySelector('label[for="editStepSelectorValue"]');
-            const inputValueLabel = document.querySelector('label[for="editStepInputValue"]');
-            const selectorTypeField = selectorTypeLabel ? selectorTypeLabel.parentElement : null;
-            const selectorValueField = selectorValueLabel ? selectorValueLabel.parentElement : null;
-            const inputValueField = inputValueLabel ? inputValueLabel.parentElement : null;
-            if (!selectorTypeField || !selectorValueField || !inputValueField) return;
-            const editScrollFields = document.getElementById('editScrollFields');
-            const editCompareTypeField = document.getElementById('editStepCompareType');
-            const editSwipeDirectionField = document.getElementById('editSwipeDirection');
-            const editSwipeDistanceField = document.getElementById('editSwipeDistance');
-            const editAssertTypeField = document.getElementById('editStepAssertType');
-            const editAssertAttrField = document.getElementById('editStepAssertAttr');
-            const editAssertOperatorField = document.getElementById('editStepAssertOperator');
-            const editVerifyTypeField = document.getElementById('editStepVerifyType');
-            const editStepClickRepeatGroup = document.getElementById('editStepClickRepeatGroup');
-            if (editStepClickRepeatGroup) editStepClickRepeatGroup.style.display = 'none';
-            const editStepBatchInputGroup = document.getElementById('editStepBatchInputGroup');
-            if (editStepBatchInputGroup) editStepBatchInputGroup.style.display = 'none';
-            
-            // 重置所有字段为默认状态
-            selectorTypeField.style.display = 'block';
-            selectorValueField.style.display = 'block';
-            inputValueField.style.display = 'block';
-            document.querySelector('label[for="editStepSelectorValue"]').textContent = t('steps_label_sel_val');
-            document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_label_in_val');
-            if (editScrollFields) editScrollFields.style.display = 'none';
-            if (editCompareTypeField) editCompareTypeField.style.display = 'none';
-            if (editSwipeDirectionField) editSwipeDirectionField.style.display = 'none';
-            if (editSwipeDistanceField) editSwipeDistanceField.style.display = 'none';
-            if (editAssertTypeField) editAssertTypeField.style.display = 'none';
-            if (editAssertAttrField) editAssertAttrField.style.display = 'none';
-            if (editAssertOperatorField) editAssertOperatorField.style.display = 'none';
-            if (editVerifyTypeField) editVerifyTypeField.style.display = 'none';
-            const editStepCaptchaMaxAttemptsGroup = document.getElementById('editStepCaptchaMaxAttemptsGroup');
-            if (editStepCaptchaMaxAttemptsGroup) editStepCaptchaMaxAttemptsGroup.style.display = 'none';
+
+        function applyStepActionFormVisibility(isEdit) {
+            const ui = _stepFormUi(isEdit);
+            if (!ui.locatorTypeGrp || !ui.locatorValueGrp || !ui.inputValueGrp) return;
+            const action = ui.action;
+            const layer = ui.layer;
+            _resetStepFormExtras(ui);
 
             if (layer === 'desktop') {
                 if (action === 'launch_app' || action === 'attach_window') {
-                    selectorTypeField.style.display = 'none';
-                    selectorValueField.style.display = 'none';
-                    inputValueField.style.display = 'block';
-                    applyDesktopEnvHints('edit', _desktopEnvConfigCache || {});
+                    _showGrp(ui.locatorTypeGrp, false);
+                    _showGrp(ui.locatorValueGrp, false);
+                    _showGrp(ui.inputValueGrp, true);
+                    applyDesktopEnvHints(isEdit ? 'edit' : 'create', _desktopEnvConfigCache || {});
                 } else if (action === 'hotkey' || action === 'wait' || action === 'screenshot') {
-                    selectorTypeField.style.display = 'none';
-                    selectorValueField.style.display = 'none';
-                    inputValueField.style.display = action === 'screenshot' ? 'none' : 'block';
-                    applyDesktopEnvHints('edit', _desktopEnvConfigCache || {});
-                } else if (action === 'click' || action === 'double_click' || action === 'right_click' || action === 'input' || action === 'verify' || action === 'assert') {
-                    selectorTypeField.style.display = 'block';
-                    selectorValueField.style.display = 'block';
-                    inputValueField.style.display = (action === 'click' || action === 'double_click' || action === 'right_click') ? 'none' : 'block';
-                    if (editStepClickRepeatGroup && action === 'click') editStepClickRepeatGroup.style.display = 'block';
+                    _showGrp(ui.locatorTypeGrp, false);
+                    _showGrp(ui.locatorValueGrp, false);
+                    _showGrp(ui.inputValueGrp, action !== 'screenshot');
+                    applyDesktopEnvHints(isEdit ? 'edit' : 'create', _desktopEnvConfigCache || {});
+                    if (action === 'wait' && ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_wait_sec');
+                } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
+                    _showGrp(ui.inputValueGrp, false);
+                    _showGrp(ui.clickRepeat, action === 'click');
+                } else if (action === 'input' || action === 'verify' || action === 'assert') {
+                    _showGrp(ui.inputValueGrp, action !== 'verify');
+                    if (action === 'verify') {
+                        _showGrp(ui.verifyType, true);
+                        _showGrp(ui.captchaMax, true);
+                        _showGrp(ui.inputValueGrp, false);
+                    }
+                    if (action === 'assert') {
+                        _showGrp(ui.assertType, true);
+                        if (isEdit) toggleEditAssertOptions();
+                        else toggleAssertOptions();
+                    }
                 }
-                updateEditSelectorHelp();
+                if (isEdit) updateEditSelectorHelp();
+                else updateSelectorHelp();
                 return;
             }
-            
-            if (action === 'navigate') {
-                // 导航操作只需要URL输入框
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_url');
-            } else if (action === 'scroll') {
-                // 滚动操作需要上下左右四个输入框
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'none';
-                editScrollFields.style.display = 'block';
-            } else if (action === 'swipe') {
-                // 滑动操作需要选择器、方向和距离
-                inputValueField.style.display = 'none';
-                editSwipeDirectionField.style.display = 'block';
-                editSwipeDistanceField.style.display = 'block';
-            } else if (action === 'input') {
-                // 输入操作需要选择器和输入值
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_input_val');
-            } else if (action === 'batch_input') {
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'none';
-                if (editStepBatchInputGroup) editStepBatchInputGroup.style.display = 'block';
-            } else if (action === 'extract_text') {
-                // 提取文本操作需要选择器和预期文本
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_opt');
-                // 显示对比方式选择
-                const editCompareTypeField = document.getElementById('editStepCompareType');
-                editCompareTypeField.style.display = 'block';
-            } else if (action === 'wait') {
-                // 等待操作只需要等待时间，不需要定位方式和选择器
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_wait_sec');
-            } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
-                // 点击相关操作只需要选择器，不需要输入值
-                inputValueField.style.display = 'none';
-                if (editStepClickRepeatGroup) editStepClickRepeatGroup.style.display = action === 'click' ? 'block' : 'none';
-            } else if (action === 'hover') {
-                // 悬停操作需要选择器和悬停时间
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_hover_sec');
-            } else if (action === 'verify') {
-                // 验证操作需要选择器和验证类型
-                inputValueField.style.display = 'none';
-                editSwipeDirectionField.style.display = 'none';
-                editSwipeDistanceField.style.display = 'none';
-                // 显示验证类型选择
-                const editVerifyTypeField = document.getElementById('editStepVerifyType');
-                editVerifyTypeField.style.display = 'block';
-                const editStepCaptchaMaxAttemptsGroup = document.getElementById('editStepCaptchaMaxAttemptsGroup');
-                if (editStepCaptchaMaxAttemptsGroup) editStepCaptchaMaxAttemptsGroup.style.display = 'block';
-            } else if (action === 'enter_iframe') {
-                // 进入iframe操作需要选择器类型和选择器值
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
-                inputValueField.style.display = 'none';
-                document.querySelector('label[for="editStepSelectorValue"]').textContent = t('steps_dyn_iframe_sel');
-            } else if (action === 'exit_iframe') {
-                // 跳出iframe操作不需要任何字段
-                selectorTypeField.style.display = 'none';
-                selectorValueField.style.display = 'none';
-                inputValueField.style.display = 'none';
-            } else if (action === 'select') {
-                // 下拉框选择操作需要选择器和选择值
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_select_val');
-            } else if (action === 'date') {
-                // 日期选择操作需要选择器和日期值
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_date_val');
-            } else if (action === 'assert') {
-                // 断言操作需要选择器、断言类型和预期值
-                selectorTypeField.style.display = 'block';
-                selectorValueField.style.display = 'block';
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_expected_val');
-                // 显示断言类型选择
-                editAssertTypeField.style.display = 'block';
-                toggleEditAssertOptions();
-            } else {
-                // 其他操作只需要选择器
-                inputValueField.style.display = 'block';
-                document.querySelector('label[for="editStepInputValue"]').textContent = t('steps_dyn_extra_opt');
+
+            if (layer === 'android') {
+                if (action === 'open_app' || action === 'close_app' || action === 'wait' || action === 'screenshot') {
+                    _showGrp(ui.locatorTypeGrp, false);
+                    _showGrp(ui.locatorValueGrp, false);
+                    _showGrp(ui.inputValueGrp, action !== 'screenshot');
+                    applyAndroidActionFormHints(ui);
+                } else if (action === 'swipe') {
+                    _showGrp(ui.inputValueGrp, false);
+                    _showGrp(ui.swipeDir, true);
+                    _showGrp(ui.swipeDist, true);
+                } else if (action === 'tap' || action === 'input_text' || action === 'assert_element' || action === 'assert_text') {
+                    _showGrp(ui.inputValueGrp, action !== 'tap');
+                    applyAndroidActionFormHints(ui);
+                    if (action === 'assert_text') _showGrp(ui.inputValueGrp, true);
+                }
+                if (isEdit) updateEditSelectorHelp();
+                else updateSelectorHelp();
+                return;
             }
-            updateEditSelectorHelp();
+
+            if (action === 'navigate') {
+                _showGrp(ui.locatorTypeGrp, false);
+                _showGrp(ui.locatorValueGrp, false);
+                _showGrp(ui.inputValueGrp, true);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_url');
+            } else if (action === 'scroll') {
+                _showGrp(ui.locatorTypeGrp, false);
+                _showGrp(ui.locatorValueGrp, false);
+                _showGrp(ui.inputValueGrp, false);
+                _showGrp(ui.scrollFields, true);
+            } else if (action === 'swipe') {
+                _showGrp(ui.inputValueGrp, false);
+                _showGrp(ui.swipeDir, true);
+                _showGrp(ui.swipeDist, true);
+            } else if (action === 'input') {
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_input_val');
+            } else if (action === 'batch_input') {
+                _showGrp(ui.locatorValueGrp, false);
+                _showGrp(ui.inputValueGrp, false);
+                _showGrp(ui.batchInput, true);
+            } else if (action === 'extract_text') {
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_opt');
+                _showGrp(ui.compareType, true);
+            } else if (action === 'wait') {
+                _showGrp(ui.locatorTypeGrp, false);
+                _showGrp(ui.locatorValueGrp, false);
+                _showGrp(ui.inputValueGrp, true);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_wait_sec');
+            } else if (action === 'click' || action === 'double_click' || action === 'right_click') {
+                _showGrp(ui.inputValueGrp, false);
+                _showGrp(ui.clickRepeat, action === 'click');
+            } else if (action === 'hover') {
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_hover_sec');
+            } else if (action === 'verify') {
+                _showGrp(ui.inputValueGrp, false);
+                _showGrp(ui.verifyType, true);
+                _showGrp(ui.captchaMax, true);
+            } else if (action === 'enter_iframe') {
+                _showGrp(ui.inputValueGrp, false);
+                if (ui.lblSelVal) ui.lblSelVal.textContent = t('steps_dyn_iframe_sel');
+            } else if (action === 'exit_iframe') {
+                _showGrp(ui.locatorTypeGrp, false);
+                _showGrp(ui.locatorValueGrp, false);
+                _showGrp(ui.inputValueGrp, false);
+            } else if (action === 'select') {
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_select_val');
+            } else if (action === 'date') {
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_date_val');
+            } else if (action === 'assert') {
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_val');
+                _showGrp(ui.assertType, true);
+                if (isEdit) toggleEditAssertOptions();
+                else toggleAssertOptions();
+            } else {
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_extra_opt');
+            }
+            if (isEdit) updateEditSelectorHelp();
+            else updateSelectorHelp();
+        }
+
+        function toggleActionFields() {
+            applyStepActionFormVisibility(false);
+        }
+
+        function toggleAssertOptions() {
+            const assertType = document.getElementById('stepAssertTypeSelect').value;
+            const ui = _stepFormUi(false);
+            _showGrp(ui.assertAttr, false);
+            _showGrp(ui.assertOp, false);
+            _showGrp(ui.locatorTypeGrp, true);
+            _showGrp(ui.locatorValueGrp, true);
+            _showGrp(ui.inputValueGrp, true);
+            if (assertType === 'element_attr') {
+                _showGrp(ui.assertAttr, true);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_attr');
+            } else if (assertType === 'element_count') {
+                _showGrp(ui.assertOp, true);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_count');
+            } else if (assertType === 'element_exists' || assertType === 'element_visible') {
+                _showGrp(ui.inputValueGrp, false);
+            } else if (assertType === 'url_equals' || assertType === 'url_contains') {
+                _showGrp(ui.locatorTypeGrp, false);
+                _showGrp(ui.locatorValueGrp, false);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_url');
+            } else if (ui.lblInVal) {
+                ui.lblInVal.textContent = t('steps_dyn_expected_text');
+            }
+        }
+
+        function toggleEditAssertOptions() {
+            const assertType = document.getElementById('editStepAssertTypeSelect').value;
+            const ui = _stepFormUi(true);
+            _showGrp(ui.assertAttr, false);
+            _showGrp(ui.assertOp, false);
+            _showGrp(ui.locatorTypeGrp, true);
+            _showGrp(ui.locatorValueGrp, true);
+            _showGrp(ui.inputValueGrp, true);
+            if (assertType === 'element_attr') {
+                _showGrp(ui.assertAttr, true);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_attr');
+            } else if (assertType === 'element_count') {
+                _showGrp(ui.assertOp, true);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_count');
+            } else if (assertType === 'element_exists' || assertType === 'element_visible') {
+                _showGrp(ui.inputValueGrp, false);
+            } else if (assertType === 'url_equals' || assertType === 'url_contains') {
+                _showGrp(ui.locatorTypeGrp, false);
+                _showGrp(ui.locatorValueGrp, false);
+                if (ui.lblInVal) ui.lblInVal.textContent = t('steps_dyn_expected_url');
+            } else if (ui.lblInVal) {
+                ui.lblInVal.textContent = t('steps_dyn_expected_text');
+            }
+        }
+
+        function toggleEditActionFields() {
+            applyStepActionFormVisibility(true);
         }
         
         // 可视化选择功能
@@ -6633,13 +6508,11 @@ function changePage(page) {
             try { updateSelectorHelp(); } catch (e) {}
             try { updateEditSelectorHelp(); } catch (e) {}
             try {
-                const sa = document.getElementById('stepAction');
-                if (sa) toggleActionFields(sa.value);
+                if (document.getElementById('stepAction')) toggleActionFields();
             } catch (e) {}
             try {
-                const ea = document.getElementById('editStepAction');
-                if (ea) {
-                    toggleEditActionFields(ea.value);
+                if (document.getElementById('editStepAction')) {
+                    toggleEditActionFields();
                     toggleEditAssertOptions();
                 }
             } catch (e) {}

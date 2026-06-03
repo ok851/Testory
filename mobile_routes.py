@@ -852,11 +852,41 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         except (TypeError, ValueError):
             port = 5554
         gpu = (body.get("gpu") or "host").strip()
-        no_window = bool(body.get("no_window"))
+        if "no_window" in body:
+            no_window = bool(body.get("no_window"))
+        else:
+            no_window = True
+        async_start = body.get("async")
+        if async_start is None:
+            async_start = True
+        if async_start:
+            from emulator_start_jobs import start_emulator_job
+
+            job_id = start_emulator_job(
+                avd_name,
+                port=port,
+                gpu=gpu,
+                no_window=no_window,
+            )
+            return jsonify({"success": True, "async": True, "job_id": job_id})
         ok, msg, meta = start_avd(avd_name, port=port, gpu=gpu, no_window=no_window)
         if not ok:
             return jsonify({"success": False, "error": msg}), 503
         return jsonify({"success": True, "message": msg, **meta, "devices": list_usb_devices()})
+
+    @app.route("/api/mobile/emulator/start/job/<job_id>", methods=["GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_emulator_start_job(job_id: str):
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        from emulator_start_jobs import get_job
+
+        job = get_job(job_id)
+        if not job:
+            return jsonify({"success": False, "ok": False, "error": "启动任务不存在或已过期"}), 404
+        return jsonify({"success": True, "ok": True, "job": job})
 
     @app.route("/api/mobile/emulator/stop", methods=["POST"])
     @login_required

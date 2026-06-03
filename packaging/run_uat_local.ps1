@@ -44,6 +44,9 @@ if (-not (Test-Path ".env")) {
         Write-Host "已从 .env.example 创建 .env"
     }
 }
+& $py env_example_sync.py 2>$null | Out-Host
+
+$env:EMBEDDED_BROWSER_AUTO_START_GATEWAY = "1"
 
 $env:DEPLOYMENT_PROFILE = "local"
 $env:DESKTOP_EXECUTION_MODE = "inprocess"

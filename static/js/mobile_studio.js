@@ -446,8 +446,13 @@
             return;
         }
         if (!list.length) {
-            var adbHint = (boot.adb_path ? 'adb 已就绪（' + boot.adb_path + '）。' : '');
-            el.textContent = adbHint + '未发现设备：请在上方「模拟器」启动 AVD，或展开「真机兼容」无线/USB 连接。';
+            var lines = [];
+            if (boot.adb_path) {
+                lines.push('adb 已就绪：');
+                lines.push(boot.adb_path);
+            }
+            lines.push('未发现设备：请在上方「模拟器」启动 AVD，或展开「真机兼容」无线/USB 连接。');
+            el.textContent = lines.join('\n');
             return;
         }
         if (!authorized.length) {
@@ -464,7 +469,7 @@
         if (!sel) return;
         const avds = (emu && emu.avds) || [];
         if (!avds.length) {
-            sel.innerHTML = '<option value="">（未创建 AVD）</option>';
+            sel.innerHTML = '<option value="">（未创建虚拟手机）</option>';
         } else {
             sel.innerHTML = avds.map(function (a) {
                 return '<option value="' + a.name + '">' + (a.label || a.name) + '</option>';
@@ -473,14 +478,72 @@
             if (def && avds.some(function (a) { return a.name === def; })) sel.value = def;
         }
         if (help) {
+            help.className = 'ms-muted ms-emulator-help';
             if (emu && emu.emulator_available) {
-                help.textContent = 'SDK: ' + (emu.android_sdk_home || '—') +
-                    ' · 运行中 ' + ((emu.running && emu.running.length) || 0) + ' 台';
+                var lines = [
+                    'SDK：' + (emu.android_sdk_home || '—'),
+                    '运行中 ' + ((emu.running && emu.running.length) || 0) + ' 台',
+                ];
+                var hint = (emu.setup_hint || '').trim();
+                if (hint) {
+                    if (emu.hypervisor_ok === false) {
+                        help.classList.add('ms-emulator-help--warn');
+                    }
+                    hint.split(/\n+/).forEach(function (part) {
+                        var s = (part || '').trim();
+                        if (s) lines.push(s);
+                    });
+                }
+                help.textContent = lines.join('\n');
             } else {
                 help.textContent = (emu && emu.emulator_message) ||
-                    '请按下方说明安装 Android Studio 并配置 ANDROID_HOME';
+                    '请在插件市场安装「Android 模拟器 SDK（命令行）」';
             }
         }
+    }
+
+    function parseEmuJobResponse(body) {
+        if (!body || body.ok === false) {
+            return { missing: true, error: (body && body.error) || '任务不存在' };
+        }
+        var job = body.job || {};
+        return {
+            missing: false,
+            state: job.state || '',
+            percent: job.percent || 0,
+            label: job.label || '',
+            ok: job.ok,
+            error: job.error || '',
+            message: job.message || '',
+            result: job.result || {},
+        };
+    }
+
+    function sleepMs(ms) {
+        return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    async function pollEmulatorStartJob(jobId) {
+        const maxPolls = 200;
+        for (let i = 0; i < maxPolls; i++) {
+            const r = await fetch('/api/mobile/emulator/start/job/' + encodeURIComponent(jobId), {
+                credentials: 'same-origin',
+            });
+            const body = await r.json().catch(function () { return {}; });
+            const info = parseEmuJobResponse(body);
+            if (info.missing) {
+                throw new Error(info.error);
+            }
+            setStatus((info.label || '启动中…') + ' (' + (info.percent || 0) + '%)', '');
+            if (info.state === 'done' && info.ok !== false) {
+                return info;
+            }
+            if (info.state === 'failed' || (info.state === 'done' && info.ok === false)) {
+                throw new Error(info.error || '启动失败');
+            }
+            await sleepMs(2000);
+        }
+        throw new Error('启动超时，请点「停止」清理后重试');
     }
 
     async function startEmulator() {
@@ -489,16 +552,44 @@
             setStatus('请选择或创建 AVD', 'warn');
             return;
         }
-        setStatus('正在启动模拟器…', '');
-        const data = await apiJson('/api/mobile/emulator/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ avd_name: avd, gpu: 'host' }),
-        });
-        await bootstrap();
-        const devSel = $('msDeviceSelect');
-        if (devSel && data.serial) devSel.value = data.serial;
-        setStatus(data.message || '模拟器已启动', 'ok');
+        const btn = $('msBtnEmulatorStart');
+        if (btn) btn.disabled = true;
+        setStatus('正在启动模拟器（无独立窗口，画面在右侧画布）…', '');
+        try {
+            const startResp = await fetch('/api/mobile/emulator/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    avd_name: avd,
+                    gpu: 'swiftshader_indirect',
+                    no_window: true,
+                    async: true,
+                }),
+            });
+            const startBody = await startResp.json().catch(function () { return {}; });
+            if (!startResp.ok || !startBody.success) {
+                throw new Error(startBody.error || '启动失败');
+            }
+            let serial = '';
+            if (startBody.async && startBody.job_id) {
+                const done = await pollEmulatorStartJob(startBody.job_id);
+                serial = (done.result && done.result.serial) || '';
+                setStatus((done.message || '模拟器已启动') + '，正在连接画布…', 'ok');
+            } else {
+                serial = startBody.serial || '';
+                setStatus((startBody.message || '模拟器已启动') + '，正在连接画布…', 'ok');
+            }
+            await bootstrap();
+            const devSel = $('msDeviceSelect');
+            if (devSel && serial) devSel.value = serial;
+            await autoConnect();
+        } catch (e) {
+            setStatus((e && e.message) || '启动失败', 'err');
+            await bootstrap();
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
 
     async function stopEmulator() {

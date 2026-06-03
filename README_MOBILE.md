@@ -9,9 +9,24 @@
 - AI 测试页可选择 **Web / Android** 生成对应用例
 - Feature flag：`ENABLE_MOBILE=1`
 
-## 1. 插件市场安装 adb（推荐）
+## 1. 插件市场（推荐）
 
-无需单独配置 Android Studio。在平台 **用户菜单 → 插件市场** 安装 **「Android Platform-Tools (adb)」**：
+### 模拟器优先（无需 Android Studio）
+
+1. 安装 **Java 11 或更高版本**（推荐 [Eclipse Temurin](https://adoptium.net/)）  
+2. **用户菜单 → 插件市场** → 安装 **「Android 模拟器 SDK（命令行）」**（首次约 2–4GB）  
+3. **完全退出并重新打开本软件**，打开 **移动端测试** → **启动模拟器**（默认无独立弹窗，画面在平台右侧画布）  
+4. **Windows 首次启动**：若提示未安装 Hypervisor，在插件市场点 **「创建虚拟手机」** 拉取驱动后，**以管理员**运行  
+   `%LOCALAPPDATA%\NewUITestPlatform\extensions\android\sdk\extras\google\Android_Emulator_Hypervisor_Driver\silent_install.bat`  
+   安装成功并**重启电脑**后再启动模拟器。  
+5. （推荐）插件市场安装 **「scrcpy 高帧率投屏」**，获得更流畅画面
+
+内网 / 离线安装包说明见 [`plugin_bundles/README.md`](plugin_bundles/README.md)（面向管理员）。  
+发布版可将 Java 放入安装目录 `runtime/jre/`，用户无需单独安装 Java。
+
+### 仅真机 USB（adb）
+
+在插件市场安装 **「Android Platform-Tools (adb)」**：
 
 | 方式 | 操作 |
 |------|------|

@@ -1370,10 +1370,14 @@
             } else if (d && d.success) {
                 aiEmbeddedGatewayStatus.enabled = !!d.enabled;
                 aiEmbeddedGatewayStatus.wsConfigured = !!d.ws_base_configured;
+                aiEmbeddedGatewayStatus.reachable = !!d.reachable;
                 if (!d.enabled) {
                     aiEmbeddedGatewayStatus.lastError = '未设置 EMBEDDED_BROWSER_GATEWAY_URL 或 EMBEDDED_BROWSER_GATEWAY_SECRET（或 .env 未被加载）';
                 } else if (!d.ws_base_configured) {
                     aiEmbeddedGatewayStatus.lastError = '未设置 EMBEDDED_BROWSER_PUBLIC_WS_BASE（浏览器需能访问该 ws(s) 地址）';
+                } else if (d.enabled && d.ws_base_configured && d.reachable === false) {
+                    aiEmbeddedGatewayStatus.lastError = (d.reach_error || '网关进程未响应').trim()
+                        + '。请确认 EMBEDDED_BROWSER_AUTO_START_GATEWAY=1 并已重启 Flask，或手动执行 python -m embedded_browser_gateway';
                 }
             } else {
                 aiEmbeddedGatewayStatus.enabled = false;
@@ -1836,6 +1840,30 @@
         return !!aiRemoteCanvasState.gatewaySessionOnly;
     }
 
+    /** 内置画布网关已配置且进程可达（与 OpenClaw 无关） */
+    function aiEmbeddedGatewayUsable() {
+        return !!(
+            aiEmbeddedGatewayStatus.enabled
+            && aiEmbeddedGatewayStatus.wsConfigured
+            && aiEmbeddedGatewayStatus.reachable !== false
+        );
+    }
+
+    /** 运行前尽量建立画布会话；成功则全程走 embedded，不弹主 Playwright */
+    async function aiEnsureEmbeddedCanvasForRun() {
+        await refreshEmbeddedGatewayStatus();
+        if (!aiEmbeddedGatewayUsable()) return false;
+        if (aiEmbeddedSessionActive()) return true;
+        if (typeof startRemoteCanvasSession === 'function') {
+            return !!(await startRemoteCanvasSession({ auto: true }));
+        }
+        return false;
+    }
+
+    function aiSkipMainPlaywrightOpen() {
+        return aiEmbeddedGatewayUsable() && aiEmbeddedSessionActive();
+    }
+
     function focusAiStageForAgentRun(opts) {
         opts = opts || {};
         var sec = document.getElementById('aiStageCenter') || document.querySelector('.ai-stage-center');
@@ -1845,8 +1873,8 @@
         if (opts.skipBrowserOpen) return;
         var u = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
         if (!u || typeof openInternalBrowserPage !== 'function') return;
-        // 已连接内置网关时仅在中栏展示/导航远程 Chromium，避免再拉起主 Playwright
-        if (aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured && aiEmbeddedSessionActive()) {
+        // 已连接内置画布时仅在中栏展示/导航远程 Chromium，避免再拉起主 Playwright
+        if (aiSkipMainPlaywrightOpen()) {
             return;
         }
         void openInternalBrowserPage(true);
@@ -2218,7 +2246,14 @@
     function fillProviderCatalogSelects() {
         const cat = providerCatalog;
         const provSel = document.getElementById('aiAddProvider');
-        if (!provSel || !cat || !cat.providers) return;
+        const popSel = document.getElementById('aiAddPopularModel');
+        if (!provSel) return;
+        if (!cat || !Array.isArray(cat.providers) || !cat.providers.length) {
+            const emptyLab = typeof t === 'function' ? t('aitest_provider_catalog_empty') : '无法加载供应商目录（请重启服务或重新安装）';
+            provSel.innerHTML = '<option value="">' + escapeHtml(emptyLab) + '</option>';
+            if (popSel) popSel.innerHTML = '<option value=""></option>';
+            return;
+        }
         const order = { local: 0, cn: 1, intl: 2 };
         const providers = cat.providers.slice().sort(function(a, b) {
             return (order[a.region] || 9) - (order[b.region] || 9) || (a.name_zh || '').localeCompare(b.name_zh || '');
@@ -2964,10 +2999,31 @@
             appendAiChat('assistant', '请先在右上角「AI 设置」中注册并选择推理模型，然后再试。');
             return;
         }
+        var useCanvasRefine = false;
+        try {
+            useCanvasRefine = await aiEnsureEmbeddedCanvasForRun();
+            if (!useCanvasRefine && aiEmbeddedGatewayStatus.enabled) {
+                var leR = (aiEmbeddedGatewayStatus.lastError || '').trim();
+                appendAiChat(
+                    'assistant',
+                    '内置画布未就绪，已取消优化（避免弹出主 Playwright / OpenClaw 浏览器）。'
+                    + (leR ? (' ' + leR) : '')
+                    + ' 请确认 embedded_browser_gateway 已启动并填写目标 URL。'
+                );
+                setAgentStatusLine('画布未就绪 — 未优化');
+                return;
+            }
+        } catch (eCr) {
+            if (aiEmbeddedGatewayStatus.enabled) {
+                appendAiChat('assistant', '连接内置画布失败：' + (eCr && eCr.message ? eCr.message : String(eCr)));
+                setAgentStatusLine('画布连接失败');
+                return;
+            }
+        }
         pushUndoSnapshot();
         if (typeof focusAiStageForAgentRun === 'function') {
             focusAiStageForAgentRun({
-                skipBrowserOpen: !!(aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured && aiEmbeddedSessionActive())
+                skipBrowserOpen: useCanvasRefine || aiSkipMainPlaywrightOpen()
             });
         }
         appendAiChat('user', message);
@@ -3042,10 +3098,12 @@
             alert('请填写指令；或先在左栏「生成用例」得到预览后，展开「高级」使用「执行预览（网关）」且可留空指令。');
             return;
         }
+        var useCanvasGw = false;
+        try {
+            useCanvasGw = await aiEnsureEmbeddedCanvasForRun();
+        } catch (eGw) { useCanvasGw = false; }
         if (typeof focusAiStageForAgentRun === 'function') {
-            focusAiStageForAgentRun({
-                skipBrowserOpen: !!(aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured)
-            });
+            focusAiStageForAgentRun({ skipBrowserOpen: useCanvasGw });
         }
         appendAiChat('user', msg + (forceEx ? '（一键执行）' : ''));
         var gwInput = document.getElementById('aiMessageInput');
@@ -3055,22 +3113,16 @@
         setAgentBusy(true, '网关执行中…');
         setAgentStatusLine('识别意图并连接后台自动化会话…');
 
-        // 若有 plan 但实时画面未连接，尝试自动连接网关（提升「识别并执行」成功率）
-        try {
-            if (hasSteps && (!aiRemoteCanvasState || !aiRemoteCanvasState.sessionId)) {
-                var gwStatus = (typeof aiEmbeddedGatewayStatus !== 'undefined') ? aiEmbeddedGatewayStatus : null;
-                if (gwStatus && gwStatus.enabled && gwStatus.wsConfigured) {
-                    setAgentStatusLine('正在连接内置浏览器…');
-                    if (typeof startRemoteCanvasSession === 'function') {
-                        var ok = await startRemoteCanvasSession({ auto: true });
-                        if (ok) {
-                            appendAiChat('assistant', '已连接内置浏览器，将在同一 Chromium 中执行。');
-                        }
-                    }
-                }
-            }
-        } catch (eAuto) {
-            appendAiChat('assistant', '自动连接内置浏览器失败，将在后台继续执行。');
+        if (hasSteps && aiEmbeddedGatewayStatus.enabled && !useCanvasGw) {
+            appendAiChat('assistant', '内置画布未连接，网关执行已中止（避免启动主 Playwright）。');
+            setAgentStatusLine('画布未就绪');
+            aiGatewayBusy = false;
+            syncAiSendButtons();
+            setAgentBusy(false);
+            return;
+        }
+        if (useCanvasGw) {
+            appendAiChat('assistant', '将在内置画布 Chromium 中执行（与中栏画面同一会话）。');
         }
         abortAiGatewayStream();
         var gwStreamCtl = new AbortController();
@@ -3167,26 +3219,35 @@
     }
 
     async function aiRunAgentWorkflow() {
+        var useCanvas = false;
         try {
-            await refreshEmbeddedGatewayStatus();
-            var okGw = aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured;
-            var live = !!(aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1);
-            var hasEmb = !!(aiRemoteCanvasState && aiRemoteCanvasState.sessionId);
-            if (okGw && !live && hasEmb && aiRemoteCanvasState.wsUrl) {
-                ensureEmbeddedLiveViewConnected({ silent: true });
-            } else if (okGw && !live && !hasEmb) {
-                var started = await startRemoteCanvasSession({ auto: true });
-                if (!started) {
-                    appendAiChat('assistant', '未能连接内置浏览器网关，本次将在主 Playwright 中执行（中栏可能不同步）。请填写 URL 并配置 EMBEDDED_BROWSER_* 后重试。');
+            useCanvas = await aiEnsureEmbeddedCanvasForRun();
+            if (!useCanvas && aiEmbeddedGatewayStatus.enabled) {
+                var le = (aiEmbeddedGatewayStatus.lastError || '').trim();
+                appendAiChat(
+                    'assistant',
+                    '内置画布未就绪，已取消本次运行（避免弹出主 Playwright 窗口）。'
+                    + (le ? (' ' + le) : '')
+                    + ' 请启动 python -m embedded_browser_gateway 并填写目标 URL。'
+                    + ' 说明：OpenClaw 与画布网关（EMBEDDED_BROWSER_*）是两套服务。'
+                );
+                setAgentStatusLine('画布未就绪 — 未运行');
+                return;
+            }
+            if (useCanvas) {
+                var live = !!(aiRemoteCanvasState.sessionId && aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1);
+                if (!live && aiRemoteCanvasState.sessionId && aiRemoteCanvasState.wsUrl) {
+                    ensureEmbeddedLiveViewConnected({ silent: true });
                 }
             }
         } catch (e) {
-            try {
-                appendAiChat('assistant', '连接内置浏览器时出错，将使用主 Playwright：' + (e && e.message ? e.message : String(e)));
-            } catch (e2) {}
+            if (aiEmbeddedGatewayStatus.enabled) {
+                appendAiChat('assistant', '连接内置画布失败：' + (e && e.message ? e.message : String(e)));
+                setAgentStatusLine('画布连接失败');
+                return;
+            }
         }
-        var skipMainBrowser = !!(aiEmbeddedGatewayStatus.enabled && aiEmbeddedGatewayStatus.wsConfigured);
-        await aiGeneratePreview({ executionMode: 'run_and_record', skipBrowserOpen: skipMainBrowser });
+        await aiGeneratePreview({ executionMode: 'run_and_record', skipBrowserOpen: useCanvas });
     }
 
     function aiUndo() {

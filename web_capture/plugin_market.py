@@ -121,21 +121,68 @@ def _extension_files_valid(install_dir: str) -> bool:
     return (Path(install_dir) / "manifest.json").is_file()
 
 
+_MOBILE_RUNTIME_PLUGIN_IDS = frozenset(
+    {
+        "mobile-android-platform-tools",
+        "mobile-android-emulator-sdk",
+        "mobile-scrcpy",
+    }
+)
+
+
+def _mobile_runtime_installed(plugin_id: str) -> bool:
+    """移动端运行时包：必须存在对应可执行文件，空目录或仅 JSON 登记不算已安装。"""
+    pid = (plugin_id or "").strip()
+    try:
+        if pid == "mobile-android-platform-tools":
+            from mobile_plugin_bundles import get_installed_adb_path
+
+            return bool(get_installed_adb_path())
+        if pid == "mobile-android-emulator-sdk":
+            from mobile_emulator_sdk_bundles import get_installed_emulator_sdk_home
+
+            return bool(get_installed_emulator_sdk_home())
+        if pid == "mobile-scrcpy":
+            from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+
+            exe = get_installed_scrcpy_exe()
+            if not exe:
+                return False
+            from mobile_scrcpy_bundles import scrcpy_install_dir, _has_scrcpy_server
+
+            return _has_scrcpy_server(scrcpy_install_dir())
+    except Exception:
+        return False
+    return False
+
+
+def prune_stale_plugin_records() -> int:
+    """移除登记在案但磁盘上已不存在的插件记录。"""
+    state = _load_state()
+    plugins = state.setdefault("plugins", {})
+    removed: List[str] = []
+    for pid in list(plugins.keys()):
+        if not is_plugin_installed(pid):
+            plugins.pop(pid, None)
+            removed.append(pid)
+    if removed:
+        _save_state(state)
+    return len(removed)
+
+
 def is_plugin_installed(plugin_id: str) -> bool:
     pid = (plugin_id or "").strip()
+    if pid in _MOBILE_RUNTIME_PLUGIN_IDS:
+        return _mobile_runtime_installed(pid)
+
     rec = (_load_state().get("plugins") or {}).get(pid) or {}
     if not rec:
         return False
     if rec.get("type") == "bookmarklet":
         return bool(rec.get("installed"))
     if rec.get("type") == "runtime_bundle":
-        if pid == "mobile-android-platform-tools":
-            try:
-                from mobile_plugin_bundles import get_installed_adb_path
-
-                return bool(get_installed_adb_path())
-            except Exception:
-                pass
+        if pid in _MOBILE_RUNTIME_PLUGIN_IDS:
+            return _mobile_runtime_installed(pid)
         install_dir = str(rec.get("install_dir") or "")
         return bool(install_dir) and Path(install_dir).is_dir()
     install_dir = str(rec.get("install_dir") or "")
@@ -217,11 +264,42 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
                     out["adb_path"] = ap
             except Exception:
                 pass
+        if pid == "mobile-android-emulator-sdk":
+            try:
+                from mobile_emulator_sdk_bundles import (
+                    emulator_sdk_setup_status,
+                    get_installed_emulator_sdk_home,
+                    resolve_adb_in_sdk,
+                )
+
+                st = emulator_sdk_setup_status()
+                out["setup_complete"] = bool(st.get("setup_complete"))
+                out["repair_needed"] = bool(st.get("sdk_ready")) and not out["setup_complete"]
+                out["default_avd"] = st.get("default_avd") or ""
+                out["avd_ready"] = bool(st.get("avd_ready"))
+                if out["repair_needed"]:
+                    out["status_label"] = "待创建虚拟手机"
+                    out["status_tone"] = "warn"
+                sdk = get_installed_emulator_sdk_home()
+                if sdk:
+                    out["android_sdk_home"] = sdk
+                    ap = resolve_adb_in_sdk()
+                    if ap:
+                        out["adb_path"] = ap
+            except Exception:
+                pass
     else:
         out["status_label"] = "未安装"
         out["status_tone"] = "muted"
         if pid == "mobile-android-platform-tools" and not plugin.get("local_bundle_ready"):
             if not plugin.get("download_url_configured"):
+                out["status_label"] = "待配置安装包"
+                out["status_tone"] = "warn"
+        if pid == "mobile-android-emulator-sdk":
+            if not plugin.get("java_ready"):
+                out["status_label"] = "需安装 JDK 11+"
+                out["status_tone"] = "warn"
+            elif not plugin.get("local_bundle_ready") and not plugin.get("download_url_configured"):
                 out["status_label"] = "待配置安装包"
                 out["status_tone"] = "warn"
     return out
@@ -236,10 +314,23 @@ def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
         items.append(get_android_platform_tools_catalog_entry())
     except Exception:
         pass
+    try:
+        from mobile_emulator_sdk_bundles import get_android_emulator_sdk_catalog_entry
+
+        items.append(get_android_emulator_sdk_catalog_entry())
+    except Exception:
+        pass
+    try:
+        from mobile_scrcpy_bundles import get_scrcpy_catalog_entry
+
+        items.append(get_scrcpy_catalog_entry())
+    except Exception:
+        pass
     return items
 
 
 def get_plugin_catalog(*, platform_origin: str = "") -> List[Dict[str, Any]]:
+    prune_stale_plugin_records()
     return [enrich_plugin_status(p) for p in _all_catalog_items(platform_origin=platform_origin)]
 
 
@@ -383,13 +474,58 @@ def ensure_capture_extension_ready() -> Dict[str, Any]:
     return ensure_uat_capture_browser()
 
 
-def install_plugin(plugin_id: str) -> Dict[str, Any]:
-    """一键安装到软件目录并登记状态。"""
+def install_plugin(plugin_id: str, *, background: Optional[bool] = None) -> Dict[str, Any]:
+    """一键安装。移动端运行时包默认后台安装，切换页面不中断。"""
     pid = (plugin_id or "").strip()
     catalog = {p["id"]: p for p in _all_catalog_items()}
     meta = catalog.get(pid)
     if not meta:
         return {"success": False, "error": f"未知插件: {pid or '(空)'}"}
+
+    if background is None:
+        try:
+            from plugin_install_jobs import should_install_in_background
+
+            background = should_install_in_background(pid)
+        except Exception:
+            background = False
+
+    if background and meta.get("type") == "runtime_bundle":
+        try:
+            from plugin_install_jobs import start_install_job
+
+            job_id = start_install_job(pid)
+            return {
+                "success": True,
+                "async": True,
+                "job_id": job_id,
+                "plugin_id": pid,
+                "message": "正在后台安装，您可以切换其他页面；稍后在插件市场查看进度。",
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    return install_plugin_sync(pid)
+
+
+def install_plugin_sync(
+    plugin_id: str,
+    *,
+    progress_cb: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """同步安装（供后台任务或快速扩展安装调用）。"""
+    pid = (plugin_id or "").strip()
+    catalog = {p["id"]: p for p in _all_catalog_items()}
+    meta = catalog.get(pid)
+    if not meta:
+        return {"success": False, "error": f"未知插件: {pid or '(空)'}"}
+
+    def _progress(percent: int, label: str) -> None:
+        if progress_cb:
+            try:
+                progress_cb(int(percent), label)
+            except Exception:
+                pass
 
     state = _load_state()
     plugins = state.setdefault("plugins", {})
@@ -400,7 +536,21 @@ def install_plugin(plugin_id: str) -> Dict[str, Any]:
             try:
                 from mobile_plugin_bundles import install_android_platform_tools
 
-                return install_android_platform_tools()
+                return install_android_platform_tools(progress_cb=progress_cb)
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+        if pid == "mobile-android-emulator-sdk":
+            try:
+                from mobile_emulator_sdk_bundles import install_android_emulator_sdk
+
+                return install_android_emulator_sdk(progress_cb=progress_cb)
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+        if pid == "mobile-scrcpy":
+            try:
+                from mobile_scrcpy_bundles import install_scrcpy_bundle
+
+                return install_scrcpy_bundle(progress_cb=progress_cb)
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
         return {"success": False, "error": "未知的运行时插件"}

@@ -12,7 +12,15 @@ import uvicorn
 try:
     from dotenv import load_dotenv
 
-    _env = Path(__file__).resolve().parent.parent / ".env"
+    try:
+        from install_paths import resolve_install_root
+
+        _root = resolve_install_root()
+    except ImportError:
+        _root = Path(__file__).resolve().parent.parent
+    _env = Path(os.environ.get("TESTORY_ENV_FILE") or (_root / ".env"))
+    if not _env.is_file():
+        _env = _root / ".env"
     if _env.is_file():
         load_dotenv(_env, encoding="utf-8-sig")
 except ImportError:

@@ -1,4 +1,41 @@
-# 插件市场离线安装包（Platform-Tools / adb）
+# 插件市场离线安装包（移动端）
+
+> **终端用户**：在软件内打开 **插件市场** 点「安装」即可，无需阅读本文。  
+> **管理员 / 内网部署**：按下面说明准备离线 zip。
+
+## Android 模拟器 SDK（命令行，推荐）
+
+插件市场「**Android 模拟器 SDK（命令行）**」：安装模拟器、系统镜像与默认虚拟手机 `Testory_Pixel7`，环境自动配置（无需 Android Studio）。
+
+**用户前置：** 本机已安装 Java 11+。
+
+### 离线 / 内网（管理员）
+
+1. 下载 [commandlinetools-win](https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip)（Linux/mac 见 `config/plugin_bundles/android_emulator_sdk.json`）
+2. 重命名为 `commandlinetools-win-latest.zip`
+3. 放入发布包目录 **`offline_plugins/`**（与主程序同级）或 **`plugin_bundles/`**
+4. 用户在本机插件市场点击「安装」（后续组件下载仍可能需要外网，或由管理员预置完整 SDK）
+
+**安装结果位置（用户数据）：** `%LOCALAPPDATA%\NewUITestPlatform\extensions\android\sdk\`
+
+### 国内镜像（默认）
+
+安装时优先从 **阿里云 Android 仓库镜像** 下载 commandlinetools 与 sdkmanager 组件；可在 `.env` 覆盖：
+
+```env
+ANDROID_SDK_REPO_MIRROR=https://mirrors.aliyun.com/android/repository/
+```
+
+### 开发 / 私有化配置（可选）
+
+```env
+ANDROID_CMDLINE_TOOLS_LOCAL_ZIP=D:\Tools\commandlinetools-win-latest.zip
+ANDROID_CMDLINE_TOOLS_URL=https://你的CDN/commandlinetools-win-latest.zip
+```
+
+---
+
+## Platform-Tools / adb
 
 把 Google **Platform-Tools** 的 zip 放在本目录（或通过 URL / 环境变量指定），插件市场「Android Platform-Tools (adb)」即可一键安装。
 

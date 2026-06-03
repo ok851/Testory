@@ -1,0 +1,36 @@
+{# 主导航链接（Web 顶栏 / 桌面侧栏共用，保留 nav-btn 与 id 供 License 功能门控） #}
+<a href="/" class="testory-nav-item nav-btn" data-nav-path="/" data-i18n-title="nav_home_title" title="首页">
+    <i class="fas fa-home"></i><span>工作台</span>
+</a>
+<a href="/list_projects" class="testory-nav-item nav-btn" data-nav-path="/list_projects" data-i18n-title="nav_project_title" title="项目管理">
+    <i class="fas fa-folder"></i><span data-i18n="nav_project">项目</span>
+</a>
+<a href="/ai-test" class="testory-nav-item nav-btn" data-nav-path="/ai-test" data-i18n-title="nav_aitest_title" title="AI测试">
+    <i class="fas fa-brain"></i><span data-i18n="nav_aitest">AI 测试</span>
+</a>
+<a href="/api-testing" class="testory-nav-item nav-btn" data-nav-path="/api-testing" data-i18n-title="nav_api_test_title" title="接口测试">
+    <i class="fas fa-plug"></i><span data-i18n="nav_api_test">接口测试</span>
+</a>
+{% if mobile_testing_enabled %}
+<a href="/mobile-testing" class="testory-nav-item nav-btn" data-nav-path="/mobile-testing" title="移动端测试">
+    <i class="fas fa-mobile-alt"></i><span>移动端</span>
+</a>
+{% endif %}
+<a href="/run-history" class="testory-nav-item nav-btn" data-nav-path="/run-history" data-feature="basic" data-i18n-title="nav_history_title" title="运行历史">
+    <i class="fas fa-history"></i><span data-i18n="nav_history">历史</span>
+</a>
+<a href="/data-driven" id="navDataDriven" class="testory-nav-item nav-btn hidden" data-nav-path="/data-driven" data-feature="data_driven" data-i18n-title="nav_data_title" title="数据驱动">
+    <i class="fas fa-table"></i><span data-i18n="nav_data">数据</span>
+</a>
+<a href="/test_report" class="testory-nav-item nav-btn" data-nav-path="/test_report" data-feature="basic" data-i18n-title="nav_report_title" title="测试报告">
+    <i class="fas fa-chart-bar"></i><span data-i18n="nav_report">报告</span>
+</a>
+<a href="/schedules" id="navSchedules" class="testory-nav-item nav-btn hidden" data-nav-path="/schedules" data-feature="schedule" data-i18n-title="nav_schedule_title" title="定时任务">
+    <i class="fas fa-clock"></i><span data-i18n="nav_schedule">定时</span>
+</a>
+<a href="/notifications" id="navNotifications" class="testory-nav-item nav-btn hidden" data-nav-path="/notifications" data-feature="email_notification" data-role="admin" data-i18n-title="nav_notification_title" title="通知配置">
+    <i class="fas fa-bell"></i><span data-i18n="nav_notification">通知</span>
+</a>
+<a href="/defects" id="navDefects" class="testory-nav-item nav-btn hidden" data-nav-path="/defects" data-feature="defect_management" data-i18n-title="nav_defect_title" title="缺陷管理">
+    <i class="fas fa-bug"></i><span data-i18n="nav_defect">缺陷</span>
+</a>

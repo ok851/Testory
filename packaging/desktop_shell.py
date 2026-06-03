@@ -53,7 +53,16 @@ def run_native_shell(
     try:
         import webview
     except ImportError:
-        _show_error("缺少桌面界面组件 pywebview。\n请重新安装完整安装包。")
+        exe = Path(sys.executable).resolve()
+        msg = "缺少桌面界面组件 pywebview。\n请重新安装完整安装包。"
+        if exe.name.lower() == "testoryshell.exe" and exe.parent == root.resolve():
+            msg = (
+                "无法加载 pywebview：请勿使用安装根目录的 TestoryShell.exe 启动。\n"
+                "请从开始菜单运行 Testory（Testory.exe）。"
+            )
+        else:
+            msg += f"\n\n当前解释器：{exe}"
+        _show_error(msg)
         return 1
 
     splash = splash_boot_uri(root)

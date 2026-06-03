@@ -7,7 +7,8 @@ WebSocket 同步点击/滚动/导航/键盘。
   EMBEDDED_BROWSER_GATEWAY_SECRET  与 Flask 共用，必填。
   EMBEDDED_BROWSER_IDLE_SEC        无 WS 活动回收秒数，默认 1800。
   EMBEDDED_BROWSER_GATE_PORT       监听端口，默认 8765。
-  PLAYWRIGHT_HEADLESS              默认 1。
+  EMBEDDED_BROWSER_HEADLESS        画布 Chromium 是否无头，默认 1（仅画布投屏，不另弹窗）；未设时不用 PLAYWRIGHT_HEADLESS。
+  PLAYWRIGHT_HEADLESS              主站 Playwright 用；画布优先 EMBEDDED_BROWSER_HEADLESS。
   PLAYWRIGHT_BROWSER               默认 chromium；可选 chrome / edge / firefox / webkit（与主站一致）。
   EMBEDDED_INSPECT_EVAL_RETRIES    inspect 快照遇「导航销毁上下文」时重试次数，默认 6。
   EMBEDDED_INSPECT_DOM_WAIT_MS     每次 evaluate 前 wait_for_load_state(domcontentloaded) 超时毫秒，默认 8000。
@@ -204,6 +205,17 @@ def _url_assert_matches_embed(actual: str, expected: str, ctype: str) -> bool:
                     return True
         return False
     return False
+
+
+def _embedded_playwright_headless() -> bool:
+    """
+    画布网关专用：默认无头 + CDP 推流，避免与 UI 画布重复弹出可见 Chromium。
+    仅当 EMBEDDED_BROWSER_HEADLESS=0 时才开有界面窗口（调试）。
+    """
+    raw = (os.environ.get("EMBEDDED_BROWSER_HEADLESS") or "").strip()
+    if raw:
+        return raw.lower() not in ("0", "false", "no", "off")
+    return True
 
 
 def _normalize_embedded_browser(raw: Optional[str]) -> str:
@@ -589,7 +601,7 @@ async def internal_create_session(request: Request) -> Dict[str, Any]:
     if user_id <= 0:
         raise HTTPException(status_code=400, detail="user_id required")
     initial_url = (body.get("initial_url") or "").strip()
-    headless = os.environ.get("PLAYWRIGHT_HEADLESS", "1").strip().lower() not in ("0", "false", "no")
+    headless = _embedded_playwright_headless()
     browser_hint = (body.get("browser") or body.get("engine") or "").strip() or None
 
     sid = uuid.uuid4().hex

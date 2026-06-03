@@ -44,6 +44,13 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+try:
+    from embedded_browser_service_bootstrap import bootstrap_embedded_browser_services
+
+    bootstrap_embedded_browser_services()
+except Exception:
+    pass
+
 from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for, Response, stream_with_context
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -148,6 +155,7 @@ from deployment_hooks import (
 from deployment_config import is_client_mode, should_delegate_execution_to_clients
 from client_run_helpers import load_case_and_steps, sync_run_to_team_server
 from cloud_llm_gateway import CloudLLMGateway
+from ai_config_paths import ai_model_registry_path, ai_provider_catalog_path, load_ai_provider_catalog_dict
 from ai_local_inference import local_ai_service
 from ai_step_normalization import (
     ai_plan_steps_to_playwright_script_steps,
@@ -444,7 +452,17 @@ def _init_cors(flask_app: Flask) -> None:
     CORS(flask_app, resources={r"/*": {"origins": "*"}})
 
 
-app = Flask(__name__)
+try:
+    from install_paths import resource_root as _testory_resource_root
+
+    _rr = _testory_resource_root()
+    app = Flask(
+        __name__,
+        template_folder=str(_rr / "templates"),
+        static_folder=str(_rr / "static"),
+    )
+except ImportError:
+    app = Flask(__name__)
 _init_cors(app)
 # Session 加密密钥：与 docker-compose 中 SECRET_KEY 一致；未设置时每次启动随机（会话在重启后失效）
 _secret_key = (os.environ.get("SECRET_KEY") or os.environ.get("FLASK_SECRET_KEY") or "").strip()
@@ -527,8 +545,6 @@ def _request_entity_too_large(_e):
 _CLOUD_LLM_ENDPOINT = os.environ.get('CLOUD_LLM_ENDPOINT', '').strip()
 _CLOUD_LLM_API_KEY = os.environ.get('CLOUD_LLM_API_KEY', '').strip()
 _cloud_llm_gateway = None
-_AI_MODEL_CFG_FILE = os.path.join(os.path.dirname(__file__), 'ai_model_registry.json')
-_AI_CATALOG_FILE = os.path.join(os.path.dirname(__file__), 'ai_provider_catalog.json')
 _AI_MODEL_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._:/+\-]{0,199}$')
 _AI_PROFILE_MODEL_ID_RE = re.compile(r'^[^\s]{1,220}$')
 
@@ -591,12 +607,7 @@ def _default_ai_model_config() -> dict:
 
 
 def _load_ai_provider_catalog() -> dict:
-    try:
-        with open(_AI_CATALOG_FILE, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
-        return raw if isinstance(raw, dict) else {}
-    except Exception:
-        return {}
+    return load_ai_provider_catalog_dict()
 
 
 def _catalog_provider_meta(provider_id: str) -> dict:
@@ -674,10 +685,11 @@ def _load_ai_model_config() -> dict:
     """
     with _ai_model_cfg_lock:
         defaults = _default_ai_model_config()
-        if not os.path.exists(_AI_MODEL_CFG_FILE):
+        cfg_path = ai_model_registry_path()
+        if not cfg_path.is_file():
             return _migrate_v1_config_to_v2({}, defaults)
         try:
-            with open(_AI_MODEL_CFG_FILE, 'r', encoding='utf-8') as f:
+            with open(cfg_path, 'r', encoding='utf-8') as f:
                 raw = json.load(f)
             if not isinstance(raw, dict):
                 return _migrate_v1_config_to_v2({}, defaults)
@@ -695,7 +707,9 @@ def _save_ai_model_config(cfg: dict) -> None:
             to_write['version'] = 2
         else:
             to_write = cfg
-        with open(_AI_MODEL_CFG_FILE, 'w', encoding='utf-8') as f:
+        cfg_path = ai_model_registry_path()
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cfg_path, 'w', encoding='utf-8') as f:
             json.dump(to_write, f, ensure_ascii=False, indent=2)
 
 
@@ -1209,7 +1223,29 @@ def api_plugin_market_install():
     if not plugin_id and data.get('browser'):
         plugin_id = f"web-capture-{(data.get('browser') or '').strip().lower()}"
     result = install_plugin(plugin_id)
-    return jsonify(result), (200 if result.get('success') else 400)
+    code = 200 if result.get('success') or result.get('async') else 400
+    return jsonify(result), code
+
+
+@app.route('/api/plugin-market/install/job/<job_id>', methods=['GET'])
+@login_required
+@api_error_handler
+def api_plugin_market_install_job(job_id):
+    from plugin_install_jobs import get_job
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({'ok': False, 'error': '安装任务不存在或已过期'}), 404
+    return jsonify({'ok': True, 'job': job})
+
+
+@app.route('/api/plugin-market/install/active', methods=['GET'])
+@login_required
+@api_error_handler
+def api_plugin_market_install_active():
+    from plugin_install_jobs import list_active_jobs
+
+    return jsonify({'success': True, 'jobs': list_active_jobs()})
 
 
 @app.route('/api/plugin-market/status', methods=['GET'])
@@ -1941,7 +1977,25 @@ def api_navigate():
     
     if not url:
         return jsonify({'error': 'URL不能为空'}), 400
-    
+
+    force_main = (data.get('force_main_playwright') or data.get('force_main') or '').strip().lower() in (
+        '1',
+        'true',
+        'yes',
+        'on',
+    )
+    if (
+        not force_main
+        and embedded_gateway_enabled()
+        and not _ai_allow_main_playwright_fallback()
+    ):
+        return jsonify({
+            'success': True,
+            'skipped': True,
+            'reason': 'embedded_canvas_preferred',
+            'message': '已配置内置画布网关，未启动主 Playwright。请使用 AI 测试页画布或 embedded 会话 API 导航。',
+        })
+
     sync_navigate_to(url, iframe_selector=iframe_selector)
     return jsonify({'success': True})
 
@@ -2087,6 +2141,14 @@ def api_get_ai_models():
     ollama_models, ollama_error = local_ai_service.list_installed_models()
     profiles = [_mask_profile_for_api(p) for p in (cfg.get('profiles') or [])]
     local_names = [p.get('model_id') for p in (cfg.get('profiles') or []) if p.get('provider') == 'ollama' and p.get('model_id')]
+    catalog = _load_ai_provider_catalog()
+    providers = catalog.get('providers') if isinstance(catalog, dict) else []
+    try:
+        from ai_config_paths import ai_provider_catalog_source
+
+        catalog_path = ai_provider_catalog_source()
+    except ImportError:
+        catalog_path = str(ai_provider_catalog_path())
     return jsonify({
         'success': True,
         'version': cfg.get('version') or 2,
@@ -2094,7 +2156,9 @@ def api_get_ai_models():
         'profiles': profiles,
         'active_local_model': cfg.get('active_local_model'),
         'local_models': local_names or cfg.get('local_models', []),
-        'provider_catalog': _load_ai_provider_catalog(),
+        'provider_catalog': catalog,
+        'provider_catalog_count': len(providers) if isinstance(providers, list) else 0,
+        'provider_catalog_path': catalog_path,
         'ollama_base_url': local_ai_service.base_url,
         'ollama_models': ollama_models,
         'ollama_error': ollama_error,
@@ -2418,6 +2482,25 @@ def _ai_url_probe_disabled() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def _ai_allow_main_playwright_fallback() -> bool:
+    """为 1 时：即使已配置 embedded 网关，也允许回退主 Playwright（可能弹出浏览器窗口）。"""
+    return (os.environ.get("AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _ai_should_open_main_playwright(*, embedded_sid: str) -> bool:
+    """内置画布网关已配置时，默认不拉起主 Playwright（除非 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1）。"""
+    if (embedded_sid or "").strip():
+        return False
+    if embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
+        return False
+    return True
+
+
 def _ai_main_session_dom_pack(target_page_url: str, *, strict: bool):
     """
     在主 Playwright 会话中打开 URL 并抓取可交互结构，供本地模型绑定真实 DOM。
@@ -2589,7 +2672,18 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         if not target_page_url:
             return {
                 'success': False,
-                'error': '「运行」模式需要填写目标页面 URL，以便在主 Playwright 会话中打开页面并执行步骤。',
+                'error': '「运行」模式需要填写目标页面 URL。',
+                '_http': 400,
+            }
+        if not _ai_should_open_main_playwright(embedded_sid=embedded_sid):
+            return {
+                'success': False,
+                'error': (
+                    '「运行」需要已连接的内置画布会话（embedded_session_id）。'
+                    '请先在 AI 测试页建立画布实时画面，并确认 embedded_browser_gateway 已启动。'
+                    '（OpenClaw 与画布网关是不同服务。）'
+                    '若确需回退主 Playwright，请在 .env 设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1。'
+                ),
                 '_http': 400,
             }
         snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
@@ -2600,14 +2694,20 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
             return {'success': False, 'error': err, '_http': code}
     elif (target_page_url or "").strip() and not embedded_sid and not _ai_url_probe_disabled() and platform_type != 'android':
         # 「仅规划」也抓取 LIVE：只要填写了目标 URL，就为主会话打开该页并探测，避免模型凭空写选择器。
-        snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
-            target_page_url, strict=False
-        )
-        if err:
+        if _ai_should_open_main_playwright(embedded_sid=embedded_sid):
+            snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
+                target_page_url, strict=False
+            )
+            if err:
+                dom_probe_warning = (
+                    "未能抓取 LIVE 页面结构，选择器将未经页面探测约束："
+                    f"{err} "
+                    "（可配置 Playwright / 主浏览器，或使用「运行生成」强制探测。设置 LOCAL_AI_SKIP_URL_PROBE=1 可关闭自动打开浏览器。）"
+                )
+        elif embedded_gateway_enabled():
             dom_probe_warning = (
-                "未能抓取 LIVE 页面结构，选择器将未经页面探测约束："
-                f"{err} "
-                "（可配置 Playwright / 主浏览器，或使用「运行生成」强制探测。设置 LOCAL_AI_SKIP_URL_PROBE=1 可关闭自动打开浏览器。）"
+                "已配置内置画布网关但未建立会话，已跳过主 Playwright 页面探测。"
+                "请先连接画布；或设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1 允许回退。"
             )
 
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
@@ -2688,6 +2788,15 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
                         user_id, embedded_sid, script_steps
                     )
                     out["execution"] = {"ran": True, "results": exec_results, "via": "embedded"}
+            elif embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
+                out["execution"] = {
+                    "ran": False,
+                    "skipped_reason": (
+                        "未连接内置画布会话，已跳过主 Playwright 执行。"
+                        "请先建立画布或设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1。"
+                    ),
+                    "results": [],
+                }
             else:
                 exec_results = sync_execute_script_steps(script_steps)
                 out["execution"] = {"ran": True, "results": exec_results, "via": "main_playwright"}
@@ -2752,14 +2861,20 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
     if not url_for_probe and isinstance(current_plan, dict):
         url_for_probe = (current_plan.get("case_url") or "").strip()
     if snap_data is None and url_for_probe and not embedded_sid and not _ai_url_probe_disabled():
-        snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
-            url_for_probe, strict=False
-        )
-        if err:
+        if _ai_should_open_main_playwright(embedded_sid=embedded_sid):
+            snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
+                url_for_probe, strict=False
+            )
+            if err:
+                chat_dom_probe_warning = (
+                    "未能抓取 LIVE 页面结构（对话优化）："
+                    f"{err} "
+                    "（选择器约束可能较弱；请填写目标 URL 或确认主浏览器可用。）"
+                )
+        elif embedded_gateway_enabled():
             chat_dom_probe_warning = (
-                "未能抓取 LIVE 页面结构（对话优化）："
-                f"{err} "
-                "（选择器约束可能较弱；请填写目标 URL 或确认主浏览器可用。）"
+                "已配置内置画布但未建立会话，已跳过主 Playwright 探测（对话优化）。"
+                "请先连接画布。"
             )
 
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
@@ -2801,6 +2916,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
                 dom_context_pack=dpack or None,
                 interaction_context=interaction_context,
                 test_scope=(data.get('test_scope') or data.get('scope') or '').strip() or None,
+                embedded_session_id=embedded_sid or None,
             )
             try:
                 generated, _, tool_meta_extra = run_ai_chat_with_tools(
@@ -3882,6 +3998,18 @@ def api_ai_agent_gateway_stream():
         embed_exec = use_embedded and kind == "execute_plan"
         embed_nav = use_embedded and kind == "navigate_url"
         need_main_playwright = not (embed_exec or embed_nav)
+        if need_main_playwright and embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
+            yield _agent_gateway_sse_line(
+                {
+                    "t": "error",
+                    "message": (
+                        "未携带有效的 embedded_session_id，且已配置内置画布网关，"
+                        "不会启动主 Playwright。请先在 AI 测试页连接画布后再执行。"
+                    ),
+                }
+            )
+            yield _agent_gateway_sse_line({"t": "end"})
+            return
 
         if need_main_playwright:
             try:
@@ -5756,10 +5884,18 @@ def api_playwright_browser():
 def api_embedded_browser_status():
     """远程 Chromium 网关是否可用（供 AI 测试页展示「远程画布」按钮）。"""
     _, _, pub = embedded_gateway_config()
+    reachable = False
+    reach_err = None
+    if embedded_gateway_enabled():
+        j, err = embedded_gateway_json('GET', '/health', timeout_sec=2.5)
+        reachable = j is not None and bool(j.get('ok'))
+        reach_err = err
     return jsonify({
         'success': True,
         'enabled': embedded_gateway_enabled(),
         'ws_base_configured': bool(pub),
+        'reachable': reachable,
+        'reach_error': reach_err,
     })
 
 
@@ -10333,14 +10469,34 @@ def api_activate_license():
         return jsonify({'success': False, 'error': result['message']}), 400
 
     info = result.get('info')
+    activation_synced = False
+    activation_sync_hint = ''
     if info and info.license_id and binding_id:
-        report_license_activation(info.license_id, binding_type, binding_id)
+        from deployment_config import get_platform_admin_url
+
+        activation_synced = report_license_activation(
+            info.license_id, binding_type, binding_id
+        )
+        if not activation_synced:
+            admin_url = get_platform_admin_url()
+            if not admin_url:
+                activation_sync_hint = (
+                    '本地已激活，但未配置 PLATFORM_ADMIN_URL，创始人控制面看不到激活记录。'
+                    '请在用户数据目录 .env 中设置，例如 PLATFORM_ADMIN_URL=http://127.0.0.1:5100'
+                )
+            else:
+                activation_sync_hint = (
+                    f'本地已激活，但未能连接创始人控制面（{admin_url}）。'
+                    '请确认 platform_admin 已启动且网络可达；重启 Testory 后会自动补报一次。'
+                )
 
     return jsonify({
         'success': True,
         'message': 'License 激活成功',
         'license_type': info.license_type if info else '',
         'expires_at': info.expires_at if info else '',
+        'activation_synced': activation_synced,
+        'activation_sync_hint': activation_sync_hint,
     })
 
 
@@ -10669,6 +10825,30 @@ def api_health_ready():
                 'reason': str(exc),
                 'python_executable': sys.executable,
             }
+    try:
+        from embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled
+
+        base, secret, pub_ws = embedded_gateway_config()
+        payload['embedded_browser'] = {
+            'configured': embedded_gateway_enabled(),
+            'gateway_url': base or None,
+            'public_ws_base': pub_ws or None,
+        }
+        if embedded_gateway_enabled():
+            import socket
+            from urllib.parse import urlparse
+
+            parsed = urlparse(base)
+            host = parsed.hostname or '127.0.0.1'
+            port = parsed.port or 8765
+            try:
+                with socket.create_connection((host, port), timeout=0.5):
+                    payload['embedded_browser']['listening'] = True
+            except OSError:
+                payload['embedded_browser']['listening'] = False
+    except Exception as exc:
+        payload['embedded_browser'] = {'configured': False, 'error': str(exc)}
+
     if not db.ping():
         payload['status'] = 'unready'
         payload['database'] = 'unavailable'

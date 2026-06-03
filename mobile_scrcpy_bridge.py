@@ -30,8 +30,59 @@ except ImportError:
 _lock = threading.Lock()
 _bridge_thread: Optional[threading.Thread] = None
 _bridge_loop: Optional[asyncio.AbstractEventLoop] = None
+_bridge_failed_msg: Optional[str] = None
+_bridge_listening: bool = False
 _active_sessions: Dict[str, "ScrcpyWsSession"] = {}
 _clients_by_serial: Dict[str, Set[Any]] = {}
+
+
+def _bridge_host() -> str:
+    return (os.environ.get("MOBILE_SCRCPY_BRIDGE_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+
+
+def _tcp_port_in_use(host: str, port: int) -> bool:
+    """
+    检测端口是否已被占用。勿对 WebSocket 服务做 create_connection 探测——
+    裸 TCP 连上即断开会触发 websockets「opening handshake failed」错误日志。
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # 勿设 SO_REUSEADDR：在 Windows 上可能对已 listen 的端口 bind 仍成功，导致误判为空闲
+        sock.bind((host, port))
+        return False
+    except OSError:
+        return True
+    finally:
+        sock.close()
+
+
+def _bridge_ready() -> bool:
+    return bool(_bridge_thread and _bridge_thread.is_alive() and _bridge_listening)
+
+
+def _service_listening(host: str, port: int) -> bool:
+    if _bridge_ready():
+        return True
+    return _tcp_port_in_use(host, port)
+
+
+def _quiet_websockets_probe_errors() -> None:
+    """屏蔽对 WS 端口做裸 TCP 探测时的握手失败堆栈（不影响真实客户端错误）。"""
+    import logging
+
+    class _Filter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            msg = record.getMessage()
+            if "opening handshake failed" in msg or "did not receive a valid HTTP request" in msg:
+                return False
+            if record.exc_info and record.exc_info[1] is not None:
+                exc_name = type(record.exc_info[1]).__name__
+                if exc_name in ("InvalidMessage", "EOFError"):
+                    return False
+            return True
+
+    for name in ("websockets.server", "websockets"):
+        logging.getLogger(name).addFilter(_Filter())
 
 
 def _find_scrcpy_server_jar() -> Optional[str]:
@@ -252,9 +303,16 @@ async def _ws_handler(websocket: Any) -> None:
 
 def bridge_health() -> Dict[str, Any]:
     jar = _find_scrcpy_server_jar()
+    host = _bridge_host()
+    port = scrcpy_bridge_port()
+    listening = _service_listening(host, port)
     return {
-        "bridge_running": _bridge_thread is not None and _bridge_thread.is_alive(),
-        "bridge_port": scrcpy_bridge_port(),
+        "bridge_running": listening,
+        "bridge_thread_alive": _bridge_thread is not None and _bridge_thread.is_alive(),
+        "bridge_port": port,
+        "bridge_host": host,
+        "bridge_port_listening": listening,
+        "bridge_error": _bridge_failed_msg,
         "scrcpy_server_jar": jar or "",
         "scrcpy_server_ready": bool(jar),
         "active_serials": list(_active_sessions.keys()),
@@ -262,38 +320,84 @@ def bridge_health() -> Dict[str, Any]:
 
 
 def ensure_bridge_started() -> Tuple[bool, str]:
-    global _bridge_thread, _bridge_loop
+    global _bridge_thread, _bridge_loop, _bridge_failed_msg, _bridge_listening
     if not _find_scrcpy_server_jar():
         return False, "未找到 scrcpy-server，请安装 scrcpy 完整包"
+    host = _bridge_host()
+    port = scrcpy_bridge_port()
+
     with _lock:
-        if _bridge_thread and _bridge_thread.is_alive():
+        if _bridge_ready():
             return True, "bridge 已在运行"
+        if _tcp_port_in_use(host, port) and not (_bridge_thread and _bridge_thread.is_alive()):
+            return (
+                True,
+                f"scrcpy bridge 端口 {port} 已有服务在监听（可能为其它 app.py 实例），将直接复用",
+            )
+        if _bridge_failed_msg and not (_bridge_thread and _bridge_thread.is_alive()):
+            return False, _bridge_failed_msg
+
+        _bridge_failed_msg = None
+        _bridge_listening = False
 
         def _run() -> None:
-            global _bridge_loop
+            global _bridge_loop, _bridge_failed_msg, _bridge_listening
             try:
                 import websockets
             except ImportError:
-                uat_logger.error("websockets 未安装，无法启动 scrcpy bridge")
+                _bridge_failed_msg = "websockets 未安装，请 pip install websockets>=12"
+                uat_logger.error(_bridge_failed_msg)
                 return
 
+            _quiet_websockets_probe_errors()
+
             async def _main() -> None:
-                port = scrcpy_bridge_port()
+                global _bridge_listening
                 async with websockets.serve(
                     _ws_handler,
-                    "127.0.0.1",
+                    host,
                     port,
                     max_size=16 * 1024 * 1024,
                     ping_interval=20,
                 ):
-                    uat_logger.info("scrcpy WebSocket bridge 监听 ws://127.0.0.1:%s", port)
-                    await asyncio.Future()
+                    with _lock:
+                        _bridge_listening = True
+                    uat_logger.info("scrcpy WebSocket bridge 监听 ws://%s:%s", host, port)
+                    try:
+                        await asyncio.Future()
+                    finally:
+                        with _lock:
+                            _bridge_listening = False
 
             _bridge_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(_bridge_loop)
-            _bridge_loop.run_until_complete(_main())
+            try:
+                _bridge_loop.run_until_complete(_main())
+            except OSError as e:
+                win_in_use = getattr(e, "winerror", None) == 10048 or e.errno in (10048, 98, 48)
+                if win_in_use or "already in use" in str(e).lower() or "只允许使用一次" in str(e):
+                    _bridge_failed_msg = (
+                        f"无法绑定 ws://{host}:{port}：端口已被占用。"
+                        "请只保留一个 python app.py，或修改 .env 中 MOBILE_SCRCPY_BRIDGE_PORT。"
+                    )
+                else:
+                    _bridge_failed_msg = f"scrcpy bridge 启动失败：{e}"
+                uat_logger.error(_bridge_failed_msg)
+            except Exception as e:
+                _bridge_failed_msg = f"scrcpy bridge 启动失败：{e}"
+                uat_logger.exception("scrcpy bridge")
 
         _bridge_thread = threading.Thread(target=_run, name="scrcpy-bridge", daemon=True)
         _bridge_thread.start()
-    time.sleep(0.3)
-    return True, "bridge 已启动"
+
+    for _ in range(24):
+        if _bridge_ready():
+            return True, f"bridge 已就绪（ws://{host}:{port}）"
+        if _bridge_thread and not _bridge_thread.is_alive():
+            break
+        time.sleep(0.15)
+
+    with _lock:
+        if _bridge_failed_msg:
+            return False, _bridge_failed_msg
+    return False, f"scrcpy bridge 启动超时，请检查端口 {port} 是否被占用"

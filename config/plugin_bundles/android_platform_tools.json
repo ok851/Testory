@@ -11,7 +11,9 @@
       "zip_inner_dir": "platform-tools",
       "adb_binary": "adb.exe",
       "url": "https://dl.google.com/android/repository/platform-tools-latest-windows.zip",
-      "mirror_urls": [],
+      "mirror_urls": [
+        "https://mirrors.aliyun.com/android/repository/platform-tools-latest-windows.zip"
+      ],
       "sha256": "",
       "size_mb_hint": 7
     },

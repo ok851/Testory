@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from mobile_device_manager import capture_screenshot_frame, set_connected_udid
-from mobile_env_config import mirror_fps, scrcpy_path
+from mobile_env_config import mirror_fps, resolve_mirror_backend, scrcpy_path
 
 try:
     from uat_logger import uat_logger
@@ -38,25 +38,28 @@ def start_scrcpy_mirror(udid: str) -> Dict[str, Any]:
     session_id = str(uuid.uuid4())
     scrcpy_proc: Optional[subprocess.Popen] = None
     scrcpy_started = False
-    scrcpy_exe = scrcpy_path()
-    cmd = [scrcpy_exe]
-    if udid:
-        cmd.extend(["-s", udid])
-    scrcpy_fps = max(15, min(60, mirror_fps()))
-    cmd.extend(["--no-audio", "--max-size", "720", "--max-fps", str(scrcpy_fps)])
-    try:
-        scrcpy_proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
-        )
-        scrcpy_started = True
-        uat_logger.info("scrcpy 已启动: udid=%s pid=%s", udid or "(default)", scrcpy_proc.pid)
-    except FileNotFoundError:
-        uat_logger.warning("未找到 scrcpy（SCRCPY_PATH=%s），仅使用 adb 截图投屏", scrcpy_exe)
-    except Exception as exc:
-        uat_logger.warning("启动 scrcpy 失败: %s", exc)
+    # 模拟器走平台内 WebCodecs 画布（scrcpy_ws），不弹出 scrcpy 独立窗口
+    use_in_app_mirror = udid.startswith("emulator-") and resolve_mirror_backend(udid) == "scrcpy_ws"
+    if not use_in_app_mirror:
+        scrcpy_exe = scrcpy_path()
+        cmd = [scrcpy_exe]
+        if udid:
+            cmd.extend(["-s", udid])
+        scrcpy_fps = max(15, min(60, mirror_fps()))
+        cmd.extend(["--no-audio", "--max-size", "720", "--max-fps", str(scrcpy_fps)])
+        try:
+            scrcpy_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
+            )
+            scrcpy_started = True
+            uat_logger.info("scrcpy 已启动: udid=%s pid=%s", udid or "(default)", scrcpy_proc.pid)
+        except FileNotFoundError:
+            uat_logger.warning("未找到 scrcpy（SCRCPY_PATH=%s），仅使用 adb 截图投屏", scrcpy_exe)
+        except Exception as exc:
+            uat_logger.warning("启动 scrcpy 失败: %s", exc)
 
     with _lock:
         _sessions[session_id] = {

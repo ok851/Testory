@@ -106,9 +106,19 @@ if ($LASTEXITCODE -ne 0) {
     throw "get-pip 失败"
 }
 
+function Resolve-RequirementsFile {
+    param([string] $FileName)
+    $inRelease = Join-Path $ReleaseDir $FileName
+    if (Test-Path $inRelease) { return $inRelease }
+    $inRoot = Join-Path $ProjectRoot $FileName
+    if (Test-Path $inRoot) { return $inRoot }
+    throw "未找到 $FileName（请在项目根目录保留，或复制到发布目录）"
+}
+
 Write-Host "  Installing release dependencies..."
-$reqMain = Join-Path $ReleaseDir "requirements.txt"
-$reqWin = Join-Path $ReleaseDir "requirements-windows.txt"
+$reqMain = Resolve-RequirementsFile "requirements.txt"
+$reqWin = Resolve-RequirementsFile "requirements-windows.txt"
+$protectedRelease = Test-Path (Join-Path $ReleaseDir "runtime\testory_app\TestoryBackend.exe")
 & $runtimePy -m pip install --upgrade pip wheel -q --no-warn-script-location
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 & $runtimePy -m pip install -q --no-warn-script-location -r $reqMain
@@ -122,14 +132,26 @@ if (Test-Path $postInstall) {
 }
 
 Write-Host "  Verify bundled imports ..."
-Push-Location $ReleaseDir
-try {
-    & $runtimePy -c "import database, requests; print('bundle imports ok')" 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Bundled Python cannot import app modules from $ReleaseDir"
+$pyw = Join-Path $venvRoot "pythonw.exe"
+if ($protectedRelease) {
+    foreach ($interp in @($pyw, $runtimePy)) {
+        if (-not (Test-Path $interp)) { continue }
+        & $interp -c "import webview; print('desktop shell imports ok')" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { break }
     }
-} finally {
-    Pop-Location
+    if ($LASTEXITCODE -ne 0) {
+        throw "Portable Python 无法导入 pywebview（桌面壳层需要）。请检查 requirements-windows.txt"
+    }
+} else {
+    Push-Location $ReleaseDir
+    try {
+        & $runtimePy -c "import database, requests; print('bundle imports ok')" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Bundled Python cannot import app modules from $ReleaseDir"
+        }
+    } finally {
+        Pop-Location
+    }
 }
 
 Write-Host "  Portable Python ready: $venvRoot" -ForegroundColor Green

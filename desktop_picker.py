@@ -39,7 +39,26 @@ _session: Dict[str, Any] = {
 _persist_disk_timer: Optional[threading.Timer] = None
 _persist_disk_lock = threading.Lock()
 _picker_proc: Optional[subprocess.Popen] = None
+_picker_thread: Optional[threading.Thread] = None
 _picker_ui_lock = threading.RLock()
+
+
+def _picker_worker_alive() -> bool:
+    global _picker_proc, _picker_thread
+    if _picker_proc is not None:
+        return _picker_proc.poll() is None
+    if _picker_thread is not None:
+        return _picker_thread.is_alive()
+    return False
+
+
+def _picker_worker_dead() -> bool:
+    global _picker_proc, _picker_thread
+    if _picker_proc is not None:
+        return _picker_proc.poll() is not None
+    if _picker_thread is not None:
+        return not _picker_thread.is_alive()
+    return False
 
 
 def desktop_picker_available() -> bool:
@@ -199,8 +218,8 @@ def _set_session(**kwargs: Any) -> None:
 
 
 def _session_snapshot() -> Dict[str, Any]:
-    proc_dead = _picker_proc is not None and _picker_proc.poll() is not None
-    proc_alive = _picker_proc is not None and not proc_dead
+    proc_dead = _picker_worker_dead() and (_picker_proc is not None or _picker_thread is not None)
+    proc_alive = _picker_worker_alive()
     src: Optional[Dict[str, Any]] = None
     if proc_alive:
         src = _load_session_from_disk()
@@ -265,9 +284,15 @@ def _request_picker_shutdown() -> None:
 
 
 def _stop_picker_process(timeout: float = 8.0, *, fast: bool = False) -> None:
-    global _picker_proc
+    global _picker_proc, _picker_thread
     proc = _picker_proc
+    thread = _picker_thread
     _picker_proc = None
+    _picker_thread = None
+    if thread is not None and thread.is_alive():
+        _request_picker_shutdown()
+        thread.join(timeout=min(float(timeout), 3.0) if fast else float(timeout))
+        return
     if not proc:
         return
     if fast:
@@ -418,15 +443,40 @@ def _spawn_picker_process(
         ),
         encoding="utf-8",
     )
+    child_env = {
+        **os.environ,
+        "UAT_PICKER_CHILD": "1",
+        "UAT_DESKTOP_PICKER_SESSION": str(session_path),
+    }
+    if getattr(sys, "frozen", False):
+        global _picker_thread
+
+        def _run_inline() -> None:
+            try:
+                os.environ.update(child_env)
+                _picker_child_main(str(cfg_path))
+            except Exception as exc:
+                _set_session(error=str(exc), picker_closed=True, active=False)
+
+        _picker_thread = threading.Thread(
+            target=_run_inline,
+            name="uat-desktop-picker",
+            daemon=True,
+        )
+        _picker_thread.start()
+        return
+
     script = str(Path(__file__).resolve())
+    try:
+        from install_paths import resolve_install_root
+
+        cwd = str(resolve_install_root())
+    except ImportError:
+        cwd = str(Path(__file__).resolve().parent)
     _picker_proc = subprocess.Popen(
         [sys.executable, script, "--picker-child", str(cfg_path)],
-        cwd=str(Path(__file__).resolve().parent),
-        env={
-            **os.environ,
-            "UAT_PICKER_CHILD": "1",
-            "UAT_DESKTOP_PICKER_SESSION": str(session_path),
-        },
+        cwd=cwd,
+        env=child_env,
     )
 
 
@@ -492,16 +542,16 @@ def start_desktop_picker(
         snap: Dict[str, Any] = {}
         while time.time() < deadline:
             time.sleep(0.06)
-            if _picker_proc and _picker_proc.poll() is not None:
+            if _picker_worker_dead():
                 err = (_load_session_from_disk() or {}).get("error") or "框选录制进程已退出"
                 return {"success": False, "error": err}
             snap = _session_snapshot()
             if snap.get("active"):
                 break
-        if _picker_proc and _picker_proc.poll() is not None:
+        if _picker_worker_dead():
             err = (_load_session_from_disk() or {}).get("error") or "框选录制进程已退出"
             return {"success": False, "error": err}
-        if _picker_proc and _picker_proc.poll() is None:
+        if _picker_worker_alive():
             _set_session(
                 starting=False,
                 recording=bool(record_mode or unified_mode),
@@ -525,7 +575,7 @@ def stop_desktop_picker(*, fast: bool = False, reset_automation: bool = True) ->
             last_pick = _session.get("last_pick")
 
         disk = _load_session_from_disk()
-        had_proc = _picker_proc is not None and _picker_proc.poll() is None
+        had_proc = _picker_worker_alive()
         _stop_picker_process(timeout=1.5 if fast else 8.0, fast=fast)
         if not fast:
             time.sleep(0.1)
@@ -588,10 +638,10 @@ def get_desktop_picker_status(*, consume_last_pick: bool = False) -> Dict[str, A
             new_steps = pending
             sent_after = len(snap.get("recorded_steps") or [])
             _session["_sent_count"] = sent_after
-            if _picker_proc and _picker_proc.poll() is None:
+            if _picker_worker_alive():
                 _patch_session_on_disk(_sent_count=sent_after)
         if consume_last_pick and last:
-            if _picker_proc and _picker_proc.poll() is None:
+            if _picker_worker_alive():
                 _clear_last_pick_on_disk()
             _session["last_pick"] = None
             last = None

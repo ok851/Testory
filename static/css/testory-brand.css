@@ -71,21 +71,7 @@ html.dark body.testory-desktop-client {
   background: rgb(15 23 42);
 }
 
-/* 桌面客户端：主内容区居中，形成应用窗口感而非整页网站 */
-body.testory-desktop-client .testory-desktop-main {
-  flex: 1;
-  width: 100%;
-  max-width: 1120px;
-  margin-left: auto;
-  margin-right: auto;
-  background: #f8fafc;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.06), 0 8px 32px rgba(15, 23, 42, 0.08);
-}
-
-html.dark body.testory-desktop-client .testory-desktop-main {
-  background: rgb(3 7 18);
-  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.08), 0 8px 32px rgba(0, 0, 0, 0.35);
-}
+/* 桌面壳布局见 testory-desktop-shell.css；此处仅保留通用桌面微调 */
 
 /* 桌面客户端：收窄内容宽度，减少「整页网站」违和感 */
 body.testory-desktop-client #main-content,

@@ -19,7 +19,9 @@ from logger import uat_logger
 def load_active_profile_for_inference() -> Dict[str, Any]:
     """读取 ai_model_registry.json 中当前 profile；无文件时退回本地 Ollama。"""
     default_model = os.environ.get("LOCAL_LLM_MODEL_MID", "llama3:8b-instruct")
-    path = os.path.join(os.path.dirname(__file__), "ai_model_registry.json")
+    from ai_config_paths import ai_model_registry_path
+
+    path = str(ai_model_registry_path())
     if not os.path.isfile(path):
         return {
             "provider": "ollama",
