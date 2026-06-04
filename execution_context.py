@@ -20,3 +20,7 @@ class ExecutionContext:
     extra: Dict[str, Any] = field(default_factory=dict)
     desktop_agent_session_id: Optional[str] = None
     desktop_machine_id: Optional[int] = None
+    # 同一次批量执行内共享（如 auth_token）；优先级高于库内同名项目变量
+    runtime_vars: Dict[str, str] = field(default_factory=dict)
+    reuse_session: bool = True
+    skip_duplicate_login_for_business: bool = True

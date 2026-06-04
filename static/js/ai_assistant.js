@@ -197,6 +197,73 @@
     return parts.join(' · ');
   }
 
+  function pollAiJobUntilDone(jobId) {
+    var polls = 0;
+    function tick() {
+      return fetch('/api/ai/task/job/' + encodeURIComponent(jobId), { credentials: 'same-origin' })
+        .then(function (resp) {
+          return resp.json().then(function (j) { return { resp: resp, j: j }; });
+        })
+        .then(function (o) {
+          if (o.resp.status === 404) throw new Error('任务不存在');
+          if (!o.j.success) throw new Error(o.j.error || '查询任务失败');
+          if (o.j.status === 'running') {
+            polls += 1;
+            var delay = polls <= 24 ? 400 : 1000;
+            return new Promise(function (res) { setTimeout(res, delay); }).then(tick);
+          }
+          if (o.j.status === 'cancelled') throw new Error('已取消');
+          if (o.j.status === 'error') {
+            var r = o.j.result || {};
+            throw new Error(o.j.error || r.error || '生成失败');
+          }
+          if (o.j.status === 'done') {
+            var result = o.j.result;
+            if (!result || !result.success) throw new Error((result && result.error) || '生成失败');
+            return result;
+          }
+          polls += 1;
+          return new Promise(function (res) { setTimeout(res, 500); }).then(tick);
+        });
+    }
+    return tick();
+  }
+
+  function startChatAsync(body) {
+    return fetch('/api/ai/task/chat-async', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body)
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.success || !d.job_id) throw new Error(d.error || '启动异步任务失败');
+        return d.job_id;
+      });
+  }
+
+  function formatStepDiffSummary(beforePlan, afterPlan) {
+    var beforeN = (beforePlan && beforePlan.steps && beforePlan.steps.length) || 0;
+    var afterN = (afterPlan && afterPlan.steps && afterPlan.steps.length) || 0;
+    var parts = ['步骤数：' + beforeN + ' → ' + afterN];
+    function stepLine(s, i) {
+      if (!s) return '';
+      return (i + 1) + '. ' + (s.action || '?') + (s.description ? ' — ' + String(s.description).slice(0, 40) : '');
+    }
+    if (afterN && afterPlan.steps[0]) parts.push('首步：' + stepLine(afterPlan.steps[0], 0));
+    if (afterN > 1 && afterPlan.steps[afterN - 1]) parts.push('末步：' + stepLine(afterPlan.steps[afterN - 1], afterN - 1));
+    return parts.join('\n');
+  }
+
+  function defaultApplyMode(actionKind, message) {
+    var k = (actionKind || '').trim();
+    if (k === 'optimize_step' || k === 'merge_steps' || k === 'assert_from_selection') return 'replace';
+    var m = (message || '').toLowerCase();
+    if (/追加|添加|再加|末尾|后面再加/.test(message || '')) return 'append';
+    return 'replace';
+  }
+
   function postJson(url, body, options) {
     var opts = options || {};
     return fetch(url, {
@@ -311,8 +378,8 @@
       '      <ol>',
       '        <li>助手会把<strong>当前用例的全部步骤</strong>发给<strong>本机 Ollama</strong>（网址默认 <code>http://127.0.0.1:11434</code>）。这和「能不能列出模型」不是一回事：列表很快，真正改写可能要<strong>几分钟</strong>。</li>',
       '        <li>打开面板后会自动<strong>同步步骤</strong>；你在网页里改过步骤后，请再点<strong>刷新同步</strong>。</li>',
-      '        <li>流程：写清楚需求 → 点<strong>发送</strong> → 等状态变为「已更新」→ 需要时再点<strong>追加到用例</strong>（会把 AI 给出的步骤<strong>接到现有步骤后面</strong>，不会自动替换原步骤）。</li>',
-      '        <li>模型、超时请在 <a href="/ai-test" target="_blank" rel="noopener">AI测试</a> 配置。若总是卡住或超时，优先换成<strong>纯文字对话模型</strong>（名称里带 <code>-vl</code> 的多半是视觉模型，在本页往往很慢）。</li>',
+      '        <li>流程：写清楚需求 → 点<strong>发送</strong> → 查看变更预览 → 点<strong>替换用例步骤</strong>（优化/合并时推荐）或<strong>追加到末尾</strong>。</li>',
+      '        <li>模型、超时请在 <a href="/ai-hub" target="_blank" rel="noopener">AI 中心</a> → <a href="/ai-test" target="_blank" rel="noopener">自主测试</a> 配置。</li>',
       '      </ol>',
       '    </details>',
       '    <div class="hufirst-ai-srow" id="hufirst-ai-status">正在同步步骤…</div>',
@@ -331,20 +398,31 @@
       '      <button type="button" id="hufirst-tpl-assert">一键：断言划词</button>',
       '      <button type="button" id="hufirst-s-clear-hist" title="只清空本浏览器里记录的对话摘要，不会删用例步骤">清空对话记录</button>',
       '    </div>',
+      '    <div id="hufirst-ai-sdiff" class="ai-diff-box" style="display:none;"></div>',
       '    <div id="hufirst-ai-slog" style="margin-top:8px;"></div>',
       '  </div>',
       '  <div id="hufirst-ai-sfoot">',
       '    <textarea id="hufirst-s-msg" rows="3" style="width:100%;box-sizing:border-box;border-radius:8px;border:1px solid #cbd5e1;padding:8px" placeholder="用一句话说明你想怎么改，例如：把第 2 步的选择器改稳一点并加 3 秒等待"></textarea>',
       '    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">',
       '      <button type="button" class="btn btn-primary" id="hufirst-s-send" style="padding:6px 14px;cursor:pointer;">发送给 AI</button>',
-      '      <button type="button" id="hufirst-s-apply" style="padding:6px 10px;cursor:pointer;" disabled>追加到用例末尾</button>',
+      '      <button type="button" class="btn btn-primary" id="hufirst-s-apply-replace" style="padding:6px 10px;cursor:pointer;" disabled>替换用例步骤</button>',
+      '      <button type="button" id="hufirst-s-apply" style="padding:6px 10px;cursor:pointer;" disabled>追加到末尾</button>',
       '    </div>',
       '  </div>',
       '</div>'
     ].join('');
     document.body.appendChild(root);
 
-    var state = { current_plan: { steps: [] }, history: [], lastPlan: null, projectName: '', model: '' };
+    var state = {
+      current_plan: { steps: [] },
+      planBeforeSend: null,
+      history: [],
+      lastPlan: null,
+      projectName: '',
+      model: '',
+      applyMode: 'replace',
+      lastWarnings: []
+    };
 
     function setStatus(s) {
       var el = document.getElementById('hufirst-ai-status');
@@ -376,6 +454,46 @@
         .catch(function (e) { setStatus('同步失败: ' + (e.message || e)); });
     }
 
+    function showDiff() {
+      var box = document.getElementById('hufirst-ai-sdiff');
+      if (!box || !state.lastPlan) return;
+      var txt = formatStepDiffSummary(state.planBeforeSend || state.current_plan, state.lastPlan);
+      if (state.lastWarnings && state.lastWarnings.length) {
+        txt += '\n提示：' + state.lastWarnings.slice(0, 5).join('；');
+      }
+      box.textContent = txt;
+      box.style.display = 'block';
+    }
+
+    function enableApplyButtons(enabled) {
+      var ap = document.getElementById('hufirst-s-apply');
+      var rp = document.getElementById('hufirst-s-apply-replace');
+      if (ap) ap.disabled = !enabled;
+      if (rp) rp.disabled = !enabled;
+    }
+
+    function onChatResult(data, msg, actionKind) {
+      state.lastPlan = data.plan;
+      state.lastWarnings = data.warnings || [];
+      if (data.plan) state.current_plan = data.plan;
+      state.applyMode = defaultApplyMode(actionKind, msg);
+      state.history = state.history || [];
+      state.history.push({ role: 'user', content: msg });
+      state.history.push({
+        role: 'assistant',
+        content: '已更新方案（' + ((data.plan && data.plan.steps) ? data.plan.steps.length : 0) + ' 步）',
+        warningsList: state.lastWarnings
+      });
+      if (state.history.length > 40) state.history = state.history.slice(-40);
+      saveCaseChatHistory(opt.getCaseId(), state.history);
+      var modeHint = state.applyMode === 'append' ? '追加到末尾' : '替换用例步骤';
+      setStatus('模型已返回。建议点击「' + modeHint + '」应用变更（见下方预览）。');
+      logLine('assistant', '已返回 ' + (data.plan && data.plan.steps ? data.plan.steps.length : 0) + ' 步。');
+      if (state.lastWarnings.length) logLine('assistant', '提示: ' + state.lastWarnings.join('；'));
+      showDiff();
+      enableApplyButtons(!!(data.plan && data.plan.steps && data.plan.steps.length));
+    }
+
     function send() {
       var msg = (document.getElementById('hufirst-s-msg') && document.getElementById('hufirst-s-msg').value || '').trim();
       if (!msg) { if (global.alert) global.alert('请先在下框里写清楚想怎么改，再发送。'); return; }
@@ -386,35 +504,62 @@
       };
       var k = (document.getElementById('hufirst-s-ctx-kind') || {}).value;
       if (k) ctx.action_kind = k;
-      setStatus('已向本机模型发送请求，若步骤多或模型较慢，可能需要等待较长时间（请勿重复狂点发送）…');
+      state.planBeforeSend = JSON.parse(JSON.stringify(state.current_plan || { steps: [] }));
+      var diffBox = document.getElementById('hufirst-ai-sdiff');
+      if (diffBox) { diffBox.style.display = 'none'; diffBox.textContent = ''; }
+      enableApplyButtons(false);
+      setStatus('已提交异步任务，正在等待本机模型（可继续浏览页面，请勿重复发送）…');
       logLine('user', msg);
-      var body = { message: msg, project_name: state.projectName || '', current_plan: state.current_plan, history: state.history, target_page_url: (opt.getTargetUrl && opt.getTargetUrl()) || '' };
+      var body = {
+        message: msg,
+        project_name: state.projectName || '',
+        current_plan: state.current_plan,
+        history: state.history,
+        target_page_url: (opt.getTargetUrl && opt.getTargetUrl()) || '',
+        case_id: opt.getCaseId(),
+        response_mode: defaultApplyMode(k, msg) === 'append' ? 'delta' : 'full'
+      };
       if (state.model) body.model = state.model;
       body = appendInteractionToPayload(body, ctx);
-      return postJson('/api/ai/task/chat', body)
-        .then(function (data) {
-          state.lastPlan = data.plan;
-          if (data.plan) state.current_plan = data.plan;
-          state.history = state.history || [];
-          state.history.push({ role: 'user', content: msg });
-          state.history.push({ role: 'assistant', content: '已更新方案（' + ((data.plan && data.plan.steps) ? data.plan.steps.length : 0) + ' 步）' });
-          if (state.history.length > 40) state.history = state.history.slice(-40);
-          saveCaseChatHistory(opt.getCaseId(), state.history);
-          setStatus('模型已返回方案。若满意，可点「追加到用例末尾」把新步骤接到当前用例后面。');
-          logLine('assistant', '已返回 ' + (data.plan && data.plan.steps ? data.plan.steps.length : 0) + ' 步。');
-          var ap = document.getElementById('hufirst-s-apply');
-          if (ap) ap.disabled = !(data.plan && data.plan.steps && data.plan.steps.length);
+      var sendBtn = document.getElementById('hufirst-s-send');
+      if (sendBtn) sendBtn.disabled = true;
+      return startChatAsync(body)
+        .then(function (jobId) { return pollAiJobUntilDone(jobId); })
+        .then(function (data) { onChatResult(data, msg, k); })
+        .catch(function (e) {
+          setStatus('出错：\n' + (e.message || e));
+          logLine('assistant', '失败: ' + (e.message || e));
         })
-        .catch(function (e) { setStatus('出错：\n' + (e.message || e)); logLine('assistant', '失败: ' + (e.message || e)); });
+        .finally(function () { if (sendBtn) sendBtn.disabled = false; });
     }
 
     function applyAppend() {
       if (!state.lastPlan || !state.lastPlan.steps || !state.lastPlan.steps.length) return;
       return postJson('/api/ai/cases/append-steps', { case_id: opt.getCaseId(), steps: state.lastPlan.steps })
         .then(function (r) {
+          var w = (r && r.warnings) || state.lastWarnings || [];
+          if (w.length && global.alert) global.alert('已追加。提示：\n' + w.join('\n'));
           if (opt.onApplied) opt.onApplied(r);
+          return getCaseSync();
         })
         .catch(function (e) { if (global.alert) global.alert('追加失败: ' + (e.message || e)); });
+    }
+
+    function applyReplace() {
+      if (!state.lastPlan || !state.lastPlan.steps || !state.lastPlan.steps.length) return;
+      return postJson('/api/ai/cases/import-ui-plan', {
+        case_id: opt.getCaseId(),
+        steps: state.lastPlan.steps,
+        replace: true,
+        goal: (document.getElementById('hufirst-s-msg') && document.getElementById('hufirst-s-msg').value) || ''
+      })
+        .then(function (r) {
+          var w = (r && r.warnings) || state.lastWarnings || [];
+          if (w.length && global.alert) global.alert('已替换用例步骤。提示：\n' + w.join('\n'));
+          if (opt.onApplied) opt.onApplied(r);
+          return getCaseSync();
+        })
+        .catch(function (e) { if (global.alert) global.alert('替换失败: ' + (e.message || e)); });
     }
 
     document.getElementById('hufirst-ai-fab').addEventListener('click', function () {
@@ -447,6 +592,8 @@
     });
     document.getElementById('hufirst-s-send').addEventListener('click', function () { send(); });
     document.getElementById('hufirst-s-apply').addEventListener('click', function () { applyAppend(); });
+    var repBtn = document.getElementById('hufirst-s-apply-replace');
+    if (repBtn) repBtn.addEventListener('click', function () { applyReplace(); });
     document.getElementById('hufirst-s-clear-hist').addEventListener('click', function () {
       state.history = [];
       saveCaseChatHistory(opt.getCaseId(), state.history);

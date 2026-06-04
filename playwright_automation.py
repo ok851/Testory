@@ -8640,10 +8640,20 @@ class PlaywrightAutomation:
             if tc:
                 project_id = tc.get("project_id")
 
+        ctx = getattr(self, "_execution_context", None)
+        runtime_overlay = None
+        if ctx is not None and isinstance(getattr(ctx, "runtime_vars", None), dict):
+            runtime_overlay = ctx.runtime_vars
+
         def resolve_chain(s: str) -> str:
             if s is None:
                 return ""
-            t = _db.resolve_variables(str(s), project_id=project_id, case_id=case_id)
+            t = _db.resolve_variables(
+                str(s),
+                project_id=project_id,
+                case_id=case_id,
+                runtime_overlay=runtime_overlay,
+            )
             return substitute_env_placeholders(t)
 
         use_cookies = bool(spec.get("use_browser_cookies"))
@@ -8666,6 +8676,9 @@ class PlaywrightAutomation:
 
         loop = asyncio.get_event_loop()
         cid = int(case_id) if case_id is not None else None
+        pipe_runtime: Dict[str, str] = {}
+        if runtime_overlay is not None:
+            pipe_runtime = runtime_overlay
         out = await loop.run_in_executor(
             None,
             functools.partial(
@@ -8677,6 +8690,7 @@ class PlaywrightAutomation:
                 jar,
                 persist_extracts=bool(spec.get("persist_extracts_to_case")),
                 collect_script_logs=False,
+                runtime=pipe_runtime,
             ),
         )
 
@@ -9516,6 +9530,34 @@ class PlaywrightAutomation:
             包含所有测试用例执行结果的字典
         """
         uat_logger.info(f"🚀 [SERIAL_MULTI_CASE] 开始串行执行 {len(case_ids)} 个用例: {case_ids}")
+
+        exec_ctx = getattr(self, "_execution_context", None)
+        runtime_vars: Dict[str, str] = {}
+        reuse_session = True
+        skip_dup_login = True
+        if exec_ctx is not None:
+            runtime_vars = exec_ctx.runtime_vars if isinstance(getattr(exec_ctx, "runtime_vars", None), dict) else {}
+            reuse_session = bool(getattr(exec_ctx, "reuse_session", True))
+            skip_dup_login = bool(getattr(exec_ctx, "skip_duplicate_login_for_business", True))
+
+        try:
+            from auth_batch_helpers import (
+                merge_runtime_from_project,
+                reorder_case_ids_for_batch,
+            )
+
+            first_pid = None
+            if case_ids:
+                probe = db.get_test_case_v2(case_ids[0])
+                if probe:
+                    first_pid = probe.get("project_id")
+            merge_runtime_from_project(db, first_pid, runtime_vars)
+            case_ids = reorder_case_ids_for_batch(case_ids, db)
+            uat_logger.info(f"🔄 [SERIAL_MULTI_CASE] 排序后会执行顺序: {case_ids}")
+        except Exception as reorder_ex:
+            uat_logger.warning("[SERIAL_MULTI_CASE] 批量排序/变量初始化跳过: %s", reorder_ex)
+
+        session_ready = runtime_vars.get("session_ready") == "1" or bool(runtime_vars.get("auth_token"))
         
         all_results = {
             "total_cases": len(case_ids),
@@ -9845,6 +9887,34 @@ class PlaywrightAutomation:
                     }, case_id)
                     continue
                 execution_steps = build_execution_steps(steps)
+                try:
+                    from auth_batch_helpers import (
+                        _case_role,
+                        maybe_strip_duplicate_login_steps,
+                        resolve_execution_steps_variables,
+                    )
+
+                    role = _case_role(case_info)
+                    if reuse_session and skip_dup_login:
+                        execution_steps, skipped = maybe_strip_duplicate_login_steps(
+                            execution_steps,
+                            case_role=role,
+                            session_ready=session_ready,
+                            skip_enabled=True,
+                        )
+                        if skipped:
+                            uat_logger.info(
+                                f"⏭️ [SERIAL_MULTI_CASE] 用例 {case_id} 跳过 {skipped} 个重复登录步骤"
+                            )
+                    resolve_execution_steps_variables(
+                        execution_steps,
+                        db,
+                        case_info.get("project_id"),
+                        case_id,
+                        runtime_vars,
+                    )
+                except Exception as auth_ex:
+                    uat_logger.debug("[SERIAL_MULTI_CASE] 登录复用处理: %s", auth_ex)
                 uat_logger.info(f"📋 用例 {case_id} ({case_name}) 共 {len(execution_steps)} 个步骤")
                 
                 # 如果用例有初始 URL，先导航到该URL
@@ -9937,6 +10007,13 @@ class PlaywrightAutomation:
                     "execution_time": round(case_duration, 2)
                 }
                 process_case_result(result, case_id)
+                try:
+                    from auth_batch_helpers import mark_session_ready_after_case
+
+                    if mark_session_ready_after_case(case_info, case_status, runtime_vars):
+                        session_ready = True
+                except Exception:
+                    pass
                 uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_id} 完成，状态: {case_status}，耗时: {result['execution_time']:.2f}s")
             except Exception as e:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 异常: {str(e)}")

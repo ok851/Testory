@@ -368,11 +368,9 @@
             </div>
         </div>
         
-        {% if not is_client %}
         <div class="navigation">
             <a href="/" class="btn btn-secondary" data-i18n="proj_back_home">← 返回首页</a>
         </div>
-        {% endif %}
     </div>
 
     <div id="createProjectModal" class="modal">
@@ -409,6 +407,12 @@
             <div class="form-group">
                 <label for="editProjectDescription" data-i18n="proj_field_desc">项目描述</label>
                 <textarea id="editProjectDescription" data-i18n-placeholder="proj_ph_desc" placeholder="请输入项目描述（可选）"></textarea>
+            </div>
+            <div class="form-group">
+                <label>项目变量（用例步骤可用 <code>{{auth_token}}</code> 等占位符）</label>
+                <div id="projectVarsList" style="margin:8px 0;"></div>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="addProjectVarRow()">+ 添加变量</button>
+                <button type="button" class="btn btn-info btn-sm" style="margin-left:8px;" onclick="saveProjectVariables()">保存变量</button>
             </div>
             <div class="modal-footer">
                 <button type="button" onclick="saveProjectEdit()" class="btn btn-success" data-i18n="proj_btn_save">保存</button>
@@ -582,11 +586,81 @@
             }
         }
 
+        let projectVarsCache = [];
+
+        function renderProjectVarRows(vars) {
+            const list = document.getElementById('projectVarsList');
+            if (!list) return;
+            projectVarsCache = vars || [];
+            if (!projectVarsCache.length) {
+                list.innerHTML = '<p style="font-size:12px;color:#64748b;">暂无变量。可添加 auth_token 等供接口 Header 引用。</p>';
+                return;
+            }
+            list.innerHTML = projectVarsCache.map((v, i) => `
+                <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center;">
+                    <input type="text" data-var-idx="${i}" data-field="name" value="${escapeHtml(v.name || '')}" placeholder="变量名" style="flex:1;">
+                    <input type="text" data-var-idx="${i}" data-field="value" value="${escapeHtml(v.value || '')}" placeholder="值" style="flex:2;">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="removeProjectVarRow(${i})">删</button>
+                </div>
+            `).join('');
+        }
+
+        function addProjectVarRow() {
+            projectVarsCache.push({ name: '', value: '' });
+            renderProjectVarRows(projectVarsCache);
+        }
+
+        function removeProjectVarRow(idx) {
+            projectVarsCache.splice(idx, 1);
+            renderProjectVarRows(projectVarsCache);
+        }
+
+        async function loadProjectVariables(projectId) {
+            try {
+                const r = await fetch(`/api/variables?scope=project&project_id=${projectId}`);
+                const d = await r.json();
+                renderProjectVarRows((d && d.variables) || []);
+            } catch (e) {
+                renderProjectVarRows([]);
+            }
+        }
+
+        async function saveProjectVariables() {
+            if (!currentEditProjectId) return;
+            const list = document.getElementById('projectVarsList');
+            if (list) {
+                list.querySelectorAll('input[data-field="name"]').forEach((inp) => {
+                    const idx = parseInt(inp.getAttribute('data-var-idx'), 10);
+                    const valInp = list.querySelector(`input[data-var-idx="${idx}"][data-field="value"]`);
+                    if (!isNaN(idx) && projectVarsCache[idx]) {
+                        projectVarsCache[idx].name = inp.value.trim();
+                        projectVarsCache[idx].value = valInp ? valInp.value : '';
+                    }
+                });
+            }
+            for (const row of projectVarsCache) {
+                if (!row.name) continue;
+                await fetch('/api/variables', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: row.name,
+                        value: row.value || '',
+                        scope: 'project',
+                        project_id: currentEditProjectId
+                    })
+                });
+            }
+            alert('项目变量已保存（同名变量将新建条目，可在变量管理中清理重复项）');
+            await loadProjectVariables(currentEditProjectId);
+        }
+
         function showEditProjectModal(projectId, name, description) {
             currentEditProjectId = projectId;
             document.getElementById('editProjectModal').classList.add('active');
             document.getElementById('editProjectName').value = name;
             document.getElementById('editProjectDescription').value = description;
+            void loadProjectVariables(projectId);
             if (typeof applyUiLang === 'function') applyUiLang();
         }
 

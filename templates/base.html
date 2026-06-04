@@ -6,8 +6,11 @@
     <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}">
-    {% if is_client %}<link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}">{% endif %}
+    <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui3">
     <script>
         (function () {
             try {
@@ -43,85 +46,10 @@
     {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}{% if is_client %} testory-desktop-client{% endif %}">
-    {% if is_client %}
-    <div class="testory-app-shell">
-        <aside class="testory-sidebar" aria-label="主导航">
-            <div class="testory-sidebar__brand">
-                <a href="/" class="testory-logo">
-                    <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}">
-                    <span class="testory-logo-word">{{ product_name }}<small>{{ product_tagline }}</small></span>
-                </a>
-            </div>
-            <nav class="testory-sidebar__nav" id="testorySidebarNav">
-                {% include 'partials/main_nav.html' %}
-            </nav>
-            <div class="testory-sidebar__foot">桌面客户端</div>
-        </aside>
-        <div class="testory-app-main">
-            <header class="testory-topbar testory-desktop-titlebar">
-                <div id="userArea" class="flex items-center gap-2 ml-auto">
-                    <div id="userDropdown" class="relative hidden">
-                        <button type="button" onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                            <i class="fas fa-user-circle text-gray-600 dark:text-gray-400 text-lg"></i>
-                            <span id="userLabel" class="text-sm text-gray-700 dark:text-gray-200 font-medium"></span>
-                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
-                        </button>
-                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-56 bg-white dark:bg-gray-900 rounded-md shadow-lg py-1 z-50 border border-gray-200 dark:border-gray-700">
-                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-id-card mr-2 text-gray-400"></i><span data-i18n="menu_profile">个人信息</span>
-                            </a>
-                            <a href="/settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-sliders-h mr-2 text-gray-400"></i><span data-i18n="menu_settings">设置中心</span>
-                            </a>
-                            <a href="/plugin-market" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-puzzle-piece mr-2 text-gray-400"></i><span data-i18n="menu_plugin_market">插件市场</span>
-                            </a>
-                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-key mr-2 text-gray-400"></i><span data-i18n="menu_license">授权管理</span>
-                            </a>
-                            {% if hide_billing_ui %}
-                            {% if website_url %}
-                            <a href="#" onclick="openWebsiteUpgrade(); return false;" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-external-link-alt mr-2 text-gray-400"></i>升级订阅（官网）
-                            </a>
-                            {% endif %}
-                            {% else %}
-                            <a href="/pricing" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navPricingLink">
-                                <i class="fas fa-tags mr-2 text-gray-400"></i><span data-i18n="menu_pricing">定价</span>
-                            </a>
-                            <a href="/payment/orders" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navOrdersLink">
-                                <i class="fas fa-receipt mr-2 text-gray-400"></i><span data-i18n="menu_orders">我的订单</span>
-                            </a>
-                            {% endif %}
-                            {% if is_client %}
-                            <a href="/client-setup" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-server mr-2 text-gray-400"></i>团队服务器
-                            </a>
-                            {% endif %}
-                            <a href="/sso-settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="ssoSettingsLink" style="display: none;">
-                                <i class="fas fa-shield-alt mr-2 text-gray-400"></i><span data-i18n="menu_sso">SSO 设置</span>
-                            </a>
-                            <a href="/user-management" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="userManagementLink" style="display: none;">
-                                <i class="fas fa-users-cog mr-2 text-gray-400"></i><span data-i18n="menu_users">用户管理</span>
-                            </a>
-                            <a href="/audit-logs" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="auditLogsLink" style="display: none;">
-                                <i class="fas fa-clipboard-list mr-2 text-gray-400"></i><span data-i18n="menu_audit_logs">审计日志</span>
-                            </a>
-                            <div class="border-t border-gray-100 dark:border-gray-700 my-1"></div>
-                            <button type="button" onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-sign-out-alt mr-2"></i><span data-i18n="menu_logout">注销</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </header>
-            <main id="main-content" class="testory-desktop-main">
-    {% else %}
-    <!-- Web 版顶栏导航 -->
-    <nav class="testory-web-topnav bg-white dark:bg-gray-900 shadow-md border-b border-gray-100 dark:border-gray-800">
-        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
-            <!-- 左侧：Logo -->
-            <div class="flex items-center gap-3">
+    <!-- 统一顶栏导航（Web 样式；桌面客户端同布局，不使用侧栏） -->
+    <nav id="testoryMainNav" class="testory-main-nav bg-white dark:bg-gray-900 shadow-md border-b border-gray-100 dark:border-gray-800{% if is_client %} testory-desktop-titlebar{% endif %}" aria-label="主导航">
+        <div class="testory-nav-inner flex justify-between items-center gap-3">
+            <div class="flex items-center gap-3 flex-shrink-0">
                 <a href="/" class="testory-logo">
                     <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}">
                     <span class="testory-logo-word">{{ product_name }}<small>{{ product_tagline }}</small></span>
@@ -130,104 +58,12 @@
                 <span class="testory-desktop-badge hidden sm:inline-flex">桌面客户端</span>
                 {% endif %}
             </div>
-            <!-- 右侧：功能按钮 + 用户信息 -->
             <div class="flex items-center gap-2 flex-wrap justify-end">
-                <a href="/" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-blue-500 text-white hover:bg-blue-600 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-i18n-title="nav_home_title" title="首页">
-                    <i class="fas fa-home"></i>
-                </a>
-                <a href="/list_projects" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-green-500 text-white hover:bg-green-600 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-i18n-title="nav_project_title" title="项目管理">
-                    <i class="fas fa-folder mr-1"></i><span data-i18n="nav_project">项目</span>
-                </a>
-                <a href="/ai-test" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-i18n-title="nav_aitest_title" title="AI测试">
-                    <i class="fas fa-brain mr-1"></i><span data-i18n="nav_aitest">AI测试</span>
-                </a>
-                <a href="/api-testing" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-teal-600 text-white hover:bg-teal-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-i18n-title="nav_api_test_title" title="接口测试">
-                    <i class="fas fa-plug mr-1"></i><span data-i18n="nav_api_test">接口测试</span>
-                </a>
-                {% if mobile_testing_enabled %}
-                <a href="/mobile-testing" class="px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" title="Android 真机投屏与自动化">
-                    <i class="fas fa-mobile-alt mr-1"></i><span>移动端</span>
-                </a>
-                {% endif %}
-                <a href="/run-history" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-purple-500 text-white hover:bg-purple-600 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-feature="basic" data-i18n-title="nav_history_title" title="运行历史">
-                    <i class="fas fa-history mr-1"></i><span data-i18n="nav_history">历史</span>
-                </a>
-                <a href="/data-driven" id="navDataDriven" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-purple-600 text-white hover:bg-purple-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10 hidden" data-feature="data_driven" data-i18n-title="nav_data_title" title="数据驱动">
-                    <i class="fas fa-table mr-1"></i><span data-i18n="nav_data">数据</span>
-                </a>
-                <a href="/test_report" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-blue-600 text-white hover:bg-blue-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10" data-feature="basic" data-i18n-title="nav_report_title" title="测试报告">
-                    <i class="fas fa-chart-bar mr-1"></i><span data-i18n="nav_report">报告</span>
-                </a>
-                <a href="/schedules" id="navSchedules" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-orange-500 text-white hover:bg-orange-600 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10 hidden" data-feature="schedule" data-i18n-title="nav_schedule_title" title="定时任务">
-                    <i class="fas fa-clock mr-1"></i><span data-i18n="nav_schedule">定时</span>
-                </a>
-                <a href="/notifications" id="navNotifications" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-pink-500 text-white hover:bg-pink-600 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10 hidden" data-feature="email_notification" data-role="admin" data-i18n-title="nav_notification_title" title="通知配置">
-                    <i class="fas fa-bell mr-1"></i><span data-i18n="nav_notification">通知</span>
-                </a>
-                <a href="/defects" id="navDefects" class="nav-btn px-3 py-1.5 rounded-md font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-900 text-sm whitespace-nowrap bg-red-600 text-white hover:bg-red-700 shadow-sm dark:shadow-none dark:ring-1 dark:ring-white/10 hidden" data-feature="defect_management" data-i18n-title="nav_defect_title" title="缺陷管理">
-                    <i class="fas fa-bug mr-1"></i><span data-i18n="nav_defect">缺陷</span>
-                </a>
-                <!-- 用户信息区（最右边） -->
-                <div id="userArea" class="flex items-center gap-2 border-l border-gray-300 dark:border-gray-600 pl-4 ml-2">
-                    <!-- 用户下拉菜单 -->
-                    <div id="userDropdown" class="relative hidden">
-                        <button type="button" onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                            <i class="fas fa-user-circle text-gray-600 dark:text-gray-400 text-lg"></i>
-                            <span id="userLabel" class="text-sm text-gray-700 dark:text-gray-200 font-medium"></span>
-                            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
-                        </button>
-                        <div id="userMenu" class="hidden absolute right-0 mt-2 w-56 bg-white dark:bg-gray-900 rounded-md shadow-lg py-1 z-50 border border-gray-200 dark:border-gray-700">
-                            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-id-card mr-2 text-gray-400"></i><span data-i18n="menu_profile">个人信息</span>
-                            </a>
-                            <a href="/settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-sliders-h mr-2 text-gray-400"></i><span data-i18n="menu_settings">设置中心</span>
-                            </a>
-                            <a href="/plugin-market" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-puzzle-piece mr-2 text-gray-400"></i><span data-i18n="menu_plugin_market">插件市场</span>
-                            </a>
-                            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-key mr-2 text-gray-400"></i><span data-i18n="menu_license">授权管理</span>
-                            </a>
-                            {% if hide_billing_ui %}
-                            {% if website_url %}
-                            <a href="#" onclick="openWebsiteUpgrade(); return false;" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-external-link-alt mr-2 text-gray-400"></i>升级订阅（官网）
-                            </a>
-                            {% endif %}
-                            {% else %}
-                            <a href="/pricing" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navPricingLink">
-                                <i class="fas fa-tags mr-2 text-gray-400"></i><span data-i18n="menu_pricing">定价</span>
-                            </a>
-                            <a href="/payment/orders" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navOrdersLink">
-                                <i class="fas fa-receipt mr-2 text-gray-400"></i><span data-i18n="menu_orders">我的订单</span>
-                            </a>
-                            {% endif %}
-                            {% if is_client %}
-                            <a href="/client-setup" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-server mr-2 text-gray-400"></i>团队服务器
-                            </a>
-                            {% endif %}
-                            <a href="/sso-settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="ssoSettingsLink" style="display: none;">
-                                <i class="fas fa-shield-alt mr-2 text-gray-400"></i><span data-i18n="menu_sso">SSO 设置</span>
-                            </a>
-                            <a href="/user-management" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="userManagementLink" style="display: none;">
-                                <i class="fas fa-users-cog mr-2 text-gray-400"></i><span data-i18n="menu_users">用户管理</span>
-                            </a>
-                            <a href="/audit-logs" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="auditLogsLink" style="display: none;">
-                                <i class="fas fa-clipboard-list mr-2 text-gray-400"></i><span data-i18n="menu_audit_logs">审计日志</span>
-                            </a>
-                            <div class="border-t border-gray-100 dark:border-gray-700 my-1"></div>
-                            <button type="button" onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800">
-                                <i class="fas fa-sign-out-alt mr-2"></i><span data-i18n="menu_logout">注销</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                {% include 'partials/main_nav.html' %}
+                {% include 'partials/user_menu.html' %}
             </div>
         </div>
     </nav>
-    {% endif %}
 
     <div id="globalRunBanner" class="hidden fixed bottom-4 right-4 z-[9999] max-w-md w-[calc(100%-2rem)] bg-white dark:bg-gray-900 border border-blue-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
         <div class="flex items-start gap-2">
@@ -242,12 +78,9 @@
         </div>
     </div>
 
-    {% block content %}{% endblock %}
-    {% if is_client %}
-            </main>
-        </div>
-    </div>
-    {% endif %}
+    <main id="testoryPageMain" class="testory-page-main">
+        {% block content %}{% endblock %}
+    </main>
 
     <script>
         window.UITranslations = {
@@ -257,12 +90,47 @@
                 nav_home_title: '首页',
                 nav_project: '项目',
                 nav_project_title: '项目管理',
+                nav_aihub: 'AI 中心',
+                nav_aihub_title: 'AI 中心：用例设计、自主测试、自愈优化',
                 nav_aitest: 'AI测试',
                 nav_aitest_title: 'AI测试工作台（本地模型 + 内置浏览器）',
+                aihub_title: 'AI 中心',
+                aihub_subtitle: '用例设计、自主测试与自愈优化分模块协作，覆盖 Web、接口与移动端。',
+                aihub_card_design_title: '用例设计',
+                aihub_card_design_desc: '上传需求说明书，生成结构化场景并批量创建 Web / 接口 / 移动端用例。',
+                aihub_card_execute_title: '自主测试',
+                aihub_card_execute_desc: '对话驱动生成与执行，嵌入式浏览器实时画面，Agent 网关流式运行。',
+                aihub_card_heal_title: '自愈优化',
+                aihub_card_heal_desc: '定位器预修复、失败诊断与步骤页 AI 助手，降低维护成本。',
+                aihub_enter: '进入',
+                aihub_cross_title: '跨端联动（预览）',
+                aihub_cross_hint: '配置 Web 与移动端用例的同步点，下一迭代将支持双端交替执行。',
+                aihub_cross_configure: '在自主测试中配置',
+                aidesign_title: 'AI 用例设计',
+                aidesign_subtitle: '上传需求说明书，生成结构化场景，再批量创建 Web / 接口 / 移动端用例。',
+                aidesign_subtitle_v2: '上传或粘贴需求说明书，一键生成 Web / 接口 / 移动端测试用例（无需先手动拆场景）。',
+                aidesign_btn_generate: '生成用例',
+                aidesign_advanced: '高级：仅预览结构化场景（可选）',
+                aidesign_project: '目标项目',
+                aidesign_base_url: 'Web 基础 URL（批量 Web 用例可选）',
+                aidesign_req_text: '需求文本（可选，与文件二选一）',
+                aidesign_req_file: '需求文件',
+                aidesign_btn_scenarios: '生成结构化场景',
+                aidesign_btn_batch: '为全部场景批量生成用例',
+                aidesign_open_cases: '打开项目用例列表',
+                aiheal_title: 'AI 自愈优化',
+                aiheal_subtitle: '定位器预修复、失败诊断与步骤审查，配合步骤页 AI 助手使用。',
+                aiheal_locator_title: '定位器预修复',
+                aiheal_locator_desc: '选择用例与目标 URL，预览 AI 解析后的选择器，确认后写入数据库。',
+                aiheal_diag_title: '失败诊断',
+                aiheal_steps_title: '步骤审查助手',
+                aiheal_go_projects: '前往项目 → 用例 → 步骤',
+                aiheal_analyze_title: '用例健康检查',
+                aitest_back_hub: '返回 AI 中心',
                 nav_api_test: '接口测试',
                 nav_api_test_title: '接口用例与 HTTP 步骤链',
                 aitest_title: 'AI 测试工作台',
-                aitest_subtitle: '顶部选择项目、用例与浏览器；左栏与 AI 对话并生成/优化用例；中栏填写 URL 点「打开」查看页面；「运行」为生成并执行。已配置内置浏览器网关时中栏为实时画面。',
+                aitest_subtitle: '自主测试：选项目与 URL，左栏对话生成步骤，顶栏「运行」生成并执行；需求批量生成请用「AI 中心 → 用例设计」。已配置内置浏览器网关时中栏为实时画面。',
                 aitest_back_projects: '返回项目列表',
                 aitest_label_project: '保存到项目',
                 aitest_label_save_case: '保存到用例',
@@ -628,6 +496,7 @@
                 tc_project_loading: '正在加载项目信息...',
                 tc_project_prefix: '项目: ',
                 tc_create_case: '+ 创建用例',
+                tc_ai_from_req: '从需求生成用例',
                 tc_run_selected: '▶ 执行选中的用例',
                 tc_stop_run: '⏹ 停止运行',
                 tc_select_all: '全选',
@@ -1023,8 +892,22 @@
                 nav_home_title: 'Home',
                 nav_project: 'Projects',
                 nav_project_title: 'Project management',
+                nav_aihub: 'AI Hub',
+                nav_aihub_title: 'AI Hub: design, autonomous test, self-heal',
                 nav_aitest: 'AI Test',
                 nav_aitest_title: 'AI test lab (local LLM + embedded browser)',
+                aihub_title: 'AI Hub',
+                aihub_subtitle: 'Design, run, and heal tests across Web, API, and mobile.',
+                aihub_card_design_title: 'Test design',
+                aihub_card_execute_title: 'Autonomous test',
+                aihub_card_heal_title: 'Self-heal',
+                aihub_enter: 'Open',
+                aidesign_title: 'AI test design',
+                aidesign_subtitle_v2: 'Upload requirements and generate Web / API / mobile cases in one step.',
+                aidesign_btn_generate: 'Generate cases',
+                aidesign_advanced: 'Advanced: preview scenarios only (optional)',
+                aiheal_title: 'AI self-heal',
+                aitest_back_hub: 'Back to AI Hub',
                 nav_api_test: 'API tests',
                 nav_api_test_title: 'API cases and HTTP step chains',
                 aitest_title: 'AI Test Lab',
@@ -1393,6 +1276,7 @@
                 tc_project_loading: 'Loading project...',
                 tc_project_prefix: 'Project: ',
                 tc_create_case: '+ New case',
+                tc_ai_from_req: 'AI from requirements',
                 tc_run_selected: '▶ Run selected',
                 tc_stop_run: '⏹ Stop',
                 tc_select_all: 'Select all',
@@ -1859,85 +1743,73 @@
             }
         });
 
-        // 加载用户信息
-        async function loadUserInfo() {
+        var AUTH_ME_CACHE_KEY = 'uat_auth_me_cache_v1';
+        var AUTH_ME_CACHE_MS = 180000;
+
+        function applyUserInfo(data) {
+            if (!data || !data.success) return;
+            const userLabel = document.getElementById('userLabel');
+            const userDropdown = document.getElementById('userDropdown');
+            if (userLabel) userLabel.textContent = data.user.username;
+            if (userDropdown) userDropdown.classList.remove('hidden');
+            if (data.user.role === 'admin') {
+                const userManagementLink = document.getElementById('userManagementLink');
+                if (userManagementLink) userManagementLink.style.display = 'block';
+                const ssoSettingsLink = document.getElementById('ssoSettingsLink');
+                if (ssoSettingsLink) ssoSettingsLink.style.display = 'block';
+                const auditLogsLink = document.getElementById('auditLogsLink');
+                if (auditLogsLink) auditLogsLink.style.display = 'block';
+            }
+            updateNavigationButtons(data);
+        }
+
+        // 加载用户信息（短时缓存，减轻模块跳转时的重复请求与顶栏闪烁）
+        async function loadUserInfo(forceRefresh) {
             try {
-                const response = await fetch('/api/auth/me');
-                const data = await response.json();
-                if (data.success) {
-                    const userLabel = document.getElementById('userLabel');
-                    const userDropdown = document.getElementById('userDropdown');
-                    if (userLabel) userLabel.textContent = data.user.username;
-                    if (userDropdown) userDropdown.classList.remove('hidden');
-                    
-                    // 显示用户管理、SSO 设置（仅管理员）
-                    if (data.user.role === 'admin') {
-                        const userManagementLink = document.getElementById('userManagementLink');
-                        if (userManagementLink) userManagementLink.style.display = 'block';
-                        const ssoSettingsLink = document.getElementById('ssoSettingsLink');
-                        if (ssoSettingsLink) ssoSettingsLink.style.display = 'block';
-                        const auditLogsLink = document.getElementById('auditLogsLink');
-                        if (auditLogsLink) auditLogsLink.style.display = 'block';
-                    }
-                    
-                    // 根据 License 和角色显示/隐藏导航按钮
-                    updateNavigationButtons(data);
+                var data = null;
+                if (!forceRefresh) {
+                    try {
+                        var raw = sessionStorage.getItem(AUTH_ME_CACHE_KEY);
+                        if (raw) {
+                            var cached = JSON.parse(raw);
+                            if (cached && cached.ts && cached.data && (Date.now() - cached.ts) < AUTH_ME_CACHE_MS) {
+                                data = cached.data;
+                            }
+                        }
+                    } catch (e) {}
                 }
+                if (!data) {
+                    const response = await fetch('/api/auth/me');
+                    data = await response.json();
+                    if (data && data.success) {
+                        try {
+                            sessionStorage.setItem(AUTH_ME_CACHE_KEY, JSON.stringify({ ts: Date.now(), data: data }));
+                        } catch (e) {}
+                    }
+                }
+                applyUserInfo(data);
             } catch (error) {
                 console.error('加载用户信息失败:', error);
             }
         }
-        
-        // 根据用户权限更新导航按钮显示
+
         function updateNavigationButtons(data) {
-            console.log('[DEBUG] updateNavigationButtons called with data:', data);
-            
-            // 安全地获取数据，兼容旧浏览器
             const userRole = (data.user && data.user.role) ? data.user.role : 'viewer';
-            const licenseType = (data.license && data.license.type) ? data.license.type : 'free';
             const features = (data.license && data.license.features) ? data.license.features : [];
-            
-            console.log('[DEBUG] User role:', userRole, 'License type:', licenseType, 'Features:', features);
-            
-            // 确保 features 是数组
-            if (!Array.isArray(features)) {
-                console.error('[DEBUG] Features is not an array:', features);
-                return;
-            }
-            
-            // 获取所有需要权限控制的导航按钮
-            const navButtons = document.querySelectorAll('.nav-btn[data-feature]');
-            console.log('[DEBUG] Found nav buttons:', navButtons.length);
-            
+            if (!Array.isArray(features)) return;
+            const navButtons = document.querySelectorAll('#testoryMainNav .nav-btn[data-feature]');
             navButtons.forEach(function(btn) {
                 const requiredFeature = btn.getAttribute('data-feature');
                 const requiredRole = btn.getAttribute('data-role');
-                const btnText = btn.textContent.trim();
-                
                 let shouldShow = true;
-                
-                // 检查功能权限 - 使用 includes 或 indexOf 兼容不同浏览器
                 if (requiredFeature && requiredFeature !== 'basic') {
-                    // 使用 includes 方法（如果支持）或 indexOf
                     const hasFeature = features.includes ? features.includes(requiredFeature) : features.indexOf(requiredFeature) !== -1;
                     shouldShow = hasFeature;
-                    console.log('[DEBUG] Button "' + btnText + '" requires feature "' + requiredFeature + '", has it: ' + shouldShow);
                 }
-                
-                // 检查角色权限
                 if (shouldShow && requiredRole) {
                     shouldShow = userRole === requiredRole;
-                    console.log('[DEBUG] Button "' + btnText + '" requires role "' + requiredRole + '", user has: ' + userRole + ', match: ' + shouldShow);
                 }
-                
-                // 显示或隐藏按钮
-                if (shouldShow) {
-                    btn.classList.remove('hidden');
-                    console.log('[DEBUG] Showing button: ' + btnText);
-                } else {
-                    btn.classList.add('hidden');
-                    console.log('[DEBUG] Hiding button: ' + btnText);
-                }
+                btn.classList.toggle('hidden', !shouldShow);
             });
         }
 
@@ -1965,6 +1837,7 @@
             try {
                 await fetch('/api/auth/logout', { method: 'POST' });
                 localStorage.removeItem('currentUser');
+                try { sessionStorage.removeItem(AUTH_ME_CACHE_KEY); } catch (e) {}
                 window.location.href = '/login';
             } catch (error) {
                 console.error('注销失败:', error);
@@ -2100,9 +1973,9 @@
             }
         }
 
-        function highlightSidebarNav() {
+        function highlightTopNav() {
             var path = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
-            document.querySelectorAll('.testory-sidebar .testory-nav-item').forEach(function (el) {
+            document.querySelectorAll('#testoryMainNav .testory-nav-item').forEach(function (el) {
                 var p = (el.getAttribute('data-nav-path') || el.getAttribute('href') || '').replace(/\/+$/, '') || '/';
                 var active = path === p || (p !== '/' && path.indexOf(p + '/') === 0);
                 el.classList.toggle('is-active', active);
@@ -2110,16 +1983,26 @@
         }
 
         document.addEventListener('DOMContentLoaded', function () {
-            highlightSidebarNav();
+            try {
+                var rawEarly = sessionStorage.getItem(AUTH_ME_CACHE_KEY);
+                if (rawEarly) {
+                    var parsedEarly = JSON.parse(rawEarly);
+                    if (parsedEarly && parsedEarly.data && parsedEarly.ts && (Date.now() - parsedEarly.ts) < AUTH_ME_CACHE_MS) {
+                        applyUserInfo(parsedEarly.data);
+                    }
+                }
+            } catch (e) {}
+            highlightTopNav();
             syncUiPreferences({ source: 'load' });
-            loadUserInfo();
+            var scheduleLoadUser = window.requestIdleCallback || function (cb) { setTimeout(cb, 1); };
+            scheduleLoadUser(function () { loadUserInfo(); });
             const stopBtn = document.getElementById('globalRunBannerStopBtn');
             if (stopBtn) stopBtn.addEventListener('click', _stopGlobalRunTask);
             document.addEventListener('visibilitychange', function () {
                 if (document.hidden) return;
                 _globalRunPollKick();
             });
-            _globalRunPollKick();
+            setTimeout(_globalRunPollKick, 2000);
         });
 
         /** AI 后台任务：离开 AI 测试页后由全站轮询拉取结果，写入 sessionStorage 供返回时合并 */
@@ -2181,10 +2064,14 @@
             } catch (e) {}
         }
         document.addEventListener('DOMContentLoaded', function () {
+            var hasPending = false;
+            try { hasPending = !!sessionStorage.getItem('uat_ai_pending_jobs'); } catch (e) {}
+            if (!hasPending) return;
             _pollUatAiBgJobs();
-            setInterval(_pollUatAiBgJobs, 1600);
+            setInterval(_pollUatAiBgJobs, 2500);
         });
     </script>
+    <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui3" defer></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

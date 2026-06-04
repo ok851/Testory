@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}AI 自愈优化 - {{ product_name }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_hub.css') }}?v=1">
+{% endblock %}
+{% block content %}
+<div class="ai-heal-page">
+    <div class="ai-module-shell">
+        <header class="ai-module-top">
+            <a href="/ai-hub" class="ai-hub-back" title="返回 AI 中心"><i class="fas fa-arrow-left"></i></a>
+            <div>
+                <h1 data-i18n="aiheal_title">AI 自愈优化</h1>
+                <p data-i18n="aiheal_subtitle">定位器预修复、失败诊断与步骤审查，配合步骤页 AI 助手使用。</p>
+            </div>
+        </header>
+        <div class="ai-module-body">
+            <section class="ai-heal-block">
+                <h3 data-i18n="aiheal_locator_title">定位器预修复</h3>
+                <p style="font-size:13px;color:#64748b;margin:0 0 10px;" data-i18n="aiheal_locator_desc">选择用例与目标 URL，预览 AI 解析后的选择器，确认后写入数据库。</p>
+                <div class="ai-design-row">
+                    <label for="aiHealProject">项目</label>
+                    <select id="aiHealProject"><option value="">加载中…</option></select>
+                </div>
+                <div class="ai-design-row">
+                    <label for="aiHealCase">用例</label>
+                    <select id="aiHealCase"><option value="">先选项目</option></select>
+                </div>
+                <div class="ai-design-row">
+                    <label for="aiHealUrl">目标页面 URL</label>
+                    <input type="url" id="aiHealUrl" placeholder="https://example.com" />
+                </div>
+                <div class="ai-design-actions">
+                    <button type="button" class="btn btn-secondary" id="aiHealPreviewBtn">预览定位解析</button>
+                    <button type="button" class="btn btn-primary" id="aiHealSaveBtn" disabled>保存到用例</button>
+                </div>
+                <pre id="aiHealLocatorOut" class="ai-design-pre" style="margin-top:10px;"></pre>
+            </section>
+
+            <section class="ai-heal-block">
+                <h3 data-i18n="aiheal_diag_title">失败诊断</h3>
+                <div class="ai-design-row">
+                    <label for="aiHealDiagText">错误日志 / 堆栈 / 步骤摘要</label>
+                    <textarea id="aiHealDiagText" rows="5" placeholder="粘贴运行失败信息…"></textarea>
+                </div>
+                <div class="ai-design-actions">
+                    <button type="button" class="btn btn-secondary" id="aiHealDiagBtn">生成诊断建议</button>
+                </div>
+                <pre id="aiHealDiagOut" class="ai-design-pre" style="margin-top:10px;"></pre>
+            </section>
+
+            <section class="ai-heal-block">
+                <h3 data-i18n="aiheal_steps_title">步骤审查助手</h3>
+                <p style="font-size:13px;color:#64748b;margin:0 0 10px;">在 Web 用例步骤编辑页右下角打开 AI 助手，支持右键优化单步、合并步骤与替换应用。</p>
+                <a href="/list_projects" class="btn btn-primary btn-sm" data-i18n="aiheal_go_projects">前往项目 → 用例 → 步骤</a>
+                <a href="/ai-hub" class="btn btn-secondary btn-sm" style="margin-left:8px;">返回 AI 中心</a>
+            </section>
+
+            <section class="ai-heal-block">
+                <h3 data-i18n="aiheal_analyze_title">用例健康检查</h3>
+                <button type="button" class="btn btn-secondary btn-sm" id="aiHealAnalyzeBtn">分析当前用例步骤</button>
+                <pre id="aiHealAnalyzeOut" class="ai-design-pre" style="margin-top:10px;"></pre>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/ai_heal.js') }}?v=1"></script>
+{% endblock %}

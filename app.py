@@ -346,6 +346,17 @@ def _make_execution_context(trigger: str, extra: dict | None = None) -> Executio
     )
 
 
+def _make_batch_execution_context(trigger: str, data: dict | None = None) -> ExecutionContext:
+    """批量执行上下文：含运行时变量池与会话复用开关。"""
+    payload = dict(data or {})
+    ctx = _make_execution_context(trigger, extra=payload)
+    if payload.get("reuse_session") is False:
+        ctx.reuse_session = False
+    if payload.get("skip_duplicate_login_for_business") is False:
+        ctx.skip_duplicate_login_for_business = False
+    return ctx
+
+
 def _force_stop_browser_async():
     """异步强制停止浏览器，避免阻塞停止接口响应。"""
     try:
@@ -482,6 +493,19 @@ _is_prod = os.environ.get("APP_ENV", "").lower() == "production" or os.environ.g
 if _flask_debug or not _is_prod:
     app.config["TEMPLATES_AUTO_RELOAD"] = True
 
+
+@app.after_request
+def _prevent_stale_html_cache(response):
+    """开发/联调时避免浏览器长期使用带侧栏的旧 HTML 缓存。"""
+    if _is_prod:
+        return response
+    ctype = (response.content_type or "").split(";")[0].strip().lower()
+    if ctype == "text/html":
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "").strip().lower() in (
@@ -617,6 +641,22 @@ def _catalog_provider_meta(provider_id: str) -> dict:
     return {}
 
 
+def _normalize_profile_base_url(base_url: str, provider: str = '') -> str:
+    """修正用户误填的完整 chat/completions 地址，避免重复拼接路径。"""
+    bu = (base_url or '').strip()
+    if not bu:
+        cmeta = _catalog_provider_meta(provider) if provider else {}
+        return (cmeta.get('default_base_url') or '').strip()
+    low = bu.lower().rstrip('/')
+    for suffix in ('/v1/chat/completions', '/chat/completions'):
+        if low.endswith(suffix):
+            bu = bu[: len(bu) - len(suffix)].rstrip('/')
+            low = bu.lower().rstrip('/')
+    if low.endswith('/v1/v1'):
+        bu = bu[: -len('/v1')]
+    return bu.rstrip('/')
+
+
 def _migrate_v1_config_to_v2(raw: dict, defaults: dict) -> dict:
     models = raw.get('local_models')
     if not isinstance(models, list) or not models:
@@ -661,15 +701,18 @@ def _normalize_v2_config(raw: dict) -> dict:
         if pid in seen:
             continue
         seen.add(pid)
+        provider = (p.get('provider') or 'ollama').strip()
+        bu_raw = (p.get('base_url') or '').strip() if isinstance(p.get('base_url'), str) else ''
         profiles.append({
             'id': pid,
-            'provider': (p.get('provider') or 'ollama').strip(),
+            'provider': provider,
             'api_style': (p.get('api_style') or 'ollama').strip(),
             'model_type': (p.get('model_type') or 'test_case_generation').strip(),
             'model_id': (p.get('model_id') or '').strip(),
             'label': (p.get('label') or '').strip(),
             'api_key': p.get('api_key') if isinstance(p.get('api_key'), str) else '',
-            'base_url': (p.get('base_url') or '').strip() if isinstance(p.get('base_url'), str) else '',
+            'base_url': _normalize_profile_base_url(bu_raw, provider),
+            'group_id': (p.get('group_id') or '').strip() if isinstance(p.get('group_id'), str) else '',
         })
     aid = (raw.get('active_profile_id') or '').strip()
     if aid and not any(x.get('id') == aid for x in profiles):
@@ -694,7 +737,23 @@ def _load_ai_model_config() -> dict:
             if not isinstance(raw, dict):
                 return _migrate_v1_config_to_v2({}, defaults)
             if int(raw.get('version') or 0) >= 2 or 'profiles' in raw:
-                return _normalize_v2_config(raw)
+                cfg = _normalize_v2_config(raw)
+                dirty = False
+                raw_profiles = raw.get('profiles') if isinstance(raw.get('profiles'), list) else []
+                by_id = {p.get('id'): p for p in raw_profiles if isinstance(p, dict) and p.get('id')}
+                for p in cfg.get('profiles') or []:
+                    old = by_id.get(p.get('id')) or {}
+                    old_bu = (old.get('base_url') or '').strip() if isinstance(old.get('base_url'), str) else ''
+                    if old_bu != (p.get('base_url') or ''):
+                        dirty = True
+                        break
+                if dirty:
+                    to_write = dict(cfg)
+                    to_write['version'] = 2
+                    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(cfg_path, 'w', encoding='utf-8') as wf:
+                        json.dump(to_write, wf, ensure_ascii=False, indent=2)
+                return cfg
             return _migrate_v1_config_to_v2(raw, defaults)
         except Exception:
             return _migrate_v1_config_to_v2({}, defaults)
@@ -1489,6 +1548,257 @@ def create_case_v2():
     """旧版独立建用例页；模板已移除，跳转到项目列表（从项目进入「用例管理」创建用例）。"""
     return redirect(url_for('list_projects'))
 
+@app.route('/ai-hub')
+@login_required
+def ai_hub_page():
+    """AI 中心：用例设计 / 自主测试 / 自愈优化入口。"""
+    return render_template('ai_hub.html')
+
+
+@app.route('/ai-design')
+@login_required
+def ai_design_page():
+    """AI 用例设计：需求文档 → 场景 → 批量生成。"""
+    return render_template('ai_design.html')
+
+
+@app.route('/ai-heal')
+@login_required
+def ai_heal_page():
+    """AI 自愈优化：定位修复、失败诊断、步骤助手入口。"""
+    return render_template('ai_heal.html')
+
+
+@app.route('/api/ai/hub/heal/analyze-steps', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_hub_heal_analyze_steps():
+    data = request.get_json(silent=True) or {}
+    steps = data.get('steps') if isinstance(data.get('steps'), list) else []
+    from ai_modules.hub_routes import hub_heal_analyze_steps
+
+    return jsonify(hub_heal_analyze_steps(steps))
+
+
+@app.route('/api/ai/hub/heal/diagnose-text', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_hub_heal_diagnose_text():
+    data = request.get_json(silent=True) or {}
+    from ai_modules.hub_routes import hub_heal_diagnose_text
+
+    msg = (data.get('error_message') or data.get('exception_message') or '').strip()
+    if not msg:
+        return jsonify({'success': False, 'error': 'error_message 不能为空'}), 400
+    out = hub_heal_diagnose_text(
+        msg,
+        step_summary=(data.get('step_summary') or '').strip(),
+        url=(data.get('url') or '').strip(),
+    )
+    return jsonify(out)
+
+
+@app.route('/api/ai/hub/design/preview', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_hub_design_preview():
+    """从需求生成用例草案（不写库）。"""
+    from ai_modules.hub_routes import hub_design_preview
+
+    out, code = hub_design_preview(
+        request,
+        resolve_profile_fn=_resolve_inference_profile,
+        get_active_model_fn=_get_active_local_model,
+    )
+    return jsonify(out), code
+
+
+@app.route('/api/ai/hub/design/save', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@audit_log('CREATE_CASE', 'case')
+def api_ai_hub_design_save():
+    """将确认的 AI 设计草案保存到项目。"""
+    from ai_modules.hub_routes import hub_design_save
+
+    _db = Database()
+    out, code = hub_design_save(
+        request,
+        db=_db,
+        user_id=current_user.id,
+        check_project_access_fn=_db.check_project_access,
+    )
+    if code == 200 and isinstance(out, dict):
+        log_ai_plan_to_audit(
+            current_user.id,
+            current_user.username,
+            'AI_DESIGN_SAVE_BATCH',
+            {
+                'batch_id': out.get('batch_id'),
+                'count': out.get('count'),
+                'created_case_ids': out.get('created_case_ids'),
+            },
+            request.remote_addr,
+        )
+    return jsonify(out), code
+
+
+@app.route('/api/ai/hub/generate/cases-from-requirements', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_hub_generate_cases_from_requirements():
+    """
+    已弃用：仅返回草案预览。请改用 /api/ai/hub/design/preview 与 /api/ai/hub/design/save。
+    """
+    from ai_modules.hub_routes import hub_design_preview
+
+    out, code = hub_design_preview(
+        request,
+        resolve_profile_fn=_resolve_inference_profile,
+        get_active_model_fn=_get_active_local_model,
+    )
+    if isinstance(out, dict):
+        out['deprecated'] = True
+        out['hint'] = '请使用 /api/ai/hub/design/preview 生成草案，/api/ai/hub/design/save 保存到项目。'
+    return jsonify(out), code
+
+
+@app.route('/api/ai/hub/generate/api-from-scenarios', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@audit_log('CREATE_CASE', 'case')
+def api_ai_hub_generate_api_from_scenarios():
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    if not project_id:
+        return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
+    _db = Database()
+    if not _db.check_project_access(current_user.id, project_id, 'editor'):
+        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+    doc = data.get('document') if isinstance(data.get('document'), dict) else {}
+    scenarios = data.get('scenarios')
+    if not isinstance(scenarios, list):
+        scenarios = doc.get('scenarios') if isinstance(doc.get('scenarios'), list) else []
+    if not scenarios:
+        return jsonify({'success': False, 'error': 'scenarios 为空'}), 400
+    try:
+        max_n = int(data.get('max_scenarios') or 20)
+    except (TypeError, ValueError):
+        max_n = 20
+    max_n = max(1, min(max_n, 40))
+    from ai_modules.generate.api_from_doc import batch_api_cases_from_scenarios
+
+    return jsonify(
+        batch_api_cases_from_scenarios(
+            _db,
+            project_id=project_id,
+            scenarios=scenarios,
+            max_scenarios=max_n,
+            user_id=current_user.id,
+        )
+    )
+
+
+@app.route('/api/ai/hub/generate/mobile-from-scenarios', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@audit_log('CREATE_CASE', 'case')
+def api_ai_hub_generate_mobile_from_scenarios():
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    if not project_id:
+        return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
+    _db = Database()
+    if not _db.check_project_access(current_user.id, project_id, 'editor'):
+        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+    doc = data.get('document') if isinstance(data.get('document'), dict) else {}
+    scenarios = data.get('scenarios')
+    if not isinstance(scenarios, list):
+        scenarios = doc.get('scenarios') if isinstance(doc.get('scenarios'), list) else []
+    if not scenarios:
+        return jsonify({'success': False, 'error': 'scenarios 为空'}), 400
+    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
+    profile, legacy_model = _resolve_inference_profile(selected_model)
+    project_name = (data.get('project_name') or '').strip()
+    try:
+        max_n = int(data.get('max_scenarios') or 15)
+    except (TypeError, ValueError):
+        max_n = 15
+    max_n = max(1, min(max_n, 30))
+    from ai_modules.generate.mobile_from_doc import batch_mobile_cases_from_scenarios
+
+    def _audit(plan):
+        log_ai_plan_to_audit(
+            current_user.id,
+            current_user.username,
+            'AI_PLAN_SCENARIO_BATCH_MOBILE',
+            plan,
+            request.remote_addr,
+        )
+
+    return jsonify(
+        batch_mobile_cases_from_scenarios(
+            _db,
+            project_id=project_id,
+            scenarios=scenarios,
+            project_name=project_name,
+            profile=profile,
+            legacy_model=legacy_model,
+            memory_context_fn=_ai_memory_context_block,
+            user_id=current_user.id,
+            max_scenarios=max_n,
+            fill_steps_fn=local_ai_service._fill_missing_step_payloads,
+            normalize_fn=apply_step_normalization_to_plan,
+            step_to_db_kwargs_fn=_ai_step_to_db_kwargs,
+            audit_fn=_audit,
+        )
+    )
+
+
+@app.route('/api/ai/hub/cross-platform/scenarios', methods=['GET', 'POST'])
+@login_required
+@api_error_handler
+def api_ai_hub_cross_platform_scenarios():
+    from ai_modules.execute.orchestrator import (
+        list_cross_platform_scenarios,
+        save_cross_platform_scenario,
+    )
+
+    if request.method == 'GET':
+        return jsonify({'success': True, 'scenarios': list_cross_platform_scenarios()})
+    data = request.get_json(silent=True) or {}
+    return jsonify(save_cross_platform_scenario(data))
+
+
+@app.route('/api/ai/hub/cross-platform/scenarios/<scenario_id>', methods=['DELETE'])
+@login_required
+@api_error_handler
+def api_ai_hub_cross_platform_scenario_delete(scenario_id: str):
+    from ai_modules.execute.orchestrator import delete_cross_platform_scenario
+
+    return jsonify(delete_cross_platform_scenario(scenario_id))
+
+
+@app.route('/api/ai/hub/cross-platform/execute', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_hub_cross_platform_execute():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get('scenario_id') or '').strip()
+    if not sid:
+        return jsonify({'success': False, 'error': 'scenario_id 必填'}), 400
+    from ai_modules.execute.orchestrator import execute_cross_platform_scenario
+
+    out = execute_cross_platform_scenario(sid)
+    code = 501 if out.get('status') == 'not_implemented' else (200 if out.get('success') else 400)
+    return jsonify(out), code
+
+
 # AI 测试工作台（本地模型 + 内嵌预览：与后台 Playwright 自动化会话经 /api/navigate 同步）
 @app.route('/ai-test')
 @login_required
@@ -1898,7 +2208,7 @@ def api_execute_multiple_cases():
                 case_ids,
                 thread_db,
                 should_stop=_should_stop_batch,
-                execution_context=_make_execution_context("ui"),
+                execution_context=_make_batch_execution_context("ui", data),
             )
             uat_logger.info(f"✅ [API] 多个测试用例同步执行完成")
         except Exception as e:
@@ -2258,12 +2568,15 @@ def _api_add_ai_profile(data: dict):
         return jsonify({'success': False, 'error': model_id}), 400
     model_type = (data.get('model_type') or 'test_case_generation').strip()
     label = (data.get('label') or '').strip() or model_id
-    api_key = data.get('api_key')
-    api_key = api_key.strip() if isinstance(api_key, str) else ''
+    from ai_multi_provider import normalize_api_key
+
+    api_key = normalize_api_key(data.get('api_key') if isinstance(data.get('api_key'), str) else '')
     base_url = (data.get('base_url') or '').strip() if isinstance(data.get('base_url'), str) else ''
-    if not base_url:
-        base_url = (cmeta.get('default_base_url') or '').strip()
+    base_url = _normalize_profile_base_url(base_url, provider)
+    group_id = (data.get('group_id') or '').strip() if isinstance(data.get('group_id'), str) else ''
     requires_key = bool(cmeta.get('requires_api_key'))
+    if provider == 'custom_openai' and not base_url:
+        return jsonify({'success': False, 'error': '第三方 / 代理需填写 Base URL（以代理商文档为准）'}), 400
     if requires_key and provider != 'ollama' and not api_key:
         return jsonify({'success': False, 'error': '该提供商需要 API 密钥'}), 400
     verify_ollama = bool(data.get('verify_ollama'))
@@ -2293,6 +2606,7 @@ def _api_add_ai_profile(data: dict):
         'label': label,
         'api_key': api_key,
         'base_url': base_url,
+        'group_id': group_id,
     })
     cfg['profiles'] = profiles
     cfg['version'] = 2
@@ -2394,6 +2708,117 @@ def api_delete_ai_model():
     })
 
 
+@app.route('/api/ai/models/verify', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_verify_ai_model_profile():
+    """校验模型配置是否可连通（发送极短测试请求）。"""
+    data = request.get_json(silent=True) or {}
+    provider = (data.get('provider') or '').strip()
+    model_id = (data.get('model_id') or '').strip()
+    profile_id = (data.get('profile_id') or '').strip()
+    api_key = data.get('api_key')
+    base_url = (data.get('base_url') or '').strip()
+
+    if profile_id:
+        cfg = _load_ai_model_config()
+        p = next((x for x in (cfg.get('profiles') or []) if x.get('id') == profile_id), None)
+        if not p:
+            return jsonify({'success': False, 'error': '未找到该模型配置'}), 404
+        provider = (p.get('provider') or '').strip()
+        model_id = (p.get('model_id') or '').strip()
+        if not isinstance(api_key, str) or not api_key.strip():
+            api_key = p.get('api_key') or ''
+        if not base_url:
+            base_url = (p.get('base_url') or '').strip()
+    if not model_id:
+        return jsonify({'success': False, 'error': 'model_id 不能为空'}), 400
+    from ai_multi_provider import dispatch_chat, normalize_api_key
+
+    key_norm = normalize_api_key(api_key if isinstance(api_key, str) else '')
+    if not key_norm:
+        return jsonify({'success': False, 'error': '请先填写有效的 API 密钥（连接测试不会使用已保存的密钥，除非在编辑已有配置且留空时才会读取库内密钥）'}), 400
+    if provider == 'minimax' and key_norm.lower().startswith('tp-'):
+        return jsonify({
+            'success': False,
+            'error': '当前 Key 为第三方/代理格式（tp-），不能用于 MiniMax 官方地址',
+            'hint': '请改选提供商「第三方 / 代理（OpenAI 兼容）」，Base URL 填代理商地址（如 https://token-plan-cn.xiaomimimo.com/v1），model 填代理商文档中的名称。',
+        }), 400
+    if key_norm.lower().startswith('tp-') and provider != 'custom_openai':
+        return jsonify({
+            'success': False,
+            'error': '检测到代理 Key（tp-），请使用提供商「第三方 / 代理（OpenAI 兼容）」',
+            'hint': 'Base URL 与 model 必须以代理商文档为准，不要选 MiniMax/OpenAI 等官方提供商。',
+        }), 400
+    if provider == 'custom_openai' and not base_url:
+        return jsonify({'success': False, 'error': '第三方 / 代理需填写 Base URL'}), 400
+    cmeta = _catalog_provider_meta(provider)
+    if not cmeta and provider:
+        return jsonify({'success': False, 'error': f'未知提供商: {provider}'}), 400
+    base_url = _normalize_profile_base_url(base_url, provider)
+    group_id = (data.get('group_id') or '').strip()
+    if profile_id and not group_id:
+        p_gid = next((x for x in (_load_ai_model_config().get('profiles') or []) if x.get('id') == profile_id), None)
+        if isinstance(p_gid, dict):
+            group_id = (p_gid.get('group_id') or '').strip()
+    profile = {
+        'provider': provider,
+        'api_style': (cmeta.get('api_style') or 'openai_compatible'),
+        'model_id': model_id,
+        'api_key': key_norm,
+        'base_url': base_url,
+        'group_id': group_id,
+    }
+    try:
+
+        reply = dispatch_chat('Reply with JSON only: {"ok":true}', profile, local_ai_service)
+        ok = bool(reply and str(reply).strip())
+        return jsonify({
+            'success': True,
+            'reachable': ok,
+            'message': '连接成功，模型可响应' if ok else '已连接但返回为空',
+            'normalized_base_url': base_url,
+        })
+    except ValueError as e:
+        err = str(e)
+        hint = ''
+        low = err.lower()
+        if 'not supported model' in low or 'param incorrect' in low:
+            popular = cmeta.get('popular_models') or []
+            bu_low = base_url.lower()
+            if 'xiaomimimo.com' in bu_low or provider == 'xiaomi_mimo_token':
+                hint = (
+                    '该 Base URL 为小米 MiMo Token Plan（不是 MiniMax）。'
+                    ' model 请改为 mimo-v2.5-pro（推荐）、mimo-v2.5 或 mimo-v2-flash；'
+                    '勿使用 MiniMax-M3、abab7-preview 等名称。'
+                    ' 也可在添加模型时直接选提供商「小米 MiMo Token Plan」。'
+                )
+            elif provider == 'custom_openai':
+                hint = (
+                    'API 已连通，但 model_id 不被该代理地址支持。'
+                    + (f' 若文档有推荐型号可尝试：{", ".join(popular[:3])}' if popular else '')
+                    + ' 请以代理商/网关文档中的 model 名称为准。'
+                )
+            else:
+                hint = (
+                    'API 已连通，但 model_id 不被该 Base URL 支持。'
+                    + (f' 请尝试：{", ".join(popular[:3])}' if popular else '')
+                    + '；Base URL 应填根地址，不要填带 /chat/completions 的完整路径。'
+                )
+        elif provider == 'minimax' and ('1004' in err or 'authorized_error' in low or 'api secret key' in low):
+            hint = (
+                'MiniMax 401：请确认使用的是开放平台「订阅 Key（sk-cp- 开头）」或「按量计费 API Key」，'
+                '且与 Base URL 地域一致（国内 api.minimaxi.com，国际 api.minimax.io）。'
+                '以 tp- 等开头的第三方代理 Key 不能用于官方地址；若仅有代理 Key，请改填代理提供的 Base URL。'
+            )
+        return jsonify({'success': False, 'error': err, 'hint': hint, 'normalized_base_url': base_url}), 400
+    except Exception as e:
+        uat_logger.exception('verify ai model failed')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/ai/models/profile', methods=['PUT', 'POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
@@ -2435,13 +2860,15 @@ def api_update_ai_profile():
     if 'base_url' in data:
         bu = data.get('base_url')
         bu = bu.strip() if isinstance(bu, str) else ''
-        if not bu:
-            bu = (cmeta.get('default_base_url') or '').strip()
-        p['base_url'] = bu
+        p['base_url'] = _normalize_profile_base_url(bu, provider)
+
+    from ai_multi_provider import normalize_api_key
 
     api_key_in = data.get('api_key')
     if isinstance(api_key_in, str) and api_key_in.strip():
-        p['api_key'] = api_key_in.strip()
+        p['api_key'] = normalize_api_key(api_key_in)
+    if 'group_id' in data:
+        p['group_id'] = (data.get('group_id') or '').strip() if isinstance(data.get('group_id'), str) else ''
     elif bool(cmeta.get('requires_api_key')) and provider != 'ollama':
         existing = (p.get('api_key') or '').strip() if isinstance(p.get('api_key'), str) else ''
         if not existing:
@@ -2894,6 +3321,13 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
     _kind = (data.get('action_kind') or data.get('intent') or '').strip()
     if _kind:
         _ic['action_kind'] = _kind
+    _rm = (data.get('response_mode') or '').strip().lower()
+    if _rm in ('delta', 'full'):
+        _ic['response_mode'] = _rm
+    elif _kind in ('optimize_step', 'merge_steps', 'assert_from_selection'):
+        _ic['response_mode'] = 'full'
+    elif isinstance(current_plan, dict) and (current_plan.get('steps') or []):
+        _ic.setdefault('response_mode', 'full')
     if _ic:
         interaction_context = _ic
 
@@ -3405,43 +3839,31 @@ def api_case_steps_bulk_patch(case_id: int):
     return jsonify({'success': True, 'case_id': case_id, 'patched': patched, 'errors': errors})
 
 
-@app.route('/api/ai/cases/from-scenarios-batch', methods=['POST'])
-@login_required
-@role_required('admin', 'tester', 'project_manager', 'test_lead')
-@api_error_handler
-@log_api_request
-@audit_log('CREATE_CASE', 'case')
-def api_ai_cases_from_scenarios_batch():
-    """
-    将结构化场景列表批量转为 Web 用例并落库；用例 description 前缀 [REQ:场景id] 便于追溯。
-    Body: project_id, document 或 scenarios, model?, project_name?, base_url? , max_scenarios? (默认20)
-    """
-    data = request.get_json(silent=True) or {}
-    project_id = data.get('project_id')
-    selected_model = (data.get('model') or '').strip() or _get_active_local_model()
-    profile, legacy_model = _resolve_inference_profile(selected_model)
-    project_name = (data.get('project_name') or '').strip()
-    base_url = (data.get('base_url') or '').strip()
-
-    try:
-        max_n = int(data.get('max_scenarios') or 20)
-    except (TypeError, ValueError):
-        max_n = 20
-    max_n = max(1, min(max_n, 40))
-
+def _ai_batch_web_cases_internal(
+    *,
+    project_id,
+    scenarios: List[dict],
+    user_id: int,
+    username: str,
+    remote_addr: str,
+    project_name: str = '',
+    base_url: str = '',
+    selected_model: str = '',
+    max_n: int = 20,
+) -> Dict[str, Any]:
+    """将结构化场景批量转为 Web 用例并落库（供路由与 Hub 复用）。"""
     if not project_id:
-        return jsonify({'success': False, 'error': 'project_id不能为空'}), 400
-
-    doc = data.get('document') if isinstance(data.get('document'), dict) else {}
-    scenarios = data.get('scenarios')
-    if not isinstance(scenarios, list):
-        scenarios = doc.get('scenarios') if isinstance(doc.get('scenarios'), list) else []
+        return {'success': False, 'error': 'project_id不能为空', '_http': 400}
     if not scenarios:
-        return jsonify({'success': False, 'error': 'scenarios 为空（请传入 document.scenarios 或顶层 scenarios）'}), 400
+        return {'success': False, 'error': 'scenarios 为空', '_http': 400}
+
+    mid = (selected_model or '').strip() or _get_active_local_model()
+    profile, legacy_model = _resolve_inference_profile(mid)
+    max_n = max(1, min(int(max_n or 20), 40))
 
     _db = Database()
-    if not _db.check_project_access(current_user.id, project_id, 'editor'):
-        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+    if not _db.check_project_access(user_id, project_id, 'editor'):
+        return {'success': False, 'error': '无权限在此项目创建用例', '_http': 403}
 
     license_info = license_manager.get_current_license()
     limits = license_manager.get_limits()
@@ -3481,7 +3903,7 @@ def api_ai_cases_from_scenarios_batch():
             all_warnings.append(f"已达项目用例上限，停止在 {len(created_ids)} 条")
             break
 
-        mem_ctx = _ai_memory_context_block(current_user.id, goal, probe_url=base_url, project_name=project_name)
+        mem_ctx = _ai_memory_context_block(user_id, goal, probe_url=base_url, project_name=project_name)
         try:
             generated = local_ai_service.generate_case_and_steps(
                 goal,
@@ -3495,7 +3917,7 @@ def api_ai_cases_from_scenarios_batch():
             continue
 
         if license_info.license_type == LicenseType.FREE.value:
-            _db.increment_created_cases(current_user.id)
+            _db.increment_created_cases(user_id)
 
         if base_url and not (generated.get('case_url') or '').strip():
             generated['case_url'] = base_url
@@ -3521,22 +3943,62 @@ def api_ai_cases_from_scenarios_batch():
         for idx, step in enumerate(steps, start=1):
             _db.create_test_step(**_ai_step_to_db_kwargs(step, case_id, idx))
         log_ai_plan_to_audit(
-            current_user.id,
-            current_user.username,
+            user_id,
+            username,
             'AI_PLAN_SCENARIO_BATCH',
             {**generated, 'scenario_id': sid},
-            request.remote_addr,
+            remote_addr,
         )
         created_ids.append(case_id)
 
-    return jsonify(
-        {
-            'success': True,
-            'created_case_ids': created_ids,
-            'count': len(created_ids),
-            'warnings': all_warnings,
-        }
+    return {
+        'success': True,
+        'created_case_ids': created_ids,
+        'count': len(created_ids),
+        'warnings': all_warnings,
+    }
+
+
+@app.route('/api/ai/cases/from-scenarios-batch', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+@audit_log('CREATE_CASE', 'case')
+def api_ai_cases_from_scenarios_batch():
+    """
+    将结构化场景列表批量转为 Web 用例并落库；用例 description 前缀 [REQ:场景id] 便于追溯。
+    Body: project_id, document 或 scenarios, model?, project_name?, base_url? , max_scenarios? (默认20)
+    """
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    project_name = (data.get('project_name') or '').strip()
+    base_url = (data.get('base_url') or '').strip()
+    selected_model = (data.get('model') or '').strip()
+
+    try:
+        max_n = int(data.get('max_scenarios') or 20)
+    except (TypeError, ValueError):
+        max_n = 20
+
+    doc = data.get('document') if isinstance(data.get('document'), dict) else {}
+    scenarios = data.get('scenarios')
+    if not isinstance(scenarios, list):
+        scenarios = doc.get('scenarios') if isinstance(doc.get('scenarios'), list) else []
+
+    out = _ai_batch_web_cases_internal(
+        project_id=project_id,
+        scenarios=scenarios,
+        user_id=current_user.id,
+        username=current_user.username,
+        remote_addr=request.remote_addr,
+        project_name=project_name,
+        base_url=base_url,
+        selected_model=selected_model,
+        max_n=max_n,
     )
+    code = int(out.pop('_http', 200))
+    return jsonify(out), code
 
 
 @app.route('/api/ai/import/api-spec/preview', methods=['POST'])

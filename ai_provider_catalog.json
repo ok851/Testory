@@ -1,5 +1,6 @@
 {
-  "version": 2,
+  "version": 3,
+  "catalog_updated": "2026-06-04",
   "model_types": [
     {
       "id": "test_case_generation",
@@ -23,16 +24,15 @@
       "default_base_url": "http://127.0.0.1:11434",
       "docs_url": "https://ollama.com",
       "popular_models": [
-        "llama3.3",
-        "llama3.2",
-        "qwen2.5",
-        "qwen2.5-coder:7b",
+        "qwen3.5:4b",
         "qwen3:8b",
-        "deepseek-r1",
+        "qwen2.5-coder:7b",
+        "llama3.3:70b",
+        "deepseek-r1:8b",
         "deepseek-v3",
-        "mistral",
-        "phi4",
-        "gemma3"
+        "gemma3:12b",
+        "mistral-small3.1",
+        "phi4-mini"
       ]
     },
     {
@@ -45,13 +45,17 @@
       "default_base_url": "https://api.openai.com/v1",
       "docs_url": "https://platform.openai.com/docs",
       "popular_models": [
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano",
         "gpt-4.1",
         "gpt-4.1-mini",
         "gpt-4o",
         "gpt-4o-mini",
         "o3",
         "o4-mini"
-      ]
+      ],
+      "model_notes": "2026 年起 ChatGPT 默认已迁移至 GPT-5 系列；API 仍可使用 gpt-4.1 / gpt-4o 等，请以控制台可用模型为准。"
     },
     {
       "id": "azure_openai",
@@ -62,8 +66,13 @@
       "requires_api_key": true,
       "default_base_url": "",
       "docs_url": "https://learn.microsoft.com/azure/ai-services/openai/",
-      "popular_models": ["gpt-4.1", "gpt-4o", "o3-mini"],
-      "notes_zh": "base_url 填资源端点；模型 ID 与 Azure 部署名一致"
+      "popular_models": [
+        "gpt-5",
+        "gpt-4.1",
+        "gpt-4o",
+        "o3-mini"
+      ],
+      "notes_zh": "base_url 填资源端点（如 https://{resource}.openai.azure.com/openai/deployments/{deployment}）；模型 ID 与 Azure 部署名一致"
     },
     {
       "id": "anthropic",
@@ -76,9 +85,9 @@
       "docs_url": "https://docs.anthropic.com",
       "popular_models": [
         "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
         "claude-3-7-sonnet-20250219",
-        "claude-3-5-haiku-20241022",
-        "claude-opus-4-20250514"
+        "claude-3-5-haiku-20241022"
       ]
     },
     {
@@ -93,6 +102,7 @@
       "popular_models": [
         "gemini-2.5-pro",
         "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
         "gemini-1.5-pro"
       ]
@@ -106,7 +116,12 @@
       "requires_api_key": true,
       "default_base_url": "https://api.x.ai/v1",
       "docs_url": "https://docs.x.ai",
-      "popular_models": ["grok-3", "grok-3-mini", "grok-2-vision-1212"]
+      "popular_models": [
+        "grok-4",
+        "grok-3",
+        "grok-3-mini",
+        "grok-2-vision-1212"
+      ]
     },
     {
       "id": "groq",
@@ -120,7 +135,8 @@
       "popular_models": [
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "qwen-qwq-32b",
         "gemma2-9b-it"
       ]
     },
@@ -135,10 +151,29 @@
       "docs_url": "https://docs.mistral.ai",
       "popular_models": [
         "mistral-large-latest",
+        "mistral-medium-latest",
         "mistral-small-latest",
         "codestral-latest",
         "pixtral-large-latest"
       ]
+    },
+    {
+      "id": "openrouter",
+      "region": "intl",
+      "name_zh": "OpenRouter（模型聚合）",
+      "name_en": "OpenRouter",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://openrouter.ai/api/v1",
+      "docs_url": "https://openrouter.ai/docs",
+      "popular_models": [
+        "openai/gpt-5",
+        "anthropic/claude-sonnet-4",
+        "google/gemini-2.5-pro",
+        "deepseek/deepseek-chat",
+        "qwen/qwen3-235b-a22b"
+      ],
+      "model_notes": "model 填 OpenRouter 上的完整模型 slug（含厂商前缀），Base URL 固定为 openrouter.ai/api/v1"
     },
     {
       "id": "alibaba_dashscope",
@@ -150,13 +185,15 @@
       "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "docs_url": "https://help.aliyun.com/zh/model-studio/",
       "popular_models": [
-        "qwen-max",
+        "qwen3.7-max",
+        "qwen3.5-plus",
+        "qwen3-max",
         "qwen-plus",
         "qwen-turbo",
-        "qwen3-235b-a22b",
-        "qwen2.5-72b-instruct",
+        "qwen3-coder-plus",
         "deepseek-v3"
-      ]
+      ],
+      "notes_zh": "北京：https://dashscope.aliyuncs.com/compatible-mode/v1；新加坡：https://dashscope-intl.aliyuncs.com/compatible-mode/v1；美国：https://dashscope-us.aliyuncs.com/compatible-mode/v1。API Key 须与地域匹配。"
     },
     {
       "id": "deepseek",
@@ -167,7 +204,11 @@
       "requires_api_key": true,
       "default_base_url": "https://api.deepseek.com/v1",
       "docs_url": "https://api-docs.deepseek.com",
-      "popular_models": ["deepseek-chat", "deepseek-reasoner"]
+      "popular_models": [
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ],
+      "model_notes": "deepseek-chat 对应 V3 对话；deepseek-reasoner 对应 R1 推理，请勿混用已下线的旧版模型名。"
     },
     {
       "id": "moonshot",
@@ -179,11 +220,17 @@
       "default_base_url": "https://api.moonshot.cn/v1",
       "docs_url": "https://platform.moonshot.cn/docs",
       "popular_models": [
-        "kimi-latest",
-        "moonshot-v1-8k",
-        "moonshot-v1-32k",
+        "kimi-k2.6",
+        "kimi-k2.5",
         "moonshot-v1-128k"
-      ]
+      ],
+      "deprecated_models": [
+        "kimi-latest",
+        "kimi-k2-0905-preview",
+        "moonshot-v1-8k",
+        "moonshot-v1-32k"
+      ],
+      "model_notes": "国内推荐 api.moonshot.cn/v1；海外可用 https://api.moonshot.ai/v1。kimi-k2 系列旧版已于 2026-05 下线，请用 kimi-k2.6。"
     },
     {
       "id": "zhipu",
@@ -193,14 +240,20 @@
       "api_style": "openai_compatible",
       "requires_api_key": true,
       "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
-      "docs_url": "https://open.bigmodel.cn/dev/api",
+      "docs_url": "https://docs.bigmodel.cn",
       "popular_models": [
-        "glm-4-plus",
-        "glm-4-air",
+        "glm-5.1",
+        "glm-4.7",
+        "glm-4.6",
         "glm-4-flash",
-        "glm-4-long",
+        "glm-4-air"
+      ],
+      "deprecated_models": [
+        "glm-4-plus",
+        "glm-4.5",
         "glm-z1-flash"
-      ]
+      ],
+      "model_notes": "OpenAI 兼容模式 Base URL 为 /api/paas/v4（勿带 /chat/completions）。GLM-4.5 及更早版本建议迁移至 glm-4.7 / glm-5.1。"
     },
     {
       "id": "baidu_qianfan",
@@ -241,9 +294,20 @@
       "name_en": "MiniMax",
       "api_style": "openai_compatible",
       "requires_api_key": true,
-      "default_base_url": "https://api.minimax.chat/v1",
-      "docs_url": "https://platform.minimax.io/document",
-      "popular_models": ["MiniMax-Text-01", "abab7-preview", "abab6.5s-chat"]
+      "default_base_url": "https://api.minimaxi.com/v1",
+      "docs_url": "https://platform.minimaxi.com/document",
+      "popular_models": [
+        "MiniMax-M3",
+        "MiniMax-M2.5",
+        "MiniMax-M2.5-highspeed",
+        "MiniMax-Text-01"
+      ],
+      "deprecated_models": [
+        "abab7-preview",
+        "abab6.5s-chat",
+        "abab6.5g-chat"
+      ],
+      "model_notes": "国内 Base URL：https://api.minimaxi.com/v1；国际：https://api.minimax.io/v1。密钥须为 MiniMax 控制台「Token Plan 订阅 Key（sk-cp-）」或「按量计费 API Key」，勿填第三方代理 Key（如 tp-）。订阅 Key 与按量 Key 不可混用；仅填根地址，勿带 /chat/completions。部分旧账号需在控制台查看 GroupId 并写入配置（可选）。"
     },
     {
       "id": "siliconflow",
@@ -255,26 +319,79 @@
       "default_base_url": "https://api.siliconflow.cn/v1",
       "docs_url": "https://docs.siliconflow.cn",
       "popular_models": [
+        "Qwen/Qwen3-235B-A22B-Instruct-2507",
         "Qwen/Qwen3-8B",
         "deepseek-ai/DeepSeek-V3",
-        "Pro/deepseek-ai/DeepSeek-R1",
+        "deepseek-ai/DeepSeek-R1",
+        "Pro/deepseek-ai/DeepSeek-V3.1-Terminus",
         "meta-llama/Llama-3.3-70B-Instruct"
-      ]
+      ],
+      "model_notes": "model 须与硅基流动模型广场中的完整名称一致（含组织前缀）。"
     },
     {
       "id": "volcengine_doubao",
       "region": "cn",
-      "name_zh": "火山引擎豆包",
+      "name_zh": "火山引擎豆包（方舟）",
       "name_en": "Volcengine Doubao",
       "api_style": "openai_compatible",
       "requires_api_key": true,
       "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
       "docs_url": "https://www.volcengine.com/docs/82379",
       "popular_models": [
+        "doubao-seed-1-6-250615",
         "doubao-1-5-pro-32k",
         "doubao-1-5-lite-32k",
         "deepseek-v3-250324"
+      ],
+      "notes_zh": "model 填方舟控制台中的推理接入点 ID（Endpoint ID），上列为常见示例名，请以控制台为准。"
+    },
+    {
+      "id": "stepfun",
+      "region": "cn",
+      "name_zh": "阶跃星辰 StepFun",
+      "name_en": "StepFun",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "default_base_url": "https://api.stepfun.com/v1",
+      "docs_url": "https://platform.stepfun.com/docs",
+      "popular_models": [
+        "step-3",
+        "step-2-16k",
+        "step-1-8k"
       ]
+    },
+    {
+      "id": "xiaomi_mimo_token",
+      "region": "cn",
+      "name_zh": "小米 MiMo Token Plan",
+      "name_en": "Xiaomi MiMo Token Plan",
+      "api_style": "openai_compatible",
+      "auth_style": "api-key",
+      "requires_api_key": true,
+      "default_base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "docs_url": "https://platform.xiaomimimo.com/docs/zh-CN/price/tokenplan/quick-access",
+      "popular_models": [
+        "mimo-v2.5-pro",
+        "mimo-v2.5",
+        "mimo-v2-flash",
+        "mimo-v2-pro",
+        "mimo-v2-omni"
+      ],
+      "model_notes": "Key 为 tp- 开头的订阅 Key；Base URL 以订阅管理页为准（中国集群默认 token-plan-cn.xiaomimimo.com/v1）。model 必须填 mimo-v2.5-pro 等 MiMo 型号，不能填 MiniMax-M3。"
+    },
+    {
+      "id": "custom_openai",
+      "region": "cn",
+      "name_zh": "第三方 / 代理（OpenAI 兼容）",
+      "name_en": "Third-party proxy (OpenAI-compatible)",
+      "api_style": "openai_compatible",
+      "requires_api_key": true,
+      "requires_base_url": true,
+      "allows_custom_model": true,
+      "default_base_url": "",
+      "docs_url": "",
+      "popular_models": [],
+      "model_notes": "用于 tp- 等其它代理商 Key、企业内网网关、One-API/New-API 等转发。Base URL 与 model 名称必须以代理商文档为准。小米 MiMo Token Plan 请直接选「小米 MiMo Token Plan」提供商。"
     }
   ]
 }

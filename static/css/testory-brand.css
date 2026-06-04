@@ -71,13 +71,33 @@ html.dark body.testory-desktop-client {
   background: rgb(15 23 42);
 }
 
-/* 桌面壳布局见 testory-desktop-shell.css；此处仅保留通用桌面微调 */
+/* 全站顶栏（Web / 桌面共用） */
+.testory-main-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex-shrink: 0;
+}
 
-/* 桌面客户端：收窄内容宽度，减少「整页网站」违和感 */
-body.testory-desktop-client #main-content,
-body.testory-desktop-client > main,
-body.testory-desktop-client .testory-desktop-main .hero-section,
-body.testory-desktop-client .testory-desktop-main > section {
+.testory-main-nav__actions {
+  scrollbar-width: thin;
+}
+
+.testory-main-nav .testory-nav-item {
+  transition: background-color 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease;
+}
+
+.testory-main-nav .testory-nav-item.is-active {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95), 0 0 0 4px rgba(99, 102, 241, 0.55);
+}
+
+html.dark .testory-main-nav .testory-nav-item.is-active {
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.9), 0 0 0 4px rgba(129, 140, 248, 0.65);
+}
+
+/* 桌面客户端：内容区微调 */
+body.testory-desktop-client .hero-section,
+body.testory-desktop-client > section {
   max-width: 100%;
   margin-left: auto;
   margin-right: auto;
@@ -87,10 +107,6 @@ body.testory-desktop-client .hero-section {
   padding: 1.75rem 1.25rem !important;
   border-radius: 0;
   margin-top: 0;
-}
-
-body.testory-desktop-client .testory-desktop-main .hero-section {
-  padding: 2rem 1.5rem !important;
 }
 
 body.testory-desktop-client .hero-content h2 {
@@ -108,31 +124,25 @@ body.testory-desktop-client section.py-16 {
   padding-bottom: 1.5rem !important;
 }
 
-body.testory-desktop-client .testory-desktop-main footer {
+body.testory-desktop-client footer {
   padding-top: 1.25rem !important;
   padding-bottom: 1.25rem !important;
   font-size: 0.8125rem;
 }
 
-body.testory-desktop-client .container {
+body.testory-desktop-client .testory-page-main .container {
   max-width: 100% !important;
   padding-left: 1rem !important;
   padding-right: 1rem !important;
 }
 
-body.testory-desktop-client nav .container {
-  max-width: 1120px !important;
-  padding-left: 0.75rem;
-  padding-right: 0.75rem;
-}
-
-body.testory-desktop-client nav a {
+body.testory-desktop-client .testory-main-nav a.nav-btn {
   padding-left: 0.45rem !important;
   padding-right: 0.45rem !important;
   font-size: 0.75rem !important;
 }
 
-body.testory-desktop-client nav a .mr-1 {
+body.testory-desktop-client .testory-main-nav a.nav-btn .mr-1 {
   margin-right: 0.2rem !important;
 }
 
@@ -154,24 +164,23 @@ body.testory-desktop-client .card {
 }
 
 /* 桌面客户端：顶栏作为应用标题栏区域（WebView2 无系统菜单栏时的常见做法） */
-body.testory-desktop-client > nav.testory-desktop-titlebar {
+body.testory-desktop-client nav.testory-desktop-titlebar,
+body.testory-desktop-client #testoryMainNav.testory-desktop-titlebar {
   -webkit-app-region: drag;
   app-region: drag;
   user-select: none;
 }
 
-body.testory-desktop-client > nav.testory-desktop-titlebar a,
-body.testory-desktop-client > nav.testory-desktop-titlebar button,
-body.testory-desktop-client > nav.testory-desktop-titlebar input,
-body.testory-desktop-client > nav.testory-desktop-titlebar select,
-body.testory-desktop-client > nav.testory-desktop-titlebar label {
+body.testory-desktop-client #testoryMainNav.testory-desktop-titlebar a,
+body.testory-desktop-client #testoryMainNav.testory-desktop-titlebar button,
+body.testory-desktop-client #testoryMainNav.testory-desktop-titlebar input,
+body.testory-desktop-client #testoryMainNav.testory-desktop-titlebar select,
+body.testory-desktop-client #testoryMainNav.testory-desktop-titlebar label {
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 
-/* 桌面客户端：更紧凑的顶栏 */
-body.testory-desktop-client nav.bg-white,
-body.testory-desktop-client nav {
+body.testory-desktop-client .testory-main-nav {
   border-bottom-color: rgba(99, 102, 241, 0.15) !important;
 }
 

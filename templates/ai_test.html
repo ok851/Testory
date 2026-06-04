@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}AI测试 - AI自动化测试平台{% endblock %}
+{% block title %}AI 自主测试 - AI自动化测试平台{% endblock %}
 {% block head %}
 <style>
     .ai-test-page {
@@ -432,13 +432,23 @@
     .btn-info { background: #0891b2; color: #fff; }
     .btn-danger { background: #dc2626; color: #fff; }
     .btn-sm { padding: 6px 12px; font-size: 12px; border: none; border-radius: 8px; cursor: pointer; }
+    .ai-settings-panel .btn,
+    .ai-settings-panel .btn-sm {
+        padding: 8px 14px; border: none; border-radius: 8px; cursor: pointer;
+        font-size: 13px; font-weight: 600; line-height: 1.2;
+    }
+    .ai-settings-panel .btn-primary { background: linear-gradient(135deg, #4f46e5, #6366f1); color: #fff; }
+    .ai-settings-panel .btn-secondary { background: #64748b; color: #fff; }
+    .ai-settings-panel .btn-info { background: #0891b2; color: #fff; }
+    .ai-settings-panel .btn-danger { background: #dc2626; color: #fff; }
+    .ai-settings-panel .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
     /* 设置抽屉 */
     .ai-settings-backdrop {
         display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
-        z-index: 10050; opacity: 0; transition: opacity 0.25s ease;
+        z-index: 10050; opacity: 0; transition: opacity 0.25s ease; pointer-events: none;
     }
-    .ai-settings-backdrop.is-open { display: block; opacity: 1; }
+    .ai-settings-backdrop.is-open { display: block; opacity: 1; pointer-events: auto; }
     .ai-settings-panel {
         position: fixed; top: 0; right: 0; width: min(420px, 100vw); max-width: 100%;
         height: 100%; background: #fff; z-index: 10051;
@@ -478,12 +488,26 @@
         flex: 1 1 140px; min-width: 0; padding: 9px 10px; border-radius: 8px;
         border: 1px solid #cbd5e1; font-size: 13px; box-sizing: border-box;
     }
-    .ai-registry-box { max-height: 160px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
-    .ai-registry-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px; }
+    .ai-registry-box { max-height: 280px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+    .ai-registry-row {
+        display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+        padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 12px;
+    }
     .ai-registry-row:last-child { border-bottom: none; }
-    .ai-registry-name { font-family: ui-monospace, monospace; word-break: break-all; color: #334155; }
-    .ai-registry-badge { font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 999px; margin-left: 6px; font-weight: 600; }
+    .ai-registry-name { flex: 1; min-width: 0; font-size: 12px; line-height: 1.45; color: #334155; }
+    .ai-registry-name code { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+    .ai-registry-badge { font-size: 10px; background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 999px; margin-left: 6px; font-weight: 600; white-space: nowrap; }
+    .ai-registry-actions { display: flex; flex-shrink: 0; gap: 6px; flex-wrap: wrap; }
+    .ai-reg-btn {
+        padding: 5px 10px; border: none; border-radius: 7px; font-size: 11px; font-weight: 600;
+        cursor: pointer; line-height: 1.2;
+    }
+    .ai-reg-btn--edit { background: #e0e7ff; color: #3730a3; }
+    .ai-reg-btn--edit:hover { background: #c7d2fe; }
+    .ai-reg-btn--del { background: #fee2e2; color: #991b1b; }
+    .ai-reg-btn--del:hover { background: #fecaca; }
     .ai-registry-empty { padding: 14px; text-align: center; color: #94a3b8; font-size: 13px; }
+    .ai-settings-tip { font-size: 11px; color: #64748b; margin: 0 0 8px; line-height: 1.45; }
     .ai-settings-hint { font-size: 11px; color: #94a3b8; margin-top: 8px; line-height: 1.45; }
 
     html.dark .ai-test-page { background: linear-gradient(160deg, #1e1b4b 0%, #312e81 100%); }
@@ -874,7 +898,7 @@
     <div class="ai-test-shell" style="display:flex;flex-direction:column;min-height:calc(100vh - 64px);">
         <header class="ai-studio-header">
             <div class="ai-studio-header__row1">
-                <a href="/list_projects" class="ai-test-back" title="返回项目" data-i18n-title="aitest_back_projects">←</a>
+                <a href="/ai-hub" class="ai-test-back" title="返回 AI 中心" data-i18n-title="aitest_back_hub">←</a>
                 <input type="text" class="ai-session-title" id="aiSessionTitle" value="AI 自动化任务" maxlength="120" autocomplete="off" aria-label="任务标题" data-i18n-placeholder="aitest_session_title_ph" placeholder="任务标题（如：提取购物车商品数量）">
                 <div class="ai-studio-header__tools">
                     <button type="button" class="ai-toolbar-btn" id="aiBtnUndo" disabled title="在「生成用例」「优化」或页面 AI 分析成功后，可撤销对计划草稿的最近一次变更">撤销</button>
@@ -1048,21 +1072,16 @@
                     <label class="ai-gen-label" for="aiGeneratedPreview" data-i18n="aitest_preview_label">用例预览</label>
                     <textarea id="aiGeneratedPreview" class="ai-gen-textarea--preview" rows="10" readonly data-i18n-placeholder="aitest_preview_ph" placeholder="生成的用例预览将显示在这里…"></textarea>
                     <p class="ai-hint-inline" style="margin-top:10px; font-size:11px;" id="aiEditCaseHint">保存后在项目用例中继续编步骤与定位。<a href="#" id="aiOpenCaseListLink" style="color:#4f46e5;font-weight:600;">打开用例列表</a></p>
-                    <details class="ai-req-scenarios" style="margin-top:10px;">
-                        <summary>需求说明书 → 场景 → 批量 Web 用例</summary>
-                        <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">
-                            <input type="file" id="aiReqFile" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" style="font-size:12px;" />
-                            <button type="button" class="btn btn-secondary btn-sm" id="aiReqScenariosBtn" style="align-self:flex-start;">生成结构化场景</button>
-                            <button type="button" class="btn btn-primary btn-sm" id="aiReqBatchUiBtn" disabled style="align-self:flex-start;">为全部场景生成 Web 用例</button>
-                            <pre id="aiReqScenariosOut" class="ai-inspect-pre" style="max-height:140px;">（上传文件或仅用左栏自然语言目标后点「生成结构化场景」）</pre>
-                        </div>
-                    </details>
-                    <details class="ai-req-scenarios" style="margin-top:10px;">
-                        <summary>高级：导入 UI 步骤 JSON（OpenClaw / 工具循环）</summary>
-                        <p style="margin:6px 0;font-size:11px;opacity:0.85;">目标用例：优先「保存到用例」所选；否则使用最近一次保存的用例 ID。</p>
-                        <textarea id="aiImportPlanJson" class="ai-gen-textarea--preview" style="min-height:120px;" placeholder='[{"action":"navigate","input_value":"https://..."},...]'></textarea>
-                        <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:12px;"><input type="checkbox" id="aiImportPlanReplace" /> 导入前清空该用例原有步骤</label>
-                        <button type="button" class="btn btn-secondary btn-sm" id="aiImportPlanBtn">导入到用例</button>
+                    <p class="ai-hint-inline" style="margin-top:10px;font-size:11px;">从需求批量生成用例请前往 <a href="/ai-design" style="color:#4f46e5;font-weight:600;">AI 用例设计</a>；步骤优化请在用例步骤页使用右下角 AI 助手。</p>
+                    <details id="cross-platform" class="ai-req-scenarios" style="margin-top:10px;">
+                        <summary>跨端联动场景（预览）</summary>
+                        <p style="margin:6px 0;font-size:11px;opacity:0.85;">配置 Web 与移动端用例 ID 及同步点；执行将在下一迭代开放。</p>
+                        <label style="font-size:12px;">标题 <input type="text" id="aiCrossTitle" style="width:100%;margin:4px 0 8px;padding:6px;border-radius:6px;border:1px solid #cbd5e1;" /></label>
+                        <label style="font-size:12px;">Web 用例 ID <input type="number" id="aiCrossWebCase" min="1" style="width:100%;margin:4px 0 8px;padding:6px;border-radius:6px;border:1px solid #cbd5e1;" /></label>
+                        <label style="font-size:12px;">移动端用例 ID <input type="number" id="aiCrossMobileCase" min="1" style="width:100%;margin:4px 0 8px;padding:6px;border-radius:6px;border:1px solid #cbd5e1;" /></label>
+                        <textarea id="aiCrossSyncJson" class="ai-gen-textarea--preview" style="min-height:80px;" placeholder='[{"after_web_step":3,"run_mobile_steps":[1,2]}]'></textarea>
+                        <button type="button" class="btn btn-secondary btn-sm" id="aiCrossSaveBtn" style="margin-top:8px;">保存联动配置</button>
+                        <pre id="aiCrossOut" class="ai-inspect-pre" style="max-height:100px;margin-top:8px;"></pre>
                     </details>
                 </div>
             </aside>
@@ -1075,7 +1094,7 @@
     </div>
 </div>
 
-<div class="ai-settings-backdrop" id="aiSettingsBackdrop" onclick="window.toggleAiSettings(false)" aria-hidden="true"></div>
+<div class="ai-settings-backdrop" id="aiSettingsBackdrop" aria-hidden="true" title=""></div>
 <aside class="ai-settings-panel" id="aiSettingsPanel" role="dialog" aria-modal="true" aria-labelledby="aiSettingsTitle" aria-hidden="true">
     <div class="ai-settings-panel__head">
         <h4 id="aiSettingsTitle" data-i18n="aitest_settings_title">AI 与模型设置</h4>
@@ -1094,6 +1113,7 @@
         </div>
         <div class="ai-settings-section">
             <h5 data-i18n="aitest_registry">已注册模型</h5>
+            <p class="ai-settings-tip">每条配置右侧可「编辑」或「删除」；关闭请点右上角 ×，避免误触背景关闭。</p>
             <div class="ai-register-row" style="margin-bottom:8px;">
                 <select id="aiOllamaNewSelect" class="ai-gen-select" style="flex:1;"></select>
                 <button type="button" class="btn btn-secondary btn-sm" style="padding:10px 12px;" onclick="window.refreshOllamaModels()" title="" data-i18n-title="aitest_ollama_refresh" data-i18n="aitest_ollama_refresh">刷新</button>
@@ -1114,7 +1134,7 @@
     </div>
 </aside>
 
-<div class="ai-add-modal-backdrop" id="aiAddModelBackdrop" role="dialog" aria-modal="true" aria-labelledby="aiAddModelTitle" onclick="window.openAiAddModelModal(false)">
+<div class="ai-add-modal-backdrop" id="aiAddModelBackdrop" role="dialog" aria-modal="true" aria-labelledby="aiAddModelTitle">
     <div class="ai-add-modal" id="aiAddModalRoot" onclick="event.stopPropagation()">
         <div class="ai-add-modal__head">
             <h4 id="aiAddModelTitle">添加模型</h4>
@@ -1125,13 +1145,19 @@
                 <label><span class="req">*</span> <span data-i18n="aitest_field_provider">提供商</span></label>
                 <select id="aiAddProvider"></select>
             </div>
-            <div class="form-row">
+            <div class="form-row" id="aiAddModelSelectRow">
                 <label><span class="req">*</span> <span data-i18n="aitest_field_model">模型</span></label>
                 <select id="aiAddPopularModel"></select>
                 <p class="ai-add-model-hint" data-i18n="aitest_model_select_only">请从下方列表选择模型（与提供商目录一致）。</p>
+                <p id="aiAddModelNotes" class="ai-add-model-hint ai-add-model-notes" style="display:none;margin-top:6px;color:#b45309;" role="status"></p>
+            </div>
+            <div class="form-row" id="aiAddCustomModelRow" style="display:none;">
+                <label><span class="req">*</span> 模型 ID（自定义）</label>
+                <input type="text" id="aiAddCustomModelId" placeholder="与代理商文档一致，例如 MiniMax-M3、abab7-preview" autocomplete="off">
+                <p class="ai-add-model-hint">第三方网关的 model 名称以代理商为准，可与官方型号不同。</p>
             </div>
             <div class="form-row" id="aiAddBaseUrlRow">
-                <label data-i18n="aitest_field_base_url">API Base URL（可选）</label>
+                <label><span class="req" id="aiAddBaseUrlStar" style="display:none;">*</span> <span data-i18n="aitest_field_base_url">API Base URL（可选）</span></label>
                 <input type="text" id="aiAddBaseUrl" placeholder="留空则使用目录默认值" data-i18n-placeholder="aitest_field_base_url_ph">
             </div>
             <div class="form-row" id="aiAddApiKeyRow">
@@ -1145,9 +1171,11 @@
             </div>
         </div>
         <div class="ai-add-modal__foot">
+            <button type="button" class="btn-ghost" id="aiAddModalVerifyBtn">连接测试</button>
             <button type="button" class="btn-ghost" onclick="window.openAiAddModelModal(false)" data-i18n="aitest_cancel">取消</button>
             <button type="button" class="btn-primary-solid" id="aiAddModalSubmitBtn">添加</button>
         </div>
+        <p id="aiAddVerifyStatus" class="ai-add-model-hint" style="padding:0 18px 12px;margin:0;display:none;" role="status"></p>
     </div>
 </div>
 {% endblock %}
@@ -2273,6 +2301,22 @@
         syncAiAddProviderFields();
     }
 
+    function isCustomOpenAiProvider(z) {
+        return !!(z && (z.id === 'custom_openai' || z.allows_custom_model));
+    }
+
+    function getAiAddModelId() {
+        var provSel = document.getElementById('aiAddProvider');
+        var cat = providerCatalog;
+        var z = cat && cat.providers && provSel && cat.providers.find(function(p) { return p.id === provSel.value; });
+        if (isCustomOpenAiProvider(z)) {
+            var cin = document.getElementById('aiAddCustomModelId');
+            return cin ? String(cin.value || '').trim() : '';
+        }
+        var pop = document.getElementById('aiAddPopularModel');
+        return (pop && pop.value) ? String(pop.value).trim() : '';
+    }
+
     function syncAiAddProviderFields() {
         const cat = providerCatalog;
         const provSel = document.getElementById('aiAddProvider');
@@ -2282,9 +2326,21 @@
         const baseRow = document.getElementById('aiAddBaseUrlRow');
         const baseIn = document.getElementById('aiAddBaseUrl');
         const docs = document.getElementById('aiAddDocsLink');
+        const selRow = document.getElementById('aiAddModelSelectRow');
+        const customRow = document.getElementById('aiAddCustomModelRow');
+        const baseStar = document.getElementById('aiAddBaseUrlStar');
         if (!provSel || !cat || !cat.providers) return;
         const z = cat.providers.find(function(p) { return p.id === provSel.value; });
-        if (popSel && z) {
+        var isCustom = isCustomOpenAiProvider(z);
+        if (selRow) selRow.style.display = isCustom ? 'none' : 'block';
+        if (customRow) customRow.style.display = isCustom ? 'block' : 'none';
+        if (baseStar) baseStar.style.display = (isCustom || (z && z.requires_base_url)) ? 'inline' : 'none';
+        if (baseIn && isCustom) {
+            baseIn.placeholder = '必填：代理商提供的 Base URL（如 https://token-plan-cn.example.com/v1）';
+        } else if (baseIn) {
+            baseIn.placeholder = typeof t === 'function' ? t('aitest_field_base_url_ph') : '留空则使用目录默认值';
+        }
+        if (popSel && z && !isCustom) {
             const models = z.popular_models || [];
             const pickLab = typeof t === 'function' ? t('aitest_select_model') : '请选择模型';
             popSel.innerHTML = '<option value="">' + pickLab + '</option>' +
@@ -2300,22 +2356,130 @@
         } else if (docs) docs.innerHTML = '';
         if (baseIn && z) {
             var editId = window.__aiAddModalEditId;
+            var curProv = provSel.value || '';
+            var prevProv = window.__aiAddSyncProvider || '';
+            var provChanged = prevProv && curProv && prevProv !== curProv;
             var def = (z.default_base_url && String(z.default_base_url).trim()) ? String(z.default_base_url).trim() : '';
             if (editId) {
                 var ep = aiProfiles.find(function(x) { return x.id === editId; });
-                if (ep && ep.provider === provSel.value) {
+                if (ep && ep.provider === curProv && !provChanged) {
                     var bu = (ep.base_url != null && String(ep.base_url).trim()) ? String(ep.base_url).trim() : '';
                     baseIn.value = bu || def;
                 } else {
                     baseIn.value = def;
                 }
-            } else {
+            } else if (provChanged || !String(baseIn.value || '').trim()) {
                 baseIn.value = def;
             }
+            window.__aiAddSyncProvider = curProv;
+        }
+        syncAiAddModelDeprecationHint();
+        syncAiAddBaseUrlMismatchHint();
+        syncThirdPartyKeyHint();
+    }
+
+    function syncThirdPartyKeyHint() {
+        var pk = document.getElementById('aiAddApiKey');
+        var provSel = document.getElementById('aiAddProvider');
+        var notes = document.getElementById('aiAddModelNotes');
+        if (!pk || !provSel || !notes) return;
+        var cat = providerCatalog;
+        var z = cat && cat.providers && cat.providers.find(function(p) { return p.id === provSel.value; });
+        if (isCustomOpenAiProvider(z)) {
+            if (z && z.model_notes) {
+                notes.style.display = 'block';
+                notes.style.color = '#64748b';
+                notes.textContent = z.model_notes;
+            }
+            return;
+        }
+        var k = String(pk.value || '').trim();
+        if (!k) return;
+        var isProxyKey = /^tp-/i.test(k);
+        if (!isProxyKey) return;
+        notes.style.display = 'block';
+        notes.style.color = '#b45309';
+        var baseEl = document.getElementById('aiAddBaseUrl');
+        var baseVal = baseEl ? String(baseEl.value || '') : '';
+        if (/xiaomimimo/i.test(baseVal) || provSel.value === 'xiaomi_mimo_token') {
+            notes.textContent = '小米 MiMo Token Plan：model 请填 mimo-v2.5-pro（勿填 MiniMax-M3）；建议直接选提供商「小米 MiMo Token Plan」。';
+            return;
+        }
+        notes.textContent = '检测到代理 Key（' + k.slice(0, 8) + '…）。请改选「小米 MiMo Token Plan」或「第三方 / 代理」，并填写代理商 Base URL 与 model 名称。';
+    }
+
+    function syncAiAddBaseUrlMismatchHint() {
+        var provSel = document.getElementById('aiAddProvider');
+        var baseIn = document.getElementById('aiAddBaseUrl');
+        var notes = document.getElementById('aiAddModelNotes');
+        if (!provSel || !baseIn || !notes) return;
+        var cat = providerCatalog;
+        var z = cat && cat.providers && cat.providers.find(function(p) { return p.id === provSel.value; });
+        if (isCustomOpenAiProvider(z)) return;
+        var bu = String(baseIn.value || '').trim().toLowerCase();
+        var def = z && z.default_base_url ? String(z.default_base_url).trim().toLowerCase() : '';
+        if (!bu || !def || bu === def) return;
+        var hostFrom = function(url) {
+            try { return new URL(url.indexOf('://') >= 0 ? url : 'https://' + url).host; } catch (e) { return ''; }
+        };
+        var hBu = hostFrom(bu);
+        var hDef = hostFrom(def);
+        if (hBu && hDef && hBu !== hDef) {
+            notes.style.display = 'block';
+            notes.style.color = '#b45309';
+            notes.textContent = '当前 Base URL（' + hBu + '）与所选提供商「' + (z.name_zh || z.id) + '」默认地址（' + hDef + '）不一致，易导致 401/400。建议改为：' + (z.default_base_url || def);
         }
     }
 
+    function syncAiAddModelDeprecationHint() {
+        var notes = document.getElementById('aiAddModelNotes');
+        var provSel = document.getElementById('aiAddProvider');
+        var popSel = document.getElementById('aiAddPopularModel');
+        if (!notes || !provSel || !popSel) return;
+        var cat = providerCatalog;
+        var z = cat && cat.providers && cat.providers.find(function(p) { return p.id === provSel.value; });
+        var mid = (popSel.value || '').trim();
+        var dep = z && Array.isArray(z.deprecated_models) && mid && z.deprecated_models.indexOf(mid) >= 0;
+        if (dep) {
+            notes.style.display = 'block';
+            notes.textContent = (z && z.model_notes) ? z.model_notes : '该模型 ID 可能已不被当前 API 支持，请换用目录中的推荐模型。';
+            return;
+        }
+        if (z && z.model_notes && !mid) {
+            notes.style.display = 'block';
+            notes.textContent = z.model_notes;
+            return;
+        }
+        if (!dep) syncThirdPartyKeyHint();
+        if (notes.style.display === 'block' && notes.textContent) return;
+        notes.style.display = 'none';
+        notes.textContent = '';
+    }
+
     window.__aiAddModalEditId = null;
+
+    function clearAiAddModalFeedback() {
+        window.__aiAddVerifySeq = (window.__aiAddVerifySeq || 0) + 1;
+        var statusEl = document.getElementById('aiAddVerifyStatus');
+        if (statusEl) {
+            statusEl.style.display = 'none';
+            statusEl.textContent = '';
+            statusEl.style.color = '';
+        }
+        var notesEl = document.getElementById('aiAddModelNotes');
+        if (notesEl) {
+            notesEl.style.display = 'none';
+            notesEl.textContent = '';
+            notesEl.style.color = '';
+        }
+        var vbtn = document.getElementById('aiAddModalVerifyBtn');
+        if (vbtn) vbtn.disabled = false;
+        var footBtn = document.getElementById('aiAddModalSubmitBtn');
+        if (footBtn) {
+            footBtn.disabled = false;
+            footBtn.dataset.submitting = '0';
+        }
+    }
 
     window.openAiAddModelModal = function(show, editProfileId) {
         const el = document.getElementById('aiAddModelBackdrop');
@@ -2323,6 +2487,8 @@
         const open = show === undefined ? !el.classList.contains('is-open') : !!show;
         if (!open) {
             window.__aiAddModalEditId = null;
+            window.__aiAddSyncProvider = null;
+            clearAiAddModalFeedback();
             el.classList.remove('is-open');
             var provClose = document.getElementById('aiAddProvider');
             if (provClose) provClose.disabled = false;
@@ -2332,6 +2498,7 @@
             if (hintClose) { hintClose.style.display = 'none'; hintClose.textContent = ''; }
             return;
         }
+        clearAiAddModalFeedback();
         window.__aiAddModalEditId = (editProfileId && String(editProfileId).trim()) || null;
         var pk = document.getElementById('aiAddApiKey');
         if (pk) {
@@ -2341,8 +2508,11 @@
                 : (typeof t === 'function' ? t('aitest_field_api_key_ph') : 'API 密钥');
         }
         if (!window.__aiAddModalEditId) {
+            window.__aiAddSyncProvider = null;
             var bu0 = document.getElementById('aiAddBaseUrl');
             if (bu0) bu0.value = '';
+            var cm0 = document.getElementById('aiAddCustomModelId');
+            if (cm0) cm0.value = '';
         }
         function applyAddModalChrome() {
             var title = document.getElementById('aiAddModelTitle');
@@ -2372,7 +2542,11 @@
             }
             syncAiAddProviderFields();
             var pop = document.getElementById('aiAddPopularModel');
-            if (pop && p.model_id) {
+            var customIn = document.getElementById('aiAddCustomModelId');
+            var cmeta = providerCatalog && providerCatalog.providers && providerCatalog.providers.find(function(x) { return x.id === p.provider; });
+            if (isCustomOpenAiProvider(cmeta) && customIn && p.model_id) {
+                customIn.value = String(p.model_id).trim();
+            } else if (pop && p.model_id) {
                 var mid = String(p.model_id).trim();
                 var has = Array.prototype.some.call(pop.options, function(o) { return o.value === mid; });
                 if (!has && mid) {
@@ -2441,14 +2615,102 @@
         return data;
     }
 
+    window.verifyAiModelProfile = async function() {
+        const prov = document.getElementById('aiAddProvider');
+        const pop = document.getElementById('aiAddPopularModel');
+        const apiKey = document.getElementById('aiAddApiKey');
+        const baseUrl = document.getElementById('aiAddBaseUrl');
+        const statusEl = document.getElementById('aiAddVerifyStatus');
+        const btn = document.getElementById('aiAddModalVerifyBtn');
+        const modelId = getAiAddModelId();
+        if (!modelId) {
+            alert(typeof t === 'function' ? t('aitest_need_model_pick') : (isCustomOpenAiProvider(providerCatalog && providerCatalog.providers && providerCatalog.providers.find(function(p) { return p.id === (prov && prov.value); })) ? '请填写自定义模型 ID' : '请从列表中选择模型'));
+            return;
+        }
+        const editId = window.__aiAddModalEditId;
+        const keyTrim = apiKey ? String(apiKey.value || '').trim() : '';
+        if (!editId && !keyTrim) {
+            alert('请先填写 API 密钥后再进行连接测试');
+            return;
+        }
+        var zProvV = providerCatalog && providerCatalog.providers && prov && providerCatalog.providers.find(function(p) { return p.id === prov.value; });
+        if (isCustomOpenAiProvider(zProvV)) {
+            var buV = baseUrl ? String(baseUrl.value || '').trim() : '';
+            if (!buV) {
+                alert('第三方 / 代理需填写代理商提供的 Base URL');
+                return;
+            }
+        }
+        const body = { model_id: modelId };
+        if (editId) {
+            body.profile_id = editId;
+            if (keyTrim) body.api_key = keyTrim;
+            if (baseUrl && baseUrl.value.trim()) body.base_url = baseUrl.value.trim();
+        } else {
+            body.provider = prov && prov.value;
+            body.api_key = keyTrim;
+            if (baseUrl && baseUrl.value.trim()) body.base_url = baseUrl.value.trim();
+        }
+        var verifySeq = (window.__aiAddVerifySeq || 0) + 1;
+        window.__aiAddVerifySeq = verifySeq;
+        function verifyStillCurrent() {
+            return window.__aiAddVerifySeq === verifySeq;
+        }
+        if (btn) { btn.disabled = true; }
+        if (statusEl) {
+            statusEl.style.display = 'block';
+            statusEl.style.color = '#64748b';
+            statusEl.textContent = '正在测试连接…';
+        }
+        try {
+            const resp = await fetch('/api/ai/models/verify', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await parseApiJsonResponse(resp);
+            if (!resp.ok || !data.success) {
+                var errMsg = data.error || ('HTTP ' + resp.status);
+                if (data.hint) errMsg += '\n\n' + data.hint;
+                if (data.normalized_base_url) errMsg += '\n\n建议 Base URL：' + data.normalized_base_url;
+                throw new Error(errMsg);
+            }
+            var okMsg = data.message || '连接成功';
+            if (data.normalized_base_url) okMsg += '（Base URL：' + data.normalized_base_url + '）';
+            if (statusEl && verifyStillCurrent()) {
+                statusEl.style.color = '#15803d';
+                statusEl.textContent = okMsg;
+            }
+        } catch (e) {
+            if (statusEl && verifyStillCurrent()) {
+                statusEl.style.color = '#b91c1c';
+                statusEl.textContent = String(e.message || e);
+            }
+        } finally {
+            if (btn && verifyStillCurrent()) btn.disabled = false;
+        }
+    };
+
     window.submitAiAddModel = async function() {
         const prov = document.getElementById('aiAddProvider');
         const pop = document.getElementById('aiAddPopularModel');
         const apiKey = document.getElementById('aiAddApiKey');
         const baseUrl = document.getElementById('aiAddBaseUrl');
         const footBtn = document.getElementById('aiAddModalSubmitBtn');
-        const modelId = (pop && pop.value) ? pop.value.trim() : '';
-        if (!modelId) { alert(typeof t === 'function' ? t('aitest_need_model_pick') : '请从列表中选择模型'); return; }
+        const modelId = getAiAddModelId();
+        if (!modelId) {
+            alert('请填写或选择模型');
+            return;
+        }
+        var zProv = providerCatalog && providerCatalog.providers && prov && providerCatalog.providers.find(function(p) { return p.id === prov.value; });
+        if (isCustomOpenAiProvider(zProv)) {
+            var buTrim = baseUrl ? String(baseUrl.value || '').trim() : '';
+            if (!buTrim) {
+                alert('第三方 / 代理需填写代理商提供的 Base URL');
+                return;
+            }
+        }
         const editId = window.__aiAddModalEditId;
         const keyTrim = apiKey ? String(apiKey.value || '').trim() : '';
         var prevTxt = footBtn ? footBtn.textContent : '';
@@ -2478,7 +2740,7 @@
                     provider: prov && prov.value,
                     model_type: AI_PROFILE_DEFAULT_MODEL_TYPE,
                     model_id: modelId,
-                    api_key: apiKey ? apiKey.value : '',
+                    api_key: keyTrim,
                     base_url: baseUrl ? baseUrl.value.trim() : '',
                     verify_ollama: !!(prov && prov.value === 'ollama'),
                 };
@@ -2557,9 +2819,12 @@
             if (registryBox) registryBox.innerHTML = aiProfiles.length ? aiProfiles.map(function(p) {
                 var badge = (p.id === activeProfileId) ? ' <span class="ai-registry-badge">默认</span>' : '';
                 var editLab = typeof t === 'function' ? t('aitest_edit_profile') : '编辑';
-                return '<div class="ai-registry-row"><span class="ai-registry-name">' + escapeHtml(profileLabel(p)) + badge + '</span><span style="display:flex;gap:6px;flex-shrink:0;">' +
-                    '<button type="button" class="btn btn-secondary btn-sm" data-ai-edit-profile="' + escapeHtml(p.id) + '">' + escapeHtml(editLab) + '</button>' +
-                    '<button type="button" class="btn btn-danger btn-sm" onclick="window.__aiDeleteProfile(\'' + escapeHtml(p.id) + '\')">删除</button></span></div>';
+                var delLab = typeof t === 'function' ? t('aitest_delete_profile') : '删除';
+                return '<div class="ai-registry-row"><span class="ai-registry-name">' + escapeHtml(profileLabel(p)) + badge + '</span>' +
+                    '<div class="ai-registry-actions">' +
+                    '<button type="button" class="ai-reg-btn ai-reg-btn--edit" data-ai-edit-profile="' + escapeHtml(p.id) + '">' + escapeHtml(editLab) + '</button>' +
+                    '<button type="button" class="ai-reg-btn ai-reg-btn--del" data-ai-delete-profile="' + escapeHtml(p.id) + '">' + escapeHtml(delLab) + '</button>' +
+                    '</div></div>';
             }).join('') : '<div class="ai-registry-empty">暂无注册模型</div>';
             const verifyChk = document.getElementById('aiVerifyOllamaChk');
             if (verifyChk) { verifyChk.disabled = !!ollamaError; verifyChk.checked = !ollamaError; }
@@ -3336,113 +3601,32 @@
         }
     }
 
-    async function aiReqScenariosBtnClick() {
-        var fd = new FormData();
-        var f = document.getElementById('aiReqFile');
-        var out = document.getElementById('aiReqScenariosOut');
-        var batchBtn = document.getElementById('aiReqBatchUiBtn');
-        window.__aiLastScenarioDoc = null;
-        if (batchBtn) batchBtn.disabled = true;
+    async function aiCrossSaveBtnClick() {
+        var out = document.getElementById('aiCrossOut');
+        var webId = parseInt((document.getElementById('aiCrossWebCase') || {}).value, 10);
+        var mobId = parseInt((document.getElementById('aiCrossMobileCase') || {}).value, 10);
+        var syncRaw = (document.getElementById('aiCrossSyncJson') || {}).value || '[]';
+        var sync = [];
+        try { sync = JSON.parse(syncRaw); } catch (e) { alert('同步点 JSON 无效'); return; }
+        if (!isFinite(webId) && !isFinite(mobId)) { alert('请至少填写一个用例 ID'); return; }
         try {
-            if (f && f.files && f.files[0]) {
-                fd.append('file', f.files[0]);
-                var resp = await fetch('/api/ai/scenarios/from-requirements', { method: 'POST', body: fd, credentials: 'same-origin' });
-                var data = await resp.json();
-                if (!resp.ok || !data.success) throw new Error(data.error || '失败');
-                window.__aiLastScenarioDoc = data.document || {};
-                if (out) out.textContent = JSON.stringify(data.document || {}, null, 2).slice(0, 12000);
-                var nsc = ((data.document && data.document.scenarios) || []).length;
-                appendAiChat('assistant', '已生成结构化场景，共 ' + nsc + ' 条。');
-                if (data.warnings && data.warnings.length) appendAiChat('assistant', '提示: ' + data.warnings.join('；'));
-            } else {
-                var g = composeAiGoal();
-                if (!g) {
-                    alert('请选择需求文件，或在左栏填写自然语言目标后重试');
-                    return;
-                }
-                var r = await fetch('/api/ai/scenarios/from-requirements', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ requirements_text: g, extra_context: '', model: getSelectedAiModel() }) });
-                var d = await r.json();
-                if (!r.ok || !d.success) throw new Error(d.error || '失败');
-                window.__aiLastScenarioDoc = d.document || {};
-                if (out) out.textContent = JSON.stringify(d.document || {}, null, 2).slice(0, 12000);
-                appendAiChat('assistant', '已生成结构化场景（来自左栏目标文本）。');
-                if (d.warnings && d.warnings.length) appendAiChat('assistant', '提示: ' + d.warnings.join('；'));
-            }
-        } catch (e) {
-            if (out) out.textContent = String(e && e.message ? e.message : e);
-            appendAiChat('assistant', '场景生成失败: ' + (e && e.message ? e.message : String(e)));
-        } finally {
-            if (batchBtn) {
-                var doc = window.__aiLastScenarioDoc;
-                var n = (doc && doc.scenarios && doc.scenarios.length) ? doc.scenarios.length : 0;
-                batchBtn.disabled = n === 0;
-            }
-        }
-    }
-
-    async function aiReqBatchUiBtnClick() {
-        if (!currentProjectId) { alert('请先选择项目'); return; }
-        if (!window.__aiLastScenarioDoc || !window.__aiLastScenarioDoc.scenarios || !window.__aiLastScenarioDoc.scenarios.length) { alert('请先生成结构化场景'); return; }
-        var baseUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-        var b = document.getElementById('aiReqBatchUiBtn');
-        if (b) b.disabled = true;
-        try {
-            var resp = await fetch('/api/ai/cases/from-scenarios-batch', {
+            var resp = await fetch('/api/ai/hub/cross-platform/scenarios', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify({
-                    project_id: currentProjectId,
-                    project_name: currentProjectName,
-                    document: window.__aiLastScenarioDoc,
-                    model: getSelectedAiModel(),
-                    base_url: baseUrl,
-                    max_scenarios: 20
+                    title: (document.getElementById('aiCrossTitle') || {}).value || '',
+                    web_case_id: isFinite(webId) ? webId : null,
+                    mobile_case_id: isFinite(mobId) ? mobId : null,
+                    sync_points: sync
                 })
             });
             var data = await resp.json();
-            if (!resp.ok || !data.success) throw new Error(data.error || '失败');
-            appendAiChat('assistant', '已批量创建 Web 用例 ' + (data.count || 0) + ' 个，ID: ' + (data.created_case_ids || []).join(', '));
-            if (data.warnings && data.warnings.length) appendAiChat('assistant', data.warnings.join('；'));
+            if (!resp.ok || !data.success) throw new Error(data.error || '保存失败');
+            if (out) out.textContent = '已保存 scenario_id=' + (data.scenario && data.scenario.scenario_id);
+            appendAiChat('assistant', '跨端联动配置已保存（执行功能下一迭代开放）。');
         } catch (e) {
-            appendAiChat('assistant', '批量生成失败: ' + (e && e.message ? e.message : String(e)));
-        } finally {
-            if (b) b.disabled = false;
-        }
-    }
-
-    async function aiImportPlanBtnClick() {
-        var sel = (document.getElementById('aiTargetCaseSelect') && document.getElementById('aiTargetCaseSelect').value || '').trim();
-        var caseId = sel ? parseInt(sel, 10) : (__aiWizardCaseId || 0);
-        if (!caseId) {
-            alert('请选择「保存到用例」或先执行一次「生成并保存」');
-            return;
-        }
-        var raw = (document.getElementById('aiImportPlanJson') && document.getElementById('aiImportPlanJson').value || '').trim();
-        if (!raw) { alert('请粘贴步骤 JSON 数组'); return; }
-        var steps;
-        try { steps = JSON.parse(raw); } catch (e) { alert('JSON 无效'); return; }
-        if (!Array.isArray(steps)) { alert('步骤须为 JSON 数组'); return; }
-        var rep = document.getElementById('aiImportPlanReplace') && document.getElementById('aiImportPlanReplace').checked;
-        var btn = document.getElementById('aiImportPlanBtn');
-        if (btn) btn.disabled = true;
-        try {
-            var resp = await fetch('/api/ai/cases/import-ui-plan', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({ case_id: caseId, steps: steps, replace: rep, goal: composeAiGoal() })
-            });
-            var data = await resp.json();
-            if (!resp.ok || !data.success) throw new Error(data.error || '导入失败');
-            appendAiChat('assistant', '已导入 ' + (data.steps_created || 0) + ' 步到用例 ' + caseId);
-            if (data.warnings && data.warnings.length) appendAiChat('assistant', data.warnings.join('；'));
-            __aiWizardCaseId = caseId;
-            showAiClosureStrip(caseId);
-        } catch (e) {
-            appendAiChat('assistant', '导入失败: ' + (e && e.message ? e.message : String(e)));
-        } finally {
-            if (btn) btn.disabled = false;
+            if (out) out.textContent = String(e && e.message ? e.message : e);
         }
     }
 
@@ -3583,10 +3767,29 @@
         var spanel = document.getElementById('aiSettingsPanel');
         if (spanel) {
             spanel.addEventListener('click', function(ev) {
-                var tgt = ev.target && ev.target.closest('[data-ai-edit-profile]');
-                if (!tgt || !spanel.contains(tgt)) return;
-                var pid = tgt.getAttribute('data-ai-edit-profile');
-                if (pid && typeof window.openAiAddModelModal === 'function') window.openAiAddModelModal(true, pid);
+                var editTgt = ev.target && ev.target.closest('[data-ai-edit-profile]');
+                if (editTgt && spanel.contains(editTgt)) {
+                    var pid = editTgt.getAttribute('data-ai-edit-profile');
+                    if (pid && typeof window.openAiAddModelModal === 'function') window.openAiAddModelModal(true, pid);
+                    return;
+                }
+                var delTgt = ev.target && ev.target.closest('[data-ai-delete-profile]');
+                if (delTgt && spanel.contains(delTgt)) {
+                    var pidDel = delTgt.getAttribute('data-ai-delete-profile');
+                    if (pidDel && typeof window.__aiDeleteProfile === 'function') window.__aiDeleteProfile(pidDel);
+                }
+            });
+        }
+        var addBd = document.getElementById('aiAddModelBackdrop');
+        if (addBd) {
+            addBd.addEventListener('mousedown', function(ev) {
+                if (ev.target === addBd) ev.preventDefault();
+            });
+        }
+        var setBd = document.getElementById('aiSettingsBackdrop');
+        if (setBd) {
+            setBd.addEventListener('mousedown', function(ev) {
+                if (ev.target === setBd) ev.preventDefault();
             });
         }
         document.addEventListener('keydown', function(e) {
@@ -3596,8 +3799,13 @@
                 return;
             }
             if (e.key !== 'Escape') return;
-            if (typeof window.openAiAddModelModal === 'function') window.openAiAddModelModal(false);
-            if (typeof window.toggleAiSettings === 'function') window.toggleAiSettings(false);
+            var addOpen = addBd && addBd.classList.contains('is-open');
+            if (addOpen) {
+                if (typeof window.openAiAddModelModal === 'function') window.openAiAddModelModal(false);
+                return;
+            }
+            var panelOpen = spanel && spanel.classList.contains('is-open');
+            if (panelOpen && typeof window.toggleAiSettings === 'function') window.toggleAiSettings(false);
         });
     })();
 
@@ -3663,6 +3871,10 @@
         });
         updateBrowserStatusLine();
         if (typeof applyUiLang === 'function') applyUiLang();
+        try {
+            var qpSet = new URLSearchParams(location.search).get('open_ai_settings');
+            if (qpSet === '1' && typeof window.toggleAiSettings === 'function') window.toggleAiSettings(true);
+        } catch (qpe) {}
         var bUn = document.getElementById('aiBtnUndo');
         if (bUn) bUn.addEventListener('click', function() { aiUndo(); });
         var bClrChat = document.getElementById('aiBtnClearChat');
@@ -3673,12 +3885,8 @@
         if (brs) brs.addEventListener('click', function() { void aiResolveLocatorsSaveClick(); });
         var brun = document.getElementById('aiBtnRunSavedCase');
         if (brun) brun.addEventListener('click', function() { void aiRunSavedCaseClick(); });
-        var rsb = document.getElementById('aiReqScenariosBtn');
-        if (rsb) rsb.addEventListener('click', function() { void aiReqScenariosBtnClick(); });
-        var rbb = document.getElementById('aiReqBatchUiBtn');
-        if (rbb) rbb.addEventListener('click', function() { void aiReqBatchUiBtnClick(); });
-        var ipb = document.getElementById('aiImportPlanBtn');
-        if (ipb) ipb.addEventListener('click', function() { void aiImportPlanBtnClick(); });
+        var csb = document.getElementById('aiCrossSaveBtn');
+        if (csb) csb.addEventListener('click', function() { void aiCrossSaveBtnClick(); });
         if (msg) msg.addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
@@ -3687,6 +3895,19 @@
         });
         var ap = document.getElementById('aiAddProvider');
         if (ap) ap.addEventListener('change', syncAiAddProviderFields);
+        var abu = document.getElementById('aiAddBaseUrl');
+        if (abu) abu.addEventListener('input', function() { syncAiAddBaseUrlMismatchHint(); syncThirdPartyKeyHint(); });
+        var apk = document.getElementById('aiAddApiKey');
+        if (apk) apk.addEventListener('input', syncThirdPartyKeyHint);
+        var apm = document.getElementById('aiAddPopularModel');
+        if (apm) apm.addEventListener('change', syncAiAddModelDeprecationHint);
+        var verifyBtn = document.getElementById('aiAddModalVerifyBtn');
+        if (verifyBtn) {
+            verifyBtn.addEventListener('click', function(ev) {
+                ev.preventDefault();
+                if (typeof window.verifyAiModelProfile === 'function') void window.verifyAiModelProfile();
+            });
+        }
         var subAdd = document.getElementById('aiAddModalSubmitBtn');
         if (subAdd) {
             subAdd.addEventListener('click', function(ev) {

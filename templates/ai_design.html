@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}AI 用例设计 - {{ product_name }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_hub.css') }}?v=3">
+{% endblock %}
+{% block content %}
+<div class="ai-design-page">
+    <div class="ai-module-shell">
+        <header class="ai-module-top">
+            <a href="/ai-hub" class="ai-hub-back" title="返回 AI 中心"><i class="fas fa-arrow-left"></i></a>
+            <div>
+                <h1 data-i18n="aidesign_title">AI 用例设计</h1>
+                <p data-i18n="aidesign_subtitle_v2">上传或粘贴需求，按多种测试方法生成 6–10 条草案，确认后再保存到项目。</p>
+            </div>
+        </header>
+        <div class="ai-module-body">
+            <div class="ai-design-row">
+                <label for="aiDesignProject" data-i18n="aidesign_project">目标项目</label>
+                <select id="aiDesignProject" class="ai-design-control"><option value="">加载中…</option></select>
+            </div>
+            <div class="ai-design-row ai-design-row--model">
+                <label for="aiDesignModelSelect">推理模型</label>
+                <div class="ai-design-model-bar">
+                    <select id="aiDesignModelSelect" class="ai-design-control"><option value="">加载中…</option></select>
+                    <a href="/ai-test?open_ai_settings=1" class="ai-btn ai-btn--ghost ai-design-model-manage" target="_blank" rel="noopener">管理模型…</a>
+                </div>
+            </div>
+            <div class="ai-design-row">
+                <label for="aiDesignBaseUrl" data-i18n="aidesign_base_url">Web 基础 URL（Web 用例可选）</label>
+                <input type="url" id="aiDesignBaseUrl" class="ai-design-control" placeholder="https://example.com" />
+            </div>
+            <div class="ai-design-row">
+                <label for="aiDesignReqText" data-i18n="aidesign_req_text">需求文本（与文件二选一或同时提供）</label>
+                <textarea id="aiDesignReqText" class="ai-design-control" rows="5" placeholder="粘贴需求说明…"></textarea>
+            </div>
+            <div class="ai-design-row">
+                <label for="aiDesignReqFile" data-i18n="aidesign_req_file">需求文件</label>
+                <input type="file" id="aiDesignReqFile" class="ai-design-file" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" />
+            </div>
+
+            <div class="ai-module-tabs" role="tablist">
+                <button type="button" class="active" data-platform="web" id="aiDesignTabWeb">Web UI</button>
+                <button type="button" data-platform="api" id="aiDesignTabApi">接口测试</button>
+                <button type="button" data-platform="android" id="aiDesignTabAndroid">移动端</button>
+            </div>
+            <p id="aiDesignPlatformHint" class="ai-design-hint"></p>
+
+            <div class="ai-design-actions ai-design-actions--primary">
+                <button type="button" class="ai-btn ai-btn--primary" id="aiDesignGenerateBtn" data-i18n="aidesign_btn_generate">生成草案</button>
+                <button type="button" class="ai-btn ai-btn--secondary" id="aiDesignSaveBtn" style="display:none;">保存到当前项目</button>
+                <a href="#" id="aiDesignCasesLink" class="ai-btn ai-btn--secondary" style="display:none;" data-i18n="aidesign_open_cases">打开项目用例列表</a>
+            </div>
+            <div id="aiDesignStatus" class="ai-design-status" role="status" aria-live="polite"></div>
+            <div id="aiDesignDraftList" class="ai-design-draft-list" style="display:none;"></div>
+            <pre id="aiDesignBatchOut" class="ai-design-pre"></pre>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/ai_design.js') }}?v=3"></script>
+{% endblock %}

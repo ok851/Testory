@@ -42,6 +42,12 @@ def configure_install_root_env() -> Path:
 
 def resource_root() -> Path:
     """Flask 模板/静态资源目录：优先安装根目录，否则 PyInstaller _MEIPASS。"""
+    # 源码运行 python app.py 时始终用仓库内 templates/static，避免 TESTORY_INSTALL_ROOT
+    # 指向旧安装包导致界面仍显示已废弃的桌面侧栏壳。
+    if not getattr(sys, "frozen", False):
+        dev_root = Path(__file__).resolve().parent
+        if (dev_root / "templates").is_dir() and (dev_root / "static").is_dir():
+            return dev_root
     root = resolve_install_root()
     if (root / "templates").is_dir() and (root / "static").is_dir():
         return root

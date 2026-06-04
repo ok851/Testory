@@ -1,0 +1,40 @@
+/* 全站布局：顶栏与主内容区隔离，避免各模块页面 CSS 污染导航 */
+
+@view-transition {
+  navigation: auto;
+}
+
+#testoryMainNav .testory-nav-inner {
+  width: 100%;
+  max-width: 1280px;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  min-height: 3.25rem;
+  box-sizing: border-box;
+}
+
+body.testory-desktop-client #testoryMainNav .testory-nav-inner {
+  max-width: 1120px;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.testory-page-main {
+  flex: 1;
+  min-height: 0;
+}
+
+html.testory-route-pending .testory-page-main {
+  opacity: 0.97;
+  pointer-events: none;
+}
+
+html.testory-route-pending #testoryMainNav {
+  pointer-events: none;
+}

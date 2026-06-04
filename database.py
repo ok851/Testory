@@ -43,7 +43,10 @@ def _api_ts_dict(d: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 _PROJECTS_SELECT = "id, name, description, tenant_id, created_at"
 
 # test_cases 当前列（与 CREATE + ALTER 一致）
-_TEST_CASES_SELECT = "id, project_id, name, url, description, created_at, precondition, expected_result, case_type"
+_TEST_CASES_SELECT = (
+    "id, project_id, name, url, description, created_at, precondition, expected_result, "
+    "case_type, COALESCE(case_role, 'business') AS case_role"
+)
 
 # test_steps 当前列（勿用 SELECT * + 固定下标，与 _row_to_step_dict 一致）
 _TEST_STEPS_SELECT = (
@@ -82,6 +85,7 @@ def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict
         "precondition": (row[6] or "") if len(row) > 6 else "",
         "expected_result": (row[7] or "") if len(row) > 7 else "",
         "case_type": _normalize_case_type(row[8]) if len(row) > 8 else "ui",
+        "case_role": (row[9] or "business").strip() if len(row) > 9 and row[9] else "business",
     }
     if step_count is not None:
         out["step_count"] = step_count
@@ -245,6 +249,17 @@ class Database:
         try:
             cursor.execute(
                 "UPDATE test_cases SET case_type = 'ui' WHERE case_type IS NULL OR TRIM(case_type) = ''"
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE test_cases ADD COLUMN case_role TEXT DEFAULT 'business'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute(
+                "UPDATE test_cases SET case_role = 'business' WHERE case_role IS NULL OR TRIM(case_role) = ''"
             )
         except sqlite3.OperationalError:
             pass
@@ -1278,12 +1293,13 @@ class Database:
             """
             SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
                    tc.precondition, tc.expected_result, COALESCE(tc.case_type, 'ui') AS case_type,
+                   COALESCE(tc.case_role, 'business') AS case_role,
                    COUNT(ts.id) AS step_count
             FROM test_cases tc
             LEFT JOIN test_steps ts ON tc.id = ts.case_id
             WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?
             GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
-                     tc.precondition, tc.expected_result, tc.case_type
+                     tc.precondition, tc.expected_result, tc.case_type, tc.case_role
             ORDER BY tc.created_at DESC
             """,
             (project_id, ct_filter),
@@ -1292,8 +1308,8 @@ class Database:
         
         cases = []
         for row in rows:
-            base = row[:9]
-            sc = int(row[9] or 0)
+            base = row[:10]
+            sc = int(row[10] or 0)
             cases.append(_test_case_row_to_dict(base, step_count=sc))
         
         conn.close()
@@ -1310,14 +1326,18 @@ class Database:
         precondition: str = "",
         expected_result: str = "",
         case_type: str = "ui",
+        case_role: str = "business",
     ) -> int:
         """创建测试用例（新版本，关联到项目）"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         ct = _normalize_case_type(case_type)
+        role = (case_role or "business").strip().lower()
+        if role not in ("login_feature", "business", "auth_fixture"):
+            role = "business"
         cursor.execute(
-            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (project_id, name, url, description, precondition, expected_result, ct),
+            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, name, url, description, precondition, expected_result, ct, role),
         )
         case_id = cursor.lastrowid
         
@@ -1332,7 +1352,7 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, COALESCE(case_type, 'ui') FROM test_cases WHERE id = ?",
+            "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, COALESCE(case_type, 'ui'), COALESCE(case_role, 'business') FROM test_cases WHERE id = ?",
             (case_id,),
         )
         row = cursor.fetchone()
@@ -1348,6 +1368,7 @@ class Database:
                 'precondition': row[6] if len(row) > 6 else '',
                 'expected_result': row[7] if len(row) > 7 else '',
                 'case_type': _normalize_case_type(row[8]) if len(row) > 8 else 'ui',
+                'case_role': (row[9] or 'business').strip() if len(row) > 9 else 'business',
             }
             conn.close()
             return out

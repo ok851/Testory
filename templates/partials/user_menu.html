@@ -1,0 +1,56 @@
+{# 顶栏用户菜单（全站共用） #}
+<div id="userArea" class="flex items-center gap-2 border-l border-gray-300 dark:border-gray-600 pl-4 ml-2 flex-shrink-0">
+    <div id="userDropdown" class="relative hidden">
+        <button type="button" onclick="toggleUserMenu()" class="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+            <i class="fas fa-user-circle text-gray-600 dark:text-gray-400 text-lg"></i>
+            <span id="userLabel" class="text-sm text-gray-700 dark:text-gray-200 font-medium"></span>
+            <i class="fas fa-chevron-down text-xs text-gray-400"></i>
+        </button>
+        <div id="userMenu" class="hidden absolute right-0 mt-2 w-56 bg-white dark:bg-gray-900 rounded-md shadow-lg py-1 z-50 border border-gray-200 dark:border-gray-700">
+            <a href="/profile" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-id-card mr-2 text-gray-400"></i><span data-i18n="menu_profile">个人信息</span>
+            </a>
+            <a href="/settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-sliders-h mr-2 text-gray-400"></i><span data-i18n="menu_settings">设置中心</span>
+            </a>
+            <a href="/plugin-market" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-puzzle-piece mr-2 text-gray-400"></i><span data-i18n="menu_plugin_market">插件市场</span>
+            </a>
+            <a href="/license" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-key mr-2 text-gray-400"></i><span data-i18n="menu_license">授权管理</span>
+            </a>
+            {% if hide_billing_ui %}
+            {% if website_url %}
+            <a href="#" onclick="openWebsiteUpgrade(); return false;" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-external-link-alt mr-2 text-gray-400"></i>升级订阅（官网）
+            </a>
+            {% endif %}
+            {% else %}
+            <a href="/pricing" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navPricingLink">
+                <i class="fas fa-tags mr-2 text-gray-400"></i><span data-i18n="menu_pricing">定价</span>
+            </a>
+            <a href="/payment/orders" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="navOrdersLink">
+                <i class="fas fa-receipt mr-2 text-gray-400"></i><span data-i18n="menu_orders">我的订单</span>
+            </a>
+            {% endif %}
+            {% if is_client %}
+            <a href="/client-setup" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-server mr-2 text-gray-400"></i>团队服务器
+            </a>
+            {% endif %}
+            <a href="/sso-settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="ssoSettingsLink" style="display: none;">
+                <i class="fas fa-shield-alt mr-2 text-gray-400"></i><span data-i18n="menu_sso">SSO 设置</span>
+            </a>
+            <a href="/user-management" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="userManagementLink" style="display: none;">
+                <i class="fas fa-users-cog mr-2 text-gray-400"></i><span data-i18n="menu_users">用户管理</span>
+            </a>
+            <a href="/audit-logs" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="auditLogsLink" style="display: none;">
+                <i class="fas fa-clipboard-list mr-2 text-gray-400"></i><span data-i18n="menu_audit_logs">审计日志</span>
+            </a>
+            <div class="border-t border-gray-100 dark:border-gray-700 my-1"></div>
+            <button type="button" onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-sign-out-alt mr-2"></i><span data-i18n="menu_logout">注销</span>
+            </button>
+        </div>
+    </div>
+</div>

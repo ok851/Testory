@@ -1,0 +1,61 @@
+{
+  "version": 2,
+  "active_profile_id": "f238957a-6c93-490b-8bf6-c6f3840d43b3",
+  "profiles": [
+    {
+      "id": "e22cc140-2004-41d0-b1d5-3c655f5623fa",
+      "provider": "ollama",
+      "api_style": "ollama",
+      "model_type": "test_case_generation",
+      "model_id": "qwen3.5:4b",
+      "label": "qwen3.5:4b",
+      "api_key": "",
+      "base_url": "http://127.0.0.1:11434",
+      "group_id": ""
+    },
+    {
+      "id": "8bcbd08e-5b10-4b00-8248-e45f3741615f",
+      "provider": "ollama",
+      "api_style": "ollama",
+      "model_type": "test_case_generation",
+      "model_id": "qwen3-vl:8b",
+      "label": "qwen3-vl:8b",
+      "api_key": "",
+      "base_url": "http://127.0.0.1:11434",
+      "group_id": ""
+    },
+    {
+      "id": "b9014f50-b372-4580-be33-a1a29af83027",
+      "provider": "deepseek",
+      "api_style": "openai_compatible",
+      "model_type": "test_case_generation",
+      "model_id": "deepseek-chat",
+      "label": "deepseek-chat",
+      "api_key": "sk-6268e9ba17c34c86b3f4eb0ff8494b56",
+      "base_url": "https://api.deepseek.com/v1",
+      "group_id": ""
+    },
+    {
+      "id": "f4993235-0137-4703-b840-9c45a56870a5",
+      "provider": "deepseek",
+      "api_style": "openai_compatible",
+      "model_type": "test_case_generation",
+      "model_id": "deepseek-reasoner",
+      "label": "deepseek-reasoner",
+      "api_key": "sk-6268e9ba17c34c86b3f4eb0ff8494b56",
+      "base_url": "https://api.deepseek.com/v1",
+      "group_id": ""
+    },
+    {
+      "id": "f238957a-6c93-490b-8bf6-c6f3840d43b3",
+      "provider": "custom_openai",
+      "api_style": "openai_compatible",
+      "model_type": "test_case_generation",
+      "model_id": "mimo-v2.5",
+      "label": "mimo-v2.5",
+      "api_key": "tp-cag12chuv5q6imirg1egn66i157sq57du730iq74h7ym5wwt",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "group_id": ""
+    }
+  ]
+}

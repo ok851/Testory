@@ -401,7 +401,26 @@ def _goal_suggests_seed_url(goal: str) -> str:
     return ""
 
 
-def _infer_navigate_url(goal: str, description: str, case_url: str) -> str:
+def _same_nav_host(url_a: str, url_b: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+
+        ha = urlparse(url_a or "").netloc.lower()
+        hb = urlparse(url_b or "").netloc.lower()
+        return bool(ha and hb and ha == hb)
+    except Exception:
+        return False
+
+
+def _infer_navigate_url(
+    goal: str,
+    description: str,
+    case_url: str,
+    mandatory_base_url: str = "",
+) -> str:
+    mb = _norm_str(mandatory_base_url)
+    if mb:
+        return mb
     u = _first_http_url(case_url, goal, description)
     if u:
         return u
@@ -834,6 +853,7 @@ class LocalAIService:
         memory_context: Optional[str] = None,
         dom_context_pack: Optional[str] = None,
         platform_type: str = "web",
+        mandatory_base_url: str = "",
     ) -> Dict[str, Any]:
         snap_t = (page_snapshot or "").strip()
         pr: List[Dict[str, Any]] = list(probe_registry) if probe_registry else []
@@ -841,6 +861,7 @@ class LocalAIService:
         dom_t = (dom_context_pack or "").strip()
         if dom_t:
             dom_t = self._maybe_compress_dom_pack(dom_t, profile, model)
+        mbu = (mandatory_base_url or probe_url or "").strip()
         prompt = self._build_prompt(
             goal,
             project_name,
@@ -848,6 +869,7 @@ class LocalAIService:
             memory_context=(memory_context or "").strip() or None,
             dom_context_pack=dom_t or None,
             platform_type=(platform_type or "web").strip().lower(),
+            mandatory_base_url=mbu,
         )
         using_model, content = self._complete_for_model(
             prompt, model, profile, meta_fallback=self.model_mid
@@ -1104,10 +1126,12 @@ class LocalAIService:
         goal: str,
         case_url: str = "",
         probe_registry: Optional[List[Dict[str, Any]]] = None,
+        mandatory_base_url: str = "",
     ) -> None:
         """补全模型漏填的 URL、等待时长、输入/校验文案、以及选择器（描述/探测/站点回退）。"""
         g = _norm_str(goal)
-        cu = _norm_str(case_url)
+        cu = _norm_str(case_url) or _norm_str(mandatory_base_url)
+        mbu = _norm_str(mandatory_base_url)
         for step in steps:
             if not isinstance(step, dict):
                 continue
@@ -1117,10 +1141,13 @@ class LocalAIService:
             desc = _norm_str(step.get("description"))
 
             if action == "navigate" and not iv:
-                inferred = _infer_navigate_url(g, desc, cu)
+                inferred = _infer_navigate_url(g, desc, cu, mbu)
                 if inferred:
                     step["input_value"] = inferred
                     cu = cu or inferred
+            elif action == "navigate" and iv and mbu and not _same_nav_host(iv, mbu):
+                step["input_value"] = mbu
+                cu = mbu
 
             elif action == "wait" and not iv:
                 step["input_value"] = _infer_wait_input_value(desc)
@@ -1210,6 +1237,7 @@ class LocalAIService:
         memory_context: Optional[str] = None,
         dom_context_pack: Optional[str] = None,
         platform_type: str = "web",
+        mandatory_base_url: str = "",
     ) -> str:
         platform = (platform_type or "web").strip().lower()
         if platform == "android":
@@ -1232,6 +1260,14 @@ class LocalAIService:
                 "not as source of truth for selectors if it conflicts with the LIVE list above):\n"
                 f"{dom_context_pack.strip()}\n\n"
             )
+        mandatory_block = ""
+        mbu = (mandatory_base_url or "").strip()
+        if mbu:
+            mandatory_block = (
+                f"\nMANDATORY application base URL (user-provided): {mbu}\n"
+                "All navigate steps MUST use this exact URL (or same-host path) in input_value. "
+                "case_url MUST match. Do NOT invent other domains.\n"
+            )
         return (
             "You are the reasoning brain; when a LIVE page snapshot is included below, the server already used "
             "Playwright headless to list real interactive elements—your locators MUST prefer those lines "
@@ -1248,6 +1284,7 @@ class LocalAIService:
             "Generate one executable AI-assisted web test case with steps from this natural language goal.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"Goal: {goal}\n"
+            f"{mandatory_block}"
             f"{mem_block}"
             f"{snap_block}"
             f"{dom_block}"
@@ -1383,6 +1420,16 @@ class LocalAIService:
                 "keeping probe_index valid. If assert_from_selection: add an assert step (compare_type text_contains or text_equals) using "
                 "the highlighted text as input_value, with a selector from the LIVE snapshot. "
                 "If optimize_step: adjust only the focused step (retry, wait, selectors)."
+            )
+        rm = (ctx.get("response_mode") or "").strip().lower()
+        if rm == "full":
+            parts.append(
+                "response_mode=full: return the COMPLETE updated steps array for the whole case "
+                "(same length or adjusted count), not a delta fragment."
+            )
+        elif rm == "delta":
+            parts.append(
+                "response_mode=delta: return ONLY new steps to append at the end unless user asked to replace."
             )
         if not parts:
             return ""
