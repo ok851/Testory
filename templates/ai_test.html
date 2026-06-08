@@ -631,13 +631,9 @@
     }
     .ai-preview-in-rail .ai-req-scenarios .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
     .ai-preview-in-rail .ai-req-scenarios .btn-sm { min-height: 32px; padding: 6px 12px; font-size: 12px; }
-    .ai-preview-in-rail .ai-req-scenarios input[type="file"] {
-        width: 100%; max-width: 100%; padding: 8px 10px; margin-top: 4px;
-        border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font-size: 12px; box-sizing: border-box;
-    }
-    .ai-preview-in-rail .ai-req-scenarios input[type="file"]:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
-    html.dark .ai-preview-in-rail .ai-req-scenarios input[type="file"] {
-        background: #111827; border-color: #475569; color: #e5e7eb;
+    .ai-preview-in-rail .ai-req-scenarios input[type="file"],
+    .ai-preview-in-rail .ai-req-scenarios .testory-upload-input {
+        width: 100%; max-width: 100%; margin-top: 4px; font-size: 12px;
     }
     html.dark .ai-preview-in-rail .ai-req-scenarios .btn-secondary { background: #475569; }
     html.dark .ai-preview-in-rail .ai-req-scenarios .btn-secondary:hover { background: #64748b; }
@@ -885,7 +881,7 @@
 {% block content %}
 <!-- ai-test template build: playwright-ui-dedup 2026-04-24 -->
 <div class="ai-test-page">
-    <script id="__aiTestCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, openclaw=openclaw_gateway_configured)|tojson }}</script>
+    <script id="__aiTestCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=hermes_gateway_configured)|tojson }}</script>
     <script>
     (function () {
         window.__aiTestCaps = {};
@@ -964,15 +960,20 @@
                     <label class="ai-gen-label" for="aiAgentEngineSelect">推理引擎</label>
                     <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"></select>
                     {% if ai_chat_tools_env_enabled %}
-                    {% if openclaw_gateway_configured %}
+                    {% if hermes_gateway_configured %}
                     <div class="ai-cap-banner" role="status">
-                        已启用 <strong>AI 工具循环</strong> 且 <strong>OpenClaw Gateway</strong> 已配置；「<strong>优化</strong>」时模型可按需调用工具（须模型支持 function calling）。
+                        已启用 <strong>AI 工具循环</strong> 与内嵌 <strong>Testory AI (Hermes)</strong>；「<strong>优化</strong>」时模型可调用 <code>hermes_execute</code>（须模型支持 function calling）。
                     </div>
                     {% else %}
                     <div class="ai-cap-banner ai-cap-banner--warn" role="alert">
-                        工具循环已开，但未配置 OpenClaw（<code>OPENCLAW_GATEWAY_URL</code> / <code>OPENCLAW_GATEWAY_TOKEN</code>）。见 <code>.env.example</code>。
+                        工具循环已开，但未配置 Hermes（<code>HERMES_GATEWAY_URL</code> / <code>HERMES_API_SERVER_KEY</code>）。见 <code>.env.example</code>。
                     </div>
                     {% endif %}
+                    <details class="ai-skills-panel" style="margin:8px 0;font-size:12px;">
+                        <summary style="cursor:pointer;">Skills（Hermes 可复用流程）</summary>
+                        <div id="aiSkillsList" style="margin-top:6px;color:#475569;">加载中…</div>
+                        <button type="button" class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="aiExportPlanToSkill()">将当前预览导出为 Skill</button>
+                    </details>
                     {% endif %}
                     <div id="aiChatHistory" class="ai-chat-log ai-chat-log--rail" role="log" aria-live="polite"></div>
                     <label class="ai-gen-label" for="aiMessageInput" data-i18n="aitest_label_goal">任务目标（自然语言）</label>
@@ -1868,7 +1869,7 @@
         return !!aiRemoteCanvasState.gatewaySessionOnly;
     }
 
-    /** 内置画布网关已配置且进程可达（与 OpenClaw 无关） */
+    /** 内置 Browser Runtime 已配置且进程可达 */
     function aiEmbeddedGatewayUsable() {
         return !!(
             aiEmbeddedGatewayStatus.enabled
@@ -3271,7 +3272,7 @@
                 var leR = (aiEmbeddedGatewayStatus.lastError || '').trim();
                 appendAiChat(
                     'assistant',
-                    '内置画布未就绪，已取消优化（避免弹出主 Playwright / OpenClaw 浏览器）。'
+                    '内置画布未就绪，已取消优化（避免弹出主 Playwright / Hermes 浏览器）。'
                     + (leR ? (' ' + leR) : '')
                     + ' 请确认 embedded_browser_gateway 已启动并填写目标 URL。'
                 );
@@ -3494,7 +3495,7 @@
                     '内置画布未就绪，已取消本次运行（避免弹出主 Playwright 窗口）。'
                     + (le ? (' ' + le) : '')
                     + ' 请启动 python -m embedded_browser_gateway 并填写目标 URL。'
-                    + ' 说明：OpenClaw 与画布网关（EMBEDDED_BROWSER_*）是两套服务。'
+                    + ' 说明：Testory AI (Hermes) 与 Browser Runtime（EMBEDDED_BROWSER_*）是两层服务。'
                 );
                 setAgentStatusLine('画布未就绪 — 未运行');
                 return;
@@ -3681,10 +3682,10 @@
         var welcomeExtra = '';
         try {
             var caps = window.__aiTestCaps || {};
-            if (caps.chat_tools && caps.openclaw) {
-                welcomeExtra = ' 说明：若已通过环境变量启用工具循环并连接 OpenClaw，可在「优化」对话中让模型通过 Gateway 执行具体操作（见上方提示条）。';
-            } else if (caps.chat_tools && !caps.openclaw) {
-                welcomeExtra = ' 说明：工具循环已启用但未连接 OpenClaw 时请尽快配置 Gateway（见上方黄色提示）。';
+            if (caps.chat_tools && (caps.hermes || caps.openclaw)) {
+                welcomeExtra = ' 说明：若已启用工具循环并连接 Testory AI (Hermes)，可在「优化」对话中让模型通过 hermes_execute 执行探索（见上方提示条）。';
+            } else if (caps.chat_tools && !caps.hermes && !caps.openclaw) {
+                welcomeExtra = ' 说明：工具循环已启用但未连接 Hermes 时请配置 HERMES_GATEWAY_*（见上方黄色提示）。';
             }
         } catch (e) {}
         var WELCOME_HTML = '<div class="ai-chat-msg ai-chat-msg--assistant"><span class="ai-chat-msg__role">AI</span><div class="ai-chat-msg__bubble">你好。选好项目、用例与浏览器后，在<strong>左栏</strong>描述任务；<strong>生成用例</strong>更新右侧预览；<strong>优化</strong>多轮改步骤；顶栏<strong>运行</strong>会生成并执行。中栏填写 URL 点「打开」查看页面。会话在本页自动保存。' + welcomeExtra + '</div></div>';
@@ -3809,6 +3810,48 @@
         });
     })();
 
+    async function aiRefreshSkillsList() {
+        var el = document.getElementById('aiSkillsList');
+        if (!el) return;
+        try {
+            var resp = await fetch('/api/ai/skills', { credentials: 'same-origin' });
+            var data = await resp.json();
+            if (!data.success || !data.skills || !data.skills.length) {
+                el.textContent = '暂无 Skill；成功探索后可导出。';
+                return;
+            }
+            el.innerHTML = data.skills.map(function (sk) {
+                return '<div><code>' + (sk.id || '') + '</code> — ' + (sk.name || '') + '</div>';
+            }).join('');
+        } catch (e) {
+            el.textContent = 'Skills 列表加载失败';
+        }
+    }
+
+    async function aiExportPlanToSkill() {
+        if (!latestAiPlan || !latestAiPlan.steps || !latestAiPlan.steps.length) {
+            alert('请先生成用例预览');
+            return;
+        }
+        try {
+            var resp = await fetch('/api/ai/skills/export-from-plan', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ plan: latestAiPlan })
+            });
+            var data = await resp.json();
+            if (!data.success) {
+                alert(data.error || '导出失败');
+                return;
+            }
+            alert('已导出 Skill: ' + (data.skill && data.skill.id ? data.skill.id : ''));
+            aiRefreshSkillsList();
+        } catch (e) {
+            alert('导出失败: ' + e);
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', async function() {
         await loadProjectList();
         await loadPlaywrightBrowserSelect();
@@ -3817,6 +3860,7 @@
         syncUndoRedoButtons();
         wireAiBrowserUrlSync();
         await refreshEmbeddedGatewayStatus();
+        await aiRefreshSkillsList();
         wireRemoteCanvasInputOnce();
         document.getElementById('aiEmbeddedCdpCopyBtn') && document.getElementById('aiEmbeddedCdpCopyBtn').addEventListener('click', function(e) {
             e.preventDefault();

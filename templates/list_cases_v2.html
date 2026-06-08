@@ -572,10 +572,10 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label><span data-i18n="tc_import_file_label">选择文件</span> <span style="color:#888;font-size:12px;">（仅支持 .xlsx 格式）</span></label>
-                    <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
-                        <label for="importFile" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#6366f1;color:#fff;border-radius:6px;cursor:pointer;">选择文件</label>
-                        <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none;" onchange="updateFileName(this)">
-                        <span id="importFileName" style="color:#555;">未选择文件</span>
+                    <div style="display:flex;align-items:center;gap:10px;margin-top:6px;" class="testory-file-picker">
+                        <label for="importFile" class="testory-upload-btn"><i class="fas fa-file-arrow-up"></i> <span data-i18n="tc_pick_file">选择文件</span></label>
+                        <input type="file" id="importFile" accept=".xlsx,.xls" class="testory-file-input-hidden" onchange="updateFileName(this)">
+                        <span id="importFileName" class="testory-file-name" data-i18n="tc_no_file">未选择文件</span>
                     </div>
                 </div>
                 <div class="form-group">
@@ -788,7 +788,12 @@
         function showExportModal(){ document.getElementById('exportModal').classList.add('active'); }
         function closeExportModal(){ document.getElementById('exportModal').classList.remove('active'); }
         function downloadTemplate(fmt){ const path = (fmt === 'json') ? '/api/cases/template/json' : '/api/cases/template/excel'; window.open(path, '_blank'); }
-        function updateFileName(input){ document.getElementById('importFileName').innerText=input.files[0]?.name||'未选择文件'; }
+        function updateFileName(input){
+            var el = document.getElementById('importFileName');
+            var name = input.files[0]?.name || (typeof t === 'function' ? t('tc_no_file') : '未选择文件');
+            el.innerText = name;
+            el.classList.toggle('is-selected', !!input.files[0]);
+        }
         async function importCases(){ const file=document.getElementById('importFile').files[0]; if(!file){ alert('请选择文件'); return; } const fd=new FormData(); fd.append('file',file); fd.append('project_id',currentProjectId); const resp=await fetch('/api/cases/import/excel',{method:'POST',body:fd}); const data=await resp.json(); if(data.success){ alert(`导入成功，创建用例${data.cases_created}个`); loadTestCases(); closeImportModal(); } else alert('导入失败' + (data.error ? (': ' + data.error) : '')); }
         async function exportCases(format){ const selected=Array.from(document.querySelectorAll('.case-checkbox input:checked')).map(cb=>parseInt(cb.id.replace('select-',''))); const payload={project_id:selected.length===0?currentProjectId:undefined,case_ids:selected.length?selected:undefined}; const resp=await fetch(`/api/cases/export/${format}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success) window.open(data.download_url,'_blank'); else alert('导出失败'); }
         function showMarkDefectModal(){ if(selectedCaseIdsOrdered.length===0){ alert('请先勾选用例'); return; } const names=selectedCaseIdsOrdered.map(id=>caseNamesById[id]).join(', '); document.getElementById('defectCaseNames').innerHTML=names; document.getElementById('markDefectModal').classList.add('active'); }

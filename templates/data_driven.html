@@ -71,22 +71,20 @@
                         <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                             <span data-i18n="dd_file">选择文件</span> <span class="text-gray-400" data-i18n="dd_file_types">（CSV / XLSX / XLS）</span>
                         </label>
-                        <div id="dropZone"
-                            class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-4 text-center cursor-pointer hover:border-blue-400 transition-colors dark:hover:border-blue-500 bg-gray-50/50 dark:bg-gray-800/50"
+                        <div id="dropZone" class="testory-upload-dropzone"
                             onclick="document.getElementById('fileInput').click()">
-                            <i class="fas fa-file-csv text-3xl text-gray-300 dark:text-gray-600 mb-2"></i>
-                            <p id="dropLabel" class="text-sm text-gray-400 dark:text-gray-500" data-i18n="dd_drop">点击选择或拖拽文件</p>
+                            <i class="fas fa-file-csv testory-upload-dropzone__icon"></i>
+                            <p id="dropLabel" class="testory-upload-dropzone__label" data-i18n="dd_drop">点击选择或拖拽文件</p>
                         </div>
-                        <input id="fileInput" type="file" accept=".csv,.xlsx,.xls" class="hidden">
+                        <input id="fileInput" type="file" accept=".csv,.xlsx,.xls" class="testory-file-input-hidden">
                     </div>
                     <div class="text-xs text-gray-500 dark:text-gray-400 bg-blue-50 dark:bg-blue-950/40 rounded-lg p-3 border border-blue-100 dark:border-blue-900">
                         <p class="font-medium text-blue-700 dark:text-blue-300 mb-1"><i class="fas fa-info-circle mr-1"></i><span data-i18n="dd_var_t">变量占位符说明</span></p>
                         <p data-i18n="dd_var_p1">在测试步骤中用占位符引用列，与 JSON 中 row 字段一致，例如行数据里的 username。</p>
                         <p class="mt-1" data-i18n="dd_var_p2">CSV 表头 username 对应 row.username。</p>
                     </div>
-                    <button id="ddUploadBtn" onclick="uploadDataset()"
-                        class="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">
-                        <i class="fas fa-upload mr-1"></i><span data-i18n="dd_btn_up">上传并创建</span>
+                    <button id="ddUploadBtn" onclick="uploadDataset()" class="testory-upload-submit">
+                        <i class="fas fa-upload"></i><span data-i18n="dd_btn_up">上传并创建</span>
                     </button>
                 </div>
             </div>
@@ -419,20 +417,20 @@
         input.addEventListener('change', () => {
             if (input.files[0]) {
                 document.getElementById('dropLabel').textContent = input.files[0].name;
-                zone.classList.add('border-blue-400', 'bg-blue-50');
+                zone.classList.add('is-dragover');
             }
         });
 
-        zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('border-blue-400'); });
-        zone.addEventListener('dragleave', () => zone.classList.remove('border-blue-400'));
+        zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('is-dragover'); });
+        zone.addEventListener('dragleave', () => zone.classList.remove('is-dragover'));
         zone.addEventListener('drop', e => {
             e.preventDefault();
-            zone.classList.remove('border-blue-400');
+            zone.classList.remove('is-dragover');
             const f = e.dataTransfer.files[0];
             if (f) {
                 input.files = e.dataTransfer.files;
                 document.getElementById('dropLabel').textContent = f.name;
-                zone.classList.add('border-blue-400', 'bg-blue-50');
+                zone.classList.add('is-dragover');
             }
         });
     }
@@ -464,7 +462,7 @@
                 document.getElementById('datasetDesc').value = '';
                 document.getElementById('fileInput').value = '';
                 document.getElementById('dropLabel').textContent = t('dd_drop');
-                document.getElementById('dropZone').classList.remove('border-blue-400', 'bg-blue-50');
+                document.getElementById('dropZone').classList.remove('is-dragover');
                 await loadDatasets();
                 selectDataset(data.dataset_id);
             } else {
@@ -474,7 +472,7 @@
             alert(t('dd_req_fail') + e.message);
         } finally {
             btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-upload mr-1"></i>' + escHtml(t('dd_btn_up'));
+            btn.innerHTML = '<i class="fas fa-upload"></i><span>' + escHtml(t('dd_btn_up')) + '</span>';
         }
     }
 

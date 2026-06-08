@@ -35,7 +35,7 @@
             </div>
             <div class="ai-design-row">
                 <label for="aiDesignReqFile" data-i18n="aidesign_req_file">需求文件</label>
-                <input type="file" id="aiDesignReqFile" class="ai-design-file" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" />
+                <input type="file" id="aiDesignReqFile" class="ai-design-file testory-upload-input" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" />
             </div>
 
             <div class="ai-module-tabs" role="tablist">
@@ -58,5 +58,5 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/ai_design.js') }}?v=3"></script>
+<script src="{{ url_for('static', filename='js/ai_design.js') }}?v=4"></script>
 {% endblock %}

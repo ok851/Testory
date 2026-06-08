@@ -114,7 +114,7 @@
       platform_type: state.platform === 'android' ? 'android' : state.platform,
       requirements_text: text,
       base_url: (document.getElementById('aiDesignBaseUrl') && document.getElementById('aiDesignBaseUrl').value || '').trim(),
-      model: (extra && ext.model) || ''
+      model: (extra && extra.model) || ''
     };
   }
 

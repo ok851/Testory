@@ -24,6 +24,15 @@ def ai_locator_resolve_enabled() -> bool:
     )
 
 
+def _legacy_locator_llm_enabled() -> bool:
+    return os.environ.get("AI_LOCATOR_RESOLVE_LEGACY_LLM", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _step_needs_locator_resolution(step: Dict[str, Any]) -> bool:
     from ai_step_normalization import is_overly_broad_css_selector
 
@@ -48,6 +57,17 @@ def resolve_plan_steps_locators_with_snapshot(
         return steps, warnings
     if not force and not ai_locator_resolve_enabled():
         return steps, warnings
+
+    try:
+        from hermes_heal_bridge import hermes_locator_resolve_enabled
+
+        if hermes_locator_resolve_enabled() and not _legacy_locator_llm_enabled():
+            warnings.append(
+                "定位器解析：已启用 Hermes Skills 路径，跳过独立 LLM 预解析（请使用 /api/ai/skills 或 AI Heal 对话维护）。"
+            )
+            return steps, warnings
+    except ImportError:
+        pass
 
     from ai_page_probe import build_locator_candidates_from_probe_entry, probe_registry_from_interactive_snapshot
     from ai_selector_recovery import (

@@ -6,8 +6,7 @@
 #
 # 可选 AI 网关（保持独立 profile，按需启用）:
 #   docker compose --profile with-embedded-browser up -d
-#   docker compose --profile with-openclaw up -d
-#   docker compose --profile full-stack up -d    # 平台 + 两个网关
+#   docker compose --profile full-stack up -d    # 平台 + Browser Runtime
 #
 # 反向代理 / PostgreSQL:
 #   docker compose --profile with-nginx up -d
@@ -54,10 +53,12 @@ services:
       - EMBEDDED_BROWSER_GATEWAY_SECRET=${EMBEDDED_BROWSER_GATEWAY_SECRET:-change-embedded-browser-secret}
       - EMBEDDED_BROWSER_PUBLIC_WS_BASE=${EMBEDDED_BROWSER_PUBLIC_WS_BASE:-ws://127.0.0.1:8765}
       - EMBEDDED_BROWSER_PUBLIC_CDP_HOST=${EMBEDDED_BROWSER_PUBLIC_CDP_HOST:-}
-      # 未启用 openclaw-gateway profile 时，请在 .env 将 URL 置空或指向宿主机 Gateway
-      - OPENCLAW_GATEWAY_URL=${OPENCLAW_GATEWAY_URL:-}
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-change-openclaw-gateway-token}
-      - OPENCLAW_GATEWAY_TIMEOUT=${OPENCLAW_GATEWAY_TIMEOUT:-120}
+      # Hermes Agent（Docker 内通常指向宿主机内嵌 Gateway；离线安装包由 Flask 自动拉起）
+      - HERMES_GATEWAY_URL=${HERMES_GATEWAY_URL:-}
+      - HERMES_API_SERVER_KEY=${HERMES_API_SERVER_KEY:-change-hermes-api-key}
+      - HERMES_AUTO_START_GATEWAY=${HERMES_AUTO_START_GATEWAY:-0}
+      - AI_AGENT_BACKEND=${AI_AGENT_BACKEND:-hermes}
+      - AI_HERMES_HEAL_ENABLE=${AI_HERMES_HEAL_ENABLE:-1}
       - AI_LOCATOR_RESOLVE_ENABLE=${AI_LOCATOR_RESOLVE_ENABLE:-0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/api/health/ready"]
@@ -67,25 +68,7 @@ services:
       start_period: 40s
     restart: unless-stopped
 
-  # 可选：OpenClaw Gateway（AI「优化」多轮工具 openclaw_execute）
-  openclaw-gateway:
-    profiles:
-      - with-openclaw
-      - full-stack
-    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
-    ports:
-      - "${OPENCLAW_HOST_PORT:-18789}:18789"
-    environment:
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-change-openclaw-gateway-token}
-      - OPENCLAW_SKIP_ONBOARDING=${OPENCLAW_SKIP_ONBOARDING:-1}
-    volumes:
-      - openclaw_config:/home/node/.openclaw
-      - openclaw_workspace:/home/node/.openclaw/workspace
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-
-  # 可选：内嵌 Chromium 网关（AI 测试 CDP / 画布 WS，与 Flask 进程隔离）
+  # 可选：Browser Runtime（AI 测试 CDP / 画布 WS，与 Flask 进程隔离）
   embedded-browser-gateway:
     profiles:
       - with-embedded-browser
@@ -93,7 +76,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "-m", "embedded_browser_gateway"]
+    command: ["python", "-m", "browser_runtime"]
     ports:
       - "8765:8765"
     environment:
@@ -141,5 +124,3 @@ services:
 
 volumes:
   postgres_data:
-  openclaw_config:
-  openclaw_workspace:

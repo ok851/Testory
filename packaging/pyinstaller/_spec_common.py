@@ -133,6 +133,7 @@ def project_hiddenimports(root: Path) -> list:
     for pkg in (
         "ai_modules",
         "web_capture",
+        "browser_runtime",
         "embedded_browser_gateway",
         "desktop_automation_gateway",
     ):

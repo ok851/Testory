@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Literal, Tuple
 
-IntentKind = Literal["execute_plan", "navigate_url", "none"]
+IntentKind = Literal["execute_plan", "navigate_url", "hermes_explore", "none"]
 
 _URL_RE = re.compile(r"https?://[^\s\]\}\"'<>]+", re.I)
 
@@ -54,5 +54,17 @@ def parse_agent_intent(message: str, has_plan_steps: bool) -> Tuple[IntentKind, 
         return "navigate_url", {"url": url}
     if url and re.match(r"^https?://", t.strip()):
         return "navigate_url", {"url": url}
+
+    explore_triggers = (
+        "探索",
+        "走通",
+        "Hermes",
+        "hermes",
+        "agent 执行",
+        "自然语言执行",
+        "帮我测",
+    )
+    if any(k in t for k in explore_triggers):
+        return "hermes_explore", {"message": t}
 
     return "none", {}

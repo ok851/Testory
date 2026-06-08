@@ -1,0 +1,209 @@
+/**
+ * 全站统一「上传文件 / 选择文件」控件样式
+ * 用法见各页面 HTML 中的 class：testory-upload-btn、testory-upload-input、testory-upload-dropzone
+ */
+
+/* Pattern A：隐藏 input + 可点击 label 按钮 */
+.testory-file-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.testory-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  min-height: 36px;
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.25);
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.testory-upload-btn:hover {
+  background: linear-gradient(135deg, #4338ca, #4f46e5);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+}
+
+.testory-upload-btn:active {
+  transform: translateY(0);
+}
+
+.testory-upload-btn--sm {
+  padding: 6px 12px;
+  min-height: 32px;
+  font-size: 12px;
+}
+
+.testory-file-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.testory-file-name {
+  font-size: 13px;
+  color: #64748b;
+  word-break: break-all;
+}
+
+.testory-file-name.is-selected {
+  color: #334155;
+  font-weight: 500;
+}
+
+/* Pattern B：原生可见 file input */
+.testory-upload-input,
+input[type="file"].testory-upload-input,
+.ai-design-file {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.testory-upload-input:hover,
+.ai-design-file:hover {
+  border-color: #818cf8;
+  background: #f1f5f9;
+}
+
+.testory-upload-input:focus,
+.ai-design-file:focus {
+  outline: none;
+  border-color: #6366f1;
+  border-style: solid;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+/* Pattern C：拖拽/点击选区 */
+.testory-upload-dropzone {
+  border: 2px dashed #cbd5e1;
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  background: #f8fafc;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.testory-upload-dropzone:hover,
+.testory-upload-dropzone.is-dragover {
+  border-color: #6366f1;
+  background: #eef2ff;
+}
+
+.testory-upload-dropzone__icon {
+  font-size: 1.75rem;
+  color: #94a3b8;
+  margin-bottom: 0.5rem;
+}
+
+.testory-upload-dropzone__label {
+  font-size: 13px;
+  color: #64748b;
+}
+
+/* Pattern D：确认上传/提交按钮 */
+.testory-upload-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 16px;
+  min-height: 40px;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s, opacity 0.15s;
+  box-sizing: border-box;
+}
+
+.testory-upload-submit:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+  transform: translateY(-1px);
+}
+
+.testory-upload-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 深色模式 */
+html.dark .testory-upload-btn {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+html.dark .testory-file-name {
+  color: #94a3b8;
+}
+
+html.dark .testory-file-name.is-selected {
+  color: #e2e8f0;
+}
+
+html.dark .testory-upload-input,
+html.dark input[type="file"].testory-upload-input,
+html.dark .ai-design-file {
+  background: #0f172a;
+  border-color: #4338ca;
+  color: #e2e8f0;
+}
+
+html.dark .testory-upload-input:hover,
+html.dark .ai-design-file:hover {
+  background: #1e293b;
+  border-color: #6366f1;
+}
+
+html.dark .testory-upload-dropzone {
+  background: rgba(15, 23, 42, 0.5);
+  border-color: #475569;
+}
+
+html.dark .testory-upload-dropzone:hover,
+html.dark .testory-upload-dropzone.is-dragover {
+  border-color: #6366f1;
+  background: rgba(49, 46, 129, 0.35);
+}
+
+html.dark .testory-upload-dropzone__icon {
+  color: #64748b;
+}
+
+html.dark .testory-upload-dropzone__label {
+  color: #94a3b8;
+}

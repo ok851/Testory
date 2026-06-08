@@ -51,6 +51,20 @@ try:
 except Exception:
     pass
 
+try:
+    from hermes_config import ensure_hermes_home
+
+    ensure_hermes_home()
+except Exception:
+    pass
+
+try:
+    from hermes_service_bootstrap import bootstrap_hermes_services
+
+    bootstrap_hermes_services()
+except Exception:
+    pass
+
 from flask import Flask, render_template, request, jsonify, session, make_response, redirect, url_for, Response, stream_with_context
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -1805,14 +1819,14 @@ def api_ai_hub_cross_platform_execute():
 def ai_test_page():
     """AI 生成测试步骤；内嵌区与后台 Playwright 会话同步（可选远程画布为另一进程）。"""
     from ai_chat_tool_loop import ai_chat_tools_enabled
-    from openclaw_gateway_client import OpenClawGatewayClient
+    from agent_gateway_client import agent_gateway_configured
 
-    _oc = OpenClawGatewayClient()
     resp = make_response(
         render_template(
             'ai_test.html',
             ai_chat_tools_env_enabled=ai_chat_tools_enabled(),
-            openclaw_gateway_configured=_oc.is_configured(),
+            hermes_gateway_configured=agent_gateway_configured(),
+            openclaw_gateway_configured=agent_gateway_configured(),
         )
     )
     # 用于核对浏览器是否命中本仓库模板（与页内 #aiTestBuildMarker 文案一致）
@@ -3108,7 +3122,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
                 'error': (
                     '「运行」需要已连接的内置画布会话（embedded_session_id）。'
                     '请先在 AI 测试页建立画布实时画面，并确认 embedded_browser_gateway 已启动。'
-                    '（OpenClaw 与画布网关是不同服务。）'
+                    '（Testory AI (Hermes) 与 Browser Runtime 是不同服务。）'
                     '若确需回退主 Playwright，请在 .env 设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1。'
                 ),
                 '_http': 400,
@@ -4108,7 +4122,7 @@ def api_ai_import_api_spec_commit():
 @log_api_request
 def api_ai_cases_import_ui_plan():
     """
-    将外部工具（如 OpenClaw / 工具循环）产出的步骤 JSON 写入用例：可选 replace 清空原步骤后写入。
+    将外部 Agent（Hermes / 工具循环）产出的步骤 JSON 写入用例：可选 replace 清空原步骤后写入。
     Body: case_id, steps[], replace? (默认 false 为追加)
     """
     data = request.get_json(silent=True) or {}
@@ -4154,6 +4168,109 @@ def api_ai_cases_import_ui_plan():
         created += 1
 
     return jsonify({'success': True, 'case_id': int(case_id), 'steps_created': created, 'warnings': warnings})
+
+
+@app.route('/api/ai/skills', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_skills_list():
+    """列出 Hermes Skills（UAT_DATA_DIR/hermes/skills）。"""
+    from ai_hermes_skills import list_skills
+
+    return jsonify({'success': True, 'skills': list_skills()})
+
+
+@app.route('/api/ai/skills/export-from-plan', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_skills_export_from_plan():
+    """将 AI 计划导出为 Hermes SKILL.md。"""
+    from ai_hermes_skills import export_plan_to_skill
+
+    data = request.get_json(silent=True) or {}
+    plan = data.get('plan') or data.get('current_plan') or {}
+    if not isinstance(plan, dict) or not plan.get('steps'):
+        return jsonify({'success': False, 'error': 'plan.steps 不能为空'}), 400
+    skill_name = _ai_str(data.get('skill_name')) or _ai_str(plan.get('case_name')) or 'test-flow'
+    module_hint = _ai_str(data.get('module_hint')) or skill_name
+    env_notes = _ai_str(data.get('environment_notes'))
+    path, summary = export_plan_to_skill(
+        plan,
+        skill_name=skill_name,
+        module_hint=module_hint,
+        environment_notes=env_notes,
+    )
+    return jsonify({'success': True, 'skill': summary, 'path': str(path)})
+
+
+@app.route('/api/ai/skills/apply-to-case', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_skills_apply_to_case():
+    """从 Skill 导入步骤到用例或返回合并后的 plan。"""
+    from ai_hermes_skills import apply_skill_to_plan
+
+    data = request.get_json(silent=True) or {}
+    skill_id = _ai_str(data.get('skill_id'))
+    if not skill_id:
+        return jsonify({'success': False, 'error': 'skill_id 不能为空'}), 400
+    case_id = data.get('case_id')
+    base = data.get('current_plan') if isinstance(data.get('current_plan'), dict) else {}
+    try:
+        plan, warnings = apply_skill_to_plan(skill_id, base_plan=base)
+    except (FileNotFoundError, ValueError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+    if case_id:
+        steps = plan.get('steps') or []
+        if not steps:
+            return jsonify({'success': False, 'error': 'Skill 中无步骤'}), 400
+        case = db.get_test_case_v2(int(case_id))
+        if not case:
+            return jsonify({'success': False, 'error': '测试用例不存在'}), 404
+        _db = Database()
+        if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'editor'):
+            return jsonify({'success': False, 'error': '无权限修改此用例'}), 403
+        replace = bool(data.get('replace', True))
+        if replace:
+            _db.delete_case_steps(int(case_id))
+            start_order = 0
+        else:
+            old_steps, _t = _db.get_case_steps_paginated(int(case_id), 1, 2000)
+            start_order = max([int(s.get('step_order') or 0) for s in old_steps] or [0])
+        created = 0
+        for idx, step in enumerate(steps, start=1):
+            _db.create_test_step(**_ai_step_to_db_kwargs(step, int(case_id), start_order + idx))
+            created += 1
+        return jsonify({'success': True, 'case_id': int(case_id), 'steps_created': created, 'warnings': warnings})
+
+    return jsonify({'success': True, 'plan': plan, 'warnings': warnings})
+
+
+@app.route('/api/ai/skills/update', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_skills_update():
+    """对话式更新 Skill（UI 变更 / 自愈）。"""
+    from ai_hermes_skills import request_hermes_skill_update
+
+    data = request.get_json(silent=True) or {}
+    skill_id = _ai_str(data.get('skill_id'))
+    message = _ai_str(data.get('message'))
+    if not skill_id or not message:
+        return jsonify({'success': False, 'error': 'skill_id 与 message 不能为空'}), 400
+    result = request_hermes_skill_update(
+        skill_id,
+        message,
+        failure_context=data.get('failure_context') if isinstance(data.get('failure_context'), dict) else None,
+    )
+    return jsonify({'success': True, 'hermes_response': result})
 
 
 @app.route('/api/ai/diagnostics/failure-bundle', methods=['POST'])
@@ -4451,9 +4568,25 @@ def api_ai_agent_gateway_stream():
             yield _agent_gateway_sse_line(
                 {
                     "t": "error",
-                    "message": "未识别为可执行命令。示例：「执行当前预览」「打开 https://example.com」",
+                    "message": "未识别为可执行命令。示例：「执行当前预览」「打开 https://example.com」「探索登录流程」",
                 }
             )
+            yield _agent_gateway_sse_line({"t": "end"})
+            return
+
+        if kind == "hermes_explore":
+            from agent_gateway_client import agent_gateway_configured, get_agent_gateway_client
+
+            if not agent_gateway_configured():
+                yield _agent_gateway_sse_line(
+                    {"t": "error", "message": "Hermes Agent 未配置，无法执行自然语言探索。"}
+                )
+                yield _agent_gateway_sse_line({"t": "end"})
+                return
+            yield _agent_gateway_sse_line({"t": "log", "message": "正在通过 Testory AI (Hermes) 执行探索…"})
+            client = get_agent_gateway_client()
+            result = client.execute_user_instruction(meta.get("message") or message)
+            yield _agent_gateway_sse_line({"t": "hermes_result", "content": result[:48000]})
             yield _agent_gateway_sse_line({"t": "end"})
             return
 

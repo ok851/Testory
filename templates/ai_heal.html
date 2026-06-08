@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}AI 自愈优化 - {{ product_name }}{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_hub.css') }}?v=1">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_hub.css') }}?v=2">
 {% endblock %}
 {% block content %}
 <div class="ai-heal-page">
@@ -14,24 +14,36 @@
             </div>
         </header>
         <div class="ai-module-body">
+            <details class="ai-heal-usage" open>
+                <summary><i class="fas fa-circle-info"></i> 使用说明</summary>
+                <ol class="ai-heal-usage__list">
+                    <li><strong>定位器预修复</strong>：选项目 → 选用例 → 填目标 URL → 点「预览定位解析」查看 AI 建议的选择器 → 确认后「保存到用例」写回数据库。</li>
+                    <li><strong>失败诊断</strong>：粘贴运行失败日志、堆栈或步骤摘要 →「生成诊断建议」获取修复思路（不直接改库）。</li>
+                    <li><strong>步骤审查助手</strong>：在 Web 用例<strong>步骤编辑页</strong>右下角打开 AI 助手，可右键优化单步、合并步骤并替换应用。</li>
+                    <li><strong>Hermes Skills 维护</strong>：UI 变更时填写 Skill ID 与变更说明 →「对话更新 Skill」→ Hermes 更新 Skill 后可同步回用例步骤。</li>
+                    <li><strong>用例健康检查</strong>：选用例后点「分析当前用例步骤」，查看步骤结构、定位器与潜在风险摘要。</li>
+                </ol>
+                <p class="ai-heal-usage__tip">前置条件：在「AI 测试」或设置中配置好推理模型；Hermes 功能需 <code>HERMES_GATEWAY_URL</code> 可用（或开启自动启动 Gateway）。</p>
+            </details>
+
             <section class="ai-heal-block">
                 <h3 data-i18n="aiheal_locator_title">定位器预修复</h3>
-                <p style="font-size:13px;color:#64748b;margin:0 0 10px;" data-i18n="aiheal_locator_desc">选择用例与目标 URL，预览 AI 解析后的选择器，确认后写入数据库。</p>
+                <p class="ai-heal-desc" data-i18n="aiheal_locator_desc">选择用例与目标 URL，预览 AI 解析后的选择器，确认后写入数据库。</p>
                 <div class="ai-design-row">
                     <label for="aiHealProject">项目</label>
-                    <select id="aiHealProject"><option value="">加载中…</option></select>
+                    <select id="aiHealProject" class="ai-design-control"><option value="">加载中…</option></select>
                 </div>
                 <div class="ai-design-row">
                     <label for="aiHealCase">用例</label>
-                    <select id="aiHealCase"><option value="">先选项目</option></select>
+                    <select id="aiHealCase" class="ai-design-control"><option value="">先选项目</option></select>
                 </div>
                 <div class="ai-design-row">
                     <label for="aiHealUrl">目标页面 URL</label>
-                    <input type="url" id="aiHealUrl" placeholder="https://example.com" />
+                    <input type="url" id="aiHealUrl" class="ai-design-control" placeholder="https://example.com" />
                 </div>
                 <div class="ai-design-actions">
-                    <button type="button" class="btn btn-secondary" id="aiHealPreviewBtn">预览定位解析</button>
-                    <button type="button" class="btn btn-primary" id="aiHealSaveBtn" disabled>保存到用例</button>
+                    <button type="button" class="ai-btn ai-btn--secondary" id="aiHealPreviewBtn">预览定位解析</button>
+                    <button type="button" class="ai-btn ai-btn--primary" id="aiHealSaveBtn" disabled>保存到用例</button>
                 </div>
                 <pre id="aiHealLocatorOut" class="ai-design-pre" style="margin-top:10px;"></pre>
             </section>
@@ -40,24 +52,46 @@
                 <h3 data-i18n="aiheal_diag_title">失败诊断</h3>
                 <div class="ai-design-row">
                     <label for="aiHealDiagText">错误日志 / 堆栈 / 步骤摘要</label>
-                    <textarea id="aiHealDiagText" rows="5" placeholder="粘贴运行失败信息…"></textarea>
+                    <textarea id="aiHealDiagText" class="ai-design-control" rows="5" placeholder="粘贴运行失败信息…"></textarea>
                 </div>
                 <div class="ai-design-actions">
-                    <button type="button" class="btn btn-secondary" id="aiHealDiagBtn">生成诊断建议</button>
+                    <button type="button" class="ai-btn ai-btn--secondary" id="aiHealDiagBtn">生成诊断建议</button>
                 </div>
                 <pre id="aiHealDiagOut" class="ai-design-pre" style="margin-top:10px;"></pre>
             </section>
 
             <section class="ai-heal-block">
                 <h3 data-i18n="aiheal_steps_title">步骤审查助手</h3>
-                <p style="font-size:13px;color:#64748b;margin:0 0 10px;">在 Web 用例步骤编辑页右下角打开 AI 助手，支持右键优化单步、合并步骤与替换应用。</p>
-                <a href="/list_projects" class="btn btn-primary btn-sm" data-i18n="aiheal_go_projects">前往项目 → 用例 → 步骤</a>
-                <a href="/ai-hub" class="btn btn-secondary btn-sm" style="margin-left:8px;">返回 AI 中心</a>
+                <p class="ai-heal-desc">在 Web 用例步骤编辑页右下角打开 AI 助手，支持右键优化单步、合并步骤与替换应用。</p>
+                <div class="ai-design-actions">
+                    <a href="/list_projects" class="ai-btn ai-btn--primary" data-i18n="aiheal_go_projects">前往项目 → 用例 → 步骤</a>
+                    <a href="/ai-hub" class="ai-btn ai-btn--secondary">返回 AI 中心</a>
+                </div>
             </section>
 
             <section class="ai-heal-block">
-                <h3 data-i18n="aiheal_analyze_title">用例健康检查</h3>
-                <button type="button" class="btn btn-secondary btn-sm" id="aiHealAnalyzeBtn">分析当前用例步骤</button>
+                <h3>Hermes Skills 维护</h3>
+                <p class="ai-heal-desc">UI 变更时通过对话更新 Skill，并同步回用例步骤。</p>
+                <div class="ai-design-row">
+                    <label for="aiHealSkillId">Skill ID</label>
+                    <input type="text" id="aiHealSkillId" class="ai-design-control" placeholder="例如 login-flow" />
+                </div>
+                <div class="ai-design-row">
+                    <label for="aiHealSkillMessage">变更说明</label>
+                    <textarea id="aiHealSkillMessage" class="ai-design-control" rows="3" placeholder="说明 UI 变更或修复意图…"></textarea>
+                </div>
+                <div class="ai-design-actions">
+                    <button type="button" class="ai-btn ai-btn--secondary" onclick="aiHealUpdateSkill()">对话更新 Skill</button>
+                </div>
+                <pre id="aiHealSkillResult" class="ai-design-pre ai-heal-skill-result" style="margin-top:10px;display:none;"></pre>
+            </section>
+
+            <section class="ai-heal-block">
+                <h3>用例健康检查</h3>
+                <p class="ai-heal-desc">基于当前所选 Web 用例步骤，生成结构与健康度摘要（需先在上文选择项目与用例）。</p>
+                <div class="ai-design-actions">
+                    <button type="button" class="ai-btn ai-btn--secondary" id="aiHealAnalyzeBtn">分析当前用例步骤</button>
+                </div>
                 <pre id="aiHealAnalyzeOut" class="ai-design-pre" style="margin-top:10px;"></pre>
             </section>
         </div>
@@ -65,5 +99,5 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/ai_heal.js') }}?v=1"></script>
+<script src="{{ url_for('static', filename='js/ai_heal.js') }}?v=2"></script>
 {% endblock %}

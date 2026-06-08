@@ -11,7 +11,7 @@ class TestEnvExampleSync(unittest.TestCase):
     def test_coerce_local_on_value(self):
         self.assertEqual(_coerce_local_on_value("ENABLE_MOBILE", "0"), "1")
         self.assertEqual(_coerce_local_on_value("ENABLE_MOBILE", "1"), "1")
-        self.assertEqual(_coerce_local_on_value("OPENCLAW_GATEWAY_URL", "http://x"), "http://x")
+        self.assertEqual(_coerce_local_on_value("HERMES_GATEWAY_URL", "http://x"), "http://x")
 
     def test_pairs_from_commented_example(self):
         text = "# ENABLE_MOBILE=0\n# EMBEDDED_BROWSER_AUTO_START_GATEWAY=0\n"

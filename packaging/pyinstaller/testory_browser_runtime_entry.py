@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""PyInstaller 入口：embedded_browser_gateway（AI 画布）独立进程。"""
+"""PyInstaller 入口：Browser Runtime（画布 WS / inspect / run-steps）。"""
 from __future__ import annotations
 
 import os

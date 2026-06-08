@@ -21,23 +21,7 @@ html.dark .api-tc-modal-scope .modal-panel h3 { color: #f9fafb; }
 html.dark .api-tc-modal-scope .form-group label { color: #d1d5db; }
 html.dark .api-tc-modal-scope .form-group input, html.dark .api-tc-modal-scope .form-group select { background: #111827; border-color: #4b5563; color: #e5e7eb; }
 html.dark .api-tc-modal-scope .modal-footer { border-color: #374151; }
-/* 导入弹窗：文件选择与预览区（补全原先未覆盖的样式） */
-.api-tc-modal-scope .form-group input[type="file"] {
-    width: 100%;
-    padding: 8px 10px;
-    font-size: 13px;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    box-sizing: border-box;
-    background: #fafafa;
-    cursor: pointer;
-}
-.api-tc-modal-scope .form-group input[type="file"]:focus { outline: none; border-color: #667eea; }
-html.dark .api-tc-modal-scope .form-group input[type="file"] {
-    background: #111827;
-    border-color: #4b5563;
-    color: #e5e7eb;
-}
+/* 文件选择样式见 static/css/testory-upload.css (.testory-upload-input) */
 #importApiPreviewBox {
     border-color: #e9ecef !important;
     background: #fafbff;
@@ -106,7 +90,7 @@ html.dark #importApiPreviewTable td { color: #e5e7eb; border-color: #374151; }
         <p class="text-xs text-gray-500 dark:text-gray-400 mb-3" style="line-height:1.5">上传 JSON 文件（OpenAPI 2/3 或 Postman Collection v2.1），预览后写入<strong>一个</strong>新接口用例（多条 api_request 步骤）。</p>
         <div class="form-group">
             <label for="importApiFile">JSON 文件</label>
-            <input type="file" id="importApiFile" accept=".json,application/json" />
+            <input type="file" id="importApiFile" class="testory-upload-input" accept=".json,application/json" />
         </div>
         <div class="form-group">
             <label for="importApiBaseUrl">Base URL（可选，OpenAPI 无 servers 时填写）</label>

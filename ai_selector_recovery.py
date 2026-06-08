@@ -232,6 +232,15 @@ async def try_recover_selector_with_vision(
     return resolved
 
 
+def _legacy_selector_llm_enabled() -> bool:
+    return os.environ.get("AI_SELECTOR_RECOVERY_LEGACY_LLM", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 async def try_recover_selector_with_llm(
     page: Any, description: str, action: str, failed_selector: str
 ) -> Optional[Tuple[str, str]]:
@@ -245,6 +254,17 @@ async def try_recover_selector_with_llm(
     desc = (description or "").strip()
     if not desc:
         return None
+
+    if not _legacy_selector_llm_enabled():
+        try:
+            from hermes_heal_bridge import hermes_heal_enabled, try_recover_selector_with_hermes
+
+            if hermes_heal_enabled():
+                resolved = await try_recover_selector_with_hermes(page, desc, action, failed_selector)
+                if resolved:
+                    return resolved
+        except ImportError:
+            pass
 
     cap = int(os.environ.get("AI_SELECTOR_RECOVERY_MAX_NODES", "100") or "100")
     cap = min(200, max(20, cap))

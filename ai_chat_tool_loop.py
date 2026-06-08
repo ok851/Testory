@@ -1,5 +1,5 @@
 """
-Multi-turn AI test chat with OpenAI-style tool calling: openclaw_execute + refine_test_plan.
+Multi-turn AI test chat with OpenAI-style tool calling: hermes_execute + refine_test_plan.
 
 Enable with environment variable AI_CHAT_TOOLS_ENABLE=1.
 """
@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ai_multi_provider import dispatch_chat_completion_messages
 from logger import uat_logger
 from embedded_browser_client import embedded_gateway_enabled
-from openclaw_gateway_client import OpenClawGatewayClient, _tool_result_max_chars
+from agent_gateway_client import agent_tool_result_max_chars, get_agent_gateway_client
 
 
 def ai_chat_tools_enabled() -> bool:
@@ -62,9 +62,9 @@ def _ai_allow_main_playwright_fallback() -> bool:
     )
 
 
-def openclaw_execute_allowed(*, embedded_session_id: str = "") -> bool:
+def hermes_execute_allowed(*, embedded_session_id: str = "") -> bool:
     """
-    已配置内置画布网关且未允许主 Playwright 回退时，禁止 openclaw_execute（会另开浏览器）。
+    已配置内置浏览器运行时且未允许主 Playwright 回退时，禁止 hermes_execute（会另开浏览器）。
     """
     if not embedded_gateway_enabled():
         return True
@@ -73,53 +73,61 @@ def openclaw_execute_allowed(*, embedded_session_id: str = "") -> bool:
     return False
 
 
-def chat_tool_schemas(*, allow_openclaw: bool = True) -> List[Dict[str, Any]]:
-    schemas: List[Dict[str, Any]] = []
-    if allow_openclaw:
-        schemas.append(
-        {
-            "type": "function",
-            "function": {
-                "name": "openclaw_execute",
-                "description": (
-                    "通过 OpenClaw Gateway 在真实浏览器中执行自然语言测试任务（可长链路、多页面、整模块）。"
-                    "适用于：探索系统、走通业务流程、收集页面 URL/标题/控件线索，供后续写入用例步骤。"
-                    "复杂任务可多次调用：先登录与主干路径，再按模块分次探索；用 continuation_from 衔接上下文。"
-                    "调用后根据返回文本整理出具体 navigate/click/input/wait/assert 步骤，必要时再调用 refine_test_plan。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "instruction": {
-                            "type": "string",
-                            "description": "主任务说明：目标系统/模块、要走的流程、注意事项（尽量完整）",
-                        },
-                        "scope": {
-                            "type": "string",
-                            "description": "可选：smoke | module | e2e | explore | regression | integration，影响探索深度与输出结构",
-                        },
-                        "environment_notes": {
-                            "type": "string",
-                            "description": "可选：基础 URL、账号、环境、测试数据前提、禁用项等",
-                        },
-                        "acceptance_criteria": {
-                            "type": "string",
-                            "description": "可选：验收/检查点，分号或换行分隔；要求 OpenClaw 输出中逐条回应",
-                        },
-                        "continuation_from": {
-                            "type": "string",
-                            "description": "可选：上次执行摘要或待继续的子任务，避免重复劳动",
-                        },
-                        "session_id": {
-                            "type": "string",
-                            "description": "可选，OpenClaw 侧会话标识",
-                        },
+def openclaw_execute_allowed(*, embedded_session_id: str = "") -> bool:
+    """Deprecated alias for hermes_execute_allowed."""
+    return hermes_execute_allowed(embedded_session_id=embedded_session_id)
+
+
+def _agent_execute_tool_schema() -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "hermes_execute",
+            "description": (
+                "通过内嵌 Hermes Agent 在真实浏览器中执行自然语言测试任务（可长链路、多页面、整模块）。"
+                "适用于：探索系统、走通业务流程、收集页面 URL/标题/控件线索，供后续写入用例步骤或 Skill。"
+                "复杂任务可多次调用：先登录与主干路径，再按模块分次探索；用 continuation_from 衔接上下文。"
+                "调用后根据返回文本整理出具体 navigate/click/input/wait/assert 步骤，必要时再调用 refine_test_plan。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "主任务说明：目标系统/模块、要走的流程、注意事项（尽量完整）",
                     },
-                    "required": ["instruction"],
+                    "scope": {
+                        "type": "string",
+                        "description": "可选：smoke | module | e2e | explore | regression | integration",
+                    },
+                    "environment_notes": {
+                        "type": "string",
+                        "description": "可选：基础 URL、账号、环境、测试数据前提、禁用项等",
+                    },
+                    "acceptance_criteria": {
+                        "type": "string",
+                        "description": "可选：验收/检查点，分号或换行分隔",
+                    },
+                    "continuation_from": {
+                        "type": "string",
+                        "description": "可选：上次执行摘要或待继续的子任务",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "可选，Agent 侧会话标识",
+                    },
                 },
+                "required": ["instruction"],
             },
-        }
-        )
+        },
+    }
+
+
+def chat_tool_schemas(*, allow_openclaw: bool = True, allow_hermes: Optional[bool] = None) -> List[Dict[str, Any]]:
+    allow = allow_hermes if allow_hermes is not None else allow_openclaw
+    schemas: List[Dict[str, Any]] = []
+    if allow:
+        schemas.append(_agent_execute_tool_schema())
     schemas.append(
         {
             "type": "function",
@@ -171,31 +179,30 @@ def _build_system_prompt(
     parts = [
         "你是资深 QA / 自动化架构师，负责对话式维护并扩展 AI 自动化测试用例计划。",
         "",
-        "## OpenClaw 与多轮工具",
+        "## Hermes Agent 与多轮工具",
     ]
     if embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
-        parts_oc = [
-            "【重要】平台已启用内置 AI 画布网关（embedded_browser_gateway），浏览器操作必须只通过 refine_test_plan 写入 steps，",
-            "由平台在画布 Chromium 中执行（与中栏实时画面同一会话）。禁止调用 openclaw_execute（会经 OpenClaw 另开独立浏览器，与画布重复）。",
+        parts_agent = [
+            "【重要】平台已启用内置浏览器运行时（Browser Runtime / 画布），浏览器操作必须只通过 refine_test_plan 写入 steps，",
+            "由平台在画布 Chromium 中执行（与中栏实时画面同一会话）。禁止调用 hermes_execute（会经 Agent 另开独立浏览器，与画布重复）。",
             "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改步骤（含 navigate/click/input/wait/assert）。",
             "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
         ]
     elif (embedded_session_id or "").strip() and embedded_gateway_enabled():
-        parts_oc = [
-            "【重要】用户已连接内置 AI 画布（embedded 会话）。浏览器操作必须只在该画布 Chromium 中通过 steps 体现；",
-            "由平台在画布执行。禁止调用 openclaw_execute（会另开独立浏览器窗口，与画布重复）。",
-            "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改步骤（含 navigate/click/input/wait/assert）。",
+        parts_agent = [
+            "【重要】用户已连接内置 AI 画布（browser runtime 会话）。浏览器操作必须只在该画布 Chromium 中通过 steps 体现；",
+            "由平台在画布执行。禁止调用 hermes_execute（会另开独立浏览器窗口，与画布重复）。",
+            "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改 steps。",
             "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
         ]
     else:
-        parts_oc = [
-            "当用户要「在真实浏览器里跑」「探索系统/模块」「走通流程」「验证一整条业务」时，可调用 openclaw_execute。",
-            "openclaw_execute 可把 scope / environment_notes / acceptance_criteria / continuation_from 与 instruction 组合成一条长指令；"
-            "对大系统请分多轮调用：例如 (1) 登录与首页 (2) 核心业务模块A (3) 模块B 等，每轮用 continuation_from 摘要上一轮。",
-            "拿到 OpenClaw 文本结果后：提炼可落地的选择器、URL、断言文案；若当前计划与探索结果不一致，调用 refine_test_plan 合并。",
+        parts_agent = [
+            "当用户要「在真实浏览器里跑」「探索系统/模块」「走通流程」「验证一整条业务」时，可调用 hermes_execute。",
+            "hermes_execute 可把 scope / environment_notes / acceptance_criteria / continuation_from 与 instruction 组合成长指令；"
+            "对大系统请分多轮调用。拿到 Agent 文本结果后提炼选择器、URL、断言文案；必要时调用 refine_test_plan 合并。",
             "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
         ]
-    parts.extend(parts_oc)
+    parts.extend(parts_agent)
     parts.extend([
         "",
         "## 输出用例质量",
@@ -249,10 +256,7 @@ def _parse_tool_arguments(raw: str) -> Dict[str, Any]:
         return {}
 
 
-def _compose_openclaw_instruction(args: Dict[str, Any]) -> str:
-    """
-    将结构化字段拼成一条交给 OpenClaw 的长指令，便于整系统/模块化探索与回归。
-    """
+def _compose_agent_instruction(args: Dict[str, Any]) -> str:
     base = (args.get("instruction") or "").strip()
     blocks: List[str] = []
     scope = (args.get("scope") or "").strip().lower()
@@ -274,9 +278,7 @@ def _compose_openclaw_instruction(args: Dict[str, Any]) -> str:
         blocks.append("【环境与数据前提】\n" + env_notes)
     ac = (args.get("acceptance_criteria") or "").strip()
     if ac:
-        blocks.append(
-            "【必须验证的检查点】（逐条尝试并在输出中写明每条通过/失败/跳过原因）\n" + ac
-        )
+        blocks.append("【必须验证的检查点】（逐条尝试并在输出中写明每条通过/失败/跳过原因）\n" + ac)
     cont = (args.get("continuation_from") or "").strip()
     if cont:
         blocks.append("【承接上次执行】（在同一浏览器会话逻辑下继续，不要重复已确认无问题的步骤）\n" + cont)
@@ -285,6 +287,9 @@ def _compose_openclaw_instruction(args: Dict[str, Any]) -> str:
     if blocks:
         return "\n\n".join(blocks) + "\n\n【主任务说明】\n" + base
     return base
+
+
+_compose_openclaw_instruction = _compose_agent_instruction
 
 
 @dataclass
@@ -305,6 +310,40 @@ class ChatToolLoopParams:
     embedded_session_id: Optional[str] = None
 
 
+def _handle_agent_execute(
+    *,
+    name: str,
+    args: Dict[str, Any],
+    allow_agent: bool,
+    agent_client: Any,
+    meta: Dict[str, Any],
+) -> str:
+    tool_key = "hermes_execute" if name == "hermes_execute" else "openclaw_execute"
+    if not allow_agent:
+        meta["tools_used"].append(f"{tool_key}_blocked")
+        return json.dumps(
+            {
+                "ok": False,
+                "error": (
+                    f"{tool_key} 已禁用：已配置内置浏览器运行时，请改用 refine_test_plan "
+                    "并在 AI 测试页通过画布执行步骤。"
+                ),
+            },
+            ensure_ascii=False,
+        )
+    instr = _compose_agent_instruction(args)
+    sid = (args.get("session_id") or "").strip()
+    if not instr.strip():
+        meta["tools_used"].append(tool_key)
+        return json.dumps(
+            {"ok": False, "error": "instruction 经拼装后仍为空；请填写主任务或 environment_notes/scope"},
+            ensure_ascii=False,
+        )
+    result_text = agent_client.execute_user_instruction(instr, sid)
+    meta["tools_used"].append(tool_key)
+    return result_text
+
+
 def run_ai_chat_with_tools(
     *,
     local_ai_service: Any,
@@ -316,9 +355,9 @@ def run_ai_chat_with_tools(
     Caller should run apply_step_normalization_to_plan on generated_plan_dict.
     """
     embed_sid = (params.embedded_session_id or "").strip()
-    allow_oc = openclaw_execute_allowed(embedded_session_id=embed_sid)
-    tools = chat_tool_schemas(allow_openclaw=allow_oc)
-    oc_client = OpenClawGatewayClient()
+    allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid)
+    tools = chat_tool_schemas(allow_hermes=allow_agent)
+    agent_client = get_agent_gateway_client()
 
     ic_note = ""
     if params.interaction_context:
@@ -347,6 +386,7 @@ def run_ai_chat_with_tools(
     last_plan: Dict[str, Any] = dict(params.current_plan) if isinstance(params.current_plan, dict) else {}
     meta: Dict[str, Any] = {"tool_rounds": 0, "tools_used": []}
     prof: Optional[Dict[str, Any]] = params.profile if isinstance(params.profile, dict) else None
+    max_result = agent_tool_result_max_chars()
 
     for round_idx in range(_max_tool_rounds()):
         if prof:
@@ -431,33 +471,14 @@ def run_ai_chat_with_tools(
             args = _parse_tool_arguments(raw_args)
             result_text = ""
 
-            if name == "openclaw_execute":
-                if not allow_oc:
-                    result_text = json.dumps(
-                        {
-                            "ok": False,
-                            "error": (
-                                "openclaw_execute 已禁用：已配置内置画布网关，请改用 refine_test_plan "
-                                "并在 AI 测试页通过画布执行步骤。"
-                            ),
-                        },
-                        ensure_ascii=False,
-                    )
-                    meta["tools_used"].append("openclaw_execute_blocked")
-                else:
-                    instr = _compose_openclaw_instruction(args)
-                    sid = (args.get("session_id") or "").strip()
-                    if not instr.strip():
-                        result_text = json.dumps(
-                            {
-                                "ok": False,
-                                "error": "instruction 经拼装后仍为空；请填写主任务或 environment_notes/scope",
-                            },
-                            ensure_ascii=False,
-                        )
-                    else:
-                        result_text = oc_client.execute_user_instruction(instr, sid)
-                    meta["tools_used"].append("openclaw_execute")
+            if name in ("hermes_execute", "openclaw_execute"):
+                result_text = _handle_agent_execute(
+                    name=name,
+                    args=args,
+                    allow_agent=allow_agent,
+                    agent_client=agent_client,
+                    meta=meta,
+                )
             elif name == "refine_test_plan":
                 adj = (args.get("adjustment") or "").strip()
                 if not adj:
@@ -481,7 +502,7 @@ def run_ai_chat_with_tools(
                     result_text = json.dumps(
                         {"ok": True, "plan": refined, "hint": "已更新 current_plan，请在最终回复输出完整 JSON 用例"},
                         ensure_ascii=False,
-                    )[: min(96000, _tool_result_max_chars())]
+                    )[: min(96000, max_result)]
                 meta["tools_used"].append("refine_test_plan")
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)

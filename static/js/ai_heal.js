@@ -167,6 +167,30 @@
     }
   }
 
+  window.aiHealUpdateSkill = async function () {
+    var skillId = (document.getElementById('aiHealSkillId') || {}).value || '';
+    var message = (document.getElementById('aiHealSkillMessage') || {}).value || '';
+    var out = document.getElementById('aiHealSkillResult');
+    if (!skillId.trim() || !message.trim()) {
+      alert('请填写 Skill ID 与说明');
+      return;
+    }
+    if (out) { out.style.display = 'block'; out.textContent = '请求 Hermes…'; }
+    try {
+      var resp = await fetch('/api/ai/skills/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ skill_id: skillId.trim(), message: message.trim() })
+      });
+      var data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || '失败');
+      if (out) out.textContent = data.hermes_response || JSON.stringify(data, null, 2);
+    } catch (e) {
+      if (out) out.textContent = String(e && e.message ? e.message : e);
+    }
+  };
+
   document.addEventListener('DOMContentLoaded', function () {
     loadProjects();
     document.getElementById('aiHealProject').addEventListener('change', function () {

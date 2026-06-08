@@ -27,13 +27,24 @@ except ImportError:
 
 
 def _embedded_gateway_cmd() -> list:
-    try:
-        exe = helper_executable("TestoryEmbeddedGw")
-        if exe is not None and exe.is_file():
-            return [str(exe)]
-    except NameError:
-        pass
-    return [sys.executable, "-m", "embedded_browser_gateway"]
+    for folder, mod in (
+        ("TestoryBrowserRuntime", "browser_runtime"),
+        ("TestoryEmbeddedGw", "embedded_browser_gateway"),
+    ):
+        try:
+            exe = helper_executable(folder)
+            if exe is not None and exe.is_file():
+                return [str(exe)]
+        except NameError:
+            pass
+        try:
+            import importlib.util
+
+            if importlib.util.find_spec(mod):
+                return [sys.executable, "-m", mod]
+        except ImportError:
+            continue
+    return [sys.executable, "-m", "browser_runtime"]
 
 
 def _truthy(name: str, default: str = "1") -> bool:

@@ -79,8 +79,8 @@ SVG = """<?xml version="1.0" encoding="UTF-8"?>
   <text x="320" y="758" text-anchor="middle" fill="#e2e8f0" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600">embedded_browser_gateway</text>
   <text x="320" y="786" text-anchor="middle" fill="#94a3b8" font-family="Segoe UI, sans-serif" font-size="12">profile: with-embedded-browser :8765</text>
   <rect x="560" y="720" width="400" height="110" rx="10" fill="url(#boxOpt)" stroke="#64748b"/>
-  <text x="760" y="758" text-anchor="middle" fill="#e2e8f0" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600">openclaw-gateway</text>
-  <text x="760" y="786" text-anchor="middle" fill="#94a3b8" font-family="Segoe UI, sans-serif" font-size="12">profile: with-openclaw :18789</text>
+  <text x="760" y="758" text-anchor="middle" fill="#e2e8f0" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600">hermes-gateway</text>
+  <text x="760" y="786" text-anchor="middle" fill="#94a3b8" font-family="Segoe UI, sans-serif" font-size="12">Testory AI :8642</text>
   <rect x="1000" y="720" width="400" height="110" rx="10" fill="url(#boxOpt)" stroke="#64748b"/>
   <text x="1200" y="758" text-anchor="middle" fill="#e2e8f0" font-family="Segoe UI, sans-serif" font-size="15" font-weight="600">desktop_automation_gateway</text>
   <text x="1200" y="786" text-anchor="middle" fill="#94a3b8" font-family="Segoe UI, sans-serif" font-size="12">mode=gateway :8766</text>
