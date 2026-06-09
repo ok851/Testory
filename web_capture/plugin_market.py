@@ -15,18 +15,77 @@ from typing import Any, Dict, List, Optional
 _ROOT = Path(__file__).resolve().parent.parent
 _CHROME_SRC = _ROOT / "browser_extension" / "chrome"
 _STATE_FILENAME = "installed_plugins.json"
+_LEGACY_EXTENSIONS_DIRNAME = "NewUITestPlatform"
+
+
+def _legacy_extensions_root() -> Optional[Path]:
+    local = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if not local:
+        return None
+    legacy = Path(local) / _LEGACY_EXTENSIONS_DIRNAME / "extensions"
+    return legacy if legacy.is_dir() else None
+
+
+def _maybe_migrate_legacy_extensions(target: Path) -> None:
+    """若新目录为空且存在旧品牌目录，一次性复制扩展文件。"""
+    marker = target.parent / ".extensions_migrated"
+    if marker.is_file():
+        return
+    legacy = _legacy_extensions_root()
+    if legacy is None:
+        marker.write_text("no_legacy\n", encoding="utf-8")
+        return
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        has_new = any(target.iterdir())
+    except OSError:
+        has_new = False
+    if has_new:
+        marker.write_text("skipped_existing\n", encoding="utf-8")
+        return
+    try:
+        if not any(legacy.iterdir()):
+            marker.write_text("legacy_empty\n", encoding="utf-8")
+            return
+        shutil.copytree(legacy, target, dirs_exist_ok=True)
+        marker.write_text(f"migrated_from={legacy}\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def software_extensions_root() -> Path:
-    """软件扩展安装根目录（打包后优先使用程序目录）。"""
+    """软件扩展安装根目录（桌面版优先 UAT_DATA_DIR/extensions）。"""
+    override = (os.environ.get("TESTORY_EXTENSIONS_ROOT") or "").strip()
+    if override:
+        root = Path(override)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    uat = (os.environ.get("UAT_DATA_DIR") or "").strip()
+    if uat:
+        root = Path(uat) / "extensions"
+        _maybe_migrate_legacy_extensions(root)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     if getattr(sys, "frozen", False):
-        root = Path(sys.executable).resolve().parent / "extensions"
-    else:
-        local = os.environ.get("LOCALAPPDATA", "")
-        if local:
-            root = Path(local) / "NewUITestPlatform" / "extensions"
-        else:
-            root = _ROOT / "extensions"
+        try:
+            from install_paths import resolve_install_root
+
+            root = resolve_install_root() / "extensions"
+        except ImportError:
+            root = Path(sys.executable).resolve().parent / "extensions"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    local = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if local:
+        root = Path(local) / "Testory" / "extensions"
+        _maybe_migrate_legacy_extensions(root)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    root = _ROOT / "extensions"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

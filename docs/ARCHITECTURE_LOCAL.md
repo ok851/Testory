@@ -1,6 +1,14 @@
 # 本地版混排自动化架构说明
 
-本文档描述 **用户 Windows 本机** 运行 HuFirst UAT 平台时的推荐架构，与仓库内 Docker（仅 Web）部署区分。
+本文档描述 **Testory 桌面客户端** 在 Windows 本机运行时的架构。Docker Compose 部署仅用于 **开发集成测试 / 团队服务器模拟**，不是面向最终用户的产品路径。
+
+## 产品入口
+
+| 角色 | 入口 |
+|------|------|
+| **最终用户** | `Testory.exe`（安装包）→ pywebview 桌面窗口 |
+| **开发人员** | `packaging/run_uat_local.ps1`（浏览器）或 `-Desktop`（桌面壳） |
+| **团队服务器** | Docker / `DEPLOYMENT_MODE=server`（企业内网，不随桌面包分发） |
 
 ## 架构图（16:9）
 
@@ -17,8 +25,8 @@
 ```mermaid
 flowchart TB
   subgraph userMachine [UserWindowsPC]
-    UI[Browser_UI_localhost_5000]
-    Core[Flask_app_py]
+    UI[Testory_exe_WebView2]
+    Core[Flask_127_0_0_1]
     Router[ExecutorFactory]
     WebExec[Playwright]
     DeskExec[DesktopWorker_inprocess]
@@ -72,16 +80,17 @@ flowchart TB
 1. 安装 Python 依赖：`pip install -r requirements.txt`；Windows 桌面步骤另装 `requirements-windows.txt`。
 2. 复制 `.env.example` → `.env`，本地版可保持默认 `DEPLOYMENT_PROFILE=local`。
 3. 执行 `playwright install`（或 `playwright install chromium`）。
-4. 运行 **`packaging/run_uat_local.ps1`**，或手动：
+4. 运行 **`packaging/run_uat_local.ps1 -Desktop`**（桌面壳），或开发调试时用浏览器：
 
 ```powershell
 $env:DEPLOYMENT_PROFILE = "local"
 $env:DESKTOP_EXECUTION_MODE = "inprocess"
 $env:PLAYWRIGHT_HEADLESS = "0"
 python app.py
+# 浏览器访问 http://127.0.0.1:5000 （dev only）
 ```
 
-浏览器访问 `http://127.0.0.1:5000`。
+最终用户通过 **Testory.exe** 启动，无需手动访问浏览器。
 
 ## 限制与边界
 

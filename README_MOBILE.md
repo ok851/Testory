@@ -15,11 +15,13 @@
 
 1. 安装 **Java 11 或更高版本**（推荐 [Eclipse Temurin](https://adoptium.net/)）  
 2. **用户菜单 → 插件市场** → 安装 **「Android 模拟器 SDK（命令行）」**（首次约 2–4GB）  
-3. **完全退出并重新打开本软件**，打开 **移动端测试** → **启动模拟器**（默认无独立弹窗，画面在平台右侧画布）  
-4. **Windows 首次启动**：若提示未安装 Hypervisor，在插件市场点 **「创建虚拟手机」** 拉取驱动后，**以管理员**运行  
-   `%LOCALAPPDATA%\NewUITestPlatform\extensions\android\sdk\extras\google\Android_Emulator_Hypervisor_Driver\silent_install.bat`  
+3. **完全退出并重新打开本软件**，打开 **移动端测试** → 查看 **模拟器环境** 面板 → 选择 **设备型号** 并 **启动模拟器**（默认无独立弹窗，画面在平台右侧画布；首次进入且 SDK 就绪时会自动启动 Pixel 7）  
+4. **Windows 首次启动**：若环境面板提示未安装 Hypervisor，在插件市场点 **「创建虚拟手机 / 修复环境」** 拉取驱动后，**以管理员**运行  
+   `%LOCALAPPDATA%\Testory\extensions\android\sdk\extras\google\Android_Emulator_Hypervisor_Driver\silent_install.bat`  
+   （旧版路径 `%LOCALAPPDATA%\NewUITestPlatform\extensions\...` 会在首次启动时自动迁移到 Testory 目录）  
    安装成功并**重启电脑**后再启动模拟器。  
-5. （推荐）插件市场安装 **「scrcpy 高帧率投屏」**，获得更流畅画面
+5. **切换设备型号**：在左侧 **设备型号** 下拉选择 Galaxy S23 / 小米 / 平板等，平台会自动停止旧实例、创建对应 AVD 并重启（外框与分辨率同步更新）  
+6. （推荐）插件市场安装 **「scrcpy 高帧率投屏」**，获得更流畅画面
 
 内网 / 离线安装包说明见 [`plugin_bundles/README.md`](plugin_bundles/README.md)（面向管理员）。  
 发布版可将 Java 放入安装目录 `runtime/jre/`，用户无需单独安装 Java。

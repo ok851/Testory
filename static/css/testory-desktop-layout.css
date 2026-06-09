@@ -1,0 +1,67 @@
+/* 桌面客户端窗口尺寸适配（1024–1280 宽度） */
+
+body.testory-desktop-client .testory-nav-inner {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  min-height: 2.75rem;
+}
+
+body.testory-desktop-client .testory-main-nav a.nav-btn {
+  padding-left: 0.55rem;
+  padding-right: 0.55rem;
+  font-size: 0.78rem;
+}
+
+body.testory-desktop-client .testory-main-nav a.nav-btn .mr-1 {
+  margin-right: 0.15rem;
+}
+
+body.testory-desktop-client .testory-page-main .container {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+@media (max-width: 1280px) {
+  body.testory-desktop-client #testoryMainNav .testory-nav-inner {
+    max-width: 100%;
+    padding-left: 0.65rem;
+    padding-right: 0.65rem;
+  }
+
+  body.testory-desktop-client .testory-main-nav a.nav-btn span {
+    display: none;
+  }
+
+  body.testory-desktop-client .testory-main-nav a.nav-btn .mr-1 {
+    margin-right: 0;
+  }
+}
+
+@media (max-width: 1024px) {
+  body.testory-desktop-client .testory-logo-word small {
+    display: none;
+  }
+
+  body.testory-desktop-client .hero-section {
+    padding-top: 1.5rem !important;
+    padding-bottom: 1.5rem !important;
+  }
+
+  body.testory-desktop-client .grid.gap-8 {
+    gap: 1rem !important;
+  }
+
+  body.testory-desktop-client .mobile-studio-page,
+  body.testory-desktop-client .ms-root {
+    max-width: 100%;
+  }
+
+  body.testory-desktop-client .ms-layout {
+    flex-direction: column;
+  }
+
+  body.testory-desktop-client .ms-sidebar {
+    width: 100%;
+    max-width: 100%;
+  }
+}

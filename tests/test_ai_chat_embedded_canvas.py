@@ -1,4 +1,4 @@
-"""AI 优化工具循环：画布运行时启用时不应暴露 hermes_execute。"""
+"""AI 优化工具循环：画布运行时 CDP 未 attach 时不应暴露 hermes_execute。"""
 import importlib
 import os
 
@@ -13,6 +13,10 @@ def test_hermes_blocked_when_embedded_gateway_configured(monkeypatch):
     monkeypatch.setenv("EMBEDDED_BROWSER_GATEWAY_URL", "http://127.0.0.1:8765")
     monkeypatch.setenv("EMBEDDED_BROWSER_GATEWAY_SECRET", "test-secret")
     monkeypatch.delenv("AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK", raising=False)
+    monkeypatch.delenv("HERMES_CDP_ENDPOINT", raising=False)
+    import hermes_config as hc
+
+    importlib.reload(hc)
     m = _reload_loop()
     assert m.hermes_execute_allowed() is False
     assert m.openclaw_execute_allowed() is False

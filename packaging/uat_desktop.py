@@ -22,6 +22,7 @@ if _root_str not in sys.path:
     sys.path.insert(0, _root_str)
 
 import shutil
+import socket
 import subprocess
 import time
 import urllib.error
@@ -30,6 +31,7 @@ from typing import Optional
 
 from desktop_user_data import ensure_user_data_dirs, resolve_env_file
 from packaging.desktop_shell import run_native_shell
+from packaging.instance_lock import acquire_instance_lock, instance_lock_message
 from packaging.launch_checks import run_launch_preflight
 from packaging.testory_runtime import resolve_bundled_python, verify_bundled_python
 
@@ -90,8 +92,14 @@ def apply_local_env(root: Path, port: int) -> Path:
     os.environ.setdefault("PLAYWRIGHT_HEADLESS", "0")
     os.environ.setdefault("DESKTOP_AUTO_START_GATEWAY", "0")
     os.environ.setdefault("FLASK_RUN_PORT", str(port))
+    os.environ.setdefault("FLASK_RUN_HOST", "127.0.0.1")
     os.environ.setdefault("UAT_DESKTOP_MODE", "1")
     os.environ.setdefault("DEPLOYMENT_MODE", "client")
+    os.environ.setdefault("DESKTOP_LAZY_GATEWAY_BOOT", "1")
+    os.environ.setdefault("TESTORY_FRAMELESS_SHELL", "1")
+    os.environ.setdefault("ENABLE_MOBILE", "1")
+    os.environ.setdefault("MOBILE_EMULATOR_MODE", "1")
+    os.environ.setdefault("MOBILE_AUTO_CONNECT", "1")
     os.environ.setdefault("SKIP_ENV_EXAMPLE_SYNC", "1")
     os.environ["PYTHONNOUSERSITE"] = "1"
     root_str = str(root.resolve())
@@ -130,6 +138,11 @@ def _patch_user_env_missing_keys(env_path: Path) -> None:
         "DEPLOYMENT_PROFILE": "local",
         "PLAYWRIGHT_HEADLESS": "0",
         "LOCAL_LLM_BASE_URL": "http://127.0.0.1:11434",
+        "FLASK_RUN_HOST": "127.0.0.1",
+        "DESKTOP_LAZY_GATEWAY_BOOT": "1",
+        "ENABLE_MOBILE": "1",
+        "MOBILE_EMULATOR_MODE": "1",
+        "MOBILE_AUTO_CONNECT": "1",
     }
     try:
         text = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
@@ -169,6 +182,11 @@ def ensure_dotenv(root: Path, user_data: Path) -> Path:
         "PLAYWRIGHT_HEADLESS=0\n"
         "DEPLOYMENT_MODE=client\n"
         "UAT_DESKTOP_MODE=1\n"
+        "FLASK_RUN_HOST=127.0.0.1\n"
+        "DESKTOP_LAZY_GATEWAY_BOOT=1\n"
+        "ENABLE_MOBILE=1\n"
+        "MOBILE_EMULATOR_MODE=1\n"
+        "MOBILE_AUTO_CONNECT=1\n"
         "PLATFORM_ADMIN_URL=http://127.0.0.1:5100\n"
         "EMBEDDED_BROWSER_GATEWAY_URL=http://127.0.0.1:8765\n"
         "EMBEDDED_BROWSER_GATEWAY_SECRET=hufirst-desktop-local\n"
@@ -217,6 +235,14 @@ def start_backend(root: Path, python: Path, port: int, user_data: Path) -> subpr
     )
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+
 def wait_until_ready(port: int, proc: subprocess.Popen, timeout_sec: float = 120.0) -> bool:
     """等待 Flask 进程可响应（/api/health 即可，不依赖 DB 就绪探针）。"""
     url = f"http://127.0.0.1:{port}/api/health"
@@ -230,7 +256,7 @@ def wait_until_ready(port: int, proc: subprocess.Popen, timeout_sec: float = 120
                     return True
         except (urllib.error.URLError, OSError, TimeoutError):
             pass
-        time.sleep(0.5)
+        time.sleep(0.35)
     return False
 
 
@@ -276,6 +302,26 @@ def _startup_failed_message(root: Path, user_data: Path, port: int, proc: Option
     return "\n".join(lines)
 
 
+def _terminate_backend(proc: Optional[subprocess.Popen]) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+def _shutdown_all(proc: Optional[subprocess.Popen]) -> None:
+    _terminate_backend(proc)
+    try:
+        from desktop_startup import shutdown_all_services
+
+        shutdown_all_services()
+    except Exception:
+        pass
+
+
 def run_desktop(port: int = DEFAULT_PORT) -> int:
     root = install_root()
     if sys.platform == "win32":
@@ -283,6 +329,19 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
 
         set_process_app_user_model_id()
     os.chdir(root)
+
+    lock_fp = acquire_instance_lock()
+    if lock_fp is None:
+        _show_error(instance_lock_message())
+        return 1
+
+    user_data = apply_local_env(root, port)
+    if _port_in_use("127.0.0.1", port):
+        _show_error(
+            f"端口 {port} 已被占用，无法启动 Testory。\n\n"
+            "请关闭其他 Testory 实例，或在用户数据 .env 中设置 FLASK_RUN_PORT。"
+        )
+        return 1
 
     pre_errors, pre_warn = run_launch_preflight(root, port=port)
     if pre_errors:
@@ -293,7 +352,6 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
         )
         return 1
 
-    user_data = apply_local_env(root, port)
     ensure_dotenv(root, user_data)
     python, runtime_err = verify_bundled_python(root)
     if runtime_err:
@@ -314,13 +372,12 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
         return 1
 
     proc: Optional[subprocess.Popen] = None
+    exit_code = 1
     try:
         proc = start_backend(root, python, port, user_data)
 
         def _backend_ready() -> bool:
-            if proc is None:
-                return False
-            if proc.poll() is not None:
+            if proc is None or proc.poll() is not None:
                 return False
             try:
                 with urllib.request.urlopen(
@@ -331,14 +388,9 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
                 return False
 
         def _on_closed() -> None:
-            if proc and proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=8)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+            _shutdown_all(proc)
 
-        return run_native_shell(
+        exit_code = run_native_shell(
             root=root,
             app_url=f"http://127.0.0.1:{port}/",
             wait_until_ready=_backend_ready,
@@ -350,10 +402,15 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
     except Exception as e:
         _log_error(root, user_data, e)
         _show_error(f"启动失败：{e}\n\n详见 {user_data / 'logs' / 'desktop_launch.log'}")
+        _shutdown_all(proc)
         return 1
     finally:
-        if proc and proc.poll() is None:
-            proc.terminate()
+        try:
+            lock_fp.close()
+        except Exception:
+            pass
+
+    return exit_code
 
 
 def main() -> None:
@@ -361,7 +418,7 @@ def main() -> None:
         root = install_root()
         os.chdir(root)
         apply_local_env(root, DEFAULT_PORT)
-        errs, warns = run_launch_preflight(root)
+        errs, warns = run_launch_preflight(root, force_full_probe=True)
         if errs:
             print("probe failed:", file=sys.stderr)
             for e in errs:

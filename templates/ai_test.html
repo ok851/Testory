@@ -881,7 +881,7 @@
 {% block content %}
 <!-- ai-test template build: playwright-ui-dedup 2026-04-24 -->
 <div class="ai-test-page">
-    <script id="__aiTestCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=hermes_gateway_configured)|tojson }}</script>
+    <script id="__aiTestCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=hermes_gateway_configured, hermes_cdp=hermes_cdp_attached)|tojson }}</script>
     <script>
     (function () {
         window.__aiTestCaps = {};
@@ -909,6 +909,7 @@
                     </button>
                 </div>
             </div>
+            <div id="aiLlmWizardBanner" class="ai-cap-banner ai-cap-banner--warn" role="status" hidden style="margin:8px 16px 0;"></div>
             <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">顶部选择项目、用例与浏览器；左栏与 AI 对话并<strong>生成用例</strong> / <strong>优化</strong>；中栏填写 URL 点「打开」查看页面；顶栏<strong>运行</strong>为生成并执行。已配置内置浏览器网关时中栏为实时画面，否则为简化预览。</p>
             <div class="ai-closure-strip" id="aiClosureStrip" hidden>
                 <span class="ai-closure-strip__label" id="aiClosureStripLabel">已保存用例</span>
@@ -961,8 +962,12 @@
                     <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"></select>
                     {% if ai_chat_tools_env_enabled %}
                     {% if hermes_gateway_configured %}
-                    <div class="ai-cap-banner" role="status">
-                        已启用 <strong>AI 工具循环</strong> 与内嵌 <strong>Testory AI (Hermes)</strong>；「<strong>优化</strong>」时模型可调用 <code>hermes_execute</code>（须模型支持 function calling）。
+                    <div class="ai-cap-banner" id="aiHermesCapBanner" role="status">
+                        {% if hermes_cdp_attached %}
+                        已启用 <strong>AI 工具循环</strong>；Hermes 已通过 <strong>CDP</strong> 连接画布浏览器。「<strong>优化</strong>」时可调用 <code>hermes_execute</code> 在同一窗口自主操作。
+                        {% else %}
+                        已启用 <strong>AI 工具循环</strong> 与 <strong>Testory AI (Hermes)</strong>。连接中栏<strong>实时画面</strong>后，Hermes 将 attach 到同一 Chromium；当前请先点「打开」连接画布。
+                        {% endif %}
                     </div>
                     {% else %}
                     <div class="ai-cap-banner ai-cap-banner--warn" role="alert">
@@ -973,6 +978,7 @@
                         <summary style="cursor:pointer;">Skills（Hermes 可复用流程）</summary>
                         <div id="aiSkillsList" style="margin-top:6px;color:#475569;">加载中…</div>
                         <button type="button" class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="aiExportPlanToSkill()">将当前预览导出为 Skill</button>
+                        <p id="aiSkillLearnHint" style="margin:6px 0 0;font-size:11px;color:#64748b;display:none;"></p>
                     </details>
                     {% endif %}
                     <div id="aiChatHistory" class="ai-chat-log ai-chat-log--rail" role="log" aria-live="polite"></div>
@@ -1171,6 +1177,7 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/ai_llm_wizard.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ai_assistant.js') }}"></script>
 <script>
 (function(){
@@ -1430,6 +1437,31 @@
         if (!inp) return;
         if (details) details.hidden = !u;
         inp.value = u || '';
+        if (window.__aiTestCaps) window.__aiTestCaps.hermes_cdp = !!u;
+        if (typeof window.aiUpdateHermesCapBanner === 'function') {
+            window.aiUpdateHermesCapBanner(window.__aiLlmReadiness || null);
+        }
+    }
+
+    window.aiUpdateHermesCapBanner = function(readiness) {
+        var el = document.getElementById('aiHermesCapBanner');
+        if (!el) return;
+        var cdp = !!(window.__aiTestCaps && window.__aiTestCaps.hermes_cdp) ||
+            !!(aiRemoteCanvasState && aiRemoteCanvasState.cdpWsUrl);
+        if (cdp) {
+            el.innerHTML = '已启用 <strong>AI 工具循环</strong>；Hermes 已通过 <strong>CDP</strong> 连接画布浏览器。「<strong>优化</strong>」时可调用 <code>hermes_execute</code> 在同一窗口自主操作。';
+        } else {
+            el.innerHTML = '已启用 <strong>AI 工具循环</strong> 与 <strong>Testory AI (Hermes)</strong>。连接中栏<strong>实时画面</strong>后，Hermes 将 attach 到同一 Chromium；当前请先点「打开」连接画布。';
+        }
+    };
+
+    function aiShowSkillLearnHint(msg) {
+        var el = document.getElementById('aiSkillLearnHint');
+        if (el) {
+            el.textContent = msg || '';
+            el.style.display = msg ? 'block' : 'none';
+        }
+        if (msg && typeof window.aiShowToast === 'function') window.aiShowToast(msg, 'success');
     }
 
     /** 网关会话创建/导航成功后：连接 JPEG 串流，使中栏即为「内置浏览器」画面（不再依赖单独按钮）。 */
@@ -1632,6 +1664,9 @@
             aiRemoteCanvasState.sessionId = data.session_id;
             aiRemoteCanvasState.wsUrl = data.ws_url || null;
             aiRemoteCanvasState.cdpWsUrl = data.cdp_ws_url || null;
+            if (data.hermes_cdp_synced) {
+                aiShowSkillLearnHint('Hermes 已 attach 到画布浏览器（CDP）。');
+            }
             syncEmbeddedCdpStrip();
             wireRemoteCanvasWebSocket(data.ws_url);
             var col = document.querySelector('.ai-browser-embed-col');
@@ -3260,7 +3295,8 @@
                     plan: latestAiPlan || {},
                     force_execute: forceEx,
                     target_page_url: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim(),
-                    embedded_session_id: (aiRemoteCanvasState && aiRemoteCanvasState.sessionId) ? aiRemoteCanvasState.sessionId : ''
+                    embedded_session_id: (aiRemoteCanvasState && aiRemoteCanvasState.sessionId) ? aiRemoteCanvasState.sessionId : '',
+                    cdp_ws_url: (aiRemoteCanvasState && aiRemoteCanvasState.cdpWsUrl) ? aiRemoteCanvasState.cdpWsUrl : ''
                 })
             });
             if (!resp.ok) {
@@ -3307,6 +3343,15 @@
                         } else if (ev.t === 'done') {
                             appendAiChat('assistant', ev.message || '完成');
                             setAgentStatusLine(ev.message || '完成');
+                        } else if (ev.t === 'skill_learned') {
+                            appendAiChat('assistant', ev.message || '已学习并保存 Skill');
+                            aiShowSkillLearnHint(ev.message || 'AI 已学习此流程并保存为 Skill');
+                            if (typeof aiRefreshSkillsList === 'function') aiRefreshSkillsList();
+                        } else if (ev.t === 'skill_suggest') {
+                            appendAiChat('assistant', (ev.message || '执行成功') + ' 可在 Skills 面板导出。');
+                            aiShowSkillLearnHint(ev.message || '执行成功，建议保存为 Skill');
+                        } else if (ev.t === 'hermes_result') {
+                            appendAiChat('assistant', (ev.content || '').slice(0, 4000));
                         }
                     }
                 }
@@ -3673,14 +3718,38 @@
             var resp = await fetch('/api/ai/skills', { credentials: 'same-origin' });
             var data = await resp.json();
             if (!data.success || !data.skills || !data.skills.length) {
-                el.textContent = '暂无 Skill；成功探索后可导出。';
+                el.textContent = '暂无 Skill；成功探索或执行后可导出。';
                 return;
             }
             el.innerHTML = data.skills.map(function (sk) {
-                return '<div><code>' + (sk.id || '') + '</code> — ' + (sk.name || '') + '</div>';
+                var id = sk.id || '';
+                return '<div style="margin-bottom:4px;"><code>' + id + '</code> — ' + (sk.name || '') +
+                    ' <button type="button" class="btn btn-secondary btn-sm" style="margin-left:4px;padding:0 6px;font-size:11px;" onclick="aiApplySkillToPlan(\'' + id.replace(/'/g, "\\'") + '\')">应用到预览</button></div>';
             }).join('');
         } catch (e) {
             el.textContent = 'Skills 列表加载失败';
+        }
+    }
+
+    async function aiApplySkillToPlan(skillId) {
+        if (!skillId) return;
+        try {
+            var resp = await fetch('/api/ai/skills/apply-to-case', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ skill_id: skillId, current_plan: latestAiPlan || {} })
+            });
+            var data = await resp.json();
+            if (!data.success) {
+                alert(data.error || '应用失败');
+                return;
+            }
+            latestAiPlan = data.plan || latestAiPlan;
+            if (typeof renderAiPreview === 'function') renderAiPreview(latestAiPlan);
+            aiShowSkillLearnHint('已从 Skill「' + skillId + '」导入步骤。');
+        } catch (e) {
+            alert('应用 Skill 失败: ' + e);
         }
     }
 
@@ -3702,6 +3771,7 @@
                 return;
             }
             alert('已导出 Skill: ' + (data.skill && data.skill.id ? data.skill.id : ''));
+            aiShowSkillLearnHint('已保存为 Hermes Skill，下次可一键应用到预览。');
             aiRefreshSkillsList();
         } catch (e) {
             alert('导出失败: ' + e);

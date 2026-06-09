@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "packaging" / "inno" / "testory.ico"
 OUT_APP_ICO = ROOT / "static" / "brand" / "app.ico"
 OUT_PNG = ROOT / "static" / "brand" / "app-icon.png"
+SVG_SRC = ROOT / "static" / "brand" / "testory-mark.svg"
 
 ICO_SIZES = (256, 128, 64, 48, 32, 16)
 
@@ -19,6 +20,22 @@ def _lerp(a: int, b: int, t: float) -> int:
 
 
 def render_testory_icon(size: int = 512):
+    """优先从 testory-mark.svg 栅格化，失败则回退程序化绘制。"""
+    if SVG_SRC.is_file():
+        try:
+            import io
+
+            import cairosvg
+            from PIL import Image
+
+            png = cairosvg.svg2png(url=str(SVG_SRC), output_width=size, output_height=size)
+            return Image.open(io.BytesIO(png)).convert("RGBA")
+        except Exception:
+            pass
+    return _render_testory_icon_program(size)
+
+
+def _render_testory_icon_program(size: int = 512):
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))

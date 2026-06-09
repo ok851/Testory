@@ -3,7 +3,11 @@
 {% block title %}测试报告 - AI自动化测试平台{% endblock %}
 
 {% block head %}
+{% if use_local_vendors %}
+<script src="{{ url_for('static', filename='vendor/chart.js/chart.umd.min.js') }}"></script>
+{% else %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+{% endif %}
 <style type="text/tailwindcss">
     @layer utilities {
         .btn {

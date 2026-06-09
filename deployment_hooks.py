@@ -28,6 +28,7 @@ from deployment_config import (
     should_delegate_execution_to_clients,
     uses_team_server,
 )
+from pathlib import Path
 from execution_remote import register_routes as register_execution_routes
 from execution_remote import start_client_worker
 from instance_identity import get_identity_info, get_instance_id, get_machine_id
@@ -42,10 +43,18 @@ from team_server_proxy import proxy_to_team_server, should_proxy_path
 
 
 def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_class=None) -> None:
+    def _vendor_available(rel: str) -> bool:
+        try:
+            static_root = Path(app.static_folder or "static")
+            return (static_root / rel.replace("/", os.sep)).is_file()
+        except Exception:
+            return False
+
     @app.context_processor
     def inject_deployment():
         ctx = deployment_context()
         ctx["client_setup_complete"] = is_setup_complete() or not is_client_mode()
+        ctx["use_local_vendors"] = _vendor_available("vendor/tailwindcss/tailwind.min.js")
         try:
             from mobile_env_config import mobile_enabled
 
@@ -80,6 +89,7 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
             "/login",
             "/api/client/",
             "/api/health",
+            "/api/startup/status",
             "/static/",
             "/api/auth/login",
             "/api/auth/me",

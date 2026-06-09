@@ -25,10 +25,20 @@
     <div class="ms-layout">
         <aside class="ms-panel ms-panel--left">
             <div class="ms-panel-scroll">
+            <section class="ms-section ms-section--env">
+                <h2 class="ms-section-title"><i class="fas fa-stethoscope text-emerald-500"></i> 模拟器环境</h2>
+                <div id="msEnvChecks" class="ms-env-checks" aria-live="polite"></div>
+                <p id="msEnvBlocking" class="ms-env-blocking ms-muted" style="display:none;"></p>
+                <div class="ms-row ms-row--wrap">
+                    <button type="button" id="msBtnEnvRepair" class="ms-btn ms-btn--ghost">创建虚拟手机 / 修复环境</button>
+                    <button type="button" id="msBtnEnvRefresh" class="ms-btn ms-btn--ghost" title="刷新">⟳</button>
+                </div>
+            </section>
+
             <section class="ms-section">
                 <h2 class="ms-section-title"><i class="fas fa-desktop text-emerald-500"></i> 模拟器（推荐）</h2>
-                <label class="ms-label">AVD 实例</label>
-                <select id="msEmulatorAvdSelect" class="ms-input"></select>
+                <label class="ms-label">设备型号</label>
+                <select id="msDeviceModelSelect" class="ms-input"></select>
                 <p id="msEmulatorHelp" class="ms-muted ms-emulator-help"></p>
                 <div class="ms-row ms-row--wrap">
                     <button type="button" id="msBtnEmulatorStart" class="ms-btn ms-btn--primary">启动模拟器</button>
@@ -79,8 +89,6 @@
                     <button type="button" id="msBtnWirelessConnect" class="ms-btn ms-btn--ghost ms-btn--block">无线配对并连接</button>
                 </details>
 
-                <label class="ms-label">外框型号（展示用）</label>
-                <select id="msFramePreset" class="ms-input"></select>
                 <label class="ms-label">前台应用（自动识别，可改）</label>
                 <select id="msAppSelect" class="ms-input"><option value="">连接后自动填充</option></select>
             </section>
@@ -140,7 +148,7 @@
                         <canvas id="msMirrorCanvas" class="ms-mirror-canvas" aria-label="设备画面，可点击与滑动"></canvas>
                         <div id="msMirrorPlaceholder" class="ms-mirror-placeholder">
                             <i class="fas fa-desktop fa-2x mb-3 opacity-40"></i>
-                            <p>先点左侧「启动模拟器」，画面将显示在本区域（无额外弹窗）</p>
+                            <p>先点左侧「启动模拟器」或选择设备型号，画面将显示在本区域（无额外弹窗）</p>
                             <p class="ms-muted" style="font-size:12px;">模拟器：平台内高帧率画布 · 真机：点「一键连接」预览</p>
                         </div>
                     </div>

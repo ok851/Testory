@@ -28,6 +28,9 @@
         pointerDown: null,
         interactionMode: INTERACTION_CONTROL,
         alsoTapOnRecord: true,
+        selectedModelId: 'pixel_7',
+        autoStartAttempted: false,
+        modelSwitchBusy: false,
     };
 
     function $(id) {
@@ -463,20 +466,116 @@
         el.textContent = '已识别 ' + authorized.length + ' 台设备，点击「一键连接」后在右侧画面用鼠标操作。';
     }
 
-    function renderEmulatorPanel(emu) {
-        const sel = $('msEmulatorAvdSelect');
-        const help = $('msEmulatorHelp');
+    function modelStatusSuffix(model) {
+        if (!model) return '';
+        if (model.running) return ' · 运行中';
+        if (model.avd_exists) return ' · 已就绪';
+        return ' · 待创建';
+    }
+
+    function renderDeviceModels(models) {
+        const sel = $('msDeviceModelSelect');
         if (!sel) return;
-        const avds = (emu && emu.avds) || [];
-        if (!avds.length) {
-            sel.innerHTML = '<option value="">（未创建虚拟手机）</option>';
-        } else {
-            sel.innerHTML = avds.map(function (a) {
-                return '<option value="' + a.name + '">' + (a.label || a.name) + '</option>';
-            }).join('');
-            const def = (state.bootstrap && state.bootstrap.default_emulator_avd) || '';
-            if (def && avds.some(function (a) { return a.name === def; })) sel.value = def;
+        const list = models || [];
+        if (!list.length) {
+            sel.innerHTML = '<option value="">（请先安装 SDK）</option>';
+            return;
         }
+        sel.innerHTML = list.map(function (m) {
+            const label = (m.label || m.id || '') + modelStatusSuffix(m);
+            return '<option value="' + m.id + '">' + label + '</option>';
+        }).join('');
+        const preferred = state.selectedModelId || 'pixel_7';
+        const running = list.find(function (m) { return m.running; });
+        if (running) {
+            sel.value = running.id;
+            state.selectedModelId = running.id;
+        } else if (list.some(function (m) { return m.id === preferred; })) {
+            sel.value = preferred;
+        } else {
+            sel.value = list[0].id;
+            state.selectedModelId = list[0].id;
+        }
+        state.selectedModelId = sel.value;
+        const current = list.find(function (m) { return m.id === sel.value; });
+        if (current && current.frame_preset_id) {
+            applyFramePreset(current.frame_preset_id);
+        }
+    }
+
+    function renderEnvPanel(diag) {
+        const box = $('msEnvChecks');
+        const blockEl = $('msEnvBlocking');
+        if (!box) return;
+        const checks = (diag && diag.checks) || [];
+        if (!checks.length) {
+            box.innerHTML = '<p class="ms-muted">加载环境检查…</p>';
+            if (blockEl) blockEl.style.display = 'none';
+            return;
+        }
+        box.innerHTML = checks.map(function (c) {
+            const ok = !!c.ok;
+            const icon = ok ? '✓' : '✕';
+            const cls = ok ? 'ms-env-item' : 'ms-env-item ms-env-item--fail';
+            const iconCls = ok ? 'ms-env-icon ms-env-icon--ok' : 'ms-env-icon ms-env-icon--fail';
+            return (
+                '<div class="' + cls + '">' +
+                '<span class="' + iconCls + '" aria-hidden="true">' + icon + '</span>' +
+                '<div><span class="ms-env-label">' + (c.label || '') + '</span>' +
+                (c.detail ? '<span class="ms-env-detail">' + c.detail + '</span>' : '') +
+                '</div></div>'
+            );
+        }).join('');
+        if (blockEl) {
+            const reason = (diag && diag.blocking_reason) || '';
+            if (reason) {
+                blockEl.textContent = '阻塞原因：' + reason;
+                blockEl.style.display = '';
+            } else {
+                blockEl.textContent = '';
+                blockEl.style.display = 'none';
+            }
+        }
+    }
+
+    async function loadDiagnostics() {
+        try {
+            const data = await apiJson('/api/mobile/emulator/diagnostics');
+            renderEnvPanel(data);
+            return data;
+        } catch (e) {
+            renderEnvPanel({ checks: [{ ok: false, label: '环境检查', detail: (e && e.message) || '加载失败' }] });
+            return null;
+        }
+    }
+
+    async function repairEnvironment() {
+        const btn = $('msBtnEnvRepair');
+        if (btn) btn.disabled = true;
+        setStatus('正在修复模拟器环境（可能需数分钟）…', '');
+        try {
+            const data = await apiJson('/api/mobile/emulator/repair', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            });
+            if (!data.success) {
+                throw new Error(data.error || data.message || '修复失败');
+            }
+            setStatus(data.message || '环境已修复', 'ok');
+            await bootstrap();
+            await loadDiagnostics();
+        } catch (e) {
+            setStatus((e && e.message) || '修复失败', 'err');
+            await loadDiagnostics();
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function renderEmulatorPanel(emu) {
+        const help = $('msEmulatorHelp');
+        renderDeviceModels((emu && emu.models) || []);
         if (help) {
             help.className = 'ms-muted ms-emulator-help';
             if (emu && emu.emulator_available) {
@@ -523,7 +622,7 @@
         return new Promise(function (resolve) { setTimeout(resolve, ms); });
     }
 
-    async function pollEmulatorStartJob(jobId) {
+    async function pollEmulatorJob(jobId, labelPrefix) {
         const maxPolls = 200;
         for (let i = 0; i < maxPolls; i++) {
             const r = await fetch('/api/mobile/emulator/start/job/' + encodeURIComponent(jobId), {
@@ -534,34 +633,57 @@
             if (info.missing) {
                 throw new Error(info.error);
             }
-            setStatus((info.label || '启动中…') + ' (' + (info.percent || 0) + '%)', '');
+            const prefix = labelPrefix || info.label || '处理中…';
+            setStatus(prefix + ' (' + (info.percent || 0) + '%)', '');
             if (info.state === 'done' && info.ok !== false) {
                 return info;
             }
             if (info.state === 'failed' || (info.state === 'done' && info.ok === false)) {
-                throw new Error(info.error || '启动失败');
+                let err = (info.error || '操作失败').trim();
+                const emu = state.bootstrap && state.bootstrap.emulator;
+                const hint = emu && (emu.setup_hint || '').trim();
+                if (hint && err.indexOf(hint) < 0) {
+                    err += '\n' + hint;
+                }
+                throw new Error(err);
             }
             await sleepMs(2000);
         }
-        throw new Error('启动超时，请点「停止」清理后重试');
+        throw new Error('操作超时，请点「停止」清理后重试');
     }
 
-    async function startEmulator() {
-        const avd = ($('msEmulatorAvdSelect') || {}).value || '';
-        if (!avd) {
-            setStatus('请选择或创建 AVD', 'warn');
+    async function pollEmulatorStartJob(jobId) {
+        return pollEmulatorJob(jobId, '启动中…');
+    }
+
+    async function switchDeviceModel(presetId, opts) {
+        opts = opts || {};
+        const pid = (presetId || ($('msDeviceModelSelect') || {}).value || '').trim();
+        if (!pid) {
+            setStatus('请选择设备型号', 'warn');
             return;
         }
-        const btn = $('msBtnEmulatorStart');
-        if (btn) btn.disabled = true;
-        setStatus('正在启动模拟器（无独立窗口，画面在右侧画布）…', '');
+        if (state.modelSwitchBusy) return;
+        state.modelSwitchBusy = true;
+        state.selectedModelId = pid;
+        const models = (state.bootstrap && state.bootstrap.emulator && state.bootstrap.emulator.models) || [];
+        const model = models.find(function (m) { return m.id === pid; });
+        const label = (model && model.label) || pid;
+        const btnStart = $('msBtnEmulatorStart');
+        const btnStop = $('msBtnEmulatorStop');
+        if (btnStart) btnStart.disabled = true;
+        if (btnStop) btnStop.disabled = true;
+        setStatus('正在切换至 ' + label + '（无独立窗口，画面在右侧画布）…', '');
         try {
-            const startResp = await fetch('/api/mobile/emulator/start', {
+            if (model && model.frame_preset_id) {
+                applyFramePreset(model.frame_preset_id);
+            }
+            const startResp = await fetch('/api/mobile/emulator/switch-model', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify({
-                    avd_name: avd,
+                    preset_id: pid,
                     gpu: 'swiftshader_indirect',
                     no_window: true,
                     async: true,
@@ -569,27 +691,39 @@
             });
             const startBody = await startResp.json().catch(function () { return {}; });
             if (!startResp.ok || !startBody.success) {
-                throw new Error(startBody.error || '启动失败');
+                throw new Error(startBody.error || '切换失败');
             }
             let serial = '';
             if (startBody.async && startBody.job_id) {
-                const done = await pollEmulatorStartJob(startBody.job_id);
+                const done = await pollEmulatorJob(startBody.job_id, '正在切换至 ' + label);
                 serial = (done.result && done.result.serial) || '';
-                setStatus((done.message || '模拟器已启动') + '，正在连接画布…', 'ok');
+                const frameId = (done.result && done.result.frame_preset_id) || (model && model.frame_preset_id);
+                if (frameId) applyFramePreset(frameId);
+                setStatus((done.message || ('已切换至 ' + label)) + '，正在连接画布…', 'ok');
             } else {
                 serial = startBody.serial || '';
-                setStatus((startBody.message || '模拟器已启动') + '，正在连接画布…', 'ok');
+                setStatus((startBody.message || ('已切换至 ' + label)) + '，正在连接画布…', 'ok');
             }
             await bootstrap();
             const devSel = $('msDeviceSelect');
             if (devSel && serial) devSel.value = serial;
-            await autoConnect();
+            if (!opts.skipConnect) {
+                await autoConnect();
+            }
         } catch (e) {
-            setStatus((e && e.message) || '启动失败', 'err');
+            setStatus((e && e.message) || '切换失败', 'err');
             await bootstrap();
+            await loadDiagnostics();
         } finally {
-            if (btn) btn.disabled = false;
+            state.modelSwitchBusy = false;
+            if (btnStart) btnStart.disabled = false;
+            if (btnStop) btnStop.disabled = false;
         }
+    }
+
+    async function startEmulator() {
+        const presetId = ($('msDeviceModelSelect') || {}).value || state.selectedModelId || 'pixel_7';
+        await switchDeviceModel(presetId);
     }
 
     async function stopEmulator() {
@@ -605,23 +739,45 @@
         setStatus('模拟器已停止', '');
     }
 
+    async function maybeAutoStartEmulator(data) {
+        if (state.autoStartAttempted || state.modelSwitchBusy) return;
+        if (!data || !data.auto_connect_default) return;
+        const emu = data.emulator || {};
+        if (!emu.emulator_available || !emu.sdk_ready) return;
+        const devices = (data.health && data.health.devices) || data.devices || [];
+        const authorized = devices.filter(function (d) { return d.state === 'device'; });
+        if (authorized.length) return;
+        const running = (emu.running && emu.running.length) || 0;
+        if (running > 0) {
+            state.autoStartAttempted = true;
+            await autoConnect().catch(function () {});
+            return;
+        }
+        const models = emu.models || [];
+        const def = models.find(function (m) { return m.id === 'pixel_7'; }) || models[0];
+        if (!def) return;
+        state.autoStartAttempted = true;
+        const sel = $('msDeviceModelSelect');
+        if (sel) sel.value = def.id;
+        state.selectedModelId = def.id;
+        await switchDeviceModel(def.id, { skipConnect: false });
+    }
+
     async function bootstrap() {
         const data = await apiJson('/api/mobile/testing/bootstrap');
         state.bootstrap = data;
-        const presetSel = $('msFramePreset');
-        if (presetSel && data.frame_presets) {
-            presetSel.innerHTML = data.frame_presets.map(function (p) {
-                return '<option value="' + p.id + '">' + p.label + '</option>';
-            }).join('');
-            presetSel.value = 'generic_19_9';
-            applyFramePreset('generic_19_9');
-        }
         const devices = (data.health && data.health.devices) || data.devices || [];
         renderDeviceList(devices);
         updateDeviceHelp(data.health, devices);
         renderEmulatorPanel(data.emulator);
+        await loadDiagnostics();
         if (data.emulator && data.emulator.emulator_available && !(devices && devices.length)) {
-            setStatus('推荐：选择 AVD 并点击「启动模拟器」', 'ok');
+            if (!state.autoStartAttempted && data.auto_connect_default && data.emulator.sdk_ready) {
+                setStatus('正在自动启动默认设备型号…', '');
+                await maybeAutoStartEmulator(data);
+            } else {
+                setStatus('推荐：选择设备型号并点击「启动模拟器」', 'ok');
+            }
         } else if (data.default_device && data.default_device.state === 'device') {
             setStatus('检测到设备，可点击「一键连接」', 'ok');
         } else if (data.health && data.health.adb_ok && data.adb_plugin_installed && data.adb_path) {
@@ -672,9 +828,16 @@
         await autoConnect();
     }
 
+    function currentFramePresetId() {
+        const models = (state.bootstrap && state.bootstrap.emulator && state.bootstrap.emulator.models) || [];
+        const pid = state.selectedModelId || ($('msDeviceModelSelect') || {}).value || '';
+        const model = models.find(function (m) { return m.id === pid; });
+        return (model && model.frame_preset_id) || state.framePreset || 'generic_19_9';
+    }
+
     async function autoConnect() {
         setStatus('正在连接…', '');
-        const preset = ($('msFramePreset') || {}).value;
+        const preset = currentFramePresetId();
         const udid = ($('msDeviceSelect') || {}).value || '';
         const data = await apiJson('/api/mobile/auto-connect', {
             method: 'POST',
@@ -841,9 +1004,26 @@
                 stopEmulator().catch(function (e) { setStatus(e.message, 'err'); });
             });
         }
-        $('msFramePreset').addEventListener('change', function () {
-            applyFramePreset(this.value);
-        });
+        const modelSel = $('msDeviceModelSelect');
+        if (modelSel) {
+            modelSel.addEventListener('change', function () {
+                if (state.modelSwitchBusy) return;
+                state.selectedModelId = this.value;
+                switchDeviceModel(this.value).catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
+        const btnEnvRepair = $('msBtnEnvRepair');
+        if (btnEnvRepair) {
+            btnEnvRepair.addEventListener('click', function () {
+                repairEnvironment().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
+        const btnEnvRefresh = $('msBtnEnvRefresh');
+        if (btnEnvRefresh) {
+            btnEnvRefresh.addEventListener('click', function () {
+                loadDiagnostics().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
         $('msProjectSelect').addEventListener('change', function () {
             state.projectId = this.value ? parseInt(this.value, 10) : null;
             state.caseId = null;

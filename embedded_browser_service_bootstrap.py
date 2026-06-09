@@ -97,6 +97,23 @@ def _start_gateway_process() -> None:
     )
 
 
+def stop_embedded_gateway() -> None:
+    global _GATEWAY_PROC, _BOOTED
+    if _GATEWAY_PROC is None:
+        return
+    try:
+        if _GATEWAY_PROC.poll() is None:
+            _GATEWAY_PROC.terminate()
+            try:
+                _GATEWAY_PROC.wait(timeout=8.0)
+            except subprocess.TimeoutExpired:
+                _GATEWAY_PROC.kill()
+    except Exception:
+        pass
+    _GATEWAY_PROC = None
+    _BOOTED = False
+
+
 def bootstrap_embedded_browser_services(*, force: bool = False) -> dict:
     """
     在 app 加载 .env 后调用一次。

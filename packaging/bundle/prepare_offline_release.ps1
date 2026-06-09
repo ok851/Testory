@@ -72,8 +72,12 @@ if (-not (Test-Path $rootVenvPy)) {
 $py = (Resolve-Path $rootVenvPy).Path
 
 Write-Host "[0/8] Generate app icons..."
-& $py -m pip install -q Pillow
+& $py -m pip install -q Pillow cairosvg
 & $py "$Root\packaging\generate_brand_icons.py"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "[0b/8] Fetch offline frontend vendors (Tailwind / Font Awesome / SweetAlert2)..."
+& $py "$Root\packaging\fetch_frontend_vendors.py"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[1/8] Install build dependencies (project .venv)..."
@@ -165,6 +169,7 @@ $must = @(
     (Join-Path $release "packaging\uat_desktop.py"),
     (Join-Path $release "packaging\launch_checks.py"),
     (Join-Path $release "static\brand\app.ico"),
+    (Join-Path $release "static\vendor\tailwindcss\tailwind.min.js"),
     (Join-Path $release ".venv\pythonw.exe")
 )
 if (-not $Legacy) {

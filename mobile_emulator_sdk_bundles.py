@@ -718,6 +718,21 @@ def _tool_error_snippet(output: str, *, max_len: int = 400) -> str:
     return _ascii_snippet(text, max_len)
 
 
+def create_avd_for_preset(preset: Dict[str, Any]) -> str:
+    """按 EMULATOR_AVD_PRESETS 条目创建 AVD（已存在则跳过）。"""
+    avd_cfg = {
+        "name": (preset.get("avd_name_hint") or "Testory_Device").strip(),
+        "system_image": (preset.get("system_image") or "system-images;android-34;google_apis;x86_64").strip(),
+        "device_id": (preset.get("device_id") or "pixel_6").strip(),
+    }
+    sdk_root = android_sdk_install_dir()
+    if not _sdk_has_emulator(sdk_root):
+        raise RuntimeError("Android 模拟器 SDK 未安装，请先在插件市场安装。")
+    if not _system_image_ready(sdk_root):
+        raise RuntimeError("系统镜像未就绪，请在插件市场点击「创建虚拟手机」或重新安装 SDK。")
+    return _create_default_avd(sdk_root, avd_cfg)
+
+
 def _create_default_avd(sdk_root: Path, avd_cfg: Dict[str, Any]) -> str:
     name = (avd_cfg.get("name") or "Testory_Pixel7").strip()
     if _avd_exists(name):
@@ -920,6 +935,23 @@ def install_android_emulator_sdk(
         )
         _step(100, "安装完成")
 
+        setup = emulator_sdk_setup_status()
+        hypervisor_hint = ""
+        try:
+            from mobile_emulator_manager import emulator_status
+
+            st = emulator_status()
+            if st.get("hypervisor_ok") is False and st.get("setup_hint"):
+                hypervisor_hint = str(st.get("setup_hint") or "")
+        except Exception:
+            pass
+        msg = (
+            f"安装完成。默认虚拟手机：{avd_name}。"
+            "请完全退出并重新打开本软件，进入「移动端测试」选择设备型号并启动。"
+        )
+        if hypervisor_hint:
+            msg += f"\n\n注意：{hypervisor_hint}"
+
         return {
             "success": True,
             "plugin_id": _PLUGIN_ID,
@@ -928,11 +960,11 @@ def install_android_emulator_sdk(
             "android_sdk_home": str(sdk_root),
             "adb_path": adb_exe,
             "default_avd": avd_name,
+            "avd_ready": bool(setup.get("avd_ready")),
+            "hypervisor_ok": not bool(hypervisor_hint),
+            "hypervisor_hint": hypervisor_hint or None,
             "progress": progress,
-            "message": (
-                f"安装完成。默认虚拟手机：{avd_name}。"
-                "请完全退出并重新打开本软件，进入「移动端测试」点击「启动模拟器」。"
-            ),
+            "message": msg,
         }
     except UnicodeEncodeError:
         return {

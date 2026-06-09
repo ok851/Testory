@@ -197,6 +197,7 @@ def project_hiddenimports(root: Path) -> list:
         "subprocess_win",
         "embedded_browser_service_bootstrap",
         "desktop_user_data",
+        "desktop_startup",
         "playwright._impl._api_structures",
         "playwright._impl._driver",
         "greenlet",

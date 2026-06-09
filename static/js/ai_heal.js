@@ -118,7 +118,10 @@
       });
       var data = await resp.json();
       if (!resp.ok || !data.success) throw new Error(data.error || '保存失败');
-      alert('已更新 ' + (data.patched || 0) + ' 条步骤');
+      var msg = '已更新 ' + (data.patched || 0) + ' 条步骤';
+      if (data.memory_synced) msg += '；AI 已记住此页面控件，下次优先复用';
+      if (typeof window.aiShowToast === 'function') window.aiShowToast(msg, 'success');
+      else alert(msg);
     } catch (e) {
       alert('保存失败: ' + (e && e.message ? e.message : String(e)));
     }

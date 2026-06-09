@@ -1,0 +1,10 @@
+{
+  "tailwindcss/tailwind.min.js": "3f81aa7f6ecdb1acc14c202e513dfee00b6c7703cd81ce1be25bf5215a92e8cb",
+  "fontawesome/css/all.min.css": "1edb1725a9ea8ca4dcf2f5508cee183218aa1685e47c1b23056717f754f58ebf",
+  "fontawesome/webfonts/fa-solid-900.woff2": "7152a6933ee3d690ec2af3d09da9d701723d16aa3410a6d80f28ff8866f3b880",
+  "fontawesome/webfonts/fa-regular-400.woff2": "8e7e5ea1b15f62ab14dbd41768e8fbcd21cc859a4ea5da812457ee714299fb35",
+  "fontawesome/webfonts/fa-brands-400.woff2": "748332090c4b8e20f95d0ff59f0be20fa9c889359d3b36d4b886d73376054207",
+  "sweetalert2/sweetalert2.min.js": "520341374aa1ee4387d6564e46c0fb0485addc98431ee246cd1be6368fedb1b0",
+  "sweetalert2/sweetalert2.min.css": "a1173e56fd474be04ddbefa81bd75cc465627ef2f5db261792e7d25fb7871743",
+  "chart.js/chart.umd.min.js": "0e2326c6868072bec1592760c6729043caeea2960a2b46cee6a2192aac6abff0"
+}

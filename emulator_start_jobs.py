@@ -119,3 +119,93 @@ def start_emulator_job(
 
     threading.Thread(target=_worker, name=f"emulator-start-{avd_name}", daemon=True).start()
     return job_id
+
+
+def start_switch_model_job(
+    preset_id: str,
+    *,
+    port: int = 5554,
+    gpu: str = "swiftshader_indirect",
+    no_window: bool = True,
+) -> str:
+    job_id = str(uuid.uuid4())
+    _write_job(
+        job_id,
+        {
+            "preset_id": preset_id,
+            "job_type": "switch_model",
+            "state": "running",
+            "percent": 5,
+            "label": "准备切换设备型号…",
+            "ok": None,
+            "error": "",
+            "result": {},
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    def _progress(percent: int, label: str) -> None:
+        _write_job(
+            job_id,
+            {
+                "state": "running",
+                "percent": max(0, min(99, int(percent))),
+                "label": (label or "").strip() or "切换中…",
+            },
+        )
+
+    def _worker() -> None:
+        try:
+            from mobile_emulator_manager import switch_emulator_model
+
+            ok, msg, meta = switch_emulator_model(
+                preset_id,
+                port=port,
+                gpu=gpu,
+                no_window=no_window,
+                progress_cb=_progress,
+            )
+            if ok:
+                _write_job(
+                    job_id,
+                    {
+                        "state": "done",
+                        "percent": 100,
+                        "label": "切换完成",
+                        "ok": True,
+                        "error": "",
+                        "message": msg,
+                        "result": meta,
+                    },
+                )
+            else:
+                _write_job(
+                    job_id,
+                    {
+                        "state": "failed",
+                        "percent": 100,
+                        "label": "切换失败",
+                        "ok": False,
+                        "error": msg,
+                        "result": meta or {},
+                    },
+                )
+        except Exception as exc:
+            _write_job(
+                job_id,
+                {
+                    "state": "failed",
+                    "percent": 100,
+                    "label": "切换失败",
+                    "ok": False,
+                    "error": str(exc),
+                    "result": {},
+                },
+            )
+
+    threading.Thread(
+        target=_worker,
+        name=f"emulator-switch-{preset_id}",
+        daemon=True,
+    ).start()
+    return job_id

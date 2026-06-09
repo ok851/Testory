@@ -47,7 +47,8 @@ if sys.platform == "win32":
 try:
     from embedded_browser_service_bootstrap import bootstrap_embedded_browser_services
 
-    bootstrap_embedded_browser_services()
+    if not __import__("desktop_startup", fromlist=["desktop_lazy_gateway_boot"]).desktop_lazy_gateway_boot():
+        bootstrap_embedded_browser_services()
 except Exception:
     pass
 
@@ -61,7 +62,8 @@ except Exception:
 try:
     from hermes_service_bootstrap import bootstrap_hermes_services
 
-    bootstrap_hermes_services()
+    if not __import__("desktop_startup", fromlist=["desktop_lazy_gateway_boot"]).desktop_lazy_gateway_boot():
+        bootstrap_hermes_services()
 except Exception:
     pass
 
@@ -1903,6 +1905,7 @@ def ai_test_page():
     """AI 生成测试步骤；内嵌区与后台 Playwright 会话同步（可选远程画布为另一进程）。"""
     from ai_chat_tool_loop import ai_chat_tools_enabled
     from agent_gateway_client import agent_gateway_configured
+    from hermes_config import hermes_cdp_attached
 
     resp = make_response(
         render_template(
@@ -1910,6 +1913,7 @@ def ai_test_page():
             ai_chat_tools_env_enabled=ai_chat_tools_enabled(),
             hermes_gateway_configured=agent_gateway_configured(),
             openclaw_gateway_configured=agent_gateway_configured(),
+            hermes_cdp_attached=hermes_cdp_attached(),
         )
     )
     # 用于核对浏览器是否命中本仓库模板（与页内 #aiTestBuildMarker 文案一致）
@@ -4454,6 +4458,46 @@ def api_ai_skills_update():
     return jsonify({'success': True, 'hermes_response': result})
 
 
+@app.route('/api/ai/llm/readiness', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_llm_readiness():
+    """混合 LLM 就绪检测（Ollama 优先，否则云端 profile）。"""
+    from ai_llm_readiness import assess_llm_readiness
+
+    return jsonify({'success': True, **assess_llm_readiness(local_ai_service=local_ai_service)})
+
+
+@app.route('/api/ai/llm/wizard-dismiss', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_llm_wizard_dismiss():
+    os.environ['AI_LLM_WIZARD_DISMISSED'] = '1'
+    return jsonify({'success': True})
+
+
+@app.route('/api/ai/skills/record-success', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_skills_record_success():
+    """记录一次成功执行，可选自动导出 Skill。"""
+    from hermes_skill_loop import record_execution_success
+
+    data = request.get_json(silent=True) or {}
+    plan = data.get('plan') if isinstance(data.get('plan'), dict) else {}
+    if not plan.get('steps'):
+        return jsonify({'success': False, 'error': 'plan.steps 不能为空'}), 400
+    result = record_execution_success(
+        plan,
+        case_url=_ai_str(data.get('case_url') or plan.get('case_url')),
+        instruction=_ai_str(data.get('instruction') or data.get('message')),
+        outcome=_ai_str(data.get('outcome')) or 'ok',
+    )
+    return jsonify({'success': True, **result})
+
+
 @app.route('/api/ai/diagnostics/failure-bundle', methods=['POST'])
 @login_required
 @api_error_handler
@@ -4741,6 +4785,7 @@ def api_ai_agent_gateway_stream():
     embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
     use_embedded = bool(embedded_sid and embedded_gateway_enabled())
     exec_uid = int(current_user.id)
+    cdp_ws_client = (data.get('cdp_ws_url') or '').strip()
 
     if (not message) and bool(data.get('force_execute')) and has_steps:
         kind, meta = 'execute_plan', {}
@@ -4748,6 +4793,14 @@ def api_ai_agent_gateway_stream():
         kind, meta = parse_agent_intent(message, has_steps)
 
     def generate():
+        if use_embedded and cdp_ws_client:
+            try:
+                from hermes_config import sync_hermes_cdp_endpoint
+
+                if sync_hermes_cdp_endpoint(cdp_ws_client, restart_gateway=True):
+                    yield _agent_gateway_sse_line({"t": "log", "message": "已同步画布 CDP 到 Hermes。"})
+            except Exception:
+                pass
         yield _agent_gateway_sse_line({"t": "intent", "kind": kind, "meta": meta})
         if kind == "none":
             yield _agent_gateway_sse_line(
@@ -4761,6 +4814,7 @@ def api_ai_agent_gateway_stream():
 
         if kind == "hermes_explore":
             from agent_gateway_client import agent_gateway_configured, get_agent_gateway_client
+            from hermes_config import hermes_cdp_attached, sync_hermes_cdp_endpoint
 
             if not agent_gateway_configured():
                 yield _agent_gateway_sse_line(
@@ -4768,10 +4822,51 @@ def api_ai_agent_gateway_stream():
                 )
                 yield _agent_gateway_sse_line({"t": "end"})
                 return
+            if use_embedded and not hermes_cdp_attached():
+                j_cdp, err_cdp = embedded_gateway_json(
+                    "GET",
+                    f"/internal/session/{embedded_sid}",
+                    user_id=exec_uid,
+                )
+                cdp_ws = ""
+                if isinstance(j_cdp, dict):
+                    cdp_ws = (j_cdp.get("cdp_browser_ws") or "").strip()
+                if cdp_ws:
+                    sync_hermes_cdp_endpoint(cdp_ws, restart_gateway=True)
+                    yield _agent_gateway_sse_line({"t": "log", "message": "已同步画布 CDP 到 Hermes。"})
+                elif not hermes_cdp_attached():
+                    yield _agent_gateway_sse_line(
+                        {
+                            "t": "error",
+                            "message": "画布 CDP 未就绪，无法在同一浏览器中探索。请先连接实时画面。",
+                        }
+                    )
+                    yield _agent_gateway_sse_line({"t": "end"})
+                    return
             yield _agent_gateway_sse_line({"t": "log", "message": "正在通过 Testory AI (Hermes) 执行探索…"})
             client = get_agent_gateway_client()
             result = client.execute_user_instruction(meta.get("message") or message)
             yield _agent_gateway_sse_line({"t": "hermes_result", "content": result[:48000]})
+            try:
+                from hermes_skill_loop import record_execution_success
+
+                loop_out = record_execution_success(
+                    plan if isinstance(plan, dict) else {},
+                    case_url=gate_url,
+                    instruction=message,
+                    outcome="hermes_explore",
+                )
+                if loop_out.get("auto_exported"):
+                    sk = loop_out.get("skill") or {}
+                    yield _agent_gateway_sse_line(
+                        {
+                            "t": "skill_learned",
+                            "message": f"已自动保存为 Skill: {sk.get('id') or ''}",
+                            "skill": sk,
+                        }
+                    )
+            except Exception:
+                pass
             yield _agent_gateway_sse_line({"t": "end"})
             return
 
@@ -4883,6 +4978,7 @@ def api_ai_agent_gateway_stream():
         script_steps = script_steps[: max(1, max_n)]
         total = len(script_steps)
         yield _agent_gateway_sse_line({"t": "log", "message": f"共 {total} 步，开始逐步执行…"})
+        all_ok = True
         for i, st in enumerate(script_steps, start=1):
             yield _agent_gateway_sse_line(
                 {"t": "step_begin", "index": i, "total": total, "action": st.get("action"), "step": st}
@@ -4906,7 +5002,38 @@ def api_ai_agent_gateway_stream():
                 yield _agent_gateway_sse_line({"t": "step_ok", "index": i, "total": total})
             except Exception as e:
                 yield _agent_gateway_sse_line({"t": "step_err", "index": i, "total": total, "error": str(e)})
+                all_ok = False
                 break
+        if all_ok and isinstance(plan, dict) and plan.get('steps'):
+            try:
+                from hermes_skill_loop import record_execution_success
+
+                loop_out = record_execution_success(
+                    plan,
+                    case_url=gate_url,
+                    instruction=message,
+                    outcome='execute_plan_ok',
+                )
+                if loop_out.get('auto_exported'):
+                    sk = loop_out.get('skill') or {}
+                    yield _agent_gateway_sse_line(
+                        {
+                            't': 'skill_learned',
+                            'message': f"已自动保存为 Skill: {sk.get('id') or ''}",
+                            'skill': sk,
+                            'success_count': loop_out.get('success_count'),
+                        }
+                    )
+                elif loop_out.get('suggest_export'):
+                    yield _agent_gateway_sse_line(
+                        {
+                            't': 'skill_suggest',
+                            'message': '执行成功。可将此流程保存为 Hermes Skill 供下次复用。',
+                            'success_count': loop_out.get('success_count'),
+                        }
+                    )
+            except Exception:
+                pass
         yield _agent_gateway_sse_line({"t": "done", "message": "执行序列结束"})
         yield _agent_gateway_sse_line({"t": "end"})
 
@@ -6721,14 +6848,22 @@ def api_embedded_browser_session_create():
         return jsonify({'success': False, 'error': str(detail or err or '网关返回无效')}), 502
     ws_url = f"{pub}/ws/{sid}?token={tok}"
     cdp_ws = (j.get("cdp_browser_ws") or "").strip() or None
+    hermes_cdp_synced = False
     if cdp_ws:
         uat_logger.info(f"embedded session {sid} cdp_ws prefix={cdp_ws[:48]}…")
+        try:
+            from hermes_config import sync_hermes_cdp_endpoint
+
+            hermes_cdp_synced = sync_hermes_cdp_endpoint(cdp_ws, restart_gateway=True)
+        except Exception as e:
+            uat_logger.warning(f"sync hermes cdp failed: {e}")
     return jsonify(
         {
             "success": True,
             "session_id": sid,
             "ws_url": ws_url,
             "cdp_ws_url": cdp_ws,
+            "hermes_cdp_synced": hermes_cdp_synced,
         }
     )
 
@@ -6787,6 +6922,12 @@ def api_embedded_browser_session_delete(session_id: str):
     )
     if err and not (j and j.get('success')):
         return jsonify({'success': False, 'error': err or '删除失败'}), 502
+    try:
+        from hermes_config import clear_hermes_cdp_endpoint
+
+        clear_hermes_cdp_endpoint(restart_gateway=True)
+    except Exception as e:
+        uat_logger.debug(f"clear hermes cdp on session delete: {e}")
     return jsonify({'success': True})
 
 
@@ -11724,6 +11865,39 @@ def api_health():
     })
 
 
+@app.route('/api/startup/status', methods=['GET'])
+def api_startup_status():
+    """桌面壳启动页轮询：分阶段进度文案。"""
+    try:
+        from desktop_startup import mark_app_ready, startup_status_payload
+
+        payload = startup_status_payload()
+        try:
+            if db.ping():
+                payload["database"] = "ok"
+                if payload.get("phase") == "booting":
+                    payload["message"] = "正在启动服务…"
+            else:
+                payload["database"] = "pending"
+                payload["message"] = "正在初始化数据库…"
+        except Exception:
+            payload["database"] = "pending"
+            payload["message"] = "正在初始化数据库…"
+        if payload.get("ready"):
+            mark_app_ready()
+        return jsonify({"success": True, **payload})
+    except Exception as exc:
+        return jsonify(
+            {
+                "success": True,
+                "phase": "ready",
+                "message": "准备就绪",
+                "ready": True,
+                "error": str(exc),
+            }
+        )
+
+
 @app.route('/api/health/ready', methods=['GET'])
 def api_health_ready():
     """就绪探针：校验 SQLite 可连接（编排/负载均衡建议用此 URL）。"""
@@ -12946,9 +13120,20 @@ from deployment_hooks import start_background_workers, wire_internal_runner  # n
 wire_internal_runner(app, _run_case_worker_sync)
 start_background_workers()
 
+try:
+    from desktop_startup import mark_app_ready, schedule_deferred_gateway_boot
+
+    if __import__("desktop_startup", fromlist=["desktop_lazy_gateway_boot"]).desktop_lazy_gateway_boot():
+        schedule_deferred_gateway_boot()
+    else:
+        mark_app_ready()
+except Exception:
+    pass
+
 
 if __name__ == '__main__':
     _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
+    _host = os.environ.get('FLASK_RUN_HOST', '0.0.0.0')
     # 默认关闭 debug，避免生产式部署误暴露调试信息与 Werkzeug 交互式调试器
     _debug = os.environ.get('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
-    app.run(debug=_debug, host='0.0.0.0', port=_port, threaded=True)
+    app.run(debug=_debug, host=_host, port=_port, threaded=True)

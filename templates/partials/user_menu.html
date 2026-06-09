@@ -38,9 +38,11 @@
                 <i class="fas fa-server mr-2 text-gray-400"></i>团队服务器
             </a>
             {% endif %}
+            {% if not is_client %}
             <a href="/sso-settings" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="ssoSettingsLink" style="display: none;">
                 <i class="fas fa-shield-alt mr-2 text-gray-400"></i><span data-i18n="menu_sso">SSO 设置</span>
             </a>
+            {% endif %}
             <a href="/user-management" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="userManagementLink" style="display: none;">
                 <i class="fas fa-users-cog mr-2 text-gray-400"></i><span data-i18n="menu_users">用户管理</span>
             </a>

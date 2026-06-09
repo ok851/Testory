@@ -15,6 +15,7 @@ from ai_multi_provider import dispatch_chat_completion_messages
 from logger import uat_logger
 from embedded_browser_client import embedded_gateway_enabled
 from agent_gateway_client import agent_tool_result_max_chars, get_agent_gateway_client
+from hermes_config import hermes_cdp_attached
 
 
 def ai_chat_tools_enabled() -> bool:
@@ -64,11 +65,16 @@ def _ai_allow_main_playwright_fallback() -> bool:
 
 def hermes_execute_allowed(*, embedded_session_id: str = "") -> bool:
     """
-    已配置内置浏览器运行时且未允许主 Playwright 回退时，禁止 hermes_execute（会另开浏览器）。
+    已配置内置浏览器运行时：仅当 CDP 已 attach 到画布会话时允许 hermes_execute（同一 Chromium）；
+    未 attach 时禁止（避免 Hermes 另开浏览器）。未配置画布网关时始终允许。
     """
     if not embedded_gateway_enabled():
         return True
     if _ai_allow_main_playwright_fallback():
+        return True
+    if hermes_cdp_attached():
+        return True
+    if (embedded_session_id or "").strip() and hermes_cdp_attached():
         return True
     return False
 
@@ -182,19 +188,30 @@ def _build_system_prompt(
         "## Hermes Agent 与多轮工具",
     ]
     if embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
-        parts_agent = [
-            "【重要】平台已启用内置浏览器运行时（Browser Runtime / 画布），浏览器操作必须只通过 refine_test_plan 写入 steps，",
-            "由平台在画布 Chromium 中执行（与中栏实时画面同一会话）。禁止调用 hermes_execute（会经 Agent 另开独立浏览器，与画布重复）。",
-            "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改步骤（含 navigate/click/input/wait/assert）。",
-            "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
-        ]
+        if hermes_cdp_attached():
+            parts_agent = [
+                "【重要】平台已连接内置画布 Chromium（CDP attach）。浏览器操作应优先调用 hermes_execute，",
+                "Hermes 将在与中栏实时画面**同一浏览器**中自主 navigate/click/input/snapshot。",
+                "执行完成后根据返回摘要调用 refine_test_plan 写入可复现 steps；仅改 JSON/选择器时可只调用 refine_test_plan。",
+            ]
+        else:
+            parts_agent = [
+                "【重要】平台已启用内置浏览器运行时，但 Hermes 尚未 attach 到画布 CDP。",
+                "请先确保 AI 测试页已连接实时画面，再调用 hermes_execute；当前请通过 refine_test_plan 写入 steps 由平台执行。",
+                "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
+            ]
     elif (embedded_session_id or "").strip() and embedded_gateway_enabled():
-        parts_agent = [
-            "【重要】用户已连接内置 AI 画布（browser runtime 会话）。浏览器操作必须只在该画布 Chromium 中通过 steps 体现；",
-            "由平台在画布执行。禁止调用 hermes_execute（会另开独立浏览器窗口，与画布重复）。",
-            "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改 steps。",
-            "当仅改 JSON、选择器或断言时，只调用 refine_test_plan。",
-        ]
+        if hermes_cdp_attached():
+            parts_agent = [
+                "【重要】用户已连接内置 AI 画布且 Hermes CDP 已 attach。可调用 hermes_execute 在同一 Chromium 中探索；",
+                "完成后用 refine_test_plan 固化步骤。仅改 JSON 时可只调用 refine_test_plan。",
+            ]
+        else:
+            parts_agent = [
+                "【重要】用户已连接内置 AI 画布（browser runtime 会话）。浏览器操作必须只在该画布 Chromium 中通过 steps 体现；",
+                "由平台在画布执行。禁止调用 hermes_execute（CDP 未同步，会另开独立浏览器窗口）。",
+                "请根据用户指令与 LIVE 快照调用 refine_test_plan 增删改 steps。",
+            ]
     else:
         parts_agent = [
             "当用户要「在真实浏览器里跑」「探索系统/模块」「走通流程」「验证一整条业务」时，可调用 hermes_execute。",
@@ -321,13 +338,14 @@ def _handle_agent_execute(
     tool_key = "hermes_execute" if name == "hermes_execute" else "openclaw_execute"
     if not allow_agent:
         meta["tools_used"].append(f"{tool_key}_blocked")
+        err_msg = (
+            f"{tool_key} 已禁用：画布 CDP 未 attach 到 Hermes。"
+            "请先在 AI 测试页连接实时画面，或改用 refine_test_plan。"
+        )
         return json.dumps(
             {
                 "ok": False,
-                "error": (
-                    f"{tool_key} 已禁用：已配置内置浏览器运行时，请改用 refine_test_plan "
-                    "并在 AI 测试页通过画布执行步骤。"
-                ),
+                "error": err_msg,
             },
             ensure_ascii=False,
         )

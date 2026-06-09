@@ -8,6 +8,8 @@ import secrets
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+_ACTIVE_CDP_ENDPOINT: str = ""
+
 
 def hermes_home_dir() -> Path:
     raw = (os.environ.get("HERMES_HOME") or "").strip()
@@ -118,3 +120,99 @@ def _sync_hermes_env_to_process(env_path: Path) -> None:
         os.environ["HERMES_API_SERVER_KEY"] = api_key
     if not (os.environ.get("HERMES_GATEWAY_URL") or "").strip():
         os.environ["HERMES_GATEWAY_URL"] = "http://127.0.0.1:8642"
+
+
+def hermes_cdp_endpoint_active() -> str:
+    """当前进程内已同步的画布 CDP WebSocket URL（空表示未 attach）。"""
+    env = (os.environ.get("HERMES_CDP_ENDPOINT") or "").strip()
+    if env:
+        return env
+    return (_ACTIVE_CDP_ENDPOINT or "").strip()
+
+
+def hermes_cdp_attached() -> bool:
+    return bool(hermes_cdp_endpoint_active())
+
+
+def _hermes_env_path() -> Path:
+    return hermes_home_dir() / ".env"
+
+
+def _upsert_env_line(lines: list[str], key: str, value: str) -> list[str]:
+    prefix = f"{key}="
+    out: list[str] = []
+    found = False
+    for line in lines:
+        if line.startswith(prefix):
+            out.append(f"{prefix}{value}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f"{prefix}{value}")
+    return out
+
+
+def _remove_env_line(lines: list[str], key: str) -> list[str]:
+    prefix = f"{key}="
+    return [line for line in lines if not line.startswith(prefix)]
+
+
+def _write_hermes_env_lines(lines: list[str]) -> None:
+    env_path = _hermes_env_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join([ln for ln in lines if ln is not None]).strip()
+    if text:
+        text += "\n"
+    env_path.write_text(text, encoding="utf-8")
+    _sync_hermes_env_to_process(env_path)
+
+
+def sync_hermes_cdp_endpoint(cdp_ws_url: str, *, restart_gateway: bool = True) -> bool:
+    """
+    将 Browser Runtime 返回的 cdp_browser_ws 写入 HERMES_HOME/.env 与进程环境，
+    供 Hermes gateway 以 cdp_attach 模式操作画布 Chromium。
+    """
+    global _ACTIVE_CDP_ENDPOINT
+    ws = (cdp_ws_url or "").strip()
+    if not ws:
+        return False
+    ensure_hermes_home()
+    env_path = _hermes_env_path()
+    if env_path.is_file():
+        lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    else:
+        lines = build_hermes_env_lines().splitlines()
+    lines = _upsert_env_line(lines, "HERMES_CDP_ENDPOINT", ws)
+    if "HERMES_BROWSER_MODE=cdp_attach" not in lines:
+        lines.append("HERMES_BROWSER_MODE=cdp_attach")
+    _write_hermes_env_lines(lines)
+    os.environ["HERMES_CDP_ENDPOINT"] = ws
+    os.environ["HERMES_BROWSER_MODE"] = "cdp_attach"
+    _ACTIVE_CDP_ENDPOINT = ws
+    if restart_gateway:
+        try:
+            from hermes_service_bootstrap import restart_hermes_gateway
+
+            restart_hermes_gateway()
+        except Exception:
+            pass
+    return True
+
+
+def clear_hermes_cdp_endpoint(*, restart_gateway: bool = True) -> None:
+    """画布会话结束时清除 CDP attach 配置。"""
+    global _ACTIVE_CDP_ENDPOINT
+    _ACTIVE_CDP_ENDPOINT = ""
+    os.environ.pop("HERMES_CDP_ENDPOINT", None)
+    env_path = _hermes_env_path()
+    if env_path.is_file():
+        lines = _remove_env_line(env_path.read_text(encoding="utf-8", errors="replace").splitlines(), "HERMES_CDP_ENDPOINT")
+        _write_hermes_env_lines(lines)
+    if restart_gateway:
+        try:
+            from hermes_service_bootstrap import restart_hermes_gateway
+
+            restart_hermes_gateway()
+        except Exception:
+            pass

@@ -29,9 +29,11 @@
 <a href="/schedules" id="navSchedules" class="{{ nav_btn }} bg-orange-500 hover:bg-orange-600 hidden" data-nav-path="/schedules" data-feature="schedule" data-i18n-title="nav_schedule_title" title="定时任务">
     <i class="fas fa-clock mr-1"></i><span data-i18n="nav_schedule">定时</span>
 </a>
+{% if not is_client %}
 <a href="/notifications" id="navNotifications" class="{{ nav_btn }} bg-pink-500 hover:bg-pink-600 hidden" data-nav-path="/notifications" data-feature="email_notification" data-role="admin" data-i18n-title="nav_notification_title" title="通知配置">
     <i class="fas fa-bell mr-1"></i><span data-i18n="nav_notification">通知</span>
 </a>
+{% endif %}
 <a href="/defects" id="navDefects" class="{{ nav_btn }} bg-red-600 hover:bg-red-700 hidden" data-nav-path="/defects" data-feature="defect_management" data-i18n-title="nav_defect_title" title="缺陷管理">
     <i class="fas fa-bug mr-1"></i><span data-i18n="nav_defect">缺陷</span>
 </a>

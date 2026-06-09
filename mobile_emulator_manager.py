@@ -805,6 +805,13 @@ def emulator_status() -> Dict[str, Any]:
     if ok:
         env = _emulator_env()
         accel_warn = _accel_check_message(msg, env) or ""
+    setup = {}
+    try:
+        from mobile_emulator_sdk_bundles import emulator_sdk_setup_status
+
+        setup = emulator_sdk_setup_status()
+    except Exception:
+        pass
     return {
         "emulator_available": ok,
         "emulator_message": msg if ok else msg,
@@ -813,6 +820,11 @@ def emulator_status() -> Dict[str, Any]:
         "avds": avds,
         "running": list_running_emulators(),
         "presets": EMULATOR_AVD_PRESETS,
+        "models": list_emulator_models(),
+        "sdk_ready": bool(setup.get("sdk_ready")),
+        "system_image_ready": bool(setup.get("system_image_ready")),
+        "avd_ready": bool(setup.get("avd_ready")),
+        "default_avd": setup.get("default_avd") or "",
         "setup_hint": accel_warn or disk_warn or hint,
         "disk_space_ok": not bool(disk_warn),
         "hypervisor_ok": not bool(accel_warn),
@@ -835,3 +847,255 @@ def parse_avd_create_command(preset_id: str) -> Optional[str]:
                 f'--force'
             )
     return None
+
+
+PRESET_FRAME_IDS: Dict[str, str] = {
+    "pixel_7": "pixel_7",
+    "samsung_s23": "samsung_s23",
+    "xiaomi_14": "xiaomi_14",
+    "tablet_10": "ipad_mini",
+}
+
+
+def get_preset_by_id(preset_id: str) -> Optional[Dict[str, Any]]:
+    pid = (preset_id or "").strip()
+    for p in EMULATOR_AVD_PRESETS:
+        if p.get("id") == pid:
+            return dict(p)
+    return None
+
+
+def avd_exists(avd_name: str) -> bool:
+    name = (avd_name or "").strip()
+    if not name:
+        return False
+    return any((a.get("name") or "") == name for a in list_avds())
+
+
+def frame_preset_for_model(preset_id: str) -> str:
+    return PRESET_FRAME_IDS.get((preset_id or "").strip(), "generic_19_9")
+
+
+def list_emulator_models() -> List[Dict[str, Any]]:
+    """设备型号列表（供 UI 切换，对标微信/HBuilderX 型号选择器）。"""
+    running = {r.get("avd_name"): r for r in list_running_emulators()}
+    out: List[Dict[str, Any]] = []
+    for p in EMULATOR_AVD_PRESETS:
+        avd_name = (p.get("avd_name_hint") or "").strip()
+        run = running.get(avd_name) or {}
+        out.append({
+            **dict(p),
+            "avd_name": avd_name,
+            "avd_exists": avd_exists(avd_name),
+            "running": bool(run),
+            "serial": run.get("serial") or "",
+            "frame_preset_id": frame_preset_for_model(p.get("id") or ""),
+        })
+    return out
+
+
+def provision_avd_for_preset(preset_id: str) -> Tuple[bool, str, str]:
+    """创建 preset 对应 AVD（若不存在）。返回 (ok, avd_name, message)。"""
+    preset = get_preset_by_id(preset_id)
+    if not preset:
+        return False, "", f"未知设备型号：{preset_id}"
+    avd_name = (preset.get("avd_name_hint") or "").strip()
+    if not avd_name:
+        return False, "", "设备型号配置缺少 AVD 名称"
+    if avd_exists(avd_name):
+        return True, avd_name, f"虚拟手机「{avd_name}」已存在"
+    try:
+        from mobile_emulator_sdk_bundles import create_avd_for_preset
+
+        create_avd_for_preset(preset)
+        return True, avd_name, f"已创建虚拟手机「{avd_name}」"
+    except Exception as exc:
+        return False, avd_name, str(exc)
+
+
+def switch_emulator_model(
+    preset_id: str,
+    *,
+    port: int = 5554,
+    gpu: str = "swiftshader_indirect",
+    no_window: bool = True,
+    progress_cb: ProgressCallback = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """停止当前模拟器 → 创建/启动新型号 AVD → 返回 serial 等元数据。"""
+    preset = get_preset_by_id(preset_id)
+    if not preset:
+        return False, f"未知设备型号：{preset_id}", {}
+    label = preset.get("label") or preset_id
+    if progress_cb:
+        progress_cb(5, f"正在切换至 {label}…")
+    for run in list_running_emulators():
+        serial = (run.get("serial") or "").strip()
+        avd = (run.get("avd_name") or "").strip()
+        if serial or avd:
+            stop_avd(serial=serial, avd_name=avd)
+    if progress_cb:
+        progress_cb(15, "正在准备虚拟手机…")
+    ok, avd_name, prov_msg = provision_avd_for_preset(preset_id)
+    if not ok:
+        return False, prov_msg, {}
+    if progress_cb:
+        progress_cb(30, prov_msg)
+    ok2, msg2, meta = start_avd(
+        avd_name,
+        port=port,
+        gpu=gpu,
+        no_window=no_window,
+        progress_cb=progress_cb,
+    )
+    if not ok2:
+        return False, msg2, meta or {}
+    meta = dict(meta or {})
+    meta["preset_id"] = preset_id
+    meta["avd_name"] = avd_name
+    meta["frame_preset_id"] = frame_preset_for_model(preset_id)
+    return True, msg2, meta
+
+
+def emulator_diagnostics() -> Dict[str, Any]:
+    """汇总模拟器环境诊断（供 UI 环境检查面板）。"""
+    from mobile_env_config import mobile_enabled
+
+    status = emulator_status()
+    bridge: Dict[str, Any] = {}
+    try:
+        from mobile_scrcpy_bridge import bridge_health
+
+        bridge = bridge_health()
+    except Exception:
+        bridge = {"ok": False, "message": "投屏桥接模块不可用"}
+
+    extensions_root = ""
+    try:
+        from web_capture.plugin_market import software_extensions_root
+
+        extensions_root = str(software_extensions_root())
+    except Exception:
+        pass
+
+    java_ok = False
+    java_path = ""
+    java_hint = ""
+    try:
+        from mobile_emulator_sdk_bundles import _java_required_message, _resolve_java_exe
+
+        java_path = _resolve_java_exe() or ""
+        java_ok = bool(java_path)
+        if not java_ok:
+            java_hint = _java_required_message()
+    except Exception as exc:
+        java_hint = str(exc)
+
+    checks: List[Dict[str, Any]] = []
+    blocking: List[str] = []
+
+    def _add(
+        cid: str,
+        label: str,
+        ok: bool,
+        detail: str,
+        *,
+        action: str = "",
+    ) -> None:
+        checks.append({
+            "id": cid,
+            "ok": bool(ok),
+            "label": label,
+            "detail": (detail or "").strip(),
+            "action": action,
+        })
+        if not ok:
+            blocking.append((detail or label).strip())
+
+    enabled = mobile_enabled()
+    _add(
+        "mobile_module",
+        "移动端模块",
+        enabled,
+        "已启用" if enabled else "未启用（请在 .env 设置 ENABLE_MOBILE=1）",
+        action="" if enabled else "docs",
+    )
+
+    sdk_ok = bool(status.get("sdk_ready"))
+    _add(
+        "sdk",
+        "SDK 组件",
+        sdk_ok,
+        status.get("android_sdk_home") or (
+            "未安装，请前往插件市场安装「Android 模拟器 SDK（命令行）」"
+            if not sdk_ok
+            else "就绪"
+        ),
+        action="" if sdk_ok else "plugin_market",
+    )
+
+    avd_ok = bool(status.get("avd_ready"))
+    _add(
+        "avd",
+        "虚拟手机 (AVD)",
+        avd_ok,
+        (
+            f"已就绪（默认：{status.get('default_avd') or '—'}）"
+            if avd_ok
+            else "未创建虚拟手机，可点击下方「修复环境」"
+        ),
+        action="" if avd_ok else "repair",
+    )
+
+    _add(
+        "java",
+        "Java 运行环境",
+        java_ok,
+        java_path or java_hint or "未检测到 Java 11+（可安装 runtime/jre 或 adoptium.net）",
+        action="" if java_ok else "install_java",
+    )
+
+    if os.name == "nt":
+        hv_ok = status.get("hypervisor_ok")
+        hv_detail = "已启用" if hv_ok else (status.get("setup_hint") or "Hypervisor 未就绪")
+        _add(
+            "hypervisor",
+            "硬件加速 (Hypervisor)",
+            bool(hv_ok) if hv_ok is not None else True,
+            hv_detail,
+            action="" if hv_ok else "hypervisor_install",
+        )
+
+    bridge_ok = bool(bridge.get("ok"))
+    _add(
+        "bridge",
+        "scrcpy 投屏桥",
+        bridge_ok,
+        bridge.get("message") or ("就绪" if bridge_ok else "未就绪（可选：插件市场安装 scrcpy）"),
+        action="" if bridge_ok else "plugin_market",
+    )
+
+    emu_ok = bool(status.get("emulator_available"))
+    if sdk_ok:
+        _add(
+            "emulator",
+            "模拟器程序",
+            emu_ok,
+            status.get("emulator_message") or ("就绪" if emu_ok else "未找到 emulator"),
+            action="" if emu_ok else "plugin_market",
+        )
+
+    blocking_reason = blocking[0] if blocking else ""
+    setup_hint = (status.get("setup_hint") or "").strip()
+    if not blocking_reason and setup_hint and status.get("hypervisor_ok") is False:
+        blocking_reason = setup_hint.split("\n")[0]
+
+    return {
+        "checks": checks,
+        "blocking_reasons": blocking,
+        "blocking_reason": blocking_reason,
+        "extensions_root": extensions_root,
+        "java_ok": java_ok,
+        "java_path": java_path,
+        **status,
+        "bridge": bridge,
+    }

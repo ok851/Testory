@@ -36,8 +36,11 @@ from mobile_env_config import (
     scrcpy_bridge_url,
 )
 from mobile_emulator_manager import (
+    emulator_diagnostics,
     emulator_status,
+    list_emulator_models,
     list_running_emulators,
+    provision_avd_for_preset,
     start_avd,
     stop_avd,
 )
@@ -834,6 +837,98 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
 
         return jsonify({"success": True, **emulator_status(), "bridge": bridge_health()})
 
+    @app.route("/api/mobile/emulator/diagnostics", methods=["GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_emulator_diagnostics():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        diag = emulator_diagnostics()
+        return jsonify({"success": True, **diag})
+
+    @app.route("/api/mobile/emulator/repair", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_emulator_repair():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        preset_id = (body.get("preset_id") or "").strip()
+        if preset_id:
+            ok, avd_name, msg = provision_avd_for_preset(preset_id)
+            return jsonify({
+                "success": ok,
+                "message": msg,
+                "avd_name": avd_name,
+                "emulator": emulator_status(),
+            }), (200 if ok else 503)
+        from mobile_emulator_sdk_bundles import ensure_emulator_sdk_ready
+
+        result = ensure_emulator_sdk_ready()
+        ok = bool(result.get("success"))
+        result["emulator"] = emulator_status()
+        return jsonify(result), (200 if ok else 503)
+
+    @app.route("/api/mobile/emulator/models", methods=["GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_emulator_models():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        return jsonify({"success": True, "models": list_emulator_models()})
+
+    @app.route("/api/mobile/emulator/switch-model", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_emulator_switch_model():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        preset_id = (body.get("preset_id") or body.get("model_id") or "").strip()
+        if not preset_id:
+            return jsonify({"success": False, "error": "需要 preset_id"}), 400
+        try:
+            port = int(body.get("port") or 5554)
+        except (TypeError, ValueError):
+            port = 5554
+        gpu = (body.get("gpu") or "swiftshader_indirect").strip()
+        if "no_window" in body:
+            no_window = bool(body.get("no_window"))
+        else:
+            no_window = True
+        async_start = body.get("async")
+        if async_start is None:
+            async_start = True
+        if async_start:
+            from emulator_start_jobs import start_switch_model_job
+
+            job_id = start_switch_model_job(
+                preset_id,
+                port=port,
+                gpu=gpu,
+                no_window=no_window,
+            )
+            return jsonify({"success": True, "async": True, "job_id": job_id, "preset_id": preset_id})
+        from mobile_emulator_manager import switch_emulator_model
+
+        ok, msg, meta = switch_emulator_model(
+            preset_id,
+            port=port,
+            gpu=gpu,
+            no_window=no_window,
+        )
+        if not ok:
+            return jsonify({"success": False, "error": msg, **(meta or {})}), 503
+        return jsonify({"success": True, "message": msg, **meta, "devices": list_usb_devices()})
+
     @app.route("/api/mobile/emulator/start", methods=["POST"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")
@@ -845,6 +940,13 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             return blocked
         body = request.get_json(silent=True) or {}
         avd_name = (body.get("avd_name") or body.get("name") or "").strip()
+        preset_id = (body.get("preset_id") or body.get("model_id") or "").strip()
+        if not avd_name and preset_id:
+            from mobile_emulator_manager import get_preset_by_id
+
+            preset = get_preset_by_id(preset_id)
+            if preset:
+                avd_name = (preset.get("avd_name_hint") or "").strip()
         if not avd_name:
             return jsonify({"success": False, "error": "需要 avd_name"}), 400
         try:

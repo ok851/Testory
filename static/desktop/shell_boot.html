@@ -31,48 +31,72 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 1.25rem;
+      gap: 1.1rem;
+      padding: 1rem;
     }
     .logo {
       width: 72px;
       height: 72px;
-      border-radius: 18px;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6 45%, #06b6d4);
-      box-shadow: 0 12px 40px rgba(99, 102, 241, 0.35);
-      display: grid;
-      place-items: center;
-      font-weight: 800;
-      font-size: 2rem;
-      letter-spacing: -0.04em;
+      filter: drop-shadow(0 12px 28px rgba(99, 102, 241, 0.35));
     }
     h1 {
       margin: 0;
-      font-size: 1.5rem;
+      font-size: 1.45rem;
       font-weight: 700;
       letter-spacing: -0.02em;
     }
     p {
       margin: 0;
       color: var(--muted);
-      font-size: 0.95rem;
+      font-size: 0.92rem;
+      text-align: center;
+      max-width: 28rem;
+      line-height: 1.5;
     }
-    .spinner {
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      border: 3px solid rgba(148, 163, 184, 0.25);
-      border-top-color: var(--accent2);
-      animation: spin 0.9s linear infinite;
+    .progress {
+      width: min(240px, 70vw);
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.2);
+      overflow: hidden;
+      margin-top: 0.25rem;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress > span {
+      display: block;
+      height: 100%;
+      width: 35%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      animation: slide 1.2s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0% { transform: translateX(-120%); }
+      100% { transform: translateX(320%); }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="logo">T</div>
+    <img class="logo" src="../brand/testory-mark.svg" alt="Testory" width="72" height="72">
     <h1>Testory</h1>
     <p id="status">正在启动本地服务…</p>
-    <div class="spinner" aria-hidden="true"></div>
+    <div class="progress" aria-hidden="true"><span></span></div>
   </div>
+  <script>
+    (function () {
+      var el = document.getElementById('status');
+      var port = 5000;
+      function poll() {
+        fetch('http://127.0.0.1:' + port + '/api/startup/status', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.message) el.textContent = d.message;
+          })
+          .catch(function () {});
+      }
+      setInterval(poll, 450);
+      poll();
+    })();
+  </script>
 </body>
 </html>

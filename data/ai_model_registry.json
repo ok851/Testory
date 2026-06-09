@@ -25,39 +25,6 @@
       "group_id": ""
     },
     {
-      "id": "b9014f50-b372-4580-be33-a1a29af83027",
-      "provider": "deepseek",
-      "api_style": "openai_compatible",
-      "model_type": "test_case_generation",
-      "model_id": "deepseek-chat",
-      "label": "deepseek-chat",
-      "api_key": "sk-6268e9ba17c34c86b3f4eb0ff8494b56",
-      "base_url": "https://api.deepseek.com/v1",
-      "group_id": ""
-    },
-    {
-      "id": "f4993235-0137-4703-b840-9c45a56870a5",
-      "provider": "deepseek",
-      "api_style": "openai_compatible",
-      "model_type": "test_case_generation",
-      "model_id": "deepseek-reasoner",
-      "label": "deepseek-reasoner",
-      "api_key": "sk-6268e9ba17c34c86b3f4eb0ff8494b56",
-      "base_url": "https://api.deepseek.com/v1",
-      "group_id": ""
-    },
-    {
-      "id": "f238957a-6c93-490b-8bf6-c6f3840d43b3",
-      "provider": "custom_openai",
-      "api_style": "openai_compatible",
-      "model_type": "test_case_generation",
-      "model_id": "mimo-v2.5",
-      "label": "mimo-v2.5",
-      "api_key": "tp-cag12chuv5q6imirg1egn66i157sq57du730iq74h7ym5wwt",
-      "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
-      "group_id": ""
-    },
-    {
       "id": "5561150d-6042-4260-9260-6a2ce1fdf4d3",
       "provider": "alibaba_dashscope",
       "api_style": "openai_compatible",

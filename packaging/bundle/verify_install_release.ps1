@@ -50,6 +50,7 @@ if ($protected) {
     foreach ($rel in @(
         "runtime\testory_app\TestoryBackend.exe",
         "runtime\TestoryEmbeddedGw\TestoryEmbeddedGw.exe",
+        "runtime\TestoryHermesGw\TestoryHermesGw.exe",
         "runtime\TestoryDesktopGw\TestoryDesktopGw.exe"
     )) {
         if (-not (Test-Path (Join-Path $release $rel))) {

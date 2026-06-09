@@ -297,6 +297,60 @@ html.dark .ms-emulator-help--warn {
     background: rgba(180, 83, 9, 0.15);
     border-color: #b45309;
 }
+.ms-env-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 0.5rem;
+}
+.ms-env-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    padding: 0.35rem 0.45rem;
+    border-radius: 0.35rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+}
+html.dark .ms-env-item {
+    background: #0f172a;
+    border-color: #334155;
+}
+.ms-env-item--fail {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+html.dark .ms-env-item--fail {
+    border-color: #7f1d1d;
+    background: rgba(127, 29, 29, 0.2);
+}
+.ms-env-icon {
+    flex-shrink: 0;
+    width: 1rem;
+    text-align: center;
+    margin-top: 0.05rem;
+}
+.ms-env-icon--ok { color: #059669; }
+.ms-env-icon--fail { color: #dc2626; }
+.ms-env-label { font-weight: 600; }
+.ms-env-detail {
+    display: block;
+    color: #64748b;
+    font-size: 0.68rem;
+    margin-top: 0.1rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+html.dark .ms-env-detail { color: #94a3b8; }
+.ms-env-blocking {
+    font-size: 0.72rem;
+    color: #b45309;
+    margin: 0 0 0.5rem;
+    white-space: pre-wrap;
+}
+html.dark .ms-env-blocking { color: #fbbf24; }
 .ms-emulator-hint {
     margin: 0.5rem 0 0;
     font-size: 0.7rem;

@@ -6,12 +6,14 @@
     <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
-    <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
-    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui4">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-upload.css') }}?v=1">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui3">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui4">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui4">
+    {% if is_client %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-layout.css') }}?v=1">
+    {% endif %}
     <script>
         (function () {
             try {
@@ -21,9 +23,18 @@
             } catch (e) {}
         })();
     </script>
+    {% if use_local_vendors %}
+    <script src="{{ url_for('static', filename='vendor/tailwindcss/tailwind.min.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/sweetalert2/sweetalert2.min.css') }}">
+    <script src="{{ url_for('static', filename='vendor/sweetalert2/sweetalert2.min.js') }}"></script>
+    {% else %}
+    <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    {% endif %}
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -46,18 +57,28 @@
     </style>
     {% block head %}{% endblock %}
 </head>
-<body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}{% if is_client %} testory-desktop-client{% endif %}">
-    <!-- 统一顶栏导航（Web 样式；桌面客户端同布局，不使用侧栏） -->
-    <nav id="testoryMainNav" class="testory-main-nav bg-white dark:bg-gray-900 shadow-md border-b border-gray-100 dark:border-gray-800{% if is_client %} testory-desktop-titlebar{% endif %}" aria-label="主导航">
+<body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}{% if is_client %} testory-desktop-client testory-frameless-shell{% endif %}">
+    {% if is_client %}
+    <header id="testoryDesktopTitlebar" class="testory-desktop-chrome" aria-label="窗口标题栏">
+        <div class="testory-desktop-chrome__drag">
+            <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="" width="18" height="18" class="testory-desktop-chrome__mark">
+            <span class="testory-desktop-chrome__title">{{ product_name }}</span>
+        </div>
+        <div class="testory-desktop-chrome__controls">
+            <button type="button" class="testory-desktop-chrome__btn" data-win="minimize" title="最小化" aria-label="最小化">&#8211;</button>
+            <button type="button" class="testory-desktop-chrome__btn" data-win="maximize" title="最大化" aria-label="最大化">&#9633;</button>
+            <button type="button" class="testory-desktop-chrome__btn testory-desktop-chrome__btn--close" data-win="close" title="关闭" aria-label="关闭">&#10005;</button>
+        </div>
+    </header>
+    {% endif %}
+    <!-- 统一顶栏导航 -->
+    <nav id="testoryMainNav" class="testory-main-nav bg-white dark:bg-gray-900 shadow-md border-b border-gray-100 dark:border-gray-800" aria-label="主导航">
         <div class="testory-nav-inner flex justify-between items-center gap-3">
             <div class="flex items-center gap-3 flex-shrink-0">
                 <a href="/" class="testory-logo">
                     <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}">
                     <span class="testory-logo-word">{{ product_name }}<small>{{ product_tagline }}</small></span>
                 </a>
-                {% if is_client %}
-                <span class="testory-desktop-badge hidden sm:inline-flex">桌面客户端</span>
-                {% endif %}
             </div>
             <div class="flex items-center gap-2 flex-wrap justify-end">
                 {% include 'partials/main_nav.html' %}
@@ -2092,7 +2113,10 @@
             setInterval(_pollUatAiBgJobs, 2500);
         });
     </script>
-    <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui3" defer></script>
+    <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui4" defer></script>
+    {% if is_client %}
+    <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=1" defer></script>
+    {% endif %}
     {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -108,6 +108,22 @@ if (Test-Path $setup) {
     if (Test-Path $bin) {
         Write-Host "Also ship: $bin" -ForegroundColor Green
     }
+    if ($env:UAT_CODESIGN_THUMBPRINT -or $env:UAT_CODESIGN_PFX) {
+        Write-Host ""
+        Write-Host "Code signing installer (UAT_CODESIGN_* set)..." -ForegroundColor Cyan
+        $signScript = Join-Path $Root "packaging\enterprise\sign_release.ps1"
+        if (Test-Path $signScript) {
+            & $signScript -FilePath $setup -Description "Testory Desktop Client"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if (Test-Path (Join-Path $Root "dist\Testory.exe")) {
+                & $signScript -FilePath (Join-Path $Root "dist\uat_release\Testory.exe") -Description "Testory Launcher" 2>$null
+            }
+        } else {
+            Write-Warning "sign_release.ps1 not found; skip signing."
+        }
+    } else {
+        Write-Host "Tip: set UAT_CODESIGN_THUMBPRINT or UAT_CODESIGN_PFX to auto-sign the installer." -ForegroundColor DarkGray
+    }
 } else {
     $setupLegacy = Join-Path $Root "dist\uat_platform_setup.exe"
     if (Test-Path $setupLegacy) {

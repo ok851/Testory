@@ -123,6 +123,34 @@ def _start_gateway_process() -> None:
     )
 
 
+def _stop_gateway_process() -> None:
+    global _GATEWAY_PROC
+    if _GATEWAY_PROC is None:
+        return
+    try:
+        if _GATEWAY_PROC.poll() is None:
+            _GATEWAY_PROC.terminate()
+            try:
+                _GATEWAY_PROC.wait(timeout=8.0)
+            except subprocess.TimeoutExpired:
+                _GATEWAY_PROC.kill()
+    except Exception:
+        pass
+    _GATEWAY_PROC = None
+
+
+def restart_hermes_gateway() -> dict:
+    """CDP 或 LLM 配置变更后重启 Hermes Gateway 以加载新环境。"""
+    global _BOOTED
+    _stop_gateway_process()
+    _BOOTED = False
+    return bootstrap_hermes_services(force=True)
+
+
+def stop_hermes_gateway() -> None:
+    _stop_gateway_process()
+
+
 def bootstrap_hermes_services(*, force: bool = False) -> dict:
     global _BOOTED
     if _BOOTED and not force:

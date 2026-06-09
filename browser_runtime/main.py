@@ -500,6 +500,7 @@ class EmbeddedSession:
     run_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     viewer_ws: Optional[WebSocket] = None
     viewer_send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    cdp_browser_ws: Optional[str] = None
 
 
 app = FastAPI(title="Embedded Browser Gateway", version="1.0.0")
@@ -661,6 +662,7 @@ async def internal_create_session(request: Request) -> Dict[str, Any]:
         browser=browser,
         context=context,
         page=page,
+        cdp_browser_ws=cdp_browser_ws,
     )
     async with _sessions_lock:
         _sessions[sid] = rec
@@ -668,6 +670,25 @@ async def internal_create_session(request: Request) -> Dict[str, Any]:
     out: Dict[str, Any] = {"session_id": sid, "ws_token": tok}
     if cdp_browser_ws:
         out["cdp_browser_ws"] = cdp_browser_ws
+    return out
+
+
+@app.get("/internal/session/{session_id}")
+async def internal_get_session(session_id: str, request: Request) -> Dict[str, Any]:
+    """返回会话元数据（含 CDP WebSocket URL）。"""
+    _require_internal(request)
+    uid = _parse_user_id(request)
+    async with _sessions_lock:
+        rec = _sessions.get(session_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="session not found")
+        if uid and rec.user_id != uid:
+            raise HTTPException(status_code=403, detail="forbidden")
+        out: Dict[str, Any] = {
+            "session_id": rec.session_id,
+            "user_id": rec.user_id,
+            "cdp_browser_ws": rec.cdp_browser_ws,
+        }
     return out
 
 

@@ -2,6 +2,8 @@
 """安装包 / 发布目录启动前自检（桌面壳、后端、资源文件）。"""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -9,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 _RUNTIME_REL = ".venv"
+_PROBE_CACHE_NAME = ".launch_probe_ok"
 
 
 def _venv_pythonw(root: Path) -> Optional[Path]:
@@ -33,6 +36,47 @@ def _backend_exe(root: Path) -> Optional[Path]:
         if p.is_file():
             return p
     return None
+
+
+def _install_fingerprint(root: Path) -> str:
+    parts = []
+    for rel in (
+        "Testory.exe",
+        "runtime/testory_app/TestoryBackend.exe",
+        ".venv/pythonw.exe",
+        "packaging/APP_VERSION.txt",
+    ):
+        p = root / rel.replace("/", os.sep)
+        if p.is_file():
+            parts.append(f"{rel}:{p.stat().st_mtime_ns}:{p.stat().st_size}")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _probe_cache_path(root: Path) -> Path:
+    base = (os.environ.get("UAT_DATA_DIR") or "").strip()
+    if not base:
+        base = str(Path(os.environ.get("LOCALAPPDATA", "")) / "Testory")
+    return Path(base) / _PROBE_CACHE_NAME
+
+
+def _probe_cache_valid(root: Path) -> bool:
+    path = _probe_cache_path(root)
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("fingerprint") == _install_fingerprint(root)
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def _write_probe_cache(root: Path) -> None:
+    path = _probe_cache_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"fingerprint": _install_fingerprint(root)}, indent=2),
+        encoding="utf-8",
+    )
 
 
 def check_layout(root: Path) -> List[str]:
@@ -90,6 +134,13 @@ def check_layout(root: Path) -> List[str]:
         errors.append(
             "缺少 ai_provider_catalog.json（AI 测试「添加模型」供应商列表将为空）。"
             "请重新执行 build_desktop_installer.ps1。"
+        )
+
+    vendor_tw = root / "static" / "vendor" / "tailwindcss" / "tailwind.min.js"
+    if not vendor_tw.is_file():
+        errors.append(
+            "缺少 static\\vendor\\tailwindcss\\tailwind.min.js（离线 UI 资源）。"
+            "请运行: python packaging\\fetch_frontend_vendors.py"
         )
 
     return errors
@@ -172,13 +223,15 @@ def check_current_process_imports(root: Path) -> List[str]:
     return errors
 
 
-def run_launch_preflight(root: Path, *, port: int = 5000) -> Tuple[List[str], List[str]]:
+def run_launch_preflight(root: Path, *, port: int = 5000, force_full_probe: bool = False) -> Tuple[List[str], List[str]]:
     """
     返回 (errors, warnings)。errors 非空时不应启动。
     """
     errors = check_layout(root)
-    if not errors:
+    if not errors and (force_full_probe or not _probe_cache_valid(root)):
         errors.extend(check_python_imports(root))
+        if not errors:
+            _write_probe_cache(root)
     if not errors:
         errors.extend(check_current_process_imports(root))
     warnings: List[str] = []

@@ -17,22 +17,41 @@ cd <项目根目录>
 - **发给用户**：仅 `dist\testory_setup.exe` + 全部分卷 `testory_setup-*.bin`
 - 打包与网盘分发说明：[docs/DESKTOP_PROTECTED_BUILD.md](../docs/DESKTOP_PROTECTED_BUILD.md)
 
-**移动端模拟器（可选）**：将 Eclipse Temurin **JRE 11+** 解压到发布目录 `runtime\jre\`（与主程序同级），插件市场安装模拟器 SDK 时会自动使用，用户无需再装 Java。离线 Android 组件 zip 可放在 `offline_plugins\`。
+**移动端模拟器（可选）**：桌面版默认启用 `ENABLE_MOBILE=1`（用户数据 `%LOCALAPPDATA%\Testory\extensions`）。插件市场安装「Android 模拟器 SDK」后，进入 **移动端测试** → **模拟器环境** 面板检查 SDK / AVD / Hypervisor；在 **设备型号** 下拉切换 Pixel / Galaxy 等（对标微信开发者工具换机型）。将 Eclipse Temurin **JRE 11+** 解压到发布目录 `runtime\jre\`（与主程序同级），插件安装时会自动使用，用户无需再装 Java。离线 Android 组件 zip 可放在 `offline_plugins\`。详见 [README_MOBILE.md](../README_MOBILE.md)。
 
 说明：[docs/DESKTOP_APP_制作安装包.md](../docs/DESKTOP_APP_制作安装包.md) · [docs/DESKTOP_APP_用户使用说明.md](../docs/DESKTOP_APP_用户使用说明.md)
 
-开发自测：`pip install pywebview` 后 `python packaging/uat_desktop.py`
+开发自测桌面壳：
+
+```powershell
+pip install pywebview
+python packaging/uat_desktop.py
+# 或
+.\packaging\run_uat_local.ps1 -Desktop
+```
 
 ---
 
-## 开发人员：本机快速启动（会打开浏览器）
+## 开发人员：本机快速启动（浏览器 · dev only）
 
 ```powershell
 cd <项目根目录>
 .\packaging\run_uat_local.ps1
 ```
 
-脚本将安装依赖并 **用系统浏览器** 打开 `http://127.0.0.1:5000`（适合改代码调试）。
+脚本将安装依赖并 **用系统浏览器** 打开 `http://127.0.0.1:5000`（仅适合改代码调试；**最终用户应使用 Testory.exe 安装包**）。
+
+桌面壳调试（无边框窗口、启动进度、布局）：
+
+```powershell
+.\packaging\run_uat_local.ps1 -Desktop
+```
+
+离线 UI 资源（Tailwind / Font Awesome / SweetAlert2）在构建安装包时自动下载到 `static/vendor/`；开发机可手动执行：
+
+```powershell
+python packaging/fetch_frontend_vendors.py
+```
 
 ## 日志与数据
 
