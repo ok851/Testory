@@ -379,15 +379,28 @@ class MobileExecutor:
         expected = (step.get("input_value") or "").strip()
         if not expected:
             raise RuntimeError("assert_text 的 input_value 不能为空")
-        compare = (step.get("compare_type") or "text_contains").strip().lower()
+        compare = (step.get("compare_type") or "text_equals").strip().lower()
         if mobile_action_requires_locator("assert_text") and (step.get("selector_value") or "").strip():
             el = self._find_element(step)
             actual = (el.text or "").strip()
         else:
-            actual = (self._driver.page_source or "")
+            actual = ""
+            try:
+                from appium.webdriver.common.appiumby import AppiumBy
+
+                actual = (self._driver.find_element(AppiumBy.TAG_NAME, "body").text or "").strip()
+            except Exception:
+                actual = (self._driver.page_source or "")
         if compare in ("text_equals", "equals"):
-            if actual != expected:
-                raise RuntimeError(f"文本断言失败：期望「{expected}」，实际「{actual[:200]}」")
+            from auth_batch_helpers import page_text_has_exact_snippet
+
+            if (step.get("selector_value") or "").strip():
+                if actual != expected:
+                    raise RuntimeError(f"文本断言失败：期望「{expected}」，实际「{actual[:200]}」")
+            elif not page_text_has_exact_snippet(actual, expected):
+                raise RuntimeError(
+                    f"文本相等断言失败：页面未出现与预期完全一致的文案「{expected}」"
+                )
         elif compare in ("text_regex", "regex"):
             if not re.search(expected, actual):
                 raise RuntimeError(f"文本正则断言失败：pattern={expected}")

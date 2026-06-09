@@ -32,6 +32,19 @@
    * 将「交互情境」合并进 /api/ai/task/chat 请求体（仅附加非空字段，向后兼容）
    * ctx: { focus_step_index, focus_step_indices, browser_selection_text, selection_text, action_kind, intent }
    */
+  /** 过滤仅面向开发者的画布/网关内部提示，避免步骤页助手打扰用户。 */
+  function filterUserFacingWarnings(warnings) {
+    if (!warnings || !warnings.length) return [];
+    return warnings.filter(function (w) {
+      var s = String(w == null ? '' : w);
+      if (!s.trim()) return false;
+      if (s.indexOf('未连接内置画布') >= 0) return false;
+      if (s.indexOf('内置画布网关') >= 0 && s.indexOf('跳过') >= 0) return false;
+      if (s.indexOf('embedded_session_id') >= 0) return false;
+      return true;
+    });
+  }
+
   function appendInteractionToPayload(base, ctx) {
     var b = base || {};
     var c = ctx || {};
@@ -474,7 +487,7 @@
 
     function onChatResult(data, msg, actionKind) {
       state.lastPlan = data.plan;
-      state.lastWarnings = data.warnings || [];
+      state.lastWarnings = filterUserFacingWarnings(data.warnings || []);
       if (data.plan) state.current_plan = data.plan;
       state.applyMode = defaultApplyMode(actionKind, msg);
       state.history = state.history || [];

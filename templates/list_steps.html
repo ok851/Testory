@@ -2516,9 +2516,15 @@ function changePage(page) {
             updateEditSelectorHelp();
             updateVisualSelectorFieldUI('edit');
             
-            // 处理对比方式选择
+            // 处理对比方式 / 断言类型
             if (step.action === 'extract_text') {
                 document.getElementById('editStepCompareTypeSelect').value = step.compare_type || 'equals';
+            } else if (step.action === 'assert' || step.action === 'assert_text') {
+                const assertSel = document.getElementById('editStepAssertTypeSelect');
+                if (assertSel) {
+                    const ct = step.compare_type || 'text_equals';
+                    assertSel.value = assertSel.querySelector('option[value="' + ct + '"]') ? ct : 'text_equals';
+                }
             }
             
             // 处理滚动操作的四个输入框
@@ -5053,7 +5059,12 @@ function changePage(page) {
                 } else if (action === 'tap' || action === 'input_text' || action === 'assert_element' || action === 'assert_text') {
                     _showGrp(ui.inputValueGrp, action !== 'tap');
                     applyAndroidActionFormHints(ui);
-                    if (action === 'assert_text') _showGrp(ui.inputValueGrp, true);
+                    if (action === 'assert_text') {
+                        _showGrp(ui.inputValueGrp, true);
+                        _showGrp(ui.assertType, true);
+                        if (isEdit) toggleEditAssertOptions();
+                        else toggleAssertOptions();
+                    }
                 }
                 if (isEdit) updateEditSelectorHelp();
                 else updateSelectorHelp();
@@ -5285,10 +5296,12 @@ function changePage(page) {
                 inputValue = bt;
                 selectorValue = '';
             }
-            // 获取对比方式选择
+            // 获取对比方式 / 断言类型
             let compareType = '';
             if (action === 'extract_text') {
                 compareType = document.getElementById('stepCompareTypeSelect').value;
+            } else if (action === 'assert' || action === 'assert_text') {
+                compareType = document.getElementById('stepAssertTypeSelect').value;
             }
             
             if (!action) {
@@ -5436,10 +5449,12 @@ function changePage(page) {
                 inputValue = bt;
                 selectorValue = '';
             }
-            // 获取对比方式选择
+            // 获取对比方式 / 断言类型
             let compareType = '';
             if (action === 'extract_text') {
                 compareType = document.getElementById('editStepCompareTypeSelect').value;
+            } else if (action === 'assert' || action === 'assert_text') {
+                compareType = document.getElementById('editStepAssertTypeSelect').value;
             }
             
             if (!action) {
@@ -5560,6 +5575,10 @@ function changePage(page) {
         }
         
         async function runTestCase() {
+            if (window.uatTryAcquireCaseRunSlot && !window.uatTryAcquireCaseRunSlot()) {
+                showToast(t('steps_run_busy') || '有用例正在执行，请等待完成', 'warning');
+                return;
+            }
             const runButton = document.getElementById('runCaseBtn');
             const stopButton = document.getElementById('stopRunCaseBtn');
             const panel = document.getElementById('runCaseProgressPanel');
@@ -5641,6 +5660,7 @@ function changePage(page) {
                     clearInterval(runCaseStatusTimer);
                     runCaseStatusTimer = null;
                 }
+                if (window.uatReleaseCaseRunSlot) window.uatReleaseCaseRunSlot();
                 resetRunCaseToolbarIdle();
             }
         }

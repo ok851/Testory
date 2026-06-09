@@ -533,13 +533,57 @@ def _probe_pick_selector(
                 rl = rec.lower()
                 if any(x in rl for x in ("result", "title", "c-container", "content_left")):
                     score += 12
-                if tag in ("h3", "a", "div"):
+                if tag in ("h3", "a", "div", "span", "li"):
                     score += 2
+                if "el-menu" in rl or "menu-item" in rl or "ant-menu" in rl:
+                    score += 6
+            if txt and len(txt) >= 2 and txt in desc:
+                score += 26
+            if al and len(al) >= 2 and al in desc:
+                score += 22
+            for pat in (
+                r"「([^」]{2,40})」",
+                "\u201c([^\u201d]{2,40})\u201d",
+                r'"([^"]{2,40})"',
+                r"'([^']{2,40})'",
+            ):
+                for qm in re.finditer(pat, desc):
+                    qn = (qm.group(1) or "").strip()
+                    if len(qn) >= 2 and (qn in txt or qn in al or qn in ph):
+                        score += 28
+            for chunk in re.findall(r"[\u4e00-\u9fff]{2,16}", desc):
+                if len(chunk) < 2:
+                    continue
+                if chunk in txt or chunk in al or chunk == txt:
+                    score += 24
         elif prefer_in:
             if tag in ("input", "textarea") or rid in ("textbox", "searchbox", "combobox"):
                 score += 4
             if typ in ("text", "search", "textarea", ""):
                 score += 1
+            dlow = desc.lower()
+            if any(k in desc for k in ("账号", "用户名", "account")) and "密码" not in desc.replace("密码", ""):
+                eid = _norm_str(ent.get("id")).lower()
+                nm = _norm_str(ent.get("name")).lower()
+                if typ == "password":
+                    score -= 40
+                if any(k in ph for k in ("账号", "用户", "account")):
+                    score += 22
+                if any(k in eid for k in ("user", "account", "login", "email")):
+                    score += 20
+                if any(k in nm for k in ("user", "account", "login", "email")):
+                    score += 18
+            if any(k in desc for k in ("密码", "password")) and "账号" not in desc.replace("密码", ""):
+                if typ == "password":
+                    score += 22
+                if "密码" in ph:
+                    score += 20
+                pw_name = _norm_str(ent.get("name")).lower()
+                if "password" in pw_name or "pwd" in pw_name:
+                    score += 16
+                ac_id = _norm_str(ent.get("id")).lower()
+                if any(k in ac_id for k in ("user", "account")) and typ != "password":
+                    score -= 25
             if any(k in desc for k in ("搜索", "关键词", "输入", "填写")) and (
                 "搜" in blob or "search" in blob or ph or tag == "textarea"
             ):
@@ -690,8 +734,11 @@ def clamp_plan_steps_to_probe_registry(
         if css and sv == css:
             return True
         tid = _norm_str(ent.get("id"))
-        if tid and re.match(r"^[\w-]+$", tid) and sv in (f"#{tid}", f"#{tid.lower()}"):
-            return True
+        if tid and re.match(r"^[\w-]+$", tid):
+            tag = _norm_str(ent.get("tag")).lower() or "input"
+            variants = {f"#{tid}", f"#{tid.lower()}", f"{tag}#{tid}", f"input#{tid}"}
+            if sv.strip() in variants:
+                return True
         if st == "text":
             for k in ("ph", "al", "txt"):
                 v = _norm_str(ent.get(k))
@@ -759,6 +806,21 @@ def clamp_plan_steps_to_probe_registry(
         if ok and action in ("click", "input") and is_overly_broad_css_selector(sv):
             ok = False
         if ok:
+            if action in ("click", "input") and sv:
+                tid = ""
+                for ent in probe_registry:
+                    if isinstance(ent, dict) and _selector_authorized(sv, st, ent):
+                        tid = _norm_str(ent.get("id"))
+                        tag = _norm_str(ent.get("tag")).lower() or "input"
+                        if tid and re.match(r"^[\w-]+$", tid):
+                            pref = f"{tag}#{tid}" if tag in ("input", "button", "textarea", "select") else f"#{tid}"
+                            if sv != pref and ("[name=" in sv.lower() or sv.lower().startswith("input[name")):
+                                step["selector_value"] = pref
+                                step["selector_type"] = "css"
+                                warnings.append(
+                                    f"第{idx + 1}步已将有 id 的控件从 name 定位升级为 {pref!r}"
+                                )
+                        break
             continue
 
         st2, sv2 = _probe_pick_selector(desc, probe_registry, action)
@@ -1310,12 +1372,18 @@ class LocalAIService:
             "Field rules:\n"
             "- navigate: put the full URL ONLY in input_value; selector_type and selector_value MUST be empty strings; probe_index empty.\n"
             "- wait: input_value MUST be a non-empty integer duration — SECONDS 1–120, OR milliseconds if value > 120 (e.g. 1500); never leave empty.\n"
-            "- input: input_value MUST be the exact characters to type into the field (never empty). Put the typed text in input_value, not only in description (e.g. to search for X, input_value must be X).\n"
+            "- input: input_value MUST be the exact characters to type into the field. "
+            "Use empty string \"\" when the goal requires leaving the field blank (e.g. empty username test); "
+            "mention 留空/为空 in description. Never omit input_value key.\n"
             "- verify: RESERVED for captcha / human-verification widgets only. input_value MUST be one of: "
             "auto, slider, image (captcha kinds), or visible/exist/clickable for element state — NOT natural-language expected text. "
             "Use auto for tianai-captcha (TAC) and mixed types (curve slider, rotate, click-text); runtime auto-detects.\n"
             "- assert: use ONLY when the goal explicitly needs a check. Prefer fewer steps; do NOT add a trailing "
             "assert \"just in case\" if the user did not ask for verification.\n"
+            "  After generation the server replays preceding steps in headless mode and grounds assert steps against "
+            "the REAL post-action page (may rewrite to page_text_contains with verified visible text).\n"
+            "  Prefer page_text_contains when checking toast/error/hint messages; use element selectors only when "
+            "the expected text is stable on a specific node in the LIVE snapshot.\n"
             "  For checks against the browser address bar / current page URL / query string (e.g. wd=…, http…, percent-encoded), "
             "MUST use compare_type url_contains or url_equals, put the expected substring in input_value, and set "
             "selector_type and selector_value to empty strings (never bind a random <a> CSS for URL checks).\n"
@@ -1520,7 +1588,7 @@ class LocalAIService:
             "}\n"
             "navigate step: URL only in input_value; empty selector fields. "
             "wait: seconds 1-120 OR milliseconds if >120. "
-            "input: input_value must contain the exact text to type (never empty). "
+            "input: input_value must contain the exact text to type; use \"\" to leave the field blank when testing empty input.\n"
             "click: selector_value must be a real locator from the snapshot, never a lone digit; use probe_index for line [n]. "
             "Optional per-step \"locator_candidates\": JSON array of {selector_type, selector_value, score}. "
             "Execution order is DOM strategies first, then selector_type \"visual_template\" (selector_value: base64 PNG or JSON with png_b64), "
@@ -1746,6 +1814,16 @@ class LocalAIService:
 
         self._fill_missing_step_payloads(steps, goal_s, case_url, probe_registry)
         clamp_warnings = clamp_plan_steps_to_probe_registry(steps, probe_registry)
+        if probe_registry:
+            try:
+                from ai_page_probe import heuristic_repair_plan_selectors_from_registry
+
+                repaired, hw = heuristic_repair_plan_selectors_from_registry(steps, probe_registry)
+                steps = repaired
+                if hw:
+                    clamp_warnings = list(clamp_warnings or []) + list(hw)
+            except Exception:
+                pass
 
         if steps and str(steps[0].get("action") or "").lower() == "navigate":
             u0 = _norm_str(steps[0].get("input_value"))

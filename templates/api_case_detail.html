@@ -1,1381 +1,172 @@
 {% extends "base.html" %}
-{% block title %}查看详情 — {{ case_name }} - 接口测试{% endblock %}
+{% block title %}接口测试 — {{ case_name }}{% endblock %}
 {% block head %}
-<style>
-/* 与 list_cases_v2 用例管理页一致的弹窗与按钮（仅用于接口测试模态框） */
-.api-tc-modal-scope .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s ease; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.api-tc-modal-scope .btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
-.api-tc-modal-scope .btn-primary { background: #667eea; color: white; }
-.api-tc-modal-scope .btn-primary:hover { background: #5568d3; }
-.api-tc-modal-scope .btn-secondary { background: #6c757d; color: white; }
-.api-tc-modal-scope .btn-secondary:hover { background: #545b62; }
-.api-tc-modal-scope .btn-success { background: #28a745; color: white; }
-.api-tc-modal-scope .btn-success:hover { background: #218838; }
-.api-tc-modal-scope .modal-panel { background: white; padding: 24px 28px; border-radius: 12px; width: 100%; max-width: 720px; max-height: 92vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.18); }
-.api-tc-modal-scope .modal-panel h3 { color: #333; font-size: 20px; font-weight: 600; margin-bottom: 16px; }
-.api-tc-modal-scope .form-group { margin-bottom: 16px; }
-.api-tc-modal-scope .form-group label { display: block; margin-bottom: 6px; font-weight: 500; color: #555; font-size: 13px; }
-.api-tc-modal-scope .form-group input[type="text"],
-.api-tc-modal-scope .form-group input[type="number"],
-.api-tc-modal-scope .form-group select,
-.api-tc-modal-scope .form-group textarea { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; font-family: inherit; box-sizing: border-box; }
-.api-tc-modal-scope .form-group textarea { min-height: 88px; resize: vertical; }
-.api-tc-modal-scope .form-group input:focus,
-.api-tc-modal-scope .form-group select:focus,
-.api-tc-modal-scope .form-group textarea:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12); }
-.api-tc-modal-scope .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e9ecef; }
-.api-tc-modal-scope .nr-section { border: 1px solid #e9ecef; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; background: #fafbff; }
-.api-tc-modal-scope .nr-section-title { font-size: 12px; font-weight: 600; color: #667eea; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px; }
-.api-tc-modal-scope .nr-kv-table-wrap { border: 1px solid #e3e6ef; border-radius: 6px; max-height: 140px; overflow-y: auto; background: white; }
-.api-tc-modal-scope .nr-kv-table { width: 100%; font-size: 12px; border-collapse: collapse; }
-.api-tc-modal-scope .nr-kv-table th { background: #f0f2f8; padding: 6px 8px; text-align: left; color: #555; position: sticky; top: 0; }
-.api-tc-modal-scope .nr-kv-table td { padding: 4px 6px; border-top: 1px solid #eee; }
-.api-tc-modal-scope .nr-kv-table input { width: 100%; border: 1px solid #ddd; border-radius: 4px; padding: 4px 6px; font-size: 12px; box-sizing: border-box; }
-.api-tc-modal-scope .nr-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 640px) { .api-tc-modal-scope .nr-two-col { grid-template-columns: 1fr; } }
-.api-tc-modal-scope .nr-opt-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
-.api-tc-modal-scope .nr-opt-row label { display: inline-flex; align-items: center; gap: 6px; font-weight: normal; cursor: pointer; margin: 0; }
-html.dark .api-tc-modal-scope .modal-panel { background: #1f2937; color: #e5e7eb; box-shadow: 0 10px 40px rgba(0,0,0,0.45); }
-html.dark .api-tc-modal-scope .modal-panel h3 { color: #f9fafb; }
-html.dark .api-tc-modal-scope .form-group label { color: #d1d5db; }
-html.dark .api-tc-modal-scope .form-group input,
-html.dark .api-tc-modal-scope .form-group select,
-html.dark .api-tc-modal-scope .form-group textarea { background: #111827; border-color: #4b5563; color: #e5e7eb; }
-html.dark .api-tc-modal-scope .nr-section { background: #111827; border-color: #374151; }
-html.dark .api-tc-modal-scope .modal-footer { border-color: #374151; }
-html.dark .api-tc-modal-scope .nr-kv-table-wrap { border-color: #4b5563; }
-html.dark .api-tc-modal-scope .nr-kv-table th { background: #1f2937; color: #d1d5db; }
-html.dark .api-tc-modal-scope .nr-kv-table td { border-color: #374151; }
-html.dark .api-tc-modal-scope .nr-kv-table input { background: #111827; border-color: #4b5563; color: #e5e7eb; }
-.api-tc-modal-scope .nr-btn-add {
-    font-size: 12px;
-    font-weight: 600;
-    padding: 6px 14px;
-    border-radius: 6px;
-    border: none;
-    cursor: pointer;
-    background: #667eea;
-    color: #fff;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-    transition: background 0.15s ease, transform 0.12s ease, box-shadow 0.12s ease;
-}
-.api-tc-modal-scope .nr-btn-add:hover {
-    background: #5568d3;
-    transform: translateY(-1px);
-    box-shadow: 0 3px 10px rgba(102, 126, 234, 0.35);
-}
-.api-tc-modal-scope .nr-chip {
-    font-size: 11px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px solid #c7d2fe;
-    background: #eef2ff;
-    color: #4338ca;
-    cursor: pointer;
-    line-height: 1.3;
-    max-width: 100%;
-    word-break: break-all;
-}
-.api-tc-modal-scope .nr-chip:hover {
-    background: #e0e7ff;
-    border-color: #818cf8;
-}
-html.dark .api-tc-modal-scope .nr-chip {
-    border-color: #4c51bf;
-    background: #312e81;
-    color: #e0e7ff;
-}
-html.dark .api-tc-modal-scope .nr-chip:hover {
-    background: #3730a3;
-}
-.api-tc-modal-scope .nr-neighbor-box {
-    margin-bottom: 12px;
-    padding: 12px 14px;
-    border-radius: 8px;
-    border: 1px solid #e0e7ff;
-    background: rgba(238, 242, 255, 0.45);
-}
-html.dark .api-tc-modal-scope .nr-neighbor-box {
-    border-color: rgba(76, 81, 191, 0.45);
-    background: rgba(49, 46, 129, 0.25);
-}
-.api-detail-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    border-radius: 8px;
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    color: #4f46e5;
-    font-size: 14px;
-    font-weight: 600;
-    text-decoration: none;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
-    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
-}
-.api-detail-back:hover {
-    border-color: #667eea;
-    background: #f5f7ff;
-    color: #4338ca;
-}
-html.dark .api-detail-back {
-    background: #1f2937;
-    border-color: #4b5563;
-    color: #a5b4fc;
-}
-html.dark .api-detail-back:hover {
-    background: #374151;
-    border-color: #818cf8;
-    color: #c7d2fe;
-}
-.api-tc-modal-scope .nr-response-meta { font-size: 13px; color: #374151; line-height: 1.5; }
-html.dark .api-tc-modal-scope .nr-response-meta { color: #d1d5db; }
-.api-tc-modal-scope .nr-response-body {
-    width: 100%;
-    min-height: 140px;
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    padding: 10px 12px;
-    border: 1px solid #e3e6ef;
-    border-radius: 6px;
-    background: #fafafa;
-    resize: vertical;
-    box-sizing: border-box;
-}
-html.dark .api-tc-modal-scope .nr-response-body {
-    background: #111827;
-    border-color: #4b5563;
-    color: #e5e7eb;
-}
-</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/api_testing.css') }}">
 {% endblock %}
 {% block body_class %}bg-slate-100 dark:bg-gray-950 min-h-screen text-gray-900 dark:text-gray-100{% endblock %}
 {% block content %}
-{% set _api_detail_id_marker = 918273645 %}
-<script type="application/json" id="uatDetailRoutes">{{ { 'api_list': url_for('api_testing_page') } | tojson }}</script>
-<div class="min-h-[calc(100vh-5rem)] bg-gradient-to-b from-slate-100 via-slate-100 to-slate-200/80 dark:from-gray-950 dark:via-gray-950 dark:to-gray-900/90 py-6 pb-14">
-    <div class="max-w-5xl mx-auto px-4">
-        <div class="mb-4">
-            <a href="{{ url_for('api_testing_page') }}{% if project_id %}?project_id={{ project_id }}{% endif %}" class="api-detail-back">← 返回接口测试</a>
+<script type="application/json" id="uatApiWorkbenchBoot">{{ { 'case_id': case_id, 'project_id': project_id } | tojson }}</script>
+<div class="api-workbench">
+    <header class="api-wb-header">
+        <div class="flex items-center gap-3 flex-wrap min-w-0">
+            <a href="{{ url_for('api_testing_page') }}{% if project_id %}?project_id={{ project_id }}{% endif %}" class="api-detail-back">← 返回</a>
+            <div class="min-w-0">
+                <h1 class="text-base font-semibold truncate">{{ case_name }}</h1>
+                <p class="text-xs text-gray-500">用例 #{{ case_id }}{% if project_id %} · 项目 #{{ project_id }}{% endif %}</p>
+            </div>
         </div>
-        <div class="rounded-xl border border-slate-200/80 dark:border-gray-800 bg-white/85 dark:bg-gray-900/75 backdrop-blur-sm shadow-sm overflow-hidden">
-            <div class="px-6 py-5 border-b border-slate-200/90 dark:border-gray-800 bg-slate-50/90 dark:bg-gray-900/90 flex flex-wrap items-start justify-between gap-4">
-                <div>
-                    <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">查看详情 — {{ case_name }}</h1>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">用例 ID：{{ case_id }}{% if project_id %} · 项目 ID：{{ project_id }}{% endif %}</p>
+        <div class="flex flex-wrap gap-2">
+            <button type="button" id="btnRunSelected" class="api-wb-btn api-wb-btn-send">运行选中</button>
+            <button type="button" id="btnRunCaseAll" class="api-wb-btn api-wb-btn-ghost">运行全部</button>
+            <button type="button" id="btnRefreshReq" class="api-wb-btn api-wb-btn-ghost">刷新</button>
+            <button type="button" id="btnDeleteCase" class="api-wb-btn api-wb-btn-danger">删除用例</button>
+        </div>
+    </header>
+    <div class="api-wb-body">
+        <aside class="api-wb-sidebar">
+            <div class="api-wb-sidebar-head">请求列表</div>
+            <div class="api-wb-sidebar-list" id="apiSidebarList"></div>
+            <div class="api-wb-sidebar-foot">
+                <button type="button" id="btnNewRequestSide" class="api-wb-btn api-wb-btn-save w-full">+ 新建请求</button>
+            </div>
+        </aside>
+        <main class="api-wb-main" id="apiWbMain">
+            <div id="apiEditorEmpty" class="api-wb-empty hidden">
+                <p class="text-sm mb-3">选择左侧请求或新建</p>
+                <button type="button" id="btnNewRequest" class="api-wb-btn api-wb-btn-save">新建请求</button>
+            </div>
+            <div id="apiEditorForm" class="api-wb-editor hidden">
+                <div class="api-wb-request-line">
+                    <select id="nrMethod" class="api-wb-method-select">
+                        <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option>
+                        <option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
+                    </select>
+                    <input id="nrUrl" type="text" class="api-wb-url-input" placeholder="https://api.example.com/path">
+                    <button type="button" id="btnSend" class="api-wb-btn api-wb-btn-send">发送</button>
+                    <button type="button" id="btnSave" class="api-wb-btn api-wb-btn-save">保存</button>
+                    <button type="button" id="btnDeleteStep" class="api-wb-btn api-wb-btn-danger hidden">删除</button>
                 </div>
-                <div class="flex flex-wrap gap-2">
-                    <button type="button" id="btnRunSelected" class="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">运行</button>
-                    <button type="button" id="btnRunCaseAll" class="px-4 py-2 rounded-md text-sm font-medium bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600">运行全部</button>
-                    <button type="button" id="btnNewRequest" class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">新建接口</button>
-                    <button type="button" id="btnRefreshReq" class="px-4 py-2 rounded-md text-sm font-medium bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600">刷新</button>
-                    <button type="button" id="btnDeleteCase" class="px-4 py-2 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700">删除用例</button>
+                <div class="api-wb-tabs">
+                    <button type="button" class="api-wb-tab active" data-req-tab="params">Params</button>
+                    <button type="button" class="api-wb-tab" data-req-tab="headers">Headers</button>
+                    <button type="button" class="api-wb-tab" data-req-tab="body">Body</button>
+                    <button type="button" class="api-wb-tab" data-req-tab="auth">Auth</button>
+                    <button type="button" class="api-wb-tab" data-req-tab="assert">断言</button>
+                    <button type="button" class="api-wb-tab" data-req-tab="advanced">高级</button>
                 </div>
-            </div>
-            <div class="px-6 py-5 bg-white/50 dark:bg-gray-900/40">
-                <p class="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">HTTP 请求列表</p>
-                <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-gray-800 bg-white/70 dark:bg-gray-900/50">
-                    <table class="w-full text-sm text-left">
-                        <thead class="bg-slate-100/90 dark:bg-gray-800/90 text-gray-700 dark:text-gray-300">
-                            <tr>
-                                <th class="px-2 py-3 font-medium w-10 text-center">
-                                    <input type="checkbox" id="reqSelectAll" class="rounded border-gray-400 dark:border-gray-500" title="全选">
-                                </th>
-                                <th class="px-4 py-3 font-medium w-14">#</th>
-                                <th class="px-4 py-3 font-medium">方法 / URL</th>
-                                <th class="px-4 py-3 font-medium">说明</th>
-                                <th class="px-4 py-3 font-medium w-52">操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="reqTableBody" class="divide-y divide-slate-200 dark:divide-gray-800 text-gray-900 dark:text-gray-100"></tbody>
-                    </table>
-                    <p id="reqEmptyHint" class="p-4 text-sm text-gray-500 dark:text-gray-400 hidden">暂无请求，请点击「新建接口」添加。</p>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 新建 / 编辑接口 -->
-<div id="newRequestModal" class="api-tc-modal-scope fixed inset-0 z-[2100] hidden flex items-center justify-center p-4 bg-black/50 dark:bg-black/60" role="dialog" aria-modal="true">
-    <div class="modal-panel">
-        <h3 id="nrModalTitle">新建接口</h3>
-        <div class="nr-section">
-            <div class="nr-section-title">请求行</div>
-            <div class="flex gap-2 flex-wrap sm:flex-nowrap">
-                <select id="nrMethod" class="w-28 shrink-0 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-2 py-2 font-mono font-medium">
-                    <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
-                </select>
-                <input id="nrUrl" type="text" class="flex-1 min-w-0 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 font-mono" placeholder="URL *">
-            </div>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">Query</div>
-            <div class="flex justify-between items-center mb-2">
-                <span class="text-xs text-gray-500 dark:text-gray-400">URL 查询参数（Query）</span>
-                <button type="button" class="nr-btn-add nr-add-kv" data-target="nrQueryTbody">+ 添加</button>
-            </div>
-            <div class="nr-kv-table-wrap"><table class="nr-kv-table"><thead><tr><th>Key</th><th>Value</th><th class="w-8"></th></tr></thead><tbody id="nrQueryTbody"></tbody></table></div>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">Headers</div>
-            <div class="flex justify-between items-center mb-2">
-                <span class="text-xs text-gray-500 dark:text-gray-400">请求头</span>
-                <button type="button" class="nr-btn-add nr-add-kv" data-target="nrHeaderTbody">+ 添加</button>
-            </div>
-            <div class="nr-kv-table-wrap"><table class="nr-kv-table"><thead><tr><th>Key</th><th>Value</th><th class="w-8"></th></tr></thead><tbody id="nrHeaderTbody"></tbody></table></div>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">Body</div>
-            <select id="nrBodyType" class="w-full sm:w-48 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-2 py-2 mb-2">
-                <option value="none">无</option><option value="json">JSON</option><option value="form">form</option><option value="raw">Raw</option>
-            </select>
-            <div id="nrBodyJsonWrap" class="hidden form-group" style="margin-bottom:0"><textarea id="nrBodyJson" class="font-mono text-xs" rows="5" placeholder="{ }"></textarea></div>
-            <div id="nrBodyFormWrap" class="hidden">
-                <div class="flex justify-end mb-2"><button type="button" class="nr-btn-add nr-add-kv" data-target="nrFormTbody">+ 添加字段</button></div>
-                <div class="nr-kv-table-wrap"><table class="nr-kv-table"><thead><tr><th>Key</th><th>Value</th><th class="w-8"></th></tr></thead><tbody id="nrFormTbody"></tbody></table></div>
-            </div>
-            <div id="nrBodyRawWrap" class="hidden">
-                <input id="nrRawCt" class="w-full text-sm rounded border dark:bg-gray-950 px-2 py-2 mb-2" placeholder="Content-Type（可选）">
-                <textarea id="nrBodyRaw" rows="4" class="w-full font-mono text-xs rounded-md border p-2 dark:bg-gray-950"></textarea>
-            </div>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">认证与选项</div>
-            <div class="form-group" style="margin-bottom:12px">
-                <label for="nrAuthType">认证方式</label>
-                <select id="nrAuthType" class="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-2 py-2 w-full sm:w-64">
-                    <option value="none">无</option>
-                    <option value="bearer">Bearer Token</option>
-                    <option value="basic">Basic</option>
-                </select>
-            </div>
-            <div id="nrAuthBearerWrap" class="hidden form-group">
-                <label for="nrBearerToken">Token</label>
-                <input id="nrBearerToken" type="text" class="font-mono text-sm" placeholder="支持 {% raw %}{{变量名}}{% endraw %}">
-            </div>
-            <div id="nrAuthBasicWrap" class="hidden form-group">
-                <div class="nr-two-col">
-                    <div><label for="nrBasicUser">用户名</label><input id="nrBasicUser" type="text" class="text-sm"></div>
-                    <div><label for="nrBasicPass">密码</label><input id="nrBasicPass" type="password" class="text-sm" autocomplete="new-password"></div>
-                </div>
-            </div>
-            <div class="nr-opt-row">
-                <div class="form-group" style="margin:0;flex:1;min-width:100px">
-                    <label for="nrTimeout">超时（秒）</label>
-                    <input id="nrTimeout" type="number" min="1" max="600" value="30" class="text-sm">
-                </div>
-                <label class="text-sm text-gray-600 dark:text-gray-300"><input type="checkbox" id="nrVerifySsl" checked> 校验 SSL 证书</label>
-                <label class="text-sm text-gray-600 dark:text-gray-300"><input type="checkbox" id="nrFollowRedirects" checked> 跟随重定向</label>
-                <label class="text-sm text-gray-600 dark:text-gray-300"><input type="checkbox" id="nrUseBrowserCookies"> 使用浏览器 Cookie（需已启动浏览器会话）</label>
-            </div>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">前置与后置</div>
-            <div class="form-group">
-                <label for="nrPreDelayMs">前置等待（毫秒）</label>
-                <input id="nrPreDelayMs" type="number" min="0" max="600000" class="text-sm" placeholder="0 表示不等待">
-                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" style="margin-bottom:0">在实际发起 HTTP 请求前暂停，最长 60 秒（由服务端限制）。可与异步环境配合。</p>
-            </div>
-            <div class="form-group">
-                <label for="nrJsonPath">后置：JSON 路径断言（可选）</label>
-                <input id="nrJsonPath" type="text" class="font-mono text-sm" placeholder="例如 data.token、list.0.id；留空则不校验 JSON 字段">
-                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" style="margin-bottom:0">点分路径，与下方「期望值」同时填写时生效（执行/试跑时校验）。</p>
-            </div>
-            <div class="form-group" style="margin-bottom:0">
-                <label for="nrExpectedJson">后置：期望值（JSON）</label>
-                <textarea id="nrExpectedJson" rows="3" class="font-mono text-xs" placeholder='与路径配合，如 "ok"、200、{"code":0}；留空则仅校验状态码'></textarea>
-            </div>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">Postman 风格：前置链 · 脚本 · 提取</div>
-            <div id="nrNeighborQuick" class="nr-neighbor-box">
-                <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
-                    <span class="text-xs font-semibold text-indigo-700 dark:text-indigo-300">邻步智能辅助</span>
-                    <button type="button" id="nrNeighborRefreshBtn" class="text-xs px-2 py-1 rounded-md border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-gray-900 text-indigo-700 dark:text-indigo-200 hover:bg-indigo-50 dark:hover:bg-gray-800">重新推断</button>
-                </div>
-                <p id="nrNeighborSummary" class="text-xs text-gray-600 dark:text-gray-400 mb-2" style="margin:0;line-height:1.5"></p>
-                <p class="text-xs text-gray-500 dark:text-gray-500 mb-1">前一步</p>
-                <div id="nrNeighborChipsPrev" class="flex flex-wrap gap-1.5 mb-2"></div>
-                <p class="text-xs text-gray-500 dark:text-gray-500 mb-1">下一步（占位符 <code class="text-xs">{% raw %}{{变量}}{% endraw %}</code>）</p>
-                <div id="nrNeighborChipsNext" class="flex flex-wrap gap-1.5 mb-2"></div>
-                <p class="text-xs text-gray-400 dark:text-gray-500" style="margin:0;line-height:1.45">根据列表中相邻接口的「提取变量」「写回用例变量」与 URL/Headers/Body 中的占位符（<code class="text-xs">{% raw %}{{变量}}{% endraw %}</code>）生成可点选项；插入默认落在当前焦点输入框，无焦点时落在 URL。</p>
-            </div>
-            <p class="text-xs text-gray-500 dark:text-gray-400 mb-2" style="line-height:1.55">依赖 <code class="text-xs">dukpy</code>（见 requirements.txt）。脚本为 JavaScript：<code class="text-xs">runtime.get/set</code>、<code class="text-xs">log(...)</code>；仅后置脚本可使用 <code class="text-xs">response.status</code>、<code class="text-xs">response.body</code>、<code class="text-xs">response.json</code>。</p>
-            <div class="form-group">
-                <label for="nrPrerequestChain">前置请求链（JSON 数组）</label>
-                <textarea id="nrPrerequestChain" class="font-mono text-xs" rows="4" placeholder='[{"spec":{"method":"POST","url":"...","body_type":"json","body_json":{}},"extract":[{"name":"token","json_path":"data.token"}],"persist_extracts_to_case":false}]'></textarea>
-            </div>
-            <div class="form-group">
-                <label for="nrPrescript">前置脚本（JavaScript）</label>
-                <textarea id="nrPrescript" class="font-mono text-xs" rows="3" placeholder="// runtime.set('tag', 'v1');"></textarea>
-            </div>
-            <div class="form-group">
-                <label for="nrPostscript">后置脚本（JavaScript）</label>
-                <textarea id="nrPostscript" class="font-mono text-xs" rows="3" placeholder="// if (response.json) runtime.set('id', String(response.json.data.id));"></textarea>
-            </div>
-            <div class="form-group">
-                <label for="nrExtractVariables">提取变量（JSON 数组，主请求响应）</label>
-                <textarea id="nrExtractVariables" class="font-mono text-xs" rows="3" placeholder='[{"name":"token","json_path":"data.token"},{"name":"sid","regex":"\"session\":\"([^\"]+)\"","group":1}]'></textarea>
-            </div>
-            <label class="text-sm text-gray-600 dark:text-gray-300 flex items-start gap-2 cursor-pointer">
-                <input type="checkbox" id="nrPersistExtracts" class="mt-1 rounded border-gray-400">
-                <span>将「提取变量」结果写入用例变量（后续步骤可用 <code class="text-xs">{% raw %}{{变量名}}{% endraw %}</code>）</span>
-            </label>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">校验与说明</div>
-            <div class="nr-two-col">
-                <div class="form-group" style="margin-bottom:0">
-                    <label for="nrExpected">期望 HTTP 状态码</label>
-                    <input id="nrExpected" type="number" value="200" class="text-sm">
-                </div>
-                <div class="form-group" style="margin-bottom:0">
-                    <label for="nrDesc">请求说明</label>
-                    <input id="nrDesc" type="text" class="text-sm" placeholder="可选">
+                <div class="api-wb-tab-panels">
+                    <div class="api-wb-tab-panel active" data-req-panel="params">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs text-gray-500">Query 参数</span>
+                            <button type="button" class="api-btn-add nr-add-kv" data-target="nrQueryTbody">+ 添加</button>
+                        </div>
+                        <div class="api-kv-table-wrap"><table class="api-kv-table"><thead><tr><th>Key</th><th>Value</th><th></th></tr></thead><tbody id="nrQueryTbody"></tbody></table></div>
+                    </div>
+                    <div class="api-wb-tab-panel" data-req-panel="headers">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-xs text-gray-500">请求头</span>
+                            <button type="button" class="api-btn-add nr-add-kv" data-target="nrHeaderTbody">+ 添加</button>
+                        </div>
+                        <div class="api-kv-table-wrap"><table class="api-kv-table"><thead><tr><th>Key</th><th>Value</th><th></th></tr></thead><tbody id="nrHeaderTbody"></tbody></table></div>
+                    </div>
+                    <div class="api-wb-tab-panel" data-req-panel="body">
+                        <select id="nrBodyType" class="mb-2 text-sm rounded border px-2 py-1.5 dark:bg-gray-900 dark:border-gray-600">
+                            <option value="none">无</option><option value="json">JSON</option><option value="form">form</option><option value="raw">Raw</option>
+                        </select>
+                        <div id="nrBodyJsonWrap" class="hidden api-form-group"><textarea id="nrBodyJson" rows="8" placeholder="{ }"></textarea></div>
+                        <div id="nrBodyFormWrap" class="hidden">
+                            <div class="flex justify-end mb-2"><button type="button" class="api-btn-add nr-add-kv" data-target="nrFormTbody">+ 添加</button></div>
+                            <div class="api-kv-table-wrap"><table class="api-kv-table"><thead><tr><th>Key</th><th>Value</th><th></th></tr></thead><tbody id="nrFormTbody"></tbody></table></div>
+                        </div>
+                        <div id="nrBodyRawWrap" class="hidden">
+                            <input id="nrRawCt" class="w-full text-sm rounded border px-2 py-1.5 mb-2 dark:bg-gray-900 dark:border-gray-600" placeholder="Content-Type">
+                            <textarea id="nrBodyRaw" rows="6" class="w-full font-mono text-xs rounded border p-2 dark:bg-gray-900 dark:border-gray-600"></textarea>
+                        </div>
+                    </div>
+                    <div class="api-wb-tab-panel" data-req-panel="auth">
+                        <div class="api-form-group">
+                            <label for="nrAuthType">认证方式</label>
+                            <select id="nrAuthType" class="text-sm"><option value="none">无</option><option value="bearer">Bearer</option><option value="basic">Basic</option></select>
+                        </div>
+                        <div id="nrAuthBearerWrap" class="hidden api-form-group">
+                            <label for="nrBearerToken">Token</label>
+                            <input id="nrBearerToken" type="text" class="font-mono text-sm" placeholder="支持 {% raw %}{{变量}}{% endraw %}">
+                        </div>
+                        <div id="nrAuthBasicWrap" class="hidden api-two-col">
+                            <div class="api-form-group"><label for="nrBasicUser">用户名</label><input id="nrBasicUser" type="text"></div>
+                            <div class="api-form-group"><label for="nrBasicPass">密码</label><input id="nrBasicPass" type="password" autocomplete="new-password"></div>
+                        </div>
+                        <div class="api-opt-row mt-2">
+                            <div class="api-form-group" style="margin:0;flex:1;max-width:120px"><label for="nrTimeout">超时(秒)</label><input id="nrTimeout" type="number" min="1" max="600" value="30"></div>
+                            <label><input type="checkbox" id="nrVerifySsl" checked> 校验 SSL</label>
+                            <label><input type="checkbox" id="nrFollowRedirects" checked> 跟随重定向</label>
+                            <label><input type="checkbox" id="nrUseBrowserCookies"> 浏览器 Cookie</label>
+                        </div>
+                    </div>
+                    <div class="api-wb-tab-panel" data-req-panel="assert">
+                        <div class="api-two-col">
+                            <div class="api-form-group"><label for="nrExpected">期望 HTTP 状态码</label><input id="nrExpected" type="number" value="200"></div>
+                            <div class="api-form-group"><label for="nrDesc">请求说明</label><input id="nrDesc" type="text" placeholder="可选"></div>
+                        </div>
+                        <div class="api-form-group"><label for="nrPreDelayMs">前置等待(ms)</label><input id="nrPreDelayMs" type="number" min="0" placeholder="0"></div>
+                        <div class="api-form-group"><label for="nrJsonPath">JSON 路径断言</label><input id="nrJsonPath" type="text" class="font-mono text-sm" placeholder="data.token"></div>
+                        <div class="api-form-group"><label for="nrExpectedJson">期望值(JSON)</label><textarea id="nrExpectedJson" rows="3" class="font-mono text-xs"></textarea></div>
+                    </div>
+                    <div class="api-wb-tab-panel" data-req-panel="advanced">
+                        <div id="nrNeighborQuick" class="api-neighbor-box">
+                            <p id="nrNeighborSummary" class="text-xs text-gray-600 dark:text-gray-400 mb-0"></p>
+                        </div>
+                        <div class="api-form-group"><label for="nrPrerequestChain">前置请求链(JSON)</label><textarea id="nrPrerequestChain" class="font-mono text-xs" rows="3">[]</textarea></div>
+                        <div class="api-form-group"><label for="nrPrescript">前置脚本</label><textarea id="nrPrescript" class="font-mono text-xs" rows="2"></textarea></div>
+                        <div class="api-form-group"><label for="nrPostscript">后置脚本</label><textarea id="nrPostscript" class="font-mono text-xs" rows="2"></textarea></div>
+                        <div class="api-form-group"><label for="nrExtractVariables">提取变量(JSON)</label><textarea id="nrExtractVariables" class="font-mono text-xs" rows="3">[]</textarea></div>
+                        <label class="text-sm flex items-center gap-2 mb-3"><input type="checkbox" id="nrPersistExtracts"> 写入用例变量</label>
+                        <details class="text-sm">
+                            <summary class="cursor-pointer text-gray-600 dark:text-gray-400">高级 JSON（若填写则<strong>覆盖</strong>上方表单）</summary>
+                            <textarea id="nrApiSpecJson" class="w-full mt-2 min-h-[80px] font-mono text-xs rounded border p-2 dark:bg-gray-900 dark:border-gray-600" placeholder="留空则使用表单"></textarea>
+                        </details>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="nr-section">
-            <div class="nr-section-title">响应预览</div>
-            <p class="text-xs text-gray-500 dark:text-gray-400 mb-2" style="line-height:1.5">不保存步骤，按当前表单（或高级 JSON）试发一次并查看响应；会解析项目/用例变量。</p>
-            <button type="button" id="nrTryRunBtn" class="btn btn-success">发送并查看响应</button>
-            <div id="nrResponsePanel" class="hidden mt-3">
-                <div id="nrResponseMeta" class="nr-response-meta mb-2"></div>
-                <label for="nrResponseBody" class="form-group" style="display:block;margin-bottom:6px;font-size:13px;font-weight:500;color:#555">响应体（预览）</label>
-                <textarea id="nrResponseBody" readonly class="nr-response-body" rows="12"></textarea>
-                <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 mb-1">试跑响应 → 一键添加 JSON 提取路径（点选后写入「提取变量」）</p>
-                <div id="nrResponseExtractChips" class="flex flex-wrap gap-1.5"></div>
+            <div class="api-wb-resizer" id="apiResizer"></div>
+            <div class="api-wb-response" id="apiResponsePane">
+                <div class="api-wb-response-meta">
+                    <span id="apiRespStatus" class="api-wb-status-badge api-wb-status-err">—</span>
+                    <span id="apiRespTime" class="api-wb-response-meta-item">—</span>
+                    <span id="apiRespSize" class="api-wb-response-meta-item">—</span>
+                    <span id="apiRespAssert" class="api-wb-response-meta-item flex-1 truncate"></span>
+                </div>
+                <div class="api-wb-tabs">
+                    <button type="button" class="api-wb-tab active" data-resp-tab="body">Body</button>
+                    <button type="button" class="api-wb-tab" data-resp-tab="headers">Headers</button>
+                    <button type="button" class="api-wb-tab" data-resp-tab="logs">日志</button>
+                    <button type="button" class="api-wb-tab" data-resp-tab="run">运行结果</button>
+                </div>
+                <div class="api-wb-response-body-wrap">
+                    <div class="api-wb-response-toolbar">
+                        <button type="button" id="btnCopyBody" class="api-wb-btn api-wb-btn-ghost text-xs py-1 px-2">复制</button>
+                        <button type="button" id="btnFormatBody" class="api-wb-btn api-wb-btn-ghost text-xs py-1 px-2">格式化 JSON</button>
+                    </div>
+                    <div class="api-wb-resp-panel api-wb-response-content" data-resp-panel="body">
+                        <textarea id="apiRespBody" readonly class="api-wb-response-textarea" rows="8"></textarea>
+                        <div id="nrResponseExtractChips" class="flex flex-wrap gap-1.5 px-4 pb-2"></div>
+                    </div>
+                    <div class="api-wb-resp-panel hidden api-wb-response-content" data-resp-panel="headers">
+                        <div id="apiRespHeadersWrap"></div>
+                    </div>
+                    <div class="api-wb-resp-panel hidden api-wb-response-content" data-resp-panel="logs">
+                        <pre id="apiRespLogs" class="p-4 text-xs font-mono whitespace-pre-wrap m-0"></pre>
+                    </div>
+                    <div class="api-wb-resp-panel hidden api-wb-response-content overflow-y-auto" data-resp-panel="run">
+                        <div id="apiRespRunResults" class="text-sm text-gray-500 p-4">运行用例后在此查看逐步结果</div>
+                    </div>
+                </div>
             </div>
-        </div>
-        <details class="text-sm text-gray-600 dark:text-gray-400 mb-2">
-            <summary class="cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">高级：直接编辑 api_spec JSON（若填写则优先使用上方表单）</summary>
-            <textarea id="nrApiSpecJson" class="w-full mt-2 min-h-[88px] font-mono text-xs rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 p-2" placeholder="留空则使用上方表单生成"></textarea>
-        </details>
-        <div class="modal-footer" style="flex-wrap:wrap;gap:10px">
-            <button type="button" id="nrCancelBtn" class="btn btn-secondary">取消</button>
-            <button type="button" id="nrSaveBtn" class="btn btn-primary">保存</button>
-        </div>
+        </main>
     </div>
 </div>
 {% endblock %}
 {% block scripts %}
-<script>
-(function () {
-    const CASE_ID = {{ case_id|int }};
-    const PROJECT_ID = {{ project_id|int }};
-    const cred = { credentials: 'same-origin' };
-    let nrEditingStepId = null;
-    /** 列表加载后的步骤缓存，供邻步推断（含 api_spec） */
-    window.__uatApiCaseSteps = [];
-
-    function parseStepApiSpec(step) {
-        if (!step) return {};
-        try {
-            const raw = step.api_spec;
-            return typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
-        } catch (e) {
-            return {};
-        }
-    }
-
-    function uatSortedSteps(steps) {
-        return (steps || []).slice().sort(function (a, b) {
-            return (parseInt(a.step_order, 10) || 0) - (parseInt(b.step_order, 10) || 0);
-        });
-    }
-
-    function uatCollectMustacheVars(str) {
-        if (str == null || typeof str !== 'string') return [];
-        var re = /\{\{\s*([^}]+?)\s*\}\}/g;
-        var m;
-        var out = [];
-        var seen = {};
-        while ((m = re.exec(str)) !== null) {
-            var name = String(m[1] || '').trim();
-            if (!name || seen[name]) continue;
-            seen[name] = true;
-            out.push(name);
-        }
-        return out;
-    }
-
-    function uatCollectVarsFromSpec(spec) {
-        if (!spec || typeof spec !== 'object') return [];
-        var bag = [];
-        bag.push.apply(bag, uatCollectMustacheVars(spec.url || ''));
-        bag.push.apply(bag, uatCollectMustacheVars(spec.bearer_token || ''));
-        var h = spec.headers || {};
-        if (h && typeof h === 'object') {
-            Object.keys(h).forEach(function (k) {
-                bag.push.apply(bag, uatCollectMustacheVars(String(h[k] != null ? h[k] : '')));
-            });
-        }
-        var p = spec.params || spec.query || {};
-        if (p && typeof p === 'object') {
-            Object.keys(p).forEach(function (k) {
-                bag.push.apply(bag, uatCollectMustacheVars(String(p[k] != null ? p[k] : '')));
-            });
-        }
-        var bf = spec.body_form || {};
-        if (bf && typeof bf === 'object') {
-            Object.keys(bf).forEach(function (k) {
-                bag.push.apply(bag, uatCollectMustacheVars(String(bf[k] != null ? bf[k] : '')));
-            });
-        }
-        if (spec.body_json != null) {
-            try {
-                bag.push.apply(bag, uatCollectMustacheVars(JSON.stringify(spec.body_json)));
-            } catch (e1) {}
-        }
-        if (spec.body_raw) bag.push.apply(bag, uatCollectMustacheVars(String(spec.body_raw)));
-        var seen = {};
-        return bag.filter(function (n) {
-            if (seen[n]) return false;
-            seen[n] = true;
-            return true;
-        });
-    }
-
-    function uatExtractNamesFromSpec(spec) {
-        if (!spec || typeof spec !== 'object') return [];
-        var arr = spec.extract_variables != null ? spec.extract_variables : spec.extract;
-        if (!Array.isArray(arr)) return [];
-        var names = [];
-        var seen = {};
-        arr.forEach(function (row) {
-            if (!row || typeof row !== 'object') return;
-            var n = String(row.name || '').trim();
-            if (!n || seen[n]) return;
-            seen[n] = true;
-            names.push({ name: n, json_path: row.json_path, regex: row.regex, group: row.group });
-        });
-        return names;
-    }
-
-    function uatSubSpecForPrereq(full) {
-        if (!full || typeof full !== 'object') return {};
-        var omit = {
-            prerequest_chain: 1,
-            prescript: 1,
-            postscript: 1,
-            pre_request_script: 1,
-            post_request_script: 1,
-            extract_variables: 1,
-            extract: 1,
-            persist_extracts_to_case: 1,
-            json_path: 1,
-            expected_json_value: 1,
-        };
-        var sub = {};
-        Object.keys(full).forEach(function (k) {
-            if (omit[k]) return;
-            sub[k] = full[k];
-        });
-        return sub;
-    }
-
-    function uatGetNeighbors(editingStepId, steps) {
-        var sorted = uatSortedSteps(steps);
-        if (!sorted.length) return { prev: null, next: null, prevSpec: null, nextSpec: null, index: -1 };
-        if (editingStepId == null) {
-            var last = sorted[sorted.length - 1];
-            return {
-                prev: last,
-                next: null,
-                prevSpec: parseStepApiSpec(last),
-                nextSpec: null,
-                index: sorted.length,
-            };
-        }
-        var idx = -1;
-        for (var i = 0; i < sorted.length; i++) {
-            if (sorted[i].id === editingStepId) {
-                idx = i;
-                break;
-            }
-        }
-        if (idx < 0) return { prev: null, next: null, prevSpec: null, nextSpec: null, index: -1 };
-        var prev = idx > 0 ? sorted[idx - 1] : null;
-        var next = idx < sorted.length - 1 ? sorted[idx + 1] : null;
-        return {
-            prev: prev,
-            next: next,
-            prevSpec: prev ? parseStepApiSpec(prev) : null,
-            nextSpec: next ? parseStepApiSpec(next) : null,
-            index: idx,
-        };
-    }
-
-    function nrInsertAtFocusedOrUrl(text) {
-        var modal = document.getElementById('newRequestModal');
-        var el = window.__nrLastModalFocus;
-        if (!el || !modal || !el.closest || !el.closest('#newRequestModal')) {
-            el = document.getElementById('nrUrl');
-        }
-        if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) {
-            el = document.getElementById('nrUrl');
-        }
-        if (!el) return;
-        var start = el.selectionStart != null ? el.selectionStart : ((el.value || '').length);
-        var end = el.selectionEnd != null ? el.selectionEnd : start;
-        var v = el.value || '';
-        el.value = v.slice(0, start) + text + v.slice(end);
-        try {
-            el.selectionStart = el.selectionEnd = start + text.length;
-        } catch (e2) {}
-        el.focus();
-    }
-
-    function nrAppendExtractRules(newRows) {
-        var ta = document.getElementById('nrExtractVariables');
-        var arr = [];
-        try {
-            arr = JSON.parse((ta.value || '').trim() || '[]');
-        } catch (e) {
-            arr = [];
-        }
-        if (!Array.isArray(arr)) arr = [];
-        var names = {};
-        arr.forEach(function (r) {
-            if (r && r.name) names[String(r.name)] = true;
-        });
-        newRows.forEach(function (row) {
-            if (!row || !row.name || names[row.name]) return;
-            arr.push(row);
-            names[row.name] = true;
-        });
-        ta.value = JSON.stringify(arr, null, 2);
-    }
-
-    function nrMergePrevExtracts(prevSpec) {
-        var arr = prevSpec.extract_variables != null ? prevSpec.extract_variables : prevSpec.extract;
-        if (!Array.isArray(arr) || !arr.length) return;
-        var rows = arr
-            .filter(function (x) {
-                return x && x.name;
-            })
-            .map(function (x) {
-                var o = { name: String(x.name) };
-                if (x.json_path) o.json_path = String(x.json_path);
-                if (x.regex) {
-                    o.regex = String(x.regex);
-                    if (x.group != null) o.group = x.group;
-                }
-                return o;
-            });
-        nrAppendExtractRules(rows);
-    }
-
-    function nrAppendPrereqFromPrevStep(prevSpec) {
-        if (!prevSpec || !prevSpec.url) return;
-        var entry = {
-            spec: uatSubSpecForPrereq(prevSpec),
-            extract: prevSpec.extract_variables != null ? prevSpec.extract_variables : prevSpec.extract || [],
-            persist_extracts_to_case: !!prevSpec.persist_extracts_to_case,
-        };
-        var arr = [];
-        try {
-            arr = JSON.parse((document.getElementById('nrPrerequestChain').value || '').trim() || '[]');
-        } catch (e) {
-            arr = [];
-        }
-        if (!Array.isArray(arr)) arr = [];
-        arr.push(entry);
-        document.getElementById('nrPrerequestChain').value = JSON.stringify(arr, null, 2);
-    }
-
-    function nrAppendPostscriptSnippet(line) {
-        var ta = document.getElementById('nrPostscript');
-        var cur = ta.value || '';
-        if (cur && cur.slice(-1) !== '\n') cur += '\n';
-        ta.value = cur + line + '\n';
-    }
-
-    function uatGuessNameFromJsonPath(path) {
-        if (!path) return 'value';
-        var parts = String(path).split('.');
-        var last = parts[parts.length - 1] || 'value';
-        last = last.replace(/\[\d+\]/g, '');
-        if (!last.match(/^[a-zA-Z_][a-zA-Z0-9_]*$/)) return 'value';
-        return last;
-    }
-
-    function uatFlattenJsonLeaves(obj, prefix, out, max) {
-        if (out.length >= max) return;
-        if (obj === null || typeof obj !== 'object') {
-            if (prefix) out.push({ path: prefix, sample: obj });
-            return;
-        }
-        if (Array.isArray(obj)) {
-            if (!obj.length) {
-                if (prefix) out.push({ path: prefix + '.0', sample: null });
-                return;
-            }
-            var first = obj[0];
-            if (typeof first === 'object' && first !== null) {
-                uatFlattenJsonLeaves(first, prefix ? prefix + '.0' : '0', out, max);
-            } else {
-                if (out.length < max) out.push({ path: (prefix ? prefix + '.0' : '0'), sample: first });
-            }
-            return;
-        }
-        var keys = Object.keys(obj);
-        if (!keys.length && prefix) {
-            out.push({ path: prefix, sample: {} });
-            return;
-        }
-        keys.forEach(function (k) {
-            if (out.length >= max) return;
-            var p = prefix ? prefix + '.' + k : k;
-            var v = obj[k];
-            if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-                uatFlattenJsonLeaves(v, p, out, max);
-            } else if (Array.isArray(v)) {
-                uatFlattenJsonLeaves(v, p, out, max);
-            } else {
-                if (out.length < max) out.push({ path: p, sample: v });
-            }
-        });
-    }
-
-    function renderResponseExtractChips() {
-        var wrap = document.getElementById('nrResponseExtractChips');
-        if (!wrap) return;
-        wrap.innerHTML = '';
-        var raw = (document.getElementById('nrResponseBody') || {}).value || '';
-        var trimmed = raw.trim();
-        if (!trimmed || trimmed[0] !== '{' && trimmed[0] !== '[') return;
-        var data;
-        try {
-            data = JSON.parse(trimmed);
-        } catch (e) {
-            return;
-        }
-        var leaves = [];
-        uatFlattenJsonLeaves(data, '', leaves, 48);
-        leaves.forEach(function (leaf) {
-            if (!leaf.path) return;
-            var btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'nr-chip';
-            btn.textContent = leaf.path;
-            btn.title = '添加提取变量（json_path）';
-            btn.addEventListener('click', function () {
-                var nm = uatGuessNameFromJsonPath(leaf.path);
-                nrAppendExtractRules([{ name: nm, json_path: leaf.path }]);
-            });
-            wrap.appendChild(btn);
-        });
-    }
-
-    function renderNeighborQuickPicks() {
-        var sumEl = document.getElementById('nrNeighborSummary');
-        var prevWrap = document.getElementById('nrNeighborChipsPrev');
-        var nextWrap = document.getElementById('nrNeighborChipsNext');
-        if (!sumEl || !prevWrap || !nextWrap) return;
-        prevWrap.innerHTML = '';
-        nextWrap.innerHTML = '';
-        var steps = window.__uatApiCaseSteps || [];
-        if (!steps.length) {
-            sumEl.textContent = '暂无步骤列表数据，请先点击「刷新」加载用例接口列表后再打开本弹窗。';
-            return;
-        }
-        var nb = uatGetNeighbors(nrEditingStepId, steps);
-        var lines = [];
-        if (nb.prev) {
-            lines.push('前一步：#' + (nb.prev.step_order != null ? nb.prev.step_order : '—') + ' ' + (parseStepApiSpec(nb.prev).method || 'GET') + ' ' + String(parseStepApiSpec(nb.prev).url || '').slice(0, 56) + (String(parseStepApiSpec(nb.prev).url || '').length > 56 ? '…' : ''));
-        } else {
-            lines.push('无前一步（当前为列表中第一个，或新建接口将接在末尾）。');
-        }
-        if (nb.next) {
-            lines.push('下一步：#' + (nb.next.step_order != null ? nb.next.step_order : '—') + ' ' + (parseStepApiSpec(nb.next).method || 'GET') + ' …');
-        } else {
-            lines.push('无下一步（当前为最后一个，或新建时尚无下一接口）。');
-        }
-        sumEl.textContent = lines.join('\n');
-
-        function addChip(parent, label, onClick) {
-            var b = document.createElement('button');
-            b.type = 'button';
-            b.className = 'nr-chip';
-            b.textContent = label;
-            b.addEventListener('click', onClick);
-            parent.appendChild(b);
-        }
-
-        if (nb.prevSpec && nb.prevSpec.url) {
-            addChip(prevWrap, '合并前一步「提取变量」', function () {
-                nrMergePrevExtracts(nb.prevSpec);
-            });
-            addChip(prevWrap, '将前一步整段加入「前置请求链」', function () {
-                nrAppendPrereqFromPrevStep(nb.prevSpec);
-            });
-            var ext = uatExtractNamesFromSpec(nb.prevSpec);
-            ext.forEach(function (row) {
-                var token = '{{' + row.name + '}}';
-                addChip(prevWrap, '插入 ' + token, function () {
-                    nrInsertAtFocusedOrUrl(token);
-                });
-            });
-            if (nb.prevSpec.persist_extracts_to_case && ext.length) {
-                addChip(prevWrap, '后置脚本：打印前步提取名（调试用）', function () {
-                    ext.forEach(function (row) {
-                        nrAppendPostscriptSnippet("// log('" + row.name + "', runtime.get('" + row.name + "'));");
-                    });
-                });
-            }
-        }
-
-        if (nb.nextSpec) {
-            var need = uatCollectVarsFromSpec(nb.nextSpec);
-            if (!need.length) {
-                var sp = document.createElement('span');
-                sp.className = 'text-xs text-gray-500 dark:text-gray-400';
-                sp.textContent = '（下一步中未发现 {{变量}} 占位）';
-                nextWrap.appendChild(sp);
-            } else {
-                addChip(nextWrap, '下一步所需变量全部加入提取表（路径留空）', function () {
-                    var rows = need.map(function (n) {
-                        return { name: n, json_path: '' };
-                    });
-                    nrAppendExtractRules(rows);
-                });
-                need.forEach(function (n) {
-                    addChip(nextWrap, '添加提取项「' + n + '」（路径留空）', function () {
-                        nrAppendExtractRules([{ name: n, json_path: '' }]);
-                    });
-                    addChip(nextWrap, '插入 {{' + n + '}}', function () {
-                        nrInsertAtFocusedOrUrl('{{' + n + '}}');
-                    });
-                    addChip(nextWrap, '后置脚本：假定 JSON 键为「' + n + '」', function () {
-                        nrAppendPostscriptSnippet(
-                            "if (response.json) { try { runtime.set('" +
-                                n +
-                                "', String(response.json." +
-                                n +
-                                " != null ? response.json." +
-                                n +
-                                " : '')); } catch (e) { log('runtime.set " +
-                                n +
-                                "', e); } }"
-                        );
-                    });
-                });
-            }
-        }
-    }
-
-    async function parseJsonResponse(r) {
-        const text = await r.text();
-        try {
-            return { ok: r.ok, status: r.status, data: text ? JSON.parse(text) : {} };
-        } catch (e) {
-            return { ok: r.ok, status: r.status, data: { error: text.slice(0, 200) || '响应不是 JSON' } };
-        }
-    }
-
-    function toastErr(msg) {
-        if (typeof Swal !== 'undefined') {
-            Swal.fire({ icon: 'error', title: msg, showConfirmButton: true });
-        } else {
-            alert(msg);
-        }
-    }
-
-    function showModal(el) {
-        el.classList.remove('hidden');
-        el.classList.add('flex');
-    }
-    function hideModal(el) {
-        el.classList.add('hidden');
-        el.classList.remove('flex');
-    }
-
-    function escapeHtml(s) {
-        if (!s) return '';
-        const d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
-    }
-
-    function kvTbodyRead(tbody) {
-        const o = {};
-        if (!tbody) return o;
-        tbody.querySelectorAll('tr').forEach(function (tr) {
-            const k = (tr.querySelector('input.k') || {}).value;
-            const v = (tr.querySelector('input.v') || {}).value;
-            if (k && String(k).trim()) o[String(k).trim()] = (v == null ? '' : String(v));
-        });
-        return o;
-    }
-
-    function addKvRow(tbody, k, v) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = '<td><input type="text" class="k" placeholder="key"></td>' +
-            '<td><input type="text" class="v" placeholder="value"></td>' +
-            '<td class="w-8"><button type="button" class="nr-rm text-red-600 text-sm px-1" title="删除">×</button></td>';
-        tr.querySelector('.k').value = k || '';
-        tr.querySelector('.v').value = v || '';
-        tr.querySelector('.nr-rm').addEventListener('click', function () { tr.remove(); });
-        tbody.appendChild(tr);
-    }
-
-    function clearKVTbody(tbody) {
-        if (tbody) tbody.innerHTML = '';
-    }
-
-    function syncNrBodyPanels() {
-        const t = document.getElementById('nrBodyType').value;
-        document.getElementById('nrBodyJsonWrap').classList.toggle('hidden', t !== 'json');
-        document.getElementById('nrBodyFormWrap').classList.toggle('hidden', t !== 'form');
-        document.getElementById('nrBodyRawWrap').classList.toggle('hidden', t !== 'raw');
-    }
-
-    function syncNrAuthPanels() {
-        const t = (document.getElementById('nrAuthType').value || 'none').toLowerCase();
-        document.getElementById('nrAuthBearerWrap').classList.toggle('hidden', t !== 'bearer');
-        document.getElementById('nrAuthBasicWrap').classList.toggle('hidden', t !== 'basic');
-    }
-
-    function buildSpecFromNrForm() {
-        const method = (document.getElementById('nrMethod').value || 'GET').toUpperCase();
-        const url = (document.getElementById('nrUrl').value || '').trim();
-        if (!url) throw new Error('请填写请求 URL');
-        const spec = { method: method, url: url };
-        const exp = parseInt(document.getElementById('nrExpected').value, 10);
-        spec.expected_status = isNaN(exp) ? 200 : exp;
-        const to = parseFloat(document.getElementById('nrTimeout').value);
-        spec.timeout = !isNaN(to) && to > 0 ? to : 30;
-        spec.verify_ssl = document.getElementById('nrVerifySsl').checked;
-        spec.follow_redirects = document.getElementById('nrFollowRedirects').checked;
-        spec.use_browser_cookies = document.getElementById('nrUseBrowserCookies').checked;
-        const auth = (document.getElementById('nrAuthType').value || 'none').toLowerCase();
-        spec.auth_type = auth;
-        if (auth === 'bearer') {
-            spec.bearer_token = document.getElementById('nrBearerToken').value || '';
-        } else if (auth === 'basic') {
-            spec.basic_username = document.getElementById('nrBasicUser').value || '';
-            spec.basic_password = document.getElementById('nrBasicPass').value || '';
-        }
-        const q = kvTbodyRead(document.getElementById('nrQueryTbody'));
-        if (Object.keys(q).length) spec.params = q;
-        const h = kvTbodyRead(document.getElementById('nrHeaderTbody'));
-        if (Object.keys(h).length) spec.headers = h;
-        const bt = document.getElementById('nrBodyType').value;
-        spec.body_type = bt;
-        if (bt === 'json') {
-            const raw = (document.getElementById('nrBodyJson').value || '').trim();
-            if (raw) {
-                try {
-                    spec.body_json = JSON.parse(raw);
-                } catch (e) {
-                    throw new Error('Body JSON 无效：' + e.message);
-                }
-            }
-        } else if (bt === 'form') {
-            const fd = kvTbodyRead(document.getElementById('nrFormTbody'));
-            if (Object.keys(fd).length) spec.body_form = fd;
-        } else if (bt === 'raw') {
-            const rb = document.getElementById('nrBodyRaw').value;
-            if (rb) spec.body_raw = rb;
-            const ct = (document.getElementById('nrRawCt').value || '').trim();
-            if (ct) spec.raw_content_type = ct;
-        }
-        const pdm = parseInt(document.getElementById('nrPreDelayMs').value, 10);
-        if (!isNaN(pdm) && pdm > 0) spec.pre_delay_ms = pdm;
-        const jp = (document.getElementById('nrJsonPath').value || '').trim();
-        const evRaw = (document.getElementById('nrExpectedJson').value || '').trim();
-        if (jp) {
-            spec.json_path = jp;
-            if (evRaw !== '') {
-                try {
-                    spec.expected_json_value = JSON.parse(evRaw);
-                } catch (e1) {
-                    spec.expected_json_value = evRaw;
-                }
-            }
-        }
-        var pc = (document.getElementById('nrPrerequestChain').value || '').trim();
-        if (pc) {
-            try {
-                var arr = JSON.parse(pc);
-                if (!Array.isArray(arr)) throw new Error('须为数组');
-                spec.prerequest_chain = arr;
-            } catch (e2) {
-                throw new Error('前置请求链 JSON 无效：' + (e2.message || String(e2)));
-            }
-        }
-        var preS = (document.getElementById('nrPrescript').value || '').trim();
-        if (preS) spec.prescript = preS;
-        var postS = (document.getElementById('nrPostscript').value || '').trim();
-        if (postS) spec.postscript = postS;
-        var ex = (document.getElementById('nrExtractVariables').value || '').trim();
-        if (ex) {
-            try {
-                var earr = JSON.parse(ex);
-                if (!Array.isArray(earr)) throw new Error('须为数组');
-                spec.extract_variables = earr;
-            } catch (e3) {
-                throw new Error('提取变量 JSON 无效：' + (e3.message || String(e3)));
-            }
-        }
-        if (document.getElementById('nrPersistExtracts').checked) spec.persist_extracts_to_case = true;
-        return spec;
-    }
-
-    function getSpecFromModal() {
-        const adv = (document.getElementById('nrApiSpecJson').value || '').trim();
-        if (adv) {
-            try {
-                return JSON.parse(adv);
-            } catch (e) {
-                throw new Error('高级 JSON 无效：' + e.message);
-            }
-        }
-        return buildSpecFromNrForm();
-    }
-
-    function applySpecToForm(spec) {
-        if (!spec || typeof spec !== 'object') spec = {};
-        document.getElementById('nrMethod').value = (spec.method || 'GET').toUpperCase();
-        document.getElementById('nrUrl').value = spec.url || '';
-        const exp = spec.expected_status != null ? spec.expected_status : 200;
-        document.getElementById('nrExpected').value = String(exp);
-        const to = spec.timeout != null ? spec.timeout : 30;
-        document.getElementById('nrTimeout').value = String(to);
-        document.getElementById('nrVerifySsl').checked = spec.verify_ssl !== false;
-        document.getElementById('nrFollowRedirects').checked = spec.follow_redirects !== false;
-        document.getElementById('nrUseBrowserCookies').checked = !!spec.use_browser_cookies;
-        const auth = (spec.auth_type || 'none').toLowerCase();
-        document.getElementById('nrAuthType').value = auth === 'bearer' || auth === 'basic' ? auth : 'none';
-        document.getElementById('nrBearerToken').value = spec.bearer_token || '';
-        document.getElementById('nrBasicUser').value = spec.basic_username || '';
-        document.getElementById('nrBasicPass').value = spec.basic_password || '';
-        syncNrAuthPanels();
-        clearKVTbody(document.getElementById('nrQueryTbody'));
-        clearKVTbody(document.getElementById('nrHeaderTbody'));
-        clearKVTbody(document.getElementById('nrFormTbody'));
-        const params = spec.params || spec.query || {};
-        if (params && typeof params === 'object') {
-            Object.keys(params).forEach(function (k) {
-                addKvRow(document.getElementById('nrQueryTbody'), k, params[k]);
-            });
-        }
-        const headers = spec.headers || {};
-        if (headers && typeof headers === 'object') {
-            Object.keys(headers).forEach(function (k) {
-                addKvRow(document.getElementById('nrHeaderTbody'), k, headers[k]);
-            });
-        }
-        const bt = (spec.body_type || 'none').toLowerCase();
-        const btEl = document.getElementById('nrBodyType');
-        btEl.value = ['none', 'json', 'form', 'raw'].indexOf(bt) >= 0 ? bt : 'none';
-        document.getElementById('nrBodyJson').value =
-            spec.body_json != null ? (typeof spec.body_json === 'string' ? spec.body_json : JSON.stringify(spec.body_json, null, 2)) : '';
-        const bf = spec.body_form || {};
-        if (bf && typeof bf === 'object') {
-            Object.keys(bf).forEach(function (k) {
-                addKvRow(document.getElementById('nrFormTbody'), k, bf[k]);
-            });
-        }
-        document.getElementById('nrBodyRaw').value = spec.body_raw || '';
-        document.getElementById('nrRawCt').value = spec.raw_content_type || '';
-        const pdm = spec.pre_delay_ms;
-        if (pdm != null && !isNaN(parseInt(pdm, 10)) && parseInt(pdm, 10) > 0) {
-            document.getElementById('nrPreDelayMs').value = String(parseInt(pdm, 10));
-        } else {
-            document.getElementById('nrPreDelayMs').value = '';
-        }
-        document.getElementById('nrJsonPath').value = spec.json_path || '';
-        const ev = spec.expected_json_value;
-        if (ev !== undefined && ev !== null) {
-            document.getElementById('nrExpectedJson').value =
-                typeof ev === 'string' ? ev : JSON.stringify(ev, null, 2);
-        } else {
-            document.getElementById('nrExpectedJson').value = '';
-        }
-        document.getElementById('nrPrerequestChain').value =
-            spec.prerequest_chain != null ? JSON.stringify(spec.prerequest_chain, null, 2) : '[]';
-        document.getElementById('nrPrescript').value =
-            spec.prescript || spec.pre_request_script || '';
-        document.getElementById('nrPostscript').value =
-            spec.postscript || spec.post_request_script || '';
-        var eva = spec.extract_variables != null ? spec.extract_variables : spec.extract;
-        document.getElementById('nrExtractVariables').value =
-            eva != null ? JSON.stringify(eva, null, 2) : '[]';
-        document.getElementById('nrPersistExtracts').checked = !!spec.persist_extracts_to_case;
-        syncNrBodyPanels();
-    }
-
-    function resetNrForm() {
-        nrEditingStepId = null;
-        document.getElementById('nrModalTitle').textContent = '新建接口';
-        document.getElementById('nrMethod').value = 'GET';
-        document.getElementById('nrUrl').value = '';
-        document.getElementById('nrExpected').value = '200';
-        document.getElementById('nrBodyType').value = 'none';
-        document.getElementById('nrBodyJson').value = '';
-        document.getElementById('nrBodyRaw').value = '';
-        document.getElementById('nrRawCt').value = '';
-        document.getElementById('nrDesc').value = '';
-        document.getElementById('nrApiSpecJson').value = '';
-        document.getElementById('nrTimeout').value = '30';
-        document.getElementById('nrVerifySsl').checked = true;
-        document.getElementById('nrFollowRedirects').checked = true;
-        document.getElementById('nrUseBrowserCookies').checked = false;
-        document.getElementById('nrAuthType').value = 'none';
-        document.getElementById('nrBearerToken').value = '';
-        document.getElementById('nrBasicUser').value = '';
-        document.getElementById('nrBasicPass').value = '';
-        syncNrAuthPanels();
-        document.getElementById('nrPreDelayMs').value = '';
-        document.getElementById('nrJsonPath').value = '';
-        document.getElementById('nrExpectedJson').value = '';
-        var nrp = document.getElementById('nrResponsePanel');
-        if (nrp) nrp.classList.add('hidden');
-        var nrb = document.getElementById('nrResponseBody');
-        if (nrb) nrb.value = '';
-        var nrx = document.getElementById('nrResponseExtractChips');
-        if (nrx) nrx.innerHTML = '';
-        var nrm = document.getElementById('nrResponseMeta');
-        if (nrm) nrm.textContent = '';
-        document.getElementById('nrPrerequestChain').value = '[]';
-        document.getElementById('nrPrescript').value = '';
-        document.getElementById('nrPostscript').value = '';
-        document.getElementById('nrExtractVariables').value = '[]';
-        document.getElementById('nrPersistExtracts').checked = false;
-        clearKVTbody(document.getElementById('nrQueryTbody'));
-        clearKVTbody(document.getElementById('nrHeaderTbody'));
-        clearKVTbody(document.getElementById('nrFormTbody'));
-        syncNrBodyPanels();
-    }
-
-    function collectSelectedStepIds() {
-        const out = [];
-        document.querySelectorAll('.req-step-cb:checked').forEach(function (cb) {
-            const id = parseInt(cb.getAttribute('data-step-id'), 10);
-            if (!isNaN(id)) out.push(id);
-        });
-        return out;
-    }
-
-    async function loadRequestTable() {
-        const tbody = document.getElementById('reqTableBody');
-        const emptyHint = document.getElementById('reqEmptyHint');
-        const selAll = document.getElementById('reqSelectAll');
-        if (selAll) selAll.checked = false;
-        tbody.innerHTML = '';
-        const r = await fetch('/api/cases/' + CASE_ID + '/steps?page=1&page_size=100', { ...cred });
-        const { ok, data: d } = await parseJsonResponse(r);
-        if (!ok) {
-            emptyHint.textContent = '加载失败';
-            emptyHint.classList.remove('hidden');
-            window.__uatApiCaseSteps = [];
-            return;
-        }
-        const steps = d.steps || [];
-        if (!steps.length) {
-            emptyHint.classList.remove('hidden');
-            window.__uatApiCaseSteps = [];
-            return;
-        }
-        emptyHint.classList.add('hidden');
-        window.__uatApiCaseSteps = steps;
-        const btnBase = 'px-2.5 py-1 rounded text-xs font-medium transition';
-        const btnRun = btnBase + ' bg-blue-600 text-white hover:bg-blue-700';
-        const btnEdit = btnBase + ' bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600';
-        const btnDel = btnBase + ' bg-[#dc3545] text-white hover:bg-[#c82333]';
-        steps.forEach(function (s) {
-            let method = '—';
-            let url = '';
-            try {
-                const sp = typeof s.api_spec === 'string' ? JSON.parse(s.api_spec || '{}') : (s.api_spec || {});
-                method = (sp.method || 'GET').toUpperCase();
-                url = sp.url || '';
-            } catch (e) {}
-            const tr = document.createElement('tr');
-            tr.className = 'bg-white/80 dark:bg-gray-900/60';
-            const ord = s.step_order != null ? s.step_order : '';
-            const desc = (s.description || '').trim() || '—';
-            const sid = s.id;
-            tr.innerHTML =
-                '<td class="px-2 py-3 text-center"><input type="checkbox" class="req-step-cb rounded border-gray-400 dark:border-gray-500" data-step-id="' + sid + '"></td>' +
-                '<td class="px-4 py-3 text-gray-500">' + escapeHtml(String(ord)) + '</td>' +
-                '<td class="px-4 py-3 font-mono text-xs"><span class="font-semibold text-teal-700 dark:text-teal-400">' + escapeHtml(method) + '</span> ' +
-                '<span class="text-gray-800 dark:text-gray-200 break-all">' + escapeHtml(url.slice(0, 120)) + (url.length > 120 ? '…' : '') + '</span></td>' +
-                '<td class="px-4 py-3">' + escapeHtml(desc) + '</td>' +
-                '<td class="px-4 py-3"><div class="flex flex-wrap gap-1.5"></div></td>';
-            const wrap = tr.querySelector('td:last-child div');
-            const bRun = document.createElement('button');
-            bRun.type = 'button';
-            bRun.className = btnRun;
-            bRun.textContent = '运行';
-            bRun.onclick = function () { runSteps([sid]); };
-            const bEd = document.createElement('button');
-            bEd.type = 'button';
-            bEd.className = btnEdit;
-            bEd.textContent = '编辑';
-            bEd.onclick = function () { openEditRequestModal(sid); };
-            const del = document.createElement('button');
-            del.type = 'button';
-            del.className = btnDel;
-            del.textContent = '删除';
-            del.onclick = function () { deleteRequest(sid); };
-            wrap.appendChild(bRun);
-            wrap.appendChild(bEd);
-            wrap.appendChild(del);
-            tbody.appendChild(tr);
-        });
-    }
-
-    async function deleteRequest(stepId) {
-        if (!confirm('确认删除？')) return;
-        const r = await fetch('/api/steps/' + stepId, { method: 'DELETE', ...cred });
-        const { ok, data: d } = await parseJsonResponse(r);
-        if (!ok || d.success === false) {
-            toastErr(d.error || '删除失败');
-            return;
-        }
-        loadRequestTable();
-    }
-
-    async function runSteps(stepIds) {
-        const r = await fetch('/api/api-cases/' + CASE_ID + '/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            ...cred,
-            body: JSON.stringify({ step_ids: stepIds }),
-        });
-        const { ok, data: d } = await parseJsonResponse(r);
-        if (!ok || !d.success) {
-            toastErr(d.error || '执行失败');
-            return;
-        }
-        alert('执行完成：' + (d.status || 'success'));
-    }
-
-    async function runCaseSelected() {
-        const ids = collectSelectedStepIds();
-        if (!ids.length) {
-            alert('请先勾选要运行的接口');
-            return;
-        }
-        await runSteps(ids);
-    }
-
-    async function runCaseAll() {
-        const r = await fetch('/api/api-cases/' + CASE_ID + '/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            ...cred,
-            body: '{}',
-        });
-        const { ok, data: d } = await parseJsonResponse(r);
-        if (!ok || !d.success) {
-            toastErr(d.error || '执行失败');
-            return;
-        }
-        alert('执行完成：' + (d.status || 'success'));
-    }
-
-    async function deleteCase() {
-        if (!confirm('确认删除？')) return;
-        const r = await fetch('/api/cases/' + CASE_ID, { method: 'DELETE', ...cred });
-        const { ok, data: d } = await parseJsonResponse(r);
-        if (!ok) {
-            toastErr(d.error || '删除失败');
-            return;
-        }
-        if (d.success === false) {
-            toastErr(d.error || '删除失败');
-            return;
-        }
-        var routes = {};
-        try {
-            var elR = document.getElementById('uatDetailRoutes');
-            if (elR) routes = JSON.parse(elR.textContent);
-        } catch (e0) {}
-        var back = routes.api_list || '/api-testing';
-        if (PROJECT_ID) back += (back.indexOf('?') >= 0 ? '&' : '?') + 'project_id=' + PROJECT_ID;
-        window.location.href = back;
-    }
-
-    function openNewRequestModal() {
-        resetNrForm();
-        showModal(document.getElementById('newRequestModal'));
-        renderNeighborQuickPicks();
-        renderResponseExtractChips();
-    }
-
-    async function openEditRequestModal(stepId) {
-        resetNrForm();
-        nrEditingStepId = stepId;
-        document.getElementById('nrModalTitle').textContent = '编辑接口';
-        const r = await fetch('/api/steps/' + stepId, { ...cred });
-        const { ok, data: d } = await parseJsonResponse(r);
-        if (!ok || !d.step) {
-            toastErr(d.error || '加载步骤失败');
-            nrEditingStepId = null;
-            return;
-        }
-        const st = d.step;
-        document.getElementById('nrDesc').value = (st.description || '').trim();
-        let spec = {};
-        try {
-            const raw = st.api_spec;
-            spec = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
-        } catch (e) {
-            spec = {};
-        }
-        applySpecToForm(spec);
-        document.getElementById('nrApiSpecJson').value = '';
-        showModal(document.getElementById('newRequestModal'));
-        renderNeighborQuickPicks();
-        renderResponseExtractChips();
-    }
-
-    function closeNewRequestModal() {
-        hideModal(document.getElementById('newRequestModal'));
-        nrEditingStepId = null;
-    }
-
-    async function tryRunRequest() {
-        var spec;
-        try {
-            spec = getSpecFromModal();
-        } catch (e) {
-            toastErr(e.message || '请检查表单');
-            return;
-        }
-        const btn = document.getElementById('nrTryRunBtn');
-        if (btn) btn.disabled = true;
-        try {
-            const r = await fetch('/api/api-cases/dry-run-request', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                ...cred,
-                body: JSON.stringify({ case_id: CASE_ID, api_spec: spec }),
-            });
-            const { ok, data: d } = await parseJsonResponse(r);
-            if (!ok || !d.success) {
-                toastErr((d && d.error) || '试跑失败');
-                return;
-            }
-            const panel = document.getElementById('nrResponsePanel');
-            const meta = document.getElementById('nrResponseMeta');
-            const bodyEl = document.getElementById('nrResponseBody');
-            if (panel) panel.classList.remove('hidden');
-            let line = '';
-            if (d.status_code != null) line += '状态码：HTTP ' + d.status_code;
-            if (d.assert_message) line += (line ? ' · ' : '') + d.assert_message;
-            if (d.ok_assert === false && d.error) line += (line ? '\n' : '') + '断言：' + d.error;
-            if (d.script_logs && d.script_logs.length) {
-                line += (line ? '\n\n' : '') + '脚本日志：\n' + d.script_logs.join('\n');
-            }
-            if (meta) meta.textContent = line || '—';
-            let txt = d.response_text || '';
-            if (!txt && d.response_json != null) {
-                try {
-                    txt = JSON.stringify(d.response_json, null, 2);
-                } catch (e2) {
-                    txt = String(d.response_json);
-                }
-            }
-            if (bodyEl) bodyEl.value = txt || '(无正文)';
-            renderResponseExtractChips();
-        } finally {
-            if (btn) btn.disabled = false;
-        }
-    }
-
-    async function saveNewRequest() {
-        var spec;
-        try {
-            spec = getSpecFromModal();
-        } catch (e) {
-            toastErr(e.message || '请填写完整请求');
-            return;
-        }
-        const desc = document.getElementById('nrDesc').value.trim();
-        const payload = {
-            action: 'api_request',
-            selector_type: '',
-            selector_value: '',
-            input_value: '',
-            description: desc,
-            api_spec: JSON.stringify(spec),
-        };
-        var r;
-        if (nrEditingStepId) {
-            r = await fetch('/api/steps/' + nrEditingStepId, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                ...cred,
-                body: JSON.stringify(payload),
-            });
-        } else {
-            r = await fetch('/api/steps', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                ...cred,
-                body: JSON.stringify(Object.assign({ case_id: CASE_ID }, payload)),
-            });
-        }
-        const { ok, data: d } = await parseJsonResponse(r);
-        if (!ok || d.success === false || (d.error && d.success !== true)) {
-            toastErr(d.error || '保存失败');
-            return;
-        }
-        const wasEdit = !!nrEditingStepId;
-        closeNewRequestModal();
-        loadRequestTable();
-        alert(wasEdit ? '已更新' : '请求已保存');
-    }
-
-    document.addEventListener('DOMContentLoaded', function () {
-        document.getElementById('nrBodyType').addEventListener('change', syncNrBodyPanels);
-        document.getElementById('nrAuthType').addEventListener('change', syncNrAuthPanels);
-        document.getElementById('btnRunSelected').addEventListener('click', runCaseSelected);
-        document.getElementById('btnRunCaseAll').addEventListener('click', runCaseAll);
-        document.getElementById('btnNewRequest').addEventListener('click', openNewRequestModal);
-        document.getElementById('btnRefreshReq').addEventListener('click', loadRequestTable);
-        document.getElementById('btnDeleteCase').addEventListener('click', deleteCase);
-        document.getElementById('nrCancelBtn').addEventListener('click', closeNewRequestModal);
-        document.getElementById('nrSaveBtn').addEventListener('click', saveNewRequest);
-        var nrTry = document.getElementById('nrTryRunBtn');
-        if (nrTry) nrTry.addEventListener('click', tryRunRequest);
-        var reqSelectAll = document.getElementById('reqSelectAll');
-        if (reqSelectAll) {
-            reqSelectAll.addEventListener('change', function () {
-                var on = reqSelectAll.checked;
-                document.querySelectorAll('.req-step-cb').forEach(function (cb) { cb.checked = on; });
-            });
-        }
-        document.querySelectorAll('.nr-add-kv').forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                addKvRow(document.getElementById(btn.getAttribute('data-target')), '', '');
-            });
-        });
-        document.getElementById('newRequestModal').addEventListener('click', function (e) {
-            if (e.target.id === 'newRequestModal') closeNewRequestModal();
-        });
-        document.getElementById('newRequestModal').addEventListener('focusin', function (ev) {
-            var t = ev.target;
-            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) {
-                window.__nrLastModalFocus = t;
-            }
-        });
-        var nrb = document.getElementById('nrNeighborRefreshBtn');
-        if (nrb) {
-            nrb.addEventListener('click', function () {
-                renderNeighborQuickPicks();
-                renderResponseExtractChips();
-            });
-        }
-        loadRequestTable();
-    });
-})();
-</script>
+<script src="{{ url_for('static', filename='js/api_testing.js') }}"></script>
+<script src="{{ url_for('static', filename='js/api_case_workbench.js') }}"></script>
 {% endblock %}

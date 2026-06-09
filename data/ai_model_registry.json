@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "active_profile_id": "f238957a-6c93-490b-8bf6-c6f3840d43b3",
+  "active_profile_id": "1511332a-5d32-4600-862d-75793aa1c178",
   "profiles": [
     {
       "id": "e22cc140-2004-41d0-b1d5-3c655f5623fa",
@@ -55,6 +55,39 @@
       "label": "mimo-v2.5",
       "api_key": "tp-cag12chuv5q6imirg1egn66i157sq57du730iq74h7ym5wwt",
       "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "group_id": ""
+    },
+    {
+      "id": "5561150d-6042-4260-9260-6a2ce1fdf4d3",
+      "provider": "alibaba_dashscope",
+      "api_style": "openai_compatible",
+      "model_type": "test_case_generation",
+      "model_id": "qwen3-max",
+      "label": "qwen3-max",
+      "api_key": "sk-38ad74c161fd4c888aea28e1c61f5639",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "group_id": ""
+    },
+    {
+      "id": "fdf94c57-233c-45f4-a4b2-2508a5b17ed4",
+      "provider": "alibaba_dashscope",
+      "api_style": "openai_compatible",
+      "model_type": "test_case_generation",
+      "model_id": "qwen3.7-max",
+      "label": "qwen3.7-max",
+      "api_key": "sk-757f474e3f9b4e30ac05e1ca49b09c31",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "group_id": ""
+    },
+    {
+      "id": "1511332a-5d32-4600-862d-75793aa1c178",
+      "provider": "alibaba_dashscope",
+      "api_style": "openai_compatible",
+      "model_type": "test_case_generation",
+      "model_id": "qwen3.5-omni-flash",
+      "label": "qwen3.5-omni-flash",
+      "api_key": "sk-757f474e3f9b4e30ac05e1ca49b09c31",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "group_id": ""
     }
   ]

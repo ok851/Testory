@@ -159,12 +159,17 @@
                 aitest_add_model_title: '添加模型',
                 aitest_field_provider: '提供商',
                 aitest_field_type: '类型',
-                aitest_field_model: '模型',
+                aitest_field_model: '模型名称',
+                aitest_field_model_ph: '如 gpt-4o、deepseek-chat、qwen3:8b',
+                aitest_model_simple_hint: '填写 API 文档中的 model 名称；本地 Ollama 填已 pull 的型号。',
+                aitest_ollama_simple_hint: '本地 Ollama 无需密钥；Base URL 留空或填 http://127.0.0.1:11434。',
+                aitest_proxy_key_need_base: '检测到代理 Key，请同时填写代理商提供的 Base URL。',
+                aitest_need_api_key: '请填写 API 密钥',
                 aitest_select_model: '请选择模型',
                 aitest_model_select_only: '请从列表中选择模型（与提供商目录一致）。',
                 aitest_need_model_pick: '请从列表中选择模型',
                 aitest_field_base_url: 'API Base URL（可选）',
-                aitest_field_base_url_ph: '留空则使用目录默认值',
+                aitest_field_base_url_ph: '留空默认 OpenAI；Ollama 填 http://127.0.0.1:11434',
                 aitest_field_api_key: 'API 密钥',
                 aitest_field_api_key_ph: 'API 密钥',
                 aitest_cancel: '取消',
@@ -940,12 +945,17 @@
                 aitest_add_model_title: 'Add model',
                 aitest_field_provider: 'Provider',
                 aitest_field_type: 'Type',
-                aitest_field_model: 'Model',
+                aitest_field_model: 'Model name',
+                aitest_field_model_ph: 'e.g. gpt-4o, deepseek-chat, qwen3:8b',
+                aitest_model_simple_hint: 'Use the model id from your API docs; for local Ollama use a pulled model name.',
+                aitest_ollama_simple_hint: 'Local Ollama needs no API key; leave Base URL blank or use http://127.0.0.1:11434.',
+                aitest_proxy_key_need_base: 'Proxy key detected — please also fill in the provider Base URL.',
+                aitest_need_api_key: 'Please enter an API key',
                 aitest_select_model: 'Select a model',
                 aitest_model_select_only: 'Choose a model from the list (matches the provider catalog).',
                 aitest_need_model_pick: 'Please select a model from the list',
                 aitest_field_base_url: 'API base URL (optional)',
-                aitest_field_base_url_ph: 'Leave blank for catalog default',
+                aitest_field_base_url_ph: 'Blank defaults to OpenAI; Ollama: http://127.0.0.1:11434',
                 aitest_field_api_key: 'API key',
                 aitest_field_api_key_ph: 'API key',
                 aitest_cancel: 'Cancel',
@@ -1900,6 +1910,16 @@
             } catch (e) {
                 return { ok: false, pack: {} };
             }
+        };
+
+        /** 全局单用例运行互斥（同标签页内防止连点并发） */
+        window.uatTryAcquireCaseRunSlot = function () {
+            if (window.__uatCaseRunInFlight) return false;
+            window.__uatCaseRunInFlight = true;
+            return true;
+        };
+        window.uatReleaseCaseRunSlot = function () {
+            window.__uatCaseRunInFlight = false;
         };
 
         /** @returns {Promise<boolean>} 是否有进行中的用例或数据驱动任务（用于自适应轮询间隔） */

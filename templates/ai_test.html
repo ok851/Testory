@@ -1143,23 +1143,9 @@
         </div>
         <div class="ai-add-modal__body">
             <div class="form-row">
-                <label><span class="req">*</span> <span data-i18n="aitest_field_provider">提供商</span></label>
-                <select id="aiAddProvider"></select>
-            </div>
-            <div class="form-row" id="aiAddModelSelectRow">
-                <label><span class="req">*</span> <span data-i18n="aitest_field_model">模型</span></label>
-                <select id="aiAddPopularModel"></select>
-                <p class="ai-add-model-hint" data-i18n="aitest_model_select_only">请从下方列表选择模型（与提供商目录一致）。</p>
-                <p id="aiAddModelNotes" class="ai-add-model-hint ai-add-model-notes" style="display:none;margin-top:6px;color:#b45309;" role="status"></p>
-            </div>
-            <div class="form-row" id="aiAddCustomModelRow" style="display:none;">
-                <label><span class="req">*</span> 模型 ID（自定义）</label>
-                <input type="text" id="aiAddCustomModelId" placeholder="与代理商文档一致，例如 MiniMax-M3、abab7-preview" autocomplete="off">
-                <p class="ai-add-model-hint">第三方网关的 model 名称以代理商为准，可与官方型号不同。</p>
-            </div>
-            <div class="form-row" id="aiAddBaseUrlRow">
-                <label><span class="req" id="aiAddBaseUrlStar" style="display:none;">*</span> <span data-i18n="aitest_field_base_url">API Base URL（可选）</span></label>
-                <input type="text" id="aiAddBaseUrl" placeholder="留空则使用目录默认值" data-i18n-placeholder="aitest_field_base_url_ph">
+                <label><span class="req">*</span> <span data-i18n="aitest_field_model">模型名称</span></label>
+                <input type="text" id="aiAddModelId" placeholder="如 gpt-4o、deepseek-chat、qwen3:8b" data-i18n-placeholder="aitest_field_model_ph" autocomplete="off">
+                <p class="ai-add-model-hint" data-i18n="aitest_model_simple_hint">填写 API 文档中的 model 名称；本地 Ollama 填已 pull 的型号。</p>
             </div>
             <div class="form-row" id="aiAddApiKeyRow">
                 <label><span class="req" id="aiAddApiKeyStar">*</span> <span data-i18n="aitest_field_api_key">API 密钥</span></label>
@@ -1167,8 +1153,12 @@
                     <input type="password" id="aiAddApiKey" autocomplete="off" data-i18n-placeholder="aitest_field_api_key_ph" placeholder="API 密钥">
                     <button type="button" onclick="window.toggleAiAddApiKeyVis()" aria-label="toggle"><i class="fas fa-eye" id="aiAddApiKeyEye"></i></button>
                 </div>
-                <div class="hint-link" id="aiAddDocsLink"></div>
                 <p id="aiAddApiKeySavedHint" class="ai-add-model-hint ai-add-apikey-saved-hint" style="display:none;margin-top:8px;" role="status"></p>
+            </div>
+            <div class="form-row" id="aiAddBaseUrlRow">
+                <label><span data-i18n="aitest_field_base_url">API Base URL（可选）</span></label>
+                <input type="text" id="aiAddBaseUrl" placeholder="留空默认 OpenAI；Ollama 填 http://127.0.0.1:11434" data-i18n-placeholder="aitest_field_base_url_ph">
+                <p id="aiAddModelNotes" class="ai-add-model-hint ai-add-model-notes" style="display:none;margin-top:6px;color:#b45309;" role="status"></p>
             </div>
         </div>
         <div class="ai-add-modal__foot">
@@ -1882,6 +1872,13 @@
     async function aiEnsureEmbeddedCanvasForRun() {
         await refreshEmbeddedGatewayStatus();
         if (!aiEmbeddedGatewayUsable()) return false;
+        if (aiRemoteCanvasState.sessionId) {
+            var wsLive = aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1;
+            if (!wsLive && typeof ensureEmbeddedLiveViewConnected === 'function') {
+                ensureEmbeddedLiveViewConnected({ silent: true });
+            }
+            if (aiRemoteCanvasState.sessionId) return true;
+        }
         if (aiEmbeddedSessionActive()) return true;
         if (typeof startRemoteCanvasSession === 'function') {
             return !!(await startRemoteCanvasSession({ auto: true }));
@@ -2054,7 +2051,19 @@
         return det;
     }
 
+    function filterUserFacingAiWarnings(warnings) {
+        if (!warnings || !warnings.length) return [];
+        return warnings.filter(function(w) {
+            var s = String(w == null ? '' : w);
+            if (!s.trim()) return false;
+            if (s.indexOf('未连接内置画布') >= 0) return false;
+            if (s.indexOf('内置画布网关') >= 0 && s.indexOf('跳过') >= 0) return false;
+            return true;
+        });
+    }
+
     function appendAiChatWarningsFoldable(warnings) {
+        warnings = filterUserFacingAiWarnings(warnings);
         if (!warnings || !warnings.length) return;
         var chat = document.getElementById('aiChatHistory');
         if (!chat) return;
@@ -2130,9 +2139,20 @@
     }
     function profileLabel(p) {
         if (!p) return '';
-        const z = (typeof t === 'function' && providerCatalog && providerCatalog.providers) ? providerCatalog.providers.find(function(x) { return x.id === p.provider; }) : null;
+        var name = (p.label || p.model_id || '').trim();
+        var bu = (p.base_url || '').trim();
+        if (bu) {
+            try {
+                var host = new URL(bu.indexOf('://') >= 0 ? bu : 'https://' + bu).host;
+                if (host) return name + ' · ' + host;
+            } catch (e) {}
+            return name + ' · ' + bu;
+        }
+        if (p.provider === 'ollama') return name + ' · Ollama';
+        if (p.provider === 'openai') return name + ' · OpenAI';
+        const z = (providerCatalog && providerCatalog.providers) ? providerCatalog.providers.find(function(x) { return x.id === p.provider; }) : null;
         const pname = (z && (document.documentElement.lang === 'en' ? z.name_en : z.name_zh)) || p.provider;
-        return (p.label || p.model_id) + ' · ' + pname;
+        return name + ' · ' + pname;
     }
 
     function updateActiveModelChip() {
@@ -2158,6 +2178,7 @@
 
     function aiStopAgentWork() {
         abortAiGatewayStream();
+        aiGatewayBusy = false;
         if (aiPlanAbort && !aiPlanAbort.signal.aborted) {
             aiUserRequestedStop = true;
             try { aiPlanAbort.abort(); } catch (e) {}
@@ -2167,6 +2188,11 @@
             window.__aiCurrentBgJobId = null;
             fetch('/api/ai/task/job/' + encodeURIComponent(jid) + '/cancel', { method: 'POST', credentials: 'same-origin' }).catch(function() {});
             if (typeof window.uatAiRemovePendingJob === 'function') window.uatAiRemovePendingJob(jid);
+        }
+        setAgentBusy(false);
+        syncAiSendButtons();
+        if (aiRemoteCanvasState && aiRemoteCanvasState.sessionId && typeof ensureEmbeddedLiveViewConnected === 'function') {
+            try { ensureEmbeddedLiveViewConnected({ silent: true }); } catch (eRe) {}
         }
     }
 
@@ -2272,187 +2298,49 @@
 
     const AI_PROFILE_DEFAULT_MODEL_TYPE = 'test_case_generation';
 
-    function fillProviderCatalogSelects() {
-        const cat = providerCatalog;
-        const provSel = document.getElementById('aiAddProvider');
-        const popSel = document.getElementById('aiAddPopularModel');
-        if (!provSel) return;
-        if (!cat || !Array.isArray(cat.providers) || !cat.providers.length) {
-            const emptyLab = typeof t === 'function' ? t('aitest_provider_catalog_empty') : '无法加载供应商目录（请重启服务或重新安装）';
-            provSel.innerHTML = '<option value="">' + escapeHtml(emptyLab) + '</option>';
-            if (popSel) popSel.innerHTML = '<option value=""></option>';
-            return;
-        }
-        const order = { local: 0, cn: 1, intl: 2 };
-        const providers = cat.providers.slice().sort(function(a, b) {
-            return (order[a.region] || 9) - (order[b.region] || 9) || (a.name_zh || '').localeCompare(b.name_zh || '');
-        });
-        const isEn = document.documentElement.lang === 'en';
-        provSel.innerHTML = providers.map(function(z) {
-            const lab = isEn ? (z.name_en || z.id) : (z.name_zh || z.id);
-            return '<option value="' + escapeHtml(z.id) + '">' + escapeHtml(lab) + '</option>';
-        }).join('');
-        var editEp = null;
-        if (window.__aiAddModalEditId) {
-            editEp = aiProfiles.find(function(x) { return x.id === window.__aiAddModalEditId; });
-            if (editEp && editEp.provider && providers.some(function(z) { return z.id === editEp.provider; })) {
-                provSel.value = editEp.provider;
-            }
-        }
-        syncAiAddProviderFields();
-    }
-
-    function isCustomOpenAiProvider(z) {
-        return !!(z && (z.id === 'custom_openai' || z.allows_custom_model));
-    }
-
     function getAiAddModelId() {
-        var provSel = document.getElementById('aiAddProvider');
-        var cat = providerCatalog;
-        var z = cat && cat.providers && provSel && cat.providers.find(function(p) { return p.id === provSel.value; });
-        if (isCustomOpenAiProvider(z)) {
-            var cin = document.getElementById('aiAddCustomModelId');
-            return cin ? String(cin.value || '').trim() : '';
-        }
-        var pop = document.getElementById('aiAddPopularModel');
-        return (pop && pop.value) ? String(pop.value).trim() : '';
+        var inp = document.getElementById('aiAddModelId');
+        return inp ? String(inp.value || '').trim() : '';
     }
 
-    function syncAiAddProviderFields() {
-        const cat = providerCatalog;
-        const provSel = document.getElementById('aiAddProvider');
-        const popSel = document.getElementById('aiAddPopularModel');
-        const keyRow = document.getElementById('aiAddApiKeyRow');
-        const star = document.getElementById('aiAddApiKeyStar');
-        const baseRow = document.getElementById('aiAddBaseUrlRow');
-        const baseIn = document.getElementById('aiAddBaseUrl');
-        const docs = document.getElementById('aiAddDocsLink');
-        const selRow = document.getElementById('aiAddModelSelectRow');
-        const customRow = document.getElementById('aiAddCustomModelRow');
-        const baseStar = document.getElementById('aiAddBaseUrlStar');
-        if (!provSel || !cat || !cat.providers) return;
-        const z = cat.providers.find(function(p) { return p.id === provSel.value; });
-        var isCustom = isCustomOpenAiProvider(z);
-        if (selRow) selRow.style.display = isCustom ? 'none' : 'block';
-        if (customRow) customRow.style.display = isCustom ? 'block' : 'none';
-        if (baseStar) baseStar.style.display = (isCustom || (z && z.requires_base_url)) ? 'inline' : 'none';
-        if (baseIn && isCustom) {
-            baseIn.placeholder = '必填：代理商提供的 Base URL（如 https://token-plan-cn.example.com/v1）';
-        } else if (baseIn) {
-            baseIn.placeholder = typeof t === 'function' ? t('aitest_field_base_url_ph') : '留空则使用目录默认值';
+    function isAiAddOllamaMode() {
+        var editId = window.__aiAddModalEditId;
+        if (editId) {
+            var ep = aiProfiles.find(function(x) { return x.id === editId; });
+            if (ep && ep.provider === 'ollama') return true;
         }
-        if (popSel && z && !isCustom) {
-            const models = z.popular_models || [];
-            const pickLab = typeof t === 'function' ? t('aitest_select_model') : '请选择模型';
-            popSel.innerHTML = '<option value="">' + pickLab + '</option>' +
-                models.map(function(m) { return '<option value="' + escapeHtml(m) + '">' + escapeHtml(m) + '</option>'; }).join('');
-        }
-        const needKey = z && z.requires_api_key;
-        const isOllama = provSel.value === 'ollama';
-        if (keyRow) keyRow.style.display = isOllama ? 'none' : 'block';
-        if (star) star.style.display = needKey ? 'inline' : 'none';
-        if (baseRow) baseRow.style.display = isOllama ? 'none' : 'block';
-        if (docs && z && z.docs_url) {
-            docs.innerHTML = '<a href="' + escapeHtml(z.docs_url) + '" target="_blank" rel="noopener">' + (typeof t === 'function' ? t('aitest_get_api_key') : '获取 API 密钥 / 文档') + '</a>';
-        } else if (docs) docs.innerHTML = '';
-        if (baseIn && z) {
-            var editId = window.__aiAddModalEditId;
-            var curProv = provSel.value || '';
-            var prevProv = window.__aiAddSyncProvider || '';
-            var provChanged = prevProv && curProv && prevProv !== curProv;
-            var def = (z.default_base_url && String(z.default_base_url).trim()) ? String(z.default_base_url).trim() : '';
-            if (editId) {
-                var ep = aiProfiles.find(function(x) { return x.id === editId; });
-                if (ep && ep.provider === curProv && !provChanged) {
-                    var bu = (ep.base_url != null && String(ep.base_url).trim()) ? String(ep.base_url).trim() : '';
-                    baseIn.value = bu || def;
-                } else {
-                    baseIn.value = def;
-                }
-            } else if (provChanged || !String(baseIn.value || '').trim()) {
-                baseIn.value = def;
-            }
-            window.__aiAddSyncProvider = curProv;
-        }
-        syncAiAddModelDeprecationHint();
-        syncAiAddBaseUrlMismatchHint();
-        syncThirdPartyKeyHint();
-    }
-
-    function syncThirdPartyKeyHint() {
         var pk = document.getElementById('aiAddApiKey');
-        var provSel = document.getElementById('aiAddProvider');
-        var notes = document.getElementById('aiAddModelNotes');
-        if (!pk || !provSel || !notes) return;
-        var cat = providerCatalog;
-        var z = cat && cat.providers && cat.providers.find(function(p) { return p.id === provSel.value; });
-        if (isCustomOpenAiProvider(z)) {
-            if (z && z.model_notes) {
-                notes.style.display = 'block';
-                notes.style.color = '#64748b';
-                notes.textContent = z.model_notes;
-            }
-            return;
-        }
-        var k = String(pk.value || '').trim();
-        if (!k) return;
-        var isProxyKey = /^tp-/i.test(k);
-        if (!isProxyKey) return;
-        notes.style.display = 'block';
-        notes.style.color = '#b45309';
-        var baseEl = document.getElementById('aiAddBaseUrl');
-        var baseVal = baseEl ? String(baseEl.value || '') : '';
-        if (/xiaomimimo/i.test(baseVal) || provSel.value === 'xiaomi_mimo_token') {
-            notes.textContent = '小米 MiMo Token Plan：model 请填 mimo-v2.5-pro（勿填 MiniMax-M3）；建议直接选提供商「小米 MiMo Token Plan」。';
-            return;
-        }
-        notes.textContent = '检测到代理 Key（' + k.slice(0, 8) + '…）。请改选「小米 MiMo Token Plan」或「第三方 / 代理」，并填写代理商 Base URL 与 model 名称。';
+        var baseIn = document.getElementById('aiAddBaseUrl');
+        var keyTrim = pk ? String(pk.value || '').trim() : '';
+        var bu = baseIn ? String(baseIn.value || '').trim().toLowerCase() : '';
+        if (keyTrim) return false;
+        return !bu || /11434|ollama/i.test(bu);
     }
 
-    function syncAiAddBaseUrlMismatchHint() {
-        var provSel = document.getElementById('aiAddProvider');
-        var baseIn = document.getElementById('aiAddBaseUrl');
+    function syncAiAddSimpleFields() {
+        var keyRow = document.getElementById('aiAddApiKeyRow');
+        var star = document.getElementById('aiAddApiKeyStar');
         var notes = document.getElementById('aiAddModelNotes');
-        if (!provSel || !baseIn || !notes) return;
-        var cat = providerCatalog;
-        var z = cat && cat.providers && cat.providers.find(function(p) { return p.id === provSel.value; });
-        if (isCustomOpenAiProvider(z)) return;
-        var bu = String(baseIn.value || '').trim().toLowerCase();
-        var def = z && z.default_base_url ? String(z.default_base_url).trim().toLowerCase() : '';
-        if (!bu || !def || bu === def) return;
-        var hostFrom = function(url) {
-            try { return new URL(url.indexOf('://') >= 0 ? url : 'https://' + url).host; } catch (e) { return ''; }
-        };
-        var hBu = hostFrom(bu);
-        var hDef = hostFrom(def);
-        if (hBu && hDef && hBu !== hDef) {
+        var pk = document.getElementById('aiAddApiKey');
+        var baseIn = document.getElementById('aiAddBaseUrl');
+        var isOllama = isAiAddOllamaMode();
+        if (keyRow) keyRow.style.display = 'block';
+        if (star) star.style.display = isOllama ? 'none' : 'inline';
+        if (!notes) return;
+        var k = pk ? String(pk.value || '').trim() : '';
+        var bu = baseIn ? String(baseIn.value || '').trim() : '';
+        if (/^tp-/i.test(k) && !bu) {
             notes.style.display = 'block';
             notes.style.color = '#b45309';
-            notes.textContent = '当前 Base URL（' + hBu + '）与所选提供商「' + (z.name_zh || z.id) + '」默认地址（' + hDef + '）不一致，易导致 401/400。建议改为：' + (z.default_base_url || def);
-        }
-    }
-
-    function syncAiAddModelDeprecationHint() {
-        var notes = document.getElementById('aiAddModelNotes');
-        var provSel = document.getElementById('aiAddProvider');
-        var popSel = document.getElementById('aiAddPopularModel');
-        if (!notes || !provSel || !popSel) return;
-        var cat = providerCatalog;
-        var z = cat && cat.providers && cat.providers.find(function(p) { return p.id === provSel.value; });
-        var mid = (popSel.value || '').trim();
-        var dep = z && Array.isArray(z.deprecated_models) && mid && z.deprecated_models.indexOf(mid) >= 0;
-        if (dep) {
-            notes.style.display = 'block';
-            notes.textContent = (z && z.model_notes) ? z.model_notes : '该模型 ID 可能已不被当前 API 支持，请换用目录中的推荐模型。';
+            notes.textContent = typeof t === 'function' ? t('aitest_proxy_key_need_base') : '检测到代理 Key，请同时填写代理商提供的 Base URL。';
             return;
         }
-        if (z && z.model_notes && !mid) {
+        if (isOllama) {
             notes.style.display = 'block';
-            notes.textContent = z.model_notes;
+            notes.style.color = '#64748b';
+            notes.textContent = typeof t === 'function' ? t('aitest_ollama_simple_hint') : '本地 Ollama 无需密钥；Base URL 留空或填 http://127.0.0.1:11434。';
             return;
         }
-        if (!dep) syncThirdPartyKeyHint();
-        if (notes.style.display === 'block' && notes.textContent) return;
         notes.style.display = 'none';
         notes.textContent = '';
     }
@@ -2488,11 +2376,8 @@
         const open = show === undefined ? !el.classList.contains('is-open') : !!show;
         if (!open) {
             window.__aiAddModalEditId = null;
-            window.__aiAddSyncProvider = null;
             clearAiAddModalFeedback();
             el.classList.remove('is-open');
-            var provClose = document.getElementById('aiAddProvider');
-            if (provClose) provClose.disabled = false;
             var rootClose = document.getElementById('aiAddModalRoot');
             if (rootClose) rootClose.classList.remove('ai-add-modal--ollama-edit');
             var hintClose = document.getElementById('aiAddApiKeySavedHint');
@@ -2508,22 +2393,19 @@
                 ? (typeof t === 'function' ? t('aitest_api_key_keep_ph') : '留空则不修改已保存的密钥')
                 : (typeof t === 'function' ? t('aitest_field_api_key_ph') : 'API 密钥');
         }
-        if (!window.__aiAddModalEditId) {
-            window.__aiAddSyncProvider = null;
-            var bu0 = document.getElementById('aiAddBaseUrl');
-            if (bu0) bu0.value = '';
-            var cm0 = document.getElementById('aiAddCustomModelId');
-            if (cm0) cm0.value = '';
-        }
         function applyAddModalChrome() {
             var title = document.getElementById('aiAddModelTitle');
             var footBtn = document.getElementById('aiAddModalSubmitBtn');
             var eid = window.__aiAddModalEditId;
             var root0 = document.getElementById('aiAddModalRoot');
+            var modelIn = document.getElementById('aiAddModelId');
+            var baseIn = document.getElementById('aiAddBaseUrl');
             if (!eid) {
                 if (title) title.textContent = typeof t === 'function' ? t('aitest_add_model_title') : '添加模型';
                 if (footBtn) footBtn.textContent = typeof t === 'function' ? t('aitest_add') : '添加';
                 if (root0) root0.classList.remove('ai-add-modal--ollama-edit');
+                if (modelIn) modelIn.value = '';
+                if (baseIn) baseIn.value = '';
                 return;
             }
             var p = aiProfiles.find(function(x) { return x.id === eid; });
@@ -2536,38 +2418,18 @@
             }
             if (title) title.textContent = typeof t === 'function' ? t('aitest_edit_model_title') : '编辑模型';
             if (footBtn) footBtn.textContent = typeof t === 'function' ? t('aitest_save_profile') : '保存';
-            var prov = document.getElementById('aiAddProvider');
-            if (prov) {
-                prov.value = p.provider || '';
-                prov.disabled = true;
-            }
-            syncAiAddProviderFields();
-            var pop = document.getElementById('aiAddPopularModel');
-            var customIn = document.getElementById('aiAddCustomModelId');
-            var cmeta = providerCatalog && providerCatalog.providers && providerCatalog.providers.find(function(x) { return x.id === p.provider; });
-            if (isCustomOpenAiProvider(cmeta) && customIn && p.model_id) {
-                customIn.value = String(p.model_id).trim();
-            } else if (pop && p.model_id) {
-                var mid = String(p.model_id).trim();
-                var has = Array.prototype.some.call(pop.options, function(o) { return o.value === mid; });
-                if (!has && mid) {
-                    var opt = document.createElement('option');
-                    opt.value = mid;
-                    opt.textContent = mid;
-                    pop.appendChild(opt);
-                }
-                pop.value = mid;
-            }
+            if (modelIn) modelIn.value = String(p.model_id || '').trim();
+            if (baseIn) baseIn.value = String(p.base_url || '').trim();
             if (root0) root0.classList.toggle('ai-add-modal--ollama-edit', p.provider === 'ollama');
         }
         function afterFill() {
-            fillProviderCatalogSelects();
             applyAddModalChrome();
+            syncAiAddSimpleFields();
             if (typeof applyUiLang === 'function') applyUiLang();
             var eid = window.__aiAddModalEditId;
-            var pk = document.getElementById('aiAddApiKey');
-            if (eid && pk) {
-                pk.placeholder = typeof t === 'function' ? t('aitest_api_key_keep_ph') : '留空则不修改已保存的密钥';
+            var pk2 = document.getElementById('aiAddApiKey');
+            if (eid && pk2) {
+                pk2.placeholder = typeof t === 'function' ? t('aitest_api_key_keep_ph') : '留空则不修改已保存的密钥';
             }
             var hint = document.getElementById('aiAddApiKeySavedHint');
             var ep = eid ? aiProfiles.find(function(x) { return x.id === eid; }) : null;
@@ -2582,7 +2444,7 @@
             }
         }
         el.classList.add('is-open');
-        if (!providerCatalog || !providerCatalog.providers) {
+        if (!aiProfiles.length) {
             loadAiModels().then(afterFill).catch(function() { afterFill(); });
         } else {
             afterFill();
@@ -2617,40 +2479,35 @@
     }
 
     window.verifyAiModelProfile = async function() {
-        const prov = document.getElementById('aiAddProvider');
-        const pop = document.getElementById('aiAddPopularModel');
         const apiKey = document.getElementById('aiAddApiKey');
         const baseUrl = document.getElementById('aiAddBaseUrl');
         const statusEl = document.getElementById('aiAddVerifyStatus');
         const btn = document.getElementById('aiAddModalVerifyBtn');
         const modelId = getAiAddModelId();
         if (!modelId) {
-            alert(typeof t === 'function' ? t('aitest_need_model_pick') : (isCustomOpenAiProvider(providerCatalog && providerCatalog.providers && providerCatalog.providers.find(function(p) { return p.id === (prov && prov.value); })) ? '请填写自定义模型 ID' : '请从列表中选择模型'));
+            alert(typeof t === 'function' ? t('aitest_need_model_id') : '请填写模型名称');
             return;
         }
         const editId = window.__aiAddModalEditId;
         const keyTrim = apiKey ? String(apiKey.value || '').trim() : '';
-        if (!editId && !keyTrim) {
-            alert('请先填写 API 密钥后再进行连接测试');
+        const buTrim = baseUrl ? String(baseUrl.value || '').trim() : '';
+        const isOllama = isAiAddOllamaMode();
+        if (!editId && !isOllama && !keyTrim) {
+            alert(typeof t === 'function' ? t('aitest_need_api_key') : '请先填写 API 密钥后再进行连接测试');
             return;
         }
-        var zProvV = providerCatalog && providerCatalog.providers && prov && providerCatalog.providers.find(function(p) { return p.id === prov.value; });
-        if (isCustomOpenAiProvider(zProvV)) {
-            var buV = baseUrl ? String(baseUrl.value || '').trim() : '';
-            if (!buV) {
-                alert('第三方 / 代理需填写代理商提供的 Base URL');
-                return;
-            }
+        if (/^tp-/i.test(keyTrim) && !buTrim) {
+            alert(typeof t === 'function' ? t('aitest_proxy_key_need_base') : '检测到代理 Key，请同时填写代理商提供的 Base URL。');
+            return;
         }
         const body = { model_id: modelId };
         if (editId) {
             body.profile_id = editId;
             if (keyTrim) body.api_key = keyTrim;
-            if (baseUrl && baseUrl.value.trim()) body.base_url = baseUrl.value.trim();
+            if (buTrim) body.base_url = buTrim;
         } else {
-            body.provider = prov && prov.value;
-            body.api_key = keyTrim;
-            if (baseUrl && baseUrl.value.trim()) body.base_url = baseUrl.value.trim();
+            if (keyTrim) body.api_key = keyTrim;
+            if (buTrim) body.base_url = buTrim;
         }
         var verifySeq = (window.__aiAddVerifySeq || 0) + 1;
         window.__aiAddVerifySeq = verifySeq;
@@ -2694,26 +2551,26 @@
     };
 
     window.submitAiAddModel = async function() {
-        const prov = document.getElementById('aiAddProvider');
-        const pop = document.getElementById('aiAddPopularModel');
         const apiKey = document.getElementById('aiAddApiKey');
         const baseUrl = document.getElementById('aiAddBaseUrl');
         const footBtn = document.getElementById('aiAddModalSubmitBtn');
         const modelId = getAiAddModelId();
         if (!modelId) {
-            alert('请填写或选择模型');
+            alert(typeof t === 'function' ? t('aitest_need_model_id') : '请填写模型名称');
             return;
-        }
-        var zProv = providerCatalog && providerCatalog.providers && prov && providerCatalog.providers.find(function(p) { return p.id === prov.value; });
-        if (isCustomOpenAiProvider(zProv)) {
-            var buTrim = baseUrl ? String(baseUrl.value || '').trim() : '';
-            if (!buTrim) {
-                alert('第三方 / 代理需填写代理商提供的 Base URL');
-                return;
-            }
         }
         const editId = window.__aiAddModalEditId;
         const keyTrim = apiKey ? String(apiKey.value || '').trim() : '';
+        const buTrim = baseUrl ? String(baseUrl.value || '').trim() : '';
+        const isOllama = isAiAddOllamaMode();
+        if (!editId && !isOllama && !keyTrim) {
+            alert(typeof t === 'function' ? t('aitest_need_api_key') : '请填写 API 密钥');
+            return;
+        }
+        if (/^tp-/i.test(keyTrim) && !buTrim) {
+            alert(typeof t === 'function' ? t('aitest_proxy_key_need_base') : '检测到代理 Key，请同时填写代理商提供的 Base URL。');
+            return;
+        }
         var prevTxt = footBtn ? footBtn.textContent : '';
         if (footBtn) {
             if (footBtn.dataset.submitting === '1') return;
@@ -2725,7 +2582,7 @@
                 const body = {
                     profile_id: editId,
                     model_id: modelId,
-                    base_url: baseUrl ? baseUrl.value.trim() : '',
+                    base_url: buTrim,
                 };
                 if (keyTrim) body.api_key = keyTrim;
                 const resp = await fetch('/api/ai/models/profile', {
@@ -2738,12 +2595,11 @@
                 if (!resp.ok || !data.success) throw new Error(data.error || ('HTTP ' + resp.status));
             } else {
                 const body = {
-                    provider: prov && prov.value,
                     model_type: AI_PROFILE_DEFAULT_MODEL_TYPE,
                     model_id: modelId,
                     api_key: keyTrim,
-                    base_url: baseUrl ? baseUrl.value.trim() : '',
-                    verify_ollama: !!(prov && prov.value === 'ollama'),
+                    base_url: buTrim,
+                    verify_ollama: isOllama,
                 };
                 const resp = await fetch('/api/ai/models', {
                     method: 'POST',
@@ -3937,14 +3793,10 @@
                 if (typeof aiGeneratePreview === 'function') aiGeneratePreview();
             }
         });
-        var ap = document.getElementById('aiAddProvider');
-        if (ap) ap.addEventListener('change', syncAiAddProviderFields);
         var abu = document.getElementById('aiAddBaseUrl');
-        if (abu) abu.addEventListener('input', function() { syncAiAddBaseUrlMismatchHint(); syncThirdPartyKeyHint(); });
+        if (abu) abu.addEventListener('input', syncAiAddSimpleFields);
         var apk = document.getElementById('aiAddApiKey');
-        if (apk) apk.addEventListener('input', syncThirdPartyKeyHint);
-        var apm = document.getElementById('aiAddPopularModel');
-        if (apm) apm.addEventListener('change', syncAiAddModelDeprecationHint);
+        if (apk) apk.addEventListener('input', syncAiAddSimpleFields);
         var verifyBtn = document.getElementById('aiAddModalVerifyBtn');
         if (verifyBtn) {
             verifyBtn.addEventListener('click', function(ev) {

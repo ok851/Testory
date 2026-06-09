@@ -251,6 +251,60 @@ def _fill_text_compare_equal(expected: Optional[str], actual: Optional[str]) -> 
     )
 
 
+_EMPTY_INPUT_DESC_MARKERS = (
+    "留空",
+    "为空",
+    "清空",
+    "不填",
+    "空账号",
+    "空密码",
+    "空白",
+    "leave empty",
+    "leave blank",
+    "empty field",
+    "clear field",
+)
+
+
+def step_description_implies_empty_input(description: Optional[str]) -> bool:
+    """步骤描述是否明确表示「输入框留空」。"""
+    desc = (description or "").strip()
+    if not desc:
+        return False
+    low = desc.lower()
+    for marker in _EMPTY_INPUT_DESC_MARKERS:
+        if marker in desc or marker.lower() in low:
+            return True
+    return False
+
+
+def resolve_fill_step_text(step: dict) -> str:
+    """解析 fill/input 步骤文本；空字符串表示清空输入框。"""
+    if not isinstance(step, dict):
+        return ""
+    if "text" in step:
+        val = step.get("text")
+    elif "input_value" in step:
+        val = step.get("input_value")
+    else:
+        val = None
+    if val is None:
+        if step_description_implies_empty_input(step.get("description")):
+            return ""
+        raise Exception(
+            "填充步骤缺少输入值（若需留空请保持输入值为空并在描述中注明「留空」）"
+        )
+    return str(val)
+
+
+def resolve_fill_step_selector(step: dict) -> str:
+    selector = step.get("selector") or step.get("selector_value") or ""
+    selector = str(selector).strip()
+    if not selector:
+        raise Exception("填充步骤缺少选择器参数")
+    return selector
+
+
 _URL_RE = re.compile(
     r'^https?://'
     r'(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}'
@@ -454,6 +508,15 @@ def _normalize_locator_candidate_list(raw: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _batch_case_gap_seconds() -> float:
+    """批量用例之间的间隔（秒），默认 150ms，可通过 UAT_BATCH_CASE_GAP_MS 调整。"""
+    try:
+        ms = int(os.environ.get("UAT_BATCH_CASE_GAP_MS", "150") or 150)
+    except (TypeError, ValueError):
+        ms = 150
+    return max(0.0, min(float(ms), 5000.0)) / 1000.0
+
+
 def parse_platform_scroll_input_value(input_value: Optional[str]) -> Dict[str, int]:
     """解析步骤里滚动距离的存储格式 up:a,down:b,left:c,right:d（与 list_steps 编辑页一致）。"""
     vals: Dict[str, int] = {"up": 0, "down": 0, "left": 0, "right": 0}
@@ -571,6 +634,31 @@ class PlaywrightAutomation:
         self._captcha_scope_locator = None  # verify 步骤用户拾取元素
         self._captcha_widget_locator = None  # 向上解析的验证码组件根（提示/滑块/刷新）
         self._captcha_max_attempts: Optional[int] = None  # 步骤级最大验证次数
+        self._case_run_hint: Dict[str, Any] = {}
+
+    def set_case_run_hint(
+        self,
+        *,
+        case_name: str = "",
+        step_descriptions: Optional[List[str]] = None,
+    ) -> None:
+        """单用例执行前注入用例名/步骤描述，供登录后校验识别负向登录场景。"""
+        self._case_run_hint = {
+            "case_name": (case_name or "").strip(),
+            "step_descriptions": [str(d or "") for d in (step_descriptions or [])],
+        }
+
+    def _intentional_login_failure_expected(self) -> bool:
+        try:
+            from auth_batch_helpers import login_failure_expected_for_case
+
+            hint = getattr(self, "_case_run_hint", None) or {}
+            return login_failure_expected_for_case(
+                hint.get("case_name") or "",
+                hint.get("step_descriptions"),
+            )
+        except Exception:
+            return False
 
     async def _bind_captcha_scope(self, user_element) -> None:
         """将后续验证码操作限定在用户拾取元素及其组件容器内。"""
@@ -2713,6 +2801,205 @@ class PlaywrightAutomation:
             uat_logger.debug("[WEB_CAPTURE_CDP] click fallback: %s", ex)
             return False
 
+    _LOGIN_SUBMIT_PREFERRED_SELECTORS = (
+        "button#submit-btn",
+        "#submit-btn",
+        "[id='submit-btn']",
+        "button.login-btn",
+    )
+
+    @staticmethod
+    def _is_login_submit_click(selector: str, selector_type: str = "css") -> bool:
+        sel = (selector or "").lower()
+        if selector_type == "text" and "登录" in (selector or ""):
+            return True
+        if selector_type == "xpath" and "登录" in (selector or ""):
+            return True
+        return any(
+            tok in sel
+            for tok in ("login-btn", "login_btn", "btn-login", "signin", "sign-in", "submit", "登录")
+        )
+
+    @staticmethod
+    def _is_generic_login_submit_selector(selector: str) -> bool:
+        """泛化 submit/login-btn 选择器易点到错误按钮；应优先 #submit-btn。"""
+        sel = (selector or "").lower()
+        if "submit-btn" in sel:
+            return False
+        return any(
+            tok in sel
+            for tok in ("submit", "login-btn", "login_btn", "btn-login", "signin", "sign-in")
+        )
+
+    async def _try_login_submit_fallback_click(
+        self, target_context, original_selector: str = "", *, skip_if_in_selector: bool = True
+    ) -> bool:
+        """登录按钮专用降级：优先站点真实 id（如 #submit-btn），再 role/text。"""
+        sel_low = (original_selector or "").lower()
+        for fb in self._LOGIN_SUBMIT_PREFERRED_SELECTORS:
+            fb_key = fb.lower().replace("'", '"')
+            if skip_if_in_selector and fb_key in sel_low:
+                continue
+            try:
+                loc = target_context.locator(fb)
+                cnt = await loc.count()
+                if cnt == 0:
+                    continue
+                for i in range(min(cnt, 3)):
+                    el = loc.nth(i)
+                    if not await el.is_visible():
+                        continue
+                    await el.click(timeout=8000)
+                    uat_logger.info("✅ [CLICK_DEBUG] 登录按钮 fallback %s 点击成功", fb)
+                    return True
+            except Exception as ex:
+                uat_logger.debug("[CLICK_DEBUG] 登录 fallback %s 失败: %s", fb, ex)
+        if hasattr(target_context, "get_by_role"):
+            try:
+                btn = target_context.get_by_role("button", name=re.compile(r"登录"))
+                if await btn.count() > 0 and await btn.first.is_visible():
+                    await btn.first.click(timeout=8000)
+                    uat_logger.info("✅ [CLICK_DEBUG] 登录按钮 role=button name=登录 点击成功")
+                    return True
+            except Exception as ex:
+                uat_logger.debug("[CLICK_DEBUG] 登录 role fallback 失败: %s", ex)
+        return False
+
+    async def _page_shows_logged_in(self, page) -> bool:
+        """已登录正向信号（SPA 登录成功后 DOM 里可能仍残留 password input）。"""
+        menu_sel = (
+            "aside nav, .el-menu, .ant-menu, [class*='sidebar'], "
+            "[class*='Sidebar'], .side-menu, .layout-sidebar"
+        )
+        try:
+            loc = page.locator(menu_sel)
+            cnt = await loc.count()
+            for i in range(min(cnt, 8)):
+                if await loc.nth(i).is_visible():
+                    uat_logger.info("✅ [LOGIN_VERIFY] 检测到侧栏/菜单，视为已登录")
+                    return True
+        except Exception:
+            pass
+        for txt in ("退出", "舆情", "首页"):
+            try:
+                loc = page.get_by_text(txt, exact=False)
+                if await loc.count() > 0 and await loc.first.is_visible():
+                    uat_logger.info("✅ [LOGIN_VERIFY] 检测到页面文案 %r，视为已登录", txt)
+                    return True
+            except Exception:
+                pass
+        return False
+
+    async def _login_form_still_prominent(self, page) -> bool:
+        """仅当密码框与登录按钮同时仍可见时，才认为仍在登录页。"""
+        pw_visible = False
+        try:
+            pw = page.locator(
+                "input[type='password'], input[name='password'], input[name='pwd'], "
+                "input[placeholder*='密码']"
+            )
+            cnt = await pw.count()
+            for i in range(min(cnt, 5)):
+                if await pw.nth(i).is_visible():
+                    pw_visible = True
+                    break
+        except Exception:
+            return False
+        if not pw_visible:
+            return False
+        login_visible = False
+        for sel in ("#submit-btn", "button#submit-btn", ".login-btn", "button[type='submit']"):
+            try:
+                loc = page.locator(sel)
+                if await loc.count() > 0 and await loc.first.is_visible():
+                    login_visible = True
+                    break
+            except Exception:
+                pass
+        if not login_visible:
+            try:
+                btn = page.get_by_role("button", name=re.compile(r"登录"))
+                if await btn.count() > 0 and await btn.first.is_visible():
+                    login_visible = True
+            except Exception:
+                pass
+        return pw_visible and login_visible
+
+    async def _page_shows_login_error_hint(self, page) -> bool:
+        """登录失败常见 toast/文案（负向用例点击后常出现）。"""
+        for kw in ("错误", "失败", "不正确", "无效", "不能为空", "请输入", "账号或密码"):
+            try:
+                loc = page.get_by_text(kw, exact=False)
+                cnt = await loc.count()
+                for i in range(min(cnt, 6)):
+                    if await loc.nth(i).is_visible():
+                        uat_logger.info("✅ [LOGIN_VERIFY] 检测到登录错误提示 %r", kw)
+                        return True
+            except Exception:
+                pass
+        return False
+
+    async def _verify_login_submit_after_click(
+        self,
+        page,
+        prev_url: str,
+        selector: str,
+        selector_type: str = "css",
+    ) -> None:
+        """登录类点击后校验：轮询已登录信号；勿仅凭 password 仍可见就判失败。"""
+        if page is None or not self._is_login_submit_click(selector, selector_type):
+            return
+        if os.environ.get("UAT_LOGIN_CLICK_VERIFY", "1").strip().lower() in (
+            "0",
+            "false",
+            "off",
+            "no",
+        ):
+            return
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=8000)
+        except Exception:
+            pass
+        try:
+            await page.wait_for_load_state("networkidle", timeout=12000)
+        except Exception:
+            pass
+        wait_ms = int(os.environ.get("UAT_LOGIN_VERIFY_WAIT_MS", "8000") or "8000")
+        poll_ms = 400
+        elapsed = 0
+        while elapsed < wait_ms:
+            if await self._page_shows_logged_in(page):
+                return
+            if await self._page_shows_login_error_hint(page):
+                uat_logger.info("✅ [LOGIN_VERIFY] 出现登录错误提示，负向登录用例继续")
+                return
+            if not await self._login_form_still_prominent(page):
+                uat_logger.info("✅ [LOGIN_VERIFY] 登录表单已不可见，视为登录成功")
+                return
+            await page.wait_for_timeout(poll_ms)
+            elapsed += poll_ms
+        if await self._login_form_still_prominent(page):
+            if await self._page_shows_login_error_hint(page):
+                return
+            if self._intentional_login_failure_expected():
+                uat_logger.warning(
+                    "⚠️ [LOGIN_VERIFY] 负向登录用例：登录未成功属预期，交由后续 assert 步骤校验"
+                )
+                return
+            raise Exception(
+                "登录点击后仍停留在登录页（密码框与登录按钮仍可见），登录可能未真正完成，"
+                "请检查登录按钮选择器或账号密码"
+            )
+        try:
+            new_url = page.url or ""
+            if prev_url and new_url == prev_url:
+                uat_logger.warning(
+                    "⚠️ [CLICK_DEBUG] 登录点击后 URL 未变化: %s（SPA 站点可能正常）",
+                    new_url[:120],
+                )
+        except Exception:
+            pass
+
     async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None):
         """点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）。
         locator_candidates: 录制器生成的 JSON 或列表，主选择器失败时按 score 降级重试。"""
@@ -2769,6 +3056,13 @@ class PlaywrightAutomation:
             raise Exception(f"操作上下文为None,无法执行点击操作")
         
         element_clicked = False
+
+        if (
+            self._is_login_submit_click(selector, selector_type)
+            and self._is_generic_login_submit_selector(selector)
+        ):
+            if await self._try_login_submit_fallback_click(target_context, selector):
+                element_clicked = True
 
         # partial_text：与 Codegen getByText 一致，优先用 Playwright 文本定位（可命中子 span，
         # 并在 Element Plus 等场景下由引擎选择可点击目标）；避免 //*[contains(...)] 点到不可交互节点。
@@ -3239,6 +3533,36 @@ class PlaywrightAutomation:
                     uat_logger.info(
                         "[TIER2/3] 当前为 iframe 内步骤，跳过视觉/坐标降级（模板与比例基于顶层视口）"
                     )
+            if not element_clicked and self._is_login_submit_click(selector, selector_type):
+                if await self._try_login_submit_fallback_click(
+                    target_context, selector, skip_if_in_selector=False
+                ):
+                    element_clicked = True
+            if not element_clicked and "登录" in (selector or ""):
+                try:
+                    login_loc = target_page.get_by_role(
+                        "button", name=re.compile(r"登录")
+                    )
+                    if await login_loc.count() > 0 and await login_loc.first.is_visible():
+                        await login_loc.first.click(timeout=8000)
+                        uat_logger.info("✅ [CLICK_DEBUG] 登录按钮 role=button 降级点击成功")
+                        element_clicked = True
+                except Exception as _login_role:
+                    uat_logger.debug("[CLICK_DEBUG] 登录 role 降级失败: %s", _login_role)
+            if not element_clicked:
+                sel_low = (selector or "").lower()
+                if any(
+                    tok in sel_low
+                    for tok in ("login-btn", "login_btn", "submit", "btn-login", "signin", "sign-in", "登录")
+                ):
+                    try:
+                        login_loc = target_page.get_by_text("登录", exact=False)
+                        if await login_loc.count() > 0:
+                            await login_loc.first.click(timeout=8000)
+                            uat_logger.info("✅ [CLICK_DEBUG] 登录按钮 text=登录 降级点击成功")
+                            element_clicked = True
+                    except Exception as _login_fb:
+                        uat_logger.debug("[CLICK_DEBUG] 登录 text 降级失败: %s", _login_fb)
             if not element_clicked:
                 raise Exception(f"无法点击元素: {selector}, 选择器类型: {selector_type}, 所有点击方式均失败")
         
@@ -3250,6 +3574,10 @@ class PlaywrightAutomation:
                 uat_logger.info(f"🔄 [CLICK_DEBUG] 检测到页面URL变化: {current_url} -> {new_url}")
         except Exception as e:
             uat_logger.warning(f"🔍 [CLICK_DEBUG] 获取点击后URL失败: {str(e)}")
+        
+        await self._verify_login_submit_after_click(
+            target_page, current_url, selector, selector_type
+        )
         
         # 单选框和复选框点击后状态验证
         try:
@@ -4899,6 +5227,7 @@ class PlaywrightAutomation:
         page=None,
         locator_candidates=None,
         _no_fallback: bool = False,
+        wait_timeout_ms: int = 5000,
     ) -> str:
         """提取特定元素的文本，支持多种定位方式。page: 可选，指定在哪个标签页执行（多标签并行时使用）
         Parameters:
@@ -4927,7 +5256,7 @@ class PlaywrightAutomation:
             for esel, etype in attempts:
                 try:
                     return await self.extract_element_text(
-                        esel, etype, iframe_selector, iframe_context, page, None, True
+                        esel, etype, iframe_selector, iframe_context, page, None, True, wait_timeout_ms
                     )
                 except Exception as e:
                     last_exc = e
@@ -5001,7 +5330,8 @@ class PlaywrightAutomation:
             # Add strict waiting mechanism
             try:
                 # Try to wait for element to exist (not required to be visible)
-                await element.wait_for(state="attached", timeout=5000)
+                wait_ms = max(1000, int(wait_timeout_ms or 5000))
+                await element.wait_for(state="attached", timeout=wait_ms)
             except Exception as e:
                 uat_logger.error(f"📝 [TEXT_EXTRACT_DEBUG] Waiting for element existence timed out: {e}")
                 raise Exception(f"等待元素超时: {selector}")
@@ -8560,8 +8890,12 @@ class PlaywrightAutomation:
             raise Exception(f"读取页面文本失败: {e}") from e
         actual = actual.strip()
         if ctype == "page_text_equals":
-            if actual != exp:
-                raise Exception(f"整页文本断言失败(equals): 实际长度={len(actual)} 预期长度={len(exp)}")
+            from auth_batch_helpers import page_text_has_exact_snippet
+
+            if not page_text_has_exact_snippet(actual, exp):
+                raise Exception(
+                    f"整页文本断言失败(equals): 页面未出现与预期完全一致的文案 {exp!r}"
+                )
         elif ctype == "page_text_contains":
             if exp and exp not in actual:
                 raise Exception(
@@ -8702,8 +9036,12 @@ class PlaywrightAutomation:
             {
                 "status": "success",
                 "step": step,
+                "step_id": step.get("id"),
                 "api_status_code": out.get("status_code"),
+                "api_elapsed_ms": out.get("elapsed_ms"),
+                "api_response_headers": out.get("response_headers") or {},
                 "api_response_preview": preview[:1500],
+                "assert_message": out.get("assert_message"),
             }
         ]
 
@@ -9413,8 +9751,14 @@ class PlaywrightAutomation:
                     continue
                 elif action == "assert":
                     selector = (step.get("selector") or "").strip()
-                    ctype = (step.get("compare_type") or "text_contains").strip().lower()
                     expected = (step.get("input_value") or step.get("text") or "").strip()
+                    from auth_batch_helpers import normalize_assert_compare_type
+
+                    ctype = normalize_assert_compare_type(
+                        step.get("compare_type"),
+                        selector_value=selector,
+                        input_value=expected,
+                    )
                     uat_logger.info(f"🔍 [ASSERT_DEBUG] assert 步骤 type={ctype} selector={selector!r} expected={expected[:120]!r}")
                     if ctype in ("url_equals", "url_contains"):
                         url = target_page.url if target_page else ""
@@ -9565,6 +9909,7 @@ class PlaywrightAutomation:
             "failed_cases": 0,
             "case_results": []
         }
+        self._batch_run_snapshot = all_results
         
         # 确保浏览器已启动
         browser_need_start = False
@@ -9680,7 +10025,13 @@ class PlaywrightAutomation:
                     exec_step["selector_type"] = step.get("selector_type", "css")
                     exec_step["iframe_selector"] = step.get("iframe_selector")
                     exec_step["input_value"] = step.get("input_value", "")
-                    exec_step["compare_type"] = step.get("compare_type", "text_contains")
+                    from auth_batch_helpers import normalize_assert_compare_type
+
+                    exec_step["compare_type"] = normalize_assert_compare_type(
+                        step.get("compare_type"),
+                        selector_value=step.get("selector_value", "") or "",
+                        input_value=step.get("input_value", "") or "",
+                    )
                 if step.get("description"):
                     exec_step["description"] = step["description"]
                 from step_executor import enrich_execution_step
@@ -9712,17 +10063,73 @@ class PlaywrightAutomation:
             else:
                 all_results["case_results"].append(result)
                 all_results["failed_cases"] += 1
+
+        def record_batch_case_history(
+            case_id: int,
+            case_name: str,
+            status: str,
+            error_msg: str,
+            duration: float = 0.0,
+            project_id=None,
+            invoke_failure: bool = True,
+        ) -> Optional[int]:
+            run_history_id = None
+            try:
+                run_history_id = db.create_run_history(
+                    case_id,
+                    status,
+                    round(max(0.0, duration), 2),
+                    error_msg or "",
+                    "",
+                    "",
+                )
+            except Exception as db_error:
+                uat_logger.error(f"❌ [MULTI_CASE] 保存用例 {case_id} 运行历史失败: {db_error}")
+            if invoke_failure and status in ("error", "stopped"):
+                self._invoke_on_case_failure({
+                    "case_id": case_id,
+                    "case_name": case_name,
+                    "project_id": project_id,
+                    "status": status,
+                    "error": error_msg or "用例执行失败",
+                    "run_history_id": run_history_id,
+                    "step_results": [],
+                    "execution_time": round(max(0.0, duration), 2),
+                })
+            return run_history_id
         
         # 🔥 精简执行前日志
         uat_logger.info(f"🎯 [SERIAL_MULTI_CASE] 开始执行用例序列")
         
         # 执行顺序追踪
         actual_execution_order = []
-        
         for index, case_id in enumerate(case_ids):
             stop_checker = getattr(self, "_external_stop_checker", None)
             if callable(stop_checker) and stop_checker():
                 uat_logger.warning("🛑 [SERIAL_MULTI_CASE] 检测到外部停止请求，终止批量执行")
+                for skipped_id in case_ids[index:]:
+                    skipped_info = db.get_test_case_v2(skipped_id) or {}
+                    skipped_name = skipped_info.get("name") or "未知"
+                    stop_msg = "用户已停止批量执行，该用例未执行"
+                    rh = record_batch_case_history(
+                        skipped_id,
+                        skipped_name,
+                        "stopped",
+                        stop_msg,
+                        0.0,
+                        project_id=skipped_info.get("project_id"),
+                        invoke_failure=False,
+                    )
+                    process_case_result(
+                        {
+                            "case_id": skipped_id,
+                            "case_name": skipped_name,
+                            "status": "stopped",
+                            "error": stop_msg,
+                            "run_history_id": rh,
+                        },
+                        skipped_id,
+                    )
                 break
             case_number = index + 1
             actual_execution_order.append(case_id)
@@ -9732,26 +10139,19 @@ class PlaywrightAutomation:
 
             case_probe = db.get_test_case_v2(case_id)
             if not case_probe:
+                err_msg = f"测试用例不存在,ID: {case_id}"
+                rh = record_batch_case_history(
+                    case_id, "未知", "error", err_msg, time.time() - case_start_time
+                )
                 process_case_result(
                     {
                         "case_id": case_id,
                         "case_name": "未知",
                         "status": "error",
-                        "error": f"测试用例不存在,ID: {case_id}",
+                        "error": err_msg,
+                        "run_history_id": rh,
                     },
                     case_id,
-                )
-                self._invoke_on_case_failure(
-                    {
-                        "case_id": case_id,
-                        "case_name": "未知",
-                        "project_id": None,
-                        "status": "error",
-                        "error": f"测试用例不存在,ID: {case_id}",
-                        "run_history_id": None,
-                        "step_results": [],
-                        "execution_time": None,
-                    }
                 )
                 continue
             if (case_probe.get("case_type") or "ui").strip().lower() == "api":
@@ -9766,14 +10166,39 @@ class PlaywrightAutomation:
             
             # 🔥 性能优化：轻量级用例环境准备（复用 context，只创建新 page）
             try:
-                # 关闭旧页面（如果有），使用轻量方式
-                if self.page:
+                from auth_batch_helpers import _case_role
+
+                batch_case_role = _case_role(case_probe) if case_probe else "business"
+                needs_fresh_session = batch_case_role == "login_feature"
+
+                if needs_fresh_session:
+                    runtime_vars.pop("session_ready", None)
                     try:
-                        await self.page.close()
+                        if self.page:
+                            await self.page.close()
                     except Exception:
                         pass
                     finally:
                         self.page = None
+                    try:
+                        if self.context:
+                            await self.context.close()
+                    except Exception:
+                        pass
+                    finally:
+                        self.context = None
+                    uat_logger.info(
+                        f"🔄 [SERIAL_MULTI_CASE] 用例 {case_id} 为登录功能用例，已重置浏览器会话"
+                    )
+                else:
+                    # 关闭旧页面（如果有），使用轻量方式
+                    if self.page:
+                        try:
+                            await self.page.close()
+                        except Exception:
+                            pass
+                        finally:
+                            self.page = None
 
                 # 检查浏览器连接是否有效（仅在首个用例或异常后检查）
                 browser_alive = False
@@ -9788,20 +10213,20 @@ class PlaywrightAutomation:
                         await self.start_browser()
                     except Exception as restart_error:
                         uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 浏览器重启失败: {str(restart_error)}")
+                        err_msg = f"浏览器重启失败: {str(restart_error)}"
+                        cname = (case_probe or {}).get("name") or "未知"
+                        rh = record_batch_case_history(
+                            case_id,
+                            cname,
+                            "error",
+                            err_msg,
+                            time.time() - case_start_time,
+                            project_id=(case_probe or {}).get("project_id"),
+                        )
                         process_case_result({
-                            "case_id": case_id, "case_name": "未知",
-                            "status": "error", "error": f"浏览器重启失败: {str(restart_error)}"
+                            "case_id": case_id, "case_name": cname,
+                            "status": "error", "error": err_msg, "run_history_id": rh,
                         }, case_id)
-                        self._invoke_on_case_failure({
-                            "case_id": case_id,
-                            "case_name": "未知",
-                            "project_id": None,
-                            "status": "error",
-                            "error": f"浏览器重启失败: {str(restart_error)}",
-                            "run_history_id": None,
-                            "step_results": [],
-                            "execution_time": None,
-                        })
                         continue
                 else:
                     # 🔥 性能优化：复用 context，避免每个用例都重建上下文
@@ -9816,21 +10241,26 @@ class PlaywrightAutomation:
                             self.context = await self.browser.new_context(ignore_https_errors=True, no_viewport=True)
                         except Exception as ctx_error:
                             uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 创建context失败: {str(ctx_error)}")
+                            err_msg = f"创建浏览器上下文失败: {str(ctx_error)}"
+                            cname = (case_probe or {}).get("name") or "未知"
+                            rh = record_batch_case_history(
+                                case_id,
+                                cname,
+                                "error",
+                                err_msg,
+                                time.time() - case_start_time,
+                                project_id=(case_probe or {}).get("project_id"),
+                            )
                             process_case_result({
-                                "case_id": case_id, "case_name": "未知",
-                                "status": "error", "error": f"创建浏览器上下文失败: {str(ctx_error)}"
+                                "case_id": case_id, "case_name": cname,
+                                "status": "error", "error": err_msg, "run_history_id": rh,
                             }, case_id)
-                            self._invoke_on_case_failure({
-                                "case_id": case_id,
-                                "case_name": "未知",
-                                "project_id": None,
-                                "status": "error",
-                                "error": f"创建浏览器上下文失败: {str(ctx_error)}",
-                                "run_history_id": None,
-                                "step_results": [],
-                                "execution_time": None,
-                            })
                             continue
+
+                if self.context is None:
+                    self.context = await self.browser.new_context(
+                        ignore_https_errors=True, no_viewport=True
+                    )
 
                 # 在复用的 context 中创建新页面
                 self.page = await self.context.new_page()
@@ -9838,52 +10268,73 @@ class PlaywrightAutomation:
                 uat_logger.info(f"✅ [SERIAL_MULTI_CASE] 用例 {case_id} 新页面就绪")
             except Exception as e:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 环境准备失败: {str(e)}")
+                err_msg = f"准备执行环境失败: {str(e)}"
+                cname = (case_probe or {}).get("name") or "未知"
+                rh = record_batch_case_history(
+                    case_id,
+                    cname,
+                    "error",
+                    err_msg,
+                    time.time() - case_start_time,
+                    project_id=(case_probe or {}).get("project_id"),
+                )
                 process_case_result({
-                    "case_id": case_id, "case_name": "未知",
-                    "status": "error", "error": f"准备执行环境失败: {str(e)}"
+                    "case_id": case_id, "case_name": cname,
+                    "status": "error", "error": err_msg, "run_history_id": rh,
                 }, case_id)
-                self._invoke_on_case_failure({
-                    "case_id": case_id,
-                    "case_name": "未知",
-                    "project_id": None,
-                    "status": "error",
-                    "error": f"准备执行环境失败: {str(e)}",
-                    "run_history_id": None,
-                    "step_results": [],
-                    "execution_time": None,
-                })
                 continue
             
             try:
                 case_start_time = time.time()
                 case_info = db.get_test_case_v2(case_id)
                 if not case_info:
+                    err_msg = f"测试用例不存在,ID: {case_id}"
+                    rh = record_batch_case_history(
+                        case_id, "未知", "error", err_msg, time.time() - case_start_time
+                    )
                     process_case_result({
                         "case_id": case_id,
                         "case_name": "未知",
                         "status": "error",
-                        "error": f"测试用例不存在,ID: {case_id}"
+                        "error": err_msg,
+                        "run_history_id": rh,
                     }, case_id)
-                    self._invoke_on_case_failure({
-                        "case_id": case_id,
-                        "case_name": "未知",
-                        "project_id": None,
-                        "status": "error",
-                        "error": f"测试用例不存在,ID: {case_id}",
-                        "run_history_id": None,
-                        "step_results": [],
-                        "execution_time": None,
-                    })
                     continue
                 case_name = case_info.get("name", "未命名用例")
                 # 🔥 修复：获取所有步骤而不是分页的10个步骤
                 steps = db.get_case_steps(case_id, page=1, page_size=9999)
+                from auth_batch_helpers import prepare_steps_for_execution
+
+                steps, _rpw = prepare_steps_for_execution(
+                    steps or [],
+                    (case_info.get("url") or "").strip(),
+                )
+                for w in _rpw or []:
+                    uat_logger.warning("批量运行时 LIVE 步骤修复: %s", w)
+                try:
+                    self.set_case_run_hint(
+                        case_name=case_name,
+                        step_descriptions=[
+                            str(s.get("description") or "") for s in (steps or [])
+                        ],
+                    )
+                except Exception:
+                    pass
                 if not steps:
+                    warn_dur = round(max(0.0, time.time() - case_start_time), 2)
+                    run_history_id = None
+                    try:
+                        run_history_id = db.create_run_history(
+                            case_id, "warning", warn_dur, "测试用例没有步骤", "", ""
+                        )
+                    except Exception as db_error:
+                        uat_logger.error(f"❌ [MULTI_CASE] 保存空步骤用例历史失败: {db_error}")
                     process_case_result({
                         "case_id": case_id,
                         "case_name": case_name,
                         "status": "warning",
-                        "warning": "测试用例没有步骤"
+                        "warning": "测试用例没有步骤",
+                        "run_history_id": run_history_id,
                     }, case_id)
                     continue
                 execution_steps = build_execution_steps(steps)
@@ -9934,62 +10385,66 @@ class PlaywrightAutomation:
 
                 # 直接执行用例步骤，不使用全局超时
                 try:
-                    case_results = await self._execute_case_steps(execution_steps)
-                    uat_logger.info(f"✅ [MULTI_CASE] 用例 {case_id} 执行完成，共执行了 {len(case_results)} 个步骤结果")
-                    # 🔥 修复：用例级计时结束，确保计时时间准确
+                    exec_out = await self._execute_case_steps(execution_steps)
+                    case_results = exec_out.get("step_results") or []
+                    steps_completed = int(exec_out.get("steps_completed") or 0)
+                    total_planned_steps = int(exec_out.get("total_steps") or len(execution_steps))
+                    uat_logger.info(
+                        f"✅ [MULTI_CASE] 用例 {case_id} 执行完成，"
+                        f"步骤 {steps_completed}/{total_planned_steps}，结果条目 {len(case_results)}"
+                    )
                     case_end_time = time.time()
                     case_duration = case_end_time - case_start_time
                 except Exception as e:
                     uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 执行异常: {str(e)}")
                     case_results = [{"status": "error", "step": None, "error": str(e)}]
-                    # 🔥 修复：在异常情况下也计算时间
+                    steps_completed = 0
+                    total_planned_steps = len(execution_steps)
                     case_end_time = time.time()
                     case_duration = case_end_time - case_start_time
-                # 🔥 精简状态判断日志
-                if len(case_results) < len(execution_steps):
-                    case_status = "error"
-                    extracted_text = ""
-                    success_count = sum(1 for r in case_results if r.get("status") == "success")
-                    error_count = sum(1 for r in case_results if r.get("status") == "error")
-                else:
-                    # 原有的状态判断逻辑
-                    success_count = sum(1 for r in case_results if r.get("status") == "success")
-                    error_count = sum(1 for r in case_results if r.get("status") == "error")
-                    
-                    # 🔥 关键修复：在 else 分支中也定义 extracted_text
-                    extracted_text = ""
-                    for r in case_results:
-                        if r.get("extracted_text"):
-                            extracted_text = r.get("extracted_text")
-                    
-                    case_status = "success" if error_count == 0 else "error"
+
+                from auth_batch_helpers import evaluate_batch_case_status, summarize_batch_case_error
+
+                success_count = sum(1 for r in case_results if (r or {}).get("status") == "success")
+                error_count = sum(1 for r in case_results if (r or {}).get("status") == "error")
+                extracted_text = ""
+                for r in case_results:
+                    if (r or {}).get("extracted_text"):
+                        extracted_text = (r or {}).get("extracted_text")
+
+                case_status = evaluate_batch_case_status(
+                    case_results,
+                    total_steps=total_planned_steps,
+                    steps_completed=steps_completed,
+                )
+                history_error = ""
+                if case_status != "success":
+                    history_error = summarize_batch_case_error(
+                        case_results,
+                        total_steps=total_planned_steps,
+                        steps_completed=steps_completed,
+                    )
+
                 run_history_id = None
                 try:
                     run_history_id = db.create_run_history(
-                       case_id,
-                       case_status,
-                       round(case_duration, 2),  # 使用实际计算的执行时间
-                       "" if case_status == "success" else 
-                    str(case_results),
-                       extracted_text
+                        case_id,
+                        case_status,
+                        round(case_duration, 2),
+                        history_error,
+                        extracted_text,
+                        "",
                     )
                 except Exception as db_error:
                     uat_logger.error(f"❌ [MULTI_CASE] 保存测试结果到数据库失败: {db_error}")
-                stopped_run = any((r or {}).get("status") == "stopped" for r in case_results)
+                stopped_run = case_status == "stopped"
                 if case_status == "error" and not stopped_run:
-                    first_err_msg = ""
-                    for r in case_results:
-                        if (r or {}).get("status") == "error" and (r or {}).get("error"):
-                            first_err_msg = str((r or {})["error"])
-                            break
-                    if not first_err_msg:
-                        first_err_msg = str(case_results)[:4000]
                     self._invoke_on_case_failure({
                         "case_id": case_id,
                         "case_name": case_name,
                         "project_id": case_info.get("project_id"),
                         "status": case_status,
-                        "error": first_err_msg,
+                        "error": history_error or "用例执行失败",
                         "run_history_id": run_history_id,
                         "step_results": case_results,
                         "execution_time": round(case_duration, 2),
@@ -9998,13 +10453,14 @@ class PlaywrightAutomation:
                     "case_id": case_id,
                     "case_name": case_name,
                     "status": case_status,
+                    "error": history_error if case_status != "success" else "",
                     "total_steps": len(case_results),
                     "successful_steps": success_count,
                     "failed_steps": error_count,
                     "extracted_text": extracted_text,
                     "step_results": case_results,
-                    # 🔥 添加用例耗时计算
-                    "execution_time": round(case_duration, 2)
+                    "execution_time": round(case_duration, 2),
+                    "run_history_id": run_history_id,
                 }
                 process_case_result(result, case_id)
                 try:
@@ -10019,25 +10475,19 @@ class PlaywrightAutomation:
                 uat_logger.error(f"❌ [SERIAL_MULTI_CASE] 用例 {case_id} 异常: {str(e)}")
                 _cname = case_info.get("name", "未命名用例") if "case_info" in locals() and case_info else "未知"
                 _cpid = case_info.get("project_id") if "case_info" in locals() and case_info else None
+                err_msg = str(e)
+                rh = record_batch_case_history(
+                    case_id, _cname, "error", err_msg, time.time() - case_start_time, _cpid
+                )
                 process_case_result({
                     "case_id": case_id,
                     "case_name": _cname,
                     "status": "error",
-                    "error": str(e)
+                    "error": err_msg,
+                    "run_history_id": rh,
                 }, case_id)
-                self._invoke_on_case_failure({
-                    "case_id": case_id,
-                    "case_name": _cname,
-                    "project_id": _cpid,
-                    "status": "error",
-                    "error": str(e),
-                    "run_history_id": None,
-                    "step_results": [],
-                    "execution_time": None,
-                })
                 uat_logger.info(f"⚠️ [SERIAL_MULTI_CASE] 用例 {case_id} 执行失败，继续下一个")
             finally:
-                # 🔥 性能优化：不关闭 context，只关闭 page（context 复用给下一个用例）
                 try:
                     if self.page:
                         await self.page.close()
@@ -10045,10 +10495,67 @@ class PlaywrightAutomation:
                     pass
                 finally:
                     self.page = None
-                # 🔥 性能优化：用例间等待时间从 1 秒减少到 0.1 秒
-                await asyncio.sleep(0.1)
+                # login_feature 用例结束后关闭 context，避免下一用例仍停留在已登录页
+                try:
+                    from auth_batch_helpers import _case_role
+
+                    if case_probe and _case_role(case_probe) == "login_feature":
+                        try:
+                            if self.context:
+                                await self.context.close()
+                        except Exception:
+                            pass
+                        finally:
+                            self.context = None
+                        uat_logger.info(
+                            f"🔄 [SERIAL_MULTI_CASE] 登录用例 {case_id} 会话已清理，下一用例将重新打开登录页"
+                        )
+                except Exception:
+                    pass
+                await asyncio.sleep(_batch_case_gap_seconds())
         
         uat_logger.info(f"🎉 [SERIAL_MULTI_CASE] 所有用例执行完成，成功: {all_results['successful_cases']}, 失败: {all_results['failed_cases']}")
+
+        executed_ids = set()
+        for row in all_results.get("case_results") or []:
+            if isinstance(row, dict) and row.get("case_id") is not None:
+                try:
+                    executed_ids.add(int(row["case_id"]))
+                except (TypeError, ValueError):
+                    pass
+        for missing_id in case_ids:
+            try:
+                mid = int(missing_id)
+            except (TypeError, ValueError):
+                continue
+            if mid in executed_ids:
+                continue
+            miss_info = db.get_test_case_v2(mid) or {}
+            miss_name = miss_info.get("name") or "未知"
+            miss_msg = "批量执行未完成：该用例未产生执行结果（可能被中断或执行引擎异常退出）"
+            rh = record_batch_case_history(
+                mid,
+                miss_name,
+                "error",
+                miss_msg,
+                0.0,
+                project_id=miss_info.get("project_id"),
+            )
+            process_case_result(
+                {
+                    "case_id": mid,
+                    "case_name": miss_name,
+                    "status": "error",
+                    "error": miss_msg,
+                    "run_history_id": rh,
+                },
+                mid,
+            )
+            uat_logger.warning(
+                "⚠️ [SERIAL_MULTI_CASE] 补录未执行用例历史 case_id=%s run_id=%s",
+                mid,
+                rh,
+            )
         
         # 验证执行顺序
         if actual_execution_order != case_ids:
@@ -10056,17 +10563,15 @@ class PlaywrightAutomation:
         
         return all_results
     
-    async def _execute_case_steps(self, execution_steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def _execute_case_steps(self, execution_steps: List[Dict[str, Any]]) -> Dict[str, Any]:
         """执行单个测试用例的所有步骤（严格在当前页面执行，禁止多标签页并行）
-        
-        Args:
-            execution_steps: 要执行的步骤列表
-            
+
         Returns:
-            步骤执行结果列表
+            含 step_results、steps_completed、total_steps、all_steps_done 的字典
         """
-        case_results = []
-        
+        case_results: List[Dict[str, Any]] = []
+        steps_completed = 0
+
         # 逐个执行步骤
         for i, step in enumerate(execution_steps):
             stop_checker = getattr(self, "_external_stop_checker", None)
@@ -10089,6 +10594,7 @@ class PlaywrightAutomation:
                     timeout=60  # 60秒超时
                 )
                 case_results.extend(step_result if isinstance(step_result, list) else [step_result])
+                steps_completed += 1
                 uat_logger.info(f"✅ [CASE_STEP] 步骤 {i+1} 执行成功")
                 
             except asyncio.TimeoutError as timeout_e:
@@ -10134,8 +10640,16 @@ class PlaywrightAutomation:
                     error_result["failure_diag"] = fb
                 case_results.append(error_result)
                 break
-        
-        return case_results
+
+        all_steps_done = steps_completed >= len(execution_steps) and not any(
+            (r or {}).get("status") in ("error", "stopped", "failed") for r in case_results
+        )
+        return {
+            "step_results": case_results,
+            "steps_completed": steps_completed,
+            "total_steps": len(execution_steps),
+            "all_steps_done": all_steps_done,
+        }
     
     async def execute_single_step(self, step: Dict[str, Any]) -> List[Dict[str, Any]]:
         """执行单个测试步骤（强制在主页面执行，禁用多标签页）
@@ -10217,41 +10731,38 @@ class PlaywrightAutomation:
                     raise Exception("点击步骤缺少选择器参数")
                     
             elif action in ["fill", "input"]:
-                selector = step.get("selector", "")
-                text = step.get("text", step.get("input_value", ""))
+                selector = resolve_fill_step_selector(step)
+                text = resolve_fill_step_text(step)
                 selector_type = step.get("selector_type", "css")
                 iframe_selector = step.get("iframe_selector", "")
-                if selector and text:
-                    try:
-                        await self.fill_input(
-                            selector,
-                            text,
-                            selector_type,
-                            iframe_selector,
-                            page=target_page,
-                            locator_candidates=step.get("locator_candidates"),
+                try:
+                    await self.fill_input(
+                        selector,
+                        text,
+                        selector_type,
+                        iframe_selector,
+                        page=target_page,
+                        locator_candidates=step.get("locator_candidates"),
+                    )
+                except Exception:
+                    goal = (step.get("description") or "").strip()
+                    recovered = None
+                    if goal and target_page:
+                        recovered = await try_recover_selector_with_llm(
+                            target_page, goal, "fill", selector
                         )
-                    except Exception:
-                        goal = (step.get("description") or "").strip()
-                        recovered = None
-                        if goal and target_page:
-                            recovered = await try_recover_selector_with_llm(
-                                target_page, goal, "fill", selector
-                            )
-                        if not recovered:
-                            raise
-                        rs, rt = recovered
-                        await self.fill_input(
-                            rs,
-                            text,
-                            rt,
-                            iframe_selector,
-                            page=target_page,
-                            locator_candidates=None,
-                        )
-                    results.append({"status": "success", "step": step})
-                else:
-                    raise Exception("填充步骤缺少选择器或文本参数")
+                    if not recovered:
+                        raise
+                    rs, rt = recovered
+                    await self.fill_input(
+                        rs,
+                        text,
+                        rt,
+                        iframe_selector,
+                        page=target_page,
+                        locator_candidates=None,
+                    )
+                results.append({"status": "success", "step": step})
 
             elif action == "batch_input":
                 raw_bt = step.get("batch_text") or step.get("text", "")
@@ -10357,8 +10868,14 @@ class PlaywrightAutomation:
 
             elif action == "assert":
                 selector = (step.get("selector") or "").strip()
-                ctype = (step.get("compare_type") or "text_contains").strip().lower()
                 expected = (step.get("input_value") or step.get("text") or "").strip()
+                from auth_batch_helpers import normalize_assert_compare_type
+
+                ctype = normalize_assert_compare_type(
+                    step.get("compare_type"),
+                    selector_value=selector,
+                    input_value=expected,
+                )
                 selector_type = step.get("selector_type", "css")
                 iframe_selector = step.get("iframe_selector", "")
                 if ctype in ("url_equals", "url_contains"):
@@ -12033,11 +12550,47 @@ def sync_get_page_text():
         return await automation.get_page_text()
     return worker.execute(run)
 
+
+def sync_prepare_fresh_web_session(nav_url: str = ""):
+    """关闭当前 context/page 并新建干净会话；可选导航到起始 URL（登录类用例与批量一致）。"""
+    async def run():
+        if automation.browser is None or not automation.browser.is_connected():
+            await automation.start_browser()
+        else:
+            try:
+                if automation.page:
+                    await automation.page.close()
+            except Exception:
+                pass
+            finally:
+                automation.page = None
+            try:
+                if automation.context:
+                    await automation.context.close()
+            except Exception:
+                pass
+            finally:
+                automation.context = None
+        if automation.context is None:
+            automation.context = await automation.browser.new_context(
+                ignore_https_errors=True, no_viewport=True
+            )
+        automation.page = await automation.context.new_page()
+        automation._wire_step_failure_diag_listeners(automation.page)
+        url = (nav_url or "").strip()
+        if url.startswith(("http://", "https://")):
+            await automation.navigate_to(url, page=automation.page)
+        return True
+
+    return worker.execute(run)
+
+
 def sync_extract_element_text(
     selector: str,
     selector_type: str = "css",
     iframe_selector: str = None,
     locator_candidates=None,
+    wait_timeout_ms: int = 5000,
 ):
     async def run():
         return await automation.extract_element_text(
@@ -12045,6 +12598,7 @@ def sync_extract_element_text(
             selector_type,
             iframe_selector=iframe_selector,
             locator_candidates=locator_candidates,
+            wait_timeout_ms=wait_timeout_ms,
         )
     return worker.execute(run)
 
@@ -12169,7 +12723,11 @@ def sync_run_api_case_for_batch(
         dur = round(_time.time() - case_start, 2)
         run_history_id = None
         try:
-            err_s = "" if case_status == "success" else str(case_results)[:4000]
+            from auth_batch_helpers import summarize_batch_case_error
+
+            err_s = "" if case_status == "success" else summarize_batch_case_error(
+                case_results, total_steps=len(steps or []), steps_completed=len(case_results)
+            )
             run_history_id = db.create_run_history(
                 case_id, case_status, dur, err_s, extracted_text, ""
             )
@@ -12522,10 +13080,20 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, 
         from execution_lock import acquire as acquire_machine_lock
 
         machine_lock_acquired = acquire_machine_lock(
-            owner=f"multi_case:{len(case_ids)}", timeout_sec=60
+            owner=f"multi_case:{len(case_ids)}", timeout_sec=120
         )
         if not machine_lock_acquired:
             uat_logger.error("❌ [UAT_LOCK] 本机执行锁获取超时")
+            try:
+                from auth_batch_helpers import build_batch_lock_fail_results
+
+                return build_batch_lock_fail_results(
+                    db,
+                    case_ids,
+                    "本机已有自动化任务在执行，请稍后重试",
+                )
+            except Exception:
+                pass
             return {
                 "total_cases": len(case_ids),
                 "successful_cases": 0,
@@ -12537,7 +13105,7 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, 
         pass
 
     # 🔥 获取执行锁
-    if not _execution_lock.acquire(blocking=True, timeout=60):
+    if not _execution_lock.acquire(blocking=True, timeout=120):
         uat_logger.error(f"❌ [EXECUTION_LOCK] 获取执行锁超时")
         if machine_lock_acquired:
             try:
@@ -12546,6 +13114,16 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, 
                 release_machine_lock()
             except ImportError:
                 pass
+        try:
+            from auth_batch_helpers import build_batch_lock_fail_results
+
+            return build_batch_lock_fail_results(
+                db,
+                case_ids,
+                "获取执行锁超时，请稍后重试",
+            )
+        except Exception:
+            pass
         return {
             "total_cases": len(case_ids),
             "successful_cases": 0,
@@ -12561,9 +13139,18 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, 
     try:
         automation._external_stop_checker = should_stop
         automation._execution_context = execution_context
+        from auth_batch_helpers import batch_worker_timeout_seconds
+
+        batch_timeout = batch_worker_timeout_seconds(case_ids, db)
+        uat_logger.info(
+            f"⏱️ [MULTI_EXEC] 批量 worker 超时 {batch_timeout}s（共 {len(case_ids)} 个用例）"
+        )
+
         async def run():
             return await automation.execute_multiple_test_cases(case_ids, db)
-        return worker.execute(run)
+        return worker.execute(
+            run, timeout=batch_timeout, _inner_timeout=batch_timeout
+        )
     except Exception as e:
         err_str = str(e)
         uat_logger.error(f"❌ [EXECUTION_LOCK] 多用例执行过程发生异常: {err_str}")
@@ -12573,14 +13160,39 @@ def sync_execute_multiple_test_cases(case_ids: List[int], db, should_stop=None, 
             uat_logger.warning("⚠️ [EXECUTION_LOCK] 检测到浏览器已关闭，强制重置所有状态")
             # 🔥 关键修复: 使用 force_reset_execution_state 而不是单独清空引用
             force_reset_execution_state()
+        snap = getattr(automation, "_batch_run_snapshot", None)
+        is_timeout = "执行超时" in err_str or "函数执行超过" in err_str
+        if is_timeout and snap is not None:
+            try:
+                from auth_batch_helpers import finalize_batch_timeout_results
+
+                return finalize_batch_timeout_results(db, case_ids, snap, err_str)
+            except Exception as merge_ex:
+                uat_logger.warning(
+                    f"⚠️ [EXECUTION_LOCK] 合并批量超时部分结果失败: {merge_ex}"
+                )
+        try:
+            from auth_batch_helpers import build_batch_lock_fail_results
+
+            return build_batch_lock_fail_results(
+                db,
+                case_ids,
+                f"执行过程异常: {err_str}",
+            )
+        except Exception:
+            pass
         return {
             "total_cases": len(case_ids),
             "successful_cases": 0,
             "failed_cases": len(case_ids),
             "case_results": [],
-            "error": f"执行过程异常: {err_str}"
+            "error": f"执行过程异常: {err_str}",
         }
     finally:
+        try:
+            automation._batch_run_snapshot = None
+        except Exception:
+            pass
         try:
             automation._external_stop_checker = None
             automation._execution_context = None

@@ -402,7 +402,7 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
             await el.wait_for(state="visible", timeout=15000)
         return
     if action == "assert":
-        ct = (step.get("compare_type") or "text_contains").strip().lower()
+        ct = (step.get("compare_type") or "text_equals").strip().lower()
         exp = str(step.get("input_value") or step.get("text") or "").strip()
         if ct in ("url_equals", "url_contains"):
             u = page.url
@@ -422,8 +422,12 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
                     await handle.dispose()
             body_txt = body_txt.strip()
             if ct == "page_text_equals":
-                if body_txt != exp:
-                    raise RuntimeError(f"page_text_equals 长度 实际={len(body_txt)} 预期={len(exp)}")
+                from auth_batch_helpers import page_text_has_exact_snippet
+
+                if not page_text_has_exact_snippet(body_txt, exp):
+                    raise RuntimeError(
+                        f"page_text_equals 未找到与预期完全一致的文案 {exp!r}"
+                    )
             elif ct == "page_text_regex":
                 if not exp or not re.search(exp, body_txt):
                     raise RuntimeError(f"page_text_regex 未匹配 pattern={exp!r}")
@@ -442,12 +446,15 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
         if ct in ("text_equals", "equals"):
             if exp and txt != exp:
                 raise RuntimeError(f"text_equals 期望 {exp!r} 实际 {txt!r}")
-        elif ct in ("text_contains", "contains", ""):
+        elif ct in ("text_contains", "contains"):
             if exp and exp not in txt:
                 raise RuntimeError(f"text_contains 期望包含 {exp!r} 实际 {txt!r}")
+        elif ct in ("text_regex", "page_text_regex", "regex"):
+            if not exp or not re.search(exp, txt):
+                raise RuntimeError(f"text_regex 未匹配 pattern={exp!r} 实际 {txt!r}")
         else:
-            if exp and exp not in txt:
-                raise RuntimeError(f"assert({ct}) 未匹配: 期望涉及 {exp!r} 文案 {txt!r}")
+            if exp and txt != exp:
+                raise RuntimeError(f"text_equals 期望 {exp!r} 实际 {txt!r}")
         return
     raise ValueError(f"unsupported action: {action}")
 

@@ -146,6 +146,8 @@ def execute_api_spec_sync(
             "status_code": None,
             "response_text": "",
             "response_json": None,
+            "response_headers": {},
+            "elapsed_ms": 0,
             "ok_assert": False,
             "assert_message": "URL 为空",
             "error": "URL 为空",
@@ -197,6 +199,8 @@ def execute_api_spec_sync(
                     "status_code": None,
                     "response_text": "",
                     "response_json": None,
+                    "response_headers": {},
+                    "elapsed_ms": 0,
                     "ok_assert": False,
                     "assert_message": f"body JSON 无效: {e}",
                     "error": str(e),
@@ -235,6 +239,7 @@ def execute_api_spec_sync(
         except (TypeError, ValueError):
             pass
 
+    t0 = time.perf_counter()
     try:
         resp, parsed_json = perform_http_request(
             method,
@@ -254,11 +259,15 @@ def execute_api_spec_sync(
             "status_code": None,
             "response_text": "",
             "response_json": None,
+            "response_headers": {},
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
             "ok_assert": False,
             "assert_message": f"请求失败: {e}",
             "error": str(e),
         }
 
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+    resp_headers = {str(k): str(v) for k, v in (resp.headers or {}).items()}
     text_preview = (resp.text or "")[:8000]
     if accept_2xx_for_status:
         ok = 200 <= int(resp.status_code) < 300
@@ -292,6 +301,8 @@ def execute_api_spec_sync(
         "status_code": resp.status_code,
         "response_text": text_preview,
         "response_json": parsed_json,
+        "response_headers": resp_headers,
+        "elapsed_ms": elapsed_ms,
         "ok_assert": ok,
         "assert_message": msg,
         "error": err,

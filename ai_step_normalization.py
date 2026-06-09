@@ -51,6 +51,8 @@ def is_overly_broad_css_selector(selector_value: str) -> bool:
     s = _str(selector_value)
     if not s:
         return False
+    if is_weak_generic_css_selector(s):
+        return True
     low = s.lower()
     if low.startswith(("xpath:", "//", "xpath=", "text=", "role=")):
         return False
@@ -61,6 +63,33 @@ def is_overly_broad_css_selector(selector_value: str) -> bool:
     if "." in s:
         return False
     return low in _OVERLY_BROAD_SINGLE_TAGS
+
+
+_WEAK_GENERIC_CSS_RE = re.compile(
+    r"^(?:input|button|textarea|select)"
+    r"\[type\s*=\s*['\"]?(?:text|password|submit|button)['\"]?\]$",
+    re.I,
+)
+
+
+def is_weak_generic_css_selector(selector_value: str) -> bool:
+    """AI 常臆造的泛化属性选择器（无 id/name/class 区分度）。"""
+    s = _str(selector_value)
+    if not s:
+        return False
+    if _WEAK_GENERIC_CSS_RE.match(s):
+        return True
+    low = s.lower()
+    if low in (
+        "input[type='text']",
+        'input[type="text"]',
+        "input[type='password']",
+        'input[type="password"]',
+        "button[type='submit']",
+        'button[type="submit"]',
+    ):
+        return True
+    return False
 
 
 def _looks_like_url_bar_expected_text(iv: str) -> bool:
@@ -93,6 +122,101 @@ def _description_suggests_url_assertion(desc: str) -> bool:
     return False
 
 
+def repair_single_assert_step_inplace(step: dict) -> List[str]:
+    """单条 assert 步骤就地修复（执行前/落库前均可调用）。返回告警文案。"""
+    warns: List[str] = []
+    if not isinstance(step, dict):
+        return warns
+    if _str(step.get("action")).lower() != "assert":
+        return warns
+    raw_ct = _str(step.get("compare_type")).lower() or "text_contains"
+    if raw_ct == "equals":
+        ct = "text_equals"
+    elif raw_ct == "contains":
+        ct = "text_contains"
+    else:
+        ct = raw_ct
+    step["compare_type"] = ct
+    iv = _str(step.get("input_value"))
+    desc = _str(step.get("description"))
+    sv = _str(step.get("selector_value"))
+    st = _str(step.get("selector_type")).lower() or "css"
+
+    try:
+        from ai_page_probe import repair_message_toast_assert_step_inplace
+
+        toast_msg = repair_message_toast_assert_step_inplace(step)
+        if toast_msg:
+            warns.append(toast_msg)
+            return warns
+    except Exception:
+        pass
+
+    url_cts = ("url_equals", "url_contains")
+    if ct in url_cts:
+        if sv or _str(step.get("selector_type")):
+            step["selector_value"] = ""
+            step["selector_type"] = ""
+            step.pop("locator_candidates", None)
+            warns.append("URL 断言已清空多余 selector，以符合平台格式")
+        return warns
+
+    text_like = ("text_equals", "text_contains", "text_regex", "")
+    if ct not in text_like:
+        return warns
+    if _description_suggests_url_assertion(desc) or _looks_like_url_bar_expected_text(iv):
+        step["compare_type"] = "url_contains"
+        step["selector_value"] = ""
+        step["selector_type"] = ""
+        step.pop("locator_candidates", None)
+        try:
+            from urllib.parse import unquote
+
+            m = re.match(r"^(wd|word|query|q)=([^&]+)\s*$", iv, re.I)
+            if m:
+                dec = unquote(m.group(2)).strip()
+                if dec and "%" not in dec:
+                    step["input_value"] = dec
+        except Exception:
+            pass
+        warns.append("已改为 URL 断言(url_contains)，selector 已清空")
+        return warns
+
+    page_content_assert = any(
+        k in desc for k in ("包含", "标题", "页面", "出现", "显示", "展示", "可见")
+    )
+    if st == "text" and sv:
+        expect_text = iv or sv
+        if page_content_assert or (not iv and sv):
+            if ct == "text_equals":
+                step["compare_type"] = "page_text_equals"
+            elif ct == "text_regex":
+                step["compare_type"] = "page_text_regex"
+            else:
+                step["compare_type"] = "page_text_contains"
+            step["input_value"] = expect_text
+            step["selector_type"] = ""
+            step["selector_value"] = ""
+            step.pop("locator_candidates", None)
+            step.pop("probe_index", None)
+            warns.append(
+                f"text 定位断言已改为整页可见文本断言({step['compare_type']})，预期 {expect_text!r}"
+            )
+            return warns
+
+    if not sv and iv:
+        if ct == "text_equals":
+            step["compare_type"] = "page_text_equals"
+        elif ct == "text_regex":
+            step["compare_type"] = "page_text_regex"
+        else:
+            step["compare_type"] = "page_text_contains"
+        warns.append(
+            f"无 selector，已改为整页可见文本断言({step['compare_type']})"
+        )
+    return warns
+
+
 def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
     """
     在归一化/探测 clamp 之前就地修正常见「模型格式」问题：
@@ -107,63 +231,14 @@ def repair_raw_ai_steps_for_platform(steps: Any) -> List[str]:
     for idx, step in enumerate(steps, start=1):
         if not isinstance(step, dict):
             continue
-        action = _str(step.get("action")).lower()
-        if action != "assert":
-            continue
-        raw_ct = _str(step.get("compare_type")).lower() or "text_contains"
-        if raw_ct == "equals":
-            ct = "text_equals"
-        elif raw_ct == "contains":
-            ct = "text_contains"
-        else:
-            ct = raw_ct
-        iv = _str(step.get("input_value"))
-        desc = _str(step.get("description"))
-        sv = _str(step.get("selector_value"))
-
-        url_cts = ("url_equals", "url_contains")
-        if ct in url_cts:
-            if sv or _str(step.get("selector_type")):
-                step["selector_value"] = ""
-                step["selector_type"] = ""
-                step.pop("locator_candidates", None)
-                warns.append(f"第{idx}步 URL 断言已清空多余 selector，以符合平台格式")
-            continue
-
-        text_like = ("text_equals", "text_contains", "text_regex", "")
-        if ct not in text_like:
-            continue
-        if _description_suggests_url_assertion(desc) or _looks_like_url_bar_expected_text(iv):
-            step["compare_type"] = "url_contains"
-            step["selector_value"] = ""
-            step["selector_type"] = ""
-            step.pop("locator_candidates", None)
-            # wd= 百分号编码 → 解码为可读关键词（执行层仍比对原始/解码 URL 多种形态）
-            try:
-                from urllib.parse import unquote
-
-                m = re.match(r"^(wd|word|query|q)=([^&]+)\s*$", iv, re.I)
-                if m:
-                    dec = unquote(m.group(2)).strip()
-                    if dec and "%" not in dec:
-                        step["input_value"] = dec
-            except Exception:
-                pass
-            warns.append(f"第{idx}步已改为 URL 断言(compare_type=url_contains)，selector 已清空")
-            continue
-
-        # 模型常见：最后一步 assert 只写预期字符串、无 selector——元素级断言无法执行，改为整页可见文本
-        if not sv and iv:
-            if ct == "text_equals":
-                step["compare_type"] = "page_text_equals"
-            elif ct == "text_regex":
-                step["compare_type"] = "page_text_regex"
+        step_warns = repair_single_assert_step_inplace(step)
+        for w in step_warns:
+            if w.startswith("无 selector"):
+                warns.append(
+                    f"第{idx}步{w}；仅检查主文档 body 文本，跨 iframe 内容可能取不到。"
+                )
             else:
-                step["compare_type"] = "page_text_contains"
-            warns.append(
-                f"第{idx}步无 selector，已改为整页可见文本断言({step['compare_type']})；"
-                "仅检查主文档 body 文本，跨 iframe 内容可能取不到。"
-            )
+                warns.append(f"第{idx}步{w}")
     return warns
 
 
@@ -204,6 +279,14 @@ def normalize_ai_step(step: dict) -> dict:
     input_value = _str(step.get("input_value"))
     description = _str(step.get("description"))
     compare_type = _str(step.get("compare_type"))
+    if action == "assert":
+        from auth_batch_helpers import normalize_assert_compare_type
+
+        compare_type = normalize_assert_compare_type(
+            compare_type,
+            selector_value=selector_value,
+            input_value=input_value,
+        )
     lc = step.get("locator_candidates")
     if lc is not None and not isinstance(lc, str):
         try:
@@ -294,7 +377,15 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
             else:
                 warnings.append(f"第{idx}步缺少 selector_value，运行时可能失败。")
         if step["action"] == "input" and not step["input_value"]:
-            warnings.append(f"第{idx}步 input 未填写输入值，请在步骤编辑中补充或重新生成。")
+            desc = _str(step.get("description"))
+            if not any(
+                m in desc or m.lower() in desc.lower()
+                for m in (
+                    "留空", "为空", "清空", "不填", "空账号", "空密码", "空白",
+                    "leave empty", "leave blank", "empty field", "clear field",
+                )
+            ):
+                warnings.append(f"第{idx}步 input 未填写输入值，请在步骤编辑中补充或重新生成。")
         if step["action"] == "navigate" and not step["input_value"]:
             warnings.append(f"第{idx}步 navigate 未填写 URL，请在步骤编辑中补充或重新生成。")
         if step["action"] == "wait":

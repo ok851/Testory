@@ -94,6 +94,8 @@ from playwright_automation import (
     force_reset_execution_state,
     parse_platform_scroll_input_value,
     scroll_event_to_platform_input_value,
+    _execution_lock,
+    set_execution_in_progress,
     sync_analyze_page_content,
     sync_automation_session_usable,
     sync_browser_go_back,
@@ -121,6 +123,8 @@ from playwright_automation import (
     sync_extract_element_text,
     sync_extract_json_from_selected_element,
     sync_fill_input,
+    resolve_fill_step_text,
+    step_description_implies_empty_input,
     sync_get_all_links,
     sync_get_current_url,
     sync_get_element_count,
@@ -137,6 +141,7 @@ from playwright_automation import (
     sync_scroll_by_delta,
     sync_scroll_page,
     sync_start_browser,
+    sync_prepare_fresh_web_session,
     resolve_playwright_headless,
     sync_select_date,
     sync_select_option,
@@ -191,6 +196,8 @@ _dataset_run_jobs: dict = {}
 _dataset_run_lock = threading.Lock()
 _case_run_jobs: dict = {}
 _case_run_lock = threading.Lock()
+_user_ui_run_locks: dict = {}
+_user_ui_run_locks_mu = threading.Lock()
 _ai_model_cfg_lock = threading.Lock()
 _login_fail_lock = threading.Lock()
 _login_fail_timestamps: dict = {}
@@ -274,6 +281,65 @@ def _case_run_cancelled(user_id: int) -> bool:
     with _case_run_lock:
         job = _case_run_jobs.get(user_id)
         return bool(job and job.get('cancel_requested'))
+
+
+def _get_user_ui_run_lock(user_id: int) -> threading.Lock:
+    """同一用户 UI 用例运行串行化，避免多标签页/连点导致并发抢占浏览器。"""
+    with _user_ui_run_locks_mu:
+        lock = _user_ui_run_locks.get(user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _user_ui_run_locks[user_id] = lock
+        return lock
+
+
+def _record_run_history_rejected(db, case_id: int, reason: str, duration: float = 0.0):
+    """锁冲突或未启动执行时写入历史，避免运行历史空白。"""
+    msg = (reason or '用例未执行').strip()
+    try:
+        rid = db.create_run_history(
+            case_id,
+            'error',
+            round(max(0.0, float(duration or 0.0)), 2),
+            msg,
+            '',
+            '',
+        )
+        uat_logger.info('已记录未执行用例历史 case_id=%s run_id=%s', case_id, rid)
+        return rid
+    except Exception as exc:
+        uat_logger.warning('记录未执行用例历史失败 case_id=%s: %s', case_id, exc)
+        return None
+
+
+class _UserUiRunGuard:
+    """同一用户 Web 用例运行串行槽（with 块内 return 也会释放锁）。"""
+
+    def __init__(self, user_id: int, label: str = ''):
+        self.user_id = user_id
+        self.label = label or ''
+        self._lock = _get_user_ui_run_lock(user_id)
+
+    def __enter__(self):
+        self._lock.acquire(blocking=True)
+        uat_logger.info(
+            '🔒 [USER_RUN] 用户 %s 进入串行执行槽%s',
+            self.user_id,
+            f' ({self.label})' if self.label else '',
+        )
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass
+        uat_logger.info(
+            '🔓 [USER_RUN] 用户 %s 释放串行执行槽%s',
+            self.user_id,
+            f' ({self.label})' if self.label else '',
+        )
+        return False
 
 
 def _env_flag_true(name: str) -> bool:
@@ -655,6 +721,17 @@ def _catalog_provider_meta(provider_id: str) -> dict:
     return {}
 
 
+def _infer_ai_provider_simple(base_url: str = '', api_key: str = '') -> str:
+    from ai_provider_infer import infer_provider_from_simple_config
+
+    catalog = _load_ai_provider_catalog()
+    return infer_provider_from_simple_config(
+        base_url,
+        api_key,
+        catalog.get('providers') if isinstance(catalog, dict) else [],
+    )
+
+
 def _normalize_profile_base_url(base_url: str, provider: str = '') -> str:
     """修正用户误填的完整 chat/completions 地址，避免重复拼接路径。"""
     bu = (base_url or '').strip()
@@ -938,7 +1015,13 @@ def _ai_step_to_db_kwargs(step: dict, case_id: int, step_order: int) -> dict:
         crc = _norm_click_repeat_count(step.get("click_repeat_count"))
     cmp_out = "equals"
     if action == "assert":
-        cmp_out = _ai_str(step.get("compare_type")) or "text_contains"
+        from auth_batch_helpers import normalize_assert_compare_type
+
+        cmp_out = normalize_assert_compare_type(
+            _ai_str(step.get("compare_type")) or "text_contains",
+            selector_value=sv,
+            input_value=iv,
+        )
     layer = _ai_str(step.get("automation_layer")).lower() or "web"
     if layer not in ("web", "desktop", "android"):
         layer = "web"
@@ -2201,57 +2284,71 @@ def api_execute_multiple_cases():
     results = None
     
     try:
-        # 同步执行多个测试用例
-        uat_logger.info(f"🚀 [API] 开始执行 {len(case_ids)} 个测试用例")
-        
-        # 🔥 性能优化：移除 API 层冗余的浏览器状态预检测
-        # sync_execute_multiple_test_cases 内部已包含完整的浏览器状态检测和恢复逻辑
-        
-        try:
-            # 创建独立的数据库连接实例，确保线程安全
-            # 注意: Database 已在文件开头导入，不要在此重复导入，否则会导致变量作用域问题
+        with _UserUiRunGuard(user_id, f'batch x{len(case_ids)}'):
+            uat_logger.info(f"🚀 [API] 开始执行 {len(case_ids)} 个测试用例")
             thread_db = Database()
-            
-            # 直接在主线程中同步执行测试用例，确保严格的执行顺序
-            uat_logger.info(f"🚀 [API] 在主线程中同步执行测试用例序列: {case_ids}")
+
             def _should_stop_batch():
                 with _case_run_lock:
                     return bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
 
-            results = sync_execute_multiple_test_cases(
-                case_ids,
-                thread_db,
-                should_stop=_should_stop_batch,
-                execution_context=_make_batch_execution_context("ui", data),
+            try:
+                uat_logger.info(f"🚀 [API] 在主线程中同步执行测试用例序列: {case_ids}")
+                results = sync_execute_multiple_test_cases(
+                    case_ids,
+                    thread_db,
+                    should_stop=_should_stop_batch,
+                    execution_context=_make_batch_execution_context("ui", data),
+                )
+                if results.get('error') and not results.get('case_results'):
+                    from auth_batch_helpers import record_cases_run_rejected
+
+                    reject_reason = str(results.get('error') or '批量执行未启动')
+                    record_cases_run_rejected(thread_db, case_ids, reject_reason)
+                    results['case_results'] = [
+                        {
+                            'case_id': cid,
+                            'case_name': (thread_db.get_test_case_v2(cid) or {}).get('name') or '未知',
+                            'status': 'error',
+                            'error': reject_reason,
+                        }
+                        for cid in case_ids
+                    ]
+                uat_logger.info(f"✅ [API] 多个测试用例同步执行完成")
+            except Exception as e:
+                uat_logger.error(f"❌ [API] 执行测试用例时发生异常: {str(e)}")
+                results = {
+                    "total_cases": len(case_ids),
+                    "successful_cases": 0,
+                    "failed_cases": len(case_ids),
+                    "case_results": [
+                        {
+                            "case_id": case_id,
+                            "case_name": "未知",
+                            "status": "error",
+                            "error": f"执行出错: {str(e)}"
+                        } for case_id in case_ids
+                    ]
+                }
+                try:
+                    from auth_batch_helpers import record_cases_run_rejected
+
+                    record_cases_run_rejected(thread_db, case_ids, str(e))
+                except Exception:
+                    pass
+
+            uat_logger.info(
+                f"多个测试用例执行完成，成功: {results['successful_cases']}, 失败: {results['failed_cases']}"
             )
-            uat_logger.info(f"✅ [API] 多个测试用例同步执行完成")
-        except Exception as e:
-            uat_logger.error(f"❌ [API] 执行测试用例时发生异常: {str(e)}")
-            results = {
-                "total_cases": len(case_ids),
-                "successful_cases": 0,
-                "failed_cases": len(case_ids),
-                "case_results": [
-                    {
-                        "case_id": case_id,
-                        "case_name": "未知",
-                        "status": "error",
-                        "error": f"执行出错: {str(e)}"
-                    } for case_id in case_ids
-                ]
-            }
-        
-        # 执行结果已在上面获取
-        
-        # 记录执行结果
-        uat_logger.info(f"多个测试用例执行完成，成功: {results['successful_cases']}, 失败: {results['failed_cases']}")
-        _case_job_update(
-            user_id,
-            completed_steps=len(case_ids),
-            current_step_order=len(case_ids),
-            message=f"批量执行完成：成功 {results.get('successful_cases', 0)}，失败 {results.get('failed_cases', 0)}",
-        )
-        
+            _case_job_update(
+                user_id,
+                completed_steps=len(case_ids),
+                current_step_order=len(case_ids),
+                message=(
+                    f"批量执行完成：成功 {results.get('successful_cases', 0)}，"
+                    f"失败 {results.get('failed_cases', 0)}"
+                ),
+            )
     except Exception as e:
         uat_logger.error(f"执行测试用例时出错: {e}")
         results = {
@@ -2267,6 +2364,12 @@ def api_execute_multiple_cases():
                 } for case_id in case_ids
             ]
         }
+        try:
+            from auth_batch_helpers import record_cases_run_rejected
+
+            record_cases_run_rejected(Database(), case_ids, str(e))
+        except Exception:
+            pass
     finally:
         # 确保浏览器资源清理，无论测试用例执行结果如何
         try:
@@ -2285,7 +2388,28 @@ def api_execute_multiple_cases():
     
     with _case_run_lock:
         stopped = bool(_case_run_jobs.get(user_id, {}).get('cancel_requested'))
-    response_data = {'success': True, 'results': results, 'stopped': stopped}
+    if results is None:
+        results = {
+            'total_cases': len(case_ids),
+            'successful_cases': 0,
+            'failed_cases': len(case_ids),
+            'case_results': [],
+            'error': '批量执行未返回结果（服务可能已中断，请重启后重试）',
+        }
+        try:
+            from auth_batch_helpers import record_cases_run_rejected
+
+            record_cases_run_rejected(_db, case_ids, results['error'])
+        except Exception:
+            pass
+    batch_ok = not results.get('error') or bool(results.get('case_results'))
+    response_data = {
+        'success': batch_ok,
+        'results': results,
+        'stopped': stopped,
+    }
+    if not batch_ok and results.get('error'):
+        response_data['error'] = results.get('error')
     return jsonify(response_data)
 
 # API: 导航到指定URL
@@ -2568,9 +2692,13 @@ def api_add_ai_model():
 
 
 def _api_add_ai_profile(data: dict):
+    from ai_multi_provider import normalize_api_key
+
     provider = (data.get('provider') or '').strip()
+    base_url_early = (data.get('base_url') or '').strip() if isinstance(data.get('base_url'), str) else ''
+    api_key_early = normalize_api_key(data.get('api_key') if isinstance(data.get('api_key'), str) else '')
     if not provider:
-        return jsonify({'success': False, 'error': 'provider不能为空'}), 400
+        provider = _infer_ai_provider_simple(base_url_early, api_key_early)
     cmeta = _catalog_provider_meta(provider)
     if not cmeta:
         return jsonify({'success': False, 'error': f'未知提供商: {provider}'}), 400
@@ -2582,17 +2710,15 @@ def _api_add_ai_profile(data: dict):
         return jsonify({'success': False, 'error': model_id}), 400
     model_type = (data.get('model_type') or 'test_case_generation').strip()
     label = (data.get('label') or '').strip() or model_id
-    from ai_multi_provider import normalize_api_key
-
-    api_key = normalize_api_key(data.get('api_key') if isinstance(data.get('api_key'), str) else '')
+    api_key = api_key_early
     base_url = (data.get('base_url') or '').strip() if isinstance(data.get('base_url'), str) else ''
     base_url = _normalize_profile_base_url(base_url, provider)
     group_id = (data.get('group_id') or '').strip() if isinstance(data.get('group_id'), str) else ''
     requires_key = bool(cmeta.get('requires_api_key'))
     if provider == 'custom_openai' and not base_url:
-        return jsonify({'success': False, 'error': '第三方 / 代理需填写 Base URL（以代理商文档为准）'}), 400
+        return jsonify({'success': False, 'error': '请填写 API Base URL（代理/第三方网关地址）'}), 400
     if requires_key and provider != 'ollama' and not api_key:
-        return jsonify({'success': False, 'error': '该提供商需要 API 密钥'}), 400
+        return jsonify({'success': False, 'error': '请填写 API 密钥'}), 400
     verify_ollama = bool(data.get('verify_ollama'))
     if provider == 'ollama' and verify_ollama:
         installed, err = local_ai_service.list_installed_models()
@@ -2730,7 +2856,8 @@ def api_delete_ai_model():
 def api_verify_ai_model_profile():
     """校验模型配置是否可连通（发送极短测试请求）。"""
     data = request.get_json(silent=True) or {}
-    provider = (data.get('provider') or '').strip()
+    explicit_provider = (data.get('provider') or '').strip()
+    provider = explicit_provider
     model_id = (data.get('model_id') or '').strip()
     profile_id = (data.get('profile_id') or '').strip()
     api_key = data.get('api_key')
@@ -2741,8 +2868,8 @@ def api_verify_ai_model_profile():
         p = next((x for x in (cfg.get('profiles') or []) if x.get('id') == profile_id), None)
         if not p:
             return jsonify({'success': False, 'error': '未找到该模型配置'}), 404
-        provider = (p.get('provider') or '').strip()
-        model_id = (p.get('model_id') or '').strip()
+        if not model_id:
+            model_id = (p.get('model_id') or '').strip()
         if not isinstance(api_key, str) or not api_key.strip():
             api_key = p.get('api_key') or ''
         if not base_url:
@@ -2752,7 +2879,14 @@ def api_verify_ai_model_profile():
     from ai_multi_provider import dispatch_chat, normalize_api_key
 
     key_norm = normalize_api_key(api_key if isinstance(api_key, str) else '')
-    if not key_norm:
+    if not explicit_provider:
+        provider = _infer_ai_provider_simple(base_url, key_norm)
+    if provider == 'ollama' and not key_norm and profile_id:
+        cfg_key = _load_ai_model_config()
+        p_key = next((x for x in (cfg_key.get('profiles') or []) if x.get('id') == profile_id), None)
+        if isinstance(p_key, dict) and (p_key.get('provider') or '').strip() == 'ollama':
+            key_norm = ''
+    if provider != 'ollama' and not key_norm:
         return jsonify({'success': False, 'error': '请先填写有效的 API 密钥（连接测试不会使用已保存的密钥，除非在编辑已有配置且留空时才会读取库内密钥）'}), 400
     if provider == 'minimax' and key_norm.lower().startswith('tp-'):
         return jsonify({
@@ -2767,7 +2901,7 @@ def api_verify_ai_model_profile():
             'hint': 'Base URL 与 model 必须以代理商文档为准，不要选 MiniMax/OpenAI 等官方提供商。',
         }), 400
     if provider == 'custom_openai' and not base_url:
-        return jsonify({'success': False, 'error': '第三方 / 代理需填写 Base URL'}), 400
+        return jsonify({'success': False, 'error': '请填写 API Base URL（代理/第三方网关地址）'}), 400
     cmeta = _catalog_provider_meta(provider)
     if not cmeta and provider:
         return jsonify({'success': False, 'error': f'未知提供商: {provider}'}), 400
@@ -2881,6 +3015,19 @@ def api_update_ai_profile():
     api_key_in = data.get('api_key')
     if isinstance(api_key_in, str) and api_key_in.strip():
         p['api_key'] = normalize_api_key(api_key_in)
+
+    final_base = (p.get('base_url') or '').strip()
+    final_key = normalize_api_key(p.get('api_key') if isinstance(p.get('api_key'), str) else '')
+    inferred_provider = _infer_ai_provider_simple(final_base, final_key)
+    inferred_meta = _catalog_provider_meta(inferred_provider)
+    if inferred_meta:
+        provider = inferred_provider
+        p['provider'] = inferred_provider
+        p['api_style'] = inferred_meta.get('api_style') or p.get('api_style') or 'openai_compatible'
+        if final_base:
+            p['base_url'] = _normalize_profile_base_url(final_base, inferred_provider)
+        cmeta = inferred_meta
+
     if 'group_id' in data:
         p['group_id'] = (data.get('group_id') or '').strip() if isinstance(data.get('group_id'), str) else ''
     elif bool(cmeta.get('requires_api_key')) and provider != 'ollama':
@@ -3026,29 +3173,47 @@ def _ai_embedded_run_script_steps_sequentially(user_id: int, embedded_sid: str, 
 
 
 def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
-    """有页面快照时：先做启发式选择器修复（默认开），再可选做 LLM 定位解析。"""
-    if (
-        not snap_data
-        or not isinstance(plan_dict, dict)
-        or not isinstance(plan_dict.get("steps"), list)
-    ):
+    """有页面快照时：启发式/LLM 选择器修复；随后对 assert 做回放页面探测校正。"""
+    if not isinstance(plan_dict, dict) or not isinstance(plan_dict.get("steps"), list):
         return plan_dict, norm_warnings
     try:
-        from ai_locator_resolution import ai_locator_resolve_enabled, resolve_plan_steps_locators_with_snapshot
-        from ai_page_probe import heuristic_repair_plan_selectors_from_registry, probe_registry_from_interactive_snapshot
+        registry = None
+        if snap_data:
+            from ai_page_probe import probe_registry_from_interactive_snapshot
 
-        _, registry, _ = probe_registry_from_interactive_snapshot(snap_data)
+            _, registry, _ = probe_registry_from_interactive_snapshot(snap_data)
+        if not registry:
+            from ai_page_probe import fetch_page_controls_bundle, resolve_steps_probe_url
+
+            probe_u = resolve_steps_probe_url(
+                plan_dict.get("steps") or [],
+                (plan_dict.get("case_url") or "").strip(),
+            )
+            if probe_u.startswith(("http://", "https://")):
+                _, _pe, registry = fetch_page_controls_bundle(probe_u)
         if registry:
-            repaired, hw = heuristic_repair_plan_selectors_from_registry(plan_dict["steps"], registry)
+            from ai_page_probe import heuristic_repair_plan_selectors_from_registry
+
+            repaired, hw = heuristic_repair_plan_selectors_from_registry(
+                plan_dict["steps"], registry
+            )
             plan_dict["steps"] = repaired
             if hw:
                 norm_warnings = list(norm_warnings or []) + list(hw)
+        if snap_data:
+            from ai_locator_resolution import ai_locator_resolve_enabled, resolve_plan_steps_locators_with_snapshot
 
-        if ai_locator_resolve_enabled():
-            new_steps, lw = resolve_plan_steps_locators_with_snapshot(plan_dict["steps"], snap_data)
-            plan_dict["steps"] = new_steps
-            if lw:
-                norm_warnings = list(norm_warnings or []) + list(lw)
+            if ai_locator_resolve_enabled():
+                new_steps, lw = resolve_plan_steps_locators_with_snapshot(
+                    plan_dict["steps"], snap_data
+                )
+                plan_dict["steps"] = new_steps
+                if lw:
+                    norm_warnings = list(norm_warnings or []) + list(lw)
+
+        from ai_page_probe import apply_ai_assert_grounding_to_plan
+
+        plan_dict, norm_warnings = apply_ai_assert_grounding_to_plan(plan_dict, norm_warnings)
     except Exception as e:
         uat_logger.warning("AI locator merge skipped: %s", e)
     return plan_dict, norm_warnings
@@ -3146,10 +3311,18 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
                     "（可配置 Playwright / 主浏览器，或使用「运行生成」强制探测。设置 LOCAL_AI_SKIP_URL_PROBE=1 可关闭自动打开浏览器。）"
                 )
         elif embedded_gateway_enabled():
-            dom_probe_warning = (
-                "已配置内置画布网关但未建立会话，已跳过主 Playwright 页面探测。"
-                "请先连接画布；或设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1 允许回退。"
-            )
+            from ai_page_probe import fetch_page_controls_bundle
+
+            summary, probe_err, headless_registry = fetch_page_controls_bundle(target_page_url)
+            if headless_registry:
+                page_snapshot = summary or page_snapshot
+                probe_registry = headless_registry
+                probe_url = (target_page_url or "").strip() or None
+            elif probe_err:
+                dom_probe_warning = (
+                    "未能获取页面实时结构，选择器将未经页面探测约束："
+                    f"{probe_err}（请确认目标 URL 可访问。）"
+                )
 
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
     mem_ctx = _ai_memory_context_block(
@@ -3312,11 +3485,19 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
                     f"{err} "
                     "（选择器约束可能较弱；请填写目标 URL 或确认主浏览器可用。）"
                 )
-        elif embedded_gateway_enabled():
-            chat_dom_probe_warning = (
-                "已配置内置画布但未建立会话，已跳过主 Playwright 探测（对话优化）。"
-                "请先连接画布。"
-            )
+        else:
+            from ai_page_probe import fetch_page_controls_bundle
+
+            summary, probe_err, headless_registry = fetch_page_controls_bundle(url_for_probe)
+            if headless_registry:
+                page_snapshot = summary or page_snapshot
+                probe_registry = headless_registry
+                probe_url = url_for_probe
+            elif probe_err:
+                chat_dom_probe_warning = (
+                    "未能获取页面实时结构，选择器/断言约束可能较弱："
+                    f"{probe_err}（请确认用例 URL 可访问。）"
+                )
 
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
     mem_ctx = _ai_memory_context_block(
@@ -4394,6 +4575,10 @@ def api_ai_generate_case_and_save():
         None,
     )
     generated, warnings = apply_step_normalization_to_plan(generated)
+    from ai_page_probe import apply_ai_assert_grounding_to_plan
+
+    generated, ground_warns = apply_ai_assert_grounding_to_plan(generated, warnings)
+    warnings = ground_warns
     log_ai_plan_to_audit(
         current_user.id,
         current_user.username,
@@ -7684,6 +7869,8 @@ def api_dry_run_api_request():
         'status_code': out.get('status_code'),
         'response_text': rt,
         'response_json': out.get('response_json'),
+        'response_headers': out.get('response_headers') or {},
+        'elapsed_ms': out.get('elapsed_ms'),
         'ok_assert': out.get('ok_assert'),
         'assert_message': out.get('assert_message'),
         'error': out.get('error'),
@@ -7732,20 +7919,84 @@ def _run_assert_automation_step(
     iframe_sel,
 ):
     """执行断言步骤（与单用例运行一致）。文本类断言返回应写入 extracted 的片段，否则返回 None。"""
-    assert_type = step.get('compare_type', 'text_equals')
+    from auth_batch_helpers import normalize_assert_compare_type
+
+    assert_type = normalize_assert_compare_type(
+        step.get('compare_type', 'text_equals'),
+        selector_value=selector_value or "",
+        input_value=input_value or "",
+    )
     expected_value = input_value
     uat_logger.info(
         f"执行断言操作: 类型={assert_type}, 选择器={selector_value}, 预期={expected_value}"
     )
     extracted_fragment = None
     try:
-        if assert_type in ['text_equals', 'text_contains', 'text_regex']:
-            actual_text = sync_extract_element_text(
-                selector_value,
-                selector_type,
-                iframe_selector=iframe_sel,
-                locator_candidates=step.get('locator_candidates') or None,
-            )
+        if assert_type in ['page_text_equals', 'page_text_contains', 'page_text_regex']:
+            actual_text = (sync_get_page_text() or "").strip()
+            if assert_type == 'page_text_equals':
+                from auth_batch_helpers import page_text_has_exact_snippet
+
+                if not page_text_has_exact_snippet(actual_text, expected_value or ""):
+                    raise Exception(
+                        f"整页文本断言失败(equals): 页面未出现与预期完全一致的文案 {expected_value!r}"
+                    )
+            elif assert_type == 'page_text_contains':
+                from ai_page_probe import page_text_matches_assert_expected
+
+                if expected_value and not page_text_matches_assert_expected(
+                    actual_text, expected_value, 'page_text_contains'
+                ):
+                    raise Exception(
+                        f"整页文本断言失败(contains): 页面未包含 {expected_value[:160]!r}"
+                    )
+            elif assert_type == 'page_text_regex':
+                from ai_page_probe import page_text_matches_assert_expected
+
+                if not page_text_matches_assert_expected(
+                    actual_text, expected_value or '', 'page_text_regex'
+                ):
+                    raise Exception(
+                        f"整页正则断言失败: pattern={expected_value!r} 实际文本长度={len(actual_text)}"
+                    )
+            extracted_fragment = actual_text[:500] if actual_text else ""
+            uat_logger.info(f"断言成功: {assert_type}")
+        elif assert_type in ['text_equals', 'text_contains', 'text_regex']:
+            from ai_page_probe import page_text_matches_assert_expected
+
+            assert_wait_ms = int(os.environ.get("UAT_ASSERT_ELEMENT_WAIT_MS", "15000") or 15000)
+            try:
+                actual_text = sync_extract_element_text(
+                    selector_value,
+                    selector_type,
+                    iframe_selector=iframe_sel,
+                    locator_candidates=step.get('locator_candidates') or None,
+                    wait_timeout_ms=assert_wait_ms,
+                )
+            except Exception as elem_ex:
+                page_text = (sync_get_page_text() or "").strip()
+                if expected_value and page_text_matches_assert_expected(
+                    page_text, expected_value, assert_type
+                ):
+                    uat_logger.warning(
+                        "元素断言定位失败，已回退整页文本断言成功: %s", expected_value[:80]
+                    )
+                    extracted_fragment = page_text[:500]
+                    uat_logger.info("断言成功: page_text(回退)")
+                    return extracted_fragment
+                if assert_type == 'text_regex' or (
+                    expected_value and '|' in str(expected_value)
+                ):
+                    uat_logger.warning(
+                        "元素断言超时，尝试 page_text_regex 回退: %s", str(expected_value)[:80]
+                    )
+                    if page_text_matches_assert_expected(
+                        page_text, expected_value, 'page_text_regex'
+                    ):
+                        extracted_fragment = page_text[:500]
+                        uat_logger.info("断言成功: page_text_regex(回退)")
+                        return extracted_fragment
+                raise elem_ex
             if assert_type == 'text_equals':
                 if actual_text != expected_value:
                     raise Exception(
@@ -7822,7 +8073,7 @@ def _run_assert_automation_step(
                 )
             uat_logger.info(f"断言成功: 属性 {attr_name} = {actual_attr}")
         else:
-            uat_logger.warning(f"未知的断言类型: {assert_type}")
+            raise Exception(f"不支持的 assert compare_type: {assert_type}")
     except Exception as assert_error:
         uat_logger.error(f"断言失败: {assert_error}")
         raise
@@ -8239,6 +8490,14 @@ def api_run_case(case_id):
         }), 400
 
     # steps 已由 load_case_and_steps 加载
+    from auth_batch_helpers import prepare_steps_for_execution
+
+    steps, _runtime_probe_warns = prepare_steps_for_execution(
+        steps, (case.get("url") or "").strip()
+    )
+    for w in _runtime_probe_warns or []:
+        uat_logger.warning("运行时 LIVE 步骤修复: %s", w)
+
     if any((s.get('action') or '').strip() == 'api_request' for s in steps):
         return jsonify({
             'success': False,
@@ -8279,732 +8538,974 @@ def api_run_case(case_id):
         pass
 
     machine_lock_acquired = False
-    try:
-        from execution_lock import ExecutionLockError, acquire as acquire_machine_lock
+    playwright_lock_acquired = False
+    with _UserUiRunGuard(user_id, f'case #{case_id}'):
+        try:
+            from execution_lock import ExecutionLockError, acquire as acquire_machine_lock
 
-        machine_lock_acquired = acquire_machine_lock(
-            owner=f"case_run:{case_id}:user:{user_id}", timeout_sec=120
-        )
-        if not machine_lock_acquired:
+            machine_lock_acquired = acquire_machine_lock(
+                owner=f"case_run:{case_id}:user:{user_id}", timeout_sec=120
+            )
+            if not machine_lock_acquired:
+                reject_msg = '本机已有自动化任务在执行，请稍后再试。'
+                _record_run_history_rejected(
+                    db, case_id, reject_msg, round(time.time() - start_time, 2)
+                )
+                return jsonify({
+                    'success': False,
+                    'error': reject_msg,
+                    'lock': 'busy',
+                }), 409
+        except ExecutionLockError as lock_exc:
+            reject_msg = str(lock_exc)
+            _record_run_history_rejected(
+                db, case_id, reject_msg, round(time.time() - start_time, 2)
+            )
+            return jsonify({'success': False, 'error': reject_msg, 'lock': 'busy'}), 409
+        except ImportError:
+            pass
+
+        if not _execution_lock.acquire(blocking=True, timeout=120):
+            if machine_lock_acquired:
+                try:
+                    from execution_lock import release as release_machine_lock
+
+                    release_machine_lock()
+                except ImportError:
+                    pass
+            reject_msg = '本机已有自动化任务在执行，请稍后再试。'
+            _record_run_history_rejected(
+                db, case_id, reject_msg, round(time.time() - start_time, 2)
+            )
             return jsonify({
                 'success': False,
-                'error': '本机已有自动化任务在执行，请稍后再试。',
+                'error': reject_msg,
                 'lock': 'busy',
             }), 409
-    except ExecutionLockError as lock_exc:
-        return jsonify({'success': False, 'error': str(lock_exc), 'lock': 'busy'}), 409
-    except ImportError:
-        pass
+        playwright_lock_acquired = True
+        set_execution_in_progress(True)
 
-    uat_logger.info(f"开始运行测试用例 #{case_id}: {case['name']}")
-    uat_logger.info(f"测试用例共有 {len(steps)} 个步骤")
-    with _case_run_lock:
-        _case_run_jobs[user_id] = {
-            'active': True,
-            'cancel_requested': False,
-            'case_id': case_id,
-            'case_name': case.get('name', ''),
-            'total_steps': len(steps),
-            'completed_steps': 0,
-            'current_step_order': 0,
-            'current_action': '',
-            'message': '准备执行...',
-            'started_at': time.time(),
-        }
-    try:
-        from captcha_engine import set_captcha_status_callback
-
-        set_captcha_status_callback(lambda msg: _case_job_update(user_id, message=msg))
-    except ImportError:
-        pass
-
-    try:
-        from step_executor import case_steps_include_android, case_steps_include_web
-        from mobile_routes import execute_mobile_case
-
-        if case_steps_include_android(steps) and not case_steps_include_web(steps):
-            try:
-                resp, status = execute_mobile_case(
-                    case_id,
-                    case,
-                    steps,
-                    db,
-                    user_id,
-                    start_time,
-                    job_update=lambda **kw: _case_job_update(user_id, **kw),
-                    job_cancelled=lambda: _case_run_cancelled(user_id),
-                )
-                with _case_run_lock:
-                    if user_id in _case_run_jobs:
-                        _case_run_jobs[user_id]["active"] = False
-                if machine_lock_acquired:
-                    try:
-                        from execution_lock import release as release_machine_lock
-
-                        release_machine_lock()
-                    except ImportError:
-                        pass
-                return resp, status
-            except Exception as mobile_early_exc:
-                uat_logger.error("Android 用例执行失败: %s", mobile_early_exc)
-                if machine_lock_acquired:
-                    try:
-                        from execution_lock import release as release_machine_lock
-
-                        release_machine_lock()
-                    except ImportError:
-                        pass
-                return jsonify({"success": False, "error": str(mobile_early_exc)}), 500
-    except ImportError:
-        pass
+        uat_logger.info(f"开始运行测试用例 #{case_id}: {case['name']}")
+        uat_logger.info(f"测试用例共有 {len(steps)} 个步骤")
+        with _case_run_lock:
+            _case_run_jobs[user_id] = {
+                'active': True,
+                'cancel_requested': False,
+                'case_id': case_id,
+                'case_name': case.get('name', ''),
+                'total_steps': len(steps),
+                'completed_steps': 0,
+                'current_step_order': 0,
+                'current_action': '',
+                'message': '准备执行...',
+                'started_at': time.time(),
+            }
+        try:
+            from captcha_engine import set_captcha_status_callback
     
-    # 提取的文本
-    extracted_text = ""
-    # 预期结果
-    expected_text = ""
-    # 截图列表（失败截图路径）
-    screenshots = []
-    # 步骤结果列表（用于步骤级记录）
-    step_results_list = []
-    # 浏览器状态标记
-    browser_closed_manually = False
-    browser_started = False
+            set_captcha_status_callback(lambda msg: _case_job_update(user_id, message=msg))
+        except ImportError:
+            pass
     
-    try:
-        # 若用户仍处于元素/桌面拾取会话，执行前关闭拾取 UI，避免全屏遮罩与钩子干扰
         try:
-            from element_picker import sync_stop_element_picker
-
-            picker_stopped = sync_stop_element_picker()
-            if (picker_stopped.get("desktop") or {}).get("was_active"):
-                uat_logger.info("检测到元素捕获仍在运行，执行前已自动关闭")
-        except Exception:
-            pass
-        try:
-            from web_dom_picker import get_web_dom_picker_status, sync_stop_web_dom_picker
-
-            if get_web_dom_picker_status().get('active'):
-                uat_logger.info("检测到网页 DOM 捕获会话，执行前自动关闭")
-                sync_stop_web_dom_picker()
-        except Exception:
-            pass
-        if bool(getattr(automation, '_selection_mode_active', False)):
-            uat_logger.info("检测到旧版 Web 拾取器会话仍在，执行前自动关闭")
-            try:
-                sync_disable_element_selection()
-            except Exception:
-                pass
-            try:
-                automation._selection_mode_active = False
-            except Exception:
-                pass
-
-        # 🔥 增强浏览器断连检测和自动恢复逻辑
-        # 启动浏览器前先检查状态：如果浏览器已断连，先强制重置所有状态
-        browser_disconnected = False
-        try:
-            if automation.browser is not None:
+            from step_executor import case_steps_include_android, case_steps_include_web
+            from mobile_routes import execute_mobile_case
+    
+            if case_steps_include_android(steps) and not case_steps_include_web(steps):
                 try:
-                    browser_disconnected = not automation.browser.is_connected()
-                except Exception:
-                    # is_connected() 抛出异常说明浏览器对象已失效
-                    browser_disconnected = True
-            else:
-                # browser 为 None 说明浏览器未启动或已被清理，这是正常状态
-                browser_disconnected = False
-        except Exception as e:
-            uat_logger.warning(f"⚠️ [浏览器检测] 检测浏览器状态时出错: {e}，假定已断连")
-            browser_disconnected = True
-        
-        if browser_disconnected:
-            uat_logger.warning("⚠️ [浏览器恢复] 检测到浏览器已断连，执行前强制重置所有状态")
-            force_reset_execution_state()
-            uat_logger.info("✅ [浏览器恢复] 状态已重置")
-
-        # 纯桌面用例不启动 Playwright，避免先弹出 about:blank 空浏览器窗口
-        from step_executor import case_steps_include_web, is_desktop_step
-
-        def _ensure_browser_for_web_step() -> None:
-            nonlocal browser_started
-            if browser_started:
-                return
-            sync_start_browser()
-            browser_started = True
-            initial_nav_url, nav_source = _resolve_case_navigation_url(
-                case=case, case_id=case_id, steps=steps
-            )
-            if initial_nav_url:
-                uat_logger.log_automation_step(
-                    "navigate", initial_nav_url, f"首次 Web 步骤前导航({nav_source})"
-                )
-                sync_navigate_to(initial_nav_url)
-
-        if not case_steps_include_web(steps):
-            uat_logger.info("纯桌面/Android 用例，跳过 Playwright 浏览器启动")
-
-        # 执行测试步骤
-        try:
-            total_step_count = len(steps)
-            for step_index, step in enumerate(steps, start=1):
-                if _case_run_cancelled(user_id):
-                    raise Exception("用户已停止执行")
-
-                action = step.get('action', '')
-                selector_type = step.get('selector_type', 'css')
-                # 变量替换：支持 {{变量名}} 语法
-                selector_value = db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id)
-                input_value = db.resolve_variables(step.get('input_value', ''), project_id=case.get('project_id'), case_id=case_id)
-                description = step.get('description', '')
-                # 添加iframe相关字段
-                enter_iframe = step.get('enter_iframe', False)
-                iframe_selector = step.get('iframe_selector', '')
-                iframe_for_step = _effective_step_iframe_selector(
-                    automation, db, step, case.get('project_id'), case_id
-                )
-                locator_candidates = step.get('locator_candidates') or None
-
-                step_start_time = time.time()
-                # 🔥 修复：初始化为 error，只有执行成功才改为 success
-                step_status = 'error'
-                step_error = ''
-                step_screenshot = ''
-                
-                uat_logger.log_automation_step(action, selector_value or input_value, description)
-                _case_job_update(
-                    user_id,
-                    current_step_order=step_index,
-                    current_action=action,
-                    message=f"正在执行步骤 {step_index}/{total_step_count}: {action}",
-                )
-                                                        
-                # 详细的调试日志，跟踪 action 值和执行的方法
-                uat_logger.debug(
-                    f"执行步骤：ID={step.get('id')}, Action={action}, SelectorType={selector_type}, "
-                    f"SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, "
-                    f"IframeSelector={iframe_selector}, IframeEffective={iframe_for_step}"
-                )
-
-                try:
-                    from execution_factory import get_executor_factory
-                    from step_executor import enrich_execution_step, is_desktop_step, is_mobile_step
-
-                    factory = get_executor_factory()
-                    exec_step = enrich_execution_step(step)
-                    if is_desktop_step(exec_step):
+                    resp, status = execute_mobile_case(
+                        case_id,
+                        case,
+                        steps,
+                        db,
+                        user_id,
+                        start_time,
+                        job_update=lambda **kw: _case_job_update(user_id, **kw),
+                        job_cancelled=lambda: _case_run_cancelled(user_id),
+                    )
+                    with _case_run_lock:
+                        if user_id in _case_run_jobs:
+                            _case_run_jobs[user_id]["active"] = False
+                    if machine_lock_acquired:
                         try:
-                            desk_step = dict(exec_step)
-                            desk_step["_case_name"] = (case.get("name") or "").strip()
-                            desk_step["selector_value"] = selector_value
-                            desk_step["input_value"] = input_value
-                            desk_result = factory.execute_desktop_step(
-                                desk_step,
-                                selector_value=selector_value,
-                                input_value=input_value,
-                            )
-                        except Exception as desk_exc:
-                            if _case_run_cancelled(user_id):
-                                raise Exception("用户已停止执行")
-                            from desktop_visual_engine import VisualMatchFailed
+                            from execution_lock import release as release_machine_lock
+    
+                            release_machine_lock()
+                        except ImportError:
+                            pass
+                    return resp, status
+                except Exception as mobile_early_exc:
+                    uat_logger.error("Android 用例执行失败: %s", mobile_early_exc)
+                    if machine_lock_acquired:
+                        try:
+                            from execution_lock import release as release_machine_lock
+    
+                            release_machine_lock()
+                        except ImportError:
+                            pass
+                    return jsonify({"success": False, "error": str(mobile_early_exc)}), 500
+        except ImportError:
+            pass
+        
+        # 提取的文本
+        extracted_text = ""
+        # 预期结果
+        expected_text = ""
+        # 截图列表（失败截图路径）
+        screenshots = []
+        # 步骤结果列表（用于步骤级记录）
+        step_results_list = []
+        # 浏览器状态标记
+        browser_closed_manually = False
+        browser_started = False
+        
+        try:
+            # 若用户仍处于元素/桌面拾取会话，执行前关闭拾取 UI，避免全屏遮罩与钩子干扰
+            try:
+                from element_picker import sync_stop_element_picker
+    
+                picker_stopped = sync_stop_element_picker()
+                if (picker_stopped.get("desktop") or {}).get("was_active"):
+                    uat_logger.info("检测到元素捕获仍在运行，执行前已自动关闭")
+            except Exception:
+                pass
+            try:
+                from web_dom_picker import get_web_dom_picker_status, sync_stop_web_dom_picker
+    
+                if get_web_dom_picker_status().get('active'):
+                    uat_logger.info("检测到网页 DOM 捕获会话，执行前自动关闭")
+                    sync_stop_web_dom_picker()
+            except Exception:
+                pass
+            if bool(getattr(automation, '_selection_mode_active', False)):
+                uat_logger.info("检测到旧版 Web 拾取器会话仍在，执行前自动关闭")
+                try:
+                    sync_disable_element_selection()
+                except Exception:
+                    pass
+                try:
+                    automation._selection_mode_active = False
+                except Exception:
+                    pass
+    
+            # 🔥 增强浏览器断连检测和自动恢复逻辑
+            # 启动浏览器前先检查状态：如果浏览器已断连，先强制重置所有状态
+            browser_disconnected = False
+            try:
+                if automation.browser is not None:
+                    try:
+                        browser_disconnected = not automation.browser.is_connected()
+                    except Exception:
+                        # is_connected() 抛出异常说明浏览器对象已失效
+                        browser_disconnected = True
+                else:
+                    # browser 为 None 说明浏览器未启动或已被清理，这是正常状态
+                    browser_disconnected = False
+            except Exception as e:
+                uat_logger.warning(f"⚠️ [浏览器检测] 检测浏览器状态时出错: {e}，假定已断连")
+                browser_disconnected = True
+            
+            if browser_disconnected:
+                uat_logger.warning("⚠️ [浏览器恢复] 检测到浏览器已断连，执行前强制重置所有状态")
+                force_reset_execution_state()
+                uat_logger.info("✅ [浏览器恢复] 状态已重置")
+    
+            # 纯桌面用例不启动 Playwright，避免先弹出 about:blank 空浏览器窗口
+            from step_executor import case_steps_include_web, is_desktop_step
+    
+            def _ensure_browser_for_web_step() -> None:
+                nonlocal browser_started
+                if browser_started:
+                    return
+                sync_start_browser()
+                browser_started = True
+                initial_nav_url, nav_source = _resolve_case_navigation_url(
+                    case=case, case_id=case_id, steps=steps
+                )
+                try:
+                    from auth_batch_helpers import _case_role
 
+                    if _case_role(case) == "login_feature":
+                        sync_prepare_fresh_web_session(initial_nav_url or "")
+                        if initial_nav_url:
+                            uat_logger.info(
+                                f"登录功能用例：已重置会话并导航({nav_source}) -> {initial_nav_url}"
+                            )
+                        return
+                except Exception as prep_ex:
+                    uat_logger.warning("登录用例会话重置失败，回退常规导航: %s", prep_ex)
+                if initial_nav_url:
+                    uat_logger.log_automation_step(
+                        "navigate", initial_nav_url, f"首次 Web 步骤前导航({nav_source})"
+                    )
+                    sync_navigate_to(initial_nav_url)
+    
+            if not case_steps_include_web(steps):
+                uat_logger.info("纯桌面/Android 用例，跳过 Playwright 浏览器启动")
+    
+            # 执行测试步骤
+            try:
+                try:
+                    automation.set_case_run_hint(
+                        case_name=(case.get("name") or ""),
+                        step_descriptions=[
+                            str(s.get("description") or "") for s in (steps or [])
+                        ],
+                    )
+                except Exception:
+                    pass
+                total_step_count = len(steps)
+                for step_index, step in enumerate(steps, start=1):
+                    if _case_run_cancelled(user_id):
+                        raise Exception("用户已停止执行")
+    
+                    action = step.get('action', '')
+                    selector_type = step.get('selector_type', 'css')
+                    # 变量替换：支持 {{变量名}} 语法
+                    selector_value = db.resolve_variables(step.get('selector_value', ''), project_id=case.get('project_id'), case_id=case_id)
+                    input_value = db.resolve_variables(step.get('input_value', ''), project_id=case.get('project_id'), case_id=case_id)
+                    description = step.get('description', '')
+                    # 添加iframe相关字段
+                    enter_iframe = step.get('enter_iframe', False)
+                    iframe_selector = step.get('iframe_selector', '')
+                    iframe_for_step = _effective_step_iframe_selector(
+                        automation, db, step, case.get('project_id'), case_id
+                    )
+                    locator_candidates = step.get('locator_candidates') or None
+    
+                    step_start_time = time.time()
+                    # 🔥 修复：初始化为 error，只有执行成功才改为 success
+                    step_status = 'error'
+                    step_error = ''
+                    step_screenshot = ''
+                    
+                    uat_logger.log_automation_step(action, selector_value or input_value, description)
+                    _case_job_update(
+                        user_id,
+                        current_step_order=step_index,
+                        current_action=action,
+                        message=f"正在执行步骤 {step_index}/{total_step_count}: {action}",
+                    )
+                                                            
+                    # 详细的调试日志，跟踪 action 值和执行的方法
+                    uat_logger.debug(
+                        f"执行步骤：ID={step.get('id')}, Action={action}, SelectorType={selector_type}, "
+                        f"SelectorValue={selector_value}, InputValue={input_value}, EnterIframe={enter_iframe}, "
+                        f"IframeSelector={iframe_selector}, IframeEffective={iframe_for_step}"
+                    )
+    
+                    try:
+                        from execution_factory import get_executor_factory
+                        from step_executor import enrich_execution_step, is_desktop_step, is_mobile_step
+    
+                        factory = get_executor_factory()
+                        exec_step = enrich_execution_step(step)
+                        if is_desktop_step(exec_step):
+                            try:
+                                desk_step = dict(exec_step)
+                                desk_step["_case_name"] = (case.get("name") or "").strip()
+                                desk_step["selector_value"] = selector_value
+                                desk_step["input_value"] = input_value
+                                desk_result = factory.execute_desktop_step(
+                                    desk_step,
+                                    selector_value=selector_value,
+                                    input_value=input_value,
+                                )
+                            except Exception as desk_exc:
+                                if _case_run_cancelled(user_id):
+                                    raise Exception("用户已停止执行")
+                                from desktop_visual_engine import VisualMatchFailed
+    
+                                step_duration = round(time.time() - step_start_time, 3)
+                                step_screenshot = getattr(desk_exc, "failure_screenshot", "") or ""
+                                step_results_list.append({
+                                    'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                                    'action': action, 'selector_value': selector_value,
+                                    'input_value': input_value, 'description': description,
+                                    'status': 'error', 'error': str(desk_exc),
+                                    'screenshot': step_screenshot, 'duration': step_duration,
+                                    'automation_layer': 'desktop',
+                                })
+                                if isinstance(desk_exc, VisualMatchFailed):
+                                    desk_exc.step_id = step.get('id')  # type: ignore[attr-defined]
+                                raise
+                            from step_executor import validate_desktop_step_result
+    
+                            validate_desktop_step_result(desk_result, action)
+                            step_status = 'success'
+                            step_error = ''
+                            step_screenshot = (desk_result or {}).get('screenshot') or ''
+                            if (desk_result or {}).get("resolved_via"):
+                                uat_logger.info(
+                                    "桌面步骤 #%s 定位方式: %s",
+                                    step.get("id"),
+                                    desk_result.get("resolved_via"),
+                                )
                             step_duration = round(time.time() - step_start_time, 3)
-                            step_screenshot = getattr(desk_exc, "failure_screenshot", "") or ""
                             step_results_list.append({
                                 'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
                                 'action': action, 'selector_value': selector_value,
                                 'input_value': input_value, 'description': description,
-                                'status': 'error', 'error': str(desk_exc),
+                                'status': step_status, 'error': step_error,
                                 'screenshot': step_screenshot, 'duration': step_duration,
                                 'automation_layer': 'desktop',
                             })
-                            if isinstance(desk_exc, VisualMatchFailed):
-                                desk_exc.step_id = step.get('id')  # type: ignore[attr-defined]
-                            raise
-                        from step_executor import validate_desktop_step_result
-
-                        validate_desktop_step_result(desk_result, action)
-                        step_status = 'success'
-                        step_error = ''
-                        step_screenshot = (desk_result or {}).get('screenshot') or ''
-                        if (desk_result or {}).get("resolved_via"):
-                            uat_logger.info(
-                                "桌面步骤 #%s 定位方式: %s",
-                                step.get("id"),
-                                desk_result.get("resolved_via"),
+                            _case_job_update(
+                                user_id,
+                                completed_steps=len(step_results_list),
+                                message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
                             )
-                        step_duration = round(time.time() - step_start_time, 3)
-                        step_results_list.append({
-                            'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
-                            'action': action, 'selector_value': selector_value,
-                            'input_value': input_value, 'description': description,
-                            'status': step_status, 'error': step_error,
-                            'screenshot': step_screenshot, 'duration': step_duration,
-                            'automation_layer': 'desktop',
-                        })
-                        _case_job_update(
-                            user_id,
-                            completed_steps=len(step_results_list),
-                            message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
-                        )
-                        continue
-                    if is_mobile_step(exec_step):
-                        try:
-                            mob_step = dict(exec_step)
-                            mob_step["selector_value"] = selector_value
-                            mob_step["input_value"] = input_value
-                            mob_result = factory.execute_mobile_step(
-                                mob_step,
-                                selector_value=selector_value,
-                                input_value=input_value,
-                            )
-                        except Exception as mob_exc:
-                            if _case_run_cancelled(user_id):
-                                raise Exception("用户已停止执行")
+                            continue
+                        if is_mobile_step(exec_step):
+                            try:
+                                mob_step = dict(exec_step)
+                                mob_step["selector_value"] = selector_value
+                                mob_step["input_value"] = input_value
+                                mob_result = factory.execute_mobile_step(
+                                    mob_step,
+                                    selector_value=selector_value,
+                                    input_value=input_value,
+                                )
+                            except Exception as mob_exc:
+                                if _case_run_cancelled(user_id):
+                                    raise Exception("用户已停止执行")
+                                step_duration = round(time.time() - step_start_time, 3)
+                                step_screenshot = (getattr(mob_exc, "failure_screenshot", None) or "")
+                                step_results_list.append({
+                                    'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                                    'action': action, 'selector_value': selector_value,
+                                    'input_value': input_value, 'description': description,
+                                    'status': 'error', 'error': str(mob_exc),
+                                    'screenshot': step_screenshot, 'duration': step_duration,
+                                    'automation_layer': 'android',
+                                })
+                                raise
+                            from mobile_automation import validate_mobile_step_result
+    
+                            validate_mobile_step_result(mob_result, action)
+                            step_status = 'success'
+                            step_error = ''
+                            step_screenshot = (mob_result or {}).get('screenshot') or ''
                             step_duration = round(time.time() - step_start_time, 3)
-                            step_screenshot = (getattr(mob_exc, "failure_screenshot", None) or "")
                             step_results_list.append({
                                 'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
                                 'action': action, 'selector_value': selector_value,
                                 'input_value': input_value, 'description': description,
-                                'status': 'error', 'error': str(mob_exc),
+                                'status': step_status, 'error': step_error,
                                 'screenshot': step_screenshot, 'duration': step_duration,
                                 'automation_layer': 'android',
                             })
-                            raise
-                        from mobile_automation import validate_mobile_step_result
-
-                        validate_mobile_step_result(mob_result, action)
-                        step_status = 'success'
-                        step_error = ''
-                        step_screenshot = (mob_result or {}).get('screenshot') or ''
-                        step_duration = round(time.time() - step_start_time, 3)
-                        step_results_list.append({
-                            'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
-                            'action': action, 'selector_value': selector_value,
-                            'input_value': input_value, 'description': description,
-                            'status': step_status, 'error': step_error,
-                            'screenshot': step_screenshot, 'duration': step_duration,
-                            'automation_layer': 'android',
-                        })
-                        _case_job_update(
-                            user_id,
-                            completed_steps=len(step_results_list),
-                            message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
+                            _case_job_update(
+                                user_id,
+                                completed_steps=len(step_results_list),
+                                message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
+                            )
+                            continue
+                    except ImportError:
+                        pass
+    
+                    from desktop_automation import normalize_automation_layer as _norm_layer
+    
+                    if _norm_layer(step) == "desktop":
+                        raise Exception(
+                            f"桌面步骤未进入桌面执行器（action={action}，"
+                            f"automation_layer={step.get('automation_layer')!r}）。"
+                            f"请确认步骤自动化层为「桌面」后重试。"
                         )
-                        continue
-                except ImportError:
-                    pass
-
-                from desktop_automation import normalize_automation_layer as _norm_layer
-
-                if _norm_layer(step) == "desktop":
-                    raise Exception(
-                        f"桌面步骤未进入桌面执行器（action={action}，"
-                        f"automation_layer={step.get('automation_layer')!r}）。"
-                        f"请确认步骤自动化层为「桌面」后重试。"
-                    )
-                if _norm_layer(step) == "android":
-                    raise Exception(
-                        f"Android 步骤未进入移动端执行器（action={action}，"
-                        f"automation_layer={step.get('automation_layer')!r}）。"
-                        f"请确认 ENABLE_MOBILE=1 且已安装 Appium 依赖。"
-                    )
-
-                _ensure_browser_for_web_step()
-                
-                if action == 'navigate':
-                    # 获取URL并进行有效性检查
-                    raw_url = step.get('url') or step.get('input_value') or ''
-                    fixed_url, url_err = _validate_and_fix_url(raw_url)
-                    if url_err:
-                        uat_logger.error(f"导航步骤URL无效: {url_err}")
-                        raise Exception(url_err)
-                    elif fixed_url:
-                        uat_logger.log_automation_step("navigate", fixed_url, "导航到URL")
-                        sync_navigate_to(fixed_url)
-                    else:
-                        uat_logger.warning("导航步骤URL为空，跳过")
-                elif action == 'click':
-                            if not selector_value:
-                                raise Exception("点击步骤缺少选择器")
+                    if _norm_layer(step) == "android":
+                        raise Exception(
+                            f"Android 步骤未进入移动端执行器（action={action}，"
+                            f"automation_layer={step.get('automation_layer')!r}）。"
+                            f"请确认 ENABLE_MOBILE=1 且已安装 Appium 依赖。"
+                        )
+    
+                    _ensure_browser_for_web_step()
+                    
+                    if action == 'navigate':
+                        # 获取URL并进行有效性检查
+                        raw_url = step.get('url') or step.get('input_value') or ''
+                        fixed_url, url_err = _validate_and_fix_url(raw_url)
+                        if url_err:
+                            uat_logger.error(f"导航步骤URL无效: {url_err}")
+                            raise Exception(url_err)
+                        elif fixed_url:
+                            uat_logger.log_automation_step("navigate", fixed_url, "导航到URL")
+                            sync_navigate_to(fixed_url)
+                        else:
+                            uat_logger.warning("导航步骤URL为空，跳过")
+                    elif action == 'click':
+                                if not selector_value:
+                                    raise Exception("点击步骤缺少选择器")
+                                try:
+                                    _repeat = _norm_click_repeat_count(step.get('click_repeat_count'))
+                                    for _r in range(_repeat):
+                                        with _case_run_lock:
+                                            if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
+                                                raise Exception("用户已停止执行")
+                                        sync_click_element(
+                                            selector_value,
+                                            selector_type,
+                                            iframe_selector=iframe_for_step,
+                                            locator_candidates=locator_candidates,
+                                        )
+                                except Exception as click_error:
+                                    uat_logger.error(f"执行点击操作时出错: {click_error}")
+                                    raise
+                    elif action == 'input':
+                        if selector_value:
                             try:
-                                _repeat = _norm_click_repeat_count(step.get('click_repeat_count'))
-                                for _r in range(_repeat):
-                                    with _case_run_lock:
-                                        if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
-                                            raise Exception("用户已停止执行")
-                                    sync_click_element(
+                                try:
+                                    safe_input_value = resolve_fill_step_text({
+                                        'input_value': input_value,
+                                        'description': step.get('description'),
+                                    })
+                                except Exception as fill_val_err:
+                                    if input_value is None and step_description_implies_empty_input(
+                                        step.get('description')
+                                    ):
+                                        safe_input_value = ""
+                                    else:
+                                        raise fill_val_err
+                                uat_logger.info(f"🔍 准备执行输入操作: 步骤ID={step.get('id', 'unknown')}, 选择器类型={selector_type}, 选择器值={selector_value}, 输入值={safe_input_value!r}")
+                                
+                                # 🔥 添加详细的诊断信息
+                                if len(selector_value) > 200:
+                                    uat_logger.warning(f"⚠️ 检测到超长CSS选择器（{len(selector_value)}字符），建议优化选择器")
+                                    uat_logger.warning(f"   当前选择器前100字符: {selector_value[:100]}...")
+                                
+                                # 🔥 检查选择器类型
+                                if selector_type == "css" and "nth-child" in selector_value:
+                                    uat_logger.warning(f"⚠️ 检测到使用nth-child定位，可能不够稳定，建议改用ID或类名")
+                                
+                                sync_fill_input(
                                         selector_value,
+                                        safe_input_value,
                                         selector_type,
                                         iframe_selector=iframe_for_step,
                                         locator_candidates=locator_candidates,
                                     )
-                            except Exception as click_error:
-                                uat_logger.error(f"执行点击操作时出错: {click_error}")
+                                uat_logger.info(f"✅ 输入操作执行完成: 步骤ID={step.get('id', 'unknown')}")
+                                
+                            except Exception as input_error:
+                                uat_logger.error(f"🔥 输入操作执行失败详情:")
+                                uat_logger.error(f"   步骤ID: {step.get('id', 'unknown')}")
+                                uat_logger.error(f"   选择器类型: {selector_type}")
+                                uat_logger.error(f"   选择器值: {selector_value}")
+                                uat_logger.error(f"   输入值: {input_value}")
+                                uat_logger.error(f"   错误信息: {input_error}")
+                                uat_logger.error(f"   iframe选择器: {iframe_for_step}")
+                                
+                                # 🔥 提供改进建议
+                                if len(selector_value) > 200:
+                                    uat_logger.error(f"   💡 建议: 选择器过长，尝试使用更简单的选择器，如ID、类名或文本定位")
+                                if "nth-child" in selector_value:
+                                    uat_logger.error(f"   💡 建议: 避免使用nth-child，改用更稳定的定位方式")
+                                if "h-[" in selector_value or "w-[" in selector_value or "calc(" in selector_value:
+                                    uat_logger.error(f"   💡 建议: 避免使用Tailwind动态类名，这些类名容易变化")
+                                
+                                # 直接抛出错误，视为测试用例执行失败
                                 raise
-                elif action == 'input':
-                    if selector_value:
-                        try:
-                            # 严格模式：未配置输入值时直接失败，避免误清空
-                            if input_value is None or str(input_value) == '':
-                                raise Exception(f"输入步骤缺少有效输入值: step_id={step.get('id', 'unknown')}")
-                            safe_input_value = input_value
-                            uat_logger.info(f"🔍 准备执行输入操作: 步骤ID={step.get('id', 'unknown')}, 选择器类型={selector_type}, 选择器值={selector_value}, 输入值={input_value}")
-                            
-                            # 🔥 添加详细的诊断信息
-                            if len(selector_value) > 200:
-                                uat_logger.warning(f"⚠️ 检测到超长CSS选择器（{len(selector_value)}字符），建议优化选择器")
-                                uat_logger.warning(f"   当前选择器前100字符: {selector_value[:100]}...")
-                            
-                            # 🔥 检查选择器类型
-                            if selector_type == "css" and "nth-child" in selector_value:
-                                uat_logger.warning(f"⚠️ 检测到使用nth-child定位，可能不够稳定，建议改用ID或类名")
-                            
+                        else:
+                            uat_logger.error("输入操作缺少选择器，步骤不能执行")
+                            raise Exception("输入操作缺少选择器")
+                    elif action == 'batch_input':
+                        pairs = parse_batch_input_lines(input_value or '')
+                        if not pairs:
+                            raise Exception("批量输入步骤缺少有效行（每行：选择器 + Tab 或逗号 + 文本，参见步骤说明）")
+                        for bsel, bval in pairs:
+                            with _case_run_lock:
+                                if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
+                                    raise Exception("用户已停止执行")
+                            uat_logger.info(
+                                f"批量输入: 选择器={bsel!r} 值长={len(bval or '')}"
+                            )
                             sync_fill_input(
-                                    selector_value,
-                                    safe_input_value,
-                                    selector_type,
-                                    iframe_selector=iframe_for_step,
-                                    locator_candidates=locator_candidates,
-                                )
-                            uat_logger.info(f"✅ 输入操作执行完成: 步骤ID={step.get('id', 'unknown')}")
-                            
-                        except Exception as input_error:
-                            uat_logger.error(f"🔥 输入操作执行失败详情:")
-                            uat_logger.error(f"   步骤ID: {step.get('id', 'unknown')}")
-                            uat_logger.error(f"   选择器类型: {selector_type}")
-                            uat_logger.error(f"   选择器值: {selector_value}")
-                            uat_logger.error(f"   输入值: {input_value}")
-                            uat_logger.error(f"   错误信息: {input_error}")
-                            uat_logger.error(f"   iframe选择器: {iframe_for_step}")
-                            
-                            # 🔥 提供改进建议
-                            if len(selector_value) > 200:
-                                uat_logger.error(f"   💡 建议: 选择器过长，尝试使用更简单的选择器，如ID、类名或文本定位")
-                            if "nth-child" in selector_value:
-                                uat_logger.error(f"   💡 建议: 避免使用nth-child，改用更稳定的定位方式")
-                            if "h-[" in selector_value or "w-[" in selector_value or "calc(" in selector_value:
-                                uat_logger.error(f"   💡 建议: 避免使用Tailwind动态类名，这些类名容易变化")
-                            
-                            # 直接抛出错误，视为测试用例执行失败
-                            raise
-                    else:
-                        uat_logger.error("输入操作缺少选择器，步骤不能执行")
-                        raise Exception("输入操作缺少选择器")
-                elif action == 'batch_input':
-                    pairs = parse_batch_input_lines(input_value or '')
-                    if not pairs:
-                        raise Exception("批量输入步骤缺少有效行（每行：选择器 + Tab 或逗号 + 文本，参见步骤说明）")
-                    for bsel, bval in pairs:
-                        with _case_run_lock:
-                            if bool(_case_run_jobs.get(user_id, {}).get('cancel_requested')):
-                                raise Exception("用户已停止执行")
-                        uat_logger.info(
-                            f"批量输入: 选择器={bsel!r} 值长={len(bval or '')}"
-                        )
-                        sync_fill_input(
-                            bsel,
-                            bval,
-                            selector_type,
-                            iframe_selector=iframe_for_step,
-                            locator_candidates=None,
-                        )
-                elif action == 'hover':
-                    if selector_value:
-                        try:
-                            sync_hover_element(selector_value, selector_type, iframe_selector=iframe_for_step)
-                            # 悬停后等待页面响应
-                            sync_wait_for_timeout(1000)
-                        except Exception as hover_error:
-                            uat_logger.error(f"执行悬停操作时出错: {hover_error}")
-                            # 直接抛出错误，视为测试用例执行失败
-                            raise
-                    else:
-                        uat_logger.error("悬停操作缺少选择器")
-                        raise Exception("悬停操作缺少选择器")
-                elif action == 'double_click':
-                    if selector_value:
-                        try:
-                            sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_for_step)
-                            # 双击后等待页面响应
-                            sync_wait_for_timeout(2000)
-                        except Exception as double_click_error:
-                            uat_logger.error(f"执行双击操作时出错: {double_click_error}")
-                            # 直接抛出错误，视为测试用例执行失败
-                            raise
-                    else:
-                        uat_logger.error("双击操作缺少选择器")
-                        raise Exception("双击操作缺少选择器")
-                elif action == 'right_click':
-                    if selector_value:
-                        try:
-                            sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_for_step)
-                            # 右键点击后等待页面响应
-                            sync_wait_for_timeout(1000)
-                        except Exception as right_click_error:
-                            uat_logger.error(f"执行右键点击操作时出错: {right_click_error}")
-                            # 直接抛出错误，视为测试用例执行失败
-                            raise
-                    else:
-                        uat_logger.error("右键点击操作缺少选择器")
-                        raise Exception("右键点击操作缺少选择器")
-                elif action == 'wait':
-                    # 修复：wait操作应该等待时间，而不是等待选择器
-                    if input_value:
-                        try:
-                            # 将输入值转换为毫秒（支持秒为单位）
-                            wait_time = int(input_value) * 1000 if int(input_value) < 1000 else int(input_value)
-                            sync_wait_for_timeout(wait_time)
-                        except ValueError:
-                            uat_logger.error(f"无效的等待时间值: {input_value}")
-                            # 🔥 修复：无效的等待时间应该视为测试失败
-                            raise Exception(f"无效的等待时间值: {input_value}")
-                    else:
-                        # 🔥 修复：如果没有输入值，应该视为失败（或者使用默认值但记录警告）
-                        uat_logger.warning("等待操作缺少输入值，使用默认值1000毫秒")
-                        sync_wait_for_timeout(1000)
-                elif action == 'select':
-                    # 修复：添加下拉框选择操作
-                    if selector_value and input_value:
-                        try:
-                            sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_for_step)
-                            # 选择后等待页面响应
-                            sync_wait_for_timeout(1000)
-                        except Exception as select_error:
-                            uat_logger.error(f"执行下拉框选择操作时出错: {select_error}")
-                            # 直接抛出错误，视为测试用例执行失败
-                            raise
-                elif action == 'date':
-                    # 新增：日期选择器操作
-                    if selector_value and input_value:
-                        try:
-                            sync_select_date(selector_value, input_value)
-                            # 选择日期后等待页面响应
-                            sync_wait_for_timeout(1000)
-                        except Exception as date_error:
-                            uat_logger.error(f"执行日期选择操作时出错: {date_error}")
-                            # 直接抛出错误，视为测试用例执行失败
-                            raise
-                elif action == 'scroll':
-                    try:
-                        _run_db_step_scroll(
-                            input_value or "",
-                            iframe_selector=iframe_for_step,
-                        )
-                        # 滚动后等待页面响应
-                        sync_wait_for_timeout(1500)
-                    except Exception as scroll_error:
-                        uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
-                        # 直接抛出错误，视为测试用例执行失败
-                        raise
-                elif action == 'swipe':
-                    if selector_value:
-                        direction = 'up'
-                        distance = 100
+                                bsel,
+                                bval,
+                                selector_type,
+                                iframe_selector=iframe_for_step,
+                                locator_candidates=None,
+                            )
+                    elif action == 'hover':
+                        if selector_value:
+                            try:
+                                sync_hover_element(selector_value, selector_type, iframe_selector=iframe_for_step)
+                                # 悬停后等待页面响应
+                                sync_wait_for_timeout(1000)
+                            except Exception as hover_error:
+                                uat_logger.error(f"执行悬停操作时出错: {hover_error}")
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                        else:
+                            uat_logger.error("悬停操作缺少选择器")
+                            raise Exception("悬停操作缺少选择器")
+                    elif action == 'double_click':
+                        if selector_value:
+                            try:
+                                sync_double_click_element(selector_value, selector_type, iframe_selector=iframe_for_step)
+                                # 双击后等待页面响应
+                                sync_wait_for_timeout(2000)
+                            except Exception as double_click_error:
+                                uat_logger.error(f"执行双击操作时出错: {double_click_error}")
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                        else:
+                            uat_logger.error("双击操作缺少选择器")
+                            raise Exception("双击操作缺少选择器")
+                    elif action == 'right_click':
+                        if selector_value:
+                            try:
+                                sync_right_click_element(selector_value, selector_type, iframe_selector=iframe_for_step)
+                                # 右键点击后等待页面响应
+                                sync_wait_for_timeout(1000)
+                            except Exception as right_click_error:
+                                uat_logger.error(f"执行右键点击操作时出错: {right_click_error}")
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                        else:
+                            uat_logger.error("右键点击操作缺少选择器")
+                            raise Exception("右键点击操作缺少选择器")
+                    elif action == 'wait':
+                        # 修复：wait操作应该等待时间，而不是等待选择器
                         if input_value:
-                            # 解析 input_value 中的方向和距离 (格式: direction:distance)
-                            parts = input_value.split(':')
-                            if len(parts) == 2:
-                                direction = parts[0]
-                                try:
-                                    distance = int(parts[1])
-                                except ValueError:
-                                    uat_logger.warning(f"无效的滑动距离值: {parts[1]}，使用默认值 100")
-                            else:
-                                # 兼容旧格式 (只有方向)
-                                direction = input_value
+                            try:
+                                # 将输入值转换为毫秒（支持秒为单位）
+                                wait_time = int(input_value) * 1000 if int(input_value) < 1000 else int(input_value)
+                                sync_wait_for_timeout(wait_time)
+                            except ValueError:
+                                uat_logger.error(f"无效的等待时间值: {input_value}")
+                                # 🔥 修复：无效的等待时间应该视为测试失败
+                                raise Exception(f"无效的等待时间值: {input_value}")
+                        else:
+                            # 🔥 修复：如果没有输入值，应该视为失败（或者使用默认值但记录警告）
+                            uat_logger.warning("等待操作缺少输入值，使用默认值1000毫秒")
+                            sync_wait_for_timeout(1000)
+                    elif action == 'select':
+                        # 修复：添加下拉框选择操作
+                        if selector_value and input_value:
+                            try:
+                                sync_select_option(selector_value, input_value, selector_type, iframe_selector=iframe_for_step)
+                                # 选择后等待页面响应
+                                sync_wait_for_timeout(1000)
+                            except Exception as select_error:
+                                uat_logger.error(f"执行下拉框选择操作时出错: {select_error}")
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                    elif action == 'date':
+                        # 新增：日期选择器操作
+                        if selector_value and input_value:
+                            try:
+                                sync_select_date(selector_value, input_value)
+                                # 选择日期后等待页面响应
+                                sync_wait_for_timeout(1000)
+                            except Exception as date_error:
+                                uat_logger.error(f"执行日期选择操作时出错: {date_error}")
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                    elif action == 'scroll':
                         try:
-                            sync_swipe_element(selector_value, direction, distance, selector_type, iframe_selector=iframe_for_step)
-                            # 滑动后等待页面响应
+                            _run_db_step_scroll(
+                                input_value or "",
+                                iframe_selector=iframe_for_step,
+                            )
+                            # 滚动后等待页面响应
                             sync_wait_for_timeout(1500)
-                        except Exception as swipe_error:
-                            uat_logger.error(f"执行滑动操作时出错: {swipe_error}")
+                        except Exception as scroll_error:
+                            uat_logger.error(f"执行滚动操作时出错: {scroll_error}")
                             # 直接抛出错误，视为测试用例执行失败
                             raise
-                elif action == 'verify':
-                    # 验证操作处理
-                    verify_type = input_value if input_value else 'auto'
-                    try:
-                        sync_verify_element(
-                            selector=selector_value,
-                            verify_type=verify_type,
-                            selector_type=selector_type,
-                            iframe_selector=iframe_for_step,
+                    elif action == 'swipe':
+                        if selector_value:
+                            direction = 'up'
+                            distance = 100
+                            if input_value:
+                                # 解析 input_value 中的方向和距离 (格式: direction:distance)
+                                parts = input_value.split(':')
+                                if len(parts) == 2:
+                                    direction = parts[0]
+                                    try:
+                                        distance = int(parts[1])
+                                    except ValueError:
+                                        uat_logger.warning(f"无效的滑动距离值: {parts[1]}，使用默认值 100")
+                                else:
+                                    # 兼容旧格式 (只有方向)
+                                    direction = input_value
+                            try:
+                                sync_swipe_element(selector_value, direction, distance, selector_type, iframe_selector=iframe_for_step)
+                                # 滑动后等待页面响应
+                                sync_wait_for_timeout(1500)
+                            except Exception as swipe_error:
+                                uat_logger.error(f"执行滑动操作时出错: {swipe_error}")
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                    elif action == 'verify':
+                        # 验证操作处理
+                        verify_type = input_value if input_value else 'auto'
+                        try:
+                            sync_verify_element(
+                                selector=selector_value,
+                                verify_type=verify_type,
+                                selector_type=selector_type,
+                                iframe_selector=iframe_for_step,
+                                locator_candidates=locator_candidates,
+                                captcha_max_attempts=step.get('captcha_max_attempts'),
+                            )
+                            # 验证后等待页面响应
+                            sync_wait_for_timeout(1500)
+                        except Exception as verify_error:
+                            uat_logger.error(f"执行验证操作时出错: {verify_error}")
+                            # 直接抛出错误，视为测试用例执行失败
+                            raise
+                    elif action == 'extract_text' or action == 'text_compare':
+                        extracted_text, expected_text = _run_extract_text_automation_step(
+                            action,
+                            step,
+                            selector_value,
+                            input_value,
+                            description,
+                            selector_type,
+                            iframe_for_step,
                             locator_candidates=locator_candidates,
-                            captcha_max_attempts=step.get('captcha_max_attempts'),
                         )
-                        # 验证后等待页面响应
-                        sync_wait_for_timeout(1500)
-                    except Exception as verify_error:
-                        uat_logger.error(f"执行验证操作时出错: {verify_error}")
-                        # 直接抛出错误，视为测试用例执行失败
-                        raise
-                elif action == 'extract_text' or action == 'text_compare':
-                    extracted_text, expected_text = _run_extract_text_automation_step(
-                        action,
-                        step,
-                        selector_value,
-                        input_value,
-                        description,
-                        selector_type,
-                        iframe_for_step,
-                        locator_candidates=locator_candidates,
-                    )
-                elif action == 'extract_json':
-                    if selector_value:
-                        # 提取元素JSON数据
+                    elif action == 'extract_json':
+                        if selector_value:
+                            # 提取元素JSON数据
+                            try:
+                                json_data = sync_extract_element_json(selector_value, selector_type)
+                                uat_logger.info(f"提取到JSON数据: {json_data}")
+                                # 保存到extracted_text变量，以便在结果中显示
+                                extracted_text = str(json_data)
+                            except Exception as extract_error:
+                                uat_logger.error(f"提取JSON数据失败: {extract_error}")
+                                # 🔥 修复：提取JSON数据失败应该视为测试失败
+                                raise Exception(f"提取JSON数据失败: {extract_error}")
+                        else:
+                            uat_logger.error("提取JSON数据时缺少选择器")
+                            # 🔥 修复：缺少选择器应该视为测试失败
+                            raise Exception("提取JSON数据时缺少选择器")
+                        
+                        # 提取后等待页面响应
+                        sync_wait_for_timeout(1000)
+                    elif action == 'assert':
+                        extra_ex = _run_assert_automation_step(
+                            step, selector_value, input_value, selector_type, iframe_for_step
+                        )
+                        if extra_ex is not None:
+                            extracted_text = extra_ex
+                    elif action == 'enter_iframe':
+                        if selector_value:
+                            # 进入 iframe：状态在 automation.current_iframe，下游步骤由 _effective_step_iframe_selector 继承
+                            try:
+                                sync_enter_iframe(selector_value, selector_type)
+                                uat_logger.info(f"✅ 成功进入iframe: {selector_value}")
+                            except Exception as enter_error:
+                                uat_logger.error(f"执行进入iframe操作时出错: {enter_error}")
+                                # 直接抛出错误，视为测试用例执行失败
+                                raise
+                        else:
+                            uat_logger.warning("进入iframe操作缺少选择器")
+                    elif action == 'exit_iframe':
+                        # 跳出 iframe：清除 automation.current_iframe，后续步骤回到主文档（除非步骤自身勾选 iframe）
                         try:
-                            json_data = sync_extract_element_json(selector_value, selector_type)
-                            uat_logger.info(f"提取到JSON数据: {json_data}")
-                            # 保存到extracted_text变量，以便在结果中显示
-                            extracted_text = str(json_data)
-                        except Exception as extract_error:
-                            uat_logger.error(f"提取JSON数据失败: {extract_error}")
-                            # 🔥 修复：提取JSON数据失败应该视为测试失败
-                            raise Exception(f"提取JSON数据失败: {extract_error}")
-                    else:
-                        uat_logger.error("提取JSON数据时缺少选择器")
-                        # 🔥 修复：缺少选择器应该视为测试失败
-                        raise Exception("提取JSON数据时缺少选择器")
-                    
-                    # 提取后等待页面响应
-                    sync_wait_for_timeout(1000)
-                elif action == 'assert':
-                    extra_ex = _run_assert_automation_step(
-                        step, selector_value, input_value, selector_type, iframe_for_step
-                    )
-                    if extra_ex is not None:
-                        extracted_text = extra_ex
-                elif action == 'enter_iframe':
-                    if selector_value:
-                        # 进入 iframe：状态在 automation.current_iframe，下游步骤由 _effective_step_iframe_selector 继承
-                        try:
-                            sync_enter_iframe(selector_value, selector_type)
-                            uat_logger.info(f"✅ 成功进入iframe: {selector_value}")
-                        except Exception as enter_error:
-                            uat_logger.error(f"执行进入iframe操作时出错: {enter_error}")
+                            sync_exit_iframe()
+                            uat_logger.info("✅ 成功跳出iframe，返回主文档")
+                        except Exception as exit_error:
+                            uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
                             # 直接抛出错误，视为测试用例执行失败
                             raise
                     else:
-                        uat_logger.warning("进入iframe操作缺少选择器")
-                elif action == 'exit_iframe':
-                    # 跳出 iframe：清除 automation.current_iframe，后续步骤回到主文档（除非步骤自身勾选 iframe）
-                    try:
-                        sync_exit_iframe()
-                        uat_logger.info("✅ 成功跳出iframe，返回主文档")
-                    except Exception as exit_error:
-                        uat_logger.error(f"执行跳出iframe操作时出错: {exit_error}")
-                        # 直接抛出错误，视为测试用例执行失败
-                        raise
-                else:
-                    from desktop_automation import normalize_automation_layer as _norm_al_web
-
-                    _layer_web = _norm_al_web(step)
-                    _st_web = (selector_type or '').strip().lower()
-                    if _layer_web == 'desktop' or _st_web == 'visual':
-                        raise RuntimeError(
-                            f"步骤 #{step.get('id')} 为桌面/visual 步骤，但未通过桌面执行器完成"
-                            f"（action={action!r}，automation_layer={step.get('automation_layer')!r}）。"
-                            "请在步骤编辑器中确认自动化层为「桌面」并保存后重试。"
-                        )
-
-                # 🔥 修复：步骤执行到这里说明成功，更新状态为 success
-                step_status = 'success'
-                step_error = ''
+                        from desktop_automation import normalize_automation_layer as _norm_al_web
+    
+                        _layer_web = _norm_al_web(step)
+                        _st_web = (selector_type or '').strip().lower()
+                        if _layer_web == 'desktop' or _st_web == 'visual':
+                            raise RuntimeError(
+                                f"步骤 #{step.get('id')} 为桌面/visual 步骤，但未通过桌面执行器完成"
+                                f"（action={action!r}，automation_layer={step.get('automation_layer')!r}）。"
+                                "请在步骤编辑器中确认自动化层为「桌面」并保存后重试。"
+                            )
+    
+                    # 🔥 修复：步骤执行到这里说明成功，更新状态为 success
+                    step_status = 'success'
+                    step_error = ''
+                    
+                    # ⭐⭐ 记录成功步骤结果
+                    step_duration = round(time.time() - step_start_time, 3)
+                    step_results_list.append({
+                        'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                        'action': action, 'selector_value': selector_value,
+                        'input_value': input_value, 'description': description,
+                        'status': step_status, 'error': step_error,
+                        'screenshot': step_screenshot, 'duration': step_duration
+                    })
+                    _case_job_update(
+                        user_id,
+                        completed_steps=len(step_results_list),
+                        message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
+                    )
                 
-                # ⭐⭐ 记录成功步骤结果
-                step_duration = round(time.time() - step_start_time, 3)
-                step_results_list.append({
-                    'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
-                    'action': action, 'selector_value': selector_value,
-                    'input_value': input_value, 'description': description,
-                    'status': step_status, 'error': step_error,
-                    'screenshot': step_screenshot, 'duration': step_duration
+                if not steps:
+                    raise RuntimeError("用例没有可执行的步骤")
+    
+                # 计算执行时间
+                duration = round(time.time() - start_time, 2)
+                
+                uat_logger.info(f"测试用例 #{case_id} 运行成功，耗时: {duration}秒")
+                
+                # 保存运行历史记录，并写入步骤结果
+                try:
+                    run_id = db.create_run_history(case_id, 'success', duration, "", extracted_text, expected_text)
+                    for sr in step_results_list:
+                        db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
+                            sr['selector_value'], sr['input_value'], sr['description'],
+                            sr['status'], sr['error'], sr['screenshot'], sr['duration'])
+                    try:
+                        from ai_memory_store import ingest_successful_run, memory_ingest_run_success_enabled
+    
+                        if memory_ingest_run_success_enabled():
+                            tid = db.get_user_tenant_id(user_id)
+                            ingest_successful_run(
+                                user_id,
+                                tid,
+                                case_id,
+                                case.get('name') or '',
+                                case.get('url') or '',
+                                duration,
+                                run_id,
+                            )
+                    except Exception as _mem_run_e:
+                        uat_logger.debug("memory ingest successful run: %s", _mem_run_e)
+                    sync_run_to_team_server(
+                        case_id, 'success', duration, step_results=step_results_list
+                    )
+                except Exception as history_error:
+                    uat_logger.warning(f"保存运行历史记录失败: {history_error}")
+                
+                if browser_started:
+                    try:
+                        sync_close_browser()
+                    except Exception as close_error:
+                        uat_logger.warning(f"关闭浏览器时出错: {close_error}")
+                
+                return jsonify({
+                    'success': True,
+                    'status': 'success',
+                    'duration': duration,
+                    'message': '测试用例运行成功',
+                    'step_count': len(step_results_list)
                 })
-                _case_job_update(
-                    user_id,
-                    completed_steps=len(step_results_list),
-                    message=f"已完成 {len(step_results_list)}/{len(steps)} 步",
-                )
-            
-            if not steps:
-                raise RuntimeError("用例没有可执行的步骤")
-
-            # 计算执行时间
-            duration = round(time.time() - start_time, 2)
-            
-            uat_logger.info(f"测试用例 #{case_id} 运行成功，耗时: {duration}秒")
-            
-            # 保存运行历史记录，并写入步骤结果
-            try:
-                run_id = db.create_run_history(case_id, 'success', duration, "", extracted_text, expected_text)
-                for sr in step_results_list:
-                    db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
-                        sr['selector_value'], sr['input_value'], sr['description'],
-                        sr['status'], sr['error'], sr['screenshot'], sr['duration'])
-                try:
-                    from ai_memory_store import ingest_successful_run, memory_ingest_run_success_enabled
-
-                    if memory_ingest_run_success_enabled():
-                        tid = db.get_user_tenant_id(user_id)
-                        ingest_successful_run(
-                            user_id,
-                            tid,
-                            case_id,
-                            case.get('name') or '',
-                            case.get('url') or '',
-                            duration,
-                            run_id,
+                
+            except Exception as e:
+                # 执行失败时的处理
+                duration = round(time.time() - start_time, 2)
+    
+                # 用户已点「停止执行」：不因关应用/断连等中间错误弹失败（桌面步骤常见）
+                if _case_run_cancelled(user_id) or '用户已停止执行' in str(e):
+                    stop_msg = '用户已停止执行'
+                    uat_logger.info(f"测试用例 #{case_id} 已由用户停止（忽略步骤异常: {str(e)[:300]}）")
+                    try:
+                        run_id = db.create_run_history(
+                            case_id, 'stopped', duration, stop_msg, extracted_text, expected_text
                         )
-                except Exception as _mem_run_e:
-                    uat_logger.debug("memory ingest successful run: %s", _mem_run_e)
-                sync_run_to_team_server(
-                    case_id, 'success', duration, step_results=step_results_list
-                )
-            except Exception as history_error:
-                uat_logger.warning(f"保存运行历史记录失败: {history_error}")
-            
-            if browser_started:
+                        for sr in step_results_list:
+                            db.create_step_result(
+                                run_id,
+                                sr['step_id'],
+                                sr['step_order'],
+                                sr['action'],
+                                sr['selector_value'],
+                                sr['input_value'],
+                                sr['description'],
+                                sr['status'],
+                                sr['error'],
+                                sr['screenshot'],
+                                sr['duration'],
+                            )
+                    except Exception as history_error:
+                        uat_logger.warning(f"保存停止运行历史失败: {history_error}")
+                    try:
+                        force_reset_execution_state()
+                    except Exception:
+                        pass
+                    return jsonify({
+                        'success': False,
+                        'status': 'stopped',
+                        'duration': duration,
+                        'error': stop_msg,
+                        'stopped': True,
+                    })
+    
+                error_msg = str(e)
+                _captcha_manual = False
                 try:
-                    sync_close_browser()
-                except Exception as close_error:
-                    uat_logger.warning(f"关闭浏览器时出错: {close_error}")
-            
-            return jsonify({
-                'success': True,
-                'status': 'success',
-                'duration': duration,
-                'message': '测试用例运行成功',
-                'step_count': len(step_results_list)
-            })
-            
+                    from captcha_recovery import CaptchaManualRequiredError as _CMR
+    
+                    _cause_cap = e
+                    while _cause_cap is not None:
+                        if isinstance(_cause_cap, _CMR):
+                            _captcha_manual = True
+                            error_msg = str(_cause_cap)
+                            break
+                        _cause_cap = getattr(_cause_cap, "__cause__", None)
+                except ImportError:
+                    pass
+                
+                # 将会话断开类错误单独归类
+                # 注意：不要用单词 page/target/context 等做子串匹配，否则 “timeout waiting for …” 等普通错误会被误判。
+                _el = error_msg.lower()
+                _disconnect_patterns = (
+                    'has been closed',
+                    'browser has been closed',
+                    'browser was closed',
+                    'browser closed',
+                    'target page, context or browser has been closed',
+                    'page was closed',
+                    'context was closed',
+                    'browser disconnected',
+                    'connection closed',
+                    'connection lost',
+                    'websocket',
+                    'econnreset',
+                    'broken pipe',
+                    'execution context was destroyed',
+                    'session deleted',
+                    'browser crashed',
+                    ' crashed',
+                    'disconnected',
+                )
+                if any(p in _el for p in _disconnect_patterns):
+                    browser_closed_manually = True
+                    error_msg = (
+                        "浏览器或自动化连接已中断（无头模式下常见于进程崩溃、资源不足、超时或被系统结束；"
+                        "不一定是手动关闭窗口）"
+                    )
+                    uat_logger.warning(
+                        f"测试用例 #{case_id} 执行中断（会话/连接断开）: {error_msg} | 原始: {str(e)[:800]}"
+                    )
+                    # 🔥 浏览器被关闭时强制重置所有状态（包括执行锁和浏览器引用）
+                    try:
+                        force_reset_execution_state()
+                    except Exception:
+                        pass
+                else:
+                    uat_logger.error(f"测试用例 #{case_id} 运行失败: {error_msg}")
+    
+                # 失败时自动截图（桌面 visual 失败已生成元素 ROI 对比图，不再截浏览器整页）
+                failure_screenshot = ''
+                visual_match_failed = None
+                _cause = e
+                while _cause is not None:
+                    try:
+                        from desktop_visual_engine import VisualMatchFailed
+                    except ImportError:
+                        break
+                    if isinstance(_cause, VisualMatchFailed):
+                        visual_match_failed = _cause
+                        break
+                    _cause = getattr(_cause, '__cause__', None)
+                if visual_match_failed and getattr(visual_match_failed, 'failure_screenshot', None):
+                    failure_screenshot = visual_match_failed.failure_screenshot
+                elif _captcha_manual:
+                    _cap_shot = None
+                    _c = e
+                    while _c is not None:
+                        if getattr(_c, "screenshot_path", None):
+                            _cap_shot = _c.screenshot_path
+                            break
+                        _c = getattr(_c, "__cause__", None)
+                    if _cap_shot:
+                        failure_screenshot = _cap_shot
+                        screenshots.append(_cap_shot)
+                elif not browser_closed_manually:
+                    try:
+                        screenshot_dir = os.path.join(os.getcwd(), 'screenshots')
+                        os.makedirs(screenshot_dir, exist_ok=True)
+                        screenshot_path = os.path.join(screenshot_dir, f'fail_{case_id}_{int(time.time())}.png')
+                        sync_take_screenshot(screenshot_path)
+                        failure_screenshot = screenshot_path
+                        screenshots.append(screenshot_path)
+                        uat_logger.info(f"失败截图已保存: {screenshot_path}")
+                    except Exception as ss_error:
+                        uat_logger.warning(f"截图失败: {ss_error}")
+    
+                # ⭐⭐ 记录失败步骤：将当前步骤添加到列表（如果该步骤未被记录）
+                # 失败的步骤在 raise 后跳过了步骤记录代码，需要在此处补充记录
+                # 通过检查 step_results_list 的最后一条记录是否是该失败步骤
+                already_recorded = (
+                    step_results_list and
+                    step_results_list[-1].get('step_id') == step.get('id')
+                ) if 'step' in dir() else False
+                if not already_recorded and 'step' in dir() and step:
+                    failed_step_duration = round(time.time() - step_start_time, 3) if 'step_start_time' in dir() else 0
+                    step_results_list.append({
+                        'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
+                        'action': step.get('action', ''), 'selector_value': step.get('selector_value', ''),
+                        'input_value': step.get('input_value', ''), 'description': step.get('description', ''),
+                        'status': 'error', 'error': error_msg,
+                        'screenshot': failure_screenshot, 'duration': failed_step_duration
+                    })
+                    uat_logger.error(f"⭐⭐ [步骤记录] 当前失败步骤 ID={step.get('id')} 已记录到列表")
+                elif step_results_list and step_results_list[-1]['status'] == 'success':
+                    # 备用：如果上述逆转属不到，把最后一条成功记录改为失败
+                    step_results_list[-1]['status'] = 'error'
+                    step_results_list[-1]['error'] = error_msg
+                    step_results_list[-1]['screenshot'] = failure_screenshot
+                
+                # 保存运行历史记录（确保即使浏览器关闭也能保存）
+                try:
+                    run_id = db.create_run_history(case_id, 'error', duration, error_msg, extracted_text, expected_text)
+                    # 更新 screenshots 字段
+                    try:
+                        conn = __import__('sqlite3').connect(db.db_path)
+                        conn.execute("UPDATE run_history SET screenshots = ? WHERE id = ?",
+                                     (json.dumps(screenshots), run_id))
+                        conn.commit(); conn.close()
+                    except Exception:
+                        pass
+                    for sr in step_results_list:
+                        db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
+                            sr['selector_value'], sr['input_value'], sr['description'],
+                            sr['status'], sr['error'], sr['screenshot'], sr['duration'])
+                    uat_logger.info(f"运行历史记录已保存，Run ID: {run_id}")
+                except Exception as history_error:
+                    uat_logger.error(f"保存运行历史记录失败: {history_error}")
+                
+                if browser_started and not browser_closed_manually and not _captcha_manual:
+                    try:
+                        sync_close_browser()
+                    except Exception:
+                        pass
+                
+                _failed_sid = None
+                if visual_match_failed and 'step' in dir() and step:
+                    _failed_sid = step.get('id')
+                return jsonify({
+                    'success': False,
+                    'status': 'error',
+                    'duration': duration,
+                    'error': error_msg,
+                    'browser_closed': browser_closed_manually,
+                    'stopped': ('用户已停止执行' in error_msg),
+                    'failure_screenshot': failure_screenshot or None,
+                    'failed_step_id': _failed_sid,
+                    'need_relearn': bool(
+                        visual_match_failed and getattr(visual_match_failed, 'need_relearn', False)
+                    ),
+                    'best_score': float(
+                        getattr(visual_match_failed, 'best_score', 0.0) if visual_match_failed else 0.0
+                    ),
+                })
+                
         except Exception as e:
-            # 执行失败时的处理
+            # 最外层异常处理 - 确保历史记录被保存
             duration = round(time.time() - start_time, 2)
-
-            # 用户已点「停止执行」：不因关应用/断连等中间错误弹失败（桌面步骤常见）
             if _case_run_cancelled(user_id) or '用户已停止执行' in str(e):
                 stop_msg = '用户已停止执行'
-                uat_logger.info(f"测试用例 #{case_id} 已由用户停止（忽略步骤异常: {str(e)[:300]}）")
+                uat_logger.info(f"测试用例 #{case_id} 已由用户停止（外层）")
                 try:
-                    run_id = db.create_run_history(
-                        case_id, 'stopped', duration, stop_msg, extracted_text, expected_text
-                    )
-                    for sr in step_results_list:
-                        db.create_step_result(
-                            run_id,
-                            sr['step_id'],
-                            sr['step_order'],
-                            sr['action'],
-                            sr['selector_value'],
-                            sr['input_value'],
-                            sr['description'],
-                            sr['status'],
-                            sr['error'],
-                            sr['screenshot'],
-                            sr['duration'],
-                        )
-                except Exception as history_error:
-                    uat_logger.warning(f"保存停止运行历史失败: {history_error}")
+                    db.create_run_history(case_id, 'stopped', duration, stop_msg, extracted_text, expected_text)
+                except Exception:
+                    pass
                 try:
                     force_reset_execution_state()
                 except Exception:
@@ -9016,226 +9517,49 @@ def api_run_case(case_id):
                     'error': stop_msg,
                     'stopped': True,
                 })
-
             error_msg = str(e)
-            _captcha_manual = False
-            try:
-                from captcha_recovery import CaptchaManualRequiredError as _CMR
-
-                _cause_cap = e
-                while _cause_cap is not None:
-                    if isinstance(_cause_cap, _CMR):
-                        _captcha_manual = True
-                        error_msg = str(_cause_cap)
-                        break
-                    _cause_cap = getattr(_cause_cap, "__cause__", None)
-            except ImportError:
-                pass
+            uat_logger.error(f"运行测试用例时发生严重错误: {error_msg}")
             
-            # 将会话断开类错误单独归类
-            # 注意：不要用单词 page/target/context 等做子串匹配，否则 “timeout waiting for …” 等普通错误会被误判。
-            _el = error_msg.lower()
-            _disconnect_patterns = (
-                'has been closed',
-                'browser has been closed',
-                'browser was closed',
-                'browser closed',
-                'target page, context or browser has been closed',
-                'page was closed',
-                'context was closed',
-                'browser disconnected',
-                'connection closed',
-                'connection lost',
-                'websocket',
-                'econnreset',
-                'broken pipe',
-                'execution context was destroyed',
-                'session deleted',
-                'browser crashed',
-                ' crashed',
-                'disconnected',
-            )
-            if any(p in _el for p in _disconnect_patterns):
-                browser_closed_manually = True
-                error_msg = (
-                    "浏览器或自动化连接已中断（无头模式下常见于进程崩溃、资源不足、超时或被系统结束；"
-                    "不一定是手动关闭窗口）"
-                )
-                uat_logger.warning(
-                    f"测试用例 #{case_id} 执行中断（会话/连接断开）: {error_msg} | 原始: {str(e)[:800]}"
-                )
-                # 🔥 浏览器被关闭时强制重置所有状态（包括执行锁和浏览器引用）
-                try:
-                    force_reset_execution_state()
-                except Exception:
-                    pass
-            else:
-                uat_logger.error(f"测试用例 #{case_id} 运行失败: {error_msg}")
-
-            # 失败时自动截图（桌面 visual 失败已生成元素 ROI 对比图，不再截浏览器整页）
-            failure_screenshot = ''
-            visual_match_failed = None
-            _cause = e
-            while _cause is not None:
-                try:
-                    from desktop_visual_engine import VisualMatchFailed
-                except ImportError:
-                    break
-                if isinstance(_cause, VisualMatchFailed):
-                    visual_match_failed = _cause
-                    break
-                _cause = getattr(_cause, '__cause__', None)
-            if visual_match_failed and getattr(visual_match_failed, 'failure_screenshot', None):
-                failure_screenshot = visual_match_failed.failure_screenshot
-            elif _captcha_manual:
-                _cap_shot = None
-                _c = e
-                while _c is not None:
-                    if getattr(_c, "screenshot_path", None):
-                        _cap_shot = _c.screenshot_path
-                        break
-                    _c = getattr(_c, "__cause__", None)
-                if _cap_shot:
-                    failure_screenshot = _cap_shot
-                    screenshots.append(_cap_shot)
-            elif not browser_closed_manually:
-                try:
-                    screenshot_dir = os.path.join(os.getcwd(), 'screenshots')
-                    os.makedirs(screenshot_dir, exist_ok=True)
-                    screenshot_path = os.path.join(screenshot_dir, f'fail_{case_id}_{int(time.time())}.png')
-                    sync_take_screenshot(screenshot_path)
-                    failure_screenshot = screenshot_path
-                    screenshots.append(screenshot_path)
-                    uat_logger.info(f"失败截图已保存: {screenshot_path}")
-                except Exception as ss_error:
-                    uat_logger.warning(f"截图失败: {ss_error}")
-
-            # ⭐⭐ 记录失败步骤：将当前步骤添加到列表（如果该步骤未被记录）
-            # 失败的步骤在 raise 后跳过了步骤记录代码，需要在此处补充记录
-            # 通过检查 step_results_list 的最后一条记录是否是该失败步骤
-            already_recorded = (
-                step_results_list and
-                step_results_list[-1].get('step_id') == step.get('id')
-            ) if 'step' in dir() else False
-            if not already_recorded and 'step' in dir() and step:
-                failed_step_duration = round(time.time() - step_start_time, 3) if 'step_start_time' in dir() else 0
-                step_results_list.append({
-                    'step_id': step.get('id'), 'step_order': step.get('step_order', 0),
-                    'action': step.get('action', ''), 'selector_value': step.get('selector_value', ''),
-                    'input_value': step.get('input_value', ''), 'description': step.get('description', ''),
-                    'status': 'error', 'error': error_msg,
-                    'screenshot': failure_screenshot, 'duration': failed_step_duration
-                })
-                uat_logger.error(f"⭐⭐ [步骤记录] 当前失败步骤 ID={step.get('id')} 已记录到列表")
-            elif step_results_list and step_results_list[-1]['status'] == 'success':
-                # 备用：如果上述逆转属不到，把最后一条成功记录改为失败
-                step_results_list[-1]['status'] = 'error'
-                step_results_list[-1]['error'] = error_msg
-                step_results_list[-1]['screenshot'] = failure_screenshot
-            
-            # 保存运行历史记录（确保即使浏览器关闭也能保存）
+            # 尝试保存运行历史记录
             try:
-                run_id = db.create_run_history(case_id, 'error', duration, error_msg, extracted_text, expected_text)
-                # 更新 screenshots 字段
-                try:
-                    conn = __import__('sqlite3').connect(db.db_path)
-                    conn.execute("UPDATE run_history SET screenshots = ? WHERE id = ?",
-                                 (json.dumps(screenshots), run_id))
-                    conn.commit(); conn.close()
-                except Exception:
-                    pass
-                for sr in step_results_list:
-                    db.create_step_result(run_id, sr['step_id'], sr['step_order'], sr['action'],
-                        sr['selector_value'], sr['input_value'], sr['description'],
-                        sr['status'], sr['error'], sr['screenshot'], sr['duration'])
-                uat_logger.info(f"运行历史记录已保存，Run ID: {run_id}")
+                run_id = db.create_run_history(case_id, 'error', duration, f"执行异常: {error_msg}", extracted_text, expected_text)
+                uat_logger.info(f"异常情况下运行历史记录已保存，Run ID: {run_id}")
             except Exception as history_error:
-                uat_logger.error(f"保存运行历史记录失败: {history_error}")
+                uat_logger.error(f"异常情况下保存运行历史记录失败: {history_error}")
             
-            if browser_started and not browser_closed_manually and not _captcha_manual:
-                try:
-                    sync_close_browser()
-                except Exception:
-                    pass
-            
-            _failed_sid = None
-            if visual_match_failed and 'step' in dir() and step:
-                _failed_sid = step.get('id')
             return jsonify({
                 'success': False,
-                'status': 'error',
-                'duration': duration,
                 'error': error_msg,
-                'browser_closed': browser_closed_manually,
-                'stopped': ('用户已停止执行' in error_msg),
-                'failure_screenshot': failure_screenshot or None,
-                'failed_step_id': _failed_sid,
-                'need_relearn': bool(
-                    visual_match_failed and getattr(visual_match_failed, 'need_relearn', False)
-                ),
-                'best_score': float(
-                    getattr(visual_match_failed, 'best_score', 0.0) if visual_match_failed else 0.0
-                ),
-            })
-            
-    except Exception as e:
-        # 最外层异常处理 - 确保历史记录被保存
-        duration = round(time.time() - start_time, 2)
-        if _case_run_cancelled(user_id) or '用户已停止执行' in str(e):
-            stop_msg = '用户已停止执行'
-            uat_logger.info(f"测试用例 #{case_id} 已由用户停止（外层）")
+                'stopped': False,
+            }), 500
+        finally:
             try:
-                db.create_run_history(case_id, 'stopped', duration, stop_msg, extracted_text, expected_text)
-            except Exception:
-                pass
-            try:
-                force_reset_execution_state()
-            except Exception:
-                pass
-            return jsonify({
-                'success': False,
-                'status': 'stopped',
-                'duration': duration,
-                'error': stop_msg,
-                'stopped': True,
-            })
-        error_msg = str(e)
-        uat_logger.error(f"运行测试用例时发生严重错误: {error_msg}")
-        
-        # 尝试保存运行历史记录
-        try:
-            run_id = db.create_run_history(case_id, 'error', duration, f"执行异常: {error_msg}", extracted_text, expected_text)
-            uat_logger.info(f"异常情况下运行历史记录已保存，Run ID: {run_id}")
-        except Exception as history_error:
-            uat_logger.error(f"异常情况下保存运行历史记录失败: {history_error}")
-        
-        return jsonify({
-            'success': False,
-            'error': error_msg,
-            'stopped': False,
-        }), 500
-    finally:
-        try:
-            from captcha_engine import set_captcha_status_callback
-
-            set_captcha_status_callback(None)
-        except ImportError:
-            pass
-        if machine_lock_acquired:
-            try:
-                from execution_lock import release as release_machine_lock
-
-                release_machine_lock()
+                from captcha_engine import set_captcha_status_callback
+    
+                set_captcha_status_callback(None)
             except ImportError:
                 pass
-        with _case_run_lock:
-            job = _case_run_jobs.get(user_id)
-            if job:
-                job['active'] = False
-                job['finished_at'] = time.time()
-                job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
-
-
+            if playwright_lock_acquired:
+                set_execution_in_progress(False)
+                try:
+                    _execution_lock.release()
+                except RuntimeError:
+                    pass
+            if machine_lock_acquired:
+                try:
+                    from execution_lock import release as release_machine_lock
+    
+                    release_machine_lock()
+                except ImportError:
+                    pass
+            with _case_run_lock:
+                job = _case_run_jobs.get(user_id)
+                if job:
+                    job['active'] = False
+                    job['finished_at'] = time.time()
+                    job['duration'] = round(time.time() - job.get('started_at', time.time()), 2)
+    
+    
 def _case_run_status_payload(user_id: int) -> dict:
     """当前用户 Web 用例步骤运行任务状态（与 /api/cases/current-run/status 响应体一致）。"""
     with _case_run_lock:
@@ -10157,9 +10481,10 @@ def _dataset_run_worker(run_id: str, user_id: int, dataset_id: int, case_id: int
                                     )
                         elif action == 'input':
                             if selector_value:
-                                if input_value is None or str(input_value) == '':
-                                    raise Exception("输入步骤缺少有效输入值")
-                                safe_input_value = input_value
+                                safe_input_value = resolve_fill_step_text({
+                                    'input_value': input_value,
+                                    'description': step.get('description'),
+                                })
                                 sync_fill_input(
                                     selector_value,
                                     safe_input_value,

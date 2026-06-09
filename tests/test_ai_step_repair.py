@@ -43,6 +43,23 @@ def test_repair_clears_selector_on_url_compare() -> None:
     assert steps[0]["selector_value"] == ""
 
 
+def test_repair_url_assert_from_description_at_runtime():
+    from auth_batch_helpers import normalize_step_assert_fields
+
+    step = {
+        "action": "assert",
+        "compare_type": "text_equals",
+        "selector_type": "",
+        "selector_value": "",
+        "input_value": "/phone/",
+        "description": "断言URL包含系统路径",
+    }
+    normalize_step_assert_fields(step)
+    assert step["compare_type"] == "url_contains"
+    assert step["selector_value"] == ""
+    assert step["input_value"] == "/phone/"
+
+
 def test_repair_assert_no_selector_to_page_text() -> None:
     steps = [
         {

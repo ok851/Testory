@@ -600,18 +600,24 @@ def _norm_probe_str(value: Any) -> str:
 
 
 def _recommended_selector(row: Dict[str, Any]) -> Tuple[str, str]:
-    """从探测行生成优先推荐的选择器与类型（供 probe_index 映射）。"""
-    css = (row.get("css") or "").strip()
+    """从探测行生成优先推荐的选择器与类型（供 probe_index 映射）。id 优先于 name。"""
+    css = (row.get("css") or row.get("suggestedSelector") or "").strip()
     if css:
         return css, "css"
+    tag = (row.get("tag") or "div").strip() or "div"
+    tag_low = tag.lower()
+    eid = (row.get("id") or "").strip()
+    if eid and re.match(r"^[\w.-]+$", eid):
+        if tag_low in ("input", "button", "a", "select", "textarea"):
+            return f"{tag_low}#{eid}", "css"
+        return f"#{eid}", "css"
     testid = (row.get("testid") or "").strip()
     if testid:
         safe = testid.replace("\\", "\\\\").replace('"', '\\"')
         return f'[data-testid="{safe}"]', "css"
-    tag = (row.get("tag") or "div").strip() or "div"
     name = (row.get("name") or "").strip()
     if name and re.match(r"^[\w.\-]+$", name):
-        return f'{tag}[name="{name}"]', "css"
+        return f'{tag_low}[name="{name}"]', "css"
     ph = (row.get("ph") or "").strip()
     if ph:
         return ph, "text"
@@ -1001,7 +1007,20 @@ def collect_page_controls(url: str) -> Tuple[str, Optional[str], List[Dict[str, 
                             break
                         if not isinstance(raw, dict):
                             continue
-                        rec, rty = _recommended_selector(raw)
+                        raw_norm = dict(raw)
+                        if not raw_norm.get("css"):
+                            sug = (raw_norm.get("suggestedSelector") or "").strip()
+                            if sug:
+                                raw_norm["css"] = sug
+                            elif raw_norm.get("id"):
+                                tid = str(raw_norm.get("id") or "").strip()
+                                ttag = (raw_norm.get("tag") or "input").strip().lower()
+                                if tid and re.match(r"^[\w.-]+$", tid):
+                                    if ttag in ("input", "button", "a", "select", "textarea"):
+                                        raw_norm["css"] = f"{ttag}#{tid}"
+                                    else:
+                                        raw_norm["css"] = f"#{tid}"
+                        rec, rty = _recommended_selector(raw_norm)
                         entry = {
                             "i": global_i,
                             "frame": frame_label,
@@ -1015,7 +1034,7 @@ def collect_page_controls(url: str) -> Tuple[str, Optional[str], List[Dict[str, 
                             "rid": raw.get("rid") or "",
                             "txt": raw.get("txt") or "",
                             "href": raw.get("href") or "",
-                            "css": raw.get("css") or "",
+                            "css": raw_norm.get("css") or "",
                             "testid": raw.get("testid") or "",
                             "recommended_selector": rec,
                             "recommended_selector_type": rty,
@@ -1191,6 +1210,12 @@ def _pick_password_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def _selector_for_registry_row(r: Dict[str, Any]) -> Tuple[str, str]:
+    tag = (r.get("tag") or "input").strip().lower() or "input"
+    eid = (r.get("id") or "").strip()
+    if eid and re.match(r"^[\w.-]+$", eid):
+        if tag in ("input", "button", "a", "select", "textarea"):
+            return f"{tag}#{eid}", "css"
+        return f"#{eid}", "css"
     rec = (r.get("recommended_selector") or "").strip()
     stype = (r.get("recommended_selector_type") or "css").strip().lower()
     if stype not in ("css", "xpath", "text"):
@@ -1204,9 +1229,6 @@ def _selector_for_registry_row(r: Dict[str, Any]) -> Tuple[str, str]:
     name = (r.get("name") or "").strip()
     if name:
         return f'input[name="{name}"]', "css"
-    eid = (r.get("id") or "").strip()
-    if eid and re.match(r"^[\w.-]+$", eid):
-        return f"#{eid}", "css"
     return "", "css"
 
 
@@ -1214,12 +1236,78 @@ def _is_password_input_step(step: Dict[str, Any]) -> bool:
     if (step.get("action") or "").strip().lower() != "input":
         return False
     desc = step.get("description") or ""
-    if "密码" in desc:
+    if "密码框" in desc:
+        return True
+    if "账号框" in desc:
+        return False
+    if "密码" in desc and "账号" not in desc.replace("密码", ""):
         return True
     sv = (step.get("selector_value") or "").lower()
     if "password" in sv and "name" in sv:
         return True
+    if "[type='password']" in sv or '[type="password"]' in sv:
+        return True
     return False
+
+
+def _is_account_input_step(step: Dict[str, Any]) -> bool:
+    if (step.get("action") or "").strip().lower() != "input":
+        return False
+    desc = step.get("description") or ""
+    if "密码框" in desc:
+        return False
+    if "账号框" in desc or "用户名" in desc:
+        return True
+    dlow = desc.lower()
+    if "password" in dlow and "account" not in dlow and "username" not in dlow:
+        return False
+    if "密码" in desc and "账号" not in desc:
+        return False
+    if any(k in desc for k in ("账号", "用户名")) or any(k in dlow for k in ("account", "username")):
+        return True
+    sv = (step.get("selector_value") or "").lower()
+    if ("username" in sv or "account" in sv) and "password" not in sv:
+        return True
+    return False
+
+
+def _registry_account_rows(registry: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for r in registry:
+        if not isinstance(r, dict):
+            continue
+        tag = (r.get("tag") or "").lower()
+        if tag not in ("input", "textarea"):
+            continue
+        typ = (r.get("typ") or "").lower()
+        if typ == "password":
+            continue
+        ph = (r.get("ph") or "")
+        eid = (r.get("id") or "").lower()
+        name = (r.get("name") or "").lower()
+        if any(k in ph for k in ("账号", "用户", "account", "Account")):
+            out.append(r)
+        elif any(k in eid for k in ("user", "account", "login", "email")):
+            out.append(r)
+        elif any(k in name for k in ("user", "account", "login", "email")):
+            out.append(r)
+    return out
+
+
+def _pick_account_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return rows[0]
+    for r in rows:
+        eid = (r.get("id") or "").lower()
+        if eid in ("username", "user", "account", "login", "email"):
+            return r
+    for r in rows:
+        ph = r.get("ph") or ""
+        if "账号" in ph or "用户" in ph:
+            return r
+    return rows[0]
 
 
 def _registry_login_button_rows(registry: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1254,9 +1342,21 @@ def _pick_login_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return pool[0]
 
 
+def _is_generic_login_submit_selector_value(sv: str) -> bool:
+    sl = (sv or "").lower()
+    if "submit-btn" in sl:
+        return False
+    return any(tok in sl for tok in ("submit", "login-btn", "login_btn", "btn-login"))
+
+
 def _selector_for_login_click_row(r: Dict[str, Any]) -> Tuple[str, str]:
-    """登录按钮：Element UI 常在快照里是 span 内文案，优先用 text=登录。"""
+    """登录按钮：有稳定 id（如 submit-btn）时优先 css；span 内文案时用 text=登录。"""
     tag = (r.get("tag") or "").lower()
+    eid = (r.get("id") or "").strip()
+    if eid and re.match(r"^[\w.-]+$", eid):
+        if tag == "button":
+            return f"button#{eid}", "css"
+        return f"#{eid}", "css"
     if tag == "span":
         return "登录", "text"
     ideal, st = _selector_for_registry_row(r)
@@ -1288,8 +1388,25 @@ def heuristic_repair_plan_selectors_from_registry(
 
     pw_rows = _registry_password_rows(registry)
     pw_row = _pick_password_row(pw_rows)
+    ac_rows = _registry_account_rows(registry)
+    ac_row = _pick_account_row(ac_rows)
+
     for i, step in enumerate(out):
         if not isinstance(step, dict):
+            continue
+        if _is_account_input_step(step) and ac_row:
+            ideal, st = _selector_for_registry_row(ac_row)
+            if not ideal:
+                continue
+            cur = (step.get("selector_value") or "").strip()
+            cur_typ = (step.get("selector_type") or "css").strip().lower()
+            if cur == ideal and cur_typ == st:
+                continue
+            hints.append(
+                f"第{i+1}步(input)：已按 LIVE 快照将账号框定位改为 {ideal!r}（原: {cur[:120]!r}）。"
+            )
+            step["selector_value"] = ideal
+            step["selector_type"] = st
             continue
         if not (_is_password_input_step(step) and pw_row):
             continue
@@ -1319,11 +1436,33 @@ def heuristic_repair_plan_selectors_from_registry(
         cur_st = (step.get("selector_type") or "css").strip().lower()
         cur_sv = (step.get("selector_value") or "").strip()
 
-        if login_row is not None and len(login_rows_all) == 1:
+        if login_row is not None:
             ideal, st = _selector_for_login_click_row(login_row)
-            if ideal and (cur_sv != ideal or cur_st != st):
+            xpath_login = cur_st == "xpath" and "登录" in cur_sv and (
+                "text()" in cur_sv or "contains" in cur_sv.lower()
+            )
+            if ideal and (
+                xpath_login
+                or _is_generic_login_submit_selector_value(cur_sv)
+                or cur_sv != ideal
+                or cur_st != st
+            ):
                 hints.append(
                     f"第{i+1}步(click)：已按 LIVE 快照将「登录」改为 {st}={ideal!r}（原: {cur_st}={cur_sv[:100]!r}）。"
+                )
+                step["selector_type"] = st
+                step["selector_value"] = ideal
+                continue
+
+        if _is_generic_login_submit_selector_value(cur_sv):
+            ideal, st = ("button#submit-btn", "css")
+            if login_row is not None:
+                reg_ideal, reg_st = _selector_for_login_click_row(login_row)
+                if reg_ideal:
+                    ideal, st = reg_ideal, reg_st
+            if cur_sv != ideal or cur_st != st:
+                hints.append(
+                    f"第{i+1}步(click)：泛化 submit/login-btn 选择器易误点，已改为 {st}={ideal!r}（原: {cur_st}={cur_sv[:100]!r}）。"
                 )
                 step["selector_type"] = st
                 step["selector_value"] = ideal
@@ -1338,7 +1477,122 @@ def heuristic_repair_plan_selectors_from_registry(
             step["selector_type"] = "text"
             step["selector_value"] = "登录"
 
+    for i, step in enumerate(out):
+        if not isinstance(step, dict):
+            continue
+        if (step.get("action") or "").strip().lower() != "assert":
+            continue
+        ct = str(step.get("compare_type") or "").strip().lower()
+        if ct in ("url_equals", "url_contains", "page_text_contains", "page_text_equals", "page_text_regex"):
+            continue
+        cur_st = (step.get("selector_type") or "css").strip().lower()
+        cur_sv = (step.get("selector_value") or "").strip()
+        desc = step.get("description") or ""
+        if not _assert_selector_needs_repair(cur_sv, cur_st, desc):
+            continue
+        target_row = None
+        if _assert_targets_password_field(step):
+            target_row = pw_row
+        elif _assert_targets_account_field(step):
+            target_row = ac_row
+        if target_row is not None:
+            ideal, st = _selector_for_registry_row(target_row)
+            if ideal:
+                hints.append(
+                    f"第{i+1}步(assert)：泛化/臆造选择器已按 LIVE 快照改为 {st}={ideal!r}（原: {cur_st}={cur_sv[:100]!r})。"
+                )
+                step["selector_type"] = st
+                step["selector_value"] = ideal
+                if not str(step.get("input_value") or "").strip() and _assert_expects_empty_value(desc):
+                    step["compare_type"] = "text_equals"
+                    step["input_value"] = ""
+                continue
+        msg_fix = repair_message_toast_assert_step_inplace(step)
+        if msg_fix:
+            hints.append(f"第{i+1}步(assert)：{msg_fix}")
+
     return out, hints
+
+
+def _assert_expects_empty_value(desc: str) -> bool:
+    return any(k in (desc or "") for k in ("为空", "留空", "空值", "未填", "空白", "empty", "blank"))
+
+
+def _assert_targets_account_field(step: Dict[str, Any]) -> bool:
+    desc = step.get("description") or ""
+    if "密码" in desc and "账号" not in desc.replace("密码", ""):
+        return False
+    return any(k in desc for k in ("账号", "用户名", "account", "username"))
+
+
+def _assert_targets_password_field(step: Dict[str, Any]) -> bool:
+    desc = step.get("description") or ""
+    if "密码框" in desc or ("密码" in desc and "账号" not in desc.replace("密码", "")):
+        return True
+    sv = (step.get("selector_value") or "").lower()
+    return "password" in sv
+
+
+def _assert_selector_needs_repair(sv: str, st: str, desc: str) -> bool:
+    if not sv:
+        return bool(desc.strip())
+    try:
+        from ai_step_normalization import is_weak_generic_css_selector
+
+        if st == "css" and is_weak_generic_css_selector(sv):
+            return True
+    except Exception:
+        pass
+    if st == "xpath" and ("contains" in sv.lower() or "text()" in sv):
+        return True
+    if st == "css" and sv.lower() in ("input", "button", "div", "span"):
+        return True
+    return False
+
+
+def resolve_steps_probe_url(steps: List[Dict[str, Any]], case_url: str = "") -> str:
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("action") or "").strip().lower() == "navigate":
+            u = str(step.get("input_value") or step.get("url") or step.get("selector_value") or "").strip()
+            if u.startswith(("http://", "https://")):
+                return u
+    u = (case_url or "").strip()
+    if u.startswith(("http://", "https://")):
+        return u
+    return ""
+
+
+def runtime_repair_steps_with_live_probe(
+    steps: List[Dict[str, Any]],
+    case_url: str = "",
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """
+    执行前对已有步骤做 LIVE 页面探测 + 启发式修复（账号/密码/登录/断言选择器）。
+    解决「AI 生成时探测过、但入库步骤未修复」或「未填 URL 导致未探测」的问题。
+    """
+    if os.environ.get("UAT_RUNTIME_PROBE_REPAIR", "1").strip().lower() in (
+        "0",
+        "false",
+        "off",
+        "no",
+    ):
+        return list(steps or []), []
+    if not steps:
+        return [], []
+    url = resolve_steps_probe_url(steps, case_url)
+    if not url:
+        return list(steps), ["运行时 LIVE 修复跳过：用例无 navigate URL 且 case_url 为空"]
+    _, err, registry = fetch_page_controls_bundle(url)
+    if err or not registry:
+        return list(steps), [
+            f"运行时 LIVE 探测未成功（步骤仍将按库内选择器执行）：{err or '无控件注册表'}"
+        ]
+    repaired, hints = heuristic_repair_plan_selectors_from_registry(
+        copy.deepcopy(steps), registry
+    )
+    return repaired, hints
 
 
 def _frame_locator(frame: Any, selector_type: str, selector_value: str) -> Optional[Any]:
@@ -1361,6 +1615,699 @@ def _frame_locator(frame: Any, selector_type: str, selector_value: str) -> Optio
         return frame.locator(sv)
     except Exception:
         return None
+
+
+def assert_grounding_enabled() -> bool:
+    return os.environ.get("LOCAL_AI_ASSERT_GROUND", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+_XPATH_CONTAINS_TEXT_RE = re.compile(
+    r"contains\s*\(\s*(?:text\s*\(\s*\)|\.)\s*,\s*['\"]([^'\"]+)['\"]",
+    re.I,
+)
+
+
+def split_assert_expected_alternatives(raw: str) -> List[str]:
+    """将 AI 写的「错误|不正确|失败」拆成候选片段；非 pipe 则返回单元素列表。"""
+    s = (raw or "").strip()
+    if not s:
+        return []
+    if "|" in s and not s.startswith("("):
+        parts = [p.strip() for p in s.split("|") if p.strip()]
+        return parts if parts else [s]
+    return [s]
+
+
+def page_text_matches_assert_expected(actual: str, expected: str, compare_type: str = "") -> bool:
+    """整页文本是否满足断言预期（支持 pipe 备选与 regex）。"""
+    from auth_batch_helpers import page_text_assert_matches
+
+    return page_text_assert_matches(actual, expected, compare_type)
+
+
+def is_message_toast_assert_selector(selector_value: str, selector_type: str = "css") -> bool:
+    st = (selector_type or "css").strip().lower()
+    sv = (selector_value or "").strip().lower()
+    if not sv:
+        return False
+    keys = (
+        "toast", "message", "notice", "el-message", "ant-message",
+        "arco-message", "van-toast", "error-msg", "err-msg",
+    )
+    if st == "xpath":
+        return any(k in sv for k in keys) or ("contains(@class" in sv and "message" in sv)
+    if st == "css":
+        return any(k in sv for k in keys)
+    return False
+
+
+def repair_message_toast_assert_step_inplace(step: Dict[str, Any]) -> Optional[str]:
+    """将 toast/message 泛化选择器改为 page_text_regex/contains，避免元素等待超时。"""
+    if not isinstance(step, dict) or (step.get("action") or "").strip().lower() != "assert":
+        return None
+    sv = str(step.get("selector_value") or "").strip()
+    st = str(step.get("selector_type") or "css").strip().lower()
+    if not is_message_toast_assert_selector(sv, st) and not (
+        st == "xpath" and "contains" in sv.lower() and any(k in sv.lower() for k in ("toast", "message", "notice"))
+    ):
+        return None
+    iv = str(step.get("input_value") or "").strip()
+    desc = str(step.get("description") or "")
+    if not iv and any(k in desc for k in ("错误", "失败", "提示", "toast", "消息")):
+        iv = "错误|不正确|失败"
+        step["input_value"] = iv
+    if "|" in iv or split_assert_expected_alternatives(iv) and len(split_assert_expected_alternatives(iv)) > 1:
+        step["compare_type"] = "page_text_regex"
+    else:
+        step["compare_type"] = "page_text_contains"
+    step["selector_type"] = ""
+    step["selector_value"] = ""
+    step.pop("locator_candidates", None)
+    step.pop("probe_index", None)
+    return f"toast/message 断言已改为 {step['compare_type']}（预期 {iv[:80]!r}），不再依赖泛化 XPath/CSS"
+
+
+def extract_assert_expected_fragments(step: Dict[str, Any]) -> List[str]:
+    """从 assert 步骤的 input_value / XPath 中提取候选预期文案。"""
+    if not isinstance(step, dict):
+        return []
+    out: List[str] = []
+    seen: set = set()
+
+    def _add(val: str) -> None:
+        v = (val or "").strip()
+        if not v or v.lower() in ("true", "false") or v in seen:
+            return
+        seen.add(v)
+        out.append(v)
+
+    raw_iv = str(step.get("input_value") or "")
+    for part in split_assert_expected_alternatives(raw_iv):
+        _add(part)
+    if not out:
+        _add(raw_iv)
+    sv = str(step.get("selector_value") or "")
+    for m in _XPATH_CONTAINS_TEXT_RE.finditer(sv):
+        _add(m.group(1))
+    return out
+
+
+def _resolve_plan_ground_url(steps: List[Dict[str, Any]], fallback_url: str = "") -> str:
+    u = (fallback_url or "").strip()
+    if u.startswith(("http://", "https://")):
+        return u
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("action") or "").strip().lower() == "navigate":
+            nu = str(step.get("input_value") or step.get("selector_value") or "").strip()
+            if nu.startswith(("http://", "https://")):
+                return nu
+    return ""
+
+
+def _pick_present_fragment(page_text: str, fragments: List[str]) -> Optional[str]:
+    blob = (page_text or "").replace("\u00a0", " ")
+    for frag in fragments:
+        f = (frag or "").strip()
+        if f and f in blob:
+            return f
+    return None
+
+
+def _hint_fragments_for_assert_step(
+    step: Dict[str, Any],
+    fragments: List[str],
+    expected: str = "",
+) -> List[str]:
+    """从描述/预期中提取主题词，用于在页面上模糊匹配真实提示语。"""
+    hints: List[str] = []
+    seen: set = set()
+
+    def _add(val: str) -> None:
+        v = (val or "").strip()
+        if not v or v in seen:
+            return
+        seen.add(v)
+        hints.append(v)
+
+    for f in fragments or []:
+        _add(f)
+    desc = str(step.get("description") or "")
+    blob = f"{desc} {expected or ''}"
+    for theme in (
+        "密码", "账号", "用户名", "手机号", "验证码", "登录",
+        "错误", "失败", "提示", "不能为空", "请输入", "不正确",
+    ):
+        if theme in blob:
+            _add(theme)
+    return hints
+
+
+def _collect_page_assert_hint_snippets(page: Any, page_text: str) -> List[str]:
+    """汇总 toast、表单校验与整页短行文本，供断言文案自动修正。"""
+    out: List[str] = []
+    seen: set = set()
+
+    def _add(val: str) -> None:
+        v = (val or "").strip()
+        if not v or len(v) > 200 or v in seen:
+            return
+        seen.add(v)
+        out.append(v)
+
+    for snip in _scan_message_like_texts(page) if page is not None else []:
+        _add(snip)
+    for line in re.split(r"[\r\n]+", page_text or ""):
+        _add(line)
+    return out
+
+
+def _best_snippet_for_fragments(snippets: List[str], fragments: List[str], desc: str = "") -> Optional[str]:
+    if not snippets:
+        return None
+    desc = desc or ""
+    best: Optional[str] = None
+    best_score = -1
+    theme_blob = desc + " " + " ".join(fragments or [])
+    for snip in snippets:
+        s = (snip or "").strip()
+        if not s or len(s) > 240:
+            continue
+        score = 0
+        for frag in fragments:
+            f = (frag or "").strip()
+            if not f:
+                continue
+            if f in s:
+                score += 10 + len(f)
+            elif any(k in s for k in (f[:4], f[-4:]) if len(f) >= 4):
+                score += 2
+        for kw in ("错误", "失败", "不能为空", "请输入", "欢迎", "成功"):
+            if kw in desc and kw in s:
+                score += 3
+        for theme in ("密码", "账号", "用户名", "手机号", "验证码", "登录"):
+            if theme in theme_blob and theme in s:
+                score += 6
+        if any(k in s for k in ("请输入", "不能为空", "错误", "失败", "不正确", "无效", "提示")):
+            score += 5
+        if len(s) <= 4 and not any(k in s for k in ("错误", "失败", "请", "不能")):
+            score -= 8
+        if len(s) >= 6 and any(k in s for k in ("请", "不能", "错误", "失败")):
+            score += 2
+        if score > best_score:
+            best_score = score
+            best = s
+    if best_score > 0:
+        return best
+    return None
+
+
+def _auto_fix_assert_from_page_snippets(
+    step: Dict[str, Any],
+    *,
+    page: Any,
+    page_text: str,
+    fragments: List[str],
+    expected: str,
+    step_idx: int,
+) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """预期文案未命中时，从回放页面上的真实提示语中选取最匹配片段并改写 assert。"""
+    snippets = _collect_page_assert_hint_snippets(page, page_text)
+    if not snippets:
+        return None, []
+    hints = _hint_fragments_for_assert_step(step, fragments, expected)
+    best = _best_snippet_for_fragments(snippets, hints, step.get("description") or "")
+    if not best:
+        return None, []
+    new_step = copy.deepcopy(step)
+    new_step["compare_type"] = "page_text_contains"
+    new_step["selector_type"] = ""
+    new_step["selector_value"] = ""
+    new_step["input_value"] = best
+    new_step.pop("probe_index", None)
+    new_step.pop("locator_candidates", None)
+    warn = (
+        f"第{step_idx}步 page_text 断言已按页面实测修正为 {best!r}"
+        f"（原预期 {expected!r} 未出现在页面上）"
+    )
+    return new_step, [warn]
+
+
+_MESSAGE_LIKE_SCAN_JS = """
+() => {
+  const sels = [
+    '.el-message', '.el-message__content', '.el-message-box__message',
+    '.el-form-item__error', '.el-form-item__validatemessage',
+    '.ant-message', '.ant-message-notice-content', '.ant-notification-notice-message',
+    '.ant-form-item-explain-error', '.ant-form-item-explain',
+    '.arco-message-content', '.arco-form-item-message',
+    '.van-toast', '.van-notify', '.van-field__error-message', '.uni-toast',
+    '[role="alert"]', '[class*="toast"]', '[class*="Toast"]',
+    '[class*="error"]', '[class*="Error"]', '[class*="warn"]', '[class*="tip"]',
+    '[class*="validate"]', '[class*="Validate"]'
+  ];
+  const out = [];
+  const seen = new Set();
+  for (const sel of sels) {
+    try {
+      document.querySelectorAll(sel).forEach(el => {
+        const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (t && t.length <= 200 && !seen.has(t)) {
+          seen.add(t);
+          out.push(t);
+        }
+      });
+    } catch (e) {}
+  }
+  return out.slice(0, 40);
+}
+"""
+
+
+def _scan_message_like_texts(page: Any) -> List[str]:
+    try:
+        rows = page.evaluate(_MESSAGE_LIKE_SCAN_JS)
+        if isinstance(rows, list):
+            return [str(x).strip() for x in rows if str(x).strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _page_visible_text(page: Any) -> str:
+    try:
+        handle = page.query_selector("body")
+        if handle:
+            try:
+                return (handle.inner_text() or "").strip()
+            finally:
+                handle.dispose()
+    except Exception:
+        pass
+    return ""
+
+
+def _locator_match_count(page: Any, selector_type: str, selector_value: str) -> int:
+    total = 0
+    for frame in page.frames:
+        try:
+            if frame.is_detached():
+                continue
+        except Exception:
+            continue
+        loc = _frame_locator(frame, selector_type, selector_value)
+        if loc is None:
+            continue
+        try:
+            total += loc.count()
+        except Exception:
+            continue
+    return total
+
+
+def _extract_text_via_selector(page: Any, selector_type: str, selector_value: str) -> Tuple[int, str]:
+    total = 0
+    chunks: List[str] = []
+    for frame in page.frames:
+        try:
+            if frame.is_detached():
+                continue
+        except Exception:
+            continue
+        loc = _frame_locator(frame, selector_type, selector_value)
+        if loc is None:
+            continue
+        try:
+            c = loc.count()
+        except Exception:
+            c = 0
+        if c <= 0:
+            continue
+        total += c
+        try:
+            t = (loc.first.inner_text(timeout=2000) or "").strip()
+            if t:
+                chunks.append(t)
+        except Exception:
+            pass
+    return total, " ".join(chunks)
+
+
+def _click_in_any_frame(page: Any, selector_type: str, selector_value: str, timeout_ms: int) -> bool:
+    for frame in page.frames:
+        loc = _frame_locator(frame, selector_type, selector_value)
+        if loc is None:
+            continue
+        try:
+            if loc.count() > 0:
+                loc.first.click(timeout=timeout_ms)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _fill_in_any_frame(page: Any, selector_type: str, selector_value: str, text: str, timeout_ms: int) -> bool:
+    for frame in page.frames:
+        loc = _frame_locator(frame, selector_type, selector_value)
+        if loc is None:
+            continue
+        try:
+            if loc.count() > 0:
+                loc.first.fill(text or "", timeout=timeout_ms)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _wait_ms_from_step_input(raw: Any) -> int:
+    try:
+        v = int(float(str(raw or "1").strip()))
+    except (TypeError, ValueError):
+        return 1000
+    if v <= 0:
+        return 1000
+    if v <= 120:
+        return min(v * 1000, 120_000)
+    return min(v, 30_000)
+
+
+def _replay_plan_step(page: Any, step: Dict[str, Any], action_timeout_ms: int) -> Optional[str]:
+    """回放单步（不含 assert），失败时返回错误说明。"""
+    action = str(step.get("action") or "").strip().lower()
+    if action in ("assert", "extract_text", "verify"):
+        return None
+    if action == "navigate":
+        url = str(step.get("input_value") or step.get("selector_value") or "").strip()
+        if not url:
+            return "navigate 缺少 URL"
+        page.goto(url, wait_until="load", timeout=action_timeout_ms)
+        return None
+    if action == "wait":
+        page.wait_for_timeout(_wait_ms_from_step_input(step.get("input_value")))
+        return None
+    if action == "click":
+        sv = str(step.get("selector_value") or "").strip()
+        if not sv:
+            return "click 缺少 selector_value"
+        st = str(step.get("selector_type") or "css").strip().lower()
+        if not _click_in_any_frame(page, st, sv, action_timeout_ms):
+            return f"click 选择器无匹配: {st}={sv[:80]}"
+        return None
+    if action == "input":
+        sv = str(step.get("selector_value") or "").strip()
+        if not sv:
+            return "input 缺少 selector_value"
+        st = str(step.get("selector_type") or "css").strip().lower()
+        text = step.get("input_value")
+        if text is None:
+            text = ""
+        else:
+            text = str(text)
+        if not _fill_in_any_frame(page, st, sv, text, action_timeout_ms):
+            return f"input 选择器无匹配: {st}={sv[:80]}"
+        return None
+    return None
+
+
+def _ground_single_assert_step(
+    page: Any,
+    step: Dict[str, Any],
+    step_idx: int,
+    *,
+    page_text: str,
+    page_url: str,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """对照回放后的真实页面修正 assert 步骤。"""
+    warnings: List[str] = []
+    if not isinstance(step, dict):
+        return step, warnings
+    expected = str(step.get("input_value") or "").strip()
+    sv = str(step.get("selector_value") or "").strip()
+    st = str(step.get("selector_type") or "css").strip().lower()
+    from auth_batch_helpers import normalize_assert_compare_type
+
+    ct = normalize_assert_compare_type(
+        step.get("compare_type") or "text_contains",
+        selector_value=sv,
+        input_value=expected,
+    )
+    fragments = extract_assert_expected_fragments(step)
+    desc = str(step.get("description") or "")
+    if st == "text" and sv and any(
+        k in desc for k in ("包含", "标题", "页面", "出现", "显示", "展示", "可见")
+    ):
+        expect_text = expected or sv
+        new_step = copy.deepcopy(step)
+        new_step["input_value"] = expect_text
+        new_step["selector_type"] = ""
+        new_step["selector_value"] = ""
+        new_step.pop("probe_index", None)
+        new_step.pop("locator_candidates", None)
+        if ct in ("text_equals", "page_text_equals"):
+            new_step["compare_type"] = "page_text_equals"
+        elif ct in ("text_regex", "page_text_regex"):
+            new_step["compare_type"] = "page_text_regex"
+        else:
+            new_step["compare_type"] = "page_text_contains"
+        step = new_step
+        expected = expect_text
+        sv = ""
+        st = ""
+        ct = new_step["compare_type"]
+        fragments = extract_assert_expected_fragments(step)
+        warnings.append(
+            f"第{step_idx}步 assert：text 定位已改为 {ct}（预期 {expect_text!r}）"
+        )
+    toast_fix = repair_message_toast_assert_step_inplace(step)
+    if toast_fix:
+        warnings.append(f"第{step_idx}步 assert：{toast_fix}")
+        return step, warnings
+
+    if ct in ("url_equals", "url_contains"):
+        if ct == "url_contains" and expected and expected not in page_url:
+            warnings.append(
+                f"第{step_idx}步 URL 断言：回放后地址 {page_url[:120]!r} 不包含预期 {expected!r}"
+            )
+        return step, warnings
+
+    if ct in ("page_text_contains", "page_text_equals", "page_text_regex"):
+        if page_text_matches_assert_expected(page_text, expected, ct):
+            matched = _pick_present_fragment(page_text, fragments or ([expected] if expected else []))
+            if not matched and expected:
+                for part in split_assert_expected_alternatives(expected):
+                    if part in page_text:
+                        matched = part
+                        break
+        else:
+            matched = None
+        if page_text_matches_assert_expected(page_text, expected, ct):
+            if matched and matched != expected:
+                step = copy.deepcopy(step)
+                step["input_value"] = matched
+                warnings.append(
+                    f"第{step_idx}步 page_text 断言已按页面探测修正文案为 {matched!r}"
+                )
+            return step, warnings
+        fixed, fix_warns = _auto_fix_assert_from_page_snippets(
+            step,
+            page=page,
+            page_text=page_text,
+            fragments=fragments or ([expected] if expected else []),
+            expected=expected,
+            step_idx=step_idx,
+        )
+        if fixed:
+            warnings.extend(fix_warns)
+            return fixed, warnings
+        hint_snips = _collect_page_assert_hint_snippets(page, page_text)[:5]
+        extra = f"；页面可见提示语示例 {hint_snips!r}" if hint_snips else ""
+        warnings.append(
+            f"第{step_idx}步 page_text 断言：回放后页面未找到预期文案 {fragments or [expected]!r}{extra}"
+        )
+        return step, warnings
+
+    matched = _pick_present_fragment(page_text, fragments)
+    if matched:
+        new_step = copy.deepcopy(step)
+        new_step["compare_type"] = "page_text_contains"
+        new_step["selector_type"] = ""
+        new_step["selector_value"] = ""
+        new_step["input_value"] = matched
+        new_step.pop("probe_index", None)
+        new_step.pop("locator_candidates", None)
+        warnings.append(
+            f"第{step_idx}步 assert 已改为 page_text_contains（页面实测含 {matched!r}；"
+            f"原元素选择器未命中或文案不符）"
+        )
+        return new_step, warnings
+
+    selector_hits = 0
+    actual_text = ""
+    if sv and page is not None:
+        selector_hits, actual_text = _extract_text_via_selector(page, st, sv)
+
+    if selector_hits > 0 and fragments:
+        for frag in fragments:
+            if frag in actual_text:
+                if frag != expected or ct != "text_contains":
+                    step = copy.deepcopy(step)
+                    step["compare_type"] = "text_contains"
+                    step["input_value"] = frag
+                return step, warnings
+        if expected and expected in actual_text:
+            return step, warnings
+
+    snippets = _scan_message_like_texts(page) if page is not None else []
+    best = _best_snippet_for_fragments(snippets, fragments, step.get("description") or "")
+    if best:
+        use_text = best
+        if len(best) > 80:
+            for frag in fragments:
+                if frag and frag in best:
+                    use_text = frag
+                    break
+        new_step = copy.deepcopy(step)
+        new_step["compare_type"] = "page_text_contains"
+        new_step["selector_type"] = ""
+        new_step["selector_value"] = ""
+        new_step["input_value"] = use_text
+        new_step.pop("probe_index", None)
+        new_step.pop("locator_candidates", None)
+        warnings.append(
+            f"第{step_idx}步 assert 已按页面提示语探测修正为 page_text_contains: {use_text!r}"
+        )
+        return new_step, warnings
+
+    if selector_hits == 0 and sv:
+        warnings.append(
+            f"第{step_idx}步 assert 选择器回放后无匹配: {st}={sv[:100]!r}；"
+            f"预期文案 {fragments or [expected]!r} 亦未出现在页面可见文本中"
+        )
+    elif fragments or expected:
+        warnings.append(
+            f"第{step_idx}步 assert：回放后页面未找到预期 {fragments or [expected]!r}，请人工核对"
+        )
+    return step, warnings
+
+
+def ground_plan_assertions_with_replay(
+    url: str,
+    steps: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[str], Optional[str]]:
+    """
+    回放用例前置步骤，在 assert 前的真实页面上探测并修正断言（selector / 文案 / compare_type）。
+    返回 (修正后的 steps, 警告列表, 致命错误)。
+    """
+    if not assert_grounding_enabled():
+        return list(steps or []), [], None
+    if not steps or not isinstance(steps, list):
+        return list(steps or []), [], None
+    ground_url = _resolve_plan_ground_url(steps, url)
+    if not ground_url.startswith(("http://", "https://")):
+        return list(steps), [], None
+
+    has_assert = any(
+        isinstance(s, dict) and str(s.get("action") or "").strip().lower() == "assert"
+        for s in steps
+    )
+    if not has_assert:
+        return list(steps), [], None
+
+    timeout_ms = _env_int("LOCAL_AI_PROBE_TIMEOUT_MS", 35000)
+    action_timeout_ms = _env_int("LOCAL_AI_ASSERT_GROUND_ACTION_MS", min(timeout_ms, 20000))
+    settle_ms = _env_int("LOCAL_AI_ASSERT_GROUND_SETTLE_MS", 1200)
+    goto_wait = (os.environ.get("LOCAL_AI_PROBE_GOTO_WAIT", "load") or "load").strip().lower()
+    if goto_wait not in ("commit", "domcontentloaded", "load", "networkidle"):
+        goto_wait = "load"
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return list(steps), [], "未安装 playwright，无法进行断言页面回放探测"
+
+    out_steps = copy.deepcopy(steps)
+    warnings: List[str] = []
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                ctx = browser.new_context(locale="zh-CN", viewport={"width": 1365, "height": 900})
+                page = ctx.new_page()
+                page.set_default_timeout(action_timeout_ms)
+                navigated = False
+                for idx, step in enumerate(out_steps):
+                    if not isinstance(step, dict):
+                        continue
+                    action = str(step.get("action") or "").strip().lower()
+                    if action == "assert":
+                        if settle_ms > 0:
+                            page.wait_for_timeout(settle_ms)
+                        page_text = _page_visible_text(page)
+                        page_url = page.url or ""
+                        grounded, gw = _ground_single_assert_step(
+                            page,
+                            step,
+                            idx + 1,
+                            page_text=page_text,
+                            page_url=page_url,
+                        )
+                        out_steps[idx] = grounded
+                        warnings.extend(gw)
+                        continue
+                    err = _replay_plan_step(page, step, action_timeout_ms)
+                    if err:
+                        warnings.append(f"第{idx + 1}步回放跳过（{action}）: {err}")
+                        if action == "navigate" and not navigated:
+                            try:
+                                page.goto(ground_url, wait_until=goto_wait, timeout=timeout_ms)
+                                navigated = True
+                            except Exception:
+                                pass
+                        continue
+                    if action == "navigate":
+                        navigated = True
+                    if action in ("click", "input", "submit"):
+                        page.wait_for_timeout(min(400, settle_ms))
+            finally:
+                browser.close()
+    except Exception as e:
+        return list(steps), warnings, f"断言回放探测异常：{e}"
+
+    return out_steps, warnings, None
+
+
+def apply_ai_assert_grounding_to_plan(
+    plan: Dict[str, Any],
+    extra_warnings: Optional[List[str]] = None,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """在 plan 落库/返回前统一做 assert 回放探测（避免重复执行）。"""
+    warns = list(extra_warnings or [])
+    if not isinstance(plan, dict):
+        return plan, warns
+    meta = plan.setdefault("meta", {})
+    if meta.get("assert_grounding_applied"):
+        return plan, warns
+    steps = plan.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return plan, warns
+    url = _resolve_plan_ground_url(steps, str(plan.get("case_url") or ""))
+    repaired, gw, gerr = ground_plan_assertions_with_replay(url, steps)
+    plan["steps"] = repaired
+    meta["assert_grounding_applied"] = True
+    if gw:
+        meta["assert_grounding"] = list(meta.get("assert_grounding") or []) + gw
+        warns.extend(gw)
+    if gerr:
+        meta["assert_grounding_error"] = gerr
+    return plan, warns
 
 
 def validate_plan_locators(url: str, steps: List[Dict[str, Any]]) -> Tuple[List[str], Optional[str]]:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -104,6 +105,8 @@ class LocalExecutionLock:
         self._fd: Optional[int] = None
         self._path: Optional[Path] = None
         self._owner: str = ""
+        self._holder_thread: Optional[int] = None
+        self._reentrant_depth: int = 0
 
     def is_held(self) -> bool:
         return self._fd is not None
@@ -115,8 +118,18 @@ class LocalExecutionLock:
         timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
         owner: str = "",
     ) -> bool:
+        current_tid = threading.get_ident()
         if self.is_held():
-            return True
+            if self._holder_thread == current_tid:
+                self._reentrant_depth += 1
+                return True
+            if not blocking:
+                return False
+            deadline = time.time() + max(0.0, timeout_sec)
+            while self.is_held() and self._holder_thread != current_tid:
+                if time.time() >= deadline:
+                    return False
+                time.sleep(0.25)
 
         path = lock_file_path()
         deadline = time.time() + max(0.0, timeout_sec)
@@ -144,6 +157,8 @@ class LocalExecutionLock:
                 self._fd = fd
                 self._path = path
                 self._owner = owner_label
+                self._holder_thread = current_tid
+                self._reentrant_depth = 1
                 uat_logger.info("🔒 [UAT_LOCK] 已获取本机执行锁 owner=%s", owner_label)
                 return True
 
@@ -157,12 +172,18 @@ class LocalExecutionLock:
     def release(self) -> None:
         if not self.is_held():
             return
+        current_tid = threading.get_ident()
+        if self._holder_thread == current_tid and self._reentrant_depth > 1:
+            self._reentrant_depth -= 1
+            return
         fd = self._fd
         path = self._path
         owner = self._owner
         self._fd = None
         self._path = None
         self._owner = ""
+        self._holder_thread = None
+        self._reentrant_depth = 0
         if fd is not None:
             _release_file(fd)
             try:
