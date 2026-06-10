@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from mobile_device_manager import capture_screenshot_frame, set_connected_udid
-from mobile_env_config import mirror_fps, resolve_mirror_backend, scrcpy_path
+from mobile_env_config import mirror_fps, scrcpy_path
 
 try:
     from uat_logger import uat_logger
@@ -38,9 +38,8 @@ def start_scrcpy_mirror(udid: str) -> Dict[str, Any]:
     session_id = str(uuid.uuid4())
     scrcpy_proc: Optional[subprocess.Popen] = None
     scrcpy_started = False
-    # 模拟器走平台内 WebCodecs 画布（scrcpy_ws），不弹出 scrcpy 独立窗口
-    use_in_app_mirror = udid.startswith("emulator-") and resolve_mirror_backend(udid) == "scrcpy_ws"
-    if not use_in_app_mirror:
+    # 模拟器永不弹出 scrcpy.exe 外窗（画面走 scrcpy_ws 或平台内 screencap 画布）
+    if not udid.startswith("emulator-"):
         scrcpy_exe = scrcpy_path()
         cmd = [scrcpy_exe]
         if udid:

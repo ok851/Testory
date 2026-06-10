@@ -8,7 +8,7 @@ import json
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from flask import jsonify, request
+from flask import Response, jsonify, request, stream_with_context
 from flask_login import current_user, login_required
 
 from mobile_device_manager import (
@@ -21,7 +21,9 @@ from mobile_device_manager import (
     get_foreground_app,
     list_user_apps,
     list_usb_devices,
+    list_real_usb_devices,
     pick_default_device,
+    pick_default_real_device,
     set_connected_udid,
 )
 from mobile_device_profiles import get_frame_preset, list_frame_presets
@@ -43,6 +45,9 @@ from mobile_emulator_manager import (
     provision_avd_for_preset,
     start_avd,
     stop_avd,
+    stop_all_emulators,
+    register_emulator_shutdown_hook,
+    set_emulator_cleanup_on_exit,
 )
 from mobile_executor import get_mobile_executor
 from mobile_mirror import disconnect_all_mirrors, get_mirror_session, start_scrcpy_mirror, stop_mirror
@@ -268,7 +273,12 @@ def execute_mobile_case(
             pass
 
 
-def _mirror_payload(udid: str, session_id: str) -> Dict[str, Any]:
+def _client_host(req) -> str:
+    raw = (req.headers.get("X-Forwarded-Host") or req.host or "127.0.0.1").split(",")[0].strip()
+    return (raw.split(":")[0] or "127.0.0.1").strip()
+
+
+def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dict[str, Any]:
     backend = resolve_mirror_backend(udid)
     payload: Dict[str, Any] = {
         "mirror_backend": backend,
@@ -283,7 +293,8 @@ def _mirror_payload(udid: str, session_id: str) -> Dict[str, Any]:
             payload["mirror_backend"] = "screencap"
             payload["mirror_fallback_reason"] = "未找到 scrcpy-server，已降级为截图投屏"
             return payload
-        payload["mirror_ws_url"] = f"{scrcpy_bridge_url()}/?serial={udid}"
+        payload["mirror_stream_url"] = f"/api/mobile/mirror/scrcpy-stream?serial={udid}"
+        payload["mirror_ws_url"] = f"{scrcpy_bridge_url(client_host)}/?serial={udid}"
         payload["bridge"] = health
     return payload
 
@@ -411,6 +422,31 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             adb_disconnect_device(udid)
         set_connected_udid(None)
         return jsonify({"success": True})
+
+    @app.route("/api/mobile/mirror/scrcpy-stream", methods=["GET"])
+    @login_required
+    def api_mobile_mirror_scrcpy_stream():
+        """模拟器高帧率 H.264 流（同源 HTTP，走 Flask 端口，无需 8767 WebSocket）。"""
+        serial = (request.args.get("serial") or request.args.get("udid") or "").strip()
+        if not serial:
+            return jsonify({"success": False, "error": "缺少 serial"}), 400
+        if not serial.startswith("emulator-"):
+            return jsonify({"success": False, "error": "仅模拟器支持 scrcpy 流"}), 400
+        from mobile_scrcpy_bridge import iter_scrcpy_http_stream
+
+        @stream_with_context
+        def _generate():
+            for chunk in iter_scrcpy_http_stream(serial):
+                yield chunk
+
+        return Response(
+            _generate(),
+            mimetype="application/octet-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.route("/api/mobile/mirror/frame", methods=["GET"])
     @login_required
@@ -734,10 +770,13 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         health = check_mobile_health()
         devices = health.get("devices") or []
         default_dev = pick_default_device()
-        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started
+        bridge: Dict[str, Any] = {}
+        try:
+            from mobile_scrcpy_bridge import bridge_health
 
-        if mobile_enabled():
-            ensure_bridge_started()
+            bridge = bridge_health()
+        except Exception:
+            bridge = {}
         return jsonify({
             "success": True,
             **public_config(),
@@ -748,7 +787,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "auto_connect_default": auto_connect_on_studio(),
             "driver_mode": mobile_driver_mode(),
             "emulator": emulator_status(),
-            "bridge": bridge_health(),
+            "bridge": bridge,
         })
 
     @app.route("/api/mobile/auto-connect", methods=["POST"])
@@ -771,60 +810,32 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
 
         dev = None
         if udid:
-            for d in list_usb_devices():
+            for d in list_real_usb_devices():
                 if d.get("udid") == udid:
                     dev = d
                     break
         if not dev:
-            dev = pick_default_device()
+            dev = pick_default_real_device()
         if not dev or dev.get("state") != "device":
             return jsonify({
                 "success": False,
-                "error": "未发现已授权设备。请 USB/无线连接后在手机上允许调试，或先在下方完成无线配对。",
+                "error": "未发现已授权的真机。请 USB/无线连接后在手机上允许调试，模拟器请使用上方「启动模拟器」。",
             }), 503
 
         udid = dev.get("udid") or ""
-        set_connected_udid(udid)
-        mirror = start_scrcpy_mirror(udid)
-        device_info = get_device_info(udid)
-        appium_ok = False
-        appium_error = ""
-        if try_appium and mobile_runtime_available():
-            executor = get_mobile_executor()
-            ok, msg = executor.check_appium_server()
-            if ok:
-                caps: Dict[str, Any] = {}
-                pkg = (
-                    (body.get("app_package") or "").strip()
-                    or device_info.get("foreground_package")
-                    or ""
-                )
-                if pkg:
-                    caps["appPackage"] = pkg
-                caps["udid"] = udid
-                try:
-                    executor.connect(caps)
-                    appium_ok = True
-                except Exception as exc:
-                    appium_error = str(exc)
-            else:
-                appium_error = msg
+        frame_preset = (body.get("frame_preset") or "generic_19_9").strip()
+        try:
+            from mobile_studio_launch import finish_studio_connect
 
-        apps = list_user_apps(udid, limit=60)
-        return jsonify({
-            "success": True,
-            "udid": udid,
-            "device": device_info,
-            "session_id": mirror.get("session_id"),
-            **_mirror_payload(udid, mirror.get("session_id") or ""),
-            "scrcpy_started": mirror.get("scrcpy_started"),
-            "appium_connected": appium_ok,
-            "appium_error": appium_error or None,
-            "apps": apps,
-            "suggested_app_package": device_info.get("foreground_package") or "",
-            "frame_preset": get_frame_preset(body.get("frame_preset") or "generic_19_9"),
-            "is_emulator": udid.startswith("emulator-"),
-        })
+            payload = finish_studio_connect(
+                udid,
+                frame_preset=frame_preset,
+                try_appium=bool(try_appium),
+                client_host=_client_host(request),
+            )
+        except RuntimeError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 503
+        return jsonify({"success": True, **payload})
 
     @app.route("/api/mobile/emulator/status", methods=["GET"])
     @login_required
@@ -882,6 +893,76 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             return blocked
         return jsonify({"success": True, "models": list_emulator_models()})
 
+    @app.route("/api/mobile/emulator/launch", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_emulator_launch():
+        """一键启动：修复环境 + 启动/复用模拟器 + 投屏连接（合并原 repair/start/connect）。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        preset_id = (body.get("preset_id") or body.get("model_id") or "pixel_7").strip()
+        if not preset_id:
+            return jsonify({"success": False, "error": "需要 preset_id"}), 400
+        try:
+            port = int(body.get("port") or 5554)
+        except (TypeError, ValueError):
+            port = 5554
+        no_window = bool(body.get("no_window")) if "no_window" in body else True
+        from mobile_env_config import resolve_emulator_gpu
+
+        gpu = resolve_emulator_gpu((body.get("gpu") or "").strip(), no_window=no_window)
+        force_restart = bool(body.get("force_restart"))
+        try_appium = bool(body.get("try_appium"))
+        async_start = body.get("async")
+        if async_start is None:
+            async_start = True
+        if async_start:
+            from emulator_start_jobs import start_launch_studio_job
+
+            try:
+                job_id = start_launch_studio_job(
+                    preset_id,
+                    port=port,
+                    gpu=gpu,
+                    no_window=no_window,
+                    force_restart=force_restart,
+                    try_appium=try_appium,
+                    client_host=_client_host(request),
+                )
+            except RuntimeError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 409
+            return jsonify({"success": True, "async": True, "job_id": job_id, "preset_id": preset_id})
+        from mobile_studio_launch import finish_studio_connect, launch_emulator_studio
+
+        ok, msg, meta = launch_emulator_studio(
+            preset_id,
+            port=port,
+            gpu=gpu,
+            no_window=no_window,
+            force_restart=force_restart,
+        )
+        if not ok:
+            return jsonify({"success": False, "error": msg, **(meta or {})}), 503
+        serial = (meta.get("serial") or "").strip()
+        frame_id = meta.get("frame_preset_id") or "generic_19_9"
+        connect_payload = finish_studio_connect(
+            serial,
+            frame_preset=frame_id,
+            try_appium=try_appium,
+            client_host=_client_host(request),
+        )
+        return jsonify({
+            "success": True,
+            "message": msg,
+            **meta,
+            **connect_payload,
+            "devices": list_usb_devices(),
+        })
+
     @app.route("/api/mobile/emulator/switch-model", methods=["POST"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")
@@ -899,23 +980,30 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             port = int(body.get("port") or 5554)
         except (TypeError, ValueError):
             port = 5554
-        gpu = (body.get("gpu") or "swiftshader_indirect").strip()
         if "no_window" in body:
             no_window = bool(body.get("no_window"))
         else:
             no_window = True
+        from mobile_env_config import resolve_emulator_gpu
+
+        gpu = resolve_emulator_gpu((body.get("gpu") or "").strip(), no_window=no_window)
         async_start = body.get("async")
         if async_start is None:
             async_start = True
         if async_start:
             from emulator_start_jobs import start_switch_model_job
 
-            job_id = start_switch_model_job(
-                preset_id,
-                port=port,
-                gpu=gpu,
-                no_window=no_window,
-            )
+            force_restart = bool(body.get("force_restart"))
+            try:
+                job_id = start_switch_model_job(
+                    preset_id,
+                    port=port,
+                    gpu=gpu,
+                    no_window=no_window,
+                    force_restart=force_restart,
+                )
+            except RuntimeError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 409
             return jsonify({"success": True, "async": True, "job_id": job_id, "preset_id": preset_id})
         from mobile_emulator_manager import switch_emulator_model
 
@@ -953,23 +1041,28 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             port = int(body.get("port") or 5554)
         except (TypeError, ValueError):
             port = 5554
-        gpu = (body.get("gpu") or "host").strip()
         if "no_window" in body:
             no_window = bool(body.get("no_window"))
         else:
             no_window = True
+        from mobile_env_config import resolve_emulator_gpu
+
+        gpu = resolve_emulator_gpu((body.get("gpu") or "").strip(), no_window=no_window)
         async_start = body.get("async")
         if async_start is None:
             async_start = True
         if async_start:
             from emulator_start_jobs import start_emulator_job
 
-            job_id = start_emulator_job(
-                avd_name,
-                port=port,
-                gpu=gpu,
-                no_window=no_window,
-            )
+            try:
+                job_id = start_emulator_job(
+                    avd_name,
+                    port=port,
+                    gpu=gpu,
+                    no_window=no_window,
+                )
+            except RuntimeError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 409
             return jsonify({"success": True, "async": True, "job_id": job_id})
         ok, msg, meta = start_avd(avd_name, port=port, gpu=gpu, no_window=no_window)
         if not ok:
@@ -1004,6 +1097,31 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         avd_name = (body.get("avd_name") or body.get("name") or "").strip()
         ok, msg = stop_avd(serial=serial, avd_name=avd_name)
         return jsonify({"success": ok, "message": msg, "devices": list_usb_devices()})
+
+    @app.route("/api/mobile/emulator/stop-all", methods=["POST"])
+    @login_required
+    @api_error_handler
+    @log_api_request
+    def api_mobile_emulator_stop_all():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        ok, msg = stop_all_emulators()
+        disconnect_all_mirrors()
+        return jsonify({"success": ok, "message": msg, "devices": list_usb_devices()})
+
+    @app.route("/api/mobile/emulator/exit-policy", methods=["POST"])
+    @api_error_handler
+    def api_mobile_emulator_exit_policy():
+        remote = (request.remote_addr or "").strip()
+        if remote not in ("127.0.0.1", "::1"):
+            return jsonify({"success": False, "error": "forbidden"}), 403
+        body = request.get_json(silent=True) or {}
+        stop = body.get("stop")
+        if stop is None:
+            stop = True
+        set_emulator_cleanup_on_exit(bool(stop))
+        return jsonify({"success": True, "stop_on_exit": bool(stop)})
 
     @app.route("/api/mobile/apps", methods=["GET"])
     @login_required
@@ -1108,3 +1226,5 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
                     release_machine_lock()
                 except Exception:
                     pass
+
+    register_emulator_shutdown_hook()

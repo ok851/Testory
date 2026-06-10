@@ -24,6 +24,7 @@
         mirrorAbort: null,
         mirrorBackend: 'screencap',
         mirrorWsUrl: '',
+        mirrorStreamUrl: '',
         scrcpyPlayer: null,
         pointerDown: null,
         interactionMode: INTERACTION_CONTROL,
@@ -31,6 +32,9 @@
         selectedModelId: 'pixel_7',
         autoStartAttempted: false,
         modelSwitchBusy: false,
+        emulatorPollToken: null,
+        diagnosticsCache: null,
+        diagnosticsCacheAt: 0,
     };
 
     function $(id) {
@@ -83,6 +87,24 @@
             dim.textContent = '分辨率 —';
             dim.removeAttribute('data-live-fps');
         }
+        updateMirrorModeBadge('idle', '');
+    }
+
+    function updateMirrorModeBadge(mode, detail) {
+        const badge = $('msMirrorMode');
+        if (!badge) return;
+        const m = mode || 'idle';
+        badge.className = 'ms-mirror-mode ms-mirror-mode--' + m;
+        if (m === 'scrcpy') {
+            badge.textContent = '高帧率 scrcpy';
+            badge.title = detail || 'H.264 硬件视频流（WebCodecs）';
+        } else if (m === 'screencap') {
+            badge.textContent = '截图投屏';
+            badge.title = detail || 'adb screencap 轮询，帧率较低';
+        } else {
+            badge.textContent = '未连接';
+            badge.title = detail || '启动模拟器或连接真机后显示投屏方式';
+        }
     }
 
     function showMirrorCanvas() {
@@ -92,38 +114,112 @@
         if (ph) ph.style.display = 'none';
     }
 
-    function startScrcpyWsMirror() {
-        const canvas = $('msMirrorCanvas');
-        if (!canvas || !state.mirrorWsUrl || !global.ScrcpyMirrorPlayer) {
-            startScreencapMirror();
+    function isEmulatorUdid(udid) {
+        return (udid || '').indexOf('emulator-') === 0;
+    }
+
+    function scrcpyMirrorFailed(msg) {
+        updateMirrorModeBadge('screencap', msg || '高帧率投屏失败');
+        if (isEmulatorUdid(state.udid)) {
+            setStatus(
+                (msg || '高帧率投屏失败') + '。请点「停止」→「启动模拟器」重试；或在插件市场安装 scrcpy。',
+                'err'
+            );
             return;
         }
-        state.mirrorRunning = true;
-        state.scrcpyPlayer = new global.ScrcpyMirrorPlayer({
+        setStatus((msg || 'scrcpy 无画面') + '，降级为截图模式', 'warn');
+        startScreencapMirror();
+    }
+
+    function buildScrcpyPlayer() {
+        const canvas = $('msMirrorCanvas');
+        if (!canvas || !global.ScrcpyMirrorPlayer) return null;
+        return new global.ScrcpyMirrorPlayer({
             canvas: canvas,
             wsUrl: state.mirrorWsUrl,
+            maxReconnect: 2,
+            noFrameTimeoutMs: 8000,
+            onFirstFrame: function () {
+                showMirrorCanvas();
+                updateMirrorModeBadge('scrcpy', 'H.264 硬件视频流');
+                const c = $('msMirrorCanvas');
+                if (c && c.width && c.height) {
+                    state.deviceWidth = c.width;
+                    state.deviceHeight = c.height;
+                    syncPhoneAspectFromDevice();
+                }
+            },
             onFps: function (fps) {
                 const dim = $('msDeviceDim');
                 if (!dim) return;
                 const base = state.deviceWidth + ' × ' + state.deviceHeight;
                 dim.textContent = base + ' · ' + fps + ' fps · scrcpy';
             },
+            onReconnect: function (attempt, max) {
+                setStatus('投屏短暂中断，正在重连 (' + attempt + '/' + max + ')…', 'warn');
+            },
+            onFallback: function (msg) {
+                if (!state.mirrorRunning) return;
+                if (state.scrcpyPlayer) {
+                    state.scrcpyPlayer.stop();
+                    state.scrcpyPlayer = null;
+                }
+                scrcpyMirrorFailed(msg);
+            },
             onError: function (msg) {
                 if (state.mirrorRunning) setStatus('投屏: ' + msg, 'warn');
             },
         });
-        state.scrcpyPlayer.start().then(function () {
-            showMirrorCanvas();
-            setStatus('高帧率投屏已启动（scrcpy）', 'ok');
-        }).catch(function (e) {
-            setStatus('scrcpy 投屏失败，降级为截图模式: ' + (e.message || e), 'warn');
+    }
+
+    function startScrcpyHttpMirror() {
+        if (!state.mirrorStreamUrl) {
+            startScrcpyWsMirror();
+            return;
+        }
+        state.mirrorRunning = true;
+        state.scrcpyPlayer = buildScrcpyPlayer();
+        if (!state.scrcpyPlayer) {
+            scrcpyMirrorFailed('浏览器不支持 WebCodecs');
+            return;
+        }
+        setStatus('高帧率投屏连接中（HTTP 流）…', '');
+        state.scrcpyPlayer.startHttp(state.mirrorStreamUrl).catch(function (e) {
+            if (!state.mirrorRunning) return;
             state.scrcpyPlayer = null;
-            startScreencapMirror();
+            if (state.mirrorWsUrl) {
+                setStatus('HTTP 流失败，尝试 WebSocket…', 'warn');
+                startScrcpyWsMirror();
+                return;
+            }
+            scrcpyMirrorFailed(e.message || String(e));
+        });
+    }
+
+    function startScrcpyWsMirror() {
+        if (!state.mirrorWsUrl || !global.ScrcpyMirrorPlayer) {
+            scrcpyMirrorFailed('缺少 scrcpy WebSocket 地址');
+            return;
+        }
+        state.mirrorRunning = true;
+        state.scrcpyPlayer = buildScrcpyPlayer();
+        if (!state.scrcpyPlayer) {
+            scrcpyMirrorFailed('浏览器不支持 WebCodecs');
+            return;
+        }
+        setStatus('高帧率投屏连接中（WebSocket）…', '');
+        state.scrcpyPlayer.start().catch(function (e) {
+            if (!state.mirrorRunning) return;
+            state.scrcpyPlayer = null;
+            scrcpyMirrorFailed(e.message || String(e));
         });
     }
 
     function startScreencapMirror() {
+        const canvas = $('msMirrorCanvas');
+        if (!canvas || !state.mirrorUrl) return;
         const ctx = canvas.getContext('2d');
+        if (!ctx) return;
         const targetFps = (state.bootstrap && state.bootstrap.mirror_fps) || 8;
         const minInterval = Math.max(16, Math.floor(1000 / Math.max(1, targetFps)));
         state.mirrorRunning = true;
@@ -179,12 +275,13 @@
                     canvas.width = img.width;
                     canvas.height = img.height;
                 }
-                ctx.drawImage(img, 0, 0);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
                 canvas.style.display = 'block';
                 const ph = $('msMirrorPlaceholder');
                 if (ph) ph.style.display = 'none';
                 state.deviceWidth = img.width;
                 state.deviceHeight = img.height;
+                syncPhoneAspectFromDevice();
                 state.mirrorFrameCount += 1;
                 updateFpsLabel();
             } catch (e) {
@@ -203,31 +300,71 @@
 
     function startMirror() {
         stopMirror();
-        if (!state.mirrorUrl && !state.mirrorWsUrl) return;
-        if (state.mirrorBackend === 'scrcpy_ws' && state.mirrorWsUrl) {
-            startScrcpyWsMirror();
+        if (!state.mirrorUrl && !state.mirrorStreamUrl && !state.mirrorWsUrl) return;
+        if (state.mirrorBackend === 'scrcpy_ws') {
+            if (state.mirrorStreamUrl) {
+                startScrcpyHttpMirror();
+                return;
+            }
+            if (state.mirrorWsUrl) {
+                startScrcpyWsMirror();
+                return;
+            }
+        }
+        if (isEmulatorUdid(state.udid)) {
+            scrcpyMirrorFailed(state.mirror_fallback_reason || '模拟器未启用高帧率投屏');
             return;
         }
         startScreencapMirror();
     }
 
+    function isRealDevice(d) {
+        const udid = ((d && d.udid) || '').trim();
+        return udid && udid.indexOf('emulator-') !== 0;
+    }
+
+    function filterRealDevices(devices) {
+        return (devices || []).filter(isRealDevice);
+    }
+
+    function syncPhoneAspectFromDevice() {
+        if (!state.deviceWidth || !state.deviceHeight) return;
+        const shell = $('msPhoneShell');
+        if (shell) {
+            shell.style.setProperty('--ms-phone-ar', state.deviceWidth + ' / ' + state.deviceHeight);
+        }
+    }
+
     function mapCanvasToDevice(clientX, clientY) {
         const canvas = $('msMirrorCanvas');
-        const wrap = $('msScreenInner');
-        if (!canvas || !wrap) return { x: 0, y: 0 };
+        if (!canvas || !state.deviceWidth || !state.deviceHeight) return { x: 0, y: 0 };
         const rect = canvas.getBoundingClientRect();
-        const scaleX = state.deviceWidth / Math.max(1, rect.width);
-        const scaleY = state.deviceHeight / Math.max(1, rect.height);
-        const x = Math.round((clientX - rect.left) * scaleX);
-        const y = Math.round((clientY - rect.top) * scaleY);
+        const dw = state.deviceWidth;
+        const dh = state.deviceHeight;
+        const scale = Math.min(rect.width / dw, rect.height / dh);
+        const renderW = dw * scale;
+        const renderH = dh * scale;
+        const offsetX = rect.left + (rect.width - renderW) / 2;
+        const offsetY = rect.top + (rect.height - renderH) / 2;
+        const x = Math.round((clientX - offsetX) * (dw / Math.max(1, renderW)));
+        const y = Math.round((clientY - offsetY) * (dh / Math.max(1, renderH)));
         return {
-            x: Math.max(0, Math.min(state.deviceWidth, x)),
-            y: Math.max(0, Math.min(state.deviceHeight, y)),
+            x: Math.max(0, Math.min(dw, x)),
+            y: Math.max(0, Math.min(dh, y)),
         };
     }
 
     async function tapAt(clientX, clientY) {
         const pt = mapCanvasToDevice(clientX, clientY);
+        if (
+            state.mirrorBackend === 'scrcpy_ws'
+            && state.scrcpyPlayer
+            && state.scrcpyPlayer.sendTap
+            && state.scrcpyPlayer.sendTap(pt.x, pt.y, state.deviceWidth, state.deviceHeight)
+        ) {
+            setStatus('点击 (' + pt.x + ', ' + pt.y + ')', 'ok');
+            return;
+        }
         await apiJson('/api/mobile/tap-at', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -239,6 +376,17 @@
     async function swipeAt(x1, y1, x2, y2) {
         const p1 = mapCanvasToDevice(x1, y1);
         const p2 = mapCanvasToDevice(x2, y2);
+        if (
+            state.mirrorBackend === 'scrcpy_ws'
+            && state.scrcpyPlayer
+            && state.scrcpyPlayer.sendSwipe
+            && state.scrcpyPlayer.sendSwipe(
+                p1.x, p1.y, p2.x, p2.y, state.deviceWidth, state.deviceHeight
+            )
+        ) {
+            setStatus('滑动', 'ok');
+            return;
+        }
         await apiJson('/api/mobile/swipe-at', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -253,7 +401,7 @@
         const canvas = $('msMirrorCanvas');
         if (!canvas) return;
         canvas.onmousedown = function (ev) {
-            if (!state.connected) return;
+            if (!state.connected || !state.udid) return;
             state.pointerDown = { x: ev.clientX, y: ev.clientY, t: Date.now() };
         };
         canvas.onmouseup = function (ev) {
@@ -295,9 +443,10 @@
         const p = presets.find(function (x) { return x.id === state.framePreset; }) || presets[0];
         const shell = $('msPhoneShell');
         if (!shell || !p) return;
-        const ar = p.frame_height / p.frame_width;
-        shell.style.maxWidth = Math.min(420, p.frame_width) + 'px';
-        shell.style.aspectRatio = p.frame_width + ' / ' + p.frame_height;
+        shell.style.setProperty('--ms-phone-ar', p.frame_width + ' / ' + p.frame_height);
+        shell.style.width = '';
+        shell.style.maxWidth = '';
+        shell.style.aspectRatio = '';
         shell.style.borderRadius = (p.corner_radius || 24) + 'px';
         const notch = $('msPhoneNotch');
         if (notch) {
@@ -417,9 +566,9 @@
     function renderDeviceList(devices) {
         const devSel = $('msDeviceSelect');
         if (!devSel) return;
-        const list = devices || [];
+        const list = filterRealDevices(devices);
         if (!list.length) {
-            devSel.innerHTML = '<option value="">（未发现设备）</option>';
+            devSel.innerHTML = '<option value="">（未发现真机，请 USB/无线连接）</option>';
             return;
         }
         devSel.innerHTML = list.map(function (d) {
@@ -434,7 +583,7 @@
         const el = $('msDeviceHelp');
         if (!el) return;
         const boot = state.bootstrap || {};
-        const list = devices || [];
+        const list = filterRealDevices(devices);
         const authorized = list.filter(function (d) { return d.state === 'device'; });
         const unauthorized = list.filter(function (d) { return d.state === 'unauthorized'; });
         if (!health || !health.adb_ok) {
@@ -454,7 +603,7 @@
                 lines.push('adb 已就绪：');
                 lines.push(boot.adb_path);
             }
-            lines.push('未发现设备：请在上方「模拟器」启动 AVD，或展开「真机兼容」无线/USB 连接。');
+            lines.push('未发现真机：请 USB 连接或在下方「真机兼容」中无线配对。模拟器请用上方「启动模拟器」。');
             el.textContent = lines.join('\n');
             return;
         }
@@ -463,7 +612,7 @@
                 '设备状态异常（非 device）：请换线/换口、重装手机驱动，或在命令行执行 adb kill-server && adb start-server 后刷新。';
             return;
         }
-        el.textContent = '已识别 ' + authorized.length + ' 台设备，点击「一键连接」后在右侧画面用鼠标操作。';
+        el.textContent = '已识别 ' + authorized.length + ' 台设备，点击「连接真机」后在右侧画面用鼠标操作。';
     }
 
     function modelStatusSuffix(model) {
@@ -487,7 +636,7 @@
         }).join('');
         const preferred = state.selectedModelId || 'pixel_7';
         const running = list.find(function (m) { return m.running; });
-        if (running) {
+        if (running && !state.modelSwitchBusy) {
             sel.value = running.id;
             state.selectedModelId = running.id;
         } else if (list.some(function (m) { return m.id === preferred; })) {
@@ -503,50 +652,80 @@
         }
     }
 
-    function renderEnvPanel(diag) {
-        const box = $('msEnvChecks');
+    function renderEnvStatus(diag) {
+        const statusEl = $('msEnvStatus');
         const blockEl = $('msEnvBlocking');
-        if (!box) return;
-        const checks = (diag && diag.checks) || [];
-        if (!checks.length) {
-            box.innerHTML = '<p class="ms-muted">加载环境检查…</p>';
+        if (!statusEl) return;
+        if (!diag) {
+            statusEl.textContent = '尚未检测，请点击「检测环境」';
+            statusEl.className = 'ms-env-status ms-env-status--idle';
             if (blockEl) blockEl.style.display = 'none';
             return;
         }
-        box.innerHTML = checks.map(function (c) {
-            const ok = !!c.ok;
-            const icon = ok ? '✓' : '✕';
-            const cls = ok ? 'ms-env-item' : 'ms-env-item ms-env-item--fail';
-            const iconCls = ok ? 'ms-env-icon ms-env-icon--ok' : 'ms-env-icon ms-env-icon--fail';
-            return (
-                '<div class="' + cls + '">' +
-                '<span class="' + iconCls + '" aria-hidden="true">' + icon + '</span>' +
-                '<div><span class="ms-env-label">' + (c.label || '') + '</span>' +
-                (c.detail ? '<span class="ms-env-detail">' + c.detail + '</span>' : '') +
-                '</div></div>'
-            );
-        }).join('');
-        if (blockEl) {
-            const reason = (diag && diag.blocking_reason) || '';
-            if (reason) {
-                blockEl.textContent = '阻塞原因：' + reason;
-                blockEl.style.display = '';
-            } else {
+        const ready = diag.ready === true || (
+            !diag.blocking_reason &&
+            Array.isArray(diag.checks) &&
+            diag.checks.length &&
+            diag.checks.every(function (c) { return c.ok || c.optional; })
+        );
+        if (ready) {
+            statusEl.textContent = '✓ 环境已就绪，可以启动模拟器';
+            statusEl.className = 'ms-env-status ms-env-status--ready';
+            if (blockEl) {
                 blockEl.textContent = '';
                 blockEl.style.display = 'none';
+            }
+        } else {
+            const reason = (diag.blocking_reason || '环境未就绪').trim();
+            statusEl.textContent = '✕ ' + reason;
+            statusEl.className = 'ms-env-status ms-env-status--fail';
+            if (blockEl) {
+                blockEl.textContent = reason.indexOf('插件市场') >= 0
+                    ? reason
+                    : ('请处理：' + reason + '。仍可直接点「启动模拟器」尝试自动修复。');
+                blockEl.style.display = '';
             }
         }
     }
 
-    async function loadDiagnostics() {
+    async function checkEnvironment() {
+        const btn = $('msBtnEnvCheck');
+        if (btn) btn.disabled = true;
+        const statusEl = $('msEnvStatus');
+        if (statusEl) {
+            statusEl.textContent = '正在检测环境…';
+            statusEl.className = 'ms-env-status ms-env-status--idle';
+        }
         try {
             const data = await apiJson('/api/mobile/emulator/diagnostics');
-            renderEnvPanel(data);
+            state.diagnosticsCache = data;
+            state.diagnosticsCacheAt = Date.now();
+            renderEnvStatus(data);
+            if (data.ready) {
+                setStatus('环境已就绪', 'ok');
+            } else {
+                setStatus(data.blocking_reason || '环境未就绪', 'warn');
+            }
             return data;
         } catch (e) {
-            renderEnvPanel({ checks: [{ ok: false, label: '环境检查', detail: (e && e.message) || '加载失败' }] });
+            renderEnvStatus({ ready: false, blocking_reason: (e && e.message) || '检测失败' });
+            setStatus((e && e.message) || '环境检测失败', 'err');
             return null;
+        } finally {
+            if (btn) btn.disabled = false;
         }
+    }
+
+    async function loadDiagnostics(force) {
+        if (!force && state.diagnosticsCache) {
+            renderEnvStatus(state.diagnosticsCache);
+            return state.diagnosticsCache;
+        }
+        return checkEnvironment();
+    }
+
+    function renderEnvPanel(diag) {
+        renderEnvStatus(diag);
     }
 
     async function repairEnvironment() {
@@ -563,11 +742,11 @@
                 throw new Error(data.error || data.message || '修复失败');
             }
             setStatus(data.message || '环境已修复', 'ok');
-            await bootstrap();
-            await loadDiagnostics();
+            await bootstrap({ skipDiagnostics: true });
+            await loadDiagnostics(true);
         } catch (e) {
             setStatus((e && e.message) || '修复失败', 'err');
-            await loadDiagnostics();
+            await loadDiagnostics(true);
         } finally {
             if (btn) btn.disabled = false;
         }
@@ -579,24 +758,13 @@
         if (help) {
             help.className = 'ms-muted ms-emulator-help';
             if (emu && emu.emulator_available) {
-                var lines = [
-                    'SDK：' + (emu.android_sdk_home || '—'),
-                    '运行中 ' + ((emu.running && emu.running.length) || 0) + ' 台',
-                ];
-                var hint = (emu.setup_hint || '').trim();
-                if (hint) {
-                    if (emu.hypervisor_ok === false) {
-                        help.classList.add('ms-emulator-help--warn');
-                    }
-                    hint.split(/\n+/).forEach(function (part) {
-                        var s = (part || '').trim();
-                        if (s) lines.push(s);
-                    });
-                }
-                help.textContent = lines.join('\n');
+                var running = ((emu.running && emu.running.length) || 0);
+                help.textContent = running > 0
+                    ? ('模拟器运行中 · ' + running + ' 台')
+                    : '环境就绪后可一键启动';
             } else {
                 help.textContent = (emu && emu.emulator_message) ||
-                    '请在插件市场安装「Android 模拟器 SDK（命令行）」';
+                    '请先在插件市场安装「Android 模拟器 SDK」';
             }
         }
     }
@@ -623,8 +791,21 @@
     }
 
     async function pollEmulatorJob(jobId, labelPrefix) {
-        const maxPolls = 200;
+        if (state.emulatorPollToken) {
+            state.emulatorPollToken.cancelled = true;
+        }
+        const token = { cancelled: false };
+        state.emulatorPollToken = token;
+        let delayMs = 700;
+        const maxDelayMs = 3500;
+        const maxPolls = 120;
+        let lastPercent = -1;
+        let stalePolls = 0;
         for (let i = 0; i < maxPolls; i++) {
+            if (token.cancelled) {
+                throw new Error('操作已取消');
+            }
+            const hidden = typeof document.hidden !== 'undefined' && document.hidden;
             const r = await fetch('/api/mobile/emulator/start/job/' + encodeURIComponent(jobId), {
                 credentials: 'same-origin',
             });
@@ -636,19 +817,41 @@
             const prefix = labelPrefix || info.label || '处理中…';
             setStatus(prefix + ' (' + (info.percent || 0) + '%)', '');
             if (info.state === 'done' && info.ok !== false) {
+                if (state.emulatorPollToken === token) state.emulatorPollToken = null;
                 return info;
             }
             if (info.state === 'failed' || (info.state === 'done' && info.ok === false)) {
-                let err = (info.error || '操作失败').trim();
+                if (state.emulatorPollToken === token) state.emulatorPollToken = null;
+                let err = (info.error || info.message || '操作失败').trim();
+                const logPath = info.result && info.result.log_path;
+                if (logPath && err.indexOf(logPath) < 0) {
+                    err += '\n诊断日志：' + logPath;
+                }
                 const emu = state.bootstrap && state.bootstrap.emulator;
                 const hint = emu && (emu.setup_hint || '').trim();
                 if (hint && err.indexOf(hint) < 0) {
                     err += '\n' + hint;
                 }
+                if (err.indexOf('停止') < 0) {
+                    err += '\n可先点「停止」清理任务管理器中的 qemu/emulator 后重试。';
+                }
                 throw new Error(err);
             }
-            await sleepMs(2000);
+            if (info.percent === lastPercent) {
+                stalePolls += 1;
+            } else {
+                stalePolls = 0;
+                lastPercent = info.percent;
+            }
+            const waitMs = hidden
+                ? Math.max(4000, delayMs)
+                : (stalePolls >= 3 ? Math.min(maxDelayMs, delayMs + 500) : delayMs);
+            await sleepMs(waitMs);
+            if (!hidden) {
+                delayMs = Math.min(maxDelayMs, Math.floor(delayMs * 1.25));
+            }
         }
+        if (state.emulatorPollToken === token) state.emulatorPollToken = null;
         throw new Error('操作超时，请点「停止」清理后重试');
     }
 
@@ -656,7 +859,97 @@
         return pollEmulatorJob(jobId, '启动中…');
     }
 
-    async function switchDeviceModel(presetId, opts) {
+    async function connectMirrorWithRetry(maxAttempts) {
+        maxAttempts = maxAttempts || 4;
+        let lastErr = null;
+        for (let i = 0; i < maxAttempts; i++) {
+            try {
+                stopMirror();
+                await autoConnect();
+                return;
+            } catch (e) {
+                lastErr = e;
+                if (i >= maxAttempts - 1) break;
+                setStatus('正在连接画布，重试 ' + (i + 2) + '/' + maxAttempts + '…', 'warn');
+                await sleepMs(1200 * (i + 1));
+            }
+        }
+        throw lastErr || new Error('连接失败');
+    }
+
+    function resolveMirrorWsUrl(raw) {
+        if (!raw) return '';
+        try {
+            var u = new URL(raw, window.location.href);
+            u.hostname = window.location.hostname;
+            u.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            return u.toString();
+        } catch (e) {
+            return raw;
+        }
+    }
+
+    function applyConnectPayload(data) {
+        state.udid = data.udid || '';
+        state.sessionId = data.session_id || '';
+        state.mirrorBackend = data.mirror_backend || 'screencap';
+        state.mirrorWsUrl = resolveMirrorWsUrl(data.mirror_ws_url || '');
+        state.mirrorStreamUrl = data.mirror_stream_url || '';
+        state.mirrorUrl = data.mirror_frame_url || '';
+        state.mirror_fallback_reason = data.mirror_fallback_reason || '';
+        state.connected = true;
+        if (data.device) {
+            state.deviceWidth = data.device.width || 1080;
+            state.deviceHeight = data.device.height || 1920;
+        }
+        const preset = (data.frame_preset && data.frame_preset.id) || currentFramePresetId();
+        if (state.deviceWidth && state.deviceHeight) {
+            syncPhoneAspectFromDevice();
+        } else {
+            applyFramePreset(preset);
+        }
+        const appSel = $('msAppSelect');
+        if (appSel && data.apps) {
+            appSel.innerHTML = data.apps.map(function (a) {
+                const sel = a.package === data.suggested_app_package ? ' selected' : '';
+                return '<option value="' + a.package + '"' + sel + '>' + a.label + ' (' + a.package + ')</option>';
+            }).join('');
+        }
+        const badge = $('msConnectBadge');
+        if (badge) {
+            badge.textContent = '已连接';
+            badge.className = 'ms-connect-badge ms-connect-badge--on';
+        }
+        if (state.mirrorBackend === 'scrcpy_ws') {
+            updateMirrorModeBadge('scrcpy', 'H.264 硬件视频流');
+        } else {
+            updateMirrorModeBadge(
+                'screencap',
+                data.mirror_fallback_reason || 'adb screencap 截图轮询'
+            );
+        }
+        let msg = '已连接 ' + (data.device && data.device.model ? data.device.model : state.udid);
+        if (data.is_emulator && state.mirrorBackend === 'scrcpy_ws') msg += ' · 高帧率 scrcpy 投屏';
+        else if (data.is_emulator) msg += ' · 模拟器（截图投屏）';
+        else msg += ' · 真机预览';
+        if (data.mirror_fallback_reason) msg += ' · ' + data.mirror_fallback_reason;
+        if (data.appium_error) msg += ' · Appium: ' + data.appium_error;
+        else if (data.appium_connected) msg += ' · Appium 已就绪';
+        setStatus(msg, 'ok');
+        startMirror();
+    }
+
+    async function prepareEmulatorMirrorSwitch() {
+        if (state.emulatorPollToken) {
+            state.emulatorPollToken.cancelled = true;
+        }
+        stopMirror();
+        if (state.connected && state.udid && state.udid.indexOf('emulator-') === 0) {
+            try { await disconnect(); } catch (e) { /* ignore */ }
+        }
+    }
+
+    async function launchEmulator(presetId, opts) {
         opts = opts || {};
         const pid = (presetId || ($('msDeviceModelSelect') || {}).value || '').trim();
         if (!pid) {
@@ -673,47 +966,51 @@
         const btnStop = $('msBtnEmulatorStop');
         if (btnStart) btnStart.disabled = true;
         if (btnStop) btnStop.disabled = true;
-        setStatus('正在切换至 ' + label + '（无独立窗口，画面在右侧画布）…', '');
+        const forceRestart = opts.forceRestart === true;
+        setStatus('正在启动 ' + label + '（环境检查、模拟器、投屏一步完成）…', '');
         try {
+            await prepareEmulatorMirrorSwitch();
             if (model && model.frame_preset_id) {
                 applyFramePreset(model.frame_preset_id);
             }
-            const startResp = await fetch('/api/mobile/emulator/switch-model', {
+            const startResp = await fetch('/api/mobile/emulator/launch', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
                 body: JSON.stringify({
                     preset_id: pid,
-                    gpu: 'swiftshader_indirect',
                     no_window: true,
                     async: true,
+                    force_restart: forceRestart,
+                    try_appium: false,
                 }),
             });
             const startBody = await startResp.json().catch(function () { return {}; });
+            if (startResp.status === 409) {
+                throw new Error(startBody.error || '已有启动任务进行中，请勿重复点击');
+            }
             if (!startResp.ok || !startBody.success) {
-                throw new Error(startBody.error || '切换失败');
+                throw new Error(startBody.error || '启动失败');
             }
-            let serial = '';
+            let jobResult = {};
             if (startBody.async && startBody.job_id) {
-                const done = await pollEmulatorJob(startBody.job_id, '正在切换至 ' + label);
-                serial = (done.result && done.result.serial) || '';
-                const frameId = (done.result && done.result.frame_preset_id) || (model && model.frame_preset_id);
-                if (frameId) applyFramePreset(frameId);
-                setStatus((done.message || ('已切换至 ' + label)) + '，正在连接画布…', 'ok');
+                const done = await pollEmulatorJob(startBody.job_id, '正在启动 ' + label);
+                jobResult = done.result || {};
             } else {
-                serial = startBody.serial || '';
-                setStatus((startBody.message || ('已切换至 ' + label)) + '，正在连接画布…', 'ok');
+                jobResult = startBody;
             }
-            await bootstrap();
-            const devSel = $('msDeviceSelect');
-            if (devSel && serial) devSel.value = serial;
+            const serial = jobResult.serial || jobResult.udid || '';
+            await bootstrap({ skipDiagnostics: true });
             if (!opts.skipConnect) {
-                await autoConnect();
+                stopMirror();
+                applyConnectPayload(jobResult);
+            } else {
+                setStatus((jobResult.message || ('已启动 ' + label)), 'ok');
             }
+            loadDiagnostics(true).catch(function () {});
         } catch (e) {
-            setStatus((e && e.message) || '切换失败', 'err');
-            await bootstrap();
-            await loadDiagnostics();
+            setStatus((e && e.message) || '启动失败', 'err');
+            await bootstrap({ skipDiagnostics: true });
         } finally {
             state.modelSwitchBusy = false;
             if (btnStart) btnStart.disabled = false;
@@ -723,63 +1020,39 @@
 
     async function startEmulator() {
         const presetId = ($('msDeviceModelSelect') || {}).value || state.selectedModelId || 'pixel_7';
-        await switchDeviceModel(presetId);
+        await launchEmulator(presetId, { forceRestart: false });
     }
 
     async function stopEmulator() {
-        const serial = ($('msDeviceSelect') || {}).value || '';
         setStatus('正在停止模拟器…', '');
-        await apiJson('/api/mobile/emulator/stop', {
+        if (state.connected && state.udid && state.udid.indexOf('emulator-') === 0) {
+            await disconnect();
+        }
+        await apiJson('/api/mobile/emulator/stop-all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ serial: serial.startsWith('emulator-') ? serial : '' }),
+            body: '{}',
         });
-        if (state.connected) await disconnect();
         await bootstrap();
         setStatus('模拟器已停止', '');
     }
 
     async function maybeAutoStartEmulator(data) {
-        if (state.autoStartAttempted || state.modelSwitchBusy) return;
-        if (!data || !data.auto_connect_default) return;
-        const emu = data.emulator || {};
-        if (!emu.emulator_available || !emu.sdk_ready) return;
-        const devices = (data.health && data.health.devices) || data.devices || [];
-        const authorized = devices.filter(function (d) { return d.state === 'device'; });
-        if (authorized.length) return;
-        const running = (emu.running && emu.running.length) || 0;
-        if (running > 0) {
-            state.autoStartAttempted = true;
-            await autoConnect().catch(function () {});
-            return;
-        }
-        const models = emu.models || [];
-        const def = models.find(function (m) { return m.id === 'pixel_7'; }) || models[0];
-        if (!def) return;
-        state.autoStartAttempted = true;
-        const sel = $('msDeviceModelSelect');
-        if (sel) sel.value = def.id;
-        state.selectedModelId = def.id;
-        await switchDeviceModel(def.id, { skipConnect: false });
+        return;
     }
 
-    async function bootstrap() {
+    async function bootstrap(opts) {
+        opts = opts || {};
         const data = await apiJson('/api/mobile/testing/bootstrap');
         state.bootstrap = data;
         const devices = (data.health && data.health.devices) || data.devices || [];
         renderDeviceList(devices);
         updateDeviceHelp(data.health, devices);
         renderEmulatorPanel(data.emulator);
-        await loadDiagnostics();
         if (data.emulator && data.emulator.emulator_available && !(devices && devices.length)) {
-            if (!state.autoStartAttempted && data.auto_connect_default && data.emulator.sdk_ready) {
-                setStatus('正在自动启动默认设备型号…', '');
-                await maybeAutoStartEmulator(data);
-            } else {
-                setStatus('推荐：选择设备型号并点击「启动模拟器」', 'ok');
-            }
+            setStatus('选择设备型号后点击「启动模拟器」', 'ok');
         } else if (data.default_device && data.default_device.state === 'device') {
-            setStatus('检测到设备，可点击「一键连接」', 'ok');
+            setStatus('检测到设备，可点击「连接真机」', 'ok');
         } else if (data.health && data.health.adb_ok && data.adb_plugin_installed && data.adb_path) {
             setStatus('adb 已就绪', 'ok');
         } else if (!data.health || !data.health.adb_ok) {
@@ -836,7 +1109,7 @@
     }
 
     async function autoConnect() {
-        setStatus('正在连接…', '');
+        setStatus('正在连接真机…', '');
         const preset = currentFramePresetId();
         const udid = ($('msDeviceSelect') || {}).value || '';
         const data = await apiJson('/api/mobile/auto-connect', {
@@ -848,36 +1121,7 @@
                 try_appium: true,
             }),
         });
-        state.udid = data.udid || '';
-        state.sessionId = data.session_id || '';
-        state.mirrorBackend = data.mirror_backend || 'screencap';
-        state.mirrorWsUrl = data.mirror_ws_url || '';
-        state.mirrorUrl = data.mirror_frame_url || '';
-        state.connected = true;
-        if (data.device) {
-            state.deviceWidth = data.device.width || 1080;
-            state.deviceHeight = data.device.height || 1920;
-        }
-        applyFramePreset(preset);
-        const appSel = $('msAppSelect');
-        if (appSel && data.apps) {
-            appSel.innerHTML = data.apps.map(function (a) {
-                const sel = a.package === data.suggested_app_package ? ' selected' : '';
-                return '<option value="' + a.package + '"' + sel + '>' + a.label + ' (' + a.package + ')</option>';
-            }).join('');
-        }
-        $('msConnectBadge').textContent = '已连接';
-        $('msConnectBadge').className = 'ms-connect-badge ms-connect-badge--on';
-        let msg = '已连接 ' + (data.device && data.device.model ? data.device.model : state.udid);
-        if (data.is_emulator && state.mirrorBackend === 'scrcpy_ws') msg += ' · 高帧率模拟器';
-        else if (data.is_emulator) msg += ' · 模拟器';
-        else msg += ' · 真机预览';
-        if (data.mirror_fallback_reason) msg += ' · ' + data.mirror_fallback_reason;
-        if (data.appium_error) msg += ' · Appium: ' + data.appium_error;
-        else if (data.appium_connected) msg += ' · Appium 已就绪';
-        if (data.scrcpy_started && state.mirrorBackend !== 'scrcpy_ws') msg += ' · scrcpy 外窗';
-        setStatus(msg, 'ok');
-        startMirror();
+        applyConnectPayload(data);
     }
 
     async function disconnect() {
@@ -897,7 +1141,9 @@
         state.sessionId = '';
         state.mirrorUrl = '';
         state.mirrorWsUrl = '';
+        state.mirrorStreamUrl = '';
         state.mirrorBackend = 'screencap';
+        state.mirror_fallback_reason = '';
         state.udid = '';
         const badge = $('msConnectBadge');
         if (badge) {
@@ -1008,20 +1254,18 @@
         if (modelSel) {
             modelSel.addEventListener('change', function () {
                 if (state.modelSwitchBusy) return;
-                state.selectedModelId = this.value;
-                switchDeviceModel(this.value).catch(function (e) { setStatus(e.message, 'err'); });
+                const newId = this.value;
+                if (!newId || newId === state.selectedModelId) return;
+                state.selectedModelId = newId;
+                launchEmulator(newId, { forceRestart: false }).catch(function (e) {
+                    setStatus(e.message, 'err');
+                });
             });
         }
-        const btnEnvRepair = $('msBtnEnvRepair');
-        if (btnEnvRepair) {
-            btnEnvRepair.addEventListener('click', function () {
-                repairEnvironment().catch(function (e) { setStatus(e.message, 'err'); });
-            });
-        }
-        const btnEnvRefresh = $('msBtnEnvRefresh');
-        if (btnEnvRefresh) {
-            btnEnvRefresh.addEventListener('click', function () {
-                loadDiagnostics().catch(function (e) { setStatus(e.message, 'err'); });
+        const btnEnvCheck = $('msBtnEnvCheck');
+        if (btnEnvCheck) {
+            btnEnvCheck.addEventListener('click', function () {
+                checkEnvironment().catch(function (e) { setStatus(e.message, 'err'); });
             });
         }
         $('msProjectSelect').addEventListener('change', function () {
@@ -1061,6 +1305,20 @@
         }
         setInteractionMode(INTERACTION_CONTROL);
         wireMirrorInteraction();
+        window.addEventListener('beforeunload', function () {
+            if (!state.bootstrap || !state.bootstrap.emulator) return;
+            var running = (state.bootstrap.emulator.running && state.bootstrap.emulator.running.length) || 0;
+            if (!running) return;
+            try {
+                fetch('/api/mobile/emulator/stop-all', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    keepalive: true,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}',
+                });
+            } catch (e) { /* ignore */ }
+        });
     }
 
     async function init() {

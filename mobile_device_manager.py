@@ -82,6 +82,25 @@ def list_usb_devices() -> List[Dict[str, Any]]:
         return []
 
 
+def is_emulator_udid(udid: str) -> bool:
+    return (udid or "").strip().startswith("emulator-")
+
+
+def list_real_usb_devices() -> List[Dict[str, Any]]:
+    """仅 USB/无线真机，不含 adb 枚举到的 emulator-*。"""
+    return [d for d in list_usb_devices() if not is_emulator_udid(d.get("udid") or "")]
+
+
+def pick_default_real_device() -> Optional[Dict[str, Any]]:
+    """真机连接：仅选择已授权的真机（不含模拟器）。"""
+    for dev in list_real_usb_devices():
+        if dev.get("state") == "device":
+            enriched = dict(dev)
+            enriched.update(get_device_info(dev.get("udid") or ""))
+            return enriched
+    return None
+
+
 def check_appium_server() -> Tuple[bool, str]:
     """检查 Appium Server 是否可达。"""
     if not mobile_enabled():

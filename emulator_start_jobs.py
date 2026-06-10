@@ -40,9 +40,13 @@ def start_emulator_job(
     avd_name: str,
     *,
     port: int = 5554,
-    gpu: str = "swiftshader_indirect",
+    gpu: str = "host",
     no_window: bool = True,
 ) -> str:
+    with _lock:
+        for rec in _jobs_mem.values():
+            if (rec.get("state") or "") == "running":
+                raise RuntimeError("已有模拟器启动任务进行中，请勿重复点击")
     job_id = str(uuid.uuid4())
     _write_job(
         job_id,
@@ -125,9 +129,14 @@ def start_switch_model_job(
     preset_id: str,
     *,
     port: int = 5554,
-    gpu: str = "swiftshader_indirect",
+    gpu: str = "host",
     no_window: bool = True,
+    force_restart: bool = False,
 ) -> str:
+    with _lock:
+        for rec in _jobs_mem.values():
+            if (rec.get("state") or "") == "running":
+                raise RuntimeError("已有模拟器启动任务进行中，请勿重复点击")
     job_id = str(uuid.uuid4())
     _write_job(
         job_id,
@@ -156,13 +165,14 @@ def start_switch_model_job(
 
     def _worker() -> None:
         try:
-            from mobile_emulator_manager import switch_emulator_model
+            from mobile_emulator_manager import ensure_emulator_for_preset
 
-            ok, msg, meta = switch_emulator_model(
+            ok, msg, meta = ensure_emulator_for_preset(
                 preset_id,
                 port=port,
                 gpu=gpu,
                 no_window=no_window,
+                force_restart=force_restart,
                 progress_cb=_progress,
             )
             if ok:
@@ -206,6 +216,115 @@ def start_switch_model_job(
     threading.Thread(
         target=_worker,
         name=f"emulator-switch-{preset_id}",
+        daemon=True,
+    ).start()
+    return job_id
+
+
+def start_launch_studio_job(
+    preset_id: str,
+    *,
+    port: int = 5554,
+    gpu: str = "host",
+    no_window: bool = True,
+    force_restart: bool = False,
+    try_appium: bool = False,
+    client_host: str = "",
+) -> str:
+    """一键启动：环境准备 + 模拟器 + 投屏连接。"""
+    with _lock:
+        for rec in _jobs_mem.values():
+            if (rec.get("state") or "") == "running":
+                raise RuntimeError("已有模拟器启动任务进行中，请勿重复点击")
+    job_id = str(uuid.uuid4())
+    _write_job(
+        job_id,
+        {
+            "preset_id": preset_id,
+            "job_type": "launch_studio",
+            "state": "running",
+            "percent": 3,
+            "label": "准备启动…",
+            "ok": None,
+            "error": "",
+            "result": {},
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    def _progress(percent: int, label: str) -> None:
+        _write_job(
+            job_id,
+            {
+                "state": "running",
+                "percent": max(0, min(99, int(percent))),
+                "label": (label or "").strip() or "启动中…",
+            },
+        )
+
+    def _worker() -> None:
+        try:
+            from mobile_studio_launch import finish_studio_connect, launch_emulator_studio
+
+            ok, msg, meta = launch_emulator_studio(
+                preset_id,
+                port=port,
+                gpu=gpu,
+                no_window=no_window,
+                force_restart=force_restart,
+                progress_cb=_progress,
+            )
+            if not ok:
+                _write_job(
+                    job_id,
+                    {
+                        "state": "failed",
+                        "percent": 100,
+                        "label": "启动失败",
+                        "ok": False,
+                        "error": msg,
+                        "result": meta or {},
+                    },
+                )
+                return
+            serial = (meta.get("serial") or "").strip()
+            frame_id = meta.get("frame_preset_id") or "generic_19_9"
+            _progress(98, "连接投屏…")
+            connect_payload = finish_studio_connect(
+                serial,
+                frame_preset=frame_id,
+                try_appium=try_appium,
+                client_host=client_host,
+            )
+            result = {**meta, **connect_payload}
+            _write_job(
+                job_id,
+                {
+                    "state": "done",
+                    "percent": 100,
+                    "label": "已就绪",
+                    "ok": True,
+                    "error": "",
+                    "message": msg,
+                    "result": result,
+                },
+            )
+        except Exception as exc:
+            _write_job(
+                job_id,
+                {
+                    "state": "failed",
+                    "percent": 100,
+                    "label": "启动失败",
+                    "ok": False,
+                    "error": str(exc),
+                    "result": {},
+                },
+            )
+
+    threading.Thread(
+        target=_worker,
+        name=f"emulator-launch-{preset_id}",
         daemon=True,
     ).start()
     return job_id

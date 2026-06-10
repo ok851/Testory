@@ -47,14 +47,27 @@
         toast(msg, 'success');
     }
 
+    function mountOverlayToBody(el) {
+        if (el && el.parentElement !== document.body) {
+            document.body.appendChild(el);
+        }
+    }
+
     function showModal(el) {
-        el.classList.remove('hidden');
-        el.classList.add('flex');
+        if (!el) return;
+        mountOverlayToBody(el);
+        el.classList.add('is-open');
+        el.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('api-modal-open');
     }
 
     function hideModal(el) {
-        el.classList.add('hidden');
-        el.classList.remove('flex');
+        if (!el) return;
+        el.classList.remove('is-open');
+        el.setAttribute('aria-hidden', 'true');
+        if (!document.querySelector('.api-modal-overlay.is-open')) {
+            document.body.classList.remove('api-modal-open');
+        }
     }
 
     function methodBadgeClass(method) {
@@ -95,8 +108,13 @@
         const results = data.step_results || [];
         const dur = data.duration != null ? data.duration + 's' : '—';
         const status = data.status || 'unknown';
+        const statusLabel = status === 'success' ? '成功' : (status === 'warning' ? '警告' : (status === 'error' ? '失败' : status));
+        const statusCls = status === 'success'
+            ? 'text-emerald-600 dark:text-emerald-400'
+            : (status === 'warning' ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400');
         let html = '<div class="px-4 py-3 text-sm border-b border-slate-200 dark:border-gray-700">';
-        html += '<span class="font-semibold">执行结果：</span> ' + escapeHtml(status);
+        html += '<span class="font-semibold">执行结果：</span> ';
+        html += '<span class="' + statusCls + ' font-medium">' + escapeHtml(statusLabel) + '</span>';
         html += ' · 耗时 ' + escapeHtml(String(dur));
         if (data.run_history_id) html += ' · 记录 #' + escapeHtml(String(data.run_history_id));
         if (data.error) html += '<div class="text-red-600 dark:text-red-400 mt-1">' + escapeHtml(data.error) + '</div>';
@@ -131,28 +149,38 @@
         return html;
     }
 
+    function closeRunResultModal() {
+        const el = document.getElementById('apiRunResultModal');
+        if (el) el.remove();
+        if (!document.querySelector('.api-modal-overlay.is-open')) {
+            document.body.classList.remove('api-modal-open');
+        }
+    }
+
     function showRunResultDrawer(data, opts) {
         opts = opts || {};
-        const existing = document.getElementById('apiRunResultDrawer');
-        if (existing) existing.remove();
-        const drawer = document.createElement('div');
-        drawer.id = 'apiRunResultDrawer';
-        drawer.className = 'api-run-result-drawer';
-        drawer.innerHTML =
+        closeRunResultModal();
+        const overlay = document.createElement('div');
+        overlay.id = 'apiRunResultModal';
+        overlay.className = 'api-run-result-modal';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.innerHTML =
             '<div class="api-run-result-panel">' +
             '<div class="api-run-result-head">' +
-            '<h3 class="text-base font-semibold">' + escapeHtml(opts.title || '运行结果') + '</h3>' +
+            '<h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">' + escapeHtml(opts.title || '运行结果') + '</h3>' +
             '<button type="button" class="api-wb-btn api-wb-btn-ghost" id="apiRunResultClose">关闭</button>' +
             '</div>' +
             '<div class="api-run-result-body" id="apiRunResultBody">' + renderRunResultsHtml(data, opts) + '</div>' +
             '</div>';
-        document.body.appendChild(drawer);
-        drawer.addEventListener('click', function (e) {
-            if (e.target === drawer) drawer.remove();
+        document.body.appendChild(overlay);
+        document.body.classList.add('api-modal-open');
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeRunResultModal();
         });
-        document.getElementById('apiRunResultClose').addEventListener('click', function () {
-            drawer.remove();
-        });
+        var panel = overlay.querySelector('.api-run-result-panel');
+        if (panel) panel.addEventListener('click', function (e) { e.stopPropagation(); });
+        document.getElementById('apiRunResultClose').addEventListener('click', closeRunResultModal);
         const body = document.getElementById('apiRunResultBody');
         if (body && opts.onStepClick) {
             body.querySelectorAll('.api-wb-run-step').forEach(function (el) {
@@ -163,7 +191,7 @@
                 });
             });
         }
-        return drawer;
+        return overlay;
     }
 
     global.UatApi = {
@@ -175,6 +203,7 @@
         toastOk: toastOk,
         showModal: showModal,
         hideModal: hideModal,
+        mountOverlayToBody: mountOverlayToBody,
         methodBadgeClass: methodBadgeClass,
         statusBadgeClass: statusBadgeClass,
         formatBytes: formatBytes,
@@ -506,16 +535,15 @@
             body: '{}',
         });
         const { ok, data: d } = await parseJsonResponse(r);
+        const title = '运行结果 — ' + (caseName || ('#' + caseId));
         if (!ok) {
-            toastErr(d.error || '执行失败');
+            showRunResultDrawer(
+                { status: 'error', error: d.error || '执行失败', step_results: [] },
+                { title: title }
+            );
             return;
         }
-        showRunResultDrawer(d, { title: '运行结果 — ' + (caseName || ('#' + caseId)) });
-        if (d.success) {
-            toastOk('执行完成：' + (d.status || 'success'));
-        } else {
-            toastErr(d.error || '执行未全部成功');
-        }
+        showRunResultDrawer(d, { title: title });
     }
 
     function openImportApiModal() {
@@ -606,6 +634,10 @@
     }
 
     document.addEventListener('DOMContentLoaded', function () {
+        ['importApiModal', 'addCaseModal'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) mountOverlayToBody(el);
+        });
         document.getElementById('btnImportApiSpec').addEventListener('click', openImportApiModal);
         document.getElementById('importApiCancelBtn').addEventListener('click', closeImportApiModal);
         document.getElementById('importApiPreviewBtn').addEventListener('click', function () { void importApiPreview(); });

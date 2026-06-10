@@ -3,166 +3,204 @@
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/api_testing.css') }}">
 {% endblock %}
-{% block body_class %}bg-slate-100 dark:bg-gray-950 min-h-screen text-gray-900 dark:text-gray-100{% endblock %}
+{% block body_class %}min-h-screen text-gray-900 dark:text-gray-100{% endblock %}
 {% block content %}
 <script type="application/json" id="uatApiWorkbenchBoot">{{ { 'case_id': case_id, 'project_id': project_id } | tojson }}</script>
-<div class="api-workbench">
-    <header class="api-wb-header">
-        <div class="flex items-center gap-3 flex-wrap min-w-0">
-            <a href="{{ url_for('api_testing_page') }}{% if project_id %}?project_id={{ project_id }}{% endif %}" class="api-detail-back">← 返回</a>
-            <div class="min-w-0">
-                <h1 class="text-base font-semibold truncate">{{ case_name }}</h1>
-                <p class="text-xs text-gray-500">用例 #{{ case_id }}{% if project_id %} · 项目 #{{ project_id }}{% endif %}</p>
+<div class="api-mgmt-page api-mgmt-page--workbench">
+    <div class="api-workbench-shell">
+        <div class="api-workbench">
+            <header class="api-wb-header">
+                <div class="flex items-center gap-3 flex-wrap min-w-0">
+                    <a href="{{ url_for('api_testing_page') }}{% if project_id %}?project_id={{ project_id }}{% endif %}" class="api-detail-back">← 返回</a>
+                    <div class="min-w-0">
+                        <h1 class="text-base font-semibold truncate">{{ case_name }}</h1>
+                        <p class="text-xs opacity-90">用例 #{{ case_id }}{% if project_id %} · 项目 #{{ project_id }}{% endif %}</p>
+                    </div>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button type="button" id="btnRunSelected" class="api-wb-btn api-wb-btn-send">运行选中</button>
+                    <button type="button" id="btnRunCaseAll" class="api-wb-btn api-wb-btn-ghost" style="background:rgba(255,255,255,0.2);color:#fff;">运行全部</button>
+                    <button type="button" id="btnRefreshReq" class="api-wb-btn api-wb-btn-ghost" style="background:rgba(255,255,255,0.2);color:#fff;">刷新</button>
+                    <button type="button" id="btnDeleteCase" class="api-wb-btn api-wb-btn-danger">删除用例</button>
+                </div>
+            </header>
+            <div class="api-wb-body">
+                <aside class="api-wb-sidebar">
+                    <div class="api-wb-sidebar-head">请求列表</div>
+                    <div class="api-wb-sidebar-list" id="apiSidebarList"></div>
+                    <div class="api-wb-sidebar-foot">
+                        <button type="button" id="btnNewRequestSide" class="api-wb-btn api-wb-btn-save w-full">+ 新建请求</button>
+                    </div>
+                </aside>
+                <main class="api-wb-main" id="apiWbMain">
+                    <div id="apiEditorEmpty" class="api-wb-empty hidden">
+                        <p class="text-sm mb-3">选择左侧请求或新建</p>
+                        <button type="button" id="btnNewRequest" class="api-wb-btn api-wb-btn-save">新建请求</button>
+                    </div>
+                    <div id="apiEditorForm" class="api-wb-editor hidden">
+                        <div class="api-wb-request-line">
+                            <select id="nrMethod" class="api-wb-method-select">
+                                <option>GET</option>
+                                <option>POST</option>
+                                <option>PUT</option>
+                                <option>PATCH</option>
+                                <option>DELETE</option>
+                                <option>HEAD</option>
+                                <option>OPTIONS</option>
+                            </select>
+                            <input id="nrUrl" type="text" class="api-wb-url-input" placeholder="https://api.example.com/path">
+                            <button type="button" id="btnSend" class="api-wb-btn api-wb-btn-send">发送</button>
+                            <button type="button" id="btnSave" class="api-wb-btn api-wb-btn-save">保存</button>
+                            <button type="button" id="btnDeleteStep" class="api-wb-btn api-wb-btn-danger hidden">删除</button>
+                        </div>
+                        <div class="api-wb-tabs">
+                            <button type="button" class="api-wb-tab active" data-req-tab="params">Params</button>
+                            <button type="button" class="api-wb-tab" data-req-tab="headers">Headers</button>
+                            <button type="button" class="api-wb-tab" data-req-tab="body">Body</button>
+                            <button type="button" class="api-wb-tab" data-req-tab="auth">Auth</button>
+                            <button type="button" class="api-wb-tab" data-req-tab="assert">断言</button>
+                            <button type="button" class="api-wb-tab" data-req-tab="advanced">高级</button>
+                        </div>
+                        <div class="api-wb-tab-panels">
+                            <div class="api-wb-tab-panel active" data-req-panel="params">
+                                <div class="flex justify-between items-center mb-2">
+                                    <span class="text-xs text-gray-500">Query 参数</span>
+                                    <button type="button" class="api-btn-add nr-add-kv" data-target="nrQueryTbody">+ 添加</button>
+                                </div>
+                                <div class="api-kv-table-wrap">
+                                    <table class="api-kv-table">
+                                        <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
+                                        <tbody id="nrQueryTbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="api-wb-tab-panel" data-req-panel="headers">
+                                <div class="flex justify-between items-center mb-2">
+                                    <span class="text-xs text-gray-500">请求头</span>
+                                    <button type="button" class="api-btn-add nr-add-kv" data-target="nrHeaderTbody">+ 添加</button>
+                                </div>
+                                <div class="api-kv-table-wrap">
+                                    <table class="api-kv-table">
+                                        <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
+                                        <tbody id="nrHeaderTbody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="api-wb-tab-panel" data-req-panel="body">
+                                <select id="nrBodyType" class="mb-2 text-sm rounded border px-2 py-1.5 dark:bg-gray-900 dark:border-gray-600">
+                                    <option value="none">无</option>
+                                    <option value="json">JSON</option>
+                                    <option value="form">form</option>
+                                    <option value="raw">Raw</option>
+                                </select>
+                                <div id="nrBodyJsonWrap" class="hidden api-form-group">
+                                    <textarea id="nrBodyJson" rows="8" placeholder="{ }"></textarea>
+                                </div>
+                                <div id="nrBodyFormWrap" class="hidden">
+                                    <div class="flex justify-end mb-2">
+                                        <button type="button" class="api-btn-add nr-add-kv" data-target="nrFormTbody">+ 添加</button>
+                                    </div>
+                                    <div class="api-kv-table-wrap">
+                                        <table class="api-kv-table">
+                                            <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
+                                            <tbody id="nrFormTbody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div id="nrBodyRawWrap" class="hidden">
+                                    <input id="nrRawCt" class="w-full text-sm rounded border px-2 py-1.5 mb-2 dark:bg-gray-900 dark:border-gray-600" placeholder="Content-Type">
+                                    <textarea id="nrBodyRaw" rows="6" class="w-full font-mono text-xs rounded border p-2 dark:bg-gray-900 dark:border-gray-600"></textarea>
+                                </div>
+                            </div>
+                            <div class="api-wb-tab-panel" data-req-panel="auth">
+                                <div class="api-form-group">
+                                    <label for="nrAuthType">认证方式</label>
+                                    <select id="nrAuthType" class="text-sm">
+                                        <option value="none">无</option>
+                                        <option value="bearer">Bearer</option>
+                                        <option value="basic">Basic</option>
+                                    </select>
+                                </div>
+                                <div id="nrAuthBearerWrap" class="hidden api-form-group">
+                                    <label for="nrBearerToken">Token</label>
+                                    <input id="nrBearerToken" type="text" class="font-mono text-sm" placeholder="支持 {% raw %}{{变量}}{% endraw %}">
+                                </div>
+                                <div id="nrAuthBasicWrap" class="hidden api-two-col">
+                                    <div class="api-form-group"><label for="nrBasicUser">用户名</label><input id="nrBasicUser" type="text"></div>
+                                    <div class="api-form-group"><label for="nrBasicPass">密码</label><input id="nrBasicPass" type="password" autocomplete="new-password"></div>
+                                </div>
+                                <div class="api-opt-row mt-2">
+                                    <div class="api-form-group" style="margin:0;flex:1;max-width:120px">
+                                        <label for="nrTimeout">超时(秒)</label>
+                                        <input id="nrTimeout" type="number" min="1" max="600" value="30">
+                                    </div>
+                                    <label><input type="checkbox" id="nrVerifySsl" checked> 校验 SSL</label>
+                                    <label><input type="checkbox" id="nrFollowRedirects" checked> 跟随重定向</label>
+                                    <label><input type="checkbox" id="nrUseBrowserCookies"> 浏览器 Cookie</label>
+                                </div>
+                            </div>
+                            <div class="api-wb-tab-panel" data-req-panel="assert">
+                                <div class="api-two-col">
+                                    <div class="api-form-group"><label for="nrExpected">期望 HTTP 状态码</label><input id="nrExpected" type="number" value="200"></div>
+                                    <div class="api-form-group"><label for="nrDesc">请求说明</label><input id="nrDesc" type="text" placeholder="可选"></div>
+                                </div>
+                                <div class="api-form-group"><label for="nrPreDelayMs">前置等待(ms)</label><input id="nrPreDelayMs" type="number" min="0" placeholder="0"></div>
+                                <div class="api-form-group"><label for="nrJsonPath">JSON 路径断言</label><input id="nrJsonPath" type="text" class="font-mono text-sm" placeholder="data.token"></div>
+                                <div class="api-form-group"><label for="nrExpectedJson">期望值(JSON)</label><textarea id="nrExpectedJson" rows="3" class="font-mono text-xs"></textarea></div>
+                            </div>
+                            <div class="api-wb-tab-panel" data-req-panel="advanced">
+                                <div id="nrNeighborQuick" class="api-neighbor-box">
+                                    <p id="nrNeighborSummary" class="text-xs text-gray-600 dark:text-gray-400 mb-0"></p>
+                                </div>
+                                <div class="api-form-group"><label for="nrPrerequestChain">前置请求链(JSON)</label><textarea id="nrPrerequestChain" class="font-mono text-xs" rows="3">[]</textarea></div>
+                                <div class="api-form-group"><label for="nrPrescript">前置脚本</label><textarea id="nrPrescript" class="font-mono text-xs" rows="2"></textarea></div>
+                                <div class="api-form-group"><label for="nrPostscript">后置脚本</label><textarea id="nrPostscript" class="font-mono text-xs" rows="2"></textarea></div>
+                                <div class="api-form-group"><label for="nrExtractVariables">提取变量(JSON)</label><textarea id="nrExtractVariables" class="font-mono text-xs" rows="3">[]</textarea></div>
+                                <label class="text-sm flex items-center gap-2 mb-3"><input type="checkbox" id="nrPersistExtracts"> 写入用例变量</label>
+                                <details class="text-sm">
+                                    <summary class="cursor-pointer text-gray-600 dark:text-gray-400">高级 JSON（若填写则<strong>覆盖</strong>上方表单）</summary>
+                                    <textarea id="nrApiSpecJson" class="w-full mt-2 min-h-[80px] font-mono text-xs rounded border p-2 dark:bg-gray-900 dark:border-gray-600" placeholder="留空则使用表单"></textarea>
+                                </details>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="api-wb-resizer" id="apiResizer"></div>
+                    <div class="api-wb-response" id="apiResponsePane">
+                        <div class="api-wb-response-meta">
+                            <span id="apiRespStatus" class="api-wb-status-badge api-wb-status-err">—</span>
+                            <span id="apiRespTime" class="api-wb-response-meta-item">—</span>
+                            <span id="apiRespSize" class="api-wb-response-meta-item">—</span>
+                            <span id="apiRespAssert" class="api-wb-response-meta-item flex-1 truncate"></span>
+                        </div>
+                        <div class="api-wb-tabs">
+                            <button type="button" class="api-wb-tab active" data-resp-tab="body">Body</button>
+                            <button type="button" class="api-wb-tab" data-resp-tab="headers">Headers</button>
+                            <button type="button" class="api-wb-tab" data-resp-tab="logs">日志</button>
+                            <button type="button" class="api-wb-tab" data-resp-tab="run">运行结果</button>
+                        </div>
+                        <div class="api-wb-response-body-wrap">
+                            <div class="api-wb-response-toolbar">
+                                <button type="button" id="btnCopyBody" class="api-wb-btn api-wb-btn-ghost text-xs py-1 px-2">复制</button>
+                                <button type="button" id="btnFormatBody" class="api-wb-btn api-wb-btn-ghost text-xs py-1 px-2">格式化 JSON</button>
+                            </div>
+                            <div class="api-wb-resp-panel api-wb-response-content" data-resp-panel="body">
+                                <textarea id="apiRespBody" readonly class="api-wb-response-textarea" rows="8"></textarea>
+                                <div id="nrResponseExtractChips" class="flex flex-wrap gap-1.5 px-4 pb-2"></div>
+                            </div>
+                            <div class="api-wb-resp-panel hidden api-wb-response-content" data-resp-panel="headers">
+                                <div id="apiRespHeadersWrap"></div>
+                            </div>
+                            <div class="api-wb-resp-panel hidden api-wb-response-content" data-resp-panel="logs">
+                                <pre id="apiRespLogs" class="p-4 text-xs font-mono whitespace-pre-wrap m-0"></pre>
+                            </div>
+                            <div class="api-wb-resp-panel hidden api-wb-response-content overflow-y-auto" data-resp-panel="run">
+                                <div id="apiRespRunResults" class="text-sm text-gray-500 p-4">运行用例后在此查看逐步结果</div>
+                            </div>
+                        </div>
+                    </div>
+                </main>
             </div>
         </div>
-        <div class="flex flex-wrap gap-2">
-            <button type="button" id="btnRunSelected" class="api-wb-btn api-wb-btn-send">运行选中</button>
-            <button type="button" id="btnRunCaseAll" class="api-wb-btn api-wb-btn-ghost">运行全部</button>
-            <button type="button" id="btnRefreshReq" class="api-wb-btn api-wb-btn-ghost">刷新</button>
-            <button type="button" id="btnDeleteCase" class="api-wb-btn api-wb-btn-danger">删除用例</button>
-        </div>
-    </header>
-    <div class="api-wb-body">
-        <aside class="api-wb-sidebar">
-            <div class="api-wb-sidebar-head">请求列表</div>
-            <div class="api-wb-sidebar-list" id="apiSidebarList"></div>
-            <div class="api-wb-sidebar-foot">
-                <button type="button" id="btnNewRequestSide" class="api-wb-btn api-wb-btn-save w-full">+ 新建请求</button>
-            </div>
-        </aside>
-        <main class="api-wb-main" id="apiWbMain">
-            <div id="apiEditorEmpty" class="api-wb-empty hidden">
-                <p class="text-sm mb-3">选择左侧请求或新建</p>
-                <button type="button" id="btnNewRequest" class="api-wb-btn api-wb-btn-save">新建请求</button>
-            </div>
-            <div id="apiEditorForm" class="api-wb-editor hidden">
-                <div class="api-wb-request-line">
-                    <select id="nrMethod" class="api-wb-method-select">
-                        <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option>
-                        <option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
-                    </select>
-                    <input id="nrUrl" type="text" class="api-wb-url-input" placeholder="https://api.example.com/path">
-                    <button type="button" id="btnSend" class="api-wb-btn api-wb-btn-send">发送</button>
-                    <button type="button" id="btnSave" class="api-wb-btn api-wb-btn-save">保存</button>
-                    <button type="button" id="btnDeleteStep" class="api-wb-btn api-wb-btn-danger hidden">删除</button>
-                </div>
-                <div class="api-wb-tabs">
-                    <button type="button" class="api-wb-tab active" data-req-tab="params">Params</button>
-                    <button type="button" class="api-wb-tab" data-req-tab="headers">Headers</button>
-                    <button type="button" class="api-wb-tab" data-req-tab="body">Body</button>
-                    <button type="button" class="api-wb-tab" data-req-tab="auth">Auth</button>
-                    <button type="button" class="api-wb-tab" data-req-tab="assert">断言</button>
-                    <button type="button" class="api-wb-tab" data-req-tab="advanced">高级</button>
-                </div>
-                <div class="api-wb-tab-panels">
-                    <div class="api-wb-tab-panel active" data-req-panel="params">
-                        <div class="flex justify-between items-center mb-2">
-                            <span class="text-xs text-gray-500">Query 参数</span>
-                            <button type="button" class="api-btn-add nr-add-kv" data-target="nrQueryTbody">+ 添加</button>
-                        </div>
-                        <div class="api-kv-table-wrap"><table class="api-kv-table"><thead><tr><th>Key</th><th>Value</th><th></th></tr></thead><tbody id="nrQueryTbody"></tbody></table></div>
-                    </div>
-                    <div class="api-wb-tab-panel" data-req-panel="headers">
-                        <div class="flex justify-between items-center mb-2">
-                            <span class="text-xs text-gray-500">请求头</span>
-                            <button type="button" class="api-btn-add nr-add-kv" data-target="nrHeaderTbody">+ 添加</button>
-                        </div>
-                        <div class="api-kv-table-wrap"><table class="api-kv-table"><thead><tr><th>Key</th><th>Value</th><th></th></tr></thead><tbody id="nrHeaderTbody"></tbody></table></div>
-                    </div>
-                    <div class="api-wb-tab-panel" data-req-panel="body">
-                        <select id="nrBodyType" class="mb-2 text-sm rounded border px-2 py-1.5 dark:bg-gray-900 dark:border-gray-600">
-                            <option value="none">无</option><option value="json">JSON</option><option value="form">form</option><option value="raw">Raw</option>
-                        </select>
-                        <div id="nrBodyJsonWrap" class="hidden api-form-group"><textarea id="nrBodyJson" rows="8" placeholder="{ }"></textarea></div>
-                        <div id="nrBodyFormWrap" class="hidden">
-                            <div class="flex justify-end mb-2"><button type="button" class="api-btn-add nr-add-kv" data-target="nrFormTbody">+ 添加</button></div>
-                            <div class="api-kv-table-wrap"><table class="api-kv-table"><thead><tr><th>Key</th><th>Value</th><th></th></tr></thead><tbody id="nrFormTbody"></tbody></table></div>
-                        </div>
-                        <div id="nrBodyRawWrap" class="hidden">
-                            <input id="nrRawCt" class="w-full text-sm rounded border px-2 py-1.5 mb-2 dark:bg-gray-900 dark:border-gray-600" placeholder="Content-Type">
-                            <textarea id="nrBodyRaw" rows="6" class="w-full font-mono text-xs rounded border p-2 dark:bg-gray-900 dark:border-gray-600"></textarea>
-                        </div>
-                    </div>
-                    <div class="api-wb-tab-panel" data-req-panel="auth">
-                        <div class="api-form-group">
-                            <label for="nrAuthType">认证方式</label>
-                            <select id="nrAuthType" class="text-sm"><option value="none">无</option><option value="bearer">Bearer</option><option value="basic">Basic</option></select>
-                        </div>
-                        <div id="nrAuthBearerWrap" class="hidden api-form-group">
-                            <label for="nrBearerToken">Token</label>
-                            <input id="nrBearerToken" type="text" class="font-mono text-sm" placeholder="支持 {% raw %}{{变量}}{% endraw %}">
-                        </div>
-                        <div id="nrAuthBasicWrap" class="hidden api-two-col">
-                            <div class="api-form-group"><label for="nrBasicUser">用户名</label><input id="nrBasicUser" type="text"></div>
-                            <div class="api-form-group"><label for="nrBasicPass">密码</label><input id="nrBasicPass" type="password" autocomplete="new-password"></div>
-                        </div>
-                        <div class="api-opt-row mt-2">
-                            <div class="api-form-group" style="margin:0;flex:1;max-width:120px"><label for="nrTimeout">超时(秒)</label><input id="nrTimeout" type="number" min="1" max="600" value="30"></div>
-                            <label><input type="checkbox" id="nrVerifySsl" checked> 校验 SSL</label>
-                            <label><input type="checkbox" id="nrFollowRedirects" checked> 跟随重定向</label>
-                            <label><input type="checkbox" id="nrUseBrowserCookies"> 浏览器 Cookie</label>
-                        </div>
-                    </div>
-                    <div class="api-wb-tab-panel" data-req-panel="assert">
-                        <div class="api-two-col">
-                            <div class="api-form-group"><label for="nrExpected">期望 HTTP 状态码</label><input id="nrExpected" type="number" value="200"></div>
-                            <div class="api-form-group"><label for="nrDesc">请求说明</label><input id="nrDesc" type="text" placeholder="可选"></div>
-                        </div>
-                        <div class="api-form-group"><label for="nrPreDelayMs">前置等待(ms)</label><input id="nrPreDelayMs" type="number" min="0" placeholder="0"></div>
-                        <div class="api-form-group"><label for="nrJsonPath">JSON 路径断言</label><input id="nrJsonPath" type="text" class="font-mono text-sm" placeholder="data.token"></div>
-                        <div class="api-form-group"><label for="nrExpectedJson">期望值(JSON)</label><textarea id="nrExpectedJson" rows="3" class="font-mono text-xs"></textarea></div>
-                    </div>
-                    <div class="api-wb-tab-panel" data-req-panel="advanced">
-                        <div id="nrNeighborQuick" class="api-neighbor-box">
-                            <p id="nrNeighborSummary" class="text-xs text-gray-600 dark:text-gray-400 mb-0"></p>
-                        </div>
-                        <div class="api-form-group"><label for="nrPrerequestChain">前置请求链(JSON)</label><textarea id="nrPrerequestChain" class="font-mono text-xs" rows="3">[]</textarea></div>
-                        <div class="api-form-group"><label for="nrPrescript">前置脚本</label><textarea id="nrPrescript" class="font-mono text-xs" rows="2"></textarea></div>
-                        <div class="api-form-group"><label for="nrPostscript">后置脚本</label><textarea id="nrPostscript" class="font-mono text-xs" rows="2"></textarea></div>
-                        <div class="api-form-group"><label for="nrExtractVariables">提取变量(JSON)</label><textarea id="nrExtractVariables" class="font-mono text-xs" rows="3">[]</textarea></div>
-                        <label class="text-sm flex items-center gap-2 mb-3"><input type="checkbox" id="nrPersistExtracts"> 写入用例变量</label>
-                        <details class="text-sm">
-                            <summary class="cursor-pointer text-gray-600 dark:text-gray-400">高级 JSON（若填写则<strong>覆盖</strong>上方表单）</summary>
-                            <textarea id="nrApiSpecJson" class="w-full mt-2 min-h-[80px] font-mono text-xs rounded border p-2 dark:bg-gray-900 dark:border-gray-600" placeholder="留空则使用表单"></textarea>
-                        </details>
-                    </div>
-                </div>
-            </div>
-            <div class="api-wb-resizer" id="apiResizer"></div>
-            <div class="api-wb-response" id="apiResponsePane">
-                <div class="api-wb-response-meta">
-                    <span id="apiRespStatus" class="api-wb-status-badge api-wb-status-err">—</span>
-                    <span id="apiRespTime" class="api-wb-response-meta-item">—</span>
-                    <span id="apiRespSize" class="api-wb-response-meta-item">—</span>
-                    <span id="apiRespAssert" class="api-wb-response-meta-item flex-1 truncate"></span>
-                </div>
-                <div class="api-wb-tabs">
-                    <button type="button" class="api-wb-tab active" data-resp-tab="body">Body</button>
-                    <button type="button" class="api-wb-tab" data-resp-tab="headers">Headers</button>
-                    <button type="button" class="api-wb-tab" data-resp-tab="logs">日志</button>
-                    <button type="button" class="api-wb-tab" data-resp-tab="run">运行结果</button>
-                </div>
-                <div class="api-wb-response-body-wrap">
-                    <div class="api-wb-response-toolbar">
-                        <button type="button" id="btnCopyBody" class="api-wb-btn api-wb-btn-ghost text-xs py-1 px-2">复制</button>
-                        <button type="button" id="btnFormatBody" class="api-wb-btn api-wb-btn-ghost text-xs py-1 px-2">格式化 JSON</button>
-                    </div>
-                    <div class="api-wb-resp-panel api-wb-response-content" data-resp-panel="body">
-                        <textarea id="apiRespBody" readonly class="api-wb-response-textarea" rows="8"></textarea>
-                        <div id="nrResponseExtractChips" class="flex flex-wrap gap-1.5 px-4 pb-2"></div>
-                    </div>
-                    <div class="api-wb-resp-panel hidden api-wb-response-content" data-resp-panel="headers">
-                        <div id="apiRespHeadersWrap"></div>
-                    </div>
-                    <div class="api-wb-resp-panel hidden api-wb-response-content" data-resp-panel="logs">
-                        <pre id="apiRespLogs" class="p-4 text-xs font-mono whitespace-pre-wrap m-0"></pre>
-                    </div>
-                    <div class="api-wb-resp-panel hidden api-wb-response-content overflow-y-auto" data-resp-panel="run">
-                        <div id="apiRespRunResults" class="text-sm text-gray-500 p-4">运行用例后在此查看逐步结果</div>
-                    </div>
-                </div>
-            </div>
-        </main>
     </div>
 </div>
 {% endblock %}

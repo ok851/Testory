@@ -14,9 +14,25 @@ def test_parse_emulator_disk_fatal():
 
 
 def test_gpu_modes_dedup():
-    modes = _gpu_modes_for_start("host")
+    modes = _gpu_modes_for_start("host", no_window=True)
+    assert modes[0] == "swiftshader_indirect"
+    assert "host" in modes
+
+
+def test_gpu_modes_windowed_keeps_host_first():
+    modes = _gpu_modes_for_start("host", no_window=False)
     assert modes[0] == "host"
-    assert "swiftshader_indirect" in modes
+
+
+def test_resolve_emulator_gpu_headless_windows(monkeypatch):
+    from mobile_env_config import resolve_emulator_gpu
+
+    monkeypatch.delenv("MOBILE_EMULATOR_GPU", raising=False)
+    monkeypatch.setattr("os.name", "nt", raising=False)
+    assert resolve_emulator_gpu("host", no_window=True) == "swiftshader_indirect"
+    assert resolve_emulator_gpu("", no_window=True) == "swiftshader_indirect"
+    monkeypatch.setenv("MOBILE_EMULATOR_GPU", "angle_indirect")
+    assert resolve_emulator_gpu("host", no_window=True) == "angle_indirect"
 
 
 def test_accel_check_message_when_hypervisor_missing(monkeypatch):

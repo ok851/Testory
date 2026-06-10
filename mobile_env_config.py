@@ -139,11 +139,41 @@ def scrcpy_path() -> str:
 
 
 def mirror_fps() -> int:
-    """画布投屏目标帧率（adb screencap 受网络/USB 带宽限制，无线通常 5–15 实际帧）。"""
+    """adb screencap 轮询目标帧率（无线真机通常 5–15 实际帧）。"""
     try:
-        return max(1, min(120, int(os.environ.get("MOBILE_MIRROR_FPS", "8"))))
+        return max(1, min(30, int(os.environ.get("MOBILE_MIRROR_FPS", "8"))))
     except ValueError:
         return 8
+
+
+def resolve_emulator_gpu(requested: str = "", *, no_window: bool = True) -> str:
+    """
+    解析模拟器 -gpu 参数。
+    无窗口 Windows 默认 swiftshader_indirect，避免 -gpu host 占满 GPU 导致整机卡顿。
+    可通过 MOBILE_EMULATOR_GPU 强制指定（如 host / angle_indirect）。
+    """
+    explicit = (os.environ.get("MOBILE_EMULATOR_GPU") or "").strip()
+    if explicit:
+        return explicit
+    req = (requested or "").strip().lower()
+    if no_window and os.name == "nt" and (not req or req in ("host", "auto", "default")):
+        return "swiftshader_indirect"
+    return req or "host"
+
+
+def scrcpy_mirror_fps() -> int:
+    """scrcpy_ws H.264 视频流目标帧率（模拟器推荐 24–30）。"""
+    raw = (os.environ.get("MOBILE_SCRCPY_FPS") or os.environ.get("MOBILE_MIRROR_FPS") or "24").strip()
+    try:
+        return max(15, min(60, int(raw)))
+    except ValueError:
+        return 24
+
+
+def emulator_scrcpy_ws_enabled() -> bool:
+    """模拟器是否启用 scrcpy_ws（默认开启；设 MOBILE_EMULATOR_SCRCPY=0 可关闭）。"""
+    raw = (os.environ.get("MOBILE_EMULATOR_SCRCPY") or "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def mirror_max_width() -> int:
@@ -216,9 +246,19 @@ def scrcpy_bridge_port() -> int:
         return 8767
 
 
-def scrcpy_bridge_url() -> str:
-    host = (os.environ.get("MOBILE_SCRCPY_BRIDGE_HOST") or "127.0.0.1").strip()
-    return f"ws://{host}:{scrcpy_bridge_port()}"
+def scrcpy_bridge_url(client_host: str = "") -> str:
+    """
+    浏览器连接 scrcpy WebSocket 桥的 URL。
+    client_host 优先（通常为 request.host / window.location.hostname），便于局域网访问。
+    """
+    port = scrcpy_bridge_port()
+    host = (
+        (client_host or "").strip()
+        or (os.environ.get("MOBILE_SCRCPY_BRIDGE_PUBLIC_HOST") or "").strip()
+        or (os.environ.get("MOBILE_SCRCPY_BRIDGE_HOST") or "").strip()
+        or "127.0.0.1"
+    )
+    return f"ws://{host}:{port}"
 
 
 def resolve_mirror_backend(udid: str = "") -> str:
@@ -228,7 +268,9 @@ def resolve_mirror_backend(udid: str = "") -> str:
         return backend
     serial = (udid or "").strip()
     if serial.startswith("emulator-"):
-        return "scrcpy_ws"
+        if emulator_scrcpy_ws_enabled():
+            return "scrcpy_ws"
+        return "screencap"
     if ":" in serial and serial.split(":")[0].replace(".", "").isdigit():
         return "screencap"
     return "screencap"
@@ -351,6 +393,8 @@ def public_config() -> Dict[str, Any]:
         "adb_plugin_installed": adb_path_source() == "plugin",
         "scrcpy_path": scrcpy_path(),
         "mirror_fps": mirror_fps(),
+        "scrcpy_mirror_fps": scrcpy_mirror_fps(),
+        "emulator_scrcpy_ws": emulator_scrcpy_ws_enabled(),
         "mirror_max_width": mirror_max_width(),
         "mirror_jpeg_quality": mirror_jpeg_quality(),
         "mirror_format": mirror_format(),

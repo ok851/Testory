@@ -636,7 +636,8 @@
         });
         const { ok, data: d } = await parseJsonResponse(r);
         if (!ok) {
-            toastErr(d.error || '执行失败');
+            renderRunResultsInPanel({ status: 'error', error: d.error || '执行失败', step_results: [] });
+            switchRespTab('run');
             return;
         }
         renderRunResultsInPanel(d);
@@ -652,11 +653,6 @@
                 error: first.error,
                 ok_assert: first.status === 'success',
             });
-        }
-        if (d.success) {
-            toastOk('执行完成：' + (d.status || 'success'));
-        } else {
-            toastErr(d.error || '执行未全部成功');
         }
     }
 

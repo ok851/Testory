@@ -4,31 +4,31 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/api_testing.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-upload.css') }}">
 {% endblock %}
-{% block body_class %}bg-slate-100 dark:bg-gray-950 min-h-screen text-gray-900 dark:text-gray-100{% endblock %}
+{% block body_class %}min-h-screen text-gray-900 dark:text-gray-100{% endblock %}
 {% block content %}
 {% set _api_detail_id_marker = 918273645 %}
 <a id="uatCaseDetailUrlTmpl" class="hidden" aria-hidden="true" href="{{ url_for('api_case_detail_page', case_id=_api_detail_id_marker)|replace(_api_detail_id_marker|string, '__ID__') }}"></a>
-<div class="api-list-page">
+<div class="api-mgmt-page">
     <div class="api-list-card">
-        <div class="px-6 py-5 border-b border-slate-200 dark:border-gray-800 bg-slate-50/90 dark:bg-gray-900/90">
-            <h1 class="text-xl font-semibold" data-i18n="nav_api_test">接口测试</h1>
-            <p class="text-xs text-gray-500 mt-1">管理 HTTP 接口用例，支持 OpenAPI/Postman 导入与试跑</p>
+        <div class="api-list-card-header">
+            <h1 data-i18n="nav_api_test">接口测试</h1>
+            <p>管理 HTTP 接口用例，支持 OpenAPI/Postman 导入与试跑</p>
         </div>
-        <div class="px-6 py-4 border-b border-slate-200 dark:border-gray-800 flex flex-wrap gap-3 items-center justify-between">
+        <div class="api-list-toolbar flex flex-wrap gap-3 items-center justify-between">
             <div class="flex flex-wrap items-center gap-3">
-                <label for="apiProjectSelect" class="text-sm font-medium">项目</label>
+                <label for="apiProjectSelect" class="text-sm font-medium text-gray-700 dark:text-gray-300">项目</label>
                 <select id="apiProjectSelect" class="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 min-w-[200px]"></select>
                 <input type="search" id="apiCaseSearch" placeholder="搜索用例…" class="rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-950 text-sm px-3 py-2 min-w-[180px]">
             </div>
             <div class="flex flex-wrap gap-2">
-                <button type="button" id="btnImportApiSpec" class="px-4 py-2 rounded-md text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700">导入 OpenAPI/Postman</button>
+                <button type="button" id="btnImportApiSpec" class="px-4 py-2 rounded-md text-sm font-medium text-white" style="background:#667eea;">导入 OpenAPI/Postman</button>
                 <button type="button" id="btnAddCase" class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700">新建用例</button>
                 <button type="button" id="btnRefreshCases" class="px-4 py-2 rounded-md text-sm font-medium bg-slate-200 text-slate-800 hover:bg-slate-300 dark:bg-gray-700 dark:text-gray-100">刷新</button>
             </div>
         </div>
-        <div class="px-6 py-5">
+        <div class="api-list-body">
             <p id="apiCaseHint" class="text-sm text-gray-600 dark:text-gray-400">请选择项目后查看接口用例列表。</p>
-            <div class="mt-3 overflow-x-auto rounded-lg border border-slate-200 dark:border-gray-800">
+            <div class="mt-3 overflow-x-auto rounded-lg border border-slate-200 dark:border-gray-700">
                 <table id="apiCasesTable" class="hidden w-full text-sm text-left">
                     <thead class="bg-slate-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
                         <tr>
@@ -45,10 +45,10 @@
 </div>
 
 <!-- 导入 OpenAPI / Postman -->
-<div id="importApiModal" class="api-tc-modal-scope fixed inset-0 z-[2100] hidden items-center justify-center p-4 bg-black/50" role="dialog">
-    <div class="modal-panel" style="max-width:640px;">
-        <h3 class="text-lg font-semibold mb-2">导入 OpenAPI / Postman</h3>
-        <p class="text-xs text-gray-500 mb-3">上传 JSON（OpenAPI 2/3 或 Postman v2.1），预览后写入新接口用例。</p>
+<div id="importApiModal" class="api-tc-modal-scope api-modal-overlay api-modal-overlay--wide" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal-panel">
+        <h3 class="text-lg font-semibold mb-2 text-gray-900 dark:text-gray-100">导入 OpenAPI / Postman</h3>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">上传 JSON（OpenAPI 2/3 或 Postman v2.1），预览后写入新接口用例。</p>
         <div class="form-group">
             <label for="importApiFile">JSON 文件</label>
             <input type="file" id="importApiFile" class="testory-upload-input" accept=".json,application/json">
@@ -76,9 +76,9 @@
 </div>
 
 <!-- 新建用例 -->
-<div id="addCaseModal" class="api-tc-modal-scope fixed inset-0 z-[2100] hidden items-center justify-center p-4 bg-black/50" role="dialog">
+<div id="addCaseModal" class="api-tc-modal-scope api-modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
     <div class="modal-panel">
-        <h3 class="text-lg font-semibold mb-2">新建用例</h3>
+        <h3 class="text-lg font-semibold mb-2 text-gray-900 dark:text-gray-100">新建用例</h3>
         <div class="flex gap-1 p-1 rounded-lg bg-slate-100 dark:bg-gray-800 w-full mb-4">
             <button type="button" id="addTabBlank" class="flex-1 py-2 rounded-md text-sm font-medium bg-white dark:bg-gray-700 shadow-sm">空白 / 复用</button>
             <button type="button" id="addTabFromUi" class="flex-1 py-2 rounded-md text-sm font-medium text-gray-600 dark:text-gray-400">从 UI 导入</button>
@@ -92,7 +92,7 @@
                 <label for="addCaseSource">复用来源</label>
                 <select id="addCaseSource"></select>
             </div>
-            <p id="addCaseSourceHint" class="text-xs text-gray-500 mb-2"></p>
+            <p id="addCaseSourceHint" class="text-xs text-gray-500 dark:text-gray-400 mb-2"></p>
         </div>
         <div id="addPanelFromUi" class="hidden">
             <div class="form-group">
@@ -103,7 +103,7 @@
                 <label for="addUiOverrideName">新用例名称（可选）</label>
                 <input id="addUiOverrideName" type="text" placeholder="不填则自动生成">
             </div>
-            <p class="text-xs text-gray-500">将自动迁移 Web 用例中的接口步骤（migrate_api_steps）</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400">将自动迁移 Web 用例中的接口步骤</p>
         </div>
         <div class="modal-footer">
             <button type="button" id="addCaseCancelBtn" class="btn btn-secondary">取消</button>
