@@ -313,51 +313,8 @@ def _terminate_backend(proc: Optional[subprocess.Popen]) -> None:
         proc.kill()
 
 
-def _ask_stop_emulators_on_exit() -> bool:
-    """退出桌面版时询问是否停止 Android 模拟器。Yes=停止，No=保留后台运行。"""
-    if (os.environ.get("MOBILE_EMULATOR_STOP_ON_EXIT") or "1").strip().lower() in (
-        "0",
-        "false",
-        "no",
-        "off",
-    ):
-        return False
-    if sys.platform == "win32":
-        try:
-            import ctypes
-
-            # MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1
-            result = ctypes.windll.user32.MessageBoxW(
-                0,
-                "退出 Testory 时是否同时停止 Android 模拟器？\n\n"
-                "• 是：释放内存（推荐）\n"
-                "• 否：模拟器继续在后台运行",
-                APP_TITLE,
-                0x24 | 0x100,
-            )
-            return result == 6  # IDYES
-        except Exception:
-            return True
-    return True
-
-
-def _set_emulator_exit_policy(port: int, stop: bool) -> None:
-    try:
-        payload = json.dumps({"stop": stop}).encode("utf-8")
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/mobile/emulator/exit-policy",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=3)
-    except Exception:
-        pass
-
-
 def _shutdown_all(proc: Optional[subprocess.Popen], *, port: int = DEFAULT_PORT) -> None:
-    stop_emulators = _ask_stop_emulators_on_exit()
-    _set_emulator_exit_policy(port, stop_emulators)
+    del port
     _terminate_backend(proc)
     try:
         from desktop_startup import shutdown_all_services

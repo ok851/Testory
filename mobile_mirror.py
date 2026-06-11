@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Android 设备投屏：scrcpy 外窗 + adb screencap WebSocket 帧流。
+Android 设备投屏：平台内画布（scrcpy_ws H.264 或 adb screencap 帧流）。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from mobile_device_manager import capture_screenshot_frame, set_connected_udid
-from mobile_env_config import mirror_fps, scrcpy_path
+from mobile_env_config import mirror_fps
 
 try:
     from uat_logger import uat_logger
@@ -29,41 +29,18 @@ _sessions: Dict[str, Dict[str, Any]] = {}
 
 def start_scrcpy_mirror(udid: str) -> Dict[str, Any]:
     """
-    启动 scrcpy 独立窗口，并注册 adb screencap 帧流会话。
+    注册投屏会话（画面由 scrcpy_ws 或 adb screencap 在平台画布内展示，不弹外窗）。
 
     Returns:
         {session_id, mirror_ws_path, scrcpy_started}
     """
     udid = (udid or "").strip()
     session_id = str(uuid.uuid4())
-    scrcpy_proc: Optional[subprocess.Popen] = None
-    scrcpy_started = False
-    # 模拟器永不弹出 scrcpy.exe 外窗（画面走 scrcpy_ws 或平台内 screencap 画布）
-    if not udid.startswith("emulator-"):
-        scrcpy_exe = scrcpy_path()
-        cmd = [scrcpy_exe]
-        if udid:
-            cmd.extend(["-s", udid])
-        scrcpy_fps = max(15, min(60, mirror_fps()))
-        cmd.extend(["--no-audio", "--max-size", "720", "--max-fps", str(scrcpy_fps)])
-        try:
-            scrcpy_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
-            )
-            scrcpy_started = True
-            uat_logger.info("scrcpy 已启动: udid=%s pid=%s", udid or "(default)", scrcpy_proc.pid)
-        except FileNotFoundError:
-            uat_logger.warning("未找到 scrcpy（SCRCPY_PATH=%s），仅使用 adb 截图投屏", scrcpy_exe)
-        except Exception as exc:
-            uat_logger.warning("启动 scrcpy 失败: %s", exc)
 
     with _lock:
         _sessions[session_id] = {
             "udid": udid,
-            "scrcpy_proc": scrcpy_proc,
+            "scrcpy_proc": None,
             "active": True,
             "started_at": time.time(),
         }
@@ -71,7 +48,7 @@ def start_scrcpy_mirror(udid: str) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "mirror_ws_path": f"/api/mobile/mirror/stream?session_id={session_id}",
-        "scrcpy_started": scrcpy_started,
+        "scrcpy_started": False,
     }
 
 

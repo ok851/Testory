@@ -45,8 +45,18 @@ _PROJECTS_SELECT = "id, name, description, tenant_id, created_at"
 # test_cases 当前列（与 CREATE + ALTER 一致）
 _TEST_CASES_SELECT = (
     "id, project_id, name, url, description, created_at, precondition, expected_result, "
-    "case_type, COALESCE(case_role, 'business') AS case_role"
+    "case_type, COALESCE(case_role, 'business') AS case_role, "
+    "COALESCE(platform, 'web') AS platform"
 )
+
+
+def _normalize_platform(raw: Any) -> str:
+    p = (raw or "web").strip().lower() if isinstance(raw, str) else "web"
+    if p in ("android", "mobile", "app"):
+        return "android"
+    if p == "desktop":
+        return "desktop"
+    return "web"
 
 # test_steps 当前列（勿用 SELECT * + 固定下标，与 _row_to_step_dict 一致）
 _TEST_STEPS_SELECT = (
@@ -86,6 +96,7 @@ def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict
         "expected_result": (row[7] or "") if len(row) > 7 else "",
         "case_type": _normalize_case_type(row[8]) if len(row) > 8 else "ui",
         "case_role": (row[9] or "business").strip() if len(row) > 9 and row[9] else "business",
+        "platform": _normalize_platform(row[10]) if len(row) > 10 else "web",
     }
     if step_count is not None:
         out["step_count"] = step_count
@@ -263,6 +274,38 @@ class Database:
             )
         except sqlite3.OperationalError:
             pass
+
+        try:
+            cursor.execute("ALTER TABLE test_cases ADD COLUMN platform TEXT DEFAULT 'web'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute(
+                "UPDATE test_cases SET platform = 'web' WHERE platform IS NULL OR TRIM(platform) = ''"
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN device_log TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS element_repository (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                alias TEXT NOT NULL,
+                platform TEXT NOT NULL DEFAULT 'android',
+                selector_type TEXT NOT NULL,
+                selector_value TEXT NOT NULL,
+                attributes_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id),
+                UNIQUE(project_id, alias, platform)
+            )
+        """)
         
         # 添加新字段到test_steps表（如果不存在）
         try:
@@ -1327,6 +1370,7 @@ class Database:
         expected_result: str = "",
         case_type: str = "ui",
         case_role: str = "business",
+        platform: str = "web",
     ) -> int:
         """创建测试用例（新版本，关联到项目）"""
         conn = self._sqlite_connect()
@@ -1335,9 +1379,10 @@ class Database:
         role = (case_role or "business").strip().lower()
         if role not in ("login_feature", "business", "auth_fixture"):
             role = "business"
+        plat = _normalize_platform(platform)
         cursor.execute(
-            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (project_id, name, url, description, precondition, expected_result, ct, role),
+            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role, platform) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, name, url, description, precondition, expected_result, ct, role, plat),
         )
         case_id = cursor.lastrowid
         
@@ -1352,7 +1397,9 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute(
-            "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, COALESCE(case_type, 'ui'), COALESCE(case_role, 'business') FROM test_cases WHERE id = ?",
+            "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, "
+            "COALESCE(case_type, 'ui'), COALESCE(case_role, 'business'), COALESCE(platform, 'web') "
+            "FROM test_cases WHERE id = ?",
             (case_id,),
         )
         row = cursor.fetchone()
@@ -1369,6 +1416,7 @@ class Database:
                 'expected_result': row[7] if len(row) > 7 else '',
                 'case_type': _normalize_case_type(row[8]) if len(row) > 8 else 'ui',
                 'case_role': (row[9] or 'business').strip() if len(row) > 9 else 'business',
+                'platform': _normalize_platform(row[10]) if len(row) > 10 else 'web',
             }
             conn.close()
             return out
@@ -1376,7 +1424,16 @@ class Database:
         conn.close()
         return None
     
-    def update_test_case_v2(self, case_id: int, name: str = None, url: str = None, description: str = None, precondition: str = None, expected_result: str = None) -> bool:
+    def update_test_case_v2(
+        self,
+        case_id: int,
+        name: str = None,
+        url: str = None,
+        description: str = None,
+        precondition: str = None,
+        expected_result: str = None,
+        platform: str = None,
+    ) -> bool:
         """更新测试用例（新版本）"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -1403,6 +1460,10 @@ class Database:
         if expected_result is not None:
             updates.append("expected_result = ?")
             params.append(expected_result)
+
+        if platform is not None:
+            updates.append("platform = ?")
+            params.append(_normalize_platform(platform))
         
         if not updates:
             conn.close()
@@ -1418,6 +1479,123 @@ class Database:
         conn.close()
         
         return success
+
+    def list_element_repository(
+        self,
+        project_id: int,
+        platform: str = "",
+    ) -> List[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        plat = _normalize_platform(platform) if platform else ""
+        if plat:
+            cursor.execute(
+                "SELECT id, project_id, alias, platform, selector_type, selector_value, attributes_json, created_at, updated_at "
+                "FROM element_repository WHERE project_id = ? AND platform = ? ORDER BY alias",
+                (project_id, plat),
+            )
+        else:
+            cursor.execute(
+                "SELECT id, project_id, alias, platform, selector_type, selector_value, attributes_json, created_at, updated_at "
+                "FROM element_repository WHERE project_id = ? ORDER BY platform, alias",
+                (project_id,),
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        out = []
+        for row in rows:
+            attrs = {}
+            try:
+                if row[6]:
+                    attrs = json.loads(row[6])
+            except (json.JSONDecodeError, TypeError):
+                attrs = {}
+            out.append({
+                "id": row[0],
+                "project_id": row[1],
+                "alias": row[2],
+                "platform": row[3],
+                "selector_type": row[4],
+                "selector_value": row[5],
+                "attributes": attrs,
+                "created_at": _bj_iso(row[7]),
+                "updated_at": _bj_iso(row[8]),
+            })
+        return out
+
+    def create_element_repository_entry(
+        self,
+        project_id: int,
+        alias: str,
+        platform: str,
+        selector_type: str,
+        selector_value: str,
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        plat = _normalize_platform(platform)
+        attrs_json = json.dumps(attributes or {}, ensure_ascii=False)
+        cursor.execute(
+            "INSERT INTO element_repository (project_id, alias, platform, selector_type, selector_value, attributes_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, (alias or "").strip(), plat, (selector_type or "").strip(), selector_value or "", attrs_json),
+        )
+        eid = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return int(eid)
+
+    def update_element_repository_entry(
+        self,
+        element_id: int,
+        *,
+        alias: str = None,
+        selector_type: str = None,
+        selector_value: str = None,
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        updates = ["updated_at = CURRENT_TIMESTAMP"]
+        params: List[Any] = []
+        if alias is not None:
+            updates.append("alias = ?")
+            params.append(alias.strip())
+        if selector_type is not None:
+            updates.append("selector_type = ?")
+            params.append(selector_type.strip())
+        if selector_value is not None:
+            updates.append("selector_value = ?")
+            params.append(selector_value)
+        if attributes is not None:
+            updates.append("attributes_json = ?")
+            params.append(json.dumps(attributes, ensure_ascii=False))
+        if len(updates) <= 1:
+            conn.close()
+            return False
+        params.append(element_id)
+        cursor.execute(
+            f"UPDATE element_repository SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        ok = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+
+    def get_element_by_alias(
+        self,
+        project_id: int,
+        alias: str,
+        platform: str = "android",
+    ) -> Optional[Dict[str, Any]]:
+        items = self.list_element_repository(project_id, platform=platform)
+        key = (alias or "").strip()
+        for item in items:
+            if item.get("alias") == key:
+                return item
+        return None
     
     def delete_test_case_v2(self, case_id: int) -> bool:
         """删除测试用例及其步骤、运行历史、缺陷等依赖（新版本，与 delete_test_case 级联一致）。"""

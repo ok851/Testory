@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-scrcpy 视频 WebSocket 桥接（模拟器高帧率画布投屏）。
+scrcpy 视频 WebSocket 桥接（真机高帧率画布投屏）。
 
 将 scrcpy-server H.264 帧通过 WebSocket 推送到浏览器 WebCodecs 解码。
-真机仍走 screencap 降级路径。
+未安装 scrcpy 时由 adb screencap 降级。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
 import re
 import shutil
 import socket
@@ -38,7 +39,10 @@ _bridge_failed_msg: Optional[str] = None
 _bridge_listening: bool = False
 _active_sessions: Dict[str, "ScrcpyWsSession"] = {}
 _clients_by_serial: Dict[str, Set[Any]] = {}
-_http_stream_locks: Dict[str, threading.Lock] = {}
+_persistent_sessions: Dict[str, "ScrcpyDeviceSession"] = {}
+_persistent_lock = threading.Lock()
+_relays: Dict[str, "ScrcpyFrameRelay"] = {}
+_relay_lock = threading.Lock()
 
 
 def _bridge_bind_host() -> str:
@@ -219,65 +223,42 @@ def _version_candidates() -> list[str]:
     return out
 
 
-def iter_scrcpy_http_stream(serial: str):
-    """
-    经 Flask 同源 HTTP 输出 H.264（uint32 长度前缀 + payload）。
-    避免浏览器连独立 8767 端口失败（局域网/防火墙）。
-    同一 serial 仅允许一条 HTTP 流，防止重复拉起 scrcpy-server 拖垮模拟器。
-    """
+def ensure_scrcpy_device_session(serial: str) -> Tuple[Optional["ScrcpyDeviceSession"], str]:
+    """获取或启动持久 scrcpy-server 会话（同一设备复用，避免重复拉起）。"""
     serial = (serial or "").strip()
     if not serial:
-        return
+        return None, "缺少 serial"
     if not _find_scrcpy_server_jar():
-        return
-    with _lock:
-        stream_lock = _http_stream_locks.setdefault(serial, threading.Lock())
-    if not stream_lock.acquire(blocking=False):
-        uat_logger.warning("scrcpy HTTP 流已在输出 serial=%s，跳过重复会话", serial)
-        return
+        return None, "未找到 scrcpy-server，请在插件市场安装 scrcpy 高帧率投屏"
+    with _persistent_lock:
+        existing = _persistent_sessions.get(serial)
+        if existing and existing.running:
+            return existing, ""
     sess = ScrcpyDeviceSession(serial)
     try:
         sess.start()
-        while sess.running:
-            packet = sess.read_packet()
-            if not packet:
-                break
-            yield struct.pack(">I", len(packet)) + packet
     except Exception as exc:
-        uat_logger.warning("scrcpy HTTP 流结束 serial=%s: %s", serial, exc)
-    finally:
-        sess.stop()
-        stream_lock.release()
+        err = str(exc) or "scrcpy 启动失败"
+        uat_logger.warning("scrcpy 会话启动失败 serial=%s: %s", serial, err)
+        return None, err
+    with _persistent_lock:
+        _persistent_sessions[serial] = sess
+    return sess, ""
 
 
-def warm_scrcpy_session(serial: str, *, timeout: float = 20.0) -> Tuple[bool, str]:
-    """验证 scrcpy 能收到视频帧（失败则前端应降级 screencap）。"""
+def stop_scrcpy_device_session(serial: str) -> None:
+    """断开设备时释放 scrcpy-server 会话与帧广播。"""
     serial = (serial or "").strip()
     if not serial:
-        return False, "缺少 serial"
-    if not _find_scrcpy_server_jar():
-        return False, "未找到 scrcpy-server"
-    last_err = ""
-    for attempt in range(2):
-        sess = ScrcpyDeviceSession(serial)
-        try:
-            sess.start()
-            deadline = time.time() + max(5.0, timeout)
-            while time.time() < deadline:
-                packet = sess.read_packet()
-                if packet and len(packet) > 32:
-                    return True, "ok"
-                if not sess.running:
-                    break
-                time.sleep(0.12)
-            last_err = "scrcpy 长时间无视频帧（模拟器可能尚未完成启动）"
-        except Exception as exc:
-            last_err = str(exc) or "scrcpy 预热失败"
-        finally:
-            sess.stop()
-        if attempt == 0:
-            time.sleep(1.0)
-    return False, last_err or "scrcpy 预热失败"
+        return
+    with _relay_lock:
+        relay = _relays.pop(serial, None)
+    if relay:
+        relay._stopped = True
+    with _persistent_lock:
+        sess = _persistent_sessions.pop(serial, None)
+    if sess:
+        sess.stop()
 
 
 class ScrcpyDeviceSession:
@@ -326,8 +307,10 @@ class ScrcpyDeviceSession:
             raise RuntimeError(f"adb forward 失败：{err}")
 
         max_fps = scrcpy_mirror_fps()
+        max_size = max(480, min(1920, int(os.environ.get("MOBILE_SCRCPY_MAX_SIZE", "1280"))))
         server_args = [
             f"max_fps={max_fps}",
+            f"max_size={max_size}",
             "tunnel_forward=true",
             f"control={'true' if _scrcpy_control_enabled() else 'false'}",
             "audio=false",
@@ -345,13 +328,29 @@ class ScrcpyDeviceSession:
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
         )
-        time.sleep(2.0)
-        sock = socket.create_connection(("127.0.0.1", self.local_port), timeout=12)
-        sock.settimeout(20.0)
-        dummy = sock.recv(1)
-        if not dummy:
-            sock.close()
-            raise RuntimeError("scrcpy 连接握手失败（请点「停止」后重新启动模拟器）")
+        time.sleep(2.5)
+        sock = None
+        for connect_try in range(3):
+            try:
+                sock = socket.create_connection(("127.0.0.1", self.local_port), timeout=14)
+                sock.settimeout(20.0)
+                dummy = sock.recv(1)
+                if dummy:
+                    break
+                sock.close()
+                sock = None
+            except OSError:
+                if sock:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                    sock = None
+            time.sleep(0.8)
+        if not sock:
+            raise RuntimeError(
+                "scrcpy 连接握手失败：请确认手机已解锁，并重试连接"
+            )
         device_name = self._read_exact(sock, 64)
         uat_logger.info(
             "scrcpy 已连接: serial=%s version=%s device=%s",
@@ -526,35 +525,190 @@ class ScrcpyDeviceSession:
             pass
 
 
+def _get_persistent_device(serial: str) -> Optional[ScrcpyDeviceSession]:
+    with _persistent_lock:
+        return _persistent_sessions.get((serial or "").strip())
+
+
+class ScrcpyFrameRelay:
+    """单设备单 scrcpy 会话 + 单读取线程，向 HTTP/WS 多客户端广播帧。"""
+
+    def __init__(self, serial: str) -> None:
+        self.serial = (serial or "").strip()
+        self._stopped = False
+        self._lock = threading.Lock()
+        self._subscribers: Dict[int, queue.Queue] = {}
+        self._next_sub_id = 0
+        self._reader_thread: Optional[threading.Thread] = None
+
+    def ensure_started(self) -> Tuple[bool, str]:
+        sess, err = ensure_scrcpy_device_session(self.serial)
+        if not sess:
+            return False, err
+        with self._lock:
+            if self._stopped:
+                self._stopped = False
+            if self._reader_thread and self._reader_thread.is_alive():
+                return True, ""
+            self._reader_thread = threading.Thread(
+                target=self._reader_loop,
+                name=f"scrcpy-relay-{self.serial}",
+                daemon=True,
+            )
+            self._reader_thread.start()
+        return True, ""
+
+    def subscribe(self, maxsize: int = 24) -> Tuple[int, queue.Queue]:
+        q: queue.Queue = queue.Queue(maxsize=maxsize)
+        with self._lock:
+            self._next_sub_id += 1
+            sid = self._next_sub_id
+            self._subscribers[sid] = q
+        return sid, q
+
+    def unsubscribe(self, sid: int) -> None:
+        with self._lock:
+            self._subscribers.pop(sid, None)
+
+    def _reader_loop(self) -> None:
+        while not self._stopped:
+            sess = _get_persistent_device(self.serial)
+            if not sess or not sess.running:
+                time.sleep(0.12)
+                continue
+            packet = sess.read_packet()
+            if not packet:
+                time.sleep(0.02)
+                continue
+            with self._lock:
+                subs = list(self._subscribers.values())
+            for sub_q in subs:
+                try:
+                    sub_q.put_nowait(packet)
+                except queue.Full:
+                    try:
+                        sub_q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        sub_q.put_nowait(packet)
+                    except queue.Full:
+                        pass
+
+    def stop(self) -> None:
+        self._stopped = True
+        with _relay_lock:
+            _relays.pop(self.serial, None)
+        with _persistent_lock:
+            sess = _persistent_sessions.pop(self.serial, None)
+        if sess:
+            sess.stop()
+
+
+def get_scrcpy_relay(serial: str) -> ScrcpyFrameRelay:
+    serial = (serial or "").strip()
+    with _relay_lock:
+        relay = _relays.get(serial)
+        if relay is None:
+            relay = ScrcpyFrameRelay(serial)
+            _relays[serial] = relay
+        return relay
+
+
+def iter_scrcpy_http_stream(serial: str):
+    """
+    经 Flask 同源 HTTP 输出 H.264（uint32 长度前缀 + payload）。
+    与预热会话共用帧广播，避免重复拉起 scrcpy-server 或争抢 read_packet。
+    """
+    serial = (serial or "").strip()
+    if not serial:
+        return
+    relay = get_scrcpy_relay(serial)
+    ok, err = relay.ensure_started()
+    if not ok:
+        uat_logger.warning("scrcpy HTTP 无法启动 serial=%s: %s", serial, err)
+        return
+    uat_logger.info("scrcpy HTTP 流开始 serial=%s", serial)
+    sid, pkt_queue = relay.subscribe()
+    try:
+        while not relay._stopped:
+            try:
+                packet = pkt_queue.get(timeout=5.0)
+            except queue.Empty:
+                sess = _get_persistent_device(serial)
+                if not sess or not sess.running:
+                    break
+                continue
+            if not packet:
+                break
+            yield struct.pack(">I", len(packet)) + packet
+    except Exception as exc:
+        uat_logger.warning("scrcpy HTTP 流结束 serial=%s: %s", serial, exc)
+    finally:
+        relay.unsubscribe(sid)
+
+
+def warm_scrcpy_session(serial: str, *, timeout: float = 20.0) -> Tuple[bool, str]:
+    """连接设备时预热 scrcpy，成功则保持会话供 HTTP 流复用。"""
+    serial = (serial or "").strip()
+    if not serial:
+        return False, "缺少 serial"
+    last_err = ""
+    for attempt in range(2):
+        if attempt > 0:
+            stop_scrcpy_device_session(serial)
+            time.sleep(0.8)
+        relay = get_scrcpy_relay(serial)
+        ok, err = relay.ensure_started()
+        if not ok:
+            last_err = err or "scrcpy 启动失败"
+            continue
+        sid, pkt_queue = relay.subscribe()
+        try:
+            deadline = time.time() + max(8.0, timeout)
+            while time.time() < deadline:
+                try:
+                    packet = pkt_queue.get(timeout=0.35)
+                except queue.Empty:
+                    continue
+                if packet and len(packet) > 32:
+                    return True, "ok"
+            last_err = "scrcpy 长时间无视频帧，请确认手机已解锁并允许 USB 调试"
+        finally:
+            relay.unsubscribe(sid)
+        stop_scrcpy_device_session(serial)
+    return False, last_err or "scrcpy 预热失败"
+
+
 class ScrcpyWsSession:
-    """WebSocket 客户端组共享一个 scrcpy 设备会话。"""
+    """WebSocket 客户端组共享帧广播（不再单独拉起 scrcpy-server）。"""
 
     def __init__(self, serial: str) -> None:
         self.serial = serial
-        self.device = ScrcpyDeviceSession(serial)
+        self.relay = get_scrcpy_relay(serial)
+        self._sub_id: Optional[int] = None
+        self._queue: Optional[queue.Queue] = None
         self.task: Optional[asyncio.Task] = None
 
     async def start_relay(self) -> None:
-        loop = asyncio.get_event_loop()
-        last_err: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                await loop.run_in_executor(None, self.device.start)
-                last_err = None
-                break
-            except Exception as exc:
-                last_err = exc
-                self.device.stop()
-                if attempt < 2:
-                    await asyncio.sleep(1.2 * (attempt + 1))
-        if last_err is not None:
-            raise last_err
+        ok, err = self.relay.ensure_started()
+        if not ok:
+            raise RuntimeError(err or "scrcpy 启动失败")
+        self._sub_id, self._queue = self.relay.subscribe()
         self.task = asyncio.create_task(self._relay_loop())
 
     async def _relay_loop(self) -> None:
         loop = asyncio.get_event_loop()
-        while self.device.running:
-            packet = await loop.run_in_executor(None, self.device.read_packet)
+        pkt_queue = self._queue
+        if not pkt_queue:
+            return
+        while not self.relay._stopped:
+            try:
+                packet = await loop.run_in_executor(
+                    None, lambda: pkt_queue.get(timeout=0.5)
+                )
+            except queue.Empty:
+                continue
             if not packet:
                 break
             clients = list(_clients_by_serial.get(self.serial, set()))
@@ -566,10 +720,12 @@ class ScrcpyWsSession:
                     dead.append(ws)
             for ws in dead:
                 _clients_by_serial.get(self.serial, set()).discard(ws)
-        self.device.stop()
 
     async def stop(self) -> None:
-        self.device.stop()
+        if self._sub_id is not None:
+            self.relay.unsubscribe(self._sub_id)
+            self._sub_id = None
+            self._queue = None
         if self.task:
             self.task.cancel()
             try:
@@ -589,11 +745,9 @@ def _handle_ws_control_message(serial: str, raw: str) -> None:
     mtype = (msg.get("type") or "").strip().lower()
     if mtype not in ("tap", "swipe", "touch"):
         return
-    with _lock:
-        sess = _active_sessions.get(serial)
-    if not sess or not sess.device.running:
+    dev = _get_persistent_device(serial)
+    if not dev or not dev.running:
         return
-    dev = sess.device
     sw = max(1, int(msg.get("screen_width") or msg.get("w") or 1080))
     sh = max(1, int(msg.get("screen_height") or msg.get("h") or 1920))
     if mtype == "swipe":
@@ -622,12 +776,14 @@ async def _ws_handler(websocket: Any) -> None:
         path = websocket.request.path  # websockets >= 11
     except Exception:
         path = getattr(websocket, "path", "") or ""
+    from urllib.parse import unquote
+
     serial = "emulator-5554"
     if "?" in path:
         qs = path.split("?", 1)[1]
         for part in qs.split("&"):
             if part.startswith("serial="):
-                serial = part.split("=", 1)[1]
+                serial = unquote(part.split("=", 1)[1])
     serial = serial.strip() or "emulator-5554"
 
     _clients_by_serial.setdefault(serial, set()).add(websocket)

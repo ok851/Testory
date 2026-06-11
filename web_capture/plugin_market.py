@@ -183,7 +183,6 @@ def _extension_files_valid(install_dir: str) -> bool:
 _MOBILE_RUNTIME_PLUGIN_IDS = frozenset(
     {
         "mobile-android-platform-tools",
-        "mobile-android-emulator-sdk",
         "mobile-scrcpy",
     }
 )
@@ -197,10 +196,6 @@ def _mobile_runtime_installed(plugin_id: str) -> bool:
             from mobile_plugin_bundles import get_installed_adb_path
 
             return bool(get_installed_adb_path())
-        if pid == "mobile-android-emulator-sdk":
-            from mobile_emulator_sdk_bundles import get_installed_emulator_sdk_home
-
-            return bool(get_installed_emulator_sdk_home())
         if pid == "mobile-scrcpy":
             from mobile_scrcpy_bundles import get_installed_scrcpy_exe
 
@@ -323,42 +318,11 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
                     out["adb_path"] = ap
             except Exception:
                 pass
-        if pid == "mobile-android-emulator-sdk":
-            try:
-                from mobile_emulator_sdk_bundles import (
-                    emulator_sdk_setup_status,
-                    get_installed_emulator_sdk_home,
-                    resolve_adb_in_sdk,
-                )
-
-                st = emulator_sdk_setup_status()
-                out["setup_complete"] = bool(st.get("setup_complete"))
-                out["repair_needed"] = bool(st.get("sdk_ready")) and not out["setup_complete"]
-                out["default_avd"] = st.get("default_avd") or ""
-                out["avd_ready"] = bool(st.get("avd_ready"))
-                if out["repair_needed"]:
-                    out["status_label"] = "待创建虚拟手机"
-                    out["status_tone"] = "warn"
-                sdk = get_installed_emulator_sdk_home()
-                if sdk:
-                    out["android_sdk_home"] = sdk
-                    ap = resolve_adb_in_sdk()
-                    if ap:
-                        out["adb_path"] = ap
-            except Exception:
-                pass
     else:
         out["status_label"] = "未安装"
         out["status_tone"] = "muted"
         if pid == "mobile-android-platform-tools" and not plugin.get("local_bundle_ready"):
             if not plugin.get("download_url_configured"):
-                out["status_label"] = "待配置安装包"
-                out["status_tone"] = "warn"
-        if pid == "mobile-android-emulator-sdk":
-            if not plugin.get("java_ready"):
-                out["status_label"] = "需安装 JDK 11+"
-                out["status_tone"] = "warn"
-            elif not plugin.get("local_bundle_ready") and not plugin.get("download_url_configured"):
                 out["status_label"] = "待配置安装包"
                 out["status_tone"] = "warn"
     return out
@@ -371,12 +335,6 @@ def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
         from mobile_plugin_bundles import get_android_platform_tools_catalog_entry
 
         items.append(get_android_platform_tools_catalog_entry())
-    except Exception:
-        pass
-    try:
-        from mobile_emulator_sdk_bundles import get_android_emulator_sdk_catalog_entry
-
-        items.append(get_android_emulator_sdk_catalog_entry())
     except Exception:
         pass
     try:
@@ -596,13 +554,6 @@ def install_plugin_sync(
                 from mobile_plugin_bundles import install_android_platform_tools
 
                 return install_android_platform_tools(progress_cb=progress_cb)
-            except Exception as exc:
-                return {"success": False, "error": str(exc)}
-        if pid == "mobile-android-emulator-sdk":
-            try:
-                from mobile_emulator_sdk_bundles import install_android_emulator_sdk
-
-                return install_android_emulator_sdk(progress_cb=progress_cb)
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
         if pid == "mobile-scrcpy":

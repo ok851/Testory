@@ -79,10 +79,7 @@
             + '<div class="mb-4">' + feats + '</div>'
             + (p.adb_path ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">adb：' + esc(p.adb_path) + '<br><span class="text-emerald-600">环境已自动配置，无需手动设置</span></p>' : '')
             + (p.id === 'mobile-android-platform-tools' && !installed ? '<p class="text-xs text-gray-500 mb-2">安装后自动识别手机连接。内网环境请联系管理员配置离线安装包。</p>' : '')
-            + (p.id === 'mobile-android-emulator-sdk' && !installed ? '<p class="text-xs text-gray-500 mb-2">一键安装模拟器与默认虚拟手机。系统镜像约 1–2GB，下载较慢属正常；可切换其他页面，本卡片会显示进度。建议同时安装「scrcpy 高帧率投屏」。</p>' : '')
-            + (p.id === 'mobile-android-emulator-sdk' && repairNeeded ? '<p class="text-xs text-amber-600 mb-2">模拟器组件已下载，默认虚拟手机 <strong>' + esc(p.default_avd || 'Testory_Pixel7') + '</strong> 尚未创建。请点击「创建虚拟手机」完成最后一步（约 1 分钟）。</p>' : '')
-            + (p.id === 'mobile-android-emulator-sdk' && !installed && p.java_ready === false ? '<p class="text-xs text-amber-600 mb-2">未检测到 Java。请先安装 Java 11+ 后重新打开本软件；完整安装包通常已内置 Java。</p>' : '')
-            + (p.id === 'mobile-scrcpy' && !installed ? '<p class="text-xs text-gray-500 mb-2">模拟器高帧率画面组件，建议与「Android 模拟器 SDK」一并安装。</p>' : '')
+            + (p.id === 'mobile-scrcpy' && !installed ? '<p class="text-xs text-gray-500 mb-2">真机高帧率画布投屏组件，建议与「Android Platform-Tools」一并安装。</p>' : '')
             + (p.sdk_platform_tools_ready && !installed ? '<p class="text-xs text-emerald-600 mb-2">检测到本机 SDK：' + esc(p.sdk_platform_tools_path || '') + '，安装时将直接复制。</p>' : '')
             + (p.android_sdk_home && installed ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">SDK：' + esc(p.android_sdk_home) + '</p>' : '')
             + '<div class="flex flex-wrap gap-2 mt-auto">'

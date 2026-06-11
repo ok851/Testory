@@ -1071,6 +1071,7 @@
                 </button>
                 <button type="button" onclick="toggleElementCapture({ recordToCase: true, captureChannel: 'desktop' })" class="btn btn-primary" id="elementCaptureRecordBtn" title="Windows 原生应用：悬浮条智能点选生成 UIA/视觉定位；勿在浏览器内用此模式拾取网页 DOM">🖥️ 桌面捕获 / 录制</button>
                 <button type="button" onclick="toggleElementCapture({ recordToCase: true, captureChannel: 'web' })" class="btn btn-info" id="elementWebCaptureBtn" title="打开网页捕获器，在自有浏览器中悬停高亮并拾取 DOM 元素">🌐 网页捕获</button>
+                <button type="button" onclick="openMobileTestingStudio()" class="btn btn-success" id="mobileTestingStudioBtn" style="display:none;" title="在移动端测试页连接设备、投屏与录制">📱 移动端测试</button>
             </div>
             <div class="toolbar-right">
                 <button type="button" onclick="backToCases()" class="btn btn-secondary" data-i18n="steps_back">← 返回用例列表</button>
@@ -1794,6 +1795,7 @@
         let currentCaseUrl = '';
         let currentEditingStepId = null;
         let currentProjectId = null;
+        let currentCasePlatform = 'web';
         let currentPage = 1;
         let totalPages = 1;
         const pageSize = 10;
@@ -1864,7 +1866,10 @@
                     currentCaseName = data.test_case.name;
                     currentProjectId = data.test_case.project_id;
                     currentCaseUrl = (data.test_case.url || '').trim();
-                    document.getElementById('caseInfo').textContent = t('steps_case_prefix') + currentCaseName;
+                    currentCasePlatform = (data.test_case.platform || 'web').toLowerCase();
+                    document.getElementById('caseInfo').textContent = t('steps_case_prefix') + currentCaseName
+                        + (currentCasePlatform === 'android' ? ' · 移动应用' : '');
+                    applyCasePlatformToolbar();
                 } else {
                     document.getElementById('caseInfo').textContent = t('steps_case_prefix') + t('steps_case_unknown');
                 }
@@ -1874,6 +1879,30 @@
             }
         }
         
+        function applyCasePlatformToolbar() {
+            const isAndroid = currentCasePlatform === 'android';
+            const webBtn = document.getElementById('elementWebCaptureBtn');
+            const deskBtn = document.getElementById('elementCaptureRecordBtn');
+            const codegenBtn = document.getElementById('startCodegenCliBtn');
+            const codegenImportBtn = document.getElementById('codegenImportBtn');
+            const sideBtn = document.getElementById('seleniumIdeImportBtn');
+            const mobileBtn = document.getElementById('mobileTestingStudioBtn');
+            if (webBtn) webBtn.style.display = isAndroid ? 'none' : '';
+            if (deskBtn) deskBtn.style.display = isAndroid ? 'none' : '';
+            if (codegenBtn) codegenBtn.style.display = isAndroid ? 'none' : '';
+            if (codegenImportBtn) codegenImportBtn.style.display = isAndroid ? 'none' : '';
+            if (sideBtn) sideBtn.style.display = isAndroid ? 'none' : '';
+            if (mobileBtn) mobileBtn.style.display = isAndroid ? '' : 'none';
+        }
+
+        function openMobileTestingStudio() {
+            if (!currentCaseId) {
+                alert('未选择用例');
+                return;
+            }
+            window.open('/mobile-testing?case_id=' + encodeURIComponent(currentCaseId), '_blank');
+        }
+
         // ==================== UI 辅助函数 ====================
         
         // 显示加载提示

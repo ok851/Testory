@@ -6,7 +6,7 @@ import struct
 from unittest.mock import MagicMock, patch
 
 from mobile_env_config import (
-    emulator_scrcpy_ws_enabled,
+    device_scrcpy_ws_enabled,
     resolve_mirror_backend,
     scrcpy_mirror_fps,
 )
@@ -14,22 +14,25 @@ from mobile_scrcpy_bridge import _handle_ws_control_message
 from mobile_mirror import start_scrcpy_mirror
 
 
-def test_resolve_mirror_backend_emulator_default_scrcpy_ws(monkeypatch):
+def test_resolve_mirror_backend_default_scrcpy_ws_when_available(monkeypatch):
     monkeypatch.delenv("MOBILE_MIRROR_BACKEND", raising=False)
-    monkeypatch.setenv("MOBILE_EMULATOR_SCRCPY", "1")
-    assert resolve_mirror_backend("emulator-5554") == "scrcpy_ws"
+    monkeypatch.setenv("MOBILE_DEVICE_SCRCPY", "1")
+    monkeypatch.setattr("mobile_env_config.scrcpy_available", lambda: True)
+    assert resolve_mirror_backend("192.168.1.5:5555") == "scrcpy_ws"
 
 
-def test_resolve_mirror_backend_emulator_opt_out_screencap(monkeypatch):
+def test_resolve_mirror_backend_opt_out_screencap(monkeypatch):
     monkeypatch.delenv("MOBILE_MIRROR_BACKEND", raising=False)
-    monkeypatch.setenv("MOBILE_EMULATOR_SCRCPY", "0")
-    assert resolve_mirror_backend("emulator-5554") == "screencap"
+    monkeypatch.setenv("MOBILE_DEVICE_SCRCPY", "0")
+    monkeypatch.setattr("mobile_env_config.scrcpy_available", lambda: True)
+    assert resolve_mirror_backend("device-serial") == "screencap"
 
 
-def test_resolve_mirror_backend_real_device_screencap(monkeypatch):
+def test_resolve_mirror_backend_no_scrcpy_screencap(monkeypatch):
     monkeypatch.delenv("MOBILE_MIRROR_BACKEND", raising=False)
-    monkeypatch.setenv("MOBILE_EMULATOR_SCRCPY", "1")
-    assert resolve_mirror_backend("192.168.1.5:5555") == "screencap"
+    monkeypatch.setenv("MOBILE_DEVICE_SCRCPY", "1")
+    monkeypatch.setattr("mobile_env_config.scrcpy_available", lambda: False)
+    assert resolve_mirror_backend("device-serial") == "screencap"
 
 
 def test_scrcpy_mirror_fps_default(monkeypatch):
@@ -38,17 +41,18 @@ def test_scrcpy_mirror_fps_default(monkeypatch):
     assert scrcpy_mirror_fps() == 24
 
 
-def test_emulator_scrcpy_ws_enabled_default(monkeypatch):
+def test_device_scrcpy_ws_enabled_default(monkeypatch):
+    monkeypatch.delenv("MOBILE_DEVICE_SCRCPY", raising=False)
     monkeypatch.delenv("MOBILE_EMULATOR_SCRCPY", raising=False)
-    assert emulator_scrcpy_ws_enabled() is True
+    assert device_scrcpy_ws_enabled() is True
 
 
-def test_start_scrcpy_mirror_skips_external_window_for_emulator(monkeypatch):
+def test_start_scrcpy_mirror_no_external_window(monkeypatch):
     monkeypatch.setattr(
         "mobile_mirror.subprocess.Popen",
         MagicMock(side_effect=AssertionError("should not spawn scrcpy.exe")),
     )
-    out = start_scrcpy_mirror("emulator-5554")
+    out = start_scrcpy_mirror("ABCD1234")
     assert out["scrcpy_started"] is False
     assert out["session_id"]
 
@@ -57,14 +61,12 @@ def test_ws_control_tap_invokes_inject(monkeypatch):
     device = MagicMock()
     device.running = True
     device.inject_tap.return_value = True
-    sess = MagicMock()
-    sess.device = device
     monkeypatch.setattr(
-        "mobile_scrcpy_bridge._active_sessions",
-        {"emulator-5554": sess},
+        "mobile_scrcpy_bridge._get_persistent_device",
+        lambda serial: device if serial == "device-1" else None,
     )
     _handle_ws_control_message(
-        "emulator-5554",
+        "device-1",
         json.dumps({"type": "tap", "x": 10, "y": 20, "screen_width": 1080, "screen_height": 2400}),
     )
     device.inject_tap.assert_called_once_with(10, 20, screen_width=1080, screen_height=2400)
@@ -84,7 +86,7 @@ def test_iter_scrcpy_http_stream_yields_length_prefix(monkeypatch):
 
         def read_packet(self):
             self._n += 1
-            if self._n > 2:
+            if self._n > 5:
                 self.running = False
                 return None
             return b"\x00\x00\x01" + bytes([self._n])
@@ -94,18 +96,20 @@ def test_iter_scrcpy_http_stream_yields_length_prefix(monkeypatch):
 
     monkeypatch.setattr("mobile_scrcpy_bridge._find_scrcpy_server_jar", lambda: "/tmp/jar")
     monkeypatch.setattr("mobile_scrcpy_bridge.ScrcpyDeviceSession", FakeSession)
-    chunks = list(iter_scrcpy_http_stream("emulator-5554"))
-    assert len(chunks) == 2
+    monkeypatch.setattr("mobile_scrcpy_bridge._relays", {})
+    monkeypatch.setattr("mobile_scrcpy_bridge._persistent_sessions", {})
+    chunks = list(iter_scrcpy_http_stream("device-1"))
+    assert len(chunks) >= 1
     assert chunks[0][:4] == b"\x00\x00\x00\x04"
-    assert chunks[0][4:] == b"\x00\x00\x01\x01"
+    assert chunks[0][4:7] == b"\x00\x00\x01"
 
 
 def test_stable_serial_port_is_deterministic():
     from mobile_scrcpy_bridge import _stable_serial_port
 
-    a = _stable_serial_port("emulator-5554")
-    b = _stable_serial_port("emulator-5554")
-    c = _stable_serial_port("emulator-5556")
+    a = _stable_serial_port("device-1")
+    b = _stable_serial_port("device-1")
+    c = _stable_serial_port("device-2")
     assert a == b
     assert a != c
     assert 27183 <= a < 27683

@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -250,25 +251,8 @@ def list_user_apps(udid: str = "", limit: int = 80) -> List[Dict[str, str]]:
 
 
 def pick_default_device() -> Optional[Dict[str, Any]]:
-    """选择第一台已授权的真机；模拟器优先模式下首选 emulator-*。"""
-    devices = list_usb_devices()
-    try:
-        from mobile_env_config import emulator_mode_enabled
-
-        if emulator_mode_enabled():
-            for dev in devices:
-                if dev.get("state") == "device" and (dev.get("udid") or "").startswith("emulator-"):
-                    enriched = dict(dev)
-                    enriched.update(get_device_info(dev.get("udid") or ""))
-                    return enriched
-    except Exception:
-        pass
-    for dev in devices:
-        if dev.get("state") == "device":
-            enriched = dict(dev)
-            enriched.update(get_device_info(dev.get("udid") or ""))
-            return enriched
-    return None
+    """选择第一台已授权的真机（不含模拟器）。"""
+    return pick_default_real_device()
 
 
 def capture_screenshot_png(udid: str = "") -> Optional[bytes]:
@@ -353,7 +337,47 @@ def _run_adb(args: List[str], timeout: int = 30) -> Tuple[int, str, str]:
         return 1, "", str(exc)
 
 
-def adb_pair_wireless(host: str, pair_port: int, pairing_code: str) -> Tuple[bool, str]:
+_PROTOCOL_FAULT_RE = re.compile(
+    r"protocol fault|couldn't read status message",
+    re.IGNORECASE,
+)
+
+
+def restart_adb_server() -> Tuple[bool, str]:
+    """重启 adb 服务，清除无线配对时的陈旧 TLS/会话状态。"""
+    rc1, _, err1 = _run_adb(["kill-server"], timeout=15)
+    if rc1 != 0 and err1 and "cannot connect" not in err1.lower():
+        return False, err1 or "adb kill-server 失败"
+    time.sleep(0.35)
+    rc2, out2, err2 = _run_adb(["start-server"], timeout=20)
+    merged = "\n".join(x for x in (out2, err2) if x).strip()
+    if rc2 != 0:
+        return False, merged or err2 or "adb start-server 失败"
+    time.sleep(0.25)
+    return True, merged or "adb 已重启"
+
+
+def _is_protocol_fault_message(msg: str) -> bool:
+    return bool(msg and _PROTOCOL_FAULT_RE.search(msg))
+
+
+def _format_pair_protocol_fault_hint() -> str:
+    return (
+        "常见原因：① 端口填错——须使用「使用配对码配对设备」弹窗里的端口，"
+        "不要用无线调试主界面的「IP 地址和端口」；② 配对码/端口已过期，请重新打开配对弹窗；"
+        "③ 手机需同时开启 USB 调试与无线调试；④ 关闭手机/电脑 VPN；"
+        "⑤ Wi-Fi 设置中关闭「随机 MAC 地址」；⑥ 开发者选项中「撤销 USB 调试授权」后重试。"
+    )
+
+
+def adb_pair_wireless(
+    host: str,
+    pair_port: int,
+    pairing_code: str,
+    *,
+    restart_server: bool = True,
+    max_attempts: int = 2,
+) -> Tuple[bool, str]:
     """无线调试配对（adb pair host:pair_port code）。"""
     host = (host or "").strip()
     code = (pairing_code or "").strip()
@@ -363,13 +387,116 @@ def adb_pair_wireless(host: str, pair_port: int, pairing_code: str) -> Tuple[boo
         port = int(pair_port)
     except (TypeError, ValueError):
         return False, "配对端口无效"
-    rc, out, err = _run_adb(["pair", f"{host}:{port}", code], timeout=45)
-    merged = "\n".join(x for x in (out, err) if x).strip()
-    if rc == 0 and "successfully paired" in merged.lower():
-        return True, merged or "配对成功"
-    if "already paired" in merged.lower():
-        return True, merged
-    return False, merged or err or "无线配对失败"
+
+    if restart_server:
+        ok_prep, prep_msg = restart_adb_server()
+        if not ok_prep:
+            return False, f"重启 adb 失败：{prep_msg}"
+
+    last_msg = ""
+    for attempt in range(max(1, max_attempts)):
+        rc, out, err = _run_adb(["pair", f"{host}:{port}", code], timeout=60)
+        merged = "\n".join(x for x in (out, err) if x).strip()
+        last_msg = merged or err or "无线配对失败"
+        lower = last_msg.lower()
+        if rc == 0 and "successfully paired" in lower:
+            return True, merged or "配对成功"
+        if "already paired" in lower:
+            return True, merged
+        if attempt + 1 < max_attempts and _is_protocol_fault_message(last_msg):
+            restart_adb_server()
+            time.sleep(0.4)
+            continue
+        break
+
+    if _is_protocol_fault_message(last_msg):
+        return False, f"{last_msg}。{_format_pair_protocol_fault_hint()}"
+    return False, last_msg
+
+
+def discover_wireless_connect_ports(host: str) -> List[int]:
+    """配对成功后通过 adb mdns services 发现设备调试端口（与配对端口可能不同）。"""
+    host = (host or "").strip()
+    if not host:
+        return []
+    rc, out, err = _run_adb(["mdns", "services"], timeout=25)
+    merged = "\n".join(x for x in (out, err) if x)
+    if rc != 0 and not merged.strip():
+        return []
+    ports: List[int] = []
+    seen = set()
+    host_pattern = re.compile(rf"{re.escape(host)}:(\d+)")
+    any_ip_pattern = re.compile(r":(\d{4,5})\b")
+    for line in merged.splitlines():
+        if "adb-tls-connect" not in line.lower() and host not in line:
+            continue
+        found = list(host_pattern.finditer(line))
+        if not found and "adb-tls-connect" in line.lower():
+            found = list(any_ip_pattern.finditer(line))
+        for match in found:
+            port = int(match.group(1))
+            if 1024 <= port <= 65535 and port not in seen:
+                seen.add(port)
+                ports.append(port)
+    return ports
+
+
+def wireless_pair_and_connect(
+    host: str,
+    port: int,
+    pairing_code: str,
+) -> Tuple[bool, str, str, str]:
+    """
+    无线配对并连接。port 为配对弹窗端口；连接端口通过 mdns 自动发现。
+    Returns: (ok, message, udid, stage)
+    """
+    host = (host or "").strip()
+    code = (pairing_code or "").strip()
+    try:
+        pair_port = int(port)
+    except (TypeError, ValueError):
+        return False, "端口无效", "", "validate"
+
+    paired = False
+    pair_msg = ""
+    if code:
+        ok_pair, pair_msg = adb_pair_wireless(host, pair_port, code)
+        if ok_pair:
+            paired = True
+        elif _is_protocol_fault_message(pair_msg):
+            # 用户可能填了主界面连接端口（或已配对），尝试直接 connect
+            ok_direct, direct_msg, udid = adb_connect_wireless(host, pair_port)
+            if ok_direct:
+                return True, f"已连接（跳过配对）：{direct_msg}", udid, "connect"
+            return False, pair_msg, "", "pair"
+        else:
+            return False, pair_msg, "", "pair"
+
+    # 配对成功后优先用 mdns 发现的调试端口，勿再用配对端口 connect
+    connect_candidates: List[int] = []
+    if paired:
+        time.sleep(0.6)
+        connect_candidates.extend(discover_wireless_connect_ports(host))
+    if pair_port not in connect_candidates:
+        connect_candidates.append(pair_port)
+
+    last_connect_msg = pair_msg or ""
+    for connect_port in connect_candidates:
+        ok_conn, conn_msg, udid = adb_connect_wireless(host, connect_port)
+        last_connect_msg = conn_msg
+        if ok_conn:
+            stage = "connect"
+            if paired and connect_port != pair_port:
+                conn_msg = f"配对成功，已连接调试端口 {connect_port}"
+            return True, conn_msg, udid, stage
+
+    if paired:
+        hint = (
+            "配对已成功，但自动连接失败。请在手机「无线调试」主界面查看「IP 地址和端口」，"
+            "仅填写该端口后再次点击连接（无需重新配对）。"
+        )
+        return False, f"{last_connect_msg}。{hint}", f"{host}:{pair_port}", "connect"
+    return False, last_connect_msg or pair_msg, "", "connect"
 
 
 def adb_connect_wireless(host: str, connect_port: int) -> Tuple[bool, str, str]:

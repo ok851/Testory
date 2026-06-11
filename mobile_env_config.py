@@ -74,15 +74,6 @@ def adb_path() -> str:
     4) 回退字符串 adb（依赖系统 PATH）
     """
     try:
-        from mobile_emulator_sdk_bundles import get_installed_emulator_sdk_home, resolve_adb_in_sdk
-
-        if get_installed_emulator_sdk_home():
-            sdk_adb = resolve_adb_in_sdk()
-            if sdk_adb:
-                return sdk_adb
-    except Exception:
-        pass
-    try:
         from mobile_plugin_bundles import get_installed_adb_path
 
         bundled = get_installed_adb_path()
@@ -146,23 +137,8 @@ def mirror_fps() -> int:
         return 8
 
 
-def resolve_emulator_gpu(requested: str = "", *, no_window: bool = True) -> str:
-    """
-    解析模拟器 -gpu 参数。
-    无窗口 Windows 默认 swiftshader_indirect，避免 -gpu host 占满 GPU 导致整机卡顿。
-    可通过 MOBILE_EMULATOR_GPU 强制指定（如 host / angle_indirect）。
-    """
-    explicit = (os.environ.get("MOBILE_EMULATOR_GPU") or "").strip()
-    if explicit:
-        return explicit
-    req = (requested or "").strip().lower()
-    if no_window and os.name == "nt" and (not req or req in ("host", "auto", "default")):
-        return "swiftshader_indirect"
-    return req or "host"
-
-
 def scrcpy_mirror_fps() -> int:
-    """scrcpy_ws H.264 视频流目标帧率（模拟器推荐 24–30）。"""
+    """scrcpy_ws H.264 视频流目标帧率（推荐 24–30）。"""
     raw = (os.environ.get("MOBILE_SCRCPY_FPS") or os.environ.get("MOBILE_MIRROR_FPS") or "24").strip()
     try:
         return max(15, min(60, int(raw)))
@@ -170,10 +146,24 @@ def scrcpy_mirror_fps() -> int:
         return 24
 
 
-def emulator_scrcpy_ws_enabled() -> bool:
-    """模拟器是否启用 scrcpy_ws（默认开启；设 MOBILE_EMULATOR_SCRCPY=0 可关闭）。"""
-    raw = (os.environ.get("MOBILE_EMULATOR_SCRCPY") or "1").strip().lower()
+def device_scrcpy_ws_enabled() -> bool:
+    """真机/设备是否启用 scrcpy_ws 高帧画布投屏（默认开启；设 MOBILE_DEVICE_SCRCPY=0 可关闭）。"""
+    raw = (
+        os.environ.get("MOBILE_DEVICE_SCRCPY")
+        or os.environ.get("MOBILE_EMULATOR_SCRCPY")
+        or "1"
+    ).strip().lower()
     return raw not in ("0", "false", "no", "off")
+
+
+def scrcpy_available() -> bool:
+    """scrcpy 可执行文件是否可用。"""
+    path = scrcpy_path()
+    if not path or path == "scrcpy":
+        import shutil
+
+        return bool(shutil.which("scrcpy"))
+    return Path(path).is_file()
 
 
 def mirror_max_width() -> int:
@@ -197,41 +187,10 @@ def mirror_format() -> str:
     return raw if raw in ("jpeg", "jpg", "png") else "jpeg"
 
 
-def android_sdk_home() -> str:
-    """Android SDK 根目录（emulator / avdmanager）。"""
-    for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
-        val = (os.environ.get(key) or "").strip()
-        if val and Path(val).is_dir():
-            return val
-    cfg = _load_mobile_defaults()
-    cfg_path = (cfg.get("android_sdk_home") or "").strip()
-    if cfg_path and Path(cfg_path).is_dir():
-        return cfg_path
-    try:
-        from mobile_emulator_sdk_bundles import get_installed_emulator_sdk_home
-
-        plugin_sdk = get_installed_emulator_sdk_home()
-        if plugin_sdk:
-            return plugin_sdk
-    except Exception:
-        pass
-    user = os.environ.get("LOCALAPPDATA") or os.environ.get("USERPROFILE") or ""
-    if user:
-        default = Path(user) / "AppData" / "Local" / "Android" / "Sdk"
-        if default.is_dir():
-            return str(default)
-    return ""
-
-
-def emulator_mode_enabled() -> bool:
-    """模拟器优先模式（默认开启）。"""
-    return _truthy("MOBILE_EMULATOR_MODE", "1")
-
-
 def mirror_backend() -> str:
     """
     投屏后端：auto | scrcpy_ws | screencap
-    auto — 模拟器( emulator-* ) 用 scrcpy_ws，真机用 screencap
+    auto — 已安装 scrcpy 时优先 scrcpy_ws，否则 screencap
     """
     raw = (os.environ.get("MOBILE_MIRROR_BACKEND") or "auto").strip().lower()
     if raw not in ("auto", "scrcpy_ws", "screencap"):
@@ -262,24 +221,14 @@ def scrcpy_bridge_url(client_host: str = "") -> str:
 
 
 def resolve_mirror_backend(udid: str = "") -> str:
-    """根据设备 serial 解析实际投屏后端。"""
+    """根据设备 serial 与 scrcpy 可用性解析实际投屏后端。"""
+    del udid  # 真机与 USB 设备统一策略
     backend = mirror_backend()
     if backend != "auto":
         return backend
-    serial = (udid or "").strip()
-    if serial.startswith("emulator-"):
-        if emulator_scrcpy_ws_enabled():
-            return "scrcpy_ws"
-        return "screencap"
-    if ":" in serial and serial.split(":")[0].replace(".", "").isdigit():
-        return "screencap"
+    if device_scrcpy_ws_enabled() and scrcpy_available():
+        return "scrcpy_ws"
     return "screencap"
-
-
-def default_emulator_avd() -> str:
-    return (os.environ.get("MOBILE_EMULATOR_AVD") or "").strip() or (
-        _load_mobile_defaults().get("emulator_avd") or ""
-    ).strip()
 
 
 def default_device_name() -> str:
@@ -394,16 +343,14 @@ def public_config() -> Dict[str, Any]:
         "scrcpy_path": scrcpy_path(),
         "mirror_fps": mirror_fps(),
         "scrcpy_mirror_fps": scrcpy_mirror_fps(),
-        "emulator_scrcpy_ws": emulator_scrcpy_ws_enabled(),
+        "device_scrcpy_ws": device_scrcpy_ws_enabled(),
+        "scrcpy_available": scrcpy_available(),
         "mirror_max_width": mirror_max_width(),
         "mirror_jpeg_quality": mirror_jpeg_quality(),
         "mirror_format": mirror_format(),
         "mirror_backend": mirror_backend(),
-        "emulator_mode": emulator_mode_enabled(),
-        "android_sdk_home": android_sdk_home(),
         "scrcpy_bridge_url": scrcpy_bridge_url(),
         "scrcpy_bridge_port": scrcpy_bridge_port(),
-        "default_emulator_avd": default_emulator_avd(),
         "device_name": default_device_name(),
         "app_package": default_app_package(),
         "app_activity": default_app_activity(),
@@ -417,7 +364,7 @@ def public_config() -> Dict[str, Any]:
             {"id": "airtest", "label": "图像模板（OpenCV / tap_image，点屏录制可用）"},
         ],
         "hint": (
-            "推荐：在「模拟器」区启动本机 AVD，高帧率投屏；真机 USB/无线请展开「真机兼容」连接。"
+            "USB 连接真机或填写无线配对码后点击「连接设备」；高帧率投屏需安装 scrcpy 插件。"
             "Appium 仅在运行自动化步骤时需要。"
         ),
     }

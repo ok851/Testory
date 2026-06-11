@@ -73,7 +73,7 @@
             <i class="fas fa-filter text-primary mr-2"></i>
             <span data-i18n="rpt_filter">筛选条件</span>
         </h3>
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" data-i18n="rpt_proj">项目</label>
                 <select id="projectFilter" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
@@ -81,12 +81,21 @@
                 </select>
             </div>
             <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" data-i18n="rpt_start">开始日期</label>
-                <input type="date" id="startDate" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">测试类型</label>
+                <select id="caseCategoryFilter" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                    <option value="">全部类型</option>
+                    <option value="web">UI 测试</option>
+                    <option value="api">接口测试</option>
+                    <option value="android">移动端</option>
+                </select>
             </div>
             <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" data-i18n="rpt_end">结束日期</label>
-                <input type="date" id="endDate" class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">时间范围</label>
+                <div class="flex items-center gap-2">
+                    <input type="date" id="startDate" aria-label="开始日期" class="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                    <span class="text-gray-500 dark:text-gray-400 text-sm shrink-0">至</span>
+                    <input type="date" id="endDate" aria-label="结束日期" class="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+                </div>
             </div>
             <div class="flex items-end">
                 <button onclick="loadReportData()" class="btn btn-primary w-full">
@@ -185,6 +194,7 @@
                 <thead class="bg-gray-50 dark:bg-gray-800">
                     <tr>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" data-i18n="rpt_th_cname">用例名称</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">类型</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" data-i18n="rpt_th_truns">总执行次数</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" data-i18n="rpt_th_pass">通过次数</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider" data-i18n="rpt_th_fail">失败次数</th>
@@ -298,6 +308,7 @@
 
     function loadReportData() {
         const projectFilter = document.getElementById('projectFilter');
+        const categoryFilter = document.getElementById('caseCategoryFilter');
         const startDateInput = document.getElementById('startDate');
         const endDateInput = document.getElementById('endDate');
         
@@ -307,11 +318,13 @@
         }
         
         const projectId = projectFilter.value;
+        const caseCategory = categoryFilter ? categoryFilter.value : '';
         const startDate = startDateInput.value;
         const endDate = endDateInput.value;
 
         const params = new URLSearchParams();
         if (projectId) params.append('project_id', projectId);
+        if (caseCategory) params.append('case_category', caseCategory);
         if (startDate) params.append('start_date', startDate);
         if (endDate) params.append('end_date', endDate);
 
@@ -572,7 +585,7 @@
             const emptyRow = document.createElement('tr');
             const emptyMsg = typeof t === 'function' ? t('rpt_empty_case') : '';
             emptyRow.innerHTML = `
-                <td colspan="7" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 text-center">${emptyMsg}</td>
+                <td colspan="8" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400 text-center">${emptyMsg}</td>
             `;
             tbody.appendChild(emptyRow);
             return;
@@ -585,6 +598,7 @@
             }
             
             const caseName = item.case_name || (typeof t === 'function' ? t('rpt_unk_case') : '');
+            const caseCategory = item.case_category || 'UI';
             const totalRuns = item.total_runs || 0;
             const passedRuns = item.passed_runs || 0;
             const failedRuns = item.failed_runs || 0;
@@ -596,6 +610,7 @@
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">${caseName}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">${caseCategory}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">${totalRuns}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">${passedRuns}</td>
                 <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">${failedRuns}</td>
@@ -657,12 +672,14 @@
 
     function exportReport(format) {
         const projectId = document.getElementById('projectFilter').value;
+        const caseCategory = (document.getElementById('caseCategoryFilter') || {}).value || '';
         const startDate = document.getElementById('startDate').value;
         const endDate = document.getElementById('endDate').value;
 
         const data = {
             format: format,
             project_id: projectId ? parseInt(projectId) : null,
+            case_category: caseCategory || null,
             start_date: startDate,
             end_date: endDate
         };

@@ -4,9 +4,8 @@
 (function (global) {
     'use strict';
 
-    const INTERACTION_CONTROL = 'control';
-    const INTERACTION_ELEMENT = 'record_element';
-    const INTERACTION_IMAGE = 'record_image';
+    const INTERACTION_RECORD = 'record';
+    const INTERACTION_CAPTURE = 'capture_element';
 
     const state = {
         bootstrap: null,
@@ -27,14 +26,12 @@
         mirrorStreamUrl: '',
         scrcpyPlayer: null,
         pointerDown: null,
-        interactionMode: INTERACTION_CONTROL,
+        interactionMode: INTERACTION_RECORD,
         alsoTapOnRecord: true,
-        selectedModelId: 'pixel_7',
-        autoStartAttempted: false,
-        modelSwitchBusy: false,
-        emulatorPollToken: null,
         diagnosticsCache: null,
         diagnosticsCacheAt: 0,
+        runningStepId: null,
+        recordingSession: [],
     };
 
     function $(id) {
@@ -103,7 +100,7 @@
             badge.title = detail || 'adb screencap 轮询，帧率较低';
         } else {
             badge.textContent = '未连接';
-            badge.title = detail || '启动模拟器或连接真机后显示投屏方式';
+            badge.title = detail || '连接设备后显示投屏方式';
         }
     }
 
@@ -114,19 +111,8 @@
         if (ph) ph.style.display = 'none';
     }
 
-    function isEmulatorUdid(udid) {
-        return (udid || '').indexOf('emulator-') === 0;
-    }
-
     function scrcpyMirrorFailed(msg) {
         updateMirrorModeBadge('screencap', msg || '高帧率投屏失败');
-        if (isEmulatorUdid(state.udid)) {
-            setStatus(
-                (msg || '高帧率投屏失败') + '。请点「停止」→「启动模拟器」重试；或在插件市场安装 scrcpy。',
-                'err'
-            );
-            return;
-        }
         setStatus((msg || 'scrcpy 无画面') + '，降级为截图模式', 'warn');
         startScreencapMirror();
     }
@@ -138,7 +124,7 @@
             canvas: canvas,
             wsUrl: state.mirrorWsUrl,
             maxReconnect: 2,
-            noFrameTimeoutMs: 8000,
+            noFrameTimeoutMs: 15000,
             onFirstFrame: function () {
                 showMirrorCanvas();
                 updateMirrorModeBadge('scrcpy', 'H.264 硬件视频流');
@@ -187,11 +173,6 @@
         state.scrcpyPlayer.startHttp(state.mirrorStreamUrl).catch(function (e) {
             if (!state.mirrorRunning) return;
             state.scrcpyPlayer = null;
-            if (state.mirrorWsUrl) {
-                setStatus('HTTP 流失败，尝试 WebSocket…', 'warn');
-                startScrcpyWsMirror();
-                return;
-            }
             scrcpyMirrorFailed(e.message || String(e));
         });
     }
@@ -300,19 +281,9 @@
 
     function startMirror() {
         stopMirror();
-        if (!state.mirrorUrl && !state.mirrorStreamUrl && !state.mirrorWsUrl) return;
-        if (state.mirrorBackend === 'scrcpy_ws') {
-            if (state.mirrorStreamUrl) {
-                startScrcpyHttpMirror();
-                return;
-            }
-            if (state.mirrorWsUrl) {
-                startScrcpyWsMirror();
-                return;
-            }
-        }
-        if (isEmulatorUdid(state.udid)) {
-            scrcpyMirrorFailed(state.mirror_fallback_reason || '模拟器未启用高帧率投屏');
+        if (!state.mirrorUrl && !state.mirrorStreamUrl) return;
+        if (state.mirrorBackend === 'scrcpy_ws' && state.mirrorStreamUrl) {
+            startScrcpyHttpMirror();
             return;
         }
         startScreencapMirror();
@@ -409,19 +380,19 @@
             const dx = Math.abs(ev.clientX - state.pointerDown.x);
             const dy = Math.abs(ev.clientY - state.pointerDown.y);
             if (dx < 8 && dy < 8) {
-                if (state.interactionMode === INTERACTION_ELEMENT || state.interactionMode === INTERACTION_IMAGE) {
-                    recordStepAt(ev.clientX, ev.clientY).catch(function (e) {
+                if (state.interactionMode === INTERACTION_CAPTURE) {
+                    captureElementAt(ev.clientX, ev.clientY).catch(function (e) {
                         setStatus(e.message || String(e), 'err');
                     });
                 } else {
-                    tapAt(ev.clientX, ev.clientY).catch(function (e) {
+                    recordTapAt(ev.clientX, ev.clientY).catch(function (e) {
                         setStatus(e.message || String(e), 'err');
                     });
                 }
-            } else if (state.interactionMode !== INTERACTION_CONTROL) {
-                setStatus('录制模式下请单击，勿拖拽', 'warn');
+            } else if (state.interactionMode === INTERACTION_CAPTURE) {
+                setStatus('捕获元素模式下请单击，勿拖拽', 'warn');
             } else {
-                swipeAt(
+                recordSwipeAt(
                     state.pointerDown.x,
                     state.pointerDown.y,
                     ev.clientX,
@@ -469,8 +440,9 @@
             const shortSel = (st.selector_value || '').length > 48
                 ? (st.selector_value || '').slice(0, 48) + '…'
                 : (st.selector_value || '');
+            const running = state.runningStepId && String(st.id) === String(state.runningStepId);
             return (
-                '<div class="ms-step-item" data-step-id="' + st.id + '">' +
+                '<div class="ms-step-item' + (running ? ' ms-step-item--running' : '') + '" data-step-id="' + st.id + '">' +
                 '<span class="ms-step-ord">' + (st.step_order || i + 1) + '</span>' +
                 '<span class="ms-step-act">' + act + '</span>' +
                 '<span class="ms-step-badge">' + badge + '</span>' +
@@ -481,30 +453,83 @@
     }
 
     function setInteractionMode(mode) {
-        state.interactionMode = mode || INTERACTION_CONTROL;
+        state.interactionMode = mode || INTERACTION_RECORD;
         document.querySelectorAll('.ms-mode-btn').forEach(function (btn) {
             const on = btn.getAttribute('data-mode') === state.interactionMode;
             btn.classList.toggle('ms-mode-btn--active', on);
         });
         const meta = $('msRecordMeta');
-        if (!meta) return;
-        if (state.interactionMode === INTERACTION_ELEMENT) {
-            meta.textContent = '当前：元素录制（点屏写入 tap + UiAutomator 定位）';
-        } else if (state.interactionMode === INTERACTION_IMAGE) {
-            meta.textContent = '当前：图像录制（点屏写入 tap_image + 模板）';
-        } else {
-            meta.textContent = '当前：操控模式（单击点击、拖拽滑动）';
+        const probeEl = $('msProbeInfo');
+        if (state.interactionMode === INTERACTION_CAPTURE) {
+            if (meta) meta.textContent = '当前：捕获元素（点屏写入 UiAutomator 定位，可加入元素库）';
+        } else if (meta) {
+            meta.textContent = '当前：录制（单击写点击步骤、拖拽写滑动步骤）';
+            if (probeEl) probeEl.style.display = 'none';
         }
     }
 
-    async function recordStepAt(clientX, clientY) {
+    function pushSessionAction(action) {
+        state.recordingSession.push(Object.assign({ at: Date.now() }, action));
+        renderRecordingTimeline();
+    }
+
+    function renderRecordingTimeline() {
+        const meta = $('msRecordSessionMeta');
+        const box = $('msRecordTimeline');
+        const count = state.recordingSession.length;
+        if (meta) meta.textContent = '本次会话：' + count + ' 个动作';
+        if (!box) return;
+        if (!count) {
+            box.innerHTML = '<span>暂无录制动作</span>';
+            return;
+        }
+        box.innerHTML = state.recordingSession.map(function (act, i) {
+            if (act.type === 'swipe') {
+                return (i + 1) + '. 滑动 (' + act.x1 + ',' + act.y1 + ')→(' + act.x2 + ',' + act.y2 + ')';
+            }
+            return (i + 1) + '. 点击 (' + act.x + ',' + act.y + ')';
+        }).join('<br>');
+    }
+
+    function clearRecordingSession() {
+        state.recordingSession = [];
+        renderRecordingTimeline();
+        setStatus('已清空录制会话', '');
+    }
+
+    async function replayRecordingSession() {
+        if (!state.recordingSession.length) {
+            setStatus('当前没有可回放的动作', 'warn');
+            return;
+        }
+        if (!state.connected || !state.udid) {
+            setStatus('请先连接设备', 'warn');
+            return;
+        }
+        setStatus('正在回放 ' + state.recordingSession.length + ' 个动作…', '');
+        const data = await apiJson('/api/mobile/replay-actions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                udid: state.udid,
+                actions: state.recordingSession,
+                delay_ms: 600,
+            }),
+        });
+        if (data.success) {
+            setStatus('回放完成（' + (data.total || 0) + ' 步）', 'ok');
+        } else {
+            setStatus('回放结束，' + (data.failed || 0) + ' 步失败', 'err');
+        }
+    }
+
+    async function recordTapAt(clientX, clientY) {
         if (!state.caseId) {
             setStatus('请先选择用例再录制步骤', 'warn');
             return;
         }
         const pt = mapCanvasToDevice(clientX, clientY);
-        const kind = state.interactionMode === INTERACTION_IMAGE ? 'image' : 'element';
-        setStatus('正在录制步骤…', '');
+        setStatus('正在录制点击…', '');
         const data = await apiJson('/api/mobile/record-step', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -513,13 +538,125 @@
                 x: pt.x,
                 y: pt.y,
                 udid: state.udid,
-                kind: kind,
+                kind: 'coord',
+                also_tap: !!state.alsoTapOnRecord,
+            }),
+        });
+        pushSessionAction({ type: 'tap', x: pt.x, y: pt.y });
+        await loadSteps();
+        const desc = (data.step && data.step.description) || ('已录制点击 (' + pt.x + ',' + pt.y + ')');
+        setStatus(desc, 'ok');
+    }
+
+    async function recordSwipeAt(x1, y1, x2, y2) {
+        if (!state.caseId) {
+            setStatus('请先选择用例再录制步骤', 'warn');
+            return;
+        }
+        const p1 = mapCanvasToDevice(x1, y1);
+        const p2 = mapCanvasToDevice(x2, y2);
+        setStatus('正在录制滑动…', '');
+        const data = await apiJson('/api/mobile/record-swipe-step', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                case_id: state.caseId,
+                x1: p1.x,
+                y1: p1.y,
+                x2: p2.x,
+                y2: p2.y,
+                udid: state.udid,
+                also_swipe: !!state.alsoTapOnRecord,
+            }),
+        });
+        pushSessionAction({
+            type: 'swipe',
+            x1: p1.x,
+            y1: p1.y,
+            x2: p2.x,
+            y2: p2.y,
+        });
+        await loadSteps();
+        const desc = (data.step && data.step.description) || '已录制滑动';
+        setStatus(desc, 'ok');
+    }
+
+    async function captureElementAt(clientX, clientY) {
+        if (!state.caseId) {
+            setStatus('请先选择用例再捕获元素', 'warn');
+            return;
+        }
+        const pt = mapCanvasToDevice(clientX, clientY);
+        setStatus('正在捕获元素…', '');
+        const data = await apiJson('/api/mobile/record-step', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                case_id: state.caseId,
+                x: pt.x,
+                y: pt.y,
+                udid: state.udid,
+                kind: 'element',
                 also_tap: !!state.alsoTapOnRecord,
             }),
         });
         await loadSteps();
-        const desc = (data.step && data.step.description) || ('已录制 (' + pt.x + ',' + pt.y + ')');
+        showProbeFromPick(data.picked || {}, data);
+        const desc = (data.step && data.step.description) || '已捕获元素';
         setStatus(desc, 'ok');
+    }
+
+    function showProbeFromPick(picked, pickData) {
+        const el = (picked && picked.node) || (pickData && pickData.element) || {};
+        const probeEl = $('msProbeInfo');
+        if (!probeEl) return;
+        const lines = [];
+        if (el.resource_id) lines.push('id: ' + el.resource_id);
+        if (el.content_desc) lines.push('content-desc: ' + el.content_desc);
+        if (el.text) lines.push('text: ' + el.text);
+        if (el.class_name) lines.push('class: ' + el.class_name);
+        const st = (pickData && pickData.step) || {};
+        if (st.selector_type) {
+            lines.push('定位: ' + st.selector_type + ' = ' + (st.selector_value || ''));
+        }
+        probeEl.innerHTML = lines.length
+            ? lines.join('<br>') + '<br><button type="button" class="ms-btn ms-btn--ghost ms-btn--sm" id="msBtnSaveElement">加入元素库</button>'
+            : '未识别到控件';
+        probeEl.style.display = '';
+        const btn = $('msBtnSaveElement');
+        if (btn && (st.selector_value || pickData.suggested_selector_value)) {
+            btn.onclick = function () {
+                saveProbedElement({
+                    suggested_selector_type: st.selector_type || pickData.suggested_selector_type,
+                    suggested_selector_value: st.selector_value || pickData.suggested_selector_value,
+                    element: el,
+                }).catch(function (e) {
+                    setStatus(e.message || String(e), 'err');
+                });
+            };
+        }
+    }
+
+    async function saveProbedElement(pickData) {
+        if (!state.projectId) {
+            setStatus('请先选择项目', 'warn');
+            return;
+        }
+        const alias = window.prompt('元素别名（如：登录按钮）', pickData.suggested_selector_value || 'element');
+        if (!alias || !alias.trim()) return;
+        await apiJson('/api/element-repository', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_id: state.projectId,
+                alias: alias.trim(),
+                platform: 'android',
+                selector_type: pickData.suggested_selector_type || 'accessibility_id',
+                selector_value: pickData.suggested_selector_value || '',
+                attributes: pickData.element || {},
+            }),
+        });
+        setStatus('已加入元素库：' + alias.trim(), 'ok');
     }
 
     async function loadProjects() {
@@ -603,7 +740,7 @@
                 lines.push('adb 已就绪：');
                 lines.push(boot.adb_path);
             }
-            lines.push('未发现真机：请 USB 连接或在下方「真机兼容」中无线配对。模拟器请用上方「启动模拟器」。');
+            lines.push('未发现真机：请 USB 连接或在下方填写无线配对信息。');
             el.textContent = lines.join('\n');
             return;
         }
@@ -612,43 +749,15 @@
                 '设备状态异常（非 device）：请换线/换口、重装手机驱动，或在命令行执行 adb kill-server && adb start-server 后刷新。';
             return;
         }
-        el.textContent = '已识别 ' + authorized.length + ' 台设备，点击「连接真机」后在右侧画面用鼠标操作。';
+        el.textContent = '已识别 ' + authorized.length + ' 台设备，点击「连接设备」后在右侧画面用鼠标操作。';
     }
 
-    function modelStatusSuffix(model) {
-        if (!model) return '';
-        if (model.running) return ' · 运行中';
-        if (model.avd_exists) return ' · 已就绪';
-        return ' · 待创建';
-    }
-
-    function renderDeviceModels(models) {
-        const sel = $('msDeviceModelSelect');
-        if (!sel) return;
-        const list = models || [];
-        if (!list.length) {
-            sel.innerHTML = '<option value="">（请先安装 SDK）</option>';
-            return;
-        }
-        sel.innerHTML = list.map(function (m) {
-            const label = (m.label || m.id || '') + modelStatusSuffix(m);
-            return '<option value="' + m.id + '">' + label + '</option>';
-        }).join('');
-        const preferred = state.selectedModelId || 'pixel_7';
-        const running = list.find(function (m) { return m.running; });
-        if (running && !state.modelSwitchBusy) {
-            sel.value = running.id;
-            state.selectedModelId = running.id;
-        } else if (list.some(function (m) { return m.id === preferred; })) {
-            sel.value = preferred;
-        } else {
-            sel.value = list[0].id;
-            state.selectedModelId = list[0].id;
-        }
-        state.selectedModelId = sel.value;
-        const current = list.find(function (m) { return m.id === sel.value; });
-        if (current && current.frame_preset_id) {
-            applyFramePreset(current.frame_preset_id);
+    function applyDefaultFramePreset(presets) {
+        const list = presets || (state.bootstrap && state.bootstrap.frame_presets) || [];
+        const preferred = list.find(function (p) { return p.id === 'generic_19_9'; }) || list[0];
+        if (preferred) {
+            state.framePreset = preferred.id;
+            applyFramePreset(preferred.id);
         }
     }
 
@@ -669,7 +778,7 @@
             diag.checks.every(function (c) { return c.ok || c.optional; })
         );
         if (ready) {
-            statusEl.textContent = '✓ 环境已就绪，可以启动模拟器';
+            statusEl.textContent = '✓ 环境已就绪，可以连接设备';
             statusEl.className = 'ms-env-status ms-env-status--ready';
             if (blockEl) {
                 blockEl.textContent = '';
@@ -682,7 +791,7 @@
             if (blockEl) {
                 blockEl.textContent = reason.indexOf('插件市场') >= 0
                     ? reason
-                    : ('请处理：' + reason + '。仍可直接点「启动模拟器」尝试自动修复。');
+                    : ('请处理：' + reason);
                 blockEl.style.display = '';
             }
         }
@@ -697,7 +806,7 @@
             statusEl.className = 'ms-env-status ms-env-status--idle';
         }
         try {
-            const data = await apiJson('/api/mobile/emulator/diagnostics');
+            const data = await apiJson('/api/mobile/diagnostics');
             state.diagnosticsCache = data;
             state.diagnosticsCacheAt = Date.now();
             renderEnvStatus(data);
@@ -728,155 +837,6 @@
         renderEnvStatus(diag);
     }
 
-    async function repairEnvironment() {
-        const btn = $('msBtnEnvRepair');
-        if (btn) btn.disabled = true;
-        setStatus('正在修复模拟器环境（可能需数分钟）…', '');
-        try {
-            const data = await apiJson('/api/mobile/emulator/repair', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
-            });
-            if (!data.success) {
-                throw new Error(data.error || data.message || '修复失败');
-            }
-            setStatus(data.message || '环境已修复', 'ok');
-            await bootstrap({ skipDiagnostics: true });
-            await loadDiagnostics(true);
-        } catch (e) {
-            setStatus((e && e.message) || '修复失败', 'err');
-            await loadDiagnostics(true);
-        } finally {
-            if (btn) btn.disabled = false;
-        }
-    }
-
-    function renderEmulatorPanel(emu) {
-        const help = $('msEmulatorHelp');
-        renderDeviceModels((emu && emu.models) || []);
-        if (help) {
-            help.className = 'ms-muted ms-emulator-help';
-            if (emu && emu.emulator_available) {
-                var running = ((emu.running && emu.running.length) || 0);
-                help.textContent = running > 0
-                    ? ('模拟器运行中 · ' + running + ' 台')
-                    : '环境就绪后可一键启动';
-            } else {
-                help.textContent = (emu && emu.emulator_message) ||
-                    '请先在插件市场安装「Android 模拟器 SDK」';
-            }
-        }
-    }
-
-    function parseEmuJobResponse(body) {
-        if (!body || body.ok === false) {
-            return { missing: true, error: (body && body.error) || '任务不存在' };
-        }
-        var job = body.job || {};
-        return {
-            missing: false,
-            state: job.state || '',
-            percent: job.percent || 0,
-            label: job.label || '',
-            ok: job.ok,
-            error: job.error || '',
-            message: job.message || '',
-            result: job.result || {},
-        };
-    }
-
-    function sleepMs(ms) {
-        return new Promise(function (resolve) { setTimeout(resolve, ms); });
-    }
-
-    async function pollEmulatorJob(jobId, labelPrefix) {
-        if (state.emulatorPollToken) {
-            state.emulatorPollToken.cancelled = true;
-        }
-        const token = { cancelled: false };
-        state.emulatorPollToken = token;
-        let delayMs = 700;
-        const maxDelayMs = 3500;
-        const maxPolls = 120;
-        let lastPercent = -1;
-        let stalePolls = 0;
-        for (let i = 0; i < maxPolls; i++) {
-            if (token.cancelled) {
-                throw new Error('操作已取消');
-            }
-            const hidden = typeof document.hidden !== 'undefined' && document.hidden;
-            const r = await fetch('/api/mobile/emulator/start/job/' + encodeURIComponent(jobId), {
-                credentials: 'same-origin',
-            });
-            const body = await r.json().catch(function () { return {}; });
-            const info = parseEmuJobResponse(body);
-            if (info.missing) {
-                throw new Error(info.error);
-            }
-            const prefix = labelPrefix || info.label || '处理中…';
-            setStatus(prefix + ' (' + (info.percent || 0) + '%)', '');
-            if (info.state === 'done' && info.ok !== false) {
-                if (state.emulatorPollToken === token) state.emulatorPollToken = null;
-                return info;
-            }
-            if (info.state === 'failed' || (info.state === 'done' && info.ok === false)) {
-                if (state.emulatorPollToken === token) state.emulatorPollToken = null;
-                let err = (info.error || info.message || '操作失败').trim();
-                const logPath = info.result && info.result.log_path;
-                if (logPath && err.indexOf(logPath) < 0) {
-                    err += '\n诊断日志：' + logPath;
-                }
-                const emu = state.bootstrap && state.bootstrap.emulator;
-                const hint = emu && (emu.setup_hint || '').trim();
-                if (hint && err.indexOf(hint) < 0) {
-                    err += '\n' + hint;
-                }
-                if (err.indexOf('停止') < 0) {
-                    err += '\n可先点「停止」清理任务管理器中的 qemu/emulator 后重试。';
-                }
-                throw new Error(err);
-            }
-            if (info.percent === lastPercent) {
-                stalePolls += 1;
-            } else {
-                stalePolls = 0;
-                lastPercent = info.percent;
-            }
-            const waitMs = hidden
-                ? Math.max(4000, delayMs)
-                : (stalePolls >= 3 ? Math.min(maxDelayMs, delayMs + 500) : delayMs);
-            await sleepMs(waitMs);
-            if (!hidden) {
-                delayMs = Math.min(maxDelayMs, Math.floor(delayMs * 1.25));
-            }
-        }
-        if (state.emulatorPollToken === token) state.emulatorPollToken = null;
-        throw new Error('操作超时，请点「停止」清理后重试');
-    }
-
-    async function pollEmulatorStartJob(jobId) {
-        return pollEmulatorJob(jobId, '启动中…');
-    }
-
-    async function connectMirrorWithRetry(maxAttempts) {
-        maxAttempts = maxAttempts || 4;
-        let lastErr = null;
-        for (let i = 0; i < maxAttempts; i++) {
-            try {
-                stopMirror();
-                await autoConnect();
-                return;
-            } catch (e) {
-                lastErr = e;
-                if (i >= maxAttempts - 1) break;
-                setStatus('正在连接画布，重试 ' + (i + 2) + '/' + maxAttempts + '…', 'warn');
-                await sleepMs(1200 * (i + 1));
-            }
-        }
-        throw lastErr || new Error('连接失败');
-    }
-
     function resolveMirrorWsUrl(raw) {
         if (!raw) return '';
         try {
@@ -902,18 +862,10 @@
             state.deviceWidth = data.device.width || 1080;
             state.deviceHeight = data.device.height || 1920;
         }
-        const preset = (data.frame_preset && data.frame_preset.id) || currentFramePresetId();
         if (state.deviceWidth && state.deviceHeight) {
             syncPhoneAspectFromDevice();
         } else {
-            applyFramePreset(preset);
-        }
-        const appSel = $('msAppSelect');
-        if (appSel && data.apps) {
-            appSel.innerHTML = data.apps.map(function (a) {
-                const sel = a.package === data.suggested_app_package ? ' selected' : '';
-                return '<option value="' + a.package + '"' + sel + '>' + a.label + ' (' + a.package + ')</option>';
-            }).join('');
+            applyDefaultFramePreset();
         }
         const badge = $('msConnectBadge');
         if (badge) {
@@ -925,120 +877,19 @@
         } else {
             updateMirrorModeBadge(
                 'screencap',
-                data.mirror_fallback_reason || 'adb screencap 截图轮询'
+                data.mirror_fallback_reason || 'adb screencap 截图轮询，帧率较低'
             );
         }
         let msg = '已连接 ' + (data.device && data.device.model ? data.device.model : state.udid);
-        if (data.is_emulator && state.mirrorBackend === 'scrcpy_ws') msg += ' · 高帧率 scrcpy 投屏';
-        else if (data.is_emulator) msg += ' · 模拟器（截图投屏）';
-        else msg += ' · 真机预览';
-        if (data.mirror_fallback_reason) msg += ' · ' + data.mirror_fallback_reason;
+        if (state.mirrorBackend === 'scrcpy_ws') msg += ' · 高帧率 scrcpy 投屏';
+        else {
+            msg += ' · 截图投屏（较慢）';
+            if (data.mirror_fallback_reason) msg += '：' + data.mirror_fallback_reason;
+        }
         if (data.appium_error) msg += ' · Appium: ' + data.appium_error;
         else if (data.appium_connected) msg += ' · Appium 已就绪';
         setStatus(msg, 'ok');
         startMirror();
-    }
-
-    async function prepareEmulatorMirrorSwitch() {
-        if (state.emulatorPollToken) {
-            state.emulatorPollToken.cancelled = true;
-        }
-        stopMirror();
-        if (state.connected && state.udid && state.udid.indexOf('emulator-') === 0) {
-            try { await disconnect(); } catch (e) { /* ignore */ }
-        }
-    }
-
-    async function launchEmulator(presetId, opts) {
-        opts = opts || {};
-        const pid = (presetId || ($('msDeviceModelSelect') || {}).value || '').trim();
-        if (!pid) {
-            setStatus('请选择设备型号', 'warn');
-            return;
-        }
-        if (state.modelSwitchBusy) return;
-        state.modelSwitchBusy = true;
-        state.selectedModelId = pid;
-        const models = (state.bootstrap && state.bootstrap.emulator && state.bootstrap.emulator.models) || [];
-        const model = models.find(function (m) { return m.id === pid; });
-        const label = (model && model.label) || pid;
-        const btnStart = $('msBtnEmulatorStart');
-        const btnStop = $('msBtnEmulatorStop');
-        if (btnStart) btnStart.disabled = true;
-        if (btnStop) btnStop.disabled = true;
-        const forceRestart = opts.forceRestart === true;
-        setStatus('正在启动 ' + label + '（环境检查、模拟器、投屏一步完成）…', '');
-        try {
-            await prepareEmulatorMirrorSwitch();
-            if (model && model.frame_preset_id) {
-                applyFramePreset(model.frame_preset_id);
-            }
-            const startResp = await fetch('/api/mobile/emulator/launch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({
-                    preset_id: pid,
-                    no_window: true,
-                    async: true,
-                    force_restart: forceRestart,
-                    try_appium: false,
-                }),
-            });
-            const startBody = await startResp.json().catch(function () { return {}; });
-            if (startResp.status === 409) {
-                throw new Error(startBody.error || '已有启动任务进行中，请勿重复点击');
-            }
-            if (!startResp.ok || !startBody.success) {
-                throw new Error(startBody.error || '启动失败');
-            }
-            let jobResult = {};
-            if (startBody.async && startBody.job_id) {
-                const done = await pollEmulatorJob(startBody.job_id, '正在启动 ' + label);
-                jobResult = done.result || {};
-            } else {
-                jobResult = startBody;
-            }
-            const serial = jobResult.serial || jobResult.udid || '';
-            await bootstrap({ skipDiagnostics: true });
-            if (!opts.skipConnect) {
-                stopMirror();
-                applyConnectPayload(jobResult);
-            } else {
-                setStatus((jobResult.message || ('已启动 ' + label)), 'ok');
-            }
-            loadDiagnostics(true).catch(function () {});
-        } catch (e) {
-            setStatus((e && e.message) || '启动失败', 'err');
-            await bootstrap({ skipDiagnostics: true });
-        } finally {
-            state.modelSwitchBusy = false;
-            if (btnStart) btnStart.disabled = false;
-            if (btnStop) btnStop.disabled = false;
-        }
-    }
-
-    async function startEmulator() {
-        const presetId = ($('msDeviceModelSelect') || {}).value || state.selectedModelId || 'pixel_7';
-        await launchEmulator(presetId, { forceRestart: false });
-    }
-
-    async function stopEmulator() {
-        setStatus('正在停止模拟器…', '');
-        if (state.connected && state.udid && state.udid.indexOf('emulator-') === 0) {
-            await disconnect();
-        }
-        await apiJson('/api/mobile/emulator/stop-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}',
-        });
-        await bootstrap();
-        setStatus('模拟器已停止', '');
-    }
-
-    async function maybeAutoStartEmulator(data) {
-        return;
     }
 
     async function bootstrap(opts) {
@@ -1048,11 +899,9 @@
         const devices = (data.health && data.health.devices) || data.devices || [];
         renderDeviceList(devices);
         updateDeviceHelp(data.health, devices);
-        renderEmulatorPanel(data.emulator);
-        if (data.emulator && data.emulator.emulator_available && !(devices && devices.length)) {
-            setStatus('选择设备型号后点击「启动模拟器」', 'ok');
-        } else if (data.default_device && data.default_device.state === 'device') {
-            setStatus('检测到设备，可点击「连接真机」', 'ok');
+        applyDefaultFramePreset(data.frame_presets);
+        if (data.default_device && data.default_device.state === 'device') {
+            setStatus('检测到设备，可点击「连接设备」', 'ok');
         } else if (data.health && data.health.adb_ok && data.adb_plugin_installed && data.adb_path) {
             setStatus('adb 已就绪', 'ok');
         } else if (!data.health || !data.health.adb_ok) {
@@ -1064,61 +913,74 @@
         }
     }
 
-    async function wirelessConnect() {
-        const host = (($('msWirelessIp') || {}).value || '').trim();
-        const pairPort = (($('msWirelessPairPort') || {}).value || '').trim();
-        const code = (($('msWirelessCode') || {}).value || '').trim();
-        const connectPort = (($('msWirelessConnectPort') || {}).value || '').trim();
-        if (!host) {
-            setStatus('请填写手机 IP', 'warn');
-            return;
-        }
-        if (!connectPort) {
-            setStatus('请填写调试端口（无线调试页「IP 地址和端口」）', 'warn');
-            return;
-        }
-        setStatus('正在无线配对/连接…', '');
-        const payload = { host: host, connect_port: connectPort };
-        if (code) {
-            if (!pairPort) {
-                setStatus('填写配对码时需同时填写配对端口', 'warn');
-                return;
-            }
-            payload.pair_port = parseInt(pairPort, 10);
-            payload.pairing_code = code;
-        }
-        const data = await apiJson('/api/mobile/wireless/connect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-        await bootstrap();
-        const devSel = $('msDeviceSelect');
-        if (devSel && data.udid) {
-            devSel.value = data.udid;
-        }
-        setStatus(data.message || ('已连接 ' + data.udid), 'ok');
-        await autoConnect();
+    function getWirelessFormValues() {
+        return {
+            host: (($('msWirelessIp') || {}).value || '').trim(),
+            port: (($('msWirelessPort') || {}).value || '').trim(),
+            code: (($('msWirelessCode') || {}).value || '').trim(),
+        };
     }
 
-    function currentFramePresetId() {
-        const models = (state.bootstrap && state.bootstrap.emulator && state.bootstrap.emulator.models) || [];
-        const pid = state.selectedModelId || ($('msDeviceModelSelect') || {}).value || '';
-        const model = models.find(function (m) { return m.id === pid; });
-        return (model && model.frame_preset_id) || state.framePreset || 'generic_19_9';
+    function isWirelessFormComplete() {
+        const v = getWirelessFormValues();
+        const portNum = parseInt(v.port, 10);
+        return !!v.host && !!v.port && portNum > 0 && portNum <= 65535
+            && v.code.length === 6 && /^\d{6}$/.test(v.code);
+    }
+
+    function updateWirelessButtonState() {
+        const btn = $('msBtnWirelessConnect');
+        if (!btn) return;
+        const ready = isWirelessFormComplete();
+        btn.disabled = !ready;
+        btn.classList.toggle('ms-btn--success', ready);
+        btn.classList.toggle('ms-btn--ghost', !ready);
+    }
+
+    async function wirelessConnect() {
+        const v = getWirelessFormValues();
+        if (!isWirelessFormComplete()) {
+            setStatus('请填写完整的 IP、端口与 6 位配对码', 'warn');
+            updateWirelessButtonState();
+            return;
+        }
+        const btn = $('msBtnWirelessConnect');
+        if (btn) btn.disabled = true;
+        setStatus('正在无线配对/连接…', '');
+        try {
+            const data = await apiJson('/api/mobile/wireless/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    host: v.host,
+                    port: parseInt(v.port, 10),
+                    pairing_code: v.code,
+                }),
+            });
+            await bootstrap();
+            const devSel = $('msDeviceSelect');
+            if (devSel && data.udid) {
+                devSel.value = data.udid;
+            }
+            setStatus(data.message || ('已连接 ' + data.udid), 'ok');
+            await autoConnect();
+        } catch (e) {
+            const msg = (e && e.message) || '无线连接失败';
+            setStatus(msg, 'err');
+        } finally {
+            updateWirelessButtonState();
+        }
     }
 
     async function autoConnect() {
-        setStatus('正在连接真机…', '');
-        const preset = currentFramePresetId();
+        setStatus('正在连接设备…', '');
         const udid = ($('msDeviceSelect') || {}).value || '';
         const data = await apiJson('/api/mobile/auto-connect', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 udid: udid,
-                frame_preset: preset,
-                try_appium: true,
+                try_appium: false,
             }),
         });
         applyConnectPayload(data);
@@ -1154,21 +1016,62 @@
         bootstrap().catch(function () { /* ignore refresh errors */ });
     }
 
+    function highlightRunningStep(stepOrder) {
+        if (!stepOrder || !state.steps.length) {
+            state.runningStepId = null;
+            renderSteps();
+            return;
+        }
+        const hit = state.steps.find(function (s) {
+            return Number(s.step_order) === Number(stepOrder);
+        });
+        state.runningStepId = hit ? hit.id : null;
+        renderSteps();
+        const box = $('msStepsList');
+        if (box && hit) {
+            const el = box.querySelector('[data-step-id="' + hit.id + '"]');
+            if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+    }
+
+    async function pollRunProgress() {
+        try {
+            const st = await apiJson('/api/cases/current-run/status');
+            if (st && st.active) {
+                highlightRunningStep(st.current_step_order);
+                setStatus(st.message || '执行中…', '');
+                return true;
+            }
+        } catch (e) { /* ignore */ }
+        return false;
+    }
+
     async function runCase() {
         if (!state.caseId) {
             setStatus('请先选择用例', 'warn');
             return;
         }
         setStatus('正在执行用例…', '');
-        const data = await apiJson('/api/mobile/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ case_id: state.caseId, udid: state.udid }),
-        });
-        if (data.success) {
-            setStatus('执行成功，耗时 ' + (data.duration || '') + 's', 'ok');
-        } else {
-            setStatus(data.error || '执行失败', 'err');
+        state.runningStepId = null;
+        renderSteps();
+        const pollTimer = setInterval(function () {
+            pollRunProgress().catch(function () {});
+        }, 800);
+        try {
+            const data = await apiJson('/api/mobile/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ case_id: state.caseId, udid: state.udid }),
+            });
+            if (data.success) {
+                setStatus('执行成功，耗时 ' + (data.duration || '') + 's', 'ok');
+            } else {
+                setStatus(data.error || '执行失败', 'err');
+            }
+        } finally {
+            clearInterval(pollTimer);
+            state.runningStepId = null;
+            renderSteps();
         }
     }
 
@@ -1235,33 +1138,17 @@
         const btnWireless = $('msBtnWirelessConnect');
         if (btnWireless) {
             btnWireless.addEventListener('click', function () {
-                wirelessConnect().catch(function (e) { setStatus(e.message, 'err'); });
+                if (btnWireless.disabled) return;
+                wirelessConnect();
             });
         }
-        const btnEmuStart = $('msBtnEmulatorStart');
-        if (btnEmuStart) {
-            btnEmuStart.addEventListener('click', function () {
-                startEmulator().catch(function (e) { setStatus(e.message, 'err'); });
-            });
-        }
-        const btnEmuStop = $('msBtnEmulatorStop');
-        if (btnEmuStop) {
-            btnEmuStop.addEventListener('click', function () {
-                stopEmulator().catch(function (e) { setStatus(e.message, 'err'); });
-            });
-        }
-        const modelSel = $('msDeviceModelSelect');
-        if (modelSel) {
-            modelSel.addEventListener('change', function () {
-                if (state.modelSwitchBusy) return;
-                const newId = this.value;
-                if (!newId || newId === state.selectedModelId) return;
-                state.selectedModelId = newId;
-                launchEmulator(newId, { forceRestart: false }).catch(function (e) {
-                    setStatus(e.message, 'err');
-                });
-            });
-        }
+        ['msWirelessIp', 'msWirelessPort', 'msWirelessCode'].forEach(function (id) {
+            const el = $(id);
+            if (!el) return;
+            el.addEventListener('input', updateWirelessButtonState);
+            el.addEventListener('change', updateWirelessButtonState);
+        });
+        updateWirelessButtonState();
         const btnEnvCheck = $('msBtnEnvCheck');
         if (btnEnvCheck) {
             btnEnvCheck.addEventListener('click', function () {
@@ -1289,13 +1176,25 @@
                 window.open('/list_steps?case_id=' + state.caseId, '_blank');
             }
         });
-        ['msModeControl', 'msModeElement', 'msModeImage'].forEach(function (id) {
+        ['msModeRecord', 'msModeCapture'].forEach(function (id) {
             const btn = $(id);
             if (!btn) return;
             btn.addEventListener('click', function () {
                 setInteractionMode(btn.getAttribute('data-mode'));
             });
         });
+        const btnReplay = $('msBtnReplaySession');
+        if (btnReplay) {
+            btnReplay.addEventListener('click', function () {
+                replayRecordingSession().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
+        const btnClear = $('msBtnClearSession');
+        if (btnClear) {
+            btnClear.addEventListener('click', function () {
+                clearRecordingSession();
+            });
+        }
         const tapChk = $('msAlsoTapVisible');
         if (tapChk) {
             tapChk.addEventListener('change', function () {
@@ -1303,22 +1202,36 @@
             });
             state.alsoTapOnRecord = !!tapChk.checked;
         }
-        setInteractionMode(INTERACTION_CONTROL);
+        renderRecordingTimeline();
+        setInteractionMode(INTERACTION_RECORD);
         wireMirrorInteraction();
-        window.addEventListener('beforeunload', function () {
-            if (!state.bootstrap || !state.bootstrap.emulator) return;
-            var running = (state.bootstrap.emulator.running && state.bootstrap.emulator.running.length) || 0;
-            if (!running) return;
-            try {
-                fetch('/api/mobile/emulator/stop-all', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    keepalive: true,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: '{}',
-                });
-            } catch (e) { /* ignore */ }
-        });
+    }
+
+    function parseCaseIdFromUrl() {
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const raw = params.get('case_id');
+            if (!raw) return null;
+            const id = parseInt(raw, 10);
+            return id > 0 ? id : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function selectCaseById(caseId) {
+        if (!caseId) return;
+        const data = await apiJson('/api/cases/' + caseId);
+        const tc = data.test_case;
+        if (!tc) return;
+        state.projectId = tc.project_id;
+        const projSel = $('msProjectSelect');
+        if (projSel) projSel.value = String(tc.project_id);
+        await loadCases();
+        state.caseId = caseId;
+        const caseSel = $('msCaseSelect');
+        if (caseSel) caseSel.value = String(caseId);
+        await loadSteps();
     }
 
     async function init() {
@@ -1337,6 +1250,16 @@
         wireUi();
         await loadProjects();
         await bootstrap();
+        const urlCaseId = parseCaseIdFromUrl();
+        if (urlCaseId) {
+            await selectCaseById(urlCaseId);
+        }
+        if (state.bootstrap && state.bootstrap.auto_connect_default) {
+            const devs = filterRealDevices((state.bootstrap.health && state.bootstrap.health.devices) || []);
+            if (devs.some(function (d) { return d.state === 'device'; })) {
+                autoConnect().catch(function () { /* optional */ });
+            }
+        }
     }
 
     global.MobileTesting = { init: init, state: state };

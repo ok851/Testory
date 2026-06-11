@@ -12,9 +12,8 @@ from flask import Response, jsonify, request, stream_with_context
 from flask_login import current_user, login_required
 
 from mobile_device_manager import (
-    adb_connect_wireless,
+    wireless_pair_and_connect,
     adb_disconnect_device,
-    adb_pair_wireless,
     capture_screenshot_frame,
     check_mobile_health,
     get_device_info,
@@ -36,18 +35,6 @@ from mobile_env_config import (
     resolve_mirror_backend,
     save_mobile_defaults,
     scrcpy_bridge_url,
-)
-from mobile_emulator_manager import (
-    emulator_diagnostics,
-    emulator_status,
-    list_emulator_models,
-    list_running_emulators,
-    provision_avd_for_preset,
-    start_avd,
-    stop_avd,
-    stop_all_emulators,
-    register_emulator_shutdown_hook,
-    set_emulator_cleanup_on_exit,
 )
 from mobile_executor import get_mobile_executor
 from mobile_mirror import disconnect_all_mirrors, get_mirror_session, start_scrcpy_mirror, stop_mirror
@@ -159,6 +146,11 @@ def execute_mobile_case(
                 step_status = "success"
                 step_error = ""
                 step_screenshot = (result or {}).get("screenshot") or ""
+                if not step_screenshot:
+                    try:
+                        step_screenshot = executor._safe_screenshot() or ""
+                    except Exception:
+                        step_screenshot = ""
             except Exception as exc:
                 step_status = "error"
                 step_error = str(exc)
@@ -240,8 +232,26 @@ def execute_mobile_case(
         duration = round(time.time() - start_time, 2)
         error_msg = str(exc)
         status = "stopped" if "用户已停止" in error_msg else "error"
+        device_log = ""
+        try:
+            from mobile_logcat import capture_logcat
+
+            device_log = capture_logcat(udid or executor.connected_udid or "")
+        except Exception:
+            device_log = ""
         try:
             run_id = db.create_run_history(case_id, status, duration, error_msg, extracted_text, expected_text)
+            if device_log and run_id:
+                try:
+                    conn = __import__("sqlite3").connect(db.db_path)
+                    conn.execute(
+                        "UPDATE run_history SET device_log = ? WHERE id = ?",
+                        (device_log, run_id),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
             for sr in step_results_list:
                 db.create_step_result(
                     run_id,
@@ -293,7 +303,11 @@ def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dic
             payload["mirror_backend"] = "screencap"
             payload["mirror_fallback_reason"] = "未找到 scrcpy-server，已降级为截图投屏"
             return payload
-        payload["mirror_stream_url"] = f"/api/mobile/mirror/scrcpy-stream?serial={udid}"
+        from urllib.parse import quote
+
+        payload["mirror_stream_url"] = (
+            f"/api/mobile/mirror/scrcpy-stream?serial={quote(udid, safe='')}"
+        )
         payload["mirror_ws_url"] = f"{scrcpy_bridge_url(client_host)}/?serial={udid}"
         payload["bridge"] = health
     return payload
@@ -400,7 +414,6 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "suggested_app_package": suggested_pkg,
             "foreground": fg,
             "appium_connected": executor.is_connected,
-            "is_emulator": resolved_udid.startswith("emulator-"),
         })
 
     @app.route("/api/mobile/disconnect", methods=["POST"])
@@ -418,6 +431,10 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             stop_mirror(session_id)
         disconnect_all_mirrors()
         get_mobile_executor().disconnect()
+        if udid:
+            from mobile_scrcpy_bridge import stop_scrcpy_device_session
+
+            stop_scrcpy_device_session(udid)
         if udid and ":" in udid:
             adb_disconnect_device(udid)
         set_connected_udid(None)
@@ -426,12 +443,14 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @app.route("/api/mobile/mirror/scrcpy-stream", methods=["GET"])
     @login_required
     def api_mobile_mirror_scrcpy_stream():
-        """模拟器高帧率 H.264 流（同源 HTTP，走 Flask 端口，无需 8767 WebSocket）。"""
-        serial = (request.args.get("serial") or request.args.get("udid") or "").strip()
+        """设备高帧率 H.264 流（同源 HTTP，走 Flask 端口，无需 8767 WebSocket）。"""
+        from urllib.parse import unquote
+
+        serial = unquote(
+            (request.args.get("serial") or request.args.get("udid") or "").strip()
+        )
         if not serial:
             return jsonify({"success": False, "error": "缺少 serial"}), 400
-        if not serial.startswith("emulator-"):
-            return jsonify({"success": False, "error": "仅模拟器支持 scrcpy 流"}), 400
         from mobile_scrcpy_bridge import iter_scrcpy_http_stream
 
         @stream_with_context
@@ -473,7 +492,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     def api_mobile_wireless_connect():
         """
         无线调试：可选 adb pair，再 adb connect，返回 udid 供一键投屏。
-        body: host, pair_port, pairing_code, connect_port
+        body: host, port, pairing_code（port 为「使用配对码配对设备」弹窗中的端口）
         """
         blocked = _require_mobile_enabled()
         if blocked:
@@ -481,26 +500,30 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         body = request.get_json(silent=True) or {}
         host = (body.get("host") or body.get("ip") or "").strip()
         pairing_code = (body.get("pairing_code") or body.get("code") or "").strip()
-        pair_port = body.get("pair_port")
-        connect_port = body.get("connect_port") or body.get("debug_port")
+        unified_port = (
+            body.get("port")
+            or body.get("connect_port")
+            or body.get("debug_port")
+            or body.get("pair_port")
+        )
 
-        if pairing_code:
-            if pair_port is None or str(pair_port).strip() == "":
-                return jsonify({"success": False, "error": "填写配对码时需同时提供配对端口"}), 400
-            ok, msg = adb_pair_wireless(host, int(pair_port), pairing_code)
-            if not ok:
-                return jsonify({"success": False, "error": msg, "stage": "pair"}), 400
+        if not host:
+            return jsonify({"success": False, "error": "请填写手机 IP"}), 400
+        if unified_port is None or str(unified_port).strip() == "":
+            return jsonify({"success": False, "error": "请填写端口"}), 400
+        if not pairing_code:
+            return jsonify({"success": False, "error": "请填写 6 位配对码"}), 400
+        if len(pairing_code) != 6 or not pairing_code.isdigit():
+            return jsonify({"success": False, "error": "配对码须为 6 位数字"}), 400
 
-        if connect_port is None or str(connect_port).strip() == "":
-            return jsonify({
-                "success": False,
-                "error": "需要调试端口（无线调试页「IP 地址和端口」中的端口，非配对端口）",
-                "stage": "connect",
-            }), 400
+        try:
+            port_int = int(unified_port)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "端口无效"}), 400
 
-        ok, msg, udid = adb_connect_wireless(host, int(connect_port))
+        ok, msg, udid, stage = wireless_pair_and_connect(host, port_int, pairing_code)
         if not ok:
-            return jsonify({"success": False, "error": msg, "stage": "connect"}), 400
+            return jsonify({"success": False, "error": msg, "stage": stage}), 400
 
         devices = list_usb_devices()
         matched = next((d for d in devices if d.get("udid") == udid), None)
@@ -740,6 +763,151 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "picked": picked,
         })
 
+    @app.route("/api/mobile/record-swipe-step", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_record_swipe_step():
+        """将滑动手势写入当前用例步骤（坐标录制）。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        case_id = body.get("case_id")
+        if not case_id:
+            return jsonify({"success": False, "error": "缺少 case_id"}), 400
+        try:
+            case_id = int(case_id)
+            x1, y1 = int(body.get("x1")), int(body.get("y1"))
+            x2, y2 = int(body.get("x2")), int(body.get("y2"))
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "需要 case_id 与坐标 x1,y1,x2,y2"}), 400
+
+        udid = (body.get("udid") or "").strip()
+        from mobile_device_manager import get_connected_udid
+
+        if not udid:
+            udid = get_connected_udid() or ""
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+
+        if body.get("also_swipe"):
+            try:
+                adb_swipe(udid, x1, y1, x2, y2, int(body.get("duration_ms") or 300))
+            except Exception:
+                pass
+
+        from database import Database
+        import json as _json
+
+        db = Database()
+        case_row = db.get_test_case_v2(case_id)
+        if not case_row:
+            return jsonify({"success": False, "error": "用例不存在"}), 404
+        pid = case_row.get("project_id")
+        if pid and not db.check_project_access(current_user.id, int(pid), "editor"):
+            return jsonify({"success": False, "error": "无权限修改此用例"}), 403
+
+        from desktop_automation import validate_step_for_layer
+
+        layer_err = validate_step_for_layer("swipe", "android")
+        if layer_err:
+            return jsonify({"success": False, "error": layer_err}), 422
+
+        duration_ms = int(body.get("duration_ms") or 300)
+        mobile_spec = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": duration_ms}
+        description = body.get("description") or f"滑动 ({x1},{y1})→({x2},{y2})"
+        step_id = db.create_test_step(
+            case_id,
+            "swipe",
+            "",
+            "",
+            "",
+            description,
+            None,
+            "",
+            "",
+            "",
+            "",
+            False,
+            "",
+            "equals",
+            "",
+            1,
+            "",
+            automation_layer="android",
+            desktop_spec="",
+            mobile_spec=_json.dumps(mobile_spec, ensure_ascii=False),
+            captcha_max_attempts=None,
+        )
+        return jsonify({
+            "success": True,
+            "step_id": step_id,
+            "step": {
+                "action": "swipe",
+                "description": description,
+                "mobile_spec": mobile_spec,
+                "automation_layer": "android",
+            },
+        })
+
+    @app.route("/api/mobile/replay-actions", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_replay_actions():
+        """按录制会话在设备上回放点击/滑动序列。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        actions = body.get("actions") or []
+        if not isinstance(actions, list) or not actions:
+            return jsonify({"success": False, "error": "缺少 actions"}), 400
+
+        udid = (body.get("udid") or "").strip()
+        from mobile_device_manager import get_connected_udid
+
+        if not udid:
+            udid = get_connected_udid() or ""
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+
+        import time
+
+        delay_ms = max(0, min(5000, int(body.get("delay_ms") or 600)))
+        executor = get_mobile_executor()
+        results = []
+        for idx, act in enumerate(actions):
+            if idx > 0 and delay_ms:
+                time.sleep(delay_ms / 1000.0)
+            kind = (act.get("type") or "").strip().lower()
+            try:
+                if kind == "tap":
+                    x, y = int(act.get("x")), int(act.get("y"))
+                    result = executor.tap_at_coordinates(x, y)
+                    results.append({"index": idx, "type": "tap", "ok": True, "result": result})
+                elif kind == "swipe":
+                    x1, y1 = int(act.get("x1")), int(act.get("y1"))
+                    x2, y2 = int(act.get("x2")), int(act.get("y2"))
+                    duration_ms = int(act.get("duration_ms") or 300)
+                    result = adb_swipe(udid, x1, y1, x2, y2, duration_ms)
+                    results.append({"index": idx, "type": "swipe", "ok": True, "result": result})
+                else:
+                    results.append({"index": idx, "type": kind, "ok": False, "error": "未知动作"})
+            except Exception as exc:
+                results.append({"index": idx, "type": kind, "ok": False, "error": str(exc)})
+
+        failed = [r for r in results if not r.get("ok")]
+        return jsonify({
+            "success": not failed,
+            "results": results,
+            "total": len(results),
+            "failed": len(failed),
+        })
+
     @app.route("/api/mobile/cases/<int:case_id>/steps", methods=["GET"])
     @login_required
     @api_error_handler
@@ -786,7 +954,6 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "frame_presets": list_frame_presets(),
             "auto_connect_default": auto_connect_on_studio(),
             "driver_mode": mobile_driver_mode(),
-            "emulator": emulator_status(),
             "bridge": bridge,
         })
 
@@ -819,13 +986,13 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if not dev or dev.get("state") != "device":
             return jsonify({
                 "success": False,
-                "error": "未发现已授权的真机。请 USB/无线连接后在手机上允许调试，模拟器请使用上方「启动模拟器」。",
+                "error": "未发现已授权的真机。请 USB 连接或在无线调试中配对后重试。",
             }), 503
 
         udid = dev.get("udid") or ""
         frame_preset = (body.get("frame_preset") or "generic_19_9").strip()
         try:
-            from mobile_studio_launch import finish_studio_connect
+            from mobile_connect import finish_studio_connect
 
             payload = finish_studio_connect(
                 udid,
@@ -837,291 +1004,149 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             return jsonify({"success": False, "error": str(exc)}), 503
         return jsonify({"success": True, **payload})
 
-    @app.route("/api/mobile/emulator/status", methods=["GET"])
+    @app.route("/api/mobile/diagnostics", methods=["GET"])
     @login_required
     @api_error_handler
-    def api_mobile_emulator_status():
+    def api_mobile_diagnostics():
+        """检测 adb、scrcpy、Appium 等移动端环境。"""
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
+        from mobile_env_config import (
+            adb_path,
+            adb_path_source,
+            mobile_runtime_available,
+            mobile_runtime_unavailable_reason,
+            scrcpy_available,
+            scrcpy_path,
+        )
         from mobile_scrcpy_bridge import bridge_health
 
-        return jsonify({"success": True, **emulator_status(), "bridge": bridge_health()})
-
-    @app.route("/api/mobile/emulator/diagnostics", methods=["GET"])
-    @login_required
-    @api_error_handler
-    def api_mobile_emulator_diagnostics():
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        diag = emulator_diagnostics()
-        return jsonify({"success": True, **diag})
-
-    @app.route("/api/mobile/emulator/repair", methods=["POST"])
-    @login_required
-    @_roles("admin", "tester", "project_manager", "test_lead")
-    @api_error_handler
-    @log_api_request
-    def api_mobile_emulator_repair():
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        body = request.get_json(silent=True) or {}
-        preset_id = (body.get("preset_id") or "").strip()
-        if preset_id:
-            ok, avd_name, msg = provision_avd_for_preset(preset_id)
-            return jsonify({
-                "success": ok,
-                "message": msg,
-                "avd_name": avd_name,
-                "emulator": emulator_status(),
-            }), (200 if ok else 503)
-        from mobile_emulator_sdk_bundles import ensure_emulator_sdk_ready
-
-        result = ensure_emulator_sdk_ready()
-        ok = bool(result.get("success"))
-        result["emulator"] = emulator_status()
-        return jsonify(result), (200 if ok else 503)
-
-    @app.route("/api/mobile/emulator/models", methods=["GET"])
-    @login_required
-    @api_error_handler
-    def api_mobile_emulator_models():
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        return jsonify({"success": True, "models": list_emulator_models()})
-
-    @app.route("/api/mobile/emulator/launch", methods=["POST"])
-    @login_required
-    @_roles("admin", "tester", "project_manager", "test_lead")
-    @api_error_handler
-    @log_api_request
-    def api_mobile_emulator_launch():
-        """一键启动：修复环境 + 启动/复用模拟器 + 投屏连接（合并原 repair/start/connect）。"""
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        body = request.get_json(silent=True) or {}
-        preset_id = (body.get("preset_id") or body.get("model_id") or "pixel_7").strip()
-        if not preset_id:
-            return jsonify({"success": False, "error": "需要 preset_id"}), 400
-        try:
-            port = int(body.get("port") or 5554)
-        except (TypeError, ValueError):
-            port = 5554
-        no_window = bool(body.get("no_window")) if "no_window" in body else True
-        from mobile_env_config import resolve_emulator_gpu
-
-        gpu = resolve_emulator_gpu((body.get("gpu") or "").strip(), no_window=no_window)
-        force_restart = bool(body.get("force_restart"))
-        try_appium = bool(body.get("try_appium"))
-        async_start = body.get("async")
-        if async_start is None:
-            async_start = True
-        if async_start:
-            from emulator_start_jobs import start_launch_studio_job
-
-            try:
-                job_id = start_launch_studio_job(
-                    preset_id,
-                    port=port,
-                    gpu=gpu,
-                    no_window=no_window,
-                    force_restart=force_restart,
-                    try_appium=try_appium,
-                    client_host=_client_host(request),
-                )
-            except RuntimeError as exc:
-                return jsonify({"success": False, "error": str(exc)}), 409
-            return jsonify({"success": True, "async": True, "job_id": job_id, "preset_id": preset_id})
-        from mobile_studio_launch import finish_studio_connect, launch_emulator_studio
-
-        ok, msg, meta = launch_emulator_studio(
-            preset_id,
-            port=port,
-            gpu=gpu,
-            no_window=no_window,
-            force_restart=force_restart,
-        )
-        if not ok:
-            return jsonify({"success": False, "error": msg, **(meta or {})}), 503
-        serial = (meta.get("serial") or "").strip()
-        frame_id = meta.get("frame_preset_id") or "generic_19_9"
-        connect_payload = finish_studio_connect(
-            serial,
-            frame_preset=frame_id,
-            try_appium=try_appium,
-            client_host=_client_host(request),
-        )
+        health = check_mobile_health()
+        checks = []
+        adb_ok = bool(health.get("adb_ok"))
+        checks.append({
+            "id": "adb",
+            "label": "ADB (Platform-Tools)",
+            "ok": adb_ok,
+            "detail": health.get("adb_message") or adb_path(),
+            "optional": False,
+        })
+        scrcpy_ok = scrcpy_available()
+        checks.append({
+            "id": "scrcpy",
+            "label": "scrcpy 高帧投屏",
+            "ok": scrcpy_ok,
+            "detail": scrcpy_path() if scrcpy_ok else "请在插件市场安装 scrcpy",
+            "optional": True,
+        })
+        appium_ok, appium_msg = get_mobile_executor().check_appium_server()
+        checks.append({
+            "id": "appium",
+            "label": "Appium Server",
+            "ok": appium_ok,
+            "detail": appium_msg,
+            "optional": True,
+        })
+        runtime_ok = mobile_runtime_available()
+        checks.append({
+            "id": "appium_client",
+            "label": "Appium Python 客户端",
+            "ok": runtime_ok,
+            "detail": mobile_runtime_unavailable_reason() or "已安装",
+            "optional": True,
+        })
+        blocking = None
+        if not adb_ok:
+            blocking = health.get("adb_message") or "ADB 不可用，请安装 Platform-Tools"
+        ready = adb_ok
         return jsonify({
             "success": True,
-            "message": msg,
-            **meta,
-            **connect_payload,
-            "devices": list_usb_devices(),
+            "ready": ready,
+            "blocking_reason": blocking,
+            "checks": checks,
+            "adb_path": adb_path(),
+            "adb_path_source": adb_path_source(),
+            "bridge": bridge_health(),
+            "health": health,
         })
 
-    @app.route("/api/mobile/emulator/switch-model", methods=["POST"])
+    @app.route("/api/element-repository", methods=["GET"])
     @login_required
-    @_roles("admin", "tester", "project_manager", "test_lead")
     @api_error_handler
-    @log_api_request
-    def api_mobile_emulator_switch_model():
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        body = request.get_json(silent=True) or {}
-        preset_id = (body.get("preset_id") or body.get("model_id") or "").strip()
-        if not preset_id:
-            return jsonify({"success": False, "error": "需要 preset_id"}), 400
+    def api_element_repository_list():
+        from database import Database
+
+        project_id = request.args.get("project_id")
+        if not project_id:
+            return jsonify({"success": False, "error": "缺少 project_id"}), 400
         try:
-            port = int(body.get("port") or 5554)
+            project_id = int(project_id)
         except (TypeError, ValueError):
-            port = 5554
-        if "no_window" in body:
-            no_window = bool(body.get("no_window"))
-        else:
-            no_window = True
-        from mobile_env_config import resolve_emulator_gpu
+            return jsonify({"success": False, "error": "project_id 无效"}), 400
+        db = Database()
+        if not db.check_project_access(current_user.id, project_id, "viewer"):
+            return jsonify({"success": False, "error": "无权限"}), 403
+        platform = (request.args.get("platform") or "").strip()
+        elements = db.list_element_repository(project_id, platform=platform)
+        return jsonify({"success": True, "elements": elements})
 
-        gpu = resolve_emulator_gpu((body.get("gpu") or "").strip(), no_window=no_window)
-        async_start = body.get("async")
-        if async_start is None:
-            async_start = True
-        if async_start:
-            from emulator_start_jobs import start_switch_model_job
-
-            force_restart = bool(body.get("force_restart"))
-            try:
-                job_id = start_switch_model_job(
-                    preset_id,
-                    port=port,
-                    gpu=gpu,
-                    no_window=no_window,
-                    force_restart=force_restart,
-                )
-            except RuntimeError as exc:
-                return jsonify({"success": False, "error": str(exc)}), 409
-            return jsonify({"success": True, "async": True, "job_id": job_id, "preset_id": preset_id})
-        from mobile_emulator_manager import switch_emulator_model
-
-        ok, msg, meta = switch_emulator_model(
-            preset_id,
-            port=port,
-            gpu=gpu,
-            no_window=no_window,
-        )
-        if not ok:
-            return jsonify({"success": False, "error": msg, **(meta or {})}), 503
-        return jsonify({"success": True, "message": msg, **meta, "devices": list_usb_devices()})
-
-    @app.route("/api/mobile/emulator/start", methods=["POST"])
+    @app.route("/api/element-repository", methods=["POST"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")
     @api_error_handler
     @log_api_request
-    def api_mobile_emulator_start():
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        body = request.get_json(silent=True) or {}
-        avd_name = (body.get("avd_name") or body.get("name") or "").strip()
-        preset_id = (body.get("preset_id") or body.get("model_id") or "").strip()
-        if not avd_name and preset_id:
-            from mobile_emulator_manager import get_preset_by_id
+    def api_element_repository_create():
+        from database import Database
 
-            preset = get_preset_by_id(preset_id)
-            if preset:
-                avd_name = (preset.get("avd_name_hint") or "").strip()
-        if not avd_name:
-            return jsonify({"success": False, "error": "需要 avd_name"}), 400
+        body = request.get_json(silent=True) or {}
+        project_id = body.get("project_id")
+        alias = (body.get("alias") or "").strip()
+        if not project_id or not alias:
+            return jsonify({"success": False, "error": "缺少 project_id 或 alias"}), 400
         try:
-            port = int(body.get("port") or 5554)
+            project_id = int(project_id)
         except (TypeError, ValueError):
-            port = 5554
-        if "no_window" in body:
-            no_window = bool(body.get("no_window"))
-        else:
-            no_window = True
-        from mobile_env_config import resolve_emulator_gpu
+            return jsonify({"success": False, "error": "project_id 无效"}), 400
+        db = Database()
+        if not db.check_project_access(current_user.id, project_id, "editor"):
+            return jsonify({"success": False, "error": "无权限"}), 403
+        try:
+            eid = db.create_element_repository_entry(
+                project_id,
+                alias,
+                body.get("platform") or "android",
+                body.get("selector_type") or "accessibility_id",
+                body.get("selector_value") or "",
+                body.get("attributes") if isinstance(body.get("attributes"), dict) else {},
+            )
+        except Exception as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        return jsonify({"success": True, "id": eid})
 
-        gpu = resolve_emulator_gpu((body.get("gpu") or "").strip(), no_window=no_window)
-        async_start = body.get("async")
-        if async_start is None:
-            async_start = True
-        if async_start:
-            from emulator_start_jobs import start_emulator_job
-
-            try:
-                job_id = start_emulator_job(
-                    avd_name,
-                    port=port,
-                    gpu=gpu,
-                    no_window=no_window,
-                )
-            except RuntimeError as exc:
-                return jsonify({"success": False, "error": str(exc)}), 409
-            return jsonify({"success": True, "async": True, "job_id": job_id})
-        ok, msg, meta = start_avd(avd_name, port=port, gpu=gpu, no_window=no_window)
-        if not ok:
-            return jsonify({"success": False, "error": msg}), 503
-        return jsonify({"success": True, "message": msg, **meta, "devices": list_usb_devices()})
-
-    @app.route("/api/mobile/emulator/start/job/<job_id>", methods=["GET"])
-    @login_required
-    @api_error_handler
-    def api_mobile_emulator_start_job(job_id: str):
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        from emulator_start_jobs import get_job
-
-        job = get_job(job_id)
-        if not job:
-            return jsonify({"success": False, "ok": False, "error": "启动任务不存在或已过期"}), 404
-        return jsonify({"success": True, "ok": True, "job": job})
-
-    @app.route("/api/mobile/emulator/stop", methods=["POST"])
+    @app.route("/api/element-repository/<int:element_id>", methods=["PUT"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")
     @api_error_handler
     @log_api_request
-    def api_mobile_emulator_stop():
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        body = request.get_json(silent=True) or {}
-        serial = (body.get("serial") or body.get("udid") or "").strip()
-        avd_name = (body.get("avd_name") or body.get("name") or "").strip()
-        ok, msg = stop_avd(serial=serial, avd_name=avd_name)
-        return jsonify({"success": ok, "message": msg, "devices": list_usb_devices()})
+    def api_element_repository_update(element_id: int):
+        from database import Database
 
-    @app.route("/api/mobile/emulator/stop-all", methods=["POST"])
-    @login_required
-    @api_error_handler
-    @log_api_request
-    def api_mobile_emulator_stop_all():
-        blocked = _require_mobile_enabled()
-        if blocked:
-            return blocked
-        ok, msg = stop_all_emulators()
-        disconnect_all_mirrors()
-        return jsonify({"success": ok, "message": msg, "devices": list_usb_devices()})
-
-    @app.route("/api/mobile/emulator/exit-policy", methods=["POST"])
-    @api_error_handler
-    def api_mobile_emulator_exit_policy():
-        remote = (request.remote_addr or "").strip()
-        if remote not in ("127.0.0.1", "::1"):
-            return jsonify({"success": False, "error": "forbidden"}), 403
         body = request.get_json(silent=True) or {}
-        stop = body.get("stop")
-        if stop is None:
-            stop = True
-        set_emulator_cleanup_on_exit(bool(stop))
-        return jsonify({"success": True, "stop_on_exit": bool(stop)})
+        db = Database()
+        try:
+            ok = db.update_element_repository_entry(
+                element_id,
+                alias=body.get("alias"),
+                selector_type=body.get("selector_type"),
+                selector_value=body.get("selector_value"),
+                attributes=body.get("attributes") if isinstance(body.get("attributes"), dict) else None,
+            )
+        except Exception as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        if not ok:
+            return jsonify({"success": False, "error": "更新失败或元素不存在"}), 404
+        return jsonify({"success": True})
 
     @app.route("/api/mobile/apps", methods=["GET"])
     @login_required
@@ -1226,5 +1251,3 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
                     release_machine_lock()
                 except Exception:
                     pass
-
-    register_emulator_shutdown_hook()

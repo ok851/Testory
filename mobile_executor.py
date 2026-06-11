@@ -350,11 +350,38 @@ class MobileExecutor:
         return {"input_value": text, "strategy": normalize_strategy(step)}
 
     def _action_swipe(self, step: Dict[str, Any]) -> Dict[str, Any]:
+        from mobile_automation import parse_mobile_spec
+        from mobile_adb_control import adb_swipe
+
+        spec = step.get("mobile_spec")
+        if isinstance(spec, str) and spec.strip():
+            spec = parse_mobile_spec(spec)
+        if isinstance(spec, dict):
+            try:
+                x1 = int(spec.get("x1"))
+                y1 = int(spec.get("y1"))
+                x2 = int(spec.get("x2"))
+                y2 = int(spec.get("y2"))
+                duration_ms = int(spec.get("duration_ms") or 300)
+                udid = self._connected_udid or ""
+                if self._driver is not None:
+                    try:
+                        self._driver.swipe(x1, y1, x2, y2, duration_ms)
+                        return {"swipe": {"start": (x1, y1), "end": (x2, y2), "via": "appium"}}
+                    except Exception:
+                        pass
+                adb_swipe(udid, x1, y1, x2, y2, duration_ms)
+                return {"swipe": {"start": (x1, y1), "end": (x2, y2), "via": "adb"}}
+            except (TypeError, ValueError):
+                pass
+
         try:
             sx = int(step.get("swipe_x") or 0)
             sy = int(step.get("swipe_y") or 0)
         except (TypeError, ValueError):
             sx, sy = 0, 0
+        if self._driver is None:
+            raise RuntimeError("swipe 需要 Appium 连接或坐标 mobile_spec")
         size = self._driver.get_window_size()
         w, h = size["width"], size["height"]
         start_x, start_y = w // 2, int(h * 0.7)

@@ -17,13 +17,17 @@ import urllib.request
 from urllib.error import URLError
 from urllib.request import Request
 
-from mobile_emulator_sdk_bundles import (
+from mobile_plugin_bundles import (
     _download_url,
-    _offline_bundle_dirs,
     _platform_key,
     _sanitize_env_value,
     _verify_sha256,
 )
+
+
+def _offline_bundle_dirs() -> List[Path]:
+    roots = [_ROOT / "plugin_bundles", Path.cwd() / "plugin_bundles"]
+    return [r.resolve() for r in roots if r.is_dir()]
 
 _ROOT = Path(__file__).resolve().parent
 _MANIFEST_PATH = _ROOT / "config" / "plugin_bundles" / "android_scrcpy.json"

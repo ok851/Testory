@@ -7370,6 +7370,13 @@ def api_create_case_v2():
     expected_result = data.get('expected_result', '')
     case_type_raw = (data.get('case_type') or 'ui').strip().lower()
     case_type = 'api' if case_type_raw == 'api' else 'ui'
+    platform_raw = (data.get('platform') or 'web').strip().lower()
+    if platform_raw in ('android', 'mobile', 'app'):
+        platform = 'android'
+    elif platform_raw == 'desktop':
+        platform = 'desktop'
+    else:
+        platform = 'web'
     
     if not project_id:
         return jsonify({'error': '项目ID不能为空'}), 400
@@ -7403,9 +7410,10 @@ def api_create_case_v2():
         _db.increment_created_cases(current_user.id)
     
     case_id = db.create_test_case_v2(
-        project_id, name, url, description, precondition, expected_result, case_type=case_type
+        project_id, name, url, description, precondition, expected_result,
+        case_type=case_type, platform=platform,
     )
-    return jsonify({'success': True, 'case_id': case_id})
+    return jsonify({'success': True, 'case_id': case_id, 'platform': platform})
 
 # API: 获取测试用例详情（新版本）
 @app.route('/api/cases/<int:case_id>', methods=['GET'])
@@ -9947,9 +9955,12 @@ def api_get_report_overview():
             project_id = int(project_id)
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        case_category = request.args.get('case_category')
         
         report_generator = TestReportGenerator()
-        overview = report_generator.get_statistics_overview(project_id, start_date, end_date)
+        overview = report_generator.get_statistics_overview(
+            project_id, start_date, end_date, case_category
+        )
         
         return jsonify({
             'success': True,
@@ -9974,9 +9985,12 @@ def api_get_status_distribution():
             project_id = int(project_id)
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        case_category = request.args.get('case_category')
         
         report_generator = TestReportGenerator()
-        status_dist = report_generator.get_status_distribution(project_id, start_date, end_date)
+        status_dist = report_generator.get_status_distribution(
+            project_id, start_date, end_date, case_category
+        )
         
         return jsonify({
             'success': True,
@@ -10001,9 +10015,12 @@ def api_get_duration_distribution():
             project_id = int(project_id)
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        case_category = request.args.get('case_category')
         
         report_generator = TestReportGenerator()
-        duration_dist = report_generator.get_duration_distribution(project_id, start_date, end_date)
+        duration_dist = report_generator.get_duration_distribution(
+            project_id, start_date, end_date, case_category
+        )
         
         return jsonify({
             'success': True,
@@ -10056,9 +10073,12 @@ def api_get_case_statistics():
             project_id = int(project_id)
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        case_category = request.args.get('case_category')
         
         report_generator = TestReportGenerator()
-        case_stats = report_generator.get_case_statistics(project_id, start_date, end_date)
+        case_stats = report_generator.get_case_statistics(
+            project_id, start_date, end_date, case_category
+        )
         
         return jsonify({
             'success': True,
@@ -10083,9 +10103,12 @@ def api_get_project_statistics():
             project_id = int(project_id)
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        case_category = request.args.get('case_category')
         
         report_generator = TestReportGenerator()
-        project_stats = report_generator.get_project_statistics(project_id, start_date, end_date)
+        project_stats = report_generator.get_project_statistics(
+            project_id, start_date, end_date, case_category
+        )
         
         return jsonify({
             'success': True,
@@ -10112,16 +10135,27 @@ def api_export_report():
             project_id = int(project_id)
         start_date = data.get('start_date')
         end_date = data.get('end_date')
+        case_category = data.get('case_category')
         filename = data.get('filename')
         
         # 收集报告数据
         report_generator = TestReportGenerator()
         report_data = {
-            'overview': report_generator.get_statistics_overview(project_id, start_date, end_date),
-            'status_distribution': report_generator.get_status_distribution(project_id, start_date, end_date),
-            'duration_distribution': report_generator.get_duration_distribution(project_id, start_date, end_date),
-            'case_statistics': report_generator.get_case_statistics(project_id, start_date, end_date),
-            'project_statistics': report_generator.get_project_statistics(project_id, start_date, end_date)
+            'overview': report_generator.get_statistics_overview(
+                project_id, start_date, end_date, case_category
+            ),
+            'status_distribution': report_generator.get_status_distribution(
+                project_id, start_date, end_date, case_category
+            ),
+            'duration_distribution': report_generator.get_duration_distribution(
+                project_id, start_date, end_date, case_category
+            ),
+            'case_statistics': report_generator.get_case_statistics(
+                project_id, start_date, end_date, case_category
+            ),
+            'project_statistics': report_generator.get_project_statistics(
+                project_id, start_date, end_date, case_category
+            ),
         }
         
         # 导出报告

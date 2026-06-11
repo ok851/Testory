@@ -6,7 +6,6 @@ from web_capture.plugin_market import _all_catalog_items, install_plugin
 def test_mobile_plugin_in_full_catalog():
     ids = {p["id"] for p in _all_catalog_items()}
     assert "mobile-android-platform-tools" in ids
-    assert "mobile-android-emulator-sdk" in ids
     assert "mobile-scrcpy" in ids
 
 

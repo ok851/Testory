@@ -9,8 +9,56 @@ class TestReportGenerator:
     
     def __init__(self, db: Database = None):
         self.db = db if db else Database()
+
+    def _build_report_filters(
+        self,
+        project_id: int = None,
+        start_date: str = None,
+        end_date: str = None,
+        case_category: str = None,
+        *,
+        project_column: str = "tc.project_id",
+        extra_conditions: List[str] = None,
+    ):
+        """构建报表 WHERE 子句与参数。case_category: all|web|api|android|mobile|desktop"""
+        where_conditions = list(extra_conditions or [])
+        params: List[Any] = []
+
+        if project_id:
+            where_conditions.append(f"{project_column} = ?")
+            params.append(project_id)
+
+        if start_date:
+            where_conditions.append("DATE(rh.created_at) >= ?")
+            params.append(start_date)
+
+        if end_date:
+            where_conditions.append("DATE(rh.created_at) <= ?")
+            params.append(end_date)
+
+        cat = (case_category or "all").strip().lower()
+        if cat == "api":
+            where_conditions.append("LOWER(COALESCE(tc.case_type, 'ui')) = 'api'")
+        elif cat in ("android", "mobile"):
+            where_conditions.append("LOWER(COALESCE(tc.case_type, 'ui')) = 'ui'")
+            where_conditions.append("LOWER(COALESCE(tc.platform, 'web')) = 'android'")
+        elif cat in ("web", "ui"):
+            where_conditions.append("LOWER(COALESCE(tc.case_type, 'ui')) = 'ui'")
+            where_conditions.append("LOWER(COALESCE(tc.platform, 'web')) = 'web'")
+        elif cat == "desktop":
+            where_conditions.append("LOWER(COALESCE(tc.case_type, 'ui')) = 'ui'")
+            where_conditions.append("LOWER(COALESCE(tc.platform, 'web')) = 'desktop'")
+
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        return where_clause, params
     
-    def get_statistics_overview(self, project_id: int = None, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+    def get_statistics_overview(
+        self,
+        project_id: int = None,
+        start_date: str = None,
+        end_date: str = None,
+        case_category: str = None,
+    ) -> Dict[str, Any]:
         """获取测试统计概览
         
         Args:
@@ -24,23 +72,9 @@ class TestReportGenerator:
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        # 构建查询条件
-        where_conditions = []
-        params = []
-        
-        if project_id:
-            where_conditions.append("tc.project_id = ?")
-            params.append(project_id)
-        
-        if start_date:
-            where_conditions.append("DATE(rh.created_at) >= ?")
-            params.append(start_date)
-        
-        if end_date:
-            where_conditions.append("DATE(rh.created_at) <= ?")
-            params.append(end_date)
-        
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        where_clause, params = self._build_report_filters(
+            project_id, start_date, end_date, case_category
+        )
         
         # 总执行次数
         cursor.execute(f"""
@@ -121,7 +155,13 @@ class TestReportGenerator:
             'total_cases': total_cases
         }
     
-    def get_status_distribution(self, project_id: int = None, start_date: str = None, end_date: str = None) -> List[Dict[str, Any]]:
+    def get_status_distribution(
+        self,
+        project_id: int = None,
+        start_date: str = None,
+        end_date: str = None,
+        case_category: str = None,
+    ) -> List[Dict[str, Any]]:
         """获取状态分布数据
         
         Args:
@@ -135,23 +175,9 @@ class TestReportGenerator:
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        # 构建查询条件
-        where_conditions = []
-        params = []
-        
-        if project_id:
-            where_conditions.append("tc.project_id = ?")
-            params.append(project_id)
-        
-        if start_date:
-            where_conditions.append("DATE(rh.created_at) >= ?")
-            params.append(start_date)
-        
-        if end_date:
-            where_conditions.append("DATE(rh.created_at) <= ?")
-            params.append(end_date)
-        
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        where_clause, params = self._build_report_filters(
+            project_id, start_date, end_date, case_category
+        )
         
         # 按状态分组统计
         cursor.execute(f"""
@@ -175,7 +201,13 @@ class TestReportGenerator:
             for row in results
         ]
     
-    def get_duration_distribution(self, project_id: int = None, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+    def get_duration_distribution(
+        self,
+        project_id: int = None,
+        start_date: str = None,
+        end_date: str = None,
+        case_category: str = None,
+    ) -> Dict[str, Any]:
         """获取耗时分布数据
         
         Args:
@@ -189,23 +221,9 @@ class TestReportGenerator:
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        # 构建查询条件
-        where_conditions = []
-        params = []
-        
-        if project_id:
-            where_conditions.append("tc.project_id = ?")
-            params.append(project_id)
-        
-        if start_date:
-            where_conditions.append("DATE(rh.created_at) >= ?")
-            params.append(start_date)
-        
-        if end_date:
-            where_conditions.append("DATE(rh.created_at) <= ?")
-            params.append(end_date)
-        
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        where_clause, params = self._build_report_filters(
+            project_id, start_date, end_date, case_category
+        )
         
         # 定义耗时区间
         ranges = [
@@ -297,7 +315,13 @@ class TestReportGenerator:
             'failed': [row[3] for row in results]
         }
     
-    def get_case_statistics(self, project_id: int = None, start_date: str = None, end_date: str = None) -> List[Dict[str, Any]]:
+    def get_case_statistics(
+        self,
+        project_id: int = None,
+        start_date: str = None,
+        end_date: str = None,
+        case_category: str = None,
+    ) -> List[Dict[str, Any]]:
         """获取用例统计数据
         
         Args:
@@ -311,31 +335,23 @@ class TestReportGenerator:
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        # 构建查询条件（排除 project_id 指向已删项目的脏数据）
-        where_conditions = [
-            "(tc.project_id IS NULL OR EXISTS (SELECT 1 FROM projects pr WHERE pr.id = tc.project_id))"
-        ]
-        params = []
-        
-        if project_id:
-            where_conditions.append("tc.project_id = ?")
-            params.append(project_id)
-        
-        if start_date:
-            where_conditions.append("DATE(rh.created_at) >= ?")
-            params.append(start_date)
-        
-        if end_date:
-            where_conditions.append("DATE(rh.created_at) <= ?")
-            params.append(end_date)
-        
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        where_clause, params = self._build_report_filters(
+            project_id,
+            start_date,
+            end_date,
+            case_category,
+            extra_conditions=[
+                "(tc.project_id IS NULL OR EXISTS (SELECT 1 FROM projects pr WHERE pr.id = tc.project_id))"
+            ],
+        )
         
         # 从运行记录聚合：已删除用例的运行历史会一并删除，不会出现在报表；孤立 run_history 无对应 tc 也会被 INNER JOIN 排除
         cursor.execute(f"""
             SELECT 
                 tc.id as case_id,
                 tc.name as case_name,
+                tc.case_type,
+                tc.platform,
                 COUNT(rh.id) as total_runs,
                 SUM(CASE WHEN rh.status = 'passed' OR rh.status = 'success' THEN 1 ELSE 0 END) as passed_runs,
                 SUM(CASE WHEN rh.status = 'failed' OR rh.status = 'error' OR rh.status = 'fail' THEN 1 ELSE 0 END) as failed_runs,
@@ -344,29 +360,49 @@ class TestReportGenerator:
             FROM run_history rh
             INNER JOIN test_cases tc ON tc.id = rh.case_id
             WHERE {where_clause}
-            GROUP BY tc.id, tc.name
+            GROUP BY tc.id, tc.name, tc.case_type, tc.platform
             ORDER BY total_runs DESC
         """, params)
         
         results = cursor.fetchall()
         
         conn.close()
+
+        def _category_label(case_type: str, platform: str) -> str:
+            ct = (case_type or "ui").lower()
+            pf = (platform or "web").lower()
+            if ct == "api":
+                return "接口"
+            if pf == "android":
+                return "移动端"
+            if pf == "desktop":
+                return "桌面"
+            return "UI"
         
         return [
             {
                 'case_id': row[0],
                 'case_name': row[1],
-                'total_runs': row[2],
-                'passed_runs': row[3],
-                'failed_runs': row[4],
-                'pass_rate': round(row[3] / row[2] * 100, 2) if row[2] > 0 else 0,
-                'avg_duration': round(row[5], 2) if row[5] else 0,
-                'last_run_time': row[6]
+                'case_type': row[2],
+                'platform': row[3],
+                'case_category': _category_label(row[2], row[3]),
+                'total_runs': row[4],
+                'passed_runs': row[5],
+                'failed_runs': row[6],
+                'pass_rate': round(row[5] / row[4] * 100, 2) if row[4] > 0 else 0,
+                'avg_duration': round(row[7], 2) if row[7] else 0,
+                'last_run_time': row[8]
             }
             for row in results
         ]
     
-    def get_project_statistics(self, project_id: int = None, start_date: str = None, end_date: str = None) -> List[Dict[str, Any]]:
+    def get_project_statistics(
+        self,
+        project_id: int = None,
+        start_date: str = None,
+        end_date: str = None,
+        case_category: str = None,
+    ) -> List[Dict[str, Any]]:
         """获取项目统计数据
         
         Args:
@@ -380,23 +416,13 @@ class TestReportGenerator:
         conn = sqlite3.connect(self.db.db_path)
         cursor = conn.cursor()
         
-        # 构建查询条件
-        where_conditions = []
-        params = []
-        
-        if project_id:
-            where_conditions.append("p.id = ?")
-            params.append(project_id)
-        
-        if start_date:
-            where_conditions.append("DATE(rh.created_at) >= ?")
-            params.append(start_date)
-        
-        if end_date:
-            where_conditions.append("DATE(rh.created_at) <= ?")
-            params.append(end_date)
-        
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        where_clause, params = self._build_report_filters(
+            project_id,
+            start_date,
+            end_date,
+            case_category,
+            project_column="p.id",
+        )
         
         # 按项目统计
         cursor.execute(f"""
