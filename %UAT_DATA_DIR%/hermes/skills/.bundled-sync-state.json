@@ -1,0 +1,10 @@
+{
+  "manifest_version": "1.0.0",
+  "synced": [
+    "testory-web-browser",
+    "testory-android-mobile",
+    "testory-windows-desktop",
+    "testory-ui-design"
+  ],
+  "skipped_skills": []
+}

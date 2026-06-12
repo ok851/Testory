@@ -1,0 +1,30 @@
+{
+  "version": "1.0.0",
+  "description": "Testory bundled Hermes skills synced to HERMES_HOME/skills on startup",
+  "skills": [
+    {
+      "id": "testory-web-browser",
+      "name": "testory-web-browser",
+      "version": "1.0.0",
+      "source": "tencent-novnc-chromium-cdp-1.0.40"
+    },
+    {
+      "id": "testory-android-mobile",
+      "name": "testory-android-mobile",
+      "version": "1.0.0",
+      "source": "appium-android-adb-1.0.2"
+    },
+    {
+      "id": "testory-windows-desktop",
+      "name": "testory-windows-desktop",
+      "version": "1.0.0",
+      "source": "windows-gui-automation-cn-1.0.0"
+    },
+    {
+      "id": "testory-ui-design",
+      "name": "testory-ui-design",
+      "version": "1.0.0",
+      "source": "ui-new-1.0.0"
+    }
+  ]
+}
