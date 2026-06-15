@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Android 移动端自动化环境配置（从 .env 读取）。
+Android 移动端环境配置（从 .env 读取）。
 
 ENABLE_MOBILE=1 启用模块
 APPIUM_SERVER_URL=http://127.0.0.1:4723
 ANDROID_DEVICE_NAME / ANDROID_APP_PACKAGE / ANDROID_APP_ACTIVITY
-SCRCPY_PATH / ADB_PATH / MOBILE_MIRROR_FPS
+ADB_PATH — 第三方模拟器 adb 路径（优先于插件市场 adb）
+MOBILE_DRIVER=auto|appium|adb|plugin
 """
 
 from __future__ import annotations
@@ -43,18 +44,23 @@ def mobile_enabled() -> bool:
 def mobile_driver_mode() -> str:
     """
     自动化驱动模式：
-    auto — 执行步骤优先 Appium，投屏/手动操作用 ADB
+    auto — 元素定位步骤用 Appium，坐标/滑动可回退 ADB
     appium — 仅 Appium
-    adb — 仅 ADB（适合纯点击滑动，无元素定位会话）
+    adb — 仅 ADB（坐标点击/滑动，无需 Appium Server）
     """
-    raw = (os.environ.get("MOBILE_DRIVER") or "auto").strip().lower()
-    if raw not in ("auto", "appium", "adb"):
-        return "auto"
+    raw = (os.environ.get("MOBILE_DRIVER") or "plugin").strip().lower()
+    if raw not in ("auto", "appium", "adb", "plugin"):
+        return "plugin"
     return raw
 
 
 def auto_connect_on_studio() -> bool:
     return _truthy("MOBILE_AUTO_CONNECT", "1")
+
+
+def emulator_mode_enabled() -> bool:
+    """是否允许连接 adb 枚举到的模拟器（emulator-* 等）。"""
+    return _truthy("MOBILE_EMULATOR_MODE", "1")
 
 
 def appium_server_url() -> str:
@@ -68,11 +74,18 @@ def appium_server_url() -> str:
 def adb_path() -> str:
     """
     解析 adb 可执行文件路径。优先级：
-    1) 插件市场已安装的 Platform-Tools
-    2) 环境变量 ADB_PATH（须为存在的文件）
-    3) client_config.mobile_defaults.adb_path
+    1) 环境变量 ADB_PATH（第三方模拟器 adb，须为存在的文件）
+    2) client_config.mobile_defaults.adb_path
+    3) 插件市场已安装的 Platform-Tools
     4) 回退字符串 adb（依赖系统 PATH）
     """
+    env_path = (os.environ.get("ADB_PATH") or "").strip()
+    if env_path and Path(env_path).is_file():
+        return env_path
+    cfg = _load_mobile_defaults()
+    cfg_path = (cfg.get("adb_path") or "").strip()
+    if cfg_path and Path(cfg_path).is_file():
+        return cfg_path
     try:
         from mobile_plugin_bundles import get_installed_adb_path
 
@@ -81,25 +94,11 @@ def adb_path() -> str:
             return bundled
     except Exception:
         pass
-    env_path = (os.environ.get("ADB_PATH") or "").strip()
-    if env_path and Path(env_path).is_file():
-        return env_path
-    cfg = _load_mobile_defaults()
-    cfg_path = (cfg.get("adb_path") or "").strip()
-    if cfg_path and Path(cfg_path).is_file():
-        return cfg_path
     return env_path or "adb"
 
 
 def adb_path_source() -> str:
-    """供 UI 展示当前 adb 来源：plugin / env / config / default。"""
-    try:
-        from mobile_plugin_bundles import get_installed_adb_path
-
-        if get_installed_adb_path():
-            return "plugin"
-    except Exception:
-        pass
+    """供 UI 展示当前 adb 来源：env / config / plugin / default。"""
     env_path = (os.environ.get("ADB_PATH") or "").strip()
     if env_path and Path(env_path).is_file():
         return "env"
@@ -107,128 +106,14 @@ def adb_path_source() -> str:
     cfg_path = (cfg.get("adb_path") or "").strip()
     if cfg_path and Path(cfg_path).is_file():
         return "config"
-    return "default"
-
-
-def scrcpy_path() -> str:
     try:
-        from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+        from mobile_plugin_bundles import get_installed_adb_path
 
-        bundled = get_installed_scrcpy_exe()
-        if bundled:
-            return bundled
+        if get_installed_adb_path():
+            return "plugin"
     except Exception:
         pass
-    cfg = _load_mobile_defaults()
-    env_path = (os.environ.get("SCRCPY_PATH") or "").strip()
-    if env_path and Path(env_path).is_file():
-        return env_path
-    cfg_path = (cfg.get("scrcpy_path") or "").strip()
-    if cfg_path and Path(cfg_path).is_file():
-        return cfg_path
-    return env_path or cfg_path or "scrcpy"
-
-
-def mirror_fps() -> int:
-    """adb screencap 轮询目标帧率（无线真机通常 5–15 实际帧）。"""
-    try:
-        return max(1, min(30, int(os.environ.get("MOBILE_MIRROR_FPS", "8"))))
-    except ValueError:
-        return 8
-
-
-def scrcpy_mirror_fps() -> int:
-    """scrcpy_ws H.264 视频流目标帧率（推荐 24–30）。"""
-    raw = (os.environ.get("MOBILE_SCRCPY_FPS") or os.environ.get("MOBILE_MIRROR_FPS") or "24").strip()
-    try:
-        return max(15, min(60, int(raw)))
-    except ValueError:
-        return 24
-
-
-def device_scrcpy_ws_enabled() -> bool:
-    """真机/设备是否启用 scrcpy_ws 高帧画布投屏（默认开启；设 MOBILE_DEVICE_SCRCPY=0 可关闭）。"""
-    raw = (
-        os.environ.get("MOBILE_DEVICE_SCRCPY")
-        or os.environ.get("MOBILE_EMULATOR_SCRCPY")
-        or "1"
-    ).strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
-
-def scrcpy_available() -> bool:
-    """scrcpy 可执行文件是否可用。"""
-    path = scrcpy_path()
-    if not path or path == "scrcpy":
-        import shutil
-
-        return bool(shutil.which("scrcpy"))
-    return Path(path).is_file()
-
-
-def mirror_max_width() -> int:
-    """投屏 JPEG 最大宽度（0=不缩放，原始 PNG）。"""
-    try:
-        return max(0, min(2160, int(os.environ.get("MOBILE_MIRROR_MAX_WIDTH", "720"))))
-    except ValueError:
-        return 720
-
-
-def mirror_jpeg_quality() -> int:
-    try:
-        return max(40, min(95, int(os.environ.get("MOBILE_MIRROR_JPEG_QUALITY", "75"))))
-    except ValueError:
-        return 75
-
-
-def mirror_format() -> str:
-    """jpeg（默认，体积小）或 png。"""
-    raw = (os.environ.get("MOBILE_MIRROR_FORMAT") or "jpeg").strip().lower()
-    return raw if raw in ("jpeg", "jpg", "png") else "jpeg"
-
-
-def mirror_backend() -> str:
-    """
-    投屏后端：auto | scrcpy_ws | screencap
-    auto — 已安装 scrcpy 时优先 scrcpy_ws，否则 screencap
-    """
-    raw = (os.environ.get("MOBILE_MIRROR_BACKEND") or "auto").strip().lower()
-    if raw not in ("auto", "scrcpy_ws", "screencap"):
-        return "auto"
-    return raw
-
-
-def scrcpy_bridge_port() -> int:
-    try:
-        return max(1024, min(65535, int(os.environ.get("MOBILE_SCRCPY_BRIDGE_PORT", "8767"))))
-    except ValueError:
-        return 8767
-
-
-def scrcpy_bridge_url(client_host: str = "") -> str:
-    """
-    浏览器连接 scrcpy WebSocket 桥的 URL。
-    client_host 优先（通常为 request.host / window.location.hostname），便于局域网访问。
-    """
-    port = scrcpy_bridge_port()
-    host = (
-        (client_host or "").strip()
-        or (os.environ.get("MOBILE_SCRCPY_BRIDGE_PUBLIC_HOST") or "").strip()
-        or (os.environ.get("MOBILE_SCRCPY_BRIDGE_HOST") or "").strip()
-        or "127.0.0.1"
-    )
-    return f"ws://{host}:{port}"
-
-
-def resolve_mirror_backend(udid: str = "") -> str:
-    """根据设备 serial 与 scrcpy 可用性解析实际投屏后端。"""
-    del udid  # 真机与 USB 设备统一策略
-    backend = mirror_backend()
-    if backend != "auto":
-        return backend
-    if device_scrcpy_ws_enabled() and scrcpy_available():
-        return "scrcpy_ws"
-    return "screencap"
+    return "default"
 
 
 def default_device_name() -> str:
@@ -314,15 +199,39 @@ def appium_client_available() -> bool:
 
 
 def mobile_runtime_available() -> bool:
-    return mobile_enabled() and appium_client_available()
+    """移动端执行运行时是否可用。"""
+    if not mobile_enabled():
+        return False
+    if mobile_driver_mode() in ("adb", "plugin"):
+        try:
+            from mobile_agent_client import mobile_agent_enabled
+
+            return mobile_agent_enabled()
+        except ImportError:
+            return True
+    return appium_client_available()
 
 
 def mobile_runtime_unavailable_reason() -> Optional[str]:
     if not mobile_enabled():
         return "移动端测试未启用，请在 .env 中设置 ENABLE_MOBILE=1"
+    if mobile_driver_mode() in ("adb", "plugin"):
+        try:
+            from mobile_agent_client import mobile_agent_enabled
+
+            if not mobile_agent_enabled():
+                return "移动端 Agent 未配置，请确认 TestoryMobileGw 已启动"
+        except ImportError:
+            pass
+        return None
     if not appium_client_available():
         return "未安装 Appium-Python-Client，请执行 pip install -r requirements-mobile-optional.txt"
     return None
+
+
+def requires_appium_for_execution() -> bool:
+    """当前驱动模式是否必须在执行前连接 Appium。"""
+    return mobile_driver_mode() in ("auto", "appium")
 
 
 def public_config() -> Dict[str, Any]:
@@ -335,22 +244,12 @@ def public_config() -> Dict[str, Any]:
         "runtime_available": mobile_runtime_available(),
         "unavailable_reason": reason or "",
         "driver_mode": mobile_driver_mode(),
+        "emulator_mode": emulator_mode_enabled(),
         "auto_connect": auto_connect_on_studio(),
         "appium_server_url": appium_server_url(),
         "adb_path": adb_path(),
         "adb_path_source": adb_path_source(),
         "adb_plugin_installed": adb_path_source() == "plugin",
-        "scrcpy_path": scrcpy_path(),
-        "mirror_fps": mirror_fps(),
-        "scrcpy_mirror_fps": scrcpy_mirror_fps(),
-        "device_scrcpy_ws": device_scrcpy_ws_enabled(),
-        "scrcpy_available": scrcpy_available(),
-        "mirror_max_width": mirror_max_width(),
-        "mirror_jpeg_quality": mirror_jpeg_quality(),
-        "mirror_format": mirror_format(),
-        "mirror_backend": mirror_backend(),
-        "scrcpy_bridge_url": scrcpy_bridge_url(),
-        "scrcpy_bridge_port": scrcpy_bridge_port(),
         "device_name": default_device_name(),
         "app_package": default_app_package(),
         "app_activity": default_app_activity(),
@@ -358,13 +257,22 @@ def public_config() -> Dict[str, Any]:
         "defaults": _load_mobile_defaults(),
         "device_frame_presets": list_frame_presets(),
         "backends": [
-            {"id": "appium", "label": "Appium + UiAutomator2", "default": True},
-            {"id": "adb", "label": "ADB 直连（投屏/点击，零 Appium）"},
-            {"id": "uiautomator2", "label": "uiautomator2（可选 pip install uiautomator2）"},
-            {"id": "airtest", "label": "图像模板（OpenCV / tap_image，点屏录制可用）"},
+            {"id": "plugin", "label": "Recorder Plugin + Agent（推荐）", "default": True},
+            {"id": "adb", "label": "ADB 直连（坐标兜底）"},
         ],
+        "agent_ws_url": _mobile_agent_ws_public(),
         "hint": (
-            "USB 连接真机或填写无线配对码后点击「连接设备」；高帧率投屏需安装 scrcpy 插件。"
-            "Appium 仅在运行自动化步骤时需要。"
+            "连接真机 USB、无线调试或模拟器后点击「连接设备」。"
+            "在手机上直接操作录制步骤；画面通过关键帧截图异步展示，无需投屏。"
         ),
+        "auto_start_appium": False,
     }
+
+
+def _mobile_agent_ws_public() -> str:
+    try:
+        from mobile_agent_client import mobile_agent_ws_url
+
+        return mobile_agent_ws_url()
+    except ImportError:
+        return ""

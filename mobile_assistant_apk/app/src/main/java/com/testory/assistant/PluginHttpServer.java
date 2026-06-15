@@ -1,0 +1,277 @@
+package com.testory.assistant;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.util.Base64;
+import android.view.accessibility.AccessibilityNodeInfo;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import fi.iki.elonen.NanoHTTPD;
+
+/**
+ * 设备本地 JSON-RPC HTTP 服务（127.0.0.1:随机端口）。
+ * Agent 经 adb forward 访问。
+ */
+public final class PluginHttpServer extends NanoHTTPD {
+
+    private static final String PREFS = "plugin_server";
+    private static final String KEY_PORT = "port";
+
+    private static volatile PluginHttpServer instance;
+    private static final CopyOnWriteArrayList<JSONObject> pendingSteps = new CopyOnWriteArrayList<>();
+
+    private final Context appContext;
+
+    private PluginHttpServer(Context ctx, int port) {
+        super("127.0.0.1", port);
+        this.appContext = ctx.getApplicationContext();
+    }
+
+    static synchronized void start(Context ctx) {
+        if (instance != null) return;
+        int port = pickPort(ctx);
+        instance = new PluginHttpServer(ctx, port);
+        try {
+            instance.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
+            persistPort(ctx, port);
+        } catch (Exception ignored) {
+            instance = null;
+        }
+    }
+
+    static synchronized void stop() {
+        if (instance == null) return;
+        try {
+            instance.stop();
+        } catch (Exception ignored) {
+        }
+        instance = null;
+    }
+
+    static boolean isRunning() {
+        return instance != null && instance.wasStarted();
+    }
+
+    static int getPort() {
+        return instance != null ? instance.getListeningPort() : -1;
+    }
+
+    static void enqueueStep(JSONObject step) {
+        if (step != null) pendingSteps.add(step);
+    }
+
+    private static int pickPort(Context ctx) {
+        int base = 17100;
+        try {
+            String id = android.provider.Settings.Secure.getString(
+                    ctx.getContentResolver(),
+                    android.provider.Settings.Secure.ANDROID_ID
+            );
+            int hash = id != null ? id.hashCode() : 0;
+            return base + Math.abs(hash % 100);
+        } catch (Exception ignored) {
+            return base + 23;
+        }
+    }
+
+    private static void persistPort(Context ctx, int port) {
+        try {
+            SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            prefs.edit().putInt(KEY_PORT, port).apply();
+            java.io.File f = new java.io.File(ctx.getExternalFilesDir(null), "plugin_port.txt");
+            java.io.FileWriter w = new java.io.FileWriter(f, false);
+            w.write(String.valueOf(port));
+            w.close();
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Override
+    public Response serve(IHTTPSession session) {
+        if (!Method.POST.equals(session.getMethod())) {
+            return jsonResponse(errorResponse(null, -32600, "仅支持 POST"));
+        }
+        try {
+            int contentLen = session.getBody().available();
+            byte[] buf = new byte[Math.max(contentLen, 256)];
+            int read = session.getBody().read(buf);
+            String body = new String(buf, 0, Math.max(read, 0), "UTF-8");
+            JSONObject req = new JSONObject(body);
+            Object id = req.has("id") ? req.get("id") : JSONObject.NULL;
+            String method = req.optString("method", "");
+            JSONObject params = req.optJSONObject("params");
+            if (params == null) params = new JSONObject();
+            JSONObject result = dispatch(method, params);
+            JSONObject resp = new JSONObject();
+            resp.put("jsonrpc", "2.0");
+            resp.put("id", id);
+            resp.put("result", result);
+            return jsonResponse(resp);
+        } catch (Exception e) {
+            return jsonResponse(errorResponse(null, -32603, e.getMessage()));
+        }
+    }
+
+    private JSONObject dispatch(String method, JSONObject params) throws Exception {
+        switch (method) {
+            case "ping":
+                return ok("pong");
+            case "getPort":
+                return new JSONObject().put("port", getPort());
+            case "getStatus":
+                return buildStatus();
+            case "startRecording":
+                boolean shot = params.optBoolean("screenshotPerStep", true);
+                AssistantSession.setScreenshotPerStep(shot);
+                AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
+                PluginForegroundService.startRecording(appContext);
+                return ok("recording");
+            case "stopRecording":
+                AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
+                PluginForegroundService.stopRecording(appContext);
+                return ok("stopped");
+            case "pollSteps":
+                int limit = params.optInt("limit", 20);
+                return pollSteps(limit);
+            case "getPageSource":
+                return getPageSourceTree();
+            case "takeScreenshot":
+                return takeScreenshotJson();
+            case "tap":
+                return performTap(params);
+            case "swipe":
+                return performSwipe(params);
+            case "input":
+                return performInput(params);
+            default:
+                throw new IllegalArgumentException("未知方法: " + method);
+        }
+    }
+
+    private static JSONObject ok(String msg) throws Exception {
+        return new JSONObject().put("ok", true).put("message", msg);
+    }
+
+    private JSONObject buildStatus() throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("server_running", isRunning());
+        o.put("port", getPort());
+        o.put("accessibility_enabled", AssistantSession.isAccessibilityReady());
+        o.put("armed_mode", AssistantSession.getArmedMode());
+        o.put("package", appContext.getPackageName());
+        return o;
+    }
+
+    private JSONObject pollSteps(int limit) throws Exception {
+        List<JSONObject> out = new ArrayList<>();
+        int n = 0;
+        for (JSONObject step : pendingSteps) {
+            out.add(step);
+            pendingSteps.remove(step);
+            if (++n >= limit) break;
+        }
+        JSONArray arr = new JSONArray();
+        for (JSONObject s : out) arr.put(s);
+        return new JSONObject().put("steps", arr);
+    }
+
+    private JSONObject getPageSourceTree() throws Exception {
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) throw new IllegalStateException("无障碍服务未就绪");
+        AccessibilityNodeInfo root = svc.getRootInActiveWindow();
+        if (root == null) throw new IllegalStateException("无法获取当前窗口");
+        JSONObject tree = nodeTree(root, 0, 40);
+        root.recycle();
+        return new JSONObject().put("tree", tree);
+    }
+
+    private JSONObject nodeTree(AccessibilityNodeInfo n, int depth, int max) throws Exception {
+        JSONObject o = new JSONObject();
+        if (n.getViewIdResourceName() != null) o.put("resource_id", n.getViewIdResourceName());
+        if (n.getText() != null) o.put("text", n.getText().toString());
+        if (n.getContentDescription() != null) o.put("content_desc", n.getContentDescription().toString());
+        if (n.getClassName() != null) o.put("class", n.getClassName().toString());
+        android.graphics.Rect r = new android.graphics.Rect();
+        n.getBoundsInScreen(r);
+        JSONArray bounds = new JSONArray();
+        bounds.put(r.left).put(r.top).put(r.right).put(r.bottom);
+        o.put("bounds", bounds);
+        if (depth < 8) {
+            JSONArray children = new JSONArray();
+            int count = Math.min(n.getChildCount(), max);
+            for (int i = 0; i < count; i++) {
+                AccessibilityNodeInfo child = n.getChild(i);
+                if (child != null) {
+                    children.put(nodeTree(child, depth + 1, max));
+                    child.recycle();
+                }
+            }
+            o.put("children", children);
+        }
+        return o;
+    }
+
+    private JSONObject takeScreenshotJson() throws Exception {
+        throw new IllegalStateException("plugin_screenshot_unavailable");
+    }
+
+    private JSONObject performTap(JSONObject params) throws Exception {
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) throw new IllegalStateException("无障碍服务未就绪");
+        int x = params.optInt("x", 0);
+        int y = params.optInt("y", 0);
+        String st = params.optString("selectorType", "");
+        String sv = params.optString("selectorValue", "");
+        boolean ok = svc.performTap(st, sv, x, y);
+        return new JSONObject().put("ok", ok);
+    }
+
+    private JSONObject performSwipe(JSONObject params) throws Exception {
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) throw new IllegalStateException("无障碍服务未就绪");
+        int x1 = params.optInt("x1", 0);
+        int y1 = params.optInt("y1", 0);
+        int x2 = params.optInt("x2", x1);
+        int y2 = params.optInt("y2", y1);
+        boolean ok = svc.performSwipe(x1, y1, x2, y2);
+        return new JSONObject().put("ok", ok);
+    }
+
+    private JSONObject performInput(JSONObject params) throws Exception {
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) throw new IllegalStateException("无障碍服务未就绪");
+        String text = params.optString("text", "");
+        String st = params.optString("selectorType", "");
+        String sv = params.optString("selectorValue", "");
+        boolean ok = svc.performInput(st, sv, text);
+        return new JSONObject().put("ok", ok);
+    }
+
+    private static Response jsonResponse(JSONObject obj) {
+        return newFixedLengthResponse(Response.Status.OK, "application/json", obj.toString());
+    }
+
+    private static JSONObject errorResponse(Object id, int code, String message) {
+        try {
+            JSONObject err = new JSONObject();
+            err.put("code", code);
+            err.put("message", message == null ? "error" : message);
+            JSONObject resp = new JSONObject();
+            resp.put("jsonrpc", "2.0");
+            resp.put("id", id == null ? JSONObject.NULL : id);
+            resp.put("error", err);
+            return resp;
+        } catch (Exception e) {
+            return new JSONObject();
+        }
+    }
+}

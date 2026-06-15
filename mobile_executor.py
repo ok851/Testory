@@ -57,8 +57,8 @@ class MobileExecutor:
     def is_enabled(cls) -> bool:
         return mobile_enabled()
 
-    def check_appium_server(self) -> Tuple[bool, str]:
-        return check_appium_server()
+    def check_appium_server(self, *, try_auto_start: bool = False) -> Tuple[bool, str]:
+        return check_appium_server(try_auto_start=try_auto_start)
 
     @property
     def is_connected(self) -> bool:
@@ -75,7 +75,7 @@ class MobileExecutor:
         if not mobile_runtime_available():
             reason = mobile_runtime_unavailable_reason() or "移动端不可用"
             raise RuntimeError(reason)
-        ok, msg = self.check_appium_server()
+        ok, msg = self.check_appium_server(try_auto_start=True)
         if not ok:
             raise RuntimeError(msg)
 
@@ -135,23 +135,42 @@ class MobileExecutor:
             return {"status": "error", "error": err, "action": action, "description": description}
 
         if self._driver is None:
-            try:
-                spec = prepared.get("mobile_spec") if isinstance(prepared.get("mobile_spec"), dict) else {}
+            from mobile_device_manager import get_connected_udid
+            from mobile_env_config import mobile_driver_mode, requires_appium_for_execution
+
+            spec = prepared.get("mobile_spec") if isinstance(prepared.get("mobile_spec"), dict) else {}
+            bound_udid = (
+                (spec.get("udid") or "").strip()
+                or (self._connected_udid or "").strip()
+                or (get_connected_udid() or "").strip()
+            )
+            if not requires_appium_for_execution() or mobile_driver_mode() == "adb":
+                if bound_udid:
+                    self.bind_device(bound_udid)
+                elif not requires_appium_for_execution():
+                    return {
+                        "status": "error",
+                        "error": "请先连接设备",
+                        "action": action,
+                        "description": description,
+                    }
+            if self._driver is None and requires_appium_for_execution():
                 caps: Dict[str, Any] = {}
-                if spec.get("udid"):
-                    caps["udid"] = spec["udid"]
+                if bound_udid:
+                    caps["udid"] = bound_udid
                 if spec.get("appPackage"):
                     caps["appPackage"] = spec["appPackage"]
                 if spec.get("appActivity"):
                     caps["appActivity"] = spec["appActivity"]
-                self.connect(caps or None)
-            except Exception as exc:
-                return {
-                    "status": "error",
-                    "error": str(exc),
-                    "action": action,
-                    "description": description,
-                }
+                try:
+                    self.connect(caps or None)
+                except Exception as exc:
+                    return {
+                        "status": "error",
+                        "error": str(exc),
+                        "action": action,
+                        "description": description,
+                    }
 
         started = time.time()
         try:
@@ -174,26 +193,37 @@ class MobileExecutor:
                 "screenshot": shot,
             }
 
-    def tap_at_coordinates(self, x: int, y: int) -> Dict[str, Any]:
-        """在设备坐标点击（供 canvas 手动操作）；Appium 不可用时回退 ADB/u2。"""
+    def tap_at_coordinates(self, x: int, y: int, *, udid: str = "") -> Dict[str, Any]:
+        """在设备坐标点击（供 API / 步骤执行）；Appium 不可用时回退 ADB/u2。"""
         from mobile_adb_control import smart_tap
+        from mobile_device_manager import get_connected_udid
 
-        udid = self._connected_udid or ""
+        resolved_udid = (udid or self._connected_udid or get_connected_udid() or "").strip()
         if self._driver is not None:
             try:
                 self._driver.execute_script(
                     "mobile: clickGesture",
                     {"x": int(x), "y": int(y)},
                 )
-                return {"status": "success", "x": x, "y": y, "via": "appium"}
+                return {"status": "success", "x": x, "y": y, "via": "appium", "udid": resolved_udid}
             except Exception:
                 try:
                     self._driver.tap([(int(x), int(y))], 100)
-                    return {"status": "success", "x": x, "y": y, "via": "appium_tap"}
+                    return {"status": "success", "x": x, "y": y, "via": "appium_tap", "udid": resolved_udid}
                 except Exception:
                     pass
-        result = smart_tap(udid, int(x), int(y))
-        return {"status": "success", **result}
+        if not resolved_udid:
+            raise RuntimeError("未连接设备，请先连接真机或模拟器")
+        result = smart_tap(resolved_udid, int(x), int(y))
+        return {"status": "success", **result, "udid": resolved_udid}
+
+    def bind_device(self, udid: str) -> None:
+        """ADB 模式下绑定 serial，无需 Appium 会话。"""
+        udid = (udid or "").strip()
+        if not udid:
+            raise RuntimeError("缺少设备 serial")
+        self._connected_udid = udid
+        set_connected_udid(udid)
 
     def _dispatch_action(self, step: Dict[str, Any]) -> Dict[str, Any]:
         action = step.get("action") or ""
@@ -363,7 +393,11 @@ class MobileExecutor:
                 x2 = int(spec.get("x2"))
                 y2 = int(spec.get("y2"))
                 duration_ms = int(spec.get("duration_ms") or 300)
-                udid = self._connected_udid or ""
+                from mobile_device_manager import get_connected_udid
+
+                udid = (self._connected_udid or get_connected_udid() or "").strip()
+                if not udid:
+                    raise RuntimeError("未连接设备，请先连接真机或模拟器")
                 if self._driver is not None:
                     try:
                         self._driver.swipe(x1, y1, x2, y2, duration_ms)

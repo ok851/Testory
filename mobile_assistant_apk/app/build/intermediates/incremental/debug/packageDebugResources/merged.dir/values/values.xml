@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_desc">Testory 移动端助手：录制操作与捕获元素，数据仅发往本机测试平台（127.0.0.1）。</string>
+    <string name="app_name">Testory Assistant</string>
+    <string name="main_hint">无需配置网络地址。平台安装助手后会自动执行 adb reverse，本应用固定连接 %1$s:%2$d。\n\n唯一需要您手动完成的一次性步骤：点击上方按钮，在系统设置中启用「Testory Assistant」。</string>
+    <string name="mode_capture">当前模式：捕获元素</string>
+    <string name="mode_idle">当前模式：待机</string>
+    <string name="mode_record">当前模式：录制</string>
+    <string name="open_accessibility">开启无障碍服务</string>
+    <string name="status_need_accessibility">请先开启无障碍服务</string>
+    <string name="status_ready">已就绪，可在平台录制/捕获</string>
+    <string name="status_waiting_platform">已连接无障碍，等待平台…</string>
+    <style name="Theme.TestoryAssistant" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#059669</item>
+        <item name="colorPrimaryVariant">#047857</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+</resources>

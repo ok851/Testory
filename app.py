@@ -45,6 +45,13 @@ if sys.platform == "win32":
         pass
 
 try:
+    from mobile_service_bootstrap import bootstrap_mobile_services
+
+    bootstrap_mobile_services()
+except Exception:
+    pass
+
+try:
     from embedded_browser_service_bootstrap import bootstrap_embedded_browser_services
 
     if not __import__("desktop_startup", fromlist=["desktop_lazy_gateway_boot"]).desktop_lazy_gateway_boot():
@@ -1312,14 +1319,6 @@ try:
         log_api_request=log_api_request,
         role_required=role_required,
     )
-    try:
-        from mobile_env_config import mobile_enabled
-        from mobile_scrcpy_bridge import ensure_bridge_started
-
-        if mobile_enabled():
-            ensure_bridge_started()
-    except Exception:
-        pass
 except ImportError:
     pass
 
@@ -1924,7 +1923,18 @@ def ai_test_page():
 @app.route('/mobile-testing')
 @login_required
 def mobile_testing_page():
-    """Android 移动端测试：左侧项目/用例/步骤与点屏录制，右侧真机投屏与操控。"""
+    """Android 移动端测试：左栏配置与设备画面，右栏 Hermes Agent 对话。"""
+    from ai_chat_tool_loop import ai_chat_tools_enabled
+    from agent_gateway_client import agent_gateway_configured
+
+    hermes_cfg = agent_gateway_configured()
+    template_kw = dict(
+        mobile_disabled=False,
+        mobile_disabled_reason='',
+        ai_chat_tools_env_enabled=ai_chat_tools_enabled(),
+        hermes_gateway_configured=hermes_cfg,
+        openclaw_gateway_configured=hermes_cfg,
+    )
     try:
         from mobile_env_config import mobile_enabled, mobile_runtime_unavailable_reason
 
@@ -1934,14 +1944,20 @@ def mobile_testing_page():
                 mobile_disabled=True,
                 mobile_disabled_reason=mobile_runtime_unavailable_reason()
                 or '请在 .env 中设置 ENABLE_MOBILE=1',
+                ai_chat_tools_env_enabled=ai_chat_tools_enabled(),
+                hermes_gateway_configured=hermes_cfg,
+                openclaw_gateway_configured=hermes_cfg,
             )
     except ImportError:
         return render_template(
             'mobile_testing.html',
             mobile_disabled=True,
             mobile_disabled_reason='移动端模块未安装',
+            ai_chat_tools_env_enabled=ai_chat_tools_enabled(),
+            hermes_gateway_configured=hermes_cfg,
+            openclaw_gateway_configured=hermes_cfg,
         )
-    return render_template('mobile_testing.html', mobile_disabled=False, mobile_disabled_reason='')
+    return render_template('mobile_testing.html', **template_kw)
 
 
 # 项目管理页面

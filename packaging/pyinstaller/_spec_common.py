@@ -136,6 +136,7 @@ def project_hiddenimports(root: Path) -> list:
         "browser_runtime",
         "embedded_browser_gateway",
         "desktop_automation_gateway",
+        "mobile_automation_gateway",
     ):
         try:
             hidden += _only_module_names(collect_submodules(pkg))

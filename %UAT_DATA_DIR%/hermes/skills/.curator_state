@@ -1,9 +1,9 @@
 {
-  "last_report_path": null,
-  "last_run_at": "2026-06-08T08:16:03.555990+00:00",
-  "last_run_duration_seconds": null,
-  "last_run_summary": "deferred first run — curator seeded, will run after one interval; use `hermes curator run --dry-run` to preview now",
+  "last_report_path": "D:\\mkst_baixiang\\Python_Code\\NewUITestPlatform\\NewUITestPlatform\\%UAT_DATA_DIR%\\hermes\\logs\\curator\\20260615-083004",
+  "last_run_at": "2026-06-15T08:30:04.218970+00:00",
+  "last_run_duration_seconds": 0.042703,
+  "last_run_summary": "auto: no changes; llm: skipped (no candidates)",
   "last_run_summary_shown_at": null,
   "paused": false,
-  "run_count": 0
+  "run_count": 1
 }

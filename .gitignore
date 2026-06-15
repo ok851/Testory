@@ -16,6 +16,7 @@ exports/
 dist/
 packaging/tools/
 plugin_bundles/*.zip
+plugin_bundles/android-sdk/
 config/plugin_bundles/*.zip
 static/plugin_bundles/*.zip
 *.log

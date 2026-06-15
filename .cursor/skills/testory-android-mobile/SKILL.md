@@ -1,101 +1,64 @@
 ---
 name: testory-android-mobile
-description: Testory Android 移动端自动化：Appium bridge_daemon 结构化 dump/tap/scroll，含 UC WebView 虚拟列表与 uiautomator2 降级策略。
-version: 1.0.0
+description: Testory Android 移动端自动化：Mobile Agent + Recorder Plugin JSON-RPC，adb forward 结构化 dump/tap/scroll/录制。
+version: 2.0.0
 source: testory-bundled
 format: agentskills.io/v1
 metadata:
   testory:
     platform: mobile
-    tags: [android, appium, adb, uiautomator2, webview, bridge]
+    tags: [android, adb, accessibility, plugin, agent]
 ---
 
 # Testory Android 移动端自动化
 
-## 双后端策略
-
-| 后端 | 适用 | 限制 |
-|------|------|------|
-| **bridge_daemon** (Appium) | 原生控件 dump/find/wait | UC WebView 虚拟列表 collapsed 项不可点 |
-| **uiautomator2** | WebView 滚动、预订/提交按钮 | 与 Appium **不可并行**（AccessibilityService 冲突） |
-| **ADB input** | 坐标点击兜底 | UC WebView 内容区触摸可能被过滤 |
-
-## 脚本路径
-
-Bundled 脚本位于 Hermes skills 目录：
+## 架构
 
 ```
-HERMES_HOME/skills/testory-android-mobile/scripts/
-  bridge_daemon.py
-  start_bridge.sh   # Linux/macOS
+Web 平台 → Mobile Agent (TestoryMobileGw) → adb forward → Recorder Plugin APK
 ```
 
-Windows 下直接：
+- **禁止** scrcpy / 视频流投屏
+- 画面仅通过 **关键帧截图**（adb screencap 或插件 API）
+- 录制：手机端物理操作 → AccessibilityService → Agent WebSocket 推送步骤
+
+## 启动 Agent
+
+桌面版自动拉起 `TestoryMobileGw`。开发调试：
 
 ```powershell
-python skills\bundled\testory-android-mobile\scripts\bridge_daemon.py dump
+python -m mobile_automation_gateway
 ```
 
-或通过平台 API：`POST /api/mobile/bridge/dump`
+环境变量：`MOBILE_AGENT_GATE_PORT=8777`，`MOBILE_AGENT_GATEWAY_SECRET`
 
-## Quick Start
+## Agent API
 
-```bash
-# 一次性启动 daemon（约 28s 预热）
-bash HERMES_HOME/skills/testory-android-mobile/scripts/start_bridge.sh
-
-# 交互命令（1-2s/次）
-python3 bridge_daemon.py dump
-python3 bridge_daemon.py tap '{"text": "查询"}'
-python3 bridge_daemon.py scroll '{"direction": "down"}'
-python3 bridge_daemon.py wait '{"text": "提交订单", "timeout": 30}'
-```
-
-## bridge 命令
-
-| 命令 | 说明 |
+| 端点 | 说明 |
 |------|------|
-| `dump` | 结构化屏幕 JSON（buttons/trains/alerts） |
-| `tap` | 按 text/id 点击 |
-| `tap_bounds` | 按 bounds 点击（h>20px 才可靠） |
-| `tap_coords` | 坐标点击 |
-| `scroll` | 方向滑动（UC WebView 可能无效） |
-| `type` | 输入文本 |
-| `wait` | 等待元素出现 |
-| `screenshot` | 截图路径 |
+| `POST /internal/devices/connect` | 连接设备 |
+| `POST /internal/plugin/install` | 安装 Recorder Plugin |
+| `POST /internal/recording/start` | 开始录制 |
+| `POST /internal/recording/stop` | 停止录制 |
+| `WS /internal/events` | 实时 step / screenshot 事件 |
+| `POST /internal/replay/run` | 回放用例步骤 |
+| `POST /internal/inspect/page-source` | 控件树 |
+| `POST /internal/inspect/screenshot` | 关键帧截图 |
 
-## UC WebView 虚拟列表（关键）
+## 插件 JSON-RPC（设备 localhost，经 adb forward）
 
-12306、支付宝 Nebula 等 UC WebView：
-
-- **可见项**：bounds 高度 60-130px，可点击
-- **屏外项**：collapsed 至 h=6px，**不可**通过 accessibility 点击
-- **操作按钮**（「预订」「提交订单」）：通常有正常 bounds
-
-**滚动**：Appium `scroll` / `mobile: scrollGesture` 在 UC WebView 常失败 → 用 uiautomator2：
-
-```python
-import uiautomator2 as u2
-d = u2.connect()
-d.swipe_ext('up', scale=0.3)
-d(text='预订').click()
-```
-
-Testory `MobileExecutor` 在 Appium swipe 失败时会自动尝试 uiautomator2 降级。
-
-## 与 MobileExecutor 冲突
-
-平台 `MobileExecutor` 持有 Appium 会话时，**不要**同时启动 bridge_daemon。API 会返回 `409 bridge_conflict`。
+`startRecording` / `stopRecording` / `pollSteps` / `getPageSource` / `takeScreenshot` / `tap` / `swipe` / `input`
 
 ## 平台集成
 
-- 设备连接：`POST /api/mobile/connect`
-- 用例执行：`POST /api/mobile/run`
-- Bridge dump：`POST /api/mobile/bridge/dump`
-- Bridge 命令：`POST /api/mobile/bridge/{action}` body `{"args": {...}}`
+Flask 薄代理：`/api/mobile/*` → `mobile_agent_client.py`
+
+- 连接：`POST /api/mobile/connect`
+- 录制：`POST /api/mobile/arm`（start） / `disarm`（stop）
+- 执行：`POST /api/mobile/run`
 
 ## 排错
 
-- **Daemon 超时**：重新 `start_bridge.sh`
-- **AccessibilityService 冲突**：断开 MobileExecutor 或 quit bridge
-- **G7004 搜不到**：UC WebView 文本带空格 `G 7 0 0 4`
+- **插件未就绪**：在设备上开启 Testory Assistant 无障碍服务
+- **Agent 未启动**：确认 `MOBILE_AGENT_GATEWAY_URL` 可达
+- **5 秒断连**：重新开启无障碍或点「安装插件」重装

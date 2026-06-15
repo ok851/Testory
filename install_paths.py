@@ -22,7 +22,7 @@ def resolve_install_root() -> Path:
         parent = exe.parent
         if parent.name == "testory_app" and parent.parent.name == "runtime":
             return parent.parent.parent
-        if parent.name in ("TestoryEmbeddedGw", "TestoryBrowserRuntime", "TestoryDesktopGw", "TestoryHermesGw"):
+        if parent.name in ("TestoryEmbeddedGw", "TestoryBrowserRuntime", "TestoryDesktopGw", "TestoryHermesGw", "TestoryMobileGw"):
             return parent.parent.parent
         return parent.parent if parent.parent.is_dir() else parent
 

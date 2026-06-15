@@ -183,7 +183,7 @@ def _extension_files_valid(install_dir: str) -> bool:
 _MOBILE_RUNTIME_PLUGIN_IDS = frozenset(
     {
         "mobile-android-platform-tools",
-        "mobile-scrcpy",
+        "mobile-testory-assistant",
     }
 )
 
@@ -196,15 +196,15 @@ def _mobile_runtime_installed(plugin_id: str) -> bool:
             from mobile_plugin_bundles import get_installed_adb_path
 
             return bool(get_installed_adb_path())
-        if pid == "mobile-scrcpy":
-            from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+        if pid == "mobile-testory-assistant":
+            from mobile_assistant_bundles import assistant_installed_on_device
+            from mobile_device_manager import get_connected_udid, pick_default_device
 
-            exe = get_installed_scrcpy_exe()
-            if not exe:
-                return False
-            from mobile_scrcpy_bundles import scrcpy_install_dir, _has_scrcpy_server
-
-            return _has_scrcpy_server(scrcpy_install_dir())
+            udid = get_connected_udid() or ""
+            if not udid:
+                dev = pick_default_device()
+                udid = (dev or {}).get("udid") or ""
+            return assistant_installed_on_device(udid) if udid else False
     except Exception:
         return False
     return False
@@ -318,6 +318,15 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
                     out["adb_path"] = ap
             except Exception:
                 pass
+        if pid == "mobile-testory-assistant":
+            try:
+                from mobile_assistant_bundles import assistant_installed_on_device
+                from mobile_device_manager import get_connected_udid
+
+                udid = get_connected_udid() or ""
+                out["assistant_on_device"] = assistant_installed_on_device(udid) if udid else False
+            except Exception:
+                pass
     else:
         out["status_label"] = "未安装"
         out["status_tone"] = "muted"
@@ -325,6 +334,9 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
             if not plugin.get("download_url_configured"):
                 out["status_label"] = "待配置安装包"
                 out["status_tone"] = "warn"
+        if pid == "mobile-testory-assistant" and not plugin.get("local_bundle_ready"):
+            out["status_label"] = "待配置 APK"
+            out["status_tone"] = "warn"
     return out
 
 
@@ -338,9 +350,9 @@ def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
     except Exception:
         pass
     try:
-        from mobile_scrcpy_bundles import get_scrcpy_catalog_entry
+        from mobile_assistant_bundles import get_testory_assistant_catalog_entry
 
-        items.append(get_scrcpy_catalog_entry())
+        items.append(get_testory_assistant_catalog_entry())
     except Exception:
         pass
     return items
@@ -556,11 +568,26 @@ def install_plugin_sync(
                 return install_android_platform_tools(progress_cb=progress_cb)
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
-        if pid == "mobile-scrcpy":
+        if pid == "mobile-testory-assistant":
             try:
-                from mobile_scrcpy_bundles import install_scrcpy_bundle
+                from mobile_assistant_bundles import install_testory_assistant
+                from mobile_device_manager import get_connected_udid, pick_default_device
 
-                return install_scrcpy_bundle(progress_cb=progress_cb)
+                udid = get_connected_udid() or ""
+                if not udid:
+                    dev = pick_default_device()
+                    udid = (dev or {}).get("udid") or ""
+                result = install_testory_assistant(udid, progress_cb=_progress)
+                if result.get("success"):
+                    plugins[pid] = {
+                        "plugin_id": pid,
+                        "type": "runtime_bundle",
+                        "version": meta.get("version") or "1.0.0",
+                        "installed_at": now,
+                        "package": result.get("package") or "com.testory.assistant",
+                    }
+                    _save_state(state)
+                return result
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
         return {"success": False, "error": "未知的运行时插件"}

@@ -64,8 +64,8 @@
                     <label class="block text-sm"><span class="text-gray-600 dark:text-gray-400">默认 appActivity</span>
                         <input type="text" id="mobileAppActivity" class="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-800" placeholder=".MainActivity">
                     </label>
-                    <label class="block text-sm"><span class="text-gray-600 dark:text-gray-400">scrcpy 路径</span>
-                        <input type="text" id="mobileScrcpyPath" class="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-800" placeholder="scrcpy 或完整路径">
+                    <label class="block text-sm"><span class="text-gray-600 dark:text-gray-400">ADB 路径（第三方模拟器）</span>
+                        <input type="text" id="mobileAdbPath" class="mt-1 w-full rounded-lg border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm dark:bg-gray-800" placeholder="D:\leidian\LDPlayer14\adb.exe">
                     </label>
                     <div class="flex flex-wrap gap-2 pt-2">
                         <button type="button" id="mobileSaveBtn" class="px-4 py-2 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700">保存移动端配置</button>
@@ -175,11 +175,11 @@
                     var u = document.getElementById('mobileAppiumUrl');
                     var p = document.getElementById('mobileAppPackage');
                     var a = document.getElementById('mobileAppActivity');
-                    var s = document.getElementById('mobileScrcpyPath');
+                    var s = document.getElementById('mobileAdbPath');
                     if (u) u.value = data.appium_server_url || d.appium_server_url || '';
                     if (p) p.value = data.app_package || d.app_package || '';
                     if (a) a.value = data.app_activity || d.app_activity || '';
-                    if (s) s.value = data.scrcpy_path || d.scrcpy_path || '';
+                    if (s) s.value = data.adb_path || d.adb_path || '';
                 } catch (e) {
                     if (disabled) {
                         disabled.textContent = '无法加载移动端配置';
@@ -199,7 +199,7 @@
                             appium_server_url: (document.getElementById('mobileAppiumUrl') || {}).value || '',
                             app_package: (document.getElementById('mobileAppPackage') || {}).value || '',
                             app_activity: (document.getElementById('mobileAppActivity') || {}).value || '',
-                            scrcpy_path: (document.getElementById('mobileScrcpyPath') || {}).value || ''
+                            adb_path: (document.getElementById('mobileAdbPath') || {}).value || ''
                         })
                     });
                     var data = await r.json();

@@ -77,6 +77,7 @@ def shutdown_all_services() -> None:
         ("embedded_browser_service_bootstrap", "stop_embedded_gateway"),
         ("hermes_service_bootstrap", "stop_hermes_gateway"),
         ("desktop_service_bootstrap", "stop_desktop_gateway"),
+        ("mobile_service_bootstrap", "stop_mobile_gateway"),
     ):
         try:
             mod = __import__(mod_name, fromlist=[func_name])

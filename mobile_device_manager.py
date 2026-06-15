@@ -77,14 +77,25 @@ def list_usb_devices() -> List[Dict[str, Any]]:
                 if m:
                     meta[key] = m.group(1)
             meta["display_name"] = meta.get("model") or meta.get("device") or udid
+            meta["is_emulator"] = is_emulator_udid(udid)
             devices.append(meta)
         return devices
     except Exception:
         return []
 
 
+_EMULATOR_LOCAL_RE = re.compile(r"^127\.0\.0\.1:\d+$", re.I)
+_EMULATOR_LOCALHOST_RE = re.compile(r"^localhost:\d+$", re.I)
+
+
 def is_emulator_udid(udid: str) -> bool:
-    return (udid or "").strip().startswith("emulator-")
+    """识别 adb 模拟器 serial（含雷电/夜神等 127.0.0.1:port）。"""
+    u = (udid or "").strip()
+    if u.startswith("emulator-"):
+        return True
+    if _EMULATOR_LOCAL_RE.match(u) or _EMULATOR_LOCALHOST_RE.match(u):
+        return True
+    return False
 
 
 def list_real_usb_devices() -> List[Dict[str, Any]]:
@@ -102,10 +113,12 @@ def pick_default_real_device() -> Optional[Dict[str, Any]]:
     return None
 
 
-def check_appium_server() -> Tuple[bool, str]:
-    """检查 Appium Server 是否可达。"""
+def check_appium_server(*, try_auto_start: bool = False) -> Tuple[bool, str]:
+    """检查 Appium Server 是否可达；try_auto_start=True 时尝试自动拉起。"""
     if not mobile_enabled():
         return False, "移动端测试未启用"
+    if try_auto_start:
+        pass  # Appium 自动启动已移除
     base = appium_server_url().rstrip("/")
     for path in ("/status", "/wd/hub/status"):
         try:
@@ -250,9 +263,35 @@ def list_user_apps(udid: str = "", limit: int = 80) -> List[Dict[str, str]]:
     return result
 
 
+def list_emulators() -> List[Dict[str, Any]]:
+    """adb 枚举到的模拟器（emulator-* 或 127.0.0.1:port）。"""
+    out: List[Dict[str, Any]] = []
+    for dev in list_usb_devices():
+        udid = dev.get("udid") or ""
+        if not is_emulator_udid(udid):
+            continue
+        enriched = dict(dev)
+        enriched["is_emulator"] = True
+        if dev.get("state") == "device":
+            enriched.update(get_device_info(udid))
+        out.append(enriched)
+    return out
+
+
+def pick_default_emulator() -> Optional[Dict[str, Any]]:
+    """选择第一台已授权的模拟器。"""
+    for dev in list_emulators():
+        if dev.get("state") == "device":
+            return dev
+    return None
+
+
 def pick_default_device() -> Optional[Dict[str, Any]]:
-    """选择第一台已授权的真机（不含模拟器）。"""
-    return pick_default_real_device()
+    """选择第一台已授权设备（真机或模拟器）。"""
+    real = pick_default_real_device()
+    if real:
+        return real
+    return pick_default_emulator()
 
 
 def capture_screenshot_png(udid: str = "") -> Optional[bytes]:
@@ -274,48 +313,10 @@ def capture_screenshot_png(udid: str = "") -> Optional[bytes]:
 
 
 def capture_screenshot_frame(udid: str = "") -> Tuple[Optional[bytes], str]:
-    """
-    获取投屏帧。默认 JPEG + 缩放以减小无线 adb 传输体积、提高实际帧率。
-    Returns:
-        (bytes, format) format 为 jpeg 或 png
-    """
-    from mobile_env_config import mirror_format, mirror_jpeg_quality, mirror_max_width
-
+    """获取设备截图帧（PNG，供步骤诊断等使用）。"""
     png = capture_screenshot_png(udid)
     if not png:
         return None, "png"
-    fmt = mirror_format()
-    max_w = mirror_max_width()
-    if fmt in ("jpeg", "jpg") or max_w > 0:
-        try:
-            import cv2
-            import numpy as np
-
-            arr = np.frombuffer(png, dtype=np.uint8)
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is None:
-                return png, "png"
-            if max_w > 0 and img.shape[1] > max_w:
-                scale = max_w / float(img.shape[1])
-                img = cv2.resize(
-                    img,
-                    (max_w, max(1, int(img.shape[0] * scale))),
-                    interpolation=cv2.INTER_AREA,
-                )
-            if fmt in ("jpeg", "jpg"):
-                ok, buf = cv2.imencode(
-                    ".jpg",
-                    img,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), mirror_jpeg_quality()],
-                )
-                if ok:
-                    return buf.tobytes(), "jpeg"
-            else:
-                ok, buf = cv2.imencode(".png", img)
-                if ok:
-                    return buf.tobytes(), "png"
-        except Exception:
-            pass
     return png, "png"
 
 

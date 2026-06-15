@@ -79,7 +79,6 @@
             + '<div class="mb-4">' + feats + '</div>'
             + (p.adb_path ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">adb：' + esc(p.adb_path) + '<br><span class="text-emerald-600">环境已自动配置，无需手动设置</span></p>' : '')
             + (p.id === 'mobile-android-platform-tools' && !installed ? '<p class="text-xs text-gray-500 mb-2">安装后自动识别手机连接。内网环境请联系管理员配置离线安装包。</p>' : '')
-            + (p.id === 'mobile-scrcpy' && !installed ? '<p class="text-xs text-gray-500 mb-2">真机高帧率画布投屏组件，建议与「Android Platform-Tools」一并安装。</p>' : '')
             + (p.sdk_platform_tools_ready && !installed ? '<p class="text-xs text-emerald-600 mb-2">检测到本机 SDK：' + esc(p.sdk_platform_tools_path || '') + '，安装时将直接复制。</p>' : '')
             + (p.android_sdk_home && installed ? '<p class="text-xs text-gray-500 dark:text-gray-400 mb-2 break-all">SDK：' + esc(p.android_sdk_home) + '</p>' : '')
             + '<div class="flex flex-wrap gap-2 mt-auto">'

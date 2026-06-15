@@ -1,0 +1,22 @@
+R_DEF: Internal format may change without notice
+local
+drawable ic_launcher
+id hintText
+id modeText
+id openAccessibilityBtn
+id statusText
+layout activity_main
+mipmap ic_launcher
+string accessibility_desc
+string app_name
+string main_hint
+string mode_capture
+string mode_idle
+string mode_record
+string open_accessibility
+string status_need_accessibility
+string status_ready
+string status_waiting_platform
+style Theme.TestoryAssistant
+xml accessibility_service_config
+xml network_security_config

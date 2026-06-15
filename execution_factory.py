@@ -78,8 +78,8 @@ class ExecutorFactory:
         selector_value: str = "",
         input_value: str = "",
     ) -> Dict[str, Any]:
-        from mobile_automation import sync_mobile_execute_step, validate_mobile_step_result
-        from mobile_executor import get_mobile_executor
+        from mobile_agent_client import agent_replay_step
+        from mobile_device_manager import get_connected_udid
 
         exec_step = self.prepare_step(step)
         if selector_value:
@@ -89,8 +89,14 @@ class ExecutorFactory:
         err = self.validate_step(exec_step)
         if err:
             raise ValueError(err)
-        result = sync_mobile_execute_step(exec_step, get_mobile_executor())
-        return validate_mobile_step_result(result, (exec_step.get("action") or "").strip())
+        udid = get_connected_udid() or ""
+        payload = agent_replay_step(udid, exec_step)
+        if not payload.get("success"):
+            raise RuntimeError(payload.get("error") or "Mobile Agent 执行失败")
+        result = payload.get("result") or {}
+        if result.get("status") == "error":
+            raise RuntimeError(result.get("error") or "步骤执行失败")
+        return result
 
     def execute_step(
         self,

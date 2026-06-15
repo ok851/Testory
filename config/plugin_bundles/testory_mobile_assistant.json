@@ -1,0 +1,14 @@
+{
+  "id": "mobile-testory-assistant",
+  "name": "Testory 移动端助手",
+  "version": "1.0.0",
+  "package": "com.testory.assistant",
+  "apk_filename": "testory-assistant.apk",
+  "description": "Android 无障碍助手：在模拟器/真机窗口直接录制与捕获元素。",
+  "features": ["无障碍录制", "设备屏高亮", "WebSocket 回传"],
+  "local_bundle_search": [
+    "config/plugin_bundles/testory-assistant.apk",
+    "plugin_bundles/testory-assistant.apk",
+    "mobile_assistant_apk/app/build/outputs/apk/debug/app-debug.apk"
+  ]
+}

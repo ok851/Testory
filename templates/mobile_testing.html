@@ -9,10 +9,11 @@
     <header class="ms-page-header">
         <div>
             <h1 class="ms-title"><i class="fas fa-mobile-alt text-emerald-500"></i> 移动端测试</h1>
-            <p class="ms-subtitle">真机 USB / 无线连接 · scrcpy 高帧投屏 · 点屏录步骤 · Appium 自动化</p>
+            <p class="ms-subtitle">手机端物理操作录制 · Agent 关键帧截图 · 无需投屏</p>
         </div>
         <div class="ms-header-actions">
             <span id="msConnectBadge" class="ms-connect-badge">未连接</span>
+            <span id="msAssistantBadge" class="ms-assistant-badge" title="Recorder Plugin">插件 —</span>
         </div>
     </header>
 
@@ -27,116 +28,90 @@
             <div class="ms-panel-scroll">
             <section class="ms-section ms-section--env">
                 <h2 class="ms-section-title"><i class="fas fa-stethoscope text-emerald-500"></i> 环境检测</h2>
-                <p id="msEnvStatus" class="ms-env-status ms-env-status--idle">尚未检测，请点击下方按钮</p>
-                <p id="msEnvBlocking" class="ms-env-blocking ms-muted" style="display:none;"></p>
+                <p id="msEnvStatus" class="ms-env-status ms-env-status--idle">尚未检测</p>
                 <button type="button" id="msBtnEnvCheck" class="ms-btn ms-btn--ghost ms-btn--block">检测环境</button>
-                <details class="ms-setup-panel">
-                    <summary class="ms-setup-summary"><i class="fas fa-book"></i> 首次使用？安装依赖</summary>
-                    <p class="ms-muted ms-setup-hint">
-                        1. 用户菜单 → <strong>插件市场</strong> → 安装「<strong>Android Platform-Tools (adb)</strong>」与「<strong>scrcpy 高帧率投屏</strong>」<br>
-                        2. 手机开启 <strong>开发者选项</strong> 与 <strong>USB 调试</strong>，USB 连接后点「连接设备」<br>
-                        3. 运行自动化步骤需本机安装 <strong>Node.js + Appium 2.x</strong>（<code>appium driver install uiautomator2</code>）
-                    </p>
-                </details>
             </section>
 
             <section class="ms-section">
                 <h2 class="ms-section-title"><i class="fas fa-plug text-emerald-500"></i> 连接设备</h2>
-                <div class="ms-row">
-                    <select id="msDeviceSelect" class="ms-input"></select>
-                    <button type="button" id="msBtnRefreshDevices" class="ms-btn ms-btn--ghost" title="刷新">⟳</button>
+                <div class="ms-device-tabs" role="tablist">
+                    <button type="button" class="ms-device-tab ms-device-tab--active" data-tab="real" id="msTabReal">真机/无线</button>
+                    <button type="button" class="ms-device-tab" data-tab="emulator" id="msTabEmulator">模拟器</button>
                 </div>
-                <div class="ms-row ms-row--wrap">
-                    <button type="button" id="msBtnConnect" class="ms-btn ms-btn--primary">连接设备</button>
-                    <button type="button" id="msBtnDisconnect" class="ms-btn ms-btn--ghost">断开</button>
+                <div class="ms-device-panel ms-device-panel--active" id="msPanelReal">
+                    <div class="ms-row">
+                        <select id="msDeviceSelect" class="ms-input"></select>
+                        <button type="button" id="msBtnRefreshDevices" class="ms-btn ms-btn--ghost">⟳</button>
+                    </div>
+                    <div class="ms-row ms-row--wrap">
+                        <button type="button" id="msBtnConnect" class="ms-btn ms-btn--primary">连接设备</button>
+                        <button type="button" id="msBtnDisconnect" class="ms-btn ms-btn--ghost">断开</button>
+                    </div>
+                    <div class="ms-wireless-panel" id="msWirelessPanel">
+                        <input type="text" id="msWirelessIp" class="ms-input" placeholder="手机 IP">
+                        <input type="text" id="msWirelessPort" class="ms-input" placeholder="端口">
+                        <input type="text" id="msWirelessCode" class="ms-input" placeholder="6 位配对码" maxlength="6">
+                        <button type="button" id="msBtnWirelessConnect" class="ms-btn ms-btn--ghost ms-btn--block">无线配对并连接</button>
+                    </div>
                 </div>
-                <p id="msDeviceHelp" class="ms-device-help ms-muted"></p>
-
-                <div class="ms-wireless-panel" id="msWirelessPanel">
-                    <p class="ms-muted ms-wireless-hint" style="font-size:12px;margin:8px 0;">
-                        <strong>无线调试：</strong>点击「<strong>使用配对码配对设备</strong>」后，<strong>仅填写弹窗内</strong>的 IP、端口与 6 位码（不要用主界面「IP 地址和端口」）。配对成功后系统会自动连接调试端口。
-                    </p>
-                    <label class="ms-label">手机 IP</label>
-                    <input type="text" id="msWirelessIp" class="ms-input" placeholder="192.168.1.5" autocomplete="off">
-                    <label class="ms-label">端口</label>
-                    <input type="text" id="msWirelessPort" class="ms-input" placeholder="39077" inputmode="numeric" autocomplete="off">
-                    <label class="ms-label">6 位配对码</label>
-                    <input type="text" id="msWirelessCode" class="ms-input" placeholder="123456" maxlength="6" inputmode="numeric" autocomplete="off">
-                    <button type="button" id="msBtnWirelessConnect" class="ms-btn ms-btn--ghost ms-btn--block ms-btn--wireless" disabled>无线配对并连接</button>
+                <div class="ms-device-panel" id="msPanelEmulator">
+                    <div class="ms-row">
+                        <select id="msEmulatorSelect" class="ms-input"></select>
+                        <button type="button" id="msBtnRefreshEmulators" class="ms-btn ms-btn--ghost">⟳</button>
+                    </div>
+                    <button type="button" id="msBtnEmulatorConnect" class="ms-btn ms-btn--primary ms-btn--block">连接模拟器</button>
                 </div>
-
             </section>
 
             <section class="ms-section">
                 <h2 class="ms-section-title">项目与用例</h2>
-                <label class="ms-label">项目</label>
                 <select id="msProjectSelect" class="ms-input"></select>
-                <label class="ms-label">用例</label>
                 <select id="msCaseSelect" class="ms-input"></select>
-                <p id="msCaseMeta" class="ms-muted">选择用例后加载步骤</p>
                 <div class="ms-row ms-row--wrap">
                     <button type="button" id="msBtnRun" class="ms-btn ms-btn--success">运行用例</button>
-                    <button type="button" id="msBtnOpenSteps" class="ms-btn ms-btn--ghost">完整编辑</button>
+                    <button type="button" id="msBtnOpenSteps" class="ms-btn ms-btn--ghost" disabled>完整编辑</button>
                 </div>
             </section>
 
             <section class="ms-section">
-                <h2 class="ms-section-title">点屏录制</h2>
-                <p class="ms-muted ms-record-hint">在右侧画面上操作，自动写入当前用例；录制结束后可回放相同动作。</p>
-                <div class="ms-mode-group" role="group" aria-label="录制模式">
-                    <button type="button" id="msModeRecord" class="ms-mode-btn ms-mode-btn--active" data-mode="record">录制</button>
-                    <button type="button" id="msModeCapture" class="ms-mode-btn" data-mode="capture_element">捕获元素</button>
+                <h2 class="ms-section-title">录制</h2>
+                <p id="msRecordHint" class="ms-muted">连接设备并安装插件后，在手机上直接操作。</p>
+                <div id="msRecordingBanner" class="ms-recording-banner" style="display:none;">录制中 — 请在手机端操作</div>
+                <label class="ms-check"><input type="checkbox" id="msScreenshotPerStep" checked> 每步截图</label>
+                <div class="ms-row ms-row--wrap">
+                    <button type="button" id="msBtnStartRecord" class="ms-btn ms-btn--primary" disabled>开始录制</button>
+                    <button type="button" id="msBtnStopRecord" class="ms-btn ms-btn--ghost" disabled>停止录制</button>
+                    <button type="button" id="msBtnInstallAssistant" class="ms-btn ms-btn--ghost">安装插件</button>
                 </div>
-                <label class="ms-check">
-                    <input type="checkbox" id="msAlsoTapVisible" checked>
-                    <span>写入步骤时同步操作设备</span>
-                </label>
-                <p id="msRecordMeta" class="ms-muted">当前：录制（单击写点击步骤、拖拽写滑动步骤）</p>
-                <div class="ms-row ms-row--wrap" style="margin-top:8px;">
-                    <button type="button" id="msBtnReplaySession" class="ms-btn ms-btn--ghost">回放录制</button>
-                    <button type="button" id="msBtnClearSession" class="ms-btn ms-btn--ghost">清空会话</button>
+                <div class="ms-row ms-row--wrap">
+                    <button type="button" id="msBtnReplaySession" class="ms-btn ms-btn--ghost">回放会话</button>
+                    <button type="button" id="msBtnReplayFrom" class="ms-btn ms-btn--ghost">从此步重放</button>
                 </div>
-                <p id="msRecordSessionMeta" class="ms-muted">本次会话：0 个动作</p>
-                <div id="msRecordTimeline" class="ms-record-timeline ms-muted" style="font-size:12px;max-height:120px;overflow:auto;margin-top:6px;"></div>
-                <div id="msProbeInfo" class="ms-probe-info ms-muted" style="display:none;font-size:12px;margin-top:8px;"></div>
-            </section>
-
-            <section class="ms-section ms-section--grow">
-                <h2 class="ms-section-title">步骤列表</h2>
-                <div id="msStepsList" class="ms-steps-list"></div>
-            </section>
-
-            <section class="ms-section">
-                <h2 class="ms-section-title">AI 生成 Android 步骤</h2>
-                <textarea id="msAiGoal" class="ms-textarea" rows="3" placeholder="例如：打开应用，登录账号 test/123456，进入首页并截图"></textarea>
-                <button type="button" id="msBtnAi" class="ms-btn ms-btn--indigo">生成并追加步骤</button>
-                <textarea id="msAiPreview" class="ms-textarea ms-ai-preview" rows="6" style="display:none;" readonly></textarea>
             </section>
             </div>
-
             <p id="msStatus" class="ms-status"></p>
         </aside>
 
-        <main class="ms-panel ms-panel--right">
-            <div class="ms-phone-toolbar">
-                <span id="msMirrorMode" class="ms-mirror-mode ms-mirror-mode--idle" title="投屏方式">未连接</span>
-                <span id="msDeviceDim" class="ms-muted">分辨率 —</span>
-            </div>
-            <div class="ms-phone-stage">
-                <div id="msPhoneShell" class="ms-phone-shell">
-                    <div id="msPhoneNotch" class="ms-phone-notch ms-phone-notch--punch"></div>
-                    <div id="msScreenInner" class="ms-screen-inner">
-                        <canvas id="msMirrorCanvas" class="ms-mirror-canvas" aria-label="设备画面，可点击与滑动"></canvas>
-                        <div id="msMirrorPlaceholder" class="ms-mirror-placeholder">
-                            <i class="fas fa-mobile-alt fa-2x mb-3 opacity-40"></i>
-                            <p>USB 连接手机或完成无线配对后，点击「连接设备」</p>
-                            <p class="ms-muted" style="font-size:12px;">安装 scrcpy 插件可获得高帧率画布投屏</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <p class="ms-hint">录制：单击写点击、拖拽写滑动，并记入会话供回放。捕获元素：点屏写入 UiAutomator 定位并可加入元素库。</p>
+        <main class="ms-panel ms-panel--center">
+            <h2 class="ms-section-title">步骤列表 <span id="msLiveStepCount" class="ms-muted">0</span></h2>
+            <div id="msStepsList" class="ms-steps-list"></div>
+            <div id="msLiveSteps" class="ms-steps-list"></div>
         </main>
+
+        <aside class="ms-panel ms-panel--right">
+            <h2 class="ms-section-title">当前步骤截图</h2>
+            <img id="msKeyframeImg" class="ms-keyframe" alt="关键帧" style="display:none;">
+            <p id="msKeyframePlaceholder" class="ms-muted">录制或选中步骤后显示截图</p>
+            <details class="ms-setup-panel" style="margin-top:1rem;">
+                <summary>控件树 JSON</summary>
+                <pre id="msTreeJson" class="ms-muted" style="font-size:11px;max-height:200px;overflow:auto;"></pre>
+            </details>
+            <div class="ms-agent-panel" style="margin-top:1rem;">
+                <div id="msChatHistory" class="ms-chat-log"></div>
+                <textarea id="msAgentInput" class="ms-textarea" rows="2" placeholder="AI 任务目标"></textarea>
+                <button type="button" id="msBtnAgentPlan" class="ms-btn ms-btn--indigo">生成用例</button>
+            </div>
+        </aside>
     </div>
     {% endif %}
 </div>
@@ -144,7 +119,9 @@
 {% block scripts %}
 {% if mobile_disabled %}
 <script id="__mobileStudioDisabledJson" type="application/json">{{ {'disabled': true, 'reason': mobile_disabled_reason}|tojson }}</script>
+{% else %}
+<script id="__mobileStudioCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=openclaw_gateway_configured)|tojson }}</script>
 {% endif %}
-<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}"></script>
+<script src="{{ url_for('static', filename='js/mobile_agent_panel.js') }}"></script>
 <script src="{{ url_for('static', filename='js/mobile_studio.js') }}"></script>
 {% endblock %}

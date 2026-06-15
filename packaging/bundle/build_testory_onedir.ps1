@@ -18,7 +18,7 @@ function Stop-TestoryRuntimeProcesses {
     if (-not $needles.Count) { return }
 
     $exeNames = @(
-        "TestoryBackend", "TestoryEmbeddedGw", "TestoryBrowserRuntime", "TestoryHermesGw", "TestoryDesktopGw",
+        "TestoryBackend", "TestoryEmbeddedGw", "TestoryBrowserRuntime", "TestoryHermesGw", "TestoryDesktopGw", "TestoryMobileGw",
         "Testory", "TestoryShell", "python", "pythonw"
     )
     foreach ($name in $exeNames) {
@@ -90,7 +90,8 @@ $specs = @(
     "testory_browser_runtime.spec",
     "testory_embedded_gw.spec",
     "testory_hermes_gw.spec",
-    "testory_desktop_gw.spec"
+    "testory_desktop_gw.spec",
+    "testory_mobile_gw.spec"
 )
 
 Push-Location $env:TEMP
@@ -129,6 +130,7 @@ Copy-Onedir "TestoryBrowserRuntime" "TestoryBrowserRuntime"
 Copy-Onedir "TestoryEmbeddedGw" "TestoryEmbeddedGw"
 Copy-Onedir "TestoryHermesGw" "TestoryHermesGw"
 Copy-Onedir "TestoryDesktopGw" "TestoryDesktopGw"
+Copy-Onedir "TestoryMobileGw" "TestoryMobileGw"
 
 $backend = Join-Path $runtime "testory_app\TestoryBackend.exe"
 if (-not (Test-Path $backend)) {
