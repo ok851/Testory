@@ -1,5 +1,5 @@
 /**
- * 移动端测试页 — 右侧 Hermes Agent 对话（精简版）
+ * 移动端测试页 — 右侧 Hermes Agent 对话（精简版）+ Mobile Vision Probe
  */
 (function (global) {
     'use strict';
@@ -96,27 +96,44 @@
         setAgentStatus('正在生成用例…');
         abortCtl = new AbortController();
         try {
+            var ctx = getContext();
             var projSel = $('msProjectSelect');
-            var data = await apiJson('/api/ai/task/plan', {
+            var projectName = projSel && projSel.selectedOptions[0]
+                ? projSel.selectedOptions[0].text : '';
+            var url = '/api/ai/task/plan';
+            var payload = {
+                goal: goal,
+                project_name: projectName,
+                platform_type: 'android',
+                mobile_context: ctx,
+            };
+            if (ctx.device_connected && ctx.udid) {
+                url = '/api/ai/mobile/probe/session';
+                payload = {
+                    goal: goal,
+                    project_name: projectName,
+                    udid: ctx.udid,
+                };
+                setAgentStatus('正在读取设备画面并生成…');
+            }
+            var data = await apiJson(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 signal: abortCtl.signal,
-                body: JSON.stringify({
-                    goal: goal,
-                    project_name: projSel && projSel.selectedOptions[0]
-                        ? projSel.selectedOptions[0].text : '',
-                    platform_type: 'android',
-                    mobile_context: getContext(),
-                }),
+                body: JSON.stringify(payload),
             });
-            if (!data.success || !data.plan) {
+            var plan = data.plan;
+            if (!data.success || !plan) {
                 appendChat('assistant', data.error || '生成失败');
                 setAgentStatus('生成失败');
                 return;
             }
-            var preview = JSON.stringify(data.plan, null, 2);
-            appendChat('assistant', '已生成 ' + (data.plan.steps || []).length + ' 步预览。\n' + preview.slice(0, 1200));
-            var n = await persistPlanSteps(data.plan);
+            var preview = JSON.stringify(plan, null, 2);
+            appendChat('assistant', '已生成 ' + (plan.steps || []).length + ' 步预览。\n' + preview.slice(0, 1200));
+            if (data.vision_hint) {
+                appendChat('assistant', '画面摘要：' + String(data.vision_hint).slice(0, 400));
+            }
+            var n = await persistPlanSteps(plan);
             setAgentStatus(n ? ('已写入 ' + n + ' 个 Android 步骤') : '已生成预览（请选择用例后再次生成以写入）');
         } catch (e) {
             if (e && e.name === 'AbortError') {
@@ -191,7 +208,7 @@
         if (capsEl) {
             try { global.__mobileStudioCaps = JSON.parse(capsEl.textContent); } catch (e) {}
         }
-        appendChat('assistant', '移动端 Agent 已就绪。左侧连接设备并选择用例后，可描述测试目标生成 Android 步骤。');
+        appendChat('assistant', '移动端 Agent 已就绪。连接设备后生成用例将自动读取当前屏幕（Vision Probe）。');
     }
 
     global.MobileAgentPanel = { wireUi: wireUi, appendChat: appendChat, setAgentStatus: setAgentStatus };

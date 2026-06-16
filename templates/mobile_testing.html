@@ -74,6 +74,15 @@
             </section>
 
             <section class="ms-section">
+                <h2 class="ms-section-title">与手机同步</h2>
+                <p class="ms-muted">在 Testory Assistant 中配对后，运行用例将下发到手机执行。</p>
+                <div class="ms-row ms-row--wrap">
+                    <button type="button" id="msBtnDevicePair" class="ms-btn ms-btn--ghost">生成配对码</button>
+                    <span id="msPairCode" class="ms-muted"></span>
+                </div>
+            </section>
+
+            <section class="ms-section">
                 <h2 class="ms-section-title">录制</h2>
                 <p id="msRecordHint" class="ms-muted">连接设备并安装插件后，在手机上直接操作。</p>
                 <div id="msRecordingBanner" class="ms-recording-banner" style="display:none;">录制中 — 请在手机端操作</div>
@@ -86,6 +95,7 @@
                 <div class="ms-row ms-row--wrap">
                     <button type="button" id="msBtnReplaySession" class="ms-btn ms-btn--ghost">回放会话</button>
                     <button type="button" id="msBtnReplayFrom" class="ms-btn ms-btn--ghost">从此步重放</button>
+                    <button type="button" id="msBtnClearSession" class="ms-btn ms-btn--ghost">清空会话</button>
                 </div>
             </section>
             </div>

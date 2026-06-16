@@ -118,7 +118,7 @@
         }
     }
 
-    function updateDeviceDimLabel() {
+    function layoutMirrorCanvas() {
         var shell = $('msPhoneShell');
         var canvas = $('msMirrorCanvas');
         var overlay = $('msMirrorOverlay');
@@ -198,30 +198,7 @@
     }
 
     async function fetchFrame() {
-        if (!state.connected || !state.udid) return;
-        try {
-            var data = await apiJson('/api/mobile/frame?udid=' + encodeURIComponent(state.udid));
-            if (!data.success || !data.data) return;
-            var canvas = $('msMirrorCanvas');
-            if (!canvas) return;
-            var img = new Image();
-            img.onload = function () {
-                canvas.width = data.width || state.deviceWidth;
-                canvas.height = data.height || state.deviceHeight;
-                state.deviceWidth = canvas.width;
-                state.deviceHeight = canvas.height;
-                var ctx = canvas.getContext('2d');
-                if (ctx) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                layoutMirrorCanvas();
-                if (state.highlightBounds) drawHighlight(state.highlightBounds);
-                var modeEl = $('msMirrorMode');
-                if (modeEl) {
-                    modeEl.textContent = '截图刷新';
-                    modeEl.className = 'ms-mirror-mode ms-mirror-mode--screencap';
-                }
-            };
-            img.src = 'data:image/png;base64,' + data.data;
-        } catch (e) { /* ignore poll errors */ }
+        /* 投屏已移除；关键帧由 Agent WS 推送 */
     }
 
     function startFramePolling() {
@@ -494,6 +471,9 @@
         var msg = '已连接 ' + (data.device && data.device.model ? data.device.model : state.udid);
         if (data.is_emulator || isEmulatorUdid(state.udid)) msg += '（模拟器）';
         if (data.plugin_ready) msg += ' · 插件就绪';
+        else if (data.assistant_auto_push && data.assistant_auto_push.success) {
+            msg += ' · 助手已自动安装到设备';
+        }
         setStatus(msg, 'ok');
     }
 
@@ -949,24 +929,31 @@
     }
 
     async function installAssistant() {
-        if (!state.connected || !state.udid) {
-            setStatus('请先连接设备', 'warn');
-            return;
-        }
         setStatus('正在安装助手…', '');
+        var body = {};
+        if (state.connected && state.udid) body.udid = state.udid;
         var data = await apiJson('/api/mobile/assistant/install', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ udid: state.udid }),
+            body: JSON.stringify(body),
         });
         if (data.success) {
-            setStatus(data.message || '助手已安装', 'ok');
-            state.assistantInstalled = true;
+            var msg = data.message || '助手已就绪';
+            if (data.device_push_pending && !state.connected) {
+                msg = '安装包已准备。请连接设备后将自动推送到手机。';
+            }
+            setStatus(msg, data.device_push_pending ? 'warn' : 'ok');
+            state.assistantInstalled = !!data.assistant_on_device || !!data.device_push_pending;
             updateAssistantBadge();
         } else {
             var hint = data.error || '安装失败';
-            if (hint.indexOf('未找到助手 APK') >= 0) {
+            if (data.need_device) {
+                hint += ' 也可先在插件市场安装（无需设备），连接后再推送。';
+            } else if (hint.indexOf('未找到助手 APK') >= 0) {
                 hint += '。请到插件市场安装「Testory 移动端助手」，或编译 mobile_assistant_apk 工程。';
+            }
+            if (hint.indexOf('无障碍') >= 0) {
+                hint += ' 请在手机「设置 → 无障碍」中启用 Testory 助手。';
             }
             setStatus(hint, 'err');
         }
@@ -1146,16 +1133,51 @@
             var data = await apiJson('/api/mobile/run', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ case_id: state.caseId, udid: state.udid }),
+                body: JSON.stringify({ case_id: state.caseId, udid: state.udid, use_sync: true }),
             });
-            if (data.success) setStatus('执行成功，耗时 ' + (data.duration || '') + 's', 'ok');
-            else setStatus(data.error || '执行失败', 'err');
+            if (data.success && data.sync_job_id) {
+                setStatus(data.message || '已下发到手机执行', 'ok');
+                return;
+            }
+            if (data.success) {
+                setStatus('执行成功，耗时 ' + (data.duration || '') + 's', 'ok');
+                return;
+            }
+            setStatus(data.error || '执行失败', 'err');
+        } catch (syncErr) {
+            try {
+                var data2 = await apiJson('/api/mobile/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ case_id: state.caseId, udid: state.udid }),
+                });
+                if (data2.success) setStatus('执行成功（网关回放），耗时 ' + (data2.duration || '') + 's', 'ok');
+                else setStatus(data2.error || syncErr.message || '执行失败', 'err');
+            } catch (e2) {
+                setStatus((e2 && e2.message) || syncErr.message || '执行失败', 'err');
+            }
         } finally {
             clearInterval(pollTimer);
             state.runningStepId = null;
             renderSteps();
-            fetchFrame();
         }
+    }
+
+    async function initDevicePair() {
+        setStatus('正在生成配对码…', '');
+        var data = await apiJson('/api/mobile/sync/pair/init', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        if (!data.success || !data.pair_code) {
+            setStatus(data.error || '配对码生成失败', 'err');
+            return;
+        }
+        state.pairCode = data.pair_code;
+        var el = $('msPairCode');
+        if (el) el.textContent = data.pair_code;
+        setStatus('请在手机 Testory Assistant 输入配对码：' + data.pair_code, 'ok');
     }
 
     function wireUi() {
@@ -1226,6 +1248,12 @@
                 stopRecording().catch(function (e) { setStatus(e.message, 'err'); });
             });
         }
+        var btnPair = $('msBtnDevicePair');
+        if (btnPair) {
+            btnPair.addEventListener('click', function () {
+                initDevicePair().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
         var btnReplayFrom = $('msBtnReplayFrom');
         if (btnReplayFrom) {
             btnReplayFrom.addEventListener('click', function () {
@@ -1267,10 +1295,16 @@
                 });
             }
         });
-        $('msBtnReplaySession').addEventListener('click', function () {
-            replayRecordingSession().catch(function (e) { setStatus(e.message, 'err'); });
-        });
-        $('msBtnClearSession').addEventListener('click', clearRecordingSession);
+        var btnReplaySession = $('msBtnReplaySession');
+        if (btnReplaySession) {
+            btnReplaySession.addEventListener('click', function () {
+                replayRecordingSession().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
+        var btnClearSession = $('msBtnClearSession');
+        if (btnClearSession) {
+            btnClearSession.addEventListener('click', clearRecordingSession);
+        }
         var tapChk = $('msAlsoTapVisible');
         if (tapChk) {
             tapChk.addEventListener('change', function () {
@@ -1280,7 +1314,7 @@
         }
         renderRecordingTimeline();
         setInteractionMode(INTERACTION_RECORD);
-        wireMirrorInteraction();
+        /* mirror 画布交互已移除 */
     }
 
     async function selectCaseById(caseId) {

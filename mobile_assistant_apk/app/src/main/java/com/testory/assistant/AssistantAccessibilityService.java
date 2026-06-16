@@ -2,15 +2,22 @@ package com.testory.assistant;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
+import android.graphics.Bitmap;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 无障碍服务：录制点击/滑动/输入，经本地 JSON-RPC 队列供 Agent 轮询。
@@ -155,6 +162,44 @@ public class AssistantAccessibilityService extends AccessibilityService {
         boolean ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
         node.recycle();
         return ok;
+    }
+
+    byte[] captureScreenshotPng() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            AtomicReference<byte[]> ref = new AtomicReference<>();
+            CountDownLatch latch = new CountDownLatch(1);
+            takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+                @Override
+                public void onSuccess(ScreenshotResult screenshotResult) {
+                    try {
+                        Bitmap bmp = Bitmap.wrapHardwareBuffer(
+                                screenshotResult.getHardwareBuffer(),
+                                screenshotResult.getColorSpace());
+                        if (bmp != null) {
+                            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                            bmp.compress(Bitmap.CompressFormat.PNG, 90, bos);
+                            ref.set(bos.toByteArray());
+                            bmp.recycle();
+                        }
+                    } catch (Exception ignored) {
+                    } finally {
+                        latch.countDown();
+                    }
+                }
+
+                @Override
+                public void onFailure(int errorCode) {
+                    latch.countDown();
+                }
+            });
+            try {
+                latch.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            return ref.get();
+        }
+        return null;
     }
 
     private boolean dispatchTap(int x, int y) {

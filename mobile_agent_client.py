@@ -88,10 +88,21 @@ def agent_disconnect_device(udid: str = "") -> Dict[str, Any]:
 
 
 def agent_install_plugin(udid: str = "") -> Dict[str, Any]:
-    payload, err = mobile_agent_json("POST", "/internal/plugin/install", body={"udid": udid})
-    if err and not payload:
-        return {"success": False, "error": err}
-    return payload or {"success": False, "error": err or "unknown"}
+    from mobile_assistant_bundles import (
+        install_testory_assistant,
+        is_assistant_prepared,
+        prepare_testory_assistant,
+        push_testory_assistant_to_device,
+    )
+
+    udid = (udid or "").strip()
+    if udid:
+        if not is_assistant_prepared():
+            prep = prepare_testory_assistant()
+            if not prep.get("success"):
+                return prep
+        return push_testory_assistant_to_device(udid)
+    return install_testory_assistant()
 
 
 def agent_plugin_status(udid: str = "") -> Dict[str, Any]:

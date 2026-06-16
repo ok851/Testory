@@ -1303,7 +1303,12 @@ class LocalAIService:
     ) -> str:
         platform = (platform_type or "web").strip().lower()
         if platform == "android":
-            return self._build_android_prompt(goal, project_name, memory_context=memory_context)
+            return self._build_android_prompt(
+                goal,
+                project_name,
+                memory_context=memory_context,
+                page_snapshot=(page_snapshot or "").strip(),
+            )
         mem_block = ""
         if memory_context:
             mem_block = f"\nRetrieved similar context (may be from past runs; verify against the LIVE snapshot):\n{memory_context}\n\n"
@@ -1406,10 +1411,18 @@ class LocalAIService:
         goal: str,
         project_name: str,
         memory_context: Optional[str] = None,
+        page_snapshot: str = "",
     ) -> str:
         mem_block = ""
         if memory_context:
             mem_block = f"\nRetrieved similar context (verify against the target Android app):\n{memory_context}\n\n"
+        snap_block = ""
+        if (page_snapshot or "").strip():
+            snap_block = (
+                "\nLIVE Android accessibility snapshot (use ONLY selectors from these lines; "
+                "prefer resource_id or label as accessibility_id):\n"
+                f"{page_snapshot.strip()}\n\n"
+            )
         return (
             "You are generating an Android native UI test case for Appium / UiAutomator2.\n"
             "Each step MUST include:\n"
@@ -1426,6 +1439,7 @@ class LocalAIService:
             f"Project: {project_name or 'unknown'}\n"
             f"Goal: {goal}\n"
             f"{mem_block}"
+            f"{snap_block}"
             "Output strict JSON with this schema:\n"
             "{\n"
             '  "case_name": "string",\n'

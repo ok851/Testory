@@ -270,6 +270,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "device": info,
             "plugin_installed": result.get("plugin_installed"),
             "plugin_ready": result.get("plugin_ready"),
+            "assistant_auto_push": result.get("assistant_auto_push"),
             "is_emulator": is_emulator_udid(result.get("udid") or udid),
         })
 
@@ -380,7 +381,9 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "udid": udid,
             "devices": devices,
             "paired": bool(pairing_code),
+            "plugin_installed": agent_result.get("plugin_installed"),
             "plugin_ready": agent_result.get("plugin_ready"),
+            "assistant_auto_push": agent_result.get("assistant_auto_push"),
         })
 
     @app.route("/api/mobile/tap-at", methods=["POST"])
@@ -716,8 +719,6 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
 
         if not udid:
             udid = get_connected_udid() or ""
-        from mobile_assistant_bundles import install_testory_assistant
-
         return jsonify(agent_install_plugin(udid))
 
     @app.route("/api/mobile/appium/start", methods=["POST"])
@@ -1255,6 +1256,45 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         except (TypeError, ValueError):
             return jsonify({"success": False, "error": "case_id 无效"}), 400
 
+        use_sync = body.get("use_sync") in (True, "true", 1, "1")
+        if use_sync:
+            from app import load_case_and_steps
+            from mobile_sync_store import enqueue_run_job
+
+            db = Database()
+            case, steps = load_case_and_steps(case_id, db)
+            if not case:
+                return jsonify({"success": False, "error": "测试用例不存在"}), 404
+            if not steps:
+                return jsonify({"success": False, "error": "该用例没有步骤"}), 400
+            exec_steps: List[Dict[str, Any]] = []
+            for step in steps:
+                s = dict(step)
+                s["selector_value"] = db.resolve_variables(
+                    step.get("selector_value", ""),
+                    project_id=case.get("project_id"),
+                    case_id=case_id,
+                )
+                s["input_value"] = db.resolve_variables(
+                    step.get("input_value", ""),
+                    project_id=case.get("project_id"),
+                    case_id=case_id,
+                )
+                exec_steps.append(s)
+            job_id = enqueue_run_job(
+                case_id=case_id,
+                steps=exec_steps,
+                user_id=current_user.id,
+                device_id=(body.get("device_id") or body.get("udid") or "").strip(),
+                source="pc",
+            )
+            return jsonify({
+                "success": True,
+                "status": "dispatched",
+                "sync_job_id": job_id,
+                "message": "已下发到已配对手机，请在 Testory Assistant 中执行",
+            })
+
         db = Database()
         from app import load_case_and_steps, _case_run_cancelled, _case_run_lock, _case_run_jobs, _case_job_update
 
@@ -1323,3 +1363,51 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
                     release_machine_lock()
                 except Exception:
                     pass
+
+    @app.route("/api/ai/mobile/probe/session", methods=["POST"])
+    @login_required
+    @api_error_handler
+    @log_api_request
+    def api_ai_mobile_probe_session():
+        """PC 端：从已连接设备拉取截图+控件树，再 Vision Probe 生成步骤。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        goal = (body.get("goal") or "").strip()
+        if not goal:
+            return jsonify({"success": False, "error": "goal 不能为空"}), 400
+        udid = _resolve_request_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        if not mobile_agent_enabled():
+            return jsonify({"success": False, "error": "Mobile Agent 未启动"}), 503
+        import base64
+
+        from mobile_automation_gateway import plugin_rpc
+        from mobile_vision_probe import execute_mobile_vision_probe
+
+        ok, msg = plugin_rpc.ensure_plugin_tunnel(udid)
+        if not ok:
+            return jsonify({"success": False, "error": msg}), 502
+        a11y_tree: Dict[str, Any] = {}
+        screenshot_b64 = ""
+        try:
+            a11y_tree = plugin_rpc.get_page_source(udid) or {}
+        except Exception as exc:
+            uat_logger.debug("mobile probe page source: %s", exc)
+        try:
+            img, _fmt = plugin_rpc.take_screenshot(udid)
+            if img:
+                screenshot_b64 = base64.b64encode(img).decode("ascii")
+        except Exception as exc:
+            uat_logger.debug("mobile probe screenshot: %s", exc)
+        probe_body = {
+            "goal": goal,
+            "a11y_tree": a11y_tree,
+            "screenshot_base64": screenshot_b64,
+            "project_name": body.get("project_name") or "",
+        }
+        out = execute_mobile_vision_probe(probe_body, user_id=current_user.id)
+        code = int(out.pop("_http", 200))
+        return jsonify(out), code

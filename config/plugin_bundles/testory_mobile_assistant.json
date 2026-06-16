@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "package": "com.testory.assistant",
   "apk_filename": "testory-assistant.apk",
-  "description": "Android 无障碍助手：在模拟器/真机窗口直接录制与捕获元素。",
-  "features": ["无障碍录制", "设备屏高亮", "WebSocket 回传"],
+  "description": "Android 无障碍录制插件：手机端物理操作录制，经 Agent JSON-RPC 回传步骤与关键帧截图。",
+  "features": ["无障碍录制", "JSON-RPC", "adb forward", "关键帧截图"],
   "local_bundle_search": [
     "config/plugin_bundles/testory-assistant.apk",
     "plugin_bundles/testory-assistant.apk",

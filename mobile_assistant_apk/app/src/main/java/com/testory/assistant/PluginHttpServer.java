@@ -221,7 +221,32 @@ public final class PluginHttpServer extends NanoHTTPD {
     }
 
     private JSONObject takeScreenshotJson() throws Exception {
-        throw new IllegalStateException("plugin_screenshot_unavailable");
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) throw new IllegalStateException("无障碍服务未就绪");
+        byte[] png = svc.captureScreenshotPng();
+        if (png == null || png.length == 0) {
+            throw new IllegalStateException("screenshot_unavailable");
+        }
+        String b64 = Base64.encodeToString(png, Base64.NO_WRAP);
+        return new JSONObject()
+                .put("format", "png")
+                .put("data", b64)
+                .put("width", 0)
+                .put("height", 0);
+    }
+
+    /** 供 MainActivity 本地轮询录制步骤。 */
+    static org.json.JSONArray drainPendingSteps(int limit) {
+        List<JSONObject> out = new ArrayList<>();
+        int n = 0;
+        for (JSONObject step : pendingSteps) {
+            out.add(step);
+            pendingSteps.remove(step);
+            if (++n >= limit) break;
+        }
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (JSONObject s : out) arr.put(s);
+        return arr;
     }
 
     private JSONObject performTap(JSONObject params) throws Exception {

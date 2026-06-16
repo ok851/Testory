@@ -197,14 +197,16 @@ def _mobile_runtime_installed(plugin_id: str) -> bool:
 
             return bool(get_installed_adb_path())
         if pid == "mobile-testory-assistant":
-            from mobile_assistant_bundles import assistant_installed_on_device
-            from mobile_device_manager import get_connected_udid, pick_default_device
+            from mobile_assistant_bundles import (
+                assistant_installed_on_device,
+                is_assistant_prepared,
+                resolve_target_udid_for_push,
+            )
 
-            udid = get_connected_udid() or ""
-            if not udid:
-                dev = pick_default_device()
-                udid = (dev or {}).get("udid") or ""
-            return assistant_installed_on_device(udid) if udid else False
+            udid = resolve_target_udid_for_push()
+            prepared = is_assistant_prepared()
+            on_device = assistant_installed_on_device(udid) if udid else False
+            return prepared or on_device
     except Exception:
         return False
     return False
@@ -320,11 +322,27 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
                 pass
         if pid == "mobile-testory-assistant":
             try:
-                from mobile_assistant_bundles import assistant_installed_on_device
-                from mobile_device_manager import get_connected_udid
+                from mobile_assistant_bundles import (
+                    assistant_installed_on_device,
+                    is_assistant_prepared,
+                    resolve_target_udid_for_push,
+                )
 
-                udid = get_connected_udid() or ""
-                out["assistant_on_device"] = assistant_installed_on_device(udid) if udid else False
+                udid = resolve_target_udid_for_push()
+                prepared = is_assistant_prepared()
+                on_device = assistant_installed_on_device(udid) if udid else False
+                out["assistant_prepared"] = prepared
+                out["assistant_on_device"] = on_device
+                out["device_push_pending"] = prepared and not on_device
+                if prepared and on_device:
+                    out["status_label"] = "已安装（设备就绪）"
+                    out["status_tone"] = "ok"
+                elif prepared:
+                    out["status_label"] = "已准备（待连接设备推送）"
+                    out["status_tone"] = "warn"
+                elif on_device:
+                    out["status_label"] = "设备已安装"
+                    out["status_tone"] = "ok"
             except Exception:
                 pass
     else:
@@ -570,13 +588,14 @@ def install_plugin_sync(
                 return {"success": False, "error": str(exc)}
         if pid == "mobile-testory-assistant":
             try:
-                from mobile_assistant_bundles import install_testory_assistant
-                from mobile_device_manager import get_connected_udid, pick_default_device
+                from mobile_assistant_bundles import (
+                    assistant_installed_on_device,
+                    is_assistant_prepared,
+                    install_testory_assistant,
+                    resolve_target_udid_for_push,
+                )
 
-                udid = get_connected_udid() or ""
-                if not udid:
-                    dev = pick_default_device()
-                    udid = (dev or {}).get("udid") or ""
+                udid = resolve_target_udid_for_push()
                 result = install_testory_assistant(udid, progress_cb=_progress)
                 if result.get("success"):
                     plugins[pid] = {
@@ -585,6 +604,12 @@ def install_plugin_sync(
                         "version": meta.get("version") or "1.0.0",
                         "installed_at": now,
                         "package": result.get("package") or "com.testory.assistant",
+                        "apk_path": result.get("apk_path") or "",
+                        "device_push_pending": bool(result.get("device_push_pending")),
+                        "assistant_on_device": bool(
+                            result.get("assistant_on_device")
+                            or (udid and assistant_installed_on_device(udid))
+                        ),
                     }
                     _save_state(state)
                 return result

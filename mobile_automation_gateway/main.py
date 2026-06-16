@@ -117,12 +117,19 @@ async def devices_connect(request: Request) -> Dict[str, Any]:
         udid = dev.get("udid") or ""
     set_connected_udid(udid)
     info = get_device_info(udid)
+    push_result = None
+    try:
+        from mobile_assistant_bundles import maybe_auto_push_assistant
+
+        push_result = maybe_auto_push_assistant(udid)
+    except Exception:
+        pass
     plugin_installed = assistant_installed_on_device(udid)
     plugin_ok = False
     plugin_msg = ""
     if plugin_installed:
         plugin_ok, plugin_msg = plugin_rpc.ensure_plugin_tunnel(udid)
-    return {
+    out = {
         "success": True,
         "udid": udid,
         "device": info,
@@ -130,6 +137,14 @@ async def devices_connect(request: Request) -> Dict[str, Any]:
         "plugin_ready": plugin_ok,
         "plugin_message": plugin_msg,
     }
+    if push_result:
+        out["assistant_auto_push"] = push_result
+        if push_result.get("success"):
+            out["plugin_installed"] = True
+            plugin_ok, plugin_msg = plugin_rpc.ensure_plugin_tunnel(udid)
+            out["plugin_ready"] = plugin_ok
+            out["plugin_message"] = plugin_msg
+    return out
 
 
 @app.post("/internal/devices/disconnect")
