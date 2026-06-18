@@ -181,6 +181,90 @@ def append_run_events(job_id: str, payload: Dict[str, Any]) -> bool:
     return True
 
 
+def list_accessible_projects(db: Any, user_id: int) -> List[Dict[str, Any]]:
+    projects = db.get_user_projects(user_id) or []
+    out: List[Dict[str, Any]] = []
+    for p in projects:
+        pid = p.get("id")
+        if not pid:
+            continue
+        out.append({"id": int(pid), "name": p.get("name") or f"项目 #{pid}"})
+    return out
+
+
+def push_case_to_pc(
+    db: Any,
+    user_id: int,
+    *,
+    project_id: int,
+    name: str,
+    steps: List[Dict[str, Any]],
+    remote_case_id: Optional[int] = None,
+    replace: bool = True,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if project_id <= 0:
+        return None, "缺少 project_id"
+    if not db.check_project_access(user_id, int(project_id), "editor"):
+        return None, "无项目编辑权限"
+    if not isinstance(steps, list) or not steps:
+        return None, "steps 为空"
+    case_name = (name or "移动端用例").strip() or "移动端用例"
+    if remote_case_id and int(remote_case_id) > 0:
+        bundle, emsg = case_bundle(db, int(remote_case_id), user_id)
+        if emsg:
+            return None, emsg
+        case_id = int(remote_case_id)
+        case_name = (bundle.get("case") or {}).get("name") or case_name
+        if replace:
+            db.delete_case_steps(case_id)
+        existing = db.get_case_steps(case_id, page=1, page_size=500)
+        next_order = 1 if replace else len(existing) + 1
+    else:
+        case_id = db.create_test_case_v2(
+            int(project_id),
+            case_name,
+            platform="android",
+            case_type="ui",
+        )
+        next_order = 1
+    created = 0
+    for raw in steps:
+        if not isinstance(raw, dict):
+            continue
+        db.create_test_step(
+            case_id=case_id,
+            step_order=int(raw.get("step_order") or next_order),
+            action=(raw.get("action") or "tap").strip(),
+            selector_type=(raw.get("selector_type") or raw.get("strategy") or "").strip(),
+            selector_value=(raw.get("selector_value") or "").strip(),
+            input_value=(raw.get("input_value") or "").strip(),
+            description=(raw.get("description") or "").strip(),
+            automation_layer="android",
+            mobile_spec=json.dumps(raw.get("mobile_spec") or {}, ensure_ascii=False)
+            if isinstance(raw.get("mobile_spec"), dict)
+            else (raw.get("mobile_spec") or ""),
+        )
+        next_order += 1
+        created += 1
+    return {
+        "case_id": case_id,
+        "name": case_name,
+        "project_id": int(project_id),
+        "project_name": _project_name(db, int(project_id)),
+        "step_count": created,
+    }, None
+
+
+def _project_name(db: Any, project_id: int) -> str:
+    try:
+        row = db.get_project(project_id)
+        if row and row.get("name"):
+            return str(row["name"])
+    except Exception:
+        pass
+    return f"项目 #{project_id}"
+
+
 def register_sync_routes(app, *, api_error_handler, login_required, role_required=None):
     """注册 /api/mobile/sync/* 与设备 token 鉴权的 probe 路由。"""
 
@@ -222,6 +306,46 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         db = Database()
         cases = list_accessible_cases(db, int(meta["user_id"]))
         return jsonify({"success": True, "cases": cases})
+
+    @app.route("/api/mobile/sync/projects", methods=["GET"])
+    @api_error_handler
+    def api_mobile_sync_projects():
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        from database import Database
+
+        db = Database()
+        projects = list_accessible_projects(db, int(meta["user_id"]))
+        return jsonify({"success": True, "projects": projects})
+
+    @app.route("/api/mobile/sync/cases/push", methods=["POST"])
+    @api_error_handler
+    def api_mobile_sync_push_case():
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        from database import Database
+
+        body = request.get_json(silent=True) or {}
+        project_id = int(body.get("project_id") or 0)
+        name = (body.get("name") or "").strip()
+        steps_in = body.get("steps") or []
+        remote_case_id = body.get("remote_case_id")
+        replace = body.get("replace", True) is not False
+        db = Database()
+        result, emsg = push_case_to_pc(
+            db,
+            int(meta["user_id"]),
+            project_id=project_id,
+            name=name,
+            steps=steps_in if isinstance(steps_in, list) else [],
+            remote_case_id=int(remote_case_id) if remote_case_id else None,
+            replace=replace,
+        )
+        if emsg:
+            return jsonify({"success": False, "error": emsg}), 400
+        return jsonify({"success": True, **result})
 
     @app.route("/api/mobile/sync/cases/<int:case_id>/bundle", methods=["GET"])
     @api_error_handler

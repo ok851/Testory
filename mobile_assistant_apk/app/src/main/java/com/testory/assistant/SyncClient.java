@@ -63,7 +63,38 @@ public final class SyncClient {
                     postMain(cb, null, resp.optString("error", "配对失败"));
                 }
             } catch (Exception e) {
-                postMain(cb, null, e.getMessage());
+                postMain(cb, null, friendlyError(e));
+            }
+        });
+    }
+
+    static void fetchProjects(Context ctx, Callback cb) {
+        EXEC.execute(() -> {
+            try {
+                JSONObject resp = get(ctx, "/api/mobile/sync/projects");
+                postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "拉取失败"));
+            } catch (Exception e) {
+                postMain(cb, null, friendlyError(e));
+            }
+        });
+    }
+
+    static void pushCase(Context ctx, int projectId, String name, JSONArray steps,
+                         Integer remoteCaseId, boolean replace, Callback cb) {
+        EXEC.execute(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("project_id", projectId);
+                body.put("name", name);
+                body.put("steps", steps);
+                body.put("replace", replace);
+                if (remoteCaseId != null && remoteCaseId > 0) {
+                    body.put("remote_case_id", remoteCaseId);
+                }
+                JSONObject resp = post(ctx, "/api/mobile/sync/cases/push", body);
+                postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "保存失败"));
+            } catch (Exception e) {
+                postMain(cb, null, friendlyError(e));
             }
         });
     }
@@ -74,7 +105,7 @@ public final class SyncClient {
                 JSONObject resp = get(ctx, "/api/mobile/sync/cases");
                 postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "拉取失败"));
             } catch (Exception e) {
-                postMain(cb, null, e.getMessage());
+                postMain(cb, null, friendlyError(e));
             }
         });
     }
@@ -85,7 +116,7 @@ public final class SyncClient {
                 JSONObject resp = get(ctx, "/api/mobile/sync/cases/" + caseId + "/bundle");
                 postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "拉取失败"));
             } catch (Exception e) {
-                postMain(cb, null, e.getMessage());
+                postMain(cb, null, friendlyError(e));
             }
         });
     }
@@ -98,7 +129,7 @@ public final class SyncClient {
                 JSONObject resp = post(ctx, "/api/mobile/sync/cases/" + remoteCaseId + "/steps", body);
                 postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "上传失败"));
             } catch (Exception e) {
-                postMain(cb, null, e.getMessage());
+                postMain(cb, null, friendlyError(e));
             }
         });
     }
@@ -109,7 +140,7 @@ public final class SyncClient {
                 JSONObject resp = get(ctx, "/api/mobile/sync/run/pending");
                 postMain(cb, resp, null);
             } catch (Exception e) {
-                postMain(cb, null, e.getMessage());
+                postMain(cb, null, friendlyError(e));
             }
         });
     }
@@ -120,7 +151,7 @@ public final class SyncClient {
                 JSONObject resp = post(ctx, "/api/mobile/sync/run/" + jobId + "/events", payload);
                 postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "上报失败"));
             } catch (Exception e) {
-                postMain(cb, null, e.getMessage());
+                postMain(cb, null, friendlyError(e));
             }
         });
     }
@@ -135,7 +166,7 @@ public final class SyncClient {
                 JSONObject resp = post(ctx, "/api/ai/mobile/probe", body);
                 postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "生成失败"));
             } catch (Exception e) {
-                postMain(cb, null, e.getMessage());
+                postMain(cb, null, friendlyError(e));
             }
         });
     }
@@ -219,5 +250,13 @@ public final class SyncClient {
             if (err != null) cb.onError(err);
             else cb.onSuccess(data);
         });
+    }
+
+    private static String friendlyError(Exception e) {
+        String msg = e.getMessage() == null ? "网络错误" : e.getMessage();
+        if (msg.contains("Cleartext HTTP traffic")) {
+            return "无法使用 HTTP 连接 PC，请升级 Testory Assistant 或检查网络安全配置";
+        }
+        return msg;
     }
 }

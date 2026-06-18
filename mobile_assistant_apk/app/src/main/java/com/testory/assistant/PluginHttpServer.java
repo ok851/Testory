@@ -2,17 +2,16 @@ package com.testory.assistant;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.util.Base64;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import fi.iki.elonen.NanoHTTPD;
@@ -48,7 +47,7 @@ public final class PluginHttpServer extends NanoHTTPD {
         }
     }
 
-    static synchronized void stop() {
+    static synchronized void stopServer() {
         if (instance == null) return;
         try {
             instance.stop();
@@ -101,10 +100,10 @@ public final class PluginHttpServer extends NanoHTTPD {
             return jsonResponse(errorResponse(null, -32600, "仅支持 POST"));
         }
         try {
-            int contentLen = session.getBody().available();
-            byte[] buf = new byte[Math.max(contentLen, 256)];
-            int read = session.getBody().read(buf);
-            String body = new String(buf, 0, Math.max(read, 0), "UTF-8");
+            Map<String, String> files = new HashMap<>();
+            session.parseBody(files);
+            String body = files.get("postData");
+            if (body == null) body = "";
             JSONObject req = new JSONObject(body);
             Object id = req.has("id") ? req.get("id") : JSONObject.NULL;
             String method = req.optString("method", "");
@@ -133,11 +132,12 @@ public final class PluginHttpServer extends NanoHTTPD {
                 boolean shot = params.optBoolean("screenshotPerStep", true);
                 AssistantSession.setScreenshotPerStep(shot);
                 AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
-                PluginForegroundService.startRecording(appContext);
+                long caseId = params.optLong("caseId", AssistantSession.getLocalCaseId());
+                if (caseId > 0) AssistantSession.setLocalCaseId(caseId);
+                RecordingController.startRecording(appContext, caseId > 0 ? caseId : AssistantSession.getLocalCaseId());
                 return ok("recording");
             case "stopRecording":
-                AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
-                PluginForegroundService.stopRecording(appContext);
+                RecordingController.stopRecording(appContext);
                 return ok("stopped");
             case "pollSteps":
                 int limit = params.optInt("limit", 20);

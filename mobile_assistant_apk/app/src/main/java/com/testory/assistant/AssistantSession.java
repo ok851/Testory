@@ -16,6 +16,12 @@ public final class AssistantSession {
     private static final AtomicBoolean socketConnected = new AtomicBoolean(false);
     private static final AtomicReference<String> deviceId = new AtomicReference<>("");
     private static final AtomicBoolean screenshotPerStep = new AtomicBoolean(true);
+    /** 本地录制用例（无 remote_id）在筛选项中的 project_id。 */
+    public static final int LOCAL_PROJECT_ID = -1;
+
+    private static volatile long suppressRecordingUntilMs;
+    private static final AtomicReference<Long> localCaseId = new AtomicReference<>(-1L);
+    private static volatile Runnable stepsUpdatedListener;
 
     private static volatile AssistantAccessibilityService serviceInstance;
 
@@ -95,6 +101,32 @@ public final class AssistantSession {
 
     static boolean isScreenshotPerStep() {
         return screenshotPerStep.get();
+    }
+
+    static void setLocalCaseId(long id) {
+        localCaseId.set(id);
+    }
+
+    static long getLocalCaseId() {
+        Long v = localCaseId.get();
+        return v == null ? -1L : v;
+    }
+
+    static void suppressRecordingFor(long ms) {
+        suppressRecordingUntilMs = System.currentTimeMillis() + Math.max(0, ms);
+    }
+
+    static boolean isRecordingSuppressed() {
+        return System.currentTimeMillis() < suppressRecordingUntilMs;
+    }
+
+    static void setStepsUpdatedListener(Runnable listener) {
+        stepsUpdatedListener = listener;
+    }
+
+    static void notifyStepsUpdated() {
+        Runnable r = stepsUpdatedListener;
+        if (r != null) r.run();
     }
 
     private static String normalizeMode(String mode) {

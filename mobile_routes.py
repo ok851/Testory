@@ -270,7 +270,13 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "device": info,
             "plugin_installed": result.get("plugin_installed"),
             "plugin_ready": result.get("plugin_ready"),
-            "assistant_auto_push": result.get("assistant_auto_push"),
+            "plugin_message": result.get("plugin_message"),
+            "assistant_installed": result.get("assistant_installed"),
+            "assistant_version_on_device": result.get("assistant_version_on_device"),
+            "assistant_version_expected": result.get("assistant_version_expected"),
+            "assistant_version_name_expected": result.get("assistant_version_name_expected"),
+            "assistant_needs_install": result.get("assistant_needs_install"),
+            "assistant_install_hint": result.get("assistant_install_hint"),
             "is_emulator": is_emulator_udid(result.get("udid") or udid),
         })
 
@@ -383,7 +389,10 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "paired": bool(pairing_code),
             "plugin_installed": agent_result.get("plugin_installed"),
             "plugin_ready": agent_result.get("plugin_ready"),
-            "assistant_auto_push": agent_result.get("assistant_auto_push"),
+            "assistant_needs_install": agent_result.get("assistant_needs_install"),
+            "assistant_install_hint": agent_result.get("assistant_install_hint"),
+            "assistant_version_on_device": agent_result.get("assistant_version_on_device"),
+            "assistant_version_name_expected": agent_result.get("assistant_version_name_expected"),
         })
 
     @app.route("/api/mobile/tap-at", methods=["POST"])
@@ -719,7 +728,8 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
 
         if not udid:
             udid = get_connected_udid() or ""
-        return jsonify(agent_install_plugin(udid))
+        open_app = bool(body.get("open_app"))
+        return jsonify(agent_install_plugin(udid, launch_app=open_app))
 
     @app.route("/api/mobile/appium/start", methods=["POST"])
     @login_required

@@ -15,8 +15,11 @@ import java.util.List;
 /** 本地用例/步骤/运行会话存储。 */
 public final class LocalStore extends SQLiteOpenHelper {
 
+    /** 本地录制用例筛选项 ID（remote_id 为空）。 */
+    public static final int LOCAL_PROJECT_ID = -1;
+
     private static final String DB = "testory_assistant.db";
-    private static final int VER = 1;
+    private static final int VER = 2;
 
     private static volatile LocalStore instance;
 
@@ -43,6 +46,7 @@ public final class LocalStore extends SQLiteOpenHelper {
                         + "remote_id INTEGER,"
                         + "name TEXT,"
                         + "project_id INTEGER,"
+                        + "project_name TEXT,"
                         + "updated_at INTEGER"
                         + ")"
         );
@@ -74,15 +78,25 @@ public final class LocalStore extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
-        /* future migrations */
+        if (oldV < 2) {
+            try {
+                db.execSQL("ALTER TABLE cases ADD COLUMN project_name TEXT");
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     long upsertCase(String name, Integer remoteId, int projectId) {
+        return upsertCase(name, remoteId, projectId, "");
+    }
+
+    long upsertCase(String name, Integer remoteId, int projectId, String projectName) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues cv = new ContentValues();
         cv.put("name", name);
         cv.put("remote_id", remoteId);
         cv.put("project_id", projectId);
+        cv.put("project_name", projectName != null ? projectName : "");
         cv.put("updated_at", System.currentTimeMillis());
         if (remoteId != null) {
             try (Cursor c = db.query("cases", new String[]{"id"}, "remote_id=?",
@@ -121,16 +135,83 @@ public final class LocalStore extends SQLiteOpenHelper {
         SQLiteDatabase db = getReadableDatabase();
         try (Cursor c = db.query("cases", null, null, null, null, null, "updated_at DESC")) {
             while (c.moveToNext()) {
+                out.add(cursorToCase(c));
+            }
+        }
+        return out;
+    }
+
+    List<JSONObject> listProjects() throws Exception {
+        List<JSONObject> out = new ArrayList<>();
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.rawQuery(
+                "SELECT DISTINCT project_id, project_name FROM cases ORDER BY project_name ASC",
+                null)) {
+            while (c.moveToNext()) {
                 JSONObject o = new JSONObject();
-                o.put("id", c.getLong(c.getColumnIndexOrThrow("id")));
-                o.put("remote_id", c.isNull(c.getColumnIndexOrThrow("remote_id"))
-                        ? JSONObject.NULL : c.getInt(c.getColumnIndexOrThrow("remote_id")));
-                o.put("name", c.getString(c.getColumnIndexOrThrow("name")));
-                o.put("project_id", c.getInt(c.getColumnIndexOrThrow("project_id")));
+                o.put("project_id", c.getInt(0));
+                String pname = c.isNull(1) ? "" : c.getString(1);
+                o.put("project_name", pname);
                 out.add(o);
             }
         }
         return out;
+    }
+
+    List<JSONObject> listCasesByProject(int projectId) throws Exception {
+        if (projectId <= 0 && projectId != LocalStore.LOCAL_PROJECT_ID) {
+            return listCases();
+        }
+        List<JSONObject> out = new ArrayList<>();
+        SQLiteDatabase db = getReadableDatabase();
+        String where;
+        String[] args;
+        if (projectId == LocalStore.LOCAL_PROJECT_ID) {
+            where = "remote_id IS NULL";
+            args = null;
+        } else {
+            where = "project_id=?";
+            args = new String[]{String.valueOf(projectId)};
+        }
+        try (Cursor c = db.query("cases", null, where, args, null, null, "updated_at DESC")) {
+            while (c.moveToNext()) {
+                out.add(cursorToCase(c));
+            }
+        }
+        return out;
+    }
+
+    boolean hasLocalCases() throws Exception {
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.query("cases", new String[]{"id"}, "remote_id IS NULL",
+                null, null, null, null, "1")) {
+            return c.moveToFirst();
+        }
+    }
+
+    JSONObject getCase(long caseId) throws Exception {
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.query("cases", null, "id=?",
+                new String[]{String.valueOf(caseId)}, null, null, null, "1")) {
+            if (c.moveToFirst()) {
+                return cursorToCase(c);
+            }
+        }
+        return null;
+    }
+
+    private JSONObject cursorToCase(Cursor c) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("id", c.getLong(c.getColumnIndexOrThrow("id")));
+        o.put("remote_id", c.isNull(c.getColumnIndexOrThrow("remote_id"))
+                ? JSONObject.NULL : c.getInt(c.getColumnIndexOrThrow("remote_id")));
+        o.put("name", c.getString(c.getColumnIndexOrThrow("name")));
+        o.put("project_id", c.getInt(c.getColumnIndexOrThrow("project_id")));
+        int nameIdx = c.getColumnIndex("project_name");
+        o.put("project_name", nameIdx >= 0 && !c.isNull(nameIdx)
+                ? c.getString(nameIdx) : "");
+        o.put("local_only", c.isNull(c.getColumnIndexOrThrow("remote_id")));
+        return o;
     }
 
     List<JSONObject> getSteps(long caseId) throws Exception {
@@ -162,10 +243,10 @@ public final class LocalStore extends SQLiteOpenHelper {
         return out;
     }
 
-    void appendRecordedStep(long caseId, JSONObject raw) throws Exception {
+    void appendNormalizedStep(long caseId, JSONObject step) throws Exception {
         List<JSONObject> existing = getSteps(caseId);
         int order = existing.size() + 1;
-        JSONObject step = RecordStepConverter.toDbStep(raw, order);
+        step.put("step_order", order);
         SQLiteDatabase db = getWritableDatabase();
         ContentValues cv = new ContentValues();
         cv.put("case_id", caseId);
@@ -173,11 +254,43 @@ public final class LocalStore extends SQLiteOpenHelper {
         cv.put("action", step.optString("action"));
         cv.put("selector_type", step.optString("selector_type"));
         cv.put("selector_value", step.optString("selector_value"));
-        cv.put("input_value", step.optString("input_value"));
-        cv.put("description", step.optString("description"));
+        cv.put("input_value", step.optString("input_value", ""));
+        cv.put("description", step.optString("description", ""));
         cv.put("mobile_spec", step.optJSONObject("mobile_spec") != null
                 ? step.getJSONObject("mobile_spec").toString() : "");
         db.insert("steps", null, cv);
+    }
+
+    void appendRecordedStep(long caseId, JSONObject raw) throws Exception {
+        appendNormalizedStep(caseId, RecordStepConverter.toDbStep(raw, getSteps(caseId).size() + 1));
+    }
+
+    void replaceStepsFromNormalized(long caseId, List<JSONObject> steps) throws Exception {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete("steps", "case_id=?", new String[]{String.valueOf(caseId)});
+        for (JSONObject s : steps) {
+            ContentValues cv = new ContentValues();
+            cv.put("case_id", caseId);
+            cv.put("step_order", s.optInt("step_order"));
+            cv.put("action", s.optString("action"));
+            cv.put("selector_type", s.optString("selector_type"));
+            cv.put("selector_value", s.optString("selector_value"));
+            cv.put("input_value", s.optString("input_value", ""));
+            cv.put("description", s.optString("description", ""));
+            cv.put("mobile_spec", s.optJSONObject("mobile_spec") != null
+                    ? s.getJSONObject("mobile_spec").toString() : "");
+            db.insert("steps", null, cv);
+        }
+    }
+
+    void linkToRemote(long localCaseId, int remoteId, int projectId, String projectName) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put("remote_id", remoteId);
+        cv.put("project_id", projectId);
+        cv.put("project_name", projectName != null ? projectName : "");
+        cv.put("updated_at", System.currentTimeMillis());
+        db.update("cases", cv, "id=?", new String[]{String.valueOf(localCaseId)});
     }
 
     long startRunSession(long caseId) {

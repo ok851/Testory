@@ -3,16 +3,36 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 _PLUGIN_ID = "mobile-testory-assistant"
 _PACKAGE = "com.testory.assistant"
 _ROOT = Path(__file__).resolve().parent
 _MANIFEST_PATH = _ROOT / "config" / "plugin_bundles" / "testory_mobile_assistant.json"
 _STAGED_APK_NAME = "testory-assistant.apk"
+_INSTALL_SCOPE_ACTIVE = False
+
+
+@contextmanager
+def assistant_device_install_scope() -> Iterator[None]:
+    """仅「安装插件」等显式入口可调用 adb install；连接设备禁止安装。"""
+    global _INSTALL_SCOPE_ACTIVE
+    _INSTALL_SCOPE_ACTIVE = True
+    try:
+        yield
+    finally:
+        _INSTALL_SCOPE_ACTIVE = False
+
+
+def _device_install_allowed() -> bool:
+    return _INSTALL_SCOPE_ACTIVE
 
 
 def _manifest() -> Dict[str, Any]:
@@ -30,9 +50,7 @@ def resolve_assistant_apk_path() -> Optional[Path]:
     manifest = _manifest()
     filename = manifest.get("apk_filename") or _STAGED_APK_NAME
     patterns = manifest.get("local_bundle_search") or [
-        "plugin_bundles/{filename}",
         "config/plugin_bundles/{filename}",
-        "mobile_assistant_apk/app/build/outputs/apk/debug/{filename}",
     ]
     for pattern in patterns:
         rel = str(pattern).format(filename=filename)
@@ -61,11 +79,11 @@ def is_assistant_prepared() -> bool:
 
 
 def resolve_install_apk_path() -> Optional[Path]:
-    """优先使用已准备的插件包，否则回退到内置 bundle。"""
-    staged = get_staged_assistant_apk()
-    if staged is not None:
-        return staged
-    return resolve_assistant_apk_path()
+    """安装时优先使用仓库内置 bundle，避免 extensions 目录残留旧副本。"""
+    bundled = resolve_assistant_apk_path()
+    if bundled is not None:
+        return bundled
+    return get_staged_assistant_apk()
 
 
 def _adb_cmd(udid: str = "") -> list:
@@ -93,11 +111,49 @@ def resolve_target_udid_for_push() -> str:
     return ""
 
 
+def _expected_version_code() -> int:
+    try:
+        return int(_manifest().get("apk_version_code") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def get_device_assistant_version_code(udid: str = "") -> int:
+    udid = (udid or resolve_target_udid_for_push() or "").strip()
+    if not udid:
+        return 0
+    try:
+        proc = subprocess.run(
+            _adb_cmd(udid) + ["shell", "dumpsys", "package", _PACKAGE],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return 0
+        import re
+
+        m = re.search(r"versionCode=(\d+)", proc.stdout or "")
+        return int(m.group(1)) if m else 0
+    except Exception:
+        return 0
+
+
+def device_assistant_needs_upgrade(udid: str = "") -> bool:
+    expected = _expected_version_code()
+    if expected <= 0:
+        return False
+    if not assistant_installed_on_device(udid):
+        return True
+    return get_device_assistant_version_code(udid) < expected
+
+
 def no_device_hint() -> str:
     return (
         "当前没有已连接的 Android 设备或模拟器。"
         "插件安装包已可在本机准备；请启动模拟器、USB 连接真机或完成无线调试配对后，"
-        "在「移动端测试」页连接设备，系统会自动将助手推送到手机（也可再次点击「安装到设备」）。"
+        "在「移动端测试」页点击「安装插件」手动推送助手（连接设备不会自动安装）。"
     )
 
 
@@ -165,23 +221,25 @@ def prepare_testory_assistant(*, progress_cb=None) -> Dict[str, Any]:
     _step(100, "助手安装包已就绪")
     udid = resolve_target_udid_for_push()
     on_device = assistant_installed_on_device(udid) if udid else False
+    needs_upgrade = device_assistant_needs_upgrade(udid) if udid else False
     return {
         "success": True,
         "plugin_id": _PLUGIN_ID,
         "package": _PACKAGE,
         "apk_path": str(dest),
         "staged_only": True,
-        "device_push_pending": not on_device,
+        "device_push_pending": bool(udid and (not on_device or needs_upgrade)),
         "assistant_on_device": on_device,
+        "assistant_needs_upgrade": needs_upgrade,
         "connected_udid": udid or None,
         "message": (
             "助手安装包已准备完成。"
             + (
-                "检测到已连接设备，正在尝试推送到手机…"
-                if udid and not on_device
+                "检测到已连接设备，请在「移动端测试」页点击「安装插件」手动推送。"
+                if udid and (not on_device or needs_upgrade)
                 else no_device_hint()
                 if not udid
-                else "设备上已存在助手，无需重复安装。"
+                else "设备上已是最新助手，无需重复安装。"
             )
         ),
     }
@@ -191,8 +249,19 @@ def push_testory_assistant_to_device(
     udid: str = "",
     *,
     progress_cb=None,
+    force_reinstall: bool = False,
+    launch_app: bool = False,
+    _from_authorized_install: bool = False,
 ) -> Dict[str, Any]:
     """阶段二：将已准备的 APK 通过 adb 安装到设备。"""
+    if not _from_authorized_install and not _device_install_allowed():
+        logger.warning("blocked unauthorized assistant adb install (udid=%s)", udid or "")
+        return {
+            "success": False,
+            "error": "连接设备不会自动安装助手。请在 PC 端点击「安装插件」。",
+            "plugin_id": _PLUGIN_ID,
+            "blocked_unauthorized_install": True,
+        }
     def _step(percent: int, label: str) -> None:
         if progress_cb:
             try:
@@ -222,7 +291,8 @@ def push_testory_assistant_to_device(
             "plugin_id": _PLUGIN_ID,
         }
 
-    if assistant_installed_on_device(udid):
+    already = assistant_installed_on_device(udid)
+    if already and not force_reinstall:
         _step(100, "设备上已安装助手")
         return {
             "success": True,
@@ -233,7 +303,8 @@ def push_testory_assistant_to_device(
             "message": "助手已在该设备上安装。请在手机开启无障碍服务。",
         }
 
-    _step(15, f"正在安装到设备 {udid}…")
+    label = "正在升级助手…" if already else f"正在安装到设备 {udid}…"
+    _step(15, label)
     try:
         proc = subprocess.run(
             _adb_cmd(udid) + ["install", "-r", str(apk)],
@@ -257,18 +328,34 @@ def push_testory_assistant_to_device(
 
     _step(70, "配置 adb forward 隧道…")
     rev_ok, rev_msg = setup_adb_forward(udid, 17123)
-    try:
-        _step(85, "打开助手引导页…")
-        subprocess.run(
-            _adb_cmd(udid) + ["shell", "am", "start", "-n", f"{_PACKAGE}/.MainActivity"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except Exception:
-        pass
+    if launch_app:
+        try:
+            _step(85, "打开助手引导页…")
+            subprocess.run(
+                _adb_cmd(udid) + ["shell", "am", "start", "-n", f"{_PACKAGE}/.MainActivity"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except Exception:
+            pass
+    else:
+        # 部分模拟器 adb install -r 后会自动拉起 App，强制回到后台
+        try:
+            subprocess.run(
+                _adb_cmd(udid) + ["shell", "am", "force-stop", _PACKAGE],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except Exception:
+            pass
     _step(100, "助手已安装到设备")
+    manifest = _manifest()
+    expected_ver = manifest.get("apk_version_name") or manifest.get("version") or "1.1.3"
+    device_code = get_device_assistant_version_code(udid)
     return {
         "success": True,
         "plugin_id": _PLUGIN_ID,
@@ -279,31 +366,54 @@ def push_testory_assistant_to_device(
         "adb_forward_message": rev_msg,
         "device_push_pending": False,
         "assistant_on_device": True,
+        "reinstalled": bool(already),
+        "expected_version": expected_ver,
+        "assistant_version_on_device": device_code,
+        "assistant_version_expected": _expected_version_code(),
         "message": (
-            "Testory 助手已安装到设备。请在手机上打开「Testory Assistant」并开启无障碍服务（仅需一次）。"
+            f"Testory 助手已{'升级' if already else '安装'}到设备（v{expected_ver}，versionCode={device_code}）。"
+            + ("请打开 App 确认版本号，" if not launch_app else "")
+            + "并在系统设置中重新开启无障碍服务。"
         ),
     }
 
 
+def get_assistant_device_status(udid: str = "") -> Dict[str, Any]:
+    """连接设备时仅检测版本，不触发 adb install。"""
+    udid = (udid or resolve_target_udid_for_push() or "").strip()
+    manifest = _manifest()
+    expected_code = _expected_version_code()
+    expected_name = str(manifest.get("apk_version_name") or manifest.get("version") or "")
+    on_device = assistant_installed_on_device(udid) if udid else False
+    device_code = get_device_assistant_version_code(udid) if on_device else 0
+    bundled = resolve_assistant_apk_path()
+    needs = (not on_device) or (expected_code > 0 and device_code < expected_code)
+    return {
+        "assistant_installed": on_device,
+        "assistant_version_on_device": device_code,
+        "assistant_version_expected": expected_code,
+        "assistant_version_name_expected": expected_name,
+        "assistant_needs_install": needs,
+        "assistant_bundled_apk": str(bundled) if bundled else None,
+    }
+
+
 def maybe_auto_push_assistant(udid: str = "") -> Optional[Dict[str, Any]]:
-    """连接设备后：若本机已准备 APK 且设备未安装，则自动推送。"""
-    udid = (udid or "").strip()
-    if not udid or not is_assistant_prepared():
-        return None
-    if assistant_installed_on_device(udid):
-        return None
-    return push_testory_assistant_to_device(udid)
+    """已禁用：连接设备时不自动安装/升级助手，请用户在 Web 端点击「安装插件」。"""
+    return None
 
 
 def install_testory_assistant(
     udid: str = "",
     *,
     progress_cb=None,
+    force_reinstall: bool = True,
+    launch_app: bool = False,
 ) -> Dict[str, Any]:
     """
     插件市场 / 移动端「安装助手」统一入口：
-    1. 确保本机 APK 已准备
-    2. 有设备则推送到手机；无设备则仅完成本机准备并提示后续步骤
+    1. 确保本机 APK 已准备（从 config/plugin_bundles 复制最新包）
+    2. 有设备则推送到手机（默认强制 adb install -r 覆盖旧版）
     """
     prep = prepare_testory_assistant(progress_cb=progress_cb)
     if not prep.get("success"):
@@ -313,14 +423,14 @@ def install_testory_assistant(
     if not target:
         return prep
 
-    if assistant_installed_on_device(target):
-        prep["assistant_on_device"] = True
-        prep["device_push_pending"] = False
-        prep["staged_only"] = False
-        prep["message"] = "助手安装包已就绪，设备上亦已安装。请开启无障碍服务。"
-        return prep
-
-    pushed = push_testory_assistant_to_device(target, progress_cb=progress_cb)
+    with assistant_device_install_scope():
+        pushed = push_testory_assistant_to_device(
+            target,
+            progress_cb=progress_cb,
+            force_reinstall=force_reinstall,
+            launch_app=launch_app,
+            _from_authorized_install=True,
+        )
     if pushed.get("success"):
         return pushed
 
@@ -328,7 +438,7 @@ def install_testory_assistant(
     prep["device_push_pending"] = True
     prep["message"] = (
         f"安装包已准备完成，但推送到设备失败：{pushed.get('error') or '未知错误'}。"
-        "请连接设备后在移动端测试页重试「安装到设备」。"
+        "请连接设备后在移动端测试页重试「安装插件」。"
     )
     return prep
 

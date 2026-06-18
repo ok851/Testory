@@ -300,7 +300,8 @@ def plugin_input(
 
 
 def restart_plugin_service(udid: str) -> Tuple[bool, str]:
-    rc, out, err = _run_adb(
+    """尝试唤醒插件 HTTP 隧道；绝不启动 MainActivity，避免连接/安装后自动弹出 App。"""
+    _run_adb(
         _adb_cmd(udid)
         + [
             "shell",
@@ -311,15 +312,7 @@ def restart_plugin_service(udid: str) -> Tuple[bool, str]:
         ],
         timeout=15,
     )
-    if rc != 0:
-        rc2, _, err2 = _run_adb(
-            _adb_cmd(udid)
-            + ["shell", "am", "start", "-n", f"{_PACKAGE}/.MainActivity"],
-            timeout=15,
-        )
-        if rc2 != 0:
-            return False, err or err2 or "无法重启插件服务"
-    time.sleep(1.0)
+    time.sleep(0.5)
     return ensure_plugin_tunnel(udid)
 
 

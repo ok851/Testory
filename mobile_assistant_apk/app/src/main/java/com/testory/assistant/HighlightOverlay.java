@@ -1,5 +1,6 @@
 package com.testory.assistant;
 
+import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
@@ -21,17 +22,19 @@ public final class HighlightOverlay {
     }
 
     static void show(Context ctx, Rect bounds) {
-        if (ctx == null || bounds == null || bounds.isEmpty()) return;
-        Context app = ctx.getApplicationContext();
-        MAIN.post(() -> showOnMain(app, bounds));
+        if (bounds == null || bounds.isEmpty()) return;
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) return;
+        MAIN.post(() -> showOnMain(svc, bounds));
     }
 
     static void hide() {
         MAIN.post(HighlightOverlay::hideOnMain);
     }
 
-    private static void showOnMain(Context app, Rect bounds) {
+    private static void showOnMain(AccessibilityService svc, Rect bounds) {
         hideOnMain();
+        Context app = svc;
         windowManager = (WindowManager) app.getSystemService(Context.WINDOW_SERVICE);
         if (windowManager == null) return;
 

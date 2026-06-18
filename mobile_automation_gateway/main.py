@@ -78,9 +78,17 @@ async def _on_startup() -> None:
     rec_mod.set_ws_loop(asyncio.get_event_loop())
 
 
+_GATEWAY_BUILD = os.environ.get("MOBILE_GATEWAY_BUILD") or "20260616-no-auto-install"
+
+
 @app.get("/health")
 async def health() -> Dict[str, Any]:
-    return {"success": True, "service": "mobile-agent-gateway"}
+    return {
+        "success": True,
+        "service": "mobile-agent-gateway",
+        "build": _GATEWAY_BUILD,
+        "auto_install_on_connect": False,
+    }
 
 
 @app.post("/internal/devices/scan")
@@ -117,14 +125,14 @@ async def devices_connect(request: Request) -> Dict[str, Any]:
         udid = dev.get("udid") or ""
     set_connected_udid(udid)
     info = get_device_info(udid)
-    push_result = None
+    assistant_status: Dict[str, Any] = {}
     try:
-        from mobile_assistant_bundles import maybe_auto_push_assistant
+        from mobile_assistant_bundles import get_assistant_device_status
 
-        push_result = maybe_auto_push_assistant(udid)
+        assistant_status = get_assistant_device_status(udid)
     except Exception:
         pass
-    plugin_installed = assistant_installed_on_device(udid)
+    plugin_installed = bool(assistant_status.get("assistant_installed")) or assistant_installed_on_device(udid)
     plugin_ok = False
     plugin_msg = ""
     if plugin_installed:
@@ -136,14 +144,15 @@ async def devices_connect(request: Request) -> Dict[str, Any]:
         "plugin_installed": plugin_installed,
         "plugin_ready": plugin_ok,
         "plugin_message": plugin_msg,
+        **assistant_status,
     }
-    if push_result:
-        out["assistant_auto_push"] = push_result
-        if push_result.get("success"):
-            out["plugin_installed"] = True
-            plugin_ok, plugin_msg = plugin_rpc.ensure_plugin_tunnel(udid)
-            out["plugin_ready"] = plugin_ok
-            out["plugin_message"] = plugin_msg
+    if assistant_status.get("assistant_needs_install"):
+        ver = assistant_status.get("assistant_version_on_device") or 0
+        exp = assistant_status.get("assistant_version_name_expected") or ""
+        out["assistant_install_hint"] = (
+            f"设备助手版本过旧或未安装（当前 versionCode={ver}）。"
+            f"请点击「安装插件」手动安装 v{exp}，连接设备不会自动推送 APK。"
+        )
     return out
 
 
@@ -166,10 +175,10 @@ async def plugin_install(request: Request) -> Dict[str, Any]:
     udid = (body.get("udid") or get_connected_udid() or "").strip()
     if not udid:
         return {"success": False, "error": "请先连接设备"}
-    result = install_testory_assistant(udid)
+    result = install_testory_assistant(udid, launch_app=False)
     if not result.get("success"):
         return result
-    ok, msg = plugin_rpc.restart_plugin_service(udid)
+    ok, msg = plugin_rpc.ensure_plugin_tunnel(udid)
     result["plugin_tunnel"] = ok
     result["plugin_tunnel_message"] = msg
     return result

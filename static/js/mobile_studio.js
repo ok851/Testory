@@ -471,10 +471,16 @@
         var msg = '已连接 ' + (data.device && data.device.model ? data.device.model : state.udid);
         if (data.is_emulator || isEmulatorUdid(state.udid)) msg += '（模拟器）';
         if (data.plugin_ready) msg += ' · 插件就绪';
-        else if (data.assistant_auto_push && data.assistant_auto_push.success) {
-            msg += ' · 助手已自动安装到设备';
+        else if (data.assistant_needs_install) {
+            var devVer = data.assistant_version_on_device || 0;
+            var expName = data.assistant_version_name_expected || '';
+            msg += ' · 助手需升级（设备 versionCode=' + devVer + ' → v' + expName + '）';
         }
-        setStatus(msg, 'ok');
+        if (data.assistant_install_hint) {
+            setStatus(data.assistant_install_hint, 'warn');
+        } else {
+            setStatus(msg, 'ok');
+        }
     }
 
     function renderSteps() {
@@ -939,6 +945,12 @@
         });
         if (data.success) {
             var msg = data.message || '助手已就绪';
+            if (data.expected_version) {
+                msg += '（目标 v' + data.expected_version + '）';
+            }
+            if (data.assistant_version_on_device) {
+                msg += ' 设备 versionCode=' + data.assistant_version_on_device;
+            }
             if (data.device_push_pending && !state.connected) {
                 msg = '安装包已准备。请连接设备后将自动推送到手机。';
             }
@@ -1174,10 +1186,25 @@
             setStatus(data.error || '配对码生成失败', 'err');
             return;
         }
-        state.pairCode = data.pair_code;
+        showPairCode(data.pair_code, data.expires_in || 600);
+    }
+
+    function showPairCode(code, expiresIn) {
+        state.pairCode = code;
+        var box = $('msPairBox');
         var el = $('msPairCode');
-        if (el) el.textContent = data.pair_code;
-        setStatus('请在手机 Testory Assistant 输入配对码：' + data.pair_code, 'ok');
+        var exp = $('msPairExpiry');
+        var copyBtn = $('msBtnCopyPairCode');
+        var urlHint = $('msSyncUrlHint');
+        if (urlHint) urlHint.textContent = window.location.origin;
+        if (box) box.style.display = '';
+        if (el) el.textContent = code;
+        if (exp) {
+            var mins = Math.max(1, Math.round((expiresIn || 600) / 60));
+            exp.textContent = '有效期约 ' + mins + ' 分钟，请在手机 App 输入';
+        }
+        if (copyBtn) copyBtn.style.display = '';
+        setStatus('配对码已生成：' + code + '（请在手机 Testory Assistant 输入）', 'ok');
     }
 
     function wireUi() {
@@ -1252,6 +1279,20 @@
         if (btnPair) {
             btnPair.addEventListener('click', function () {
                 initDevicePair().catch(function (e) { setStatus(e.message, 'err'); });
+            });
+        }
+        var btnCopyPair = $('msBtnCopyPairCode');
+        if (btnCopyPair) {
+            btnCopyPair.addEventListener('click', function () {
+                if (!state.pairCode) return;
+                var text = state.pairCode;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(function () {
+                        setStatus('配对码已复制', 'ok');
+                    }).catch(function () { setStatus(text, 'ok'); });
+                } else {
+                    setStatus('配对码：' + text, 'ok');
+                }
             });
         }
         var btnReplayFrom = $('msBtnReplayFrom');
@@ -1336,8 +1377,11 @@
         var cfgEl = document.getElementById('__mobileStudioDisabledJson');
         if (cfgEl) return;
         wireUi();
+        var urlHint = $('msSyncUrlHint');
+        if (urlHint) urlHint.textContent = window.location.origin;
         await loadProjects();
         await bootstrap();
+        initDevicePair().catch(function () { /* 配对码可选 */ });
         var params = new URLSearchParams(window.location.search);
         var urlCaseId = parseInt(params.get('case_id') || '', 10);
         if (urlCaseId > 0) await selectCaseById(urlCaseId);

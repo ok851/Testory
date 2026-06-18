@@ -1,51 +1,312 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#F8FAFC"
-    android:orientation="vertical"
-    android:padding="24dp">
+    android:background="@color/ta_bg"
+    android:fillViewport="true">
 
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/app_name"
-        android:textColor="#0F172A"
-        android:textSize="22sp"
-        android:textStyle="bold" />
+        android:orientation="vertical"
+        android:padding="16dp">
 
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="@string/status_need_accessibility"
-        android:textSize="16sp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/section_card"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="18dp">
 
-    <TextView
-        android:id="@+id/modeText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="@string/mode_idle"
-        android:textColor="#475569"
-        android:textSize="14sp" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="@color/ta_text"
+                android:textSize="24sp"
+                android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/hintText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:lineSpacingExtra="4dp"
-        android:textColor="#64748B"
-        android:textSize="14sp" />
+            <TextView
+                android:id="@+id/versionText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="@color/ta_muted"
+                android:textSize="12sp" />
 
-    <Button
-        android:id="@+id/openAccessibilityBtn"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:backgroundTint="#059669"
-        android:text="@string/open_accessibility"
-        android:textAllCaps="false" />
-</LinearLayout>
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/status_need_accessibility"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/modeText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/mode_idle"
+                android:textColor="@color/ta_muted"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/hintText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:lineSpacingExtra="3dp"
+                android:textColor="@color/ta_muted"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/openAccessibilityBtn"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="14dp"
+                android:backgroundTint="@color/ta_primary"
+                android:text="@string/open_accessibility"
+                android:textAllCaps="false" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/section_card"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_record"
+                android:textColor="@color/ta_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnStartRecord"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/ta_record"
+                    android:text="@string/btn_start_record"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnStopRecord"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/ta_muted"
+                    android:text="@string/btn_stop_record"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/recordStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/ta_muted"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/section_card"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_sync"
+                android:textColor="@color/ta_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/syncBaseUrl"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@android:color/transparent"
+                android:hint="@string/sync_base_url_hint"
+                android:inputType="textUri"
+                android:padding="8dp"
+                android:text="http://10.0.2.2:5000" />
+
+            <EditText
+                android:id="@+id/syncPairCode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:background="@android:color/transparent"
+                android:hint="@string/sync_pair_code_hint"
+                android:inputType="number"
+                android:maxLength="6"
+                android:padding="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnPair"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/ta_record"
+                    android:text="@string/btn_pair"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnSyncCases"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/ta_muted"
+                    android:text="@string/btn_sync_cases"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/btnSaveToPc"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="10dp"
+                android:backgroundTint="#2563EB"
+                android:text="@string/btn_save_to_pc"
+                android:textAllCaps="false" />
+
+            <Button
+                android:id="@+id/btnVisionProbe"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="10dp"
+                android:backgroundTint="#7C3AED"
+                android:text="@string/btn_vision_probe"
+                android:textAllCaps="false" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/section_card"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_run"
+                android:textColor="@color/ta_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/label_project_filter"
+                android:textColor="@color/ta_muted"
+                android:textSize="13sp" />
+
+            <Spinner
+                android:id="@+id/projectSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/label_case_select"
+                android:textColor="@color/ta_muted"
+                android:textSize="13sp" />
+
+            <Spinner
+                android:id="@+id/caseSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnRunCase"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/ta_primary"
+                    android:text="@string/btn_run_case"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnStopRun"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/ta_muted"
+                    android:text="@string/btn_stop_run"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="24dp"
+            android:background="@drawable/section_card"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_steps"
+                android:textColor="@color/ta_text"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/stepsListText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:fontFamily="monospace"
+                android:lineSpacingExtra="3dp"
+                android:text="@string/no_steps"
+                android:textColor="#334155"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

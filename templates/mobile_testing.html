@@ -73,18 +73,23 @@
                 </div>
             </section>
 
-            <section class="ms-section">
-                <h2 class="ms-section-title">与手机同步</h2>
-                <p class="ms-muted">在 Testory Assistant 中配对后，运行用例将下发到手机执行。</p>
+            <section class="ms-section ms-section--sync">
+                <h2 class="ms-section-title"><i class="fas fa-link text-emerald-500"></i> 与手机同步</h2>
+                <p class="ms-muted">在手机 App 填写 PC 地址 <code id="msSyncUrlHint">—</code> 与下方配对码后点「配对 PC」。</p>
+                <div id="msPairBox" class="ms-pair-box" style="display:none;">
+                    <span class="ms-pair-label">配对码</span>
+                    <span id="msPairCode" class="ms-pair-code">------</span>
+                    <span id="msPairExpiry" class="ms-pair-expiry"></span>
+                </div>
                 <div class="ms-row ms-row--wrap">
-                    <button type="button" id="msBtnDevicePair" class="ms-btn ms-btn--ghost">生成配对码</button>
-                    <span id="msPairCode" class="ms-muted"></span>
+                    <button type="button" id="msBtnDevicePair" class="ms-btn ms-btn--primary">生成配对码</button>
+                    <button type="button" id="msBtnCopyPairCode" class="ms-btn ms-btn--ghost" style="display:none;">复制</button>
                 </div>
             </section>
 
             <section class="ms-section">
                 <h2 class="ms-section-title">录制</h2>
-                <p id="msRecordHint" class="ms-muted">连接设备并安装插件后，在手机上直接操作。</p>
+                <p id="msRecordHint" class="ms-muted">连接设备后不会自动安装助手；请点击下方「安装插件」安装/升级，再在手机上开启无障碍。</p>
                 <div id="msRecordingBanner" class="ms-recording-banner" style="display:none;">录制中 — 请在手机端操作</div>
                 <label class="ms-check"><input type="checkbox" id="msScreenshotPerStep" checked> 每步截图</label>
                 <div class="ms-row ms-row--wrap">

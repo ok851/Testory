@@ -87,22 +87,27 @@ def agent_disconnect_device(udid: str = "") -> Dict[str, Any]:
     return payload or {"success": False, "error": err or "unknown"}
 
 
-def agent_install_plugin(udid: str = "") -> Dict[str, Any]:
+def agent_install_plugin(udid: str = "", *, launch_app: bool = False) -> Dict[str, Any]:
     from mobile_assistant_bundles import (
+        assistant_device_install_scope,
         install_testory_assistant,
-        is_assistant_prepared,
         prepare_testory_assistant,
         push_testory_assistant_to_device,
     )
 
     udid = (udid or "").strip()
-    if udid:
-        if not is_assistant_prepared():
-            prep = prepare_testory_assistant()
-            if not prep.get("success"):
-                return prep
-        return push_testory_assistant_to_device(udid)
-    return install_testory_assistant()
+    prep = prepare_testory_assistant()
+    if not prep.get("success"):
+        return prep
+    with assistant_device_install_scope():
+        if udid:
+            return push_testory_assistant_to_device(
+                udid,
+                force_reinstall=True,
+                launch_app=launch_app,
+                _from_authorized_install=True,
+            )
+        return install_testory_assistant(force_reinstall=True, launch_app=launch_app)
 
 
 def agent_plugin_status(udid: str = "") -> Dict[str, Any]:

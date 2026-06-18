@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ta_bg">#F1F5F9</color>
+    <color name="ta_card">#FFFFFF</color>
+    <color name="ta_text">#0F172A</color>
+    <color name="ta_muted">#64748B</color>
+    <color name="ta_primary">#059669</color>
+    <color name="ta_record">#2563EB</color>
+    <color name="ta_danger">#DC2626</color>
+</resources>
