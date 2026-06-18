@@ -1,0 +1,13 @@
+{
+  "name": "testory-desktop-assets",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build:tauri-api": "node scripts/copy-tauri-api.mjs",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

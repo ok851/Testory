@@ -6,6 +6,14 @@ body.testory-frameless-shell {
   min-height: 100vh;
   min-height: 100dvh;
   overflow: hidden;
+  user-select: none;
+}
+
+body.testory-frameless-shell input,
+body.testory-frameless-shell textarea,
+body.testory-frameless-shell [contenteditable="true"],
+body.testory-frameless-shell .allow-text-select {
+  user-select: text;
 }
 
 body.testory-frameless-shell .testory-desktop-chrome {

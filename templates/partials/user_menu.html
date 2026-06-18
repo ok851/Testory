@@ -49,6 +49,11 @@
             <a href="/audit-logs" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800" id="auditLogsLink" style="display: none;">
                 <i class="fas fa-clipboard-list mr-2 text-gray-400"></i><span data-i18n="menu_audit_logs">审计日志</span>
             </a>
+            {% if is_tauri %}
+            <a href="/runtime-logs" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <i class="fas fa-terminal mr-2 text-gray-400"></i><span data-i18n="menu_runtime_logs">运行日志</span>
+            </a>
+            {% endif %}
             <div class="border-t border-gray-100 dark:border-gray-700 my-1"></div>
             <button type="button" onclick="handleLogout()" class="block w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800">
                 <i class="fas fa-sign-out-alt mr-2"></i><span data-i18n="menu_logout">注销</span>

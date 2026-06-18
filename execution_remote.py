@@ -298,6 +298,7 @@ LOCAL_API_PREFIXES = (
     "/api/enable_element",
     "/api/disable_element",
     "/api/get_selected_element",
+    "/api/license/",
 )
 
 

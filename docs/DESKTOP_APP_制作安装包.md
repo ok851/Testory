@@ -45,7 +45,7 @@ $env:DEPLOYMENT_MODE = "server"
 python app.py
 ```
 
-创始人 License / 安装包统计：`python -m platform_admin.app`（默认端口 5100）。
+创始人 License / 安装包统计：`python projects/testory-platform-admin/app.py`（默认端口 5100）。
 
 ## 原理（方便排查）
 

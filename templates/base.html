@@ -57,10 +57,10 @@
     </style>
     {% block head %}{% endblock %}
 </head>
-<body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}{% if is_client %} testory-desktop-client testory-frameless-shell{% endif %}">
-    {% if is_client %}
+<body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}{% if is_client or is_tauri %} testory-desktop-client testory-frameless-shell{% endif %}">
+    {% if is_client or is_tauri %}
     <header id="testoryDesktopTitlebar" class="testory-desktop-chrome" aria-label="窗口标题栏">
-        <div class="testory-desktop-chrome__drag">
+        <div class="testory-desktop-chrome__drag"{% if is_tauri %} data-tauri-drag-region{% endif %}>
             <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="" width="18" height="18" class="testory-desktop-chrome__mark">
             <span class="testory-desktop-chrome__title">{{ product_name }}</span>
         </div>
@@ -273,6 +273,7 @@
                 menu_sso: 'SSO 设置',
                 menu_users: '用户管理',
                 menu_audit_logs: '审计日志',
+                menu_runtime_logs: '运行日志',
                 menu_logout: '注销',
                 banner_running: '任务执行中',
                 banner_stop: '停止',
@@ -1059,6 +1060,7 @@
                 menu_sso: 'SSO settings',
                 menu_users: 'User management',
                 menu_audit_logs: 'Audit logs',
+                menu_runtime_logs: 'Runtime logs',
                 menu_logout: 'Log out',
                 banner_running: 'Task running',
                 banner_stop: 'Stop',
@@ -2114,7 +2116,9 @@
         });
     </script>
     <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui4" defer></script>
-    {% if is_client %}
+    {% if is_tauri %}
+    <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=2"></script>
+    {% elif is_client %}
     <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=1" defer></script>
     {% endif %}
     {% block scripts %}{% endblock %}

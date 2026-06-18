@@ -21,4 +21,9 @@ config/plugin_bundles/*.zip
 static/plugin_bundles/*.zip
 *.log
 agent-tools/
+node_modules/
+.npm-cache/
+static/vendor/tauri/
+src-tauri/target/
+src-tauri/gen/
  

@@ -90,6 +90,7 @@ def deployment_context() -> Dict[str, Any]:
         "is_standalone": mode == DeploymentMode.STANDALONE,
         "is_server": mode == DeploymentMode.SERVER,
         "is_client": mode == DeploymentMode.CLIENT,
+        "is_tauri": os.environ.get("TESTORY_TAURI_MODE", "").strip() == "1",
         "is_local_standalone": is_local_standalone_desktop(),
         "uses_team_server": uses_team_server(),
         "hide_billing_ui": hide_billing_ui(),

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Testory",
+  "version": "1.0.0",
+  "identifier": "com.testory.desktop",
+  "build": {
+    "beforeDevCommand": "npm run build:tauri-api",
+    "beforeBuildCommand": "npm ci --cache .npm-cache && npm run build:tauri-api",
+    "frontendDist": "../static/desktop/tauri_dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; script-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* ipc: http://ipc.localhost; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* asset:; font-src 'self' data:; media-src 'self' blob: data:"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Testory",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "decorations": false,
+        "transparent": true,
+        "url": "tauri_splash.html"
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../packaging/inno/testory.ico"
+    ]
+  }
+}

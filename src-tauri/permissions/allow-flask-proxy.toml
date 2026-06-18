@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-flask-proxy"
+description = "Flask localhost invoke proxy and native file dialogs"
+commands.allow = [
+  "flask_fetch",
+  "pick_native_files",
+  "read_native_file_base64",
+]

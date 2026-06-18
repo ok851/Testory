@@ -1,0 +1,15 @@
+[Unit]
+Description=Testory Website
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/testory-website
+EnvironmentFile=/opt/testory-website/.env
+ExecStart=/opt/testory-website/.venv/bin/waitress-serve --listen=127.0.0.1:5200 app:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

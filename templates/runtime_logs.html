@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}运行日志 - Testory{% endblock %}
+{% block head %}
+<style>
+  .runtime-log-shell {
+    height: calc(100vh - 7.5rem);
+    min-height: 420px;
+  }
+  .runtime-log-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-bottom: 0.75rem;
+  }
+  .runtime-log-panel {
+    height: 100%;
+    border: 1px solid rgb(229 231 235);
+    border-radius: 0.75rem;
+    background: rgb(15 23 42);
+    color: rgb(226 232 240);
+    overflow: hidden;
+  }
+  .runtime-log-meta {
+    font-size: 12px;
+    color: rgb(148 163 184);
+  }
+  .runtime-log-status {
+    font-size: 12px;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: rgb(30 41 59);
+  }
+  .runtime-log-status.is-live { color: rgb(52 211 153); }
+  .runtime-log-status.is-off { color: rgb(248 113 113); }
+  .testory-vscroll-viewport { height: 100% !important; }
+  .testory-vscroll-row { color: rgb(226 232 240); padding: 0 0.75rem; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+  <div class="mb-4">
+    <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">
+      <i class="fas fa-terminal text-emerald-500 mr-2"></i>运行日志
+    </h2>
+    <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">桌面版实时 tail 平台日志与 backend_startup.log（虚拟滚动，适合长日志）。</p>
+  </div>
+
+  <div class="runtime-log-toolbar">
+    <label class="text-sm text-gray-700 dark:text-gray-300">
+      来源
+      <select id="logSource" class="ml-2 border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1 text-sm bg-white dark:bg-gray-900">
+        <option value="platform">平台日志 (uat_platform_*.log)</option>
+        <option value="backend">启动日志 (backend_startup.log)</option>
+      </select>
+    </label>
+    <button type="button" id="logReconnectBtn" class="px-3 py-1.5 rounded-md text-sm bg-blue-600 text-white hover:bg-blue-700">重新连接</button>
+    <button type="button" id="logClearBtn" class="px-3 py-1.5 rounded-md text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200">清空视图</button>
+    <span id="logMeta" class="runtime-log-meta"></span>
+    <span id="logStatus" class="runtime-log-status is-off">未连接</span>
+  </div>
+
+  <div class="runtime-log-shell">
+    <div id="logViewportHost" class="runtime-log-panel allow-text-select"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="module">
+  import { VirtualScrollList } from '{{ url_for('static', filename='js/virtual-scroll.js') }}?v=1';
+
+  const host = document.getElementById('logViewportHost');
+  const sourceEl = document.getElementById('logSource');
+  const statusEl = document.getElementById('logStatus');
+  const metaEl = document.getElementById('logMeta');
+  const list = new VirtualScrollList(host, { rowHeight: 22, maxLines: 10000, height: '100%' });
+
+  let es = null;
+  let lineCounter = 0;
+
+  function setStatus(text, live) {
+    statusEl.textContent = text;
+    statusEl.classList.toggle('is-live', !!live);
+    statusEl.classList.toggle('is-off', !live);
+  }
+
+  function disconnect() {
+    if (es) {
+      es.close();
+      es = null;
+    }
+  }
+
+  function connect() {
+    disconnect();
+    list.clear();
+    lineCounter = 0;
+    setStatus('连接中…', false);
+    const source = encodeURIComponent(sourceEl.value || 'platform');
+    es = new EventSource(`/stream/logs?source=${source}`);
+    es.addEventListener('meta', (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}');
+        metaEl.textContent = data.path ? `文件: ${data.path}` : '';
+      } catch (e) {}
+    });
+    es.addEventListener('line', (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}');
+        list.appendLine(data.text || '');
+        lineCounter += 1;
+        list.scrollToBottom();
+      } catch (e) {}
+    });
+    es.addEventListener('error', () => {
+      setStatus('连接中断', false);
+    });
+    es.onopen = () => setStatus('实时', true);
+  }
+
+  document.getElementById('logReconnectBtn').addEventListener('click', connect);
+  document.getElementById('logClearBtn').addEventListener('click', () => {
+    list.clear();
+    lineCounter = 0;
+  });
+  sourceEl.addEventListener('change', connect);
+  connect();
+  window.addEventListener('beforeunload', disconnect);
+</script>
+{% endblock %}

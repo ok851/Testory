@@ -47,10 +47,12 @@ python packaging/uat_desktop.py
 ```powershell
 $env:PLATFORM_ADMIN_USER = "founder"
 $env:PLATFORM_ADMIN_PASSWORD = "your-password"
-python -m platform_admin.app
+python projects/testory-platform-admin/app.py
 ```
 
 默认端口 `5100`。功能：License 签发/吊销、安装包发布与下载统计、订单录入。
+
+详见 [PROJECT_SPLIT.md](PROJECT_SPLIT.md)。
 
 ## 关键模块
 
@@ -61,7 +63,7 @@ python -m platform_admin.app
 | [execution_remote.py](../execution_remote.py) | 执行队列 claim/complete |
 | [team_server_client.py](../team_server_client.py) | 客户端访问团队服务器 |
 | [client_config_store.py](../client_config_store.py) | 本地保存服务器 URL、会话 |
-| [platform_admin/](../platform_admin/) | 创始人后台 |
+| [projects/testory-platform-admin/](../projects/testory-platform-admin/) | 创始人后台 |
 
 ## License 双层
 

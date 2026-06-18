@@ -1496,6 +1496,7 @@ def api_login():
             username,
             email=user_data.get("email") or "",
             team_server_url=get_team_server_url() if is_client_mode() else "",
+            license_type=license_manager.get_current_license().license_type,
         )
     except Exception:
         pass
@@ -11801,6 +11802,95 @@ def _audit_logs_export_response(fmt: str):
     return jsonify({'success': False, 'error': '不支持的导出格式'}), 400
 
 
+def _resolve_runtime_log_path(source: str):
+    from pathlib import Path
+
+    raw_dir = os.environ.get('UAT_DATA_DIR', '').strip()
+    log_dir = (Path(raw_dir) / 'logs') if raw_dir else Path('logs')
+    source = (source or 'platform').strip().lower()
+    if source == 'backend':
+        return log_dir / 'backend_startup.log'
+    today = datetime.datetime.now().strftime('%Y%m%d')
+    return log_dir / f'uat_platform_{today}.log'
+
+
+@app.route('/runtime-logs')
+@login_required
+def runtime_logs_page():
+    """桌面版运行日志 tail 页面（Tauri / 本地客户端）。"""
+    return render_template('runtime_logs.html')
+
+
+@app.route('/stream/logs')
+@login_required
+def stream_runtime_logs():
+    """SSE tail 平台或 backend 启动日志。"""
+    import json
+    import time
+    from flask import Response, stream_with_context
+
+    source = (request.args.get('source') or 'platform').strip().lower()
+    log_path = _resolve_runtime_log_path(source)
+    tail_bytes = max(4096, min(int(request.args.get('tail_bytes', 65536)), 512 * 1024))
+
+    def _emit(event: str, payload: dict):
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def _read_tail_lines(path, max_bytes: int):
+        if not path.is_file():
+            return []
+        try:
+            size = path.stat().st_size
+            with path.open('rb') as fp:
+                if size > max_bytes:
+                    fp.seek(size - max_bytes)
+                    fp.readline()
+                chunk = fp.read().decode('utf-8', errors='replace')
+            return [ln for ln in chunk.splitlines() if ln != '']
+        except OSError:
+            return []
+
+    @stream_with_context
+    def generate():
+        yield _emit('meta', {'path': str(log_path), 'source': source})
+        idx = 0
+        for line in _read_tail_lines(log_path, tail_bytes):
+            yield _emit('line', {'idx': idx, 'text': line})
+            idx += 1
+
+        if not log_path.is_file():
+            yield _emit('line', {'idx': idx, 'text': '[日志文件尚未创建，等待写入…]'})
+            idx += 1
+
+        pos = 0
+        while True:
+            if not log_path.is_file():
+                time.sleep(1.0)
+                continue
+            try:
+                with log_path.open('r', encoding='utf-8', errors='replace') as fp:
+                    fp.seek(pos)
+                    while True:
+                        line = fp.readline()
+                        if not line:
+                            pos = fp.tell()
+                            break
+                        text = line.rstrip('\n\r')
+                        if text:
+                            yield _emit('line', {'idx': idx, 'text': text})
+                            idx += 1
+            except OSError:
+                pass
+            time.sleep(0.45)
+
+    headers = {
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+    }
+    return Response(generate(), mimetype='text/event-stream', headers=headers)
+
+
 @app.route('/api/audit-logs', methods=['GET'])
 @login_required
 @role_required('admin')
@@ -13194,8 +13284,28 @@ except Exception:
 
 
 if __name__ == '__main__':
-    _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
     _host = os.environ.get('FLASK_RUN_HOST', '0.0.0.0')
-    # 默认关闭 debug，避免生产式部署误暴露调试信息与 Werkzeug 交互式调试器
     _debug = os.environ.get('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
+    _is_tauri = os.environ.get('TESTORY_TAURI_MODE', '0').strip() == '1'
+
+    if _is_tauri:
+        import socket
+        from pathlib import Path
+
+        _bind_host = os.environ.get('FLASK_RUN_HOST', '127.0.0.1')
+        if _bind_host in ('0.0.0.0', '::', ''):
+            _bind_host = '127.0.0.1'
+        _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _sock.bind((_bind_host, 0))
+        _port = _sock.getsockname()[1]
+        _sock.close()
+        _port_file = os.environ.get('TESTORY_FLASK_PORT_FILE', '').strip()
+        if _port_file:
+            _pf = Path(_port_file)
+            _pf.parent.mkdir(parents=True, exist_ok=True)
+            _pf.write_text(str(_port), encoding='utf-8')
+        _host = _bind_host
+    else:
+        _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
+
     app.run(debug=_debug, host=_host, port=_port, threaded=True)

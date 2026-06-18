@@ -1,0 +1,32 @@
+[package]
+name = "testory-desktop"
+version = "1.0.0"
+description = "Testory desktop shell (Tauri + Flask SSR)"
+authors = ["Testory"]
+edition = "2021"
+
+[lib]
+name = "testory_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "testory-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+rfd = "0.15"
+base64 = "0.22"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -9,7 +9,8 @@ import urllib.request
 from typing import Any, Dict, Optional
 
 from deployment_config import get_platform_admin_url, get_website_url
-from platform_pay_token import create_pay_token
+from packages.testory_common.pay_token import create_pay_token
+from packages.testory_common.platform_client import platform_api_json as _platform_api_json
 
 
 def _sync_secret() -> str:
@@ -147,29 +148,4 @@ def report_current_license_activation() -> bool:
 
 def platform_api_json(path: str, method: str = "GET", body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """官网服务端调用创始人控制面 JSON API。"""
-    admin_url = get_platform_admin_url()
-    if not admin_url:
-        return {"success": False, "error": "未配置 PLATFORM_ADMIN_URL"}
-    data = None
-    headers = {"Accept": "application/json"}
-    if body is not None:
-        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(
-        admin_url.rstrip("/") + path,
-        data=data,
-        headers=headers,
-        method=method.upper(),
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {"success": True}
-    except urllib.error.HTTPError as e:
-        try:
-            raw = e.read().decode("utf-8")
-            return json.loads(raw) if raw else {"success": False, "error": str(e)}
-        except Exception:
-            return {"success": False, "error": str(e)}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    return _platform_api_json(path, method=method, body=body)

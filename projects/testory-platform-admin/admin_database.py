@@ -13,7 +13,7 @@ def _db_path() -> str:
     raw = (os.environ.get("PLATFORM_ADMIN_DB") or "").strip()
     if raw:
         return raw
-    base = Path(__file__).resolve().parent.parent / "data"
+    base = Path(__file__).resolve().parent / "data"
     base.mkdir(parents=True, exist_ok=True)
     return str(base / "platform_admin.db")
 
