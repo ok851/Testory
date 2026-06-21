@@ -637,6 +637,33 @@ img { max-width: 100%; display: block; }
   position: relative;
 }
 .download-section p { color: var(--text-muted); margin: 0 0 1.75rem; position: relative; }
+.download-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.5rem;
+  position: relative;
+}
+.download-lead {
+  max-width: 36rem;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+.download-alert {
+  color: #fca5a5 !important;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 1rem;
+  max-width: 32rem;
+  margin: 0 auto 1.25rem !important;
+  font-size: 0.9rem;
+}
+.download-hint {
+  margin-top: 0.75rem !important;
+  margin-bottom: 0 !important;
+  font-size: 0.875rem;
+  color: var(--text-dim);
+}
+.download-btn { position: relative; }
 .download-meta {
   margin-top: 1.25rem;
   font-size: 0.8125rem;

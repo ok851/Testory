@@ -1,6 +1,6 @@
 ﻿# 将运行所需文件复制到发布目录，供 Inno Setup 打包
 param(
-    [string] $OutDir = "dist\uat_release",
+    [string] $OutDir = 'dist\uat_release',
     [string] $Root = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 )
 

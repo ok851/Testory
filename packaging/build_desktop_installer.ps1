@@ -3,9 +3,9 @@
 #   .\packaging\build_desktop_installer.ps1
 #
 # Options:
-#   -IsccPath "D:\Inno Setup 6\ISCC.exe"   explicit ISCC (optional if Inno is on PATH or default paths)
+#   -IsccPath "D:\Inno Setup 6\ISCC.exe"   use your local Inno ISCC (no download; script only finds ISCC)
 #   -InnoOnly                              skip prepare; compile existing dist\uat_release only
-#   -PrepareOnly                           prepare dist\uat_release only; do NOT call ISCC (manual compile in Inno GUI)
+#   -PrepareOnly                           prepare dist\uat_release only; open .iss in Inno GUI yourself
 #   -Legacy                                ship plaintext .py (dev only); default is Protected onedir
 
 param(
@@ -94,7 +94,7 @@ if ($IsccPath) {
 }
 
 Write-Host ""
-Write-Host "Compiling installer with Inno Setup..." -ForegroundColor Cyan
+Write-Host "Compiling installer with Inno Setup (local ISCC only, no download)..." -ForegroundColor Cyan
 $iscc = & "$Root\packaging\tools\Ensure-InnoSetup.ps1" -ProjectRoot $Root -IsccPath $IsccPath
 & $iscc $iss
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

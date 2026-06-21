@@ -6,6 +6,8 @@ import json
 import os
 import secrets
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -20,7 +22,7 @@ from testory_common.bootstrap import bootstrap_project  # noqa: E402
 
 bootstrap_project(project_dir=PROJECT_DIR)
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 
 from testory_common.brand import brand_context  # noqa: E402
 from testory_common.pay_token import verify_pay_token  # noqa: E402
@@ -129,9 +131,44 @@ def pricing_page():
     return render_template("pricing.html", **ctx)
 
 
+def _proxy_admin_installer_download() -> Response:
+    """内网拉取控制面安装包并透传给浏览器（同域下载，不暴露后台端口）。"""
+    admin_url = f"{PLATFORM_ADMIN_URL}/api/public/download/latest"
+    req = urllib.request.Request(
+        admin_url,
+        headers={"User-Agent": (request.headers.get("User-Agent") or "Testory-Website/1.0")[:500]},
+    )
+    try:
+        upstream = urllib.request.urlopen(req, timeout=300)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return Response("暂无可用安装包", status=404, mimetype="text/plain; charset=utf-8")
+        return Response(f"下载失败: {e}", status=502, mimetype="text/plain; charset=utf-8")
+    except Exception as e:
+        return Response(f"下载失败: {e}", status=502, mimetype="text/plain; charset=utf-8")
+
+    headers = {}
+    for key in ("Content-Disposition", "Content-Type", "Content-Length"):
+        val = upstream.headers.get(key)
+        if val:
+            headers[key] = val
+
+    def generate():
+        try:
+            while True:
+                chunk = upstream.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            upstream.close()
+
+    return Response(generate(), headers=headers)
+
+
 @app.route("/download/latest")
 def download_latest():
-    """302 到 CDN 或创始人控制面公开下载接口（不代理文件流）。"""
+    """同域下载：本地包经内网代理；外部 CDN 仍 302。"""
     release = _fetch_release_from_admin()
     if not release:
         return (
@@ -143,11 +180,12 @@ def download_latest():
             404,
         )
     target = (release.get("direct_download_url") or "").strip()
-    if not target:
-        target = f"{PLATFORM_ADMIN_URL}/api/public/download/latest"
-    if target.startswith("/"):
-        target = f"{PLATFORM_ADMIN_URL}{target}"
-    return redirect(target)
+    website_base = (os.environ.get("WEBSITE_URL") or request.host_url or "").strip().rstrip("/")
+    self_url = f"{website_base}/download/latest" if website_base else url_for("download_latest", _external=True)
+    if target.startswith("http://") or target.startswith("https://"):
+        if target.rstrip("/") != self_url.rstrip("/") and not target.startswith(PLATFORM_ADMIN_URL):
+            return redirect(target)
+    return _proxy_admin_installer_download()
 
 
 @app.route("/api/contact", methods=["POST"])

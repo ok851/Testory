@@ -39,6 +39,20 @@
 
 {% block auth_scripts %}
 <script>
+(function () {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('reason') === 'password_changed') {
+        var errorMsg = document.getElementById('errorMsg');
+        var errorText = document.getElementById('errorText');
+        if (errorMsg && errorText) {
+            errorText.textContent = '密码已更新，请使用新密码登录';
+            errorMsg.classList.add('show');
+            errorMsg.style.background = 'rgba(34, 197, 94, 0.12)';
+            errorMsg.style.borderColor = 'rgba(34, 197, 94, 0.35)';
+            errorMsg.style.color = '#86efac';
+        }
+    }
+})();
 document.getElementById('loginForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     const username = document.getElementById('username').value.trim();

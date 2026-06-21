@@ -1,0 +1,40 @@
+# 纯 IP 部署（无域名）— 复制到 /etc/nginx/sites-available/testory
+# 替换 YOUR_OFFICE_IP 为本机宽带公网 IP；替换 server_name 为服务器公网 IP
+#
+# 启用:
+#   sudo ln -sf /etc/nginx/sites-available/testory /etc/nginx/sites-enabled/
+#   sudo rm -f /etc/nginx/sites-enabled/default
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# 前置条件: platform-admin app.py 已添加 WSGI ScriptName 中间件；
+#   .env 中 PLATFORM_ADMIN_PATH_PREFIX=/admin
+
+server {
+    listen 80;
+    server_name 62.234.135.115;
+
+    client_max_body_size 500m;
+
+    # 官网
+    location / {
+        proxy_pass http://127.0.0.1:5200;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 后台管理 — 仅白名单 IP（其余公网 IP 直接 403）
+    location /admin/ {
+        allow YOUR_OFFICE_IP;
+        deny all;
+
+        # location 与 proxy_pass 末尾都必须带 /，否则静态资源与路由会错乱
+        proxy_pass http://127.0.0.1:5100/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Script-Name /admin;
+    }
+}

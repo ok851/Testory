@@ -1847,6 +1847,33 @@
             });
         }
 
+        /** License 激活后即时刷新顶栏功能开关（无需重新登录） */
+        window.refreshAuthAndLicense = async function(forceRefresh, licensePayload) {
+            try { sessionStorage.removeItem(AUTH_ME_CACHE_KEY); } catch (e) {}
+            if (licensePayload && licensePayload.features) {
+                try {
+                    var resp = await fetch('/api/auth/me');
+                    var meData = await resp.json();
+                    if (meData && meData.success) {
+                        meData.license = Object.assign({}, meData.license || {}, {
+                            type: licensePayload.type || (meData.license && meData.license.type),
+                            features: licensePayload.features,
+                            limits: licensePayload.limits || (meData.license && meData.license.limits)
+                        });
+                        applyUserInfo(meData);
+                    }
+                } catch (err) {
+                    console.error('refreshAuthAndLicense:', err);
+                }
+            }
+            await loadUserInfo(true);
+            if (licensePayload) {
+                try {
+                    window.dispatchEvent(new CustomEvent('testory:license-updated', { detail: licensePayload }));
+                } catch (e2) {}
+            }
+        };
+
         // 桌面客户端：跳转官网支付（须已登录）
         async function openWebsiteUpgrade(plan) {
             try {

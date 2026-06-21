@@ -273,11 +273,72 @@ sudo certbot --nginx -d www.yourdomain.com -d yourdomain.com -d admin.yourdomain
 
 ---
 
+## 6b. 纯 IP 部署（无域名）
+
+若暂无域名，仅通过公网 IP 访问（例如 `http://62.234.135.115/`），使用模板
+[`scripts/cloud/nginx/testory-ip-only.conf.example`](../scripts/cloud/nginx/testory-ip-only.conf.example)：
+
+- 官网：`/` → `127.0.0.1:5200`
+- 后台：`/admin/` → `127.0.0.1:5100`（**IP 白名单**）
+
+**核心前提（必做）**：在 [`projects/testory-platform-admin/app.py`](../projects/testory-platform-admin/app.py) 部署含 **WSGI ScriptName 中间件** 的版本。只改 Nginx 与 `.env` 而不改应用代码，访问 `/admin/login` 会持续 404。
+
+### 环境变量
+
+```env
+# /opt/testory-platform-admin/.env
+PLATFORM_ADMIN_PATH_PREFIX=/admin
+WEBSITE_URL=http://你的公网IP
+# 删除 PLATFORM_ADMIN_PUBLIC_URL 中带 :5100 的地址
+
+# /opt/testory-website/.env
+WEBSITE_URL=http://你的公网IP
+PLATFORM_ADMIN_URL=http://127.0.0.1:5100
+```
+
+变更后重启：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart testory-admin testory-website
+```
+
+### 防火墙
+
+仅开放 22、80（及日后 443）；清理调试时开放的多余端口：
+
+```bash
+sudo ufw delete allow 8081/tcp
+sudo ufw delete allow 5100/tcp
+sudo ufw status
+```
+
+### Nginx 路径写法
+
+```nginx
+location /admin/ {                    # 必须有末尾 /
+    allow YOUR_OFFICE_IP;             # 填本机宽带公网 IP
+    deny all;
+    proxy_pass http://127.0.0.1:5100/;  # 必须有末尾 /
+    proxy_set_header X-Script-Name /admin;
+}
+```
+
+### 自检
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:5200/
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:5100/login
+# 白名单 IP 外网访问 /admin/login 应 200；非白名单应 403
+```
+
+---
+
 ## 7. 安装包与下载
 
-1. 浏览器访问 `https://admin.yourdomain.com`，用 `.env` 中的 founder 账号登录。
+1. 浏览器访问控制面（域名 `https://admin.yourdomain.com` 或纯 IP `http://你的IP/admin/`），用 `.env` 中的 founder 账号登录。
 2. 进入 **安装包** 页，上传 `.exe` 或填写 **CDN/OSS 直链**（推荐）。
-3. 官网「下载」→ `/download/latest` → 302 到控制面或 CDN。
+3. 官网「下载」→ `/download/latest` → **同域代理**安装包到浏览器（外部 CDN 仍 302）。
 
 **推荐**：腾讯云 COS + CDN，`download_url` 填 CDN 地址，轻量机不承担大文件流量。
 

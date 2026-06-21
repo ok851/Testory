@@ -1,4 +1,4 @@
-# 编译保护版 PyInstaller onedir（后端 + 网关辅助进程）
+﻿# 编译保护版 PyInstaller onedir（后端 + 网关辅助进程）
 param(
     [Parameter(Mandatory = $true)][string] $Root,
     [Parameter(Mandatory = $true)][string] $ReleaseDir

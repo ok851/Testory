@@ -1,6 +1,6 @@
-# 保护版发布：只复制资源与桌面壳层，不复制业务 .py 源码树
+﻿# 保护版发布：只复制资源与桌面壳层，不复制业务 .py 源码树
 param(
-    [string] $OutDir = "dist\uat_release",
+    [string] $OutDir = 'dist\uat_release',
     [string] $Root = ""
 )
 

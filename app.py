@@ -1580,7 +1580,8 @@ def api_change_password():
         return jsonify({'success': False, 'error': '原密码错误'}), 401
     _db.update_user(current_user.id, password_hash=generate_password_hash(new_password))
     uat_logger.info(f"用户 {current_user.username} 修改了密码")
-    return jsonify({'success': True})
+    logout_user()
+    return jsonify({'success': True, 'require_relogin': True, 'message': '密码已修改，请重新登录'})
 
 # ==================== 用户管理API（仅管理员） ====================
 
@@ -11614,6 +11615,7 @@ def api_activate_license():
                     '请确认 platform_admin 已启动且网络可达；重启 Testory 后会自动补报一次。'
                 )
 
+    limits = license_manager.get_limits()
     return jsonify({
         'success': True,
         'message': 'License 激活成功',
@@ -11621,6 +11623,15 @@ def api_activate_license():
         'expires_at': info.expires_at if info else '',
         'activation_synced': activation_synced,
         'activation_sync_hint': activation_sync_hint,
+        'license': {
+            'type': info.license_type if info else '',
+            'features': limits.get('features') or [],
+            'limits': {
+                'max_projects': limits.get('max_projects'),
+                'max_cases_per_project': limits.get('max_cases_per_project'),
+                'max_executions_per_day': limits.get('max_executions_per_day'),
+            },
+        },
     })
 
 

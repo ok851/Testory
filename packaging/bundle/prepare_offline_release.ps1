@@ -1,7 +1,7 @@
 ﻿# 准备「用户零配置」离线发布目录 dist\uat_release（Python + 依赖 + Chromium + 配置模板）
 param(
     [string] $Root = "",
-    [string] $OutDir = "dist\uat_release",
+    [string] $OutDir = 'dist\uat_release',
     [switch] $Legacy
 )
 

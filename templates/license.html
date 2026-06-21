@@ -539,8 +539,13 @@
                         title: typeof t === 'function' ? t('lic_swal_act_ok') : '',
                         text: msg,
                         confirmButtonText: typeof t === 'function' ? t('payment_ok') : 'OK'
-                    }).then(() => {
-                        location.reload();
+                    }).then(async () => {
+                        if (typeof window.refreshAuthAndLicense === 'function' && result.license) {
+                            await window.refreshAuthAndLicense(true, result.license);
+                        }
+                        if (typeof loadLicenseInfo === 'function') {
+                            loadLicenseInfo();
+                        }
                     });
                 } else {
                     Swal.fire({

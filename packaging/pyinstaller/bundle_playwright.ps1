@@ -1,7 +1,7 @@
 ﻿# 将 Playwright 浏览器复制到发布目录，供 PLAYWRIGHT_BROWSERS_PATH 使用
 param(
     [string] $VenvPath = ".\.venv",
-    [string] $OutDir = "dist\uat_bundle",
+    [string] $OutDir = 'dist\uat_bundle',
     [string] $Browser = "chromium"
 )
 

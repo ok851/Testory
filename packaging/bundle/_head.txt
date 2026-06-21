@@ -1,0 +1,19 @@
+﻿# 淇濇姢鐗堝彂甯冿細鍙鍒惰祫婧愪笌妗岄潰澹冲眰锛屼笉澶嶅埗涓氬姟 .py 婧愮爜鏍?param(
+    [string] $OutDir = 'dist\uat_release',
+    [string] $Root = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+. (Join-Path (Split-Path $PSScriptRoot -Parent) "tools\Get-ProjectRoot.ps1")
+if (-not $Root) {
+    $Root = Get-ProjectRoot -StartPath $PSScriptRoot
+} else {
+    $Root = (Resolve-Path $Root).Path
+}
+
+$Out = Join-Path $Root $OutDir
+if (Test-Path $Out) {
+    Remove-Item -LiteralPath $Out -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -It

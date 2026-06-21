@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 import sys
+import time
 import uuid
 from functools import wraps
 from pathlib import Path
@@ -21,6 +22,7 @@ from testory_common.bootstrap import bootstrap_project  # noqa: E402
 bootstrap_project(project_dir=PROJECT_DIR)
 
 from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from admin_database import PlatformAdminDB  # noqa: E402
@@ -44,6 +46,17 @@ app = Flask(
     static_url_path="/static",
 )
 app.secret_key = (os.environ.get("PLATFORM_ADMIN_SECRET") or secrets.token_hex(32)).strip()
+PATH_PREFIX = (os.environ.get("PLATFORM_ADMIN_PATH_PREFIX") or "").strip().rstrip("/")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+if os.environ.get("PLATFORM_ADMIN_SECURE_COOKIES", "").strip().lower() in ("1", "true", "yes"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_LOGIN_RATE_WINDOW_SEC = 60
+_LOGIN_RATE_MAX = 5
 _db = PlatformAdminDB()
 _lm = LicenseManager()
 
@@ -53,6 +66,40 @@ if not _admin_pass:
     _admin_pass = secrets.token_urlsafe(12)
     print(f"[platform_admin] 首次启动默认密码（请尽快修改）: {_admin_pass}")
 _db.ensure_admin(_admin_user, generate_password_hash(_admin_pass))
+
+
+class _ScriptNameMiddleware:
+    """识别 Nginx /admin 子路径，使 url_for 与静态资源带正确前缀。"""
+
+    def __init__(self, app, default_prefix: str = ""):
+        self.app = app
+        self.default_prefix = (default_prefix or "").rstrip("/")
+
+    def __call__(self, environ, start_response):
+        prefix = (environ.get("HTTP_X_SCRIPT_NAME") or self.default_prefix or "").strip().rstrip("/")
+        if prefix:
+            environ["SCRIPT_NAME"] = prefix
+        return self.app(environ, start_response)
+
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+if PATH_PREFIX:
+    app.wsgi_app = _ScriptNameMiddleware(app.wsgi_app, PATH_PREFIX)
+
+
+def _client_ip() -> str:
+    return (request.headers.get("X-Real-IP") or request.remote_addr or "").strip()
+
+
+def _login_rate_ok(ip: str) -> bool:
+    now = time.time()
+    attempts = [t for t in _LOGIN_ATTEMPTS.get(ip, []) if now - t < _LOGIN_RATE_WINDOW_SEC]
+    _LOGIN_ATTEMPTS[ip] = attempts
+    return len(attempts) < _LOGIN_RATE_MAX
+
+
+def _record_login_failure(ip: str) -> None:
+    _LOGIN_ATTEMPTS.setdefault(ip, []).append(time.time())
 
 
 @app.context_processor
@@ -75,12 +122,17 @@ def login_required(fn):
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
     if request.method == "POST":
+        ip = _client_ip()
+        if not _login_rate_ok(ip):
+            return render_template("login.html", error="登录尝试过于频繁，请稍后再试")
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
         user = _db.get_admin_by_username(username)
         if user and check_password_hash(user["password_hash"], password):
+            _LOGIN_ATTEMPTS.pop(ip, None)
             session["platform_admin"] = username
             return redirect(url_for("dashboard"))
+        _record_login_failure(ip)
         return render_template("login.html", error="用户名或密码错误")
     return render_template("login.html")
 
@@ -122,22 +174,11 @@ def users_page():
     return render_template("users.html", users=_db.list_product_users(), active_page="users")
 
 
-def _admin_public_base() -> str:
-    return (
-        os.environ.get("PLATFORM_ADMIN_PUBLIC_URL")
-        or os.environ.get("PLATFORM_ADMIN_URL")
-        or ""
-    ).strip().rstrip("/")
-
-
 def _direct_download_url(release: dict) -> str:
     url = (release.get("download_url") or "").strip()
     if url.startswith("http://") or url.startswith("https://"):
         return url
-    base = _admin_public_base()
-    if base:
-        return f"{base}/api/public/download/latest"
-    return "/api/public/download/latest"
+    return f"{WEBSITE_URL}/download/latest"
 
 
 def _check_sync_secret() -> bool:

@@ -219,6 +219,12 @@
                 });
                 const result = await response.json();
                 if (result.success) {
+                    if (result.require_relogin) {
+                        try { sessionStorage.removeItem('uat_auth_me_cache_v1'); } catch (e) {}
+                        localStorage.removeItem('currentUser');
+                        window.location.href = '/login?reason=password_changed';
+                        return;
+                    }
                     alert(typeof t === 'function' ? t('prof_pwd_ok') : '');
                     document.getElementById('passwordForm').reset();
                 } else {
