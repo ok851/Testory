@@ -79,6 +79,11 @@ git clone <你的仓库地址> .
   app.py  admin_database.py  license_manager.py  templates/  testory_common/  data/
 ```
 
+**切勿**把 monorepo 根目录的 `website/app.py` 或 `platform_admin/app.py`（仅几行的兼容壳）当作生产 `app.py` 部署。  
+正确做法：使用 `projects/testory-website/app.py`（完整 Flask 应用，数百行），或运行 `export_split_projects.ps1` 导出后再上传。
+
+若 `head -5 /opt/testory-website/app.py` 出现 `from website.__main__ import main`，说明部署错了，服务会 502。
+
 ---
 
 ## 3. Python 虚拟环境与依赖
