@@ -24,6 +24,8 @@ agent-tools/
 node_modules/
 .npm-cache/
 static/vendor/tauri/
-src-tauri/target/
+src-tauri/target/git add .gitignore
 src-tauri/gen/
- 
+%UAT_DATA_DIR%/hermes/*.lock
+%UAT_DATA_DIR%/hermes/*.pid
+%UAT_DATA_DIR%/hermes/gateway_state.json
