@@ -33,6 +33,11 @@ _MOBILE_ACTIONS = frozenset({
     "tap_image",
     "wait_image",
     "assert_image",
+    "ai_tap",
+    "ai_input",
+    "assert_vision",
+    "wait_vision",
+    "extract_vision",
 })
 
 _MOBILE_ONLY_ACTIONS = frozenset({"open_app", "close_app", "tap", "input_text"})
@@ -180,6 +185,44 @@ def sync_mobile_execute_step(step: Dict[str, Any], executor: Any) -> Dict[str, A
     if not mobile_runtime_available():
         reason = mobile_runtime_unavailable_reason() or "移动端不可用"
         return {"status": "error", "error": reason, "description": step.get("description") or ""}
+
+    action = normalize_mobile_action(step.get("action") or "")
+    if action in _MOBILE_ACTIONS and action in (
+        "ai_tap", "ai_input", "assert_vision", "wait_vision", "extract_vision",
+    ):
+        from mobile_agent_client import agent_replay_step, mobile_agent_enabled
+        from mobile_device_manager import get_connected_udid
+
+        if not mobile_agent_enabled():
+            return {
+                "status": "error",
+                "error": "视觉步骤需要 Mobile Agent Gateway（MOBILE_AGENT_GATEWAY_URL）",
+                "description": step.get("description") or "",
+            }
+        udid = ""
+        if executor is not None:
+            udid = (getattr(executor, "connected_udid", None) or "").strip()
+        if not udid:
+            udid = (get_connected_udid() or "").strip()
+        if not udid:
+            return {"status": "error", "error": "未连接 Android 设备", "description": step.get("description") or ""}
+        j = agent_replay_step(udid, step, step_index=0)
+        result = (j or {}).get("result") or {}
+        if (j or {}).get("success") is False or result.get("status") == "error":
+            return {
+                "status": "error",
+                "error": result.get("error") or (j or {}).get("error") or "视觉步骤执行失败",
+                "description": step.get("description") or "",
+                "action": action,
+            }
+        return {
+            "status": "success",
+            "action": action,
+            "description": step.get("description") or "",
+            "message": result.get("message") or result.get("data") or "",
+            "screenshot": result.get("screenshot") or "",
+        }
+
     prepared = prepare_mobile_step(step)
     err = validate_step_for_mobile(prepared.get("action") or "")
     if err:

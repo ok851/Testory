@@ -7,21 +7,25 @@ import json
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from flask import jsonify, request
+from flask import Response, jsonify, request, stream_with_context
 from flask_login import current_user, login_required
 
 from mobile_device_manager import (
     wireless_pair_and_connect,
     adb_disconnect_device,
     check_mobile_health,
+    collect_device_warnings,
+    format_connect_error,
     get_device_info,
     get_foreground_app,
     is_emulator_udid,
+    list_devices_for_ui,
     list_emulators,
     list_usb_devices,
     list_user_apps,
     pick_default_emulator,
     pick_default_device,
+    prune_stale_adb_devices,
     set_connected_udid,
 )
 from mobile_adb_control import adb_press_back, adb_press_home, adb_swipe, smart_tap
@@ -180,6 +184,74 @@ def _resolve_request_udid(body: Optional[Dict[str, Any]] = None) -> str:
     return udid
 
 
+def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dict[str, Any]:
+    from mobile_env_config import resolve_mirror_backend, scrcpy_bridge_url
+
+    backend = resolve_mirror_backend(udid)
+    payload: Dict[str, Any] = {
+        "mirror_backend": backend,
+        "mirror_frame_url": f"/api/mobile/mirror/frame?session_id={session_id}&udid={udid}",
+    }
+    if backend == "scrcpy_ws":
+        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started, warm_scrcpy_session
+
+        ensure_bridge_started()
+        health = bridge_health()
+        if not health.get("scrcpy_server_ready"):
+            payload["mirror_backend"] = "screencap"
+            payload["mirror_fallback_reason"] = "未找到 scrcpy-server，已降级为截图投屏"
+            return payload
+        warm_ok, warm_err = warm_scrcpy_session(udid, timeout=12.0)
+        if not warm_ok:
+            payload["mirror_backend"] = "screencap"
+            payload["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败，已降级为截图投屏"
+            return payload
+        from urllib.parse import quote
+
+        payload["mirror_stream_url"] = (
+            f"/api/mobile/mirror/scrcpy-stream?serial={quote(udid, safe='')}"
+        )
+        payload["mirror_ws_url"] = f"{scrcpy_bridge_url(client_host)}/?serial={udid}"
+        payload["bridge"] = health
+        payload["scrcpy_warmed"] = True
+    return payload
+
+
+def _connect_response_with_mirror(
+    udid: str,
+    agent_result: Dict[str, Any],
+    *,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    from mobile_mirror import start_scrcpy_mirror
+
+    resolved = (agent_result.get("udid") or udid or "").strip()
+    mirror = start_scrcpy_mirror(resolved)
+    client_host = (request.host or "").split(":")[0] if request else ""
+    info = agent_result.get("device") or get_device_info(resolved)
+    out: Dict[str, Any] = {
+        "success": True,
+        "udid": resolved,
+        "device": info,
+        "session_id": mirror.get("session_id") or "",
+        "scrcpy_started": bool(mirror.get("scrcpy_started")),
+        "plugin_installed": agent_result.get("plugin_installed"),
+        "plugin_ready": agent_result.get("plugin_ready"),
+        "plugin_message": agent_result.get("plugin_message"),
+        "assistant_installed": agent_result.get("assistant_installed"),
+        "assistant_version_on_device": agent_result.get("assistant_version_on_device"),
+        "assistant_version_expected": agent_result.get("assistant_version_expected"),
+        "assistant_version_name_expected": agent_result.get("assistant_version_name_expected"),
+        "assistant_needs_install": agent_result.get("assistant_needs_install"),
+        "assistant_install_hint": agent_result.get("assistant_install_hint"),
+        "is_emulator": is_emulator_udid(resolved),
+    }
+    out.update(_mirror_payload(resolved, mirror.get("session_id") or "", client_host=client_host))
+    if extra:
+        out.update(extra)
+    return out
+
+
 def register_mobile_routes(app, *, api_error_handler, log_api_request, role_required=None):
     """注册移动端 API 到 Flask app。"""
 
@@ -234,6 +306,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             return blocked
         devices = list_usb_devices()
         emulators = list_emulators()
+        real_devices = list_devices_for_ui("real")
         if not devices:
             health = check_mobile_health()
             if not health.get("adb_ok"):
@@ -242,7 +315,30 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             "success": True,
             "devices": devices,
             "emulators": emulators,
-            "real_devices": [d for d in devices if not (d.get("udid") or "").startswith("emulator-")],
+            "real_devices": real_devices,
+            "device_warnings": collect_device_warnings(real_devices),
+        })
+
+    @app.route("/api/mobile/devices/prune", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_devices_prune():
+        """清理离线、deny 前缀等幽灵 adb 设备。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        result = prune_stale_adb_devices()
+        real_devices = list_devices_for_ui("real")
+        return jsonify({
+            "success": True,
+            "pruned": result.get("pruned") or [],
+            "errors": result.get("errors") or [],
+            "devices": result.get("devices") or [],
+            "real_devices": real_devices,
+            "emulators": result.get("emulators") or list_emulators(),
+            "device_warnings": collect_device_warnings(real_devices),
         })
 
     @app.route("/api/mobile/connect", methods=["POST"])
@@ -263,22 +359,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if not result.get("success"):
             return jsonify(result), 503
         set_connected_udid(result.get("udid") or udid)
-        info = result.get("device") or get_device_info(result.get("udid") or udid)
-        return jsonify({
-            "success": True,
-            "udid": result.get("udid") or udid,
-            "device": info,
-            "plugin_installed": result.get("plugin_installed"),
-            "plugin_ready": result.get("plugin_ready"),
-            "plugin_message": result.get("plugin_message"),
-            "assistant_installed": result.get("assistant_installed"),
-            "assistant_version_on_device": result.get("assistant_version_on_device"),
-            "assistant_version_expected": result.get("assistant_version_expected"),
-            "assistant_version_name_expected": result.get("assistant_version_name_expected"),
-            "assistant_needs_install": result.get("assistant_needs_install"),
-            "assistant_install_hint": result.get("assistant_install_hint"),
-            "is_emulator": is_emulator_udid(result.get("udid") or udid),
-        })
+        return jsonify(_connect_response_with_mirror(udid, result))
 
     @app.route("/api/mobile/disconnect", methods=["POST"])
     @login_required
@@ -286,6 +367,18 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     def api_mobile_disconnect():
         body = request.get_json(silent=True) or {}
         udid = _resolve_request_udid(body)
+        session_id = (body.get("session_id") or "").strip()
+        if session_id:
+            from mobile_mirror import stop_mirror
+
+            stop_mirror(session_id)
+        if udid:
+            try:
+                from mobile_scrcpy_bridge import stop_scrcpy_device_session
+
+                stop_scrcpy_device_session(udid)
+            except Exception:
+                pass
         agent_disconnect_device(udid)
         set_connected_udid(None)
         return jsonify({"success": True})
@@ -320,7 +413,235 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if not result.get("success"):
             return jsonify(result), 503
         set_connected_udid(result.get("udid") or udid)
-        return jsonify({"success": True, **result, "is_emulator": True})
+        return jsonify(_connect_response_with_mirror(udid, result, extra={"is_emulator": True}))
+
+    @app.route("/api/mobile/mirror/status", methods=["GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_mirror_status():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started
+        from mobile_env_config import resolve_mirror_backend, scrcpy_available
+
+        ensure_bridge_started()
+        udid = (request.args.get("udid") or "").strip()
+        if not udid:
+            from mobile_device_manager import get_connected_udid
+
+            udid = get_connected_udid() or ""
+        return jsonify({
+            "success": True,
+            "udid": udid,
+            "mirror_backend": resolve_mirror_backend(udid),
+            "scrcpy_available": scrcpy_available(),
+            "bridge": bridge_health(),
+        })
+
+    @app.route("/api/mobile/mirror/start", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_mirror_start():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        udid = _resolve_request_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        from mobile_mirror import start_scrcpy_mirror
+
+        mirror = start_scrcpy_mirror(udid)
+        client_host = (request.host or "").split(":")[0]
+        payload = _mirror_payload(udid, mirror.get("session_id") or "", client_host=client_host)
+        payload.update({"success": True, "session_id": mirror.get("session_id"), "udid": udid})
+        return jsonify(payload)
+
+    @app.route("/api/mobile/mirror/stop", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_mirror_stop():
+        body = request.get_json(silent=True) or {}
+        session_id = (body.get("session_id") or "").strip()
+        udid = _resolve_request_udid(body)
+        if session_id:
+            from mobile_mirror import stop_mirror
+
+            stop_mirror(session_id)
+        if udid:
+            try:
+                from mobile_scrcpy_bridge import stop_scrcpy_device_session
+
+                stop_scrcpy_device_session(udid)
+            except Exception:
+                pass
+        return jsonify({"success": True})
+
+    @app.route("/api/mobile/mirror/scrcpy-stream", methods=["GET"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_mirror_scrcpy_stream():
+        """设备高帧率 H.264 流（同源 HTTP，走 Flask 端口）。"""
+        from urllib.parse import unquote
+
+        serial = unquote(
+            (request.args.get("serial") or request.args.get("udid") or "").strip()
+        )
+        if not serial:
+            return jsonify({"success": False, "error": "缺少 serial"}), 400
+        from mobile_scrcpy_bridge import iter_scrcpy_http_stream
+
+        @stream_with_context
+        def _generate():
+            for chunk in iter_scrcpy_http_stream(serial):
+                yield chunk
+
+        return Response(
+            _generate(),
+            mimetype="application/octet-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "X-Content-Type-Options": "nosniff",
+                "Connection": "keep-alive",
+            },
+            direct_passthrough=True,
+        )
+
+    @app.route("/api/mobile/mirror/frame", methods=["GET"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_mirror_frame():
+        """adb screencap 降级投屏帧。"""
+        import base64
+
+        from mobile_device_manager import capture_screenshot_frame, get_connected_udid
+        from mobile_mirror import get_mirror_session
+
+        session_id = (request.args.get("session_id") or "").strip()
+        sess = get_mirror_session(session_id) if session_id else None
+        udid = (request.args.get("udid") or "").strip() or (sess or {}).get("udid") or ""
+        if not udid:
+            udid = get_connected_udid() or ""
+        frame, fmt = capture_screenshot_frame(udid)
+        if not frame:
+            return jsonify({"success": False, "error": "无法获取设备截图"}), 503
+        b64 = base64.b64encode(frame).decode("ascii")
+        return jsonify({"success": True, "format": fmt, "data": b64})
+
+    def _playground_udid(body: Dict[str, Any]) -> str:
+        udid = _resolve_request_udid(body)
+        if not udid:
+            from mobile_device_manager import get_connected_udid
+
+            udid = get_connected_udid() or ""
+        return udid
+
+    @app.route("/api/mobile/playground/tap", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_playground_tap():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        udid = _playground_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        from mobile_playground import playground_tap
+
+        out = playground_tap(udid, body.get("locate") or body.get("description") or "")
+        status = 200 if out.get("success") else 422
+        return jsonify(out), status
+
+    @app.route("/api/mobile/playground/assert", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_playground_assert():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        udid = _playground_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        from mobile_playground import playground_assert
+
+        out = playground_assert(udid, body.get("condition") or body.get("description") or "")
+        status = 200 if out.get("success") else 422
+        return jsonify(out), status
+
+    @app.route("/api/mobile/playground/query", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_playground_query():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        udid = _playground_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        from mobile_playground import playground_query
+
+        out = playground_query(udid, body.get("prompt") or body.get("question") or "")
+        status = 200 if out.get("success") else 422
+        return jsonify(out), status
+
+    @app.route("/api/mobile/playground/act", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_playground_act():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        udid = _playground_udid(body)
+        if not udid:
+            return jsonify({"success": False, "error": "请先连接设备"}), 400
+        from mobile_playground import playground_act
+
+        out = playground_act(udid, body.get("goal") or body.get("prompt") or "")
+        status = 200 if out.get("success") else 422
+        return jsonify(out), status
+
+    @app.route("/api/mobile/playground/save-steps", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    @log_api_request
+    def api_mobile_playground_save_steps():
+        """将 Playground 回放步骤追加到当前用例（含 unit_id 继承）。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        run_id = (body.get("run_id") or body.get("replay_run_id") or "").strip()
+        case_id = body.get("case_id")
+        if not run_id:
+            replay = body.get("replay") or {}
+            if isinstance(replay, dict):
+                run_id = (replay.get("run_id") or "").strip()
+        if not run_id or not case_id:
+            return jsonify({"success": False, "error": "需要 run_id 与 case_id"}), 400
+        from mobile_playground import playground_save_replay_to_case
+
+        out = playground_save_replay_to_case(run_id, case_id, user_id=current_user.id)
+        status = 200 if out.get("success") else 422
+        return jsonify(out), status
 
     @app.route("/api/mobile/wireless/connect", methods=["POST"])
     @login_required
@@ -381,19 +702,20 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
 
         set_connected_udid(udid)
         agent_result = agent_connect_device(udid=udid)
-        return jsonify({
-            "success": True,
-            "message": msg,
-            "udid": udid,
-            "devices": devices,
-            "paired": bool(pairing_code),
-            "plugin_installed": agent_result.get("plugin_installed"),
-            "plugin_ready": agent_result.get("plugin_ready"),
-            "assistant_needs_install": agent_result.get("assistant_needs_install"),
-            "assistant_install_hint": agent_result.get("assistant_install_hint"),
-            "assistant_version_on_device": agent_result.get("assistant_version_on_device"),
-            "assistant_version_name_expected": agent_result.get("assistant_version_name_expected"),
-        })
+        if not agent_result.get("success"):
+            return jsonify({
+                "success": True,
+                "message": msg,
+                "udid": udid,
+                "devices": devices,
+                "paired": bool(pairing_code),
+                **agent_result,
+            })
+        return jsonify(_connect_response_with_mirror(
+            udid,
+            agent_result,
+            extra={"message": msg, "devices": devices, "paired": bool(pairing_code)},
+        ))
 
     @app.route("/api/mobile/tap-at", methods=["POST"])
     @login_required
@@ -1043,6 +1365,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             return blocked
         health = check_mobile_health()
         devices = health.get("devices") or []
+        real_devices = list_devices_for_ui("real")
         default_dev = pick_default_device()
         from mobile_device_profiles import list_frame_presets
         from mobile_assistant_bundles import assistant_installed_on_device
@@ -1055,7 +1378,9 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             **public_config(),
             "health": health,
             "devices": devices,
+            "real_devices": real_devices,
             "emulators": list_emulators(),
+            "device_warnings": collect_device_warnings(real_devices),
             "default_device": default_dev,
             "frame_presets": list_frame_presets(),
             "auto_connect_default": auto_connect_on_studio(),
@@ -1089,14 +1414,16 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if not dev or dev.get("state") != "device":
             return jsonify({
                 "success": False,
-                "error": "未发现已授权设备。请启动模拟器、USB 连接真机或在无线调试中配对后重试。",
-            }), 503
+                "error": format_connect_error(dev),
+                "device_state": (dev or {}).get("state") or "",
+                "udid": (dev or {}).get("udid") or udid,
+            }), 422
         udid = dev.get("udid") or ""
         result = agent_connect_device(udid=udid)
         if not result.get("success"):
             return jsonify(result), 503
         set_connected_udid(result.get("udid") or udid)
-        return jsonify({"success": True, **result})
+        return jsonify(_connect_response_with_mirror(udid, result))
 
     @app.route("/api/mobile/diagnostics", methods=["GET"])
     @login_required

@@ -9,7 +9,7 @@
     <header class="ms-page-header">
         <div>
             <h1 class="ms-title"><i class="fas fa-mobile-alt text-emerald-500"></i> 移动端测试</h1>
-            <p class="ms-subtitle">手机端物理操作录制 · Agent 关键帧截图 · 无需投屏</p>
+            <p class="ms-subtitle">手机端物理操作录制 · scrcpy 高帧投屏 · Agent 关键帧</p>
         </div>
         <div class="ms-header-actions">
             <span id="msConnectBadge" class="ms-connect-badge">未连接</span>
@@ -108,12 +108,64 @@
         </aside>
 
         <main class="ms-panel ms-panel--center">
+            <div class="ms-phone-toolbar">
+                <span id="msMirrorMode" class="ms-mirror-mode ms-mirror-mode--idle" title="投屏方式">未连接</span>
+                <span id="msDeviceDim" class="ms-muted">分辨率 —</span>
+            </div>
+            <div class="ms-phone-stage">
+                <div id="msPhoneShell" class="ms-phone-shell">
+                    <div id="msPhoneNotch" class="ms-phone-notch ms-phone-notch--punch"></div>
+                    <div id="msScreenInner" class="ms-screen-inner">
+                        <canvas id="msMirrorCanvas" class="ms-mirror-canvas" aria-label="设备画面"></canvas>
+                        <canvas id="msMirrorOverlay" class="ms-mirror-overlay" aria-hidden="true"></canvas>
+                        <div id="msMirrorPlaceholder" class="ms-mirror-placeholder">
+                            <i class="fas fa-mobile-alt fa-2x mb-3 opacity-40"></i>
+                            <p>连接设备后此处显示实时画面</p>
+                            <p class="ms-muted" style="font-size:12px;">插件市场安装 scrcpy 可获得高帧率投屏</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <h2 class="ms-section-title">步骤列表 <span id="msLiveStepCount" class="ms-muted">0</span></h2>
             <div id="msStepsList" class="ms-steps-list"></div>
             <div id="msLiveSteps" class="ms-steps-list"></div>
         </main>
 
         <aside class="ms-panel ms-panel--right">
+            <section class="ms-playground">
+                <h2 class="ms-section-title">智能操作</h2>
+                <p class="ms-muted ms-playground-hint">连接设备后，用自然语言即时操作当前画面（Midscene 风格）</p>
+                <div class="ms-playground-tabs" role="tablist">
+                    <button type="button" class="ms-playground-tab ms-playground-tab--active" data-pg-tab="tap">点一下</button>
+                    <button type="button" class="ms-playground-tab" data-pg-tab="assert">检查一下</button>
+                    <button type="button" class="ms-playground-tab" data-pg-tab="query">读一下</button>
+                    <button type="button" class="ms-playground-tab" data-pg-tab="act">帮我做</button>
+                </div>
+                <div id="msPlaygroundStatus" class="ms-playground-status" hidden></div>
+                <div id="msPlaygroundPanelTap" class="ms-playground-panel ms-playground-panel--active">
+                    <label class="ms-playground-label">描述要点击的元素</label>
+                    <input type="text" id="msPgTapInput" class="ms-input" placeholder="例如：登录按钮">
+                    <button type="button" id="msPgTapBtn" class="ms-btn ms-btn--primary ms-btn--block">执行点击</button>
+                </div>
+                <div id="msPlaygroundPanelAssert" class="ms-playground-panel" hidden>
+                    <label class="ms-playground-label">描述要确认的内容</label>
+                    <input type="text" id="msPgAssertInput" class="ms-input" placeholder="例如：页面显示登录成功">
+                    <button type="button" id="msPgAssertBtn" class="ms-btn ms-btn--primary ms-btn--block">执行检查</button>
+                </div>
+                <div id="msPlaygroundPanelQuery" class="ms-playground-panel" hidden>
+                    <label class="ms-playground-label">要从画面读取什么</label>
+                    <textarea id="msPgQueryInput" class="ms-textarea" rows="3" placeholder="例如：当前页面的用户 ID 是多少？"></textarea>
+                    <button type="button" id="msPgQueryBtn" class="ms-btn ms-btn--primary ms-btn--block">读取</button>
+                    <pre id="msPgQueryResult" class="ms-playground-result ms-muted" hidden></pre>
+                </div>
+                <div id="msPlaygroundPanelAct" class="ms-playground-panel" hidden>
+                    <label class="ms-playground-label">要完成的目标（可多步自动规划）</label>
+                    <textarea id="msPgActInput" class="ms-textarea" rows="3" placeholder="例如：在搜索框输入 Midscene 并执行搜索"></textarea>
+                    <button type="button" id="msPgActBtn" class="ms-btn ms-btn--indigo ms-btn--block">开始执行</button>
+                </div>
+                <a id="msPlaygroundReplayLink" class="ms-playground-replay" href="#" target="_blank" rel="noopener" hidden>查看本次操作回放</a>
+                <button type="button" id="msPgSaveStepsBtn" class="ms-btn ms-btn--ghost ms-btn--block" hidden>保存到当前用例</button>
+            </section>
             <h2 class="ms-section-title">当前步骤截图</h2>
             <img id="msKeyframeImg" class="ms-keyframe" alt="关键帧" style="display:none;">
             <p id="msKeyframePlaceholder" class="ms-muted">录制或选中步骤后显示截图</p>
@@ -137,6 +189,8 @@
 {% else %}
 <script id="__mobileStudioCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=openclaw_gateway_configured)|tojson }}</script>
 {% endif %}
+<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}?v=20260622e"></script>
 <script src="{{ url_for('static', filename='js/mobile_agent_panel.js') }}"></script>
-<script src="{{ url_for('static', filename='js/mobile_studio.js') }}"></script>
+<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260622e"></script>
+<script src="{{ url_for('static', filename='js/mobile_playground.js') }}?v=20260622e"></script>
 {% endblock %}

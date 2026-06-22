@@ -74,6 +74,27 @@ ws = websocket.create_connection(
 - 纯 API 任务（无需浏览器）
 - 未连接画布且未配置 CDP 时强行浏览器自动化（应提示用户先打开 AI 测试画布）
 
+## Testory CLI（开发者 / Hermes / CI）
+
+> 终端用户请使用 AI 测试页；以下命令供集成与自动化流水线。
+
+```bash
+# 就绪检查（视觉模型、画布）
+python -m testory_cli web readiness --session-id <embedded_session_id>
+
+# 视口截图
+python -m testory_cli web screenshot --session-id <sid> -o shot.png
+
+# 智能点击 / 输入（自然语言，与产品内 ai_tap / ai_input 一致）
+python -m testory_cli web tap --session-id <sid> --locate "登录按钮"
+python -m testory_cli web input --session-id <sid> --locate "搜索框" --text "hello"
+
+# 批量步骤（JSON 与平台 run-steps 一致）
+python -m testory_cli web run-steps --session-id <sid> --file steps.json
+```
+
+环境：与主站共用 `.env` 中 `EMBEDDED_BROWSER_GATEWAY_URL` / `EMBEDDED_BROWSER_GATEWAY_SECRET`。
+
 ## 维护
 
 - 用例步骤可导出为 Skill：`POST /api/ai/skills/export-from-plan`

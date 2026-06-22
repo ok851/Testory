@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 from logger import uat_logger
 
@@ -62,6 +62,7 @@ async def try_recover_selector_with_hermes(
     cap = int(os.environ.get("AI_SELECTOR_RECOVERY_MAX_NODES", "100") or "100")
     registry = await _collect_registry_main_frame(page, min(200, max(20, cap)))
     if not registry:
+        uat_logger.warning("[AI_HERMES_HEAL] 当前页主文档未采集到可交互控件，将尝试视觉定位兜底")
         return None
     if not registry_lines:
         from ai_selector_recovery import _registry_lines
@@ -122,3 +123,70 @@ def sync_repair_to_memory(
         )
     except Exception as e:
         uat_logger.debug("hermes heal memory sync skipped: %s", e)
+
+
+def build_vlm_ground_heal_candidate(description: str) -> Optional[Dict[str, Any]]:
+    """DOM/heal 无 probe 时建议 Tier4 vlm_ground 候选。"""
+    desc = (description or "").strip()
+    if not desc:
+        return None
+    try:
+        from ai_vision_grounding import locator_tier_vlm_enabled
+        from locator_tier_utils import build_vlm_ground_candidate
+
+        if not locator_tier_vlm_enabled():
+            return None
+        return build_vlm_ground_candidate(desc)
+    except Exception as e:
+        uat_logger.debug("vlm_ground heal candidate: %s", e)
+        return None
+
+
+def merge_vlm_ground_into_locator_candidates(
+    locator_candidates_raw: Any,
+    description: str,
+) -> Any:
+    """将 vlm_ground 候选合并进步骤 locator_candidates（就地返回 JSON 字符串或原值）。"""
+    cand = build_vlm_ground_heal_candidate(description)
+    if not cand:
+        return locator_candidates_raw
+    try:
+        from locator_tier_utils import merge_candidates_json
+
+        if locator_candidates_raw:
+            lc_str = (
+                locator_candidates_raw
+                if isinstance(locator_candidates_raw, str)
+                else json.dumps(locator_candidates_raw, ensure_ascii=False)
+            )
+            return merge_candidates_json(lc_str, [cand])
+        return json.dumps([cand], ensure_ascii=False)
+    except Exception as e:
+        uat_logger.debug("merge vlm_ground heal: %s", e)
+        return locator_candidates_raw
+
+
+def apply_vlm_ground_heal_to_step(step: Dict[str, Any]) -> bool:
+    """为单步写入 vlm_ground 候选（有 description 且尚无 vlm 项时）。"""
+    if not isinstance(step, dict):
+        return False
+    desc = (
+        (step.get("description") or "")
+        or (step.get("locate_prompt") or "")
+    ).strip()
+    if not desc:
+        return False
+    merged = merge_vlm_ground_into_locator_candidates(step.get("locator_candidates"), desc)
+    if merged == step.get("locator_candidates"):
+        return False
+    step["locator_candidates"] = merged
+    return True
+
+
+def apply_vlm_ground_heal_to_steps(steps: List[Dict[str, Any]]) -> int:
+    """批量为步骤附加 vlm_ground 自愈候选。返回修改步数。"""
+    n = 0
+    for st in steps or []:
+        if isinstance(st, dict) and apply_vlm_ground_heal_to_step(st):
+            n += 1
+    return n

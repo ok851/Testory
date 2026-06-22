@@ -253,8 +253,13 @@ def normalize_ai_step(step: dict) -> dict:
     android_actions = {
         "open_app", "close_app", "tap", "input_text", "swipe", "wait",
         "assert_text", "assert_element", "screenshot", "click", "input", "verify", "assert",
+        "ai_tap", "ai_input", "assert_vision", "wait_vision", "extract_vision",
     }
-    allowed_actions = {"navigate", "click", "input", "wait", "verify", "extract_text", "assert"}
+    allowed_actions = {
+        "navigate", "click", "input", "wait", "verify", "extract_text", "assert",
+        "ai_tap", "ai_input", "ai_scroll",
+        "assert_vision", "wait_vision", "extract_vision",
+    }
     if layer == "desktop":
         allowed_actions = desktop_actions
     elif layer == "android":
@@ -278,6 +283,7 @@ def normalize_ai_step(step: dict) -> dict:
     selector_value = _str(step.get("selector_value"))
     input_value = _str(step.get("input_value"))
     description = _str(step.get("description"))
+    locate_prompt = _str(step.get("locate_prompt"))
     compare_type = _str(step.get("compare_type"))
     if action == "assert":
         from auth_batch_helpers import normalize_assert_compare_type
@@ -318,6 +324,10 @@ def normalize_ai_step(step: dict) -> dict:
         out["compare_type"] = compare_type
     if lc:
         out["locator_candidates"] = lc
+    if locate_prompt:
+        out["locate_prompt"] = locate_prompt
+        if not description:
+            out["description"] = locate_prompt
     if layer == "android":
         out["strategy"] = selector_type or "accessibility_id"
     ms = step.get("mobile_spec")
@@ -332,7 +342,220 @@ def normalize_ai_step(step: dict) -> dict:
     return out
 
 
-def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
+def infer_plan_platform_type(plan: Optional[Dict[str, Any]] = None, steps: Any = None) -> str:
+    """从 plan.meta / plan.platform / 步骤 automation_layer 推断平台。"""
+    if isinstance(plan, dict):
+        meta = plan.get("meta") if isinstance(plan.get("meta"), dict) else {}
+        for key in ("platform_type", "platform"):
+            pt = _str(plan.get(key) if key == "platform" else meta.get(key)).lower()
+            if pt in ("web", "desktop", "android"):
+                return pt
+    rows = steps if isinstance(steps, list) else (plan.get("steps") if isinstance(plan, dict) else [])
+    if not isinstance(rows, list):
+        return "web"
+    layers = {
+        _str(s.get("automation_layer")).lower()
+        for s in rows
+        if isinstance(s, dict) and _str(s.get("automation_layer"))
+    }
+    if "desktop" in layers:
+        return "desktop"
+    if "android" in layers:
+        return "android"
+    actions = {_str(s.get("action")).lower() for s in rows if isinstance(s, dict)}
+    if actions & {"launch_app", "attach_window", "hotkey"}:
+        return "desktop"
+    if actions & {"open_app", "tap", "input_text"}:
+        return "android"
+    return "web"
+
+
+_DESKTOP_SHELL_LAUNCH = frozenset({
+    "control", "control.exe", "notepad", "notepad.exe", "calc", "calc.exe",
+    "mspaint", "mspaint.exe", "explorer", "explorer.exe", "cmd", "cmd.exe",
+})
+
+
+def _guess_desktop_app_from_text(text: str) -> str:
+    t = _str(text)
+    if not t:
+        return ""
+    low = t.lower()
+    if "控制面板" in t or "control panel" in low:
+        return "control"
+    if "记事本" in t or "notepad" in low:
+        return "notepad"
+    if "计算器" in t or "calculator" in low or "calc.exe" in low:
+        return "calc"
+    if "资源管理器" in t or "文件管理器" in t or "explorer" in low:
+        return "explorer"
+    return ""
+
+
+def desktop_template_steps_for_goal(goal: str) -> List[dict]:
+    """模型输出不可执行时的桌面步骤兜底（常见系统应用）。"""
+    app = _guess_desktop_app_from_text(goal)
+    if app == "control":
+        title = "控制面板"
+        return [
+            {
+                "action": "launch_app",
+                "automation_layer": "desktop",
+                "input_value": "control",
+                "desktop_spec": json.dumps({"app": "control"}, ensure_ascii=False),
+                "selector_type": "",
+                "selector_value": "",
+                "description": "启动控制面板",
+            },
+            {
+                "action": "wait",
+                "automation_layer": "desktop",
+                "input_value": "3",
+                "selector_type": "",
+                "selector_value": "",
+                "description": "等待控制面板窗口出现",
+            },
+            {
+                "action": "attach_window",
+                "automation_layer": "desktop",
+                "desktop_spec": json.dumps({"title_contains": title}, ensure_ascii=False),
+                "selector_type": "",
+                "selector_value": "",
+                "description": f"附着到「{title}」窗口",
+            },
+            {
+                "action": "verify",
+                "automation_layer": "desktop",
+                "selector_type": "window",
+                "selector_value": title,
+                "input_value": "exist",
+                "description": "确认控制面板窗口已显示",
+            },
+        ]
+    if app:
+        return [
+            {
+                "action": "launch_app",
+                "automation_layer": "desktop",
+                "input_value": app,
+                "selector_type": "",
+                "selector_value": "",
+                "description": f"启动 {app}",
+            },
+            {
+                "action": "wait",
+                "automation_layer": "desktop",
+                "input_value": "2",
+                "selector_type": "",
+                "selector_value": "",
+                "description": "等待应用窗口",
+            },
+        ]
+    return []
+
+
+def repair_desktop_ai_steps_inplace(steps: Any) -> List[str]:
+    """将模型误生成的 Web 风格步骤纠正为桌面可执行格式。"""
+    warns: List[str] = []
+    if not isinstance(steps, list):
+        return warns
+    last_launch_app = ""
+    for idx, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        step["automation_layer"] = "desktop"
+        action = _str(step.get("action")).lower()
+        iv = _str(step.get("input_value"))
+        sv = _str(step.get("selector_value"))
+        st = _str(step.get("selector_type")).lower()
+        desc = _str(step.get("description"))
+
+        iv_low = iv.lower()
+        if action in ("click", "input", "navigate", "extract_text") and (
+            iv_low in _DESKTOP_SHELL_LAUNCH or _guess_desktop_app_from_text(iv or desc)
+        ):
+            app = iv_low if iv_low in _DESKTOP_SHELL_LAUNCH else _guess_desktop_app_from_text(iv or desc)
+            step["action"] = "launch_app"
+            step["input_value"] = app
+            step["selector_type"] = ""
+            step["selector_value"] = ""
+            warns.append(f"第{idx}步已从 {action} 纠正为 launch_app（启动 {app}）")
+            action = "launch_app"
+        elif action == "navigate":
+            step["action"] = "launch_app"
+            step["selector_type"] = ""
+            step["selector_value"] = ""
+            warns.append(f"第{idx}步：桌面场景不使用 navigate，已改为 launch_app")
+            action = "launch_app"
+
+        if action in ("verify", "assert") and st in ("css", "xpath", "text", ""):
+            title_hint = sv or _guess_window_title_from_desc(desc) or iv
+            if title_hint and not any(c in title_hint for c in "#.[/") and len(title_hint) < 120:
+                step["selector_type"] = "window"
+                step["input_value"] = step.get("input_value") or "exist"
+                spec_obj: Dict[str, Any] = {}
+                raw_ds = step.get("desktop_spec")
+                if isinstance(raw_ds, str) and raw_ds.strip():
+                    try:
+                        spec_obj = json.loads(raw_ds)
+                    except Exception:
+                        spec_obj = {}
+                elif isinstance(raw_ds, dict):
+                    spec_obj = dict(raw_ds)
+                if not spec_obj.get("title_contains") and not spec_obj.get("title"):
+                    spec_obj["title_contains"] = title_hint
+                    step["desktop_spec"] = json.dumps(spec_obj, ensure_ascii=False)
+                warns.append(f"第{idx}步：窗口校验已改为 window + desktop_spec.title_contains")
+
+        if action == "attach_window":
+            spec_obj = {}
+            raw_ds = step.get("desktop_spec")
+            if isinstance(raw_ds, str) and raw_ds.strip():
+                try:
+                    spec_obj = json.loads(raw_ds)
+                except Exception:
+                    spec_obj = {}
+            elif isinstance(raw_ds, dict):
+                spec_obj = dict(raw_ds)
+            if not spec_obj.get("title_contains") and not spec_obj.get("title"):
+                from desktop_run_context import window_hints_for_launch
+
+                title_hint = (
+                    sv
+                    or _guess_window_title_from_desc(desc)
+                    or (window_hints_for_launch(last_launch_app)[0] if last_launch_app else "")
+                )
+                if title_hint:
+                    spec_obj["title_contains"] = title_hint
+                    step["desktop_spec"] = json.dumps(spec_obj, ensure_ascii=False)
+                    if not sv:
+                        step["selector_value"] = title_hint
+                    warns.append(f"第{idx}步：已补充 attach_window 的 title_contains")
+
+        if action == "launch_app":
+            last_launch_app = _str(step.get("input_value")) or _guess_desktop_app_from_text(desc)
+
+        if action == "launch_app" and not _str(step.get("input_value")):
+            app = _guess_desktop_app_from_text(desc)
+            if app:
+                step["input_value"] = app
+                warns.append(f"第{idx}步：已根据描述补全 launch_app → {app!r}")
+
+    return warns
+
+
+def _guess_window_title_from_desc(desc: str) -> str:
+    d = _str(desc)
+    if "控制面板" in d:
+        return "控制面板"
+    if "记事本" in d:
+        return "记事本"
+    if "计算器" in d:
+        return "计算器"
+    return ""
+
+
+def dedupe_and_validate_ai_steps(steps: list, *, platform: str = "web") -> Tuple[List[dict], List[str]]:
     """
     去重 + 非阻断校验提示。
     Returns: (clean_steps, warnings)
@@ -341,6 +564,7 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
     clean_steps: List[dict] = []
     seen = set()
 
+    platform = (platform or "web").strip().lower()
     for raw in steps or []:
         if not isinstance(raw, dict):
             continue
@@ -360,11 +584,44 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
 
     if clean_steps:
         first_action = clean_steps[0].get("action")
-        if first_action != "navigate":
+        first_layer = _str(clean_steps[0].get("automation_layer")).lower() or platform
+        if platform == "desktop" or first_layer == "desktop":
+            if first_action not in ("launch_app", "attach_window"):
+                warnings.append(
+                    "建议首步使用 launch_app 或 attach_window 打开目标应用（桌面自动化不使用 navigate）。"
+                )
+        elif platform == "android" or first_layer == "android":
+            if first_action not in ("open_app", "tap", "attach_window"):
+                warnings.append("建议首步使用 open_app 启动目标 Android 应用。")
+        elif first_action != "navigate":
             warnings.append("建议首步使用 navigate 进入目标页面，以提升执行稳定性。")
 
     for idx, step in enumerate(clean_steps, start=1):
-        if step["action"] in {"click", "input", "verify", "extract_text", "assert"} and not step["selector_value"]:
+        layer = _str(step.get("automation_layer")).lower() or platform
+        if layer == "desktop" or platform == "desktop":
+            act = step.get("action")
+            if act == "launch_app" and not step.get("input_value") and not step.get("desktop_spec"):
+                warnings.append(f"第{idx}步 launch_app 缺少 input_value 或 desktop_spec.path，运行时可能失败。")
+            elif act == "attach_window" and not step.get("desktop_spec"):
+                warnings.append(f"第{idx}步 attach_window 缺少 desktop_spec（如 title_contains），运行时可能失败。")
+            elif act in {"click", "input", "double_click", "right_click"} and not (
+                step.get("selector_value") or step.get("locate_prompt") or step.get("desktop_spec")
+            ):
+                warnings.append(f"第{idx}步桌面点击/输入缺少定位（selector_value、locate_prompt 或 desktop_spec）。")
+            continue
+        if layer == "android" or platform == "android":
+            if step["action"] in {"tap", "click", "input", "input_text"} and not step.get("selector_value"):
+                warnings.append(f"第{idx}步缺少 Android 定位 selector_value，运行时可能失败。")
+            continue
+        if step["action"] in {"ai_tap", "ai_input", "ai_scroll"}:
+            lp = _str(step.get("locate_prompt")) or _str(step.get("description"))
+            if not lp:
+                warnings.append(f"第{idx}步缺少元素描述（locate_prompt / description），运行时可能失败。")
+        elif step["action"] in {"assert_vision", "wait_vision", "extract_vision"}:
+            desc = _str(step.get("description")) or _str(step.get("input_value")) or _str(step.get("locate_prompt"))
+            if not desc:
+                warnings.append(f"第{idx}步缺少画面描述（description / input_value），运行时可能失败。")
+        elif step["action"] in {"click", "input", "verify", "extract_text", "assert"} and not step["selector_value"]:
             ct = _str(step.get("compare_type")).lower()
             if step["action"] == "assert" and ct in (
                 "url_equals",
@@ -372,6 +629,7 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
                 "page_text_contains",
                 "page_text_equals",
                 "page_text_regex",
+                "vision_contains",
             ):
                 pass
             else:
@@ -386,6 +644,8 @@ def dedupe_and_validate_ai_steps(steps: list) -> Tuple[List[dict], List[str]]:
                 )
             ):
                 warnings.append(f"第{idx}步 input 未填写输入值，请在步骤编辑中补充或重新生成。")
+        if step["action"] == "ai_input" and not step["input_value"]:
+            warnings.append(f"第{idx}步 ai_input 未填写输入内容。")
         if step["action"] == "navigate" and not step["input_value"]:
             warnings.append(f"第{idx}步 navigate 未填写 URL，请在步骤编辑中补充或重新生成。")
         if step["action"] == "wait":
@@ -409,8 +669,14 @@ def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Op
     steps = plan.get("steps")
     if not isinstance(steps, list):
         return plan, []
-    repair_warns = repair_raw_ai_steps_for_platform(steps)
-    clean, warnings = dedupe_and_validate_ai_steps(steps)
+    platform = infer_plan_platform_type(plan, steps)
+    if platform == "desktop":
+        repair_warns = repair_desktop_ai_steps_inplace(steps)
+    elif platform == "android":
+        repair_warns = []
+    else:
+        repair_warns = repair_raw_ai_steps_for_platform(steps)
+    clean, warnings = dedupe_and_validate_ai_steps(steps, platform=platform)
     warnings = list(repair_warns) + list(warnings)
     plan["steps"] = clean
     meta = plan.get("meta")
@@ -419,6 +685,9 @@ def apply_step_normalization_to_plan(plan: Optional[Dict[str, Any]]) -> Tuple[Op
         plan["meta"] = meta
     if warnings:
         meta["normalization_warnings"] = warnings
+    if platform != "web":
+        meta["platform_type"] = platform
+        plan["platform"] = platform
     extra: List[str] = []
     sr = meta.get("step_repair_warnings")
     if isinstance(sr, list):

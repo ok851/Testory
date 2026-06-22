@@ -42,6 +42,12 @@ class TestMobileEnvConfig(unittest.TestCase):
 
 
 class TestMobileConnect(unittest.TestCase):
+    def test_format_connect_error_for_unauthorized(self):
+        from mobile_device_manager import format_connect_error
+
+        msg = format_connect_error({"udid": "DEV1", "state": "unauthorized"})
+        self.assertIn("尚未授权", msg)
+
     def test_finish_studio_connect_sets_udid(self):
         from mobile_connect import finish_studio_connect
 

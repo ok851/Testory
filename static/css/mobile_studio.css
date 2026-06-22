@@ -460,6 +460,10 @@ html.dark .ms-panel--left .ms-status {
     background: #dbeafe;
     color: #1d4ed8;
 }
+.ms-mirror-mode--connecting {
+    background: #fef3c7;
+    color: #b45309;
+}
 .ms-mirror-mode--screencap {
     background: #fef3c7;
     color: #b45309;
@@ -799,4 +803,157 @@ html.dark .ms-pair-code { color: #ecfdf5; }
     font-size: 0.75rem;
     color: #64748b;
     margin-top: 0.35rem;
+}
+
+/* Playground（Phase 2） */
+.ms-playground {
+    margin-bottom: 1.25rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #e2e8f0;
+}
+html.dark .ms-playground {
+    border-bottom-color: #334155;
+}
+.ms-playground-hint {
+    font-size: 0.72rem;
+    margin: 0 0 0.65rem;
+    line-height: 1.45;
+}
+.ms-playground-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-bottom: 0.75rem;
+}
+.ms-playground-tab {
+    flex: 1 1 calc(50% - 0.35rem);
+    min-width: 4.5rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.45rem;
+    background: #f8fafc;
+    color: #475569;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+html.dark .ms-playground-tab {
+    background: #1e293b;
+    border-color: #475569;
+    color: #94a3b8;
+}
+.ms-playground-tab:hover {
+    border-color: #6366f1;
+    color: #4338ca;
+}
+html.dark .ms-playground-tab:hover {
+    color: #a5b4fc;
+}
+.ms-playground-tab--active {
+    background: #eef2ff;
+    border-color: #6366f1;
+    color: #4338ca;
+}
+html.dark .ms-playground-tab--active {
+    background: #312e81;
+    border-color: #818cf8;
+    color: #e0e7ff;
+}
+.ms-playground-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.ms-playground-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #64748b;
+}
+html.dark .ms-playground-label {
+    color: #94a3b8;
+}
+.ms-playground-status {
+    font-size: 0.72rem;
+    line-height: 1.45;
+    padding: 0.45rem 0.55rem;
+    border-radius: 0.4rem;
+    margin-bottom: 0.5rem;
+}
+.ms-playground-status--info,
+.ms-playground-status--busy {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+}
+.ms-playground-status--ok {
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
+}
+.ms-playground-status--warn {
+    background: #fffbeb;
+    color: #b45309;
+    border: 1px solid #fde68a;
+}
+.ms-playground-status--err {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}
+html.dark .ms-playground-status--info,
+html.dark .ms-playground-status--busy {
+    background: #1e3a5f;
+    color: #93c5fd;
+    border-color: #1d4ed8;
+}
+html.dark .ms-playground-status--ok {
+    background: #064e3b;
+    color: #6ee7b7;
+    border-color: #059669;
+}
+html.dark .ms-playground-status--warn {
+    background: #78350f;
+    color: #fcd34d;
+    border-color: #d97706;
+}
+html.dark .ms-playground-status--err {
+    background: #7f1d1d;
+    color: #fca5a5;
+    border-color: #dc2626;
+}
+.ms-playground-result {
+    font-size: 0.72rem;
+    line-height: 1.5;
+    padding: 0.5rem 0.55rem;
+    border-radius: 0.4rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 8rem;
+    overflow: auto;
+    margin: 0;
+}
+html.dark .ms-playground-result {
+    background: #0f172a;
+    border-color: #334155;
+}
+.ms-playground-replay {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #6366f1;
+    text-decoration: none;
+}
+.ms-playground-replay:hover {
+    text-decoration: underline;
+}
+html.dark .ms-playground-replay {
+    color: #a5b4fc;
+}
+.ms-btn--block {
+    width: 100%;
+    margin-top: 0.15rem;
 }

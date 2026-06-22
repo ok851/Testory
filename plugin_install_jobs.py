@@ -19,6 +19,7 @@ ProgressCallback = Callable[[int, str], None]
 BACKGROUND_PLUGIN_IDS = frozenset(
     {
         "mobile-android-platform-tools",
+        "mobile-scrcpy",
     }
 )
 

@@ -5665,7 +5665,9 @@ function changePage(page) {
                         if (txt) txt.textContent = t('steps_toast_stopped');
                         showToast(t('steps_toast_stopped'), 'warning');
                     } else {
-                        if (/视觉匹配|visual|自学习|重新框选/i.test(errMsg) || data.need_relearn) {
+                        const isWindowDesktopErr = /窗口未找到|未找到目标窗口|窗口 verify|launch_app/i.test(errMsg);
+                        const isVisualOnlyErr = /视觉匹配|重新框选|selector_type 必须为 'visual'/i.test(errMsg);
+                        if ((/视觉匹配|visual|自学习|重新框选|已废弃的 UIA/i.test(errMsg) || data.need_relearn) && isVisualOnlyErr && !isWindowDesktopErr) {
                             offerVisualRelearn(data.failed_step_id, null, errMsg, data.failure_screenshot, data);
                         } else {
                             alert(t('steps_run_fail_alert').replace('{err}', errMsg || t('index_err_unknown')));

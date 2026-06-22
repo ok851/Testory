@@ -156,7 +156,130 @@
         }
         
         .content {
-            padding: 30px;
+            padding: 0;
+        }
+        .cases-layout {
+            display: flex;
+            min-height: 420px;
+        }
+        .units-sidebar {
+            width: 220px;
+            flex-shrink: 0;
+            border-right: 1px solid #e9ecef;
+            background: #f8fafc;
+            padding: 14px 12px;
+        }
+        .units-sidebar h4 {
+            font-size: 13px;
+            margin: 0 0 10px;
+            color: #475569;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .unit-item {
+            padding: 8px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-bottom: 4px;
+            color: #334155;
+        }
+        .unit-item-managed {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 6px 4px 4px;
+        }
+        .unit-item-managed .unit-item-main {
+            flex: 1;
+            min-width: 0;
+            padding: 6px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .unit-item-managed:hover .unit-item-main { background: #e2e8f0; }
+        .unit-item-managed.active .unit-item-main { background: #667eea; color: #fff; }
+        .unit-item-managed.active { color: #fff; }
+        .unit-item-managed .unit-name {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding-right: 28px;
+        }
+        .unit-item-actions {
+            display: none;
+            flex-shrink: 0;
+            gap: 2px;
+        }
+        .unit-item-managed:hover .unit-item-actions,
+        .unit-item-managed.active .unit-item-actions {
+            display: flex;
+        }
+        .unit-item-actions button {
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            padding: 2px 5px;
+            font-size: 12px;
+            border-radius: 4px;
+            color: #64748b;
+            line-height: 1.2;
+        }
+        .unit-item-managed.active .unit-item-actions button { color: rgba(255,255,255,0.9); }
+        .unit-item-actions button:hover { background: rgba(0,0,0,0.08); }
+        .unit-item-managed.active .unit-item-actions button:hover { background: rgba(255,255,255,0.2); }
+        .unit-item .unit-count { float: right; opacity: 0.75; font-size: 11px; }
+        .unit-item:hover { background: #e2e8f0; }
+        .unit-item.active { background: #667eea; color: #fff; }
+        .cases-main { flex: 1; padding: 20px 30px; min-width: 0; }
+        .cases-pagination {
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .cases-pagination .page-info {
+            font-size: 13px;
+            color: #64748b;
+        }
+        .cases-pagination .page-btns {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .cases-pagination .page-btns button {
+            padding: 5px 12px;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            background: #fff;
+            cursor: pointer;
+            font-size: 12px;
+            color: #334155;
+        }
+        .cases-pagination .page-btns button:hover:not(:disabled) {
+            border-color: #667eea;
+            color: #667eea;
+        }
+        .cases-pagination .page-btns button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .cases-pagination .page-num {
+            min-width: 28px;
+            text-align: center;
+            font-size: 13px;
+            color: #475569;
+        }
+        .hierarchy-hint {
+            font-size: 12px;
+            opacity: 0.85;
+            margin-top: 6px;
         }
         
         .case-list {
@@ -447,6 +570,7 @@
         <div class="header">
             <h1 data-i18n="tc_title">测试用例管理</h1>
             <div class="project-info" id="projectInfo" data-i18n="tc_project_loading">正在加载项目信息...</div>
+            <div class="hierarchy-hint">项目 → 单元 → 用例 → 步骤</div>
         </div>
         
         <div class="toolbar">
@@ -474,8 +598,12 @@
             <div id="selectedOrderList" class="selected-order-list"></div>
         </div>
         
-        <div class="content">
-            <div id="casesList">
+        <div class="content cases-layout">
+            <aside class="units-sidebar" id="unitsSidebar">
+                <h4>测试单元 <button type="button" class="btn btn-secondary btn-sm" onclick="showCreateUnitPrompt()" title="新建单元">+</button></h4>
+                <div id="unitsList"><div class="loading" style="padding:8px;">加载中…</div></div>
+            </aside>
+            <div class="cases-main" id="casesList">
                 <div class="loading">
                     <div class="loading-spinner"></div>
                     <p data-i18n="tc_loading_cases">正在加载测试用例...</p>
@@ -483,7 +611,7 @@
             </div>
         </div>
     </div>
-    
+
     <div id="createCaseModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -492,6 +620,10 @@
             <div class="form-group">
                 <label for="caseName" data-i18n="proj_case_name">用例名称 *</label>
                 <input type="text" id="caseName" data-i18n-placeholder="proj_case_ph_name" placeholder="请输入测试用例名称">
+            </div>
+            <div class="form-group">
+                <label for="caseUnitSelect">所属单元</label>
+                <select id="caseUnitSelect" class="form-control"></select>
             </div>
             <div class="form-group">
                 <label for="casePlatform">测试类型</label>
@@ -551,9 +683,33 @@
                 <label for="editCaseExpectedResult" data-i18n="proj_case_exp">预期结果</label>
                 <textarea id="editCaseExpectedResult"></textarea>
             </div>
+            <div class="form-group">
+                <label for="editCaseUnitSelect">所属单元</label>
+                <select id="editCaseUnitSelect" class="form-control"></select>
+            </div>
             <div class="modal-footer">
                 <button type="button" onclick="closeEditCaseModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
                 <button type="button" onclick="updateTestCase()" class="btn btn-primary" data-i18n="proj_btn_save">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="editUnitModal" class="modal">
+        <div class="modal-content" style="max-width: 480px;">
+            <div class="modal-header">
+                <h3>编辑测试单元</h3>
+            </div>
+            <div class="form-group">
+                <label for="editUnitName">单元名称 *</label>
+                <input type="text" id="editUnitName" placeholder="如：登录模块、订单流程">
+            </div>
+            <div class="form-group">
+                <label for="editUnitDescription">单元描述</label>
+                <textarea id="editUnitDescription" rows="3" placeholder="可选，说明该单元包含的测试范围"></textarea>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="closeEditUnitModal()" class="btn btn-secondary">取消</button>
+                <button type="button" onclick="saveTestUnit()" class="btn btn-primary">保存</button>
             </div>
         </div>
     </div>
@@ -608,6 +764,7 @@
                 <div class="form-group">
                     <button type="button" onclick="exportCases('excel')" class="btn btn-primary">导出为Excel</button>
                     <button type="button" onclick="exportCases('json')" class="btn btn-info">导出为JSON</button>
+                    <button type="button" onclick="previewProjectYaml()" class="btn btn-secondary">YAML 预览（当前筛选）</button>
                 </div>
             </div>
             <div class="modal-footer">
@@ -683,6 +840,170 @@
         let caseRunStatusTimer = null;
         let localCaseExecutionRunning = false;
 
+        let currentUnitId = null;
+        let allUnitsList = [];
+        let ungroupedCaseCount = 0;
+        let currentEditingUnitId = null;
+        let casesPage = 1;
+        const casesPageSize = 10;
+        let casesTotal = 0;
+        let casesTotalPages = 1;
+
+        function casesListUrl() {
+            var url = `/api/projects/${currentProjectId}/cases?page=${casesPage}&page_size=${casesPageSize}`;
+            if (currentUnitId === 'ungrouped') url += '&unit_id=ungrouped';
+            else if (currentUnitId) url += '&unit_id=' + encodeURIComponent(currentUnitId);
+            return url;
+        }
+        async function loadUnits() {
+            try {
+                const resp = await fetch(`/api/projects/${currentProjectId}/units`);
+                const data = await resp.json();
+                allUnitsList = data.units || [];
+                ungroupedCaseCount = data.ungrouped_case_count || 0;
+                renderUnitsSidebar();
+                populateCaseUnitSelect();
+            } catch (e) {
+                console.error(e);
+                document.getElementById('unitsList').innerHTML = '<div style="color:#94a3b8;font-size:12px;">单元加载失败</div>';
+            }
+        }
+        function renderUnitsSidebar() {
+            const el = document.getElementById('unitsList');
+            if (!el) return;
+            var html = '<div class="unit-item' + (currentUnitId === null ? ' active' : '') + '" onclick="selectUnit(null)">全部用例</div>';
+            html += '<div class="unit-item' + (currentUnitId === 'ungrouped' ? ' active' : '') + '" onclick="selectUnit(\'ungrouped\')">未分组 <span class="unit-count">' + ungroupedCaseCount + '</span></div>';
+            allUnitsList.forEach(function (u) {
+                var active = String(currentUnitId) === String(u.id) ? ' active' : '';
+                html += '<div class="unit-item unit-item-managed' + active + '">'
+                    + '<div class="unit-item-main" onclick="selectUnit(' + u.id + ')" title="' + escapeHtml(u.description || '') + '">'
+                    + '<span class="unit-name">' + escapeHtml(u.name) + ' <span class="unit-count">' + (u.case_count || 0) + '</span></span>'
+                    + '</div>'
+                    + '<div class="unit-item-actions">'
+                    + '<button type="button" title="编辑单元" onclick="event.stopPropagation(); showEditUnitModal(' + u.id + ')">✎</button>'
+                    + '<button type="button" title="删除单元" onclick="event.stopPropagation(); confirmDeleteUnit(' + u.id + ')">🗑</button>'
+                    + '</div></div>';
+            });
+            el.innerHTML = html;
+        }
+        function populateCaseUnitSelect() {
+            const sel = document.getElementById('caseUnitSelect');
+            if (!sel) return;
+            var html = '<option value="">未分组</option>';
+            allUnitsList.forEach(function (u) {
+                html += '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>';
+            });
+            sel.innerHTML = html;
+            if (currentUnitId && currentUnitId !== 'ungrouped') sel.value = String(currentUnitId);
+            populateEditCaseUnitSelect();
+        }
+        function populateEditCaseUnitSelect(selectedId) {
+            const sel = document.getElementById('editCaseUnitSelect');
+            if (!sel) return;
+            var html = '<option value="">未分组</option>';
+            allUnitsList.forEach(function (u) {
+                html += '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>';
+            });
+            sel.innerHTML = html;
+            if (selectedId !== undefined && selectedId !== null && selectedId !== '') sel.value = String(selectedId);
+        }
+        function selectUnit(unitId) {
+            currentUnitId = unitId;
+            casesPage = 1;
+            renderUnitsSidebar();
+            loadTestCases();
+        }
+        async function showCreateUnitPrompt() {
+            var name = prompt('请输入单元名称（如：登录模块、订单流程）');
+            if (!name || !name.trim()) return;
+            const resp = await fetch(`/api/projects/${currentProjectId}/units`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim() })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                await loadUnits();
+                selectUnit(data.unit_id);
+            } else alert(data.error || '创建单元失败');
+        }
+        function showEditUnitModal(unitId) {
+            var unit = allUnitsList.find(function (u) { return String(u.id) === String(unitId); });
+            if (!unit) { alert('单元不存在或已删除'); return; }
+            currentEditingUnitId = unit.id;
+            document.getElementById('editUnitName').value = unit.name || '';
+            document.getElementById('editUnitDescription').value = unit.description || '';
+            document.getElementById('editUnitModal').classList.add('active');
+        }
+        function closeEditUnitModal() {
+            document.getElementById('editUnitModal').classList.remove('active');
+            currentEditingUnitId = null;
+        }
+        async function saveTestUnit() {
+            if (!currentEditingUnitId) return;
+            var name = (document.getElementById('editUnitName').value || '').trim();
+            if (!name) { alert('单元名称不能为空'); return; }
+            var description = (document.getElementById('editUnitDescription').value || '').trim();
+            try {
+                const resp = await fetch(`/api/projects/${currentProjectId}/units/${currentEditingUnitId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name, description: description })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    closeEditUnitModal();
+                    await loadUnits();
+                    await loadTestCases();
+                } else {
+                    alert(data.error || '更新单元失败');
+                }
+            } catch (e) {
+                alert('更新单元失败：' + e.message);
+            }
+        }
+        async function confirmDeleteUnit(unitId) {
+            var unit = allUnitsList.find(function (u) { return String(u.id) === String(unitId); });
+            if (!unit) { alert('单元不存在或已删除'); return; }
+            var caseCount = unit.case_count || 0;
+            var msg = caseCount > 0
+                ? `确定删除单元「${unit.name}」吗？\n\n该单元下有 ${caseCount} 个用例，删除后这些用例将变为「未分组」。`
+                : `确定删除单元「${unit.name}」吗？`;
+            if (!confirm(msg)) return;
+            try {
+                const resp = await fetch(`/api/projects/${currentProjectId}/units/${unitId}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (data.success) {
+                    if (String(currentUnitId) === String(unitId)) {
+                        currentUnitId = null;
+                    }
+                    await loadUnits();
+                    await loadTestCases();
+                } else {
+                    alert(data.error || '删除单元失败');
+                }
+            } catch (e) {
+                alert('删除单元失败：' + e.message);
+            }
+        }
+        async function previewCaseYaml(caseId) {
+            const resp = await fetch('/api/cases/' + caseId + '/export/yaml-preview');
+            const data = await resp.json();
+            if (!data.success) { alert(data.error || '预览失败'); return; }
+            var w = window.open('', '_blank');
+            if (w) { w.document.write('<pre style="padding:16px;font-family:monospace;white-space:pre-wrap;">' + escapeHtml(data.yaml) + '</pre>'); }
+        }
+        async function previewProjectYaml() {
+            var url = '/api/projects/' + currentProjectId + '/export/yaml-preview';
+            if (currentUnitId === 'ungrouped') url += '?unit_id=ungrouped';
+            else if (currentUnitId) url += '?unit_id=' + encodeURIComponent(currentUnitId);
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (!data.success) { alert(data.error || '预览失败'); return; }
+            var w = window.open('', '_blank');
+            if (w) { w.document.write('<pre style="padding:16px;font-family:monospace;white-space:pre-wrap;">' + escapeHtml(data.yaml) + '</pre>'); }
+        }
+
         function escapeHtml(text) { if (!text) return ''; const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
         function showRunResultModal(content, isError = false) {
             document.getElementById('runResultContent').innerHTML = content;
@@ -707,13 +1028,40 @@
                 if (adb && currentProjectId) adb.href = '/ai-design?project_id=' + encodeURIComponent(currentProjectId);
             } catch(e) { console.error(e); document.getElementById('projectInfo').textContent = '加载失败'; }
         }
+        function renderCasesPagination() {
+            if (casesTotal <= casesPageSize) return '';
+            var start = (casesPage - 1) * casesPageSize + 1;
+            var end = Math.min(casesPage * casesPageSize, casesTotal);
+            return '<div class="cases-pagination">'
+                + '<div class="page-info">共 ' + casesTotal + ' 条，当前 ' + start + '–' + end + ' 条（' + casesPageSize + ' 条/页）</div>'
+                + '<div class="page-btns">'
+                + '<button type="button" onclick="goToCasesPage(1)" ' + (casesPage <= 1 ? 'disabled' : '') + '>首页</button>'
+                + '<button type="button" onclick="goToCasesPage(' + (casesPage - 1) + ')" ' + (casesPage <= 1 ? 'disabled' : '') + '>上一页</button>'
+                + '<span class="page-num">' + casesPage + ' / ' + casesTotalPages + '</span>'
+                + '<button type="button" onclick="goToCasesPage(' + (casesPage + 1) + ')" ' + (casesPage >= casesTotalPages ? 'disabled' : '') + '>下一页</button>'
+                + '<button type="button" onclick="goToCasesPage(' + casesTotalPages + ')" ' + (casesPage >= casesTotalPages ? 'disabled' : '') + '>末页</button>'
+                + '</div></div>';
+        }
+        function goToCasesPage(page) {
+            var p = parseInt(page, 10);
+            if (isNaN(p) || p < 1) p = 1;
+            if (p > casesTotalPages) p = casesTotalPages;
+            if (p === casesPage) return;
+            casesPage = p;
+            loadTestCases();
+        }
         async function loadTestCases() {
             try {
-                const resp = await fetch(`/api/projects/${currentProjectId}/cases`);
+                const resp = await fetch(casesListUrl());
                 const data = await resp.json();
                 const casesList = document.getElementById('casesList');
+                casesTotal = parseInt(data.total, 10) || 0;
+                casesTotalPages = parseInt(data.total_pages, 10) || Math.max(1, Math.ceil(casesTotal / casesPageSize) || 1);
+                if (casesTotal > 0 && casesPage > casesTotalPages) {
+                    casesPage = casesTotalPages;
+                    return loadTestCases();
+                }
                 allCasesList = data.cases || [];
-                caseNamesById = {};
                 allCasesList.forEach(c => { caseNamesById[c.id] = c.name; });
                 if (data.cases && data.cases.length) {
                     casesList.innerHTML = '<div class="case-list" id="caseListContainer"></div>';
@@ -722,9 +1070,10 @@
                         const isSelected = selectedCaseIdsOrdered.includes(tc.id);
                         const div = document.createElement('div'); div.className = 'case-item'; div.id = `case-${tc.id}`;
                         div.innerHTML = `<div class="case-checkbox"><input type="checkbox" id="select-${tc.id}" onchange="toggleCaseSelection(${tc.id})" ${isSelected ? 'checked' : ''}></div>
-                            <div class="case-content"><h3>${escapeHtml(tc.name)}</h3></div>
+                            <div class="case-content"><h3>${escapeHtml(tc.name)}</h3>${tc.unit_name ? '<div style="font-size:12px;color:#64748b;margin-top:4px;">单元：' + escapeHtml(tc.unit_name) + '</div>' : ''}</div>
                             <div class="case-actions">
                                 <button class="btn btn-info btn-sm" onclick="viewCaseSteps(${tc.id})">步骤</button>
+                                <button class="btn btn-secondary btn-sm" onclick="previewCaseYaml(${tc.id})">YAML预览</button>
                                 <button class="btn btn-secondary btn-sm" onclick="viewRunHistory(${tc.id})">历史</button>
                                 <button class="btn btn-sm" onclick="editTestCase(${tc.id})">编辑</button>
                                 <button class="btn btn-success btn-sm" onclick="runTestCase(${tc.id})">运行</button>
@@ -732,8 +1081,14 @@
                             </div>`;
                         container.appendChild(div);
                     });
+                    casesList.insertAdjacentHTML('beforeend', renderCasesPagination());
                     updateSelectedOrderList();
-                } else casesList.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><div>暂无测试用例</div><button onclick="showCreateCaseModal()" class="btn btn-primary">创建第一个用例</button></div>`;
+                } else if (casesTotal > 0 && casesPage > 1) {
+                    casesPage = 1;
+                    return loadTestCases();
+                } else {
+                    casesList.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><div>暂无测试用例</div><button onclick="showCreateCaseModal()" class="btn btn-primary">创建第一个用例</button></div>`;
+                }
             } catch(e) { console.error(e); document.getElementById('casesList').innerHTML = '<div class="empty-state">加载失败，请刷新</div>'; }
         }
         function onCasePlatformChange() {
@@ -763,6 +1118,8 @@
             const description = document.getElementById('caseDescription').value.trim();
             const precondition = document.getElementById('casePrecondition').value.trim();
             const expected_result = document.getElementById('caseExpectedResult').value.trim();
+            const unitSel = document.getElementById('caseUnitSelect');
+            const unit_id = unitSel && unitSel.value ? parseInt(unitSel.value, 10) : null;
             try {
                 const response = await fetch('/api/cases', {
                     method: 'POST',
@@ -774,7 +1131,8 @@
                         description,
                         precondition,
                         expected_result,
-                        platform
+                        platform,
+                        unit_id: unit_id
                     })
                 });
                 const data = await response.json();
@@ -791,7 +1149,13 @@
         }
 
         function toggleCaseSelection(caseId) { const cb = document.getElementById(`select-${caseId}`); if(cb.checked) { if(!selectedCaseIdsOrdered.includes(caseId)) selectedCaseIdsOrdered.push(caseId); } else selectedCaseIdsOrdered = selectedCaseIdsOrdered.filter(id=>id!==caseId); updateSelectedOrderList(); }
-        function selectAllCases() { selectedCaseIdsOrdered = allCasesList.map(c=>c.id); document.querySelectorAll('input[type="checkbox"][id^="select-"]').forEach(cb=>cb.checked=true); updateSelectedOrderList(); }
+        function selectAllCases() {
+            allCasesList.forEach(function (c) {
+                if (!selectedCaseIdsOrdered.includes(c.id)) selectedCaseIdsOrdered.push(c.id);
+            });
+            document.querySelectorAll('input[type="checkbox"][id^="select-"]').forEach(cb => { cb.checked = true; });
+            updateSelectedOrderList();
+        }
         function deselectAllCases() { selectedCaseIdsOrdered = []; document.querySelectorAll('input[type="checkbox"][id^="select-"]').forEach(cb=>cb.checked=false); updateSelectedOrderList(); }
         function updateSelectedOrderList() { const panel=document.getElementById('selectedOrderPanel'); const listEl=document.getElementById('selectedOrderList'); if(selectedCaseIdsOrdered.length===0){ panel.classList.remove('visible'); listEl.innerHTML=''; return; } panel.classList.add('visible'); listEl.innerHTML=selectedCaseIdsOrdered.map((id,idx)=>`<div class="selected-order-item" draggable="true" data-case-id="${id}" data-order-index="${idx}" ondragstart="handleOrderDragStart(event)" ondragover="handleOrderDragOver(event)" ondrop="handleOrderDrop(event)" ondragend="handleOrderDragEnd(event)"><div class="step-number">${idx+1}</div><div class="step-content"><h4>${escapeHtml(caseNamesById[id]||'用例')}</h4></div></div>`).join(''); }
         function handleOrderDragStart(e){ const row = e.currentTarget; draggedOrderIndex = parseInt(row.dataset.orderIndex, 10); row.classList.add('dragging'); e.dataTransfer.setData('text/plain',''); }
@@ -805,9 +1169,9 @@
         function viewCaseSteps(caseId){ sessionStorage.setItem('currentCaseId',caseId); sessionStorage.setItem('currentProjectId',currentProjectId); window.location.href='/list_steps'; }
         function viewRunHistory(caseId){ window.location.href=`/run-history?case_id=${caseId}`; }
         async function editTestCase(caseId){ const resp=await fetch(`/api/cases/${caseId}`); const data=await resp.json(); if(data.test_case) showEditCaseModal(caseId,data.test_case); else alert('获取用例失败'); }
-        function showEditCaseModal(caseId,caseData){ currentEditingCaseId=caseId; document.getElementById('editCaseModal').classList.add('active'); document.getElementById('editCaseName').value=caseData.name||''; document.getElementById('editCaseUrl').value=caseData.url||''; document.getElementById('editCaseDescription').value=caseData.description||''; document.getElementById('editCasePrecondition').value=caseData.precondition||''; document.getElementById('editCaseExpectedResult').value=caseData.expected_result||''; if(typeof applyUiLang==='function')applyUiLang(); }
+        function showEditCaseModal(caseId,caseData){ currentEditingCaseId=caseId; document.getElementById('editCaseModal').classList.add('active'); document.getElementById('editCaseName').value=caseData.name||''; document.getElementById('editCaseUrl').value=caseData.url||''; document.getElementById('editCaseDescription').value=caseData.description||''; document.getElementById('editCasePrecondition').value=caseData.precondition||''; document.getElementById('editCaseExpectedResult').value=caseData.expected_result||''; populateEditCaseUnitSelect(caseData.unit_id||''); if(typeof applyUiLang==='function')applyUiLang(); }
         function closeEditCaseModal(){ document.getElementById('editCaseModal').classList.remove('active'); currentEditingCaseId=null; }
-        async function updateTestCase(){ const name=document.getElementById('editCaseName').value.trim(); if(!name){ alert('用例名称不能为空'); return; } const payload={name, url:document.getElementById('editCaseUrl').value.trim(), description:document.getElementById('editCaseDescription').value.trim(), precondition:document.getElementById('editCasePrecondition').value.trim(), expected_result:document.getElementById('editCaseExpectedResult').value.trim()}; const resp=await fetch(`/api/cases/${currentEditingCaseId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert('更新成功'); closeEditCaseModal(); loadTestCases(); } else alert('更新失败'); }
+        async function updateTestCase(){ const name=document.getElementById('editCaseName').value.trim(); if(!name){ alert('用例名称不能为空'); return; } const unitSel=document.getElementById('editCaseUnitSelect'); const unitRaw=unitSel&&unitSel.value?unitSel.value:null; const payload={name, url:document.getElementById('editCaseUrl').value.trim(), description:document.getElementById('editCaseDescription').value.trim(), precondition:document.getElementById('editCasePrecondition').value.trim(), expected_result:document.getElementById('editCaseExpectedResult').value.trim(), unit_id:unitRaw?parseInt(unitRaw,10):null}; const resp=await fetch(`/api/cases/${currentEditingCaseId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert('更新成功'); closeEditCaseModal(); loadTestCases(); loadUnits(); } else alert('更新失败'); }
         async function deleteTestCase(caseId){ if(confirm('确认删除？')){ const resp=await fetch(`/api/cases/${caseId}`,{method:'DELETE'}); const data=await resp.json(); if(data.success){ selectedCaseIdsOrdered=selectedCaseIdsOrdered.filter(id=>id!==caseId); loadTestCases(); } else alert('删除失败'); } }
         function showImportModal(){ document.getElementById('importModal').classList.add('active'); }
         function closeImportModal(){ document.getElementById('importModal').classList.remove('active'); document.getElementById('importFile').value=''; document.getElementById('importFileName').innerText='未选择文件'; }
@@ -852,7 +1216,7 @@
         async function submitMarkDefects(){ const payload={case_ids:selectedCaseIdsOrdered, project_id:parseInt(currentProjectId), title_template:document.getElementById('defectTitleTemplate').value, description:document.getElementById('defectDescription').value, severity:document.getElementById('defectSeverity').value, priority:document.getElementById('defectPriority').value, actual_result:document.getElementById('defectActualResult').value, environment:document.getElementById('defectEnvironment').value}; const resp=await fetch('/api/defects/batch_from_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert(`创建缺陷${data.created_count}个`); closeMarkDefectModal(); } else alert('标记缺陷失败'); }
         async function syncCaseRunButtonState(){ const { ok, pack } = await window.uatFetchCurrentRunsPack(); const c=(pack||{}).case||{}; const active=!!(ok&&c.success&&c.active)||localCaseExecutionRunning; document.getElementById('stopCaseRunBtn').disabled=!active; }
         document.addEventListener('visibilitychange',function(){ if(!document.hidden) syncCaseRunButtonState(); });
-        document.addEventListener('DOMContentLoaded',async()=>{ currentProjectId=getProjectIdFromUrl(); if(!currentProjectId){ alert('无效项目'); window.location.href='/list_projects'; return; } await loadProjectInfo(); await loadTestCases(); void syncCaseRunButtonState(); setInterval(syncCaseRunButtonState,3500); });
-        window.addEventListener('ui-preferences-updated',()=>{ loadProjectInfo(); loadTestCases(); });
+        document.addEventListener('DOMContentLoaded',async()=>{ currentProjectId=getProjectIdFromUrl(); if(!currentProjectId){ alert('无效项目'); window.location.href='/list_projects'; return; } await loadProjectInfo(); await loadUnits(); await loadTestCases(); void syncCaseRunButtonState(); setInterval(syncCaseRunButtonState,3500); });
+        window.addEventListener('ui-preferences-updated',()=>{ loadProjectInfo(); loadUnits(); loadTestCases(); });
     </script>
 {% endblock %}

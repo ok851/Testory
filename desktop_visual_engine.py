@@ -12,6 +12,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 VISUAL_SELECTOR_TYPE = "visual"
 
+# 窗口级原生定位（AI / 步骤编辑常用，不走 visual 框选）
+_NATIVE_WINDOW_SELECTORS = frozenset({
+    "window",
+    "title",
+    "hwnd",
+    "process",
+})
+
 _LEGACY_DESKTOP_SELECTORS = frozenset({
     "automation_id",
     "auto_id",
@@ -167,8 +175,28 @@ def is_legacy_desktop_step(step: Dict[str, Any]) -> bool:
     if st == VISUAL_SELECTOR_TYPE:
         return False
     action = (step.get("action") or "").strip().lower()
-    if action in ("launch_app", "wait", "hotkey", "screenshot"):
+    if action in (
+        "launch_app",
+        "wait",
+        "hotkey",
+        "screenshot",
+        "attach_window",
+    ):
         return False
+    if st in _NATIVE_WINDOW_SELECTORS:
+        return False
+    if action in ("verify", "assert"):
+        sv = (step.get("selector_value") or "").strip()
+        spec = step.get("desktop_spec")
+        if isinstance(spec, str) and spec.strip():
+            try:
+                spec = json.loads(spec)
+            except json.JSONDecodeError:
+                spec = {}
+        if not isinstance(spec, dict):
+            spec = {}
+        if sv or spec.get("title_contains") or spec.get("window_title") or spec.get("window_title_re"):
+            return False
     if st in _LEGACY_DESKTOP_SELECTORS:
         return True
     if step.get("locator_candidates") or step.get("desktop_spec"):

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import threading
@@ -103,14 +104,196 @@ def list_real_usb_devices() -> List[Dict[str, Any]]:
     return [d for d in list_usb_devices() if not is_emulator_udid(d.get("udid") or "")]
 
 
+_WIRELESS_UDID_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}:\d+$")
+_MDNS_STUB_RE = re.compile(r"_adb-tls|_tcp", re.I)
+
+
+def device_serial_deny_prefixes() -> List[str]:
+    raw = (os.environ.get("MOBILE_DEVICE_SERIAL_DENY_PREFIXES") or "PQ").strip()
+    if not raw:
+        return []
+    return [p.strip().upper() for p in raw.split(",") if p.strip()]
+
+
+def is_deny_prefix_serial(udid: str) -> bool:
+    u = (udid or "").strip().upper()
+    if not u:
+        return False
+    for prefix in device_serial_deny_prefixes():
+        if u.startswith(prefix.upper()):
+            return True
+    return False
+
+
+def is_wireless_udid(udid: str) -> bool:
+    return bool(_WIRELESS_UDID_RE.match((udid or "").strip()))
+
+
+def is_mdns_stub_serial(udid: str) -> bool:
+    return bool(_MDNS_STUB_RE.search(udid or ""))
+
+
+def device_state_label(state: str) -> str:
+    s = (state or "").strip().lower()
+    labels = {
+        "device": "已授权",
+        "unauthorized": "需授权",
+        "offline": "离线",
+        "no permissions": "无权限",
+    }
+    return labels.get(s, state or "未知")
+
+
+def format_connect_error(dev: Optional[Dict[str, Any]] = None) -> str:
+    """按 adb state 返回可操作的连接错误文案。"""
+    if not dev:
+        return (
+            "未发现已授权设备。请启动模拟器、USB 连接真机或在无线调试中配对后重试。"
+        )
+    state = (dev.get("state") or "").strip().lower()
+    udid = dev.get("udid") or dev.get("display_name") or ""
+    if state == "unauthorized":
+        return (
+            f"设备 {udid} 尚未授权 USB 调试。请在手机上点击「允许 USB 调试」"
+            "并勾选「始终允许此计算机」，然后刷新设备列表再连接。"
+        )
+    if state == "offline":
+        return (
+            f"设备 {udid} 处于离线状态。请检查 USB 线/无线连接，"
+            "或在开发者选项中重新开启无线调试后刷新列表。"
+        )
+    if state == "no permissions":
+        return (
+            f"设备 {udid} 无 adb 权限。请确认已开启开发者选项与 USB 调试，"
+            "必要时在手机上撤销授权后重新插拔 USB。"
+        )
+    if state != "device":
+        return (
+            f"设备 {udid} 当前状态为「{device_state_label(state)}」，"
+            "无法连接。请处理后再试。"
+        )
+    return "未发现已授权设备。请启动模拟器、USB 连接真机或在无线调试中配对后重试。"
+
+
+def score_device_priority(dev: Dict[str, Any]) -> int:
+    """
+    设备默认选中优先级（分数越高越优先）。
+    USB 真机 serial > 无线 IP:port > deny 前缀（如 PQ）残留。
+    """
+    udid = (dev.get("udid") or "").strip()
+    state = (dev.get("state") or "").strip().lower()
+    score = 0
+    if state == "device":
+        score += 1000
+    elif state == "unauthorized":
+        score += 200
+    elif state == "offline":
+        score += 50
+    if is_emulator_udid(udid):
+        score -= 500
+    if is_deny_prefix_serial(udid):
+        score -= 800
+    if is_mdns_stub_serial(udid):
+        score -= 900
+    if is_wireless_udid(udid):
+        score += 100
+    elif udid and not is_emulator_udid(udid):
+        score += 300
+    return score
+
+
+def sort_devices_for_ui(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    indexed = list(enumerate(devices))
+    indexed.sort(key=lambda item: (-score_device_priority(item[1]), item[0]))
+    return [dev for _, dev in indexed]
+
+
+def list_devices_for_ui(tab: str = "real") -> List[Dict[str, Any]]:
+    """按 UI Tab 返回设备列表（已排序）。"""
+    tab_key = (tab or "real").strip().lower()
+    if tab_key == "emulator":
+        return sort_devices_for_ui(list_emulators())
+    return sort_devices_for_ui(list_real_usb_devices())
+
+
+def pick_best_authorized_device(
+    devices: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """在已授权设备中按优先级选择默认真机。"""
+    pool = devices if devices is not None else list_real_usb_devices()
+    authorized = [d for d in pool if d.get("state") == "device" and not is_deny_prefix_serial(d.get("udid") or "")]
+    if not authorized:
+        return None
+    best = sort_devices_for_ui(authorized)[0]
+    enriched = dict(best)
+    enriched.update(get_device_info(best.get("udid") or ""))
+    return enriched
+
+
 def pick_default_real_device() -> Optional[Dict[str, Any]]:
-    """真机连接：仅选择已授权的真机（不含模拟器）。"""
-    for dev in list_real_usb_devices():
-        if dev.get("state") == "device":
-            enriched = dict(dev)
-            enriched.update(get_device_info(dev.get("udid") or ""))
-            return enriched
-    return None
+    """真机连接：按优先级选择已授权真机（跳过 deny 前缀残留）。"""
+    return pick_best_authorized_device()
+
+
+def should_prune_device(dev: Dict[str, Any]) -> bool:
+    """判断是否应清理的幽灵/残留 adb 设备。"""
+    udid = (dev.get("udid") or "").strip()
+    state = (dev.get("state") or "").strip().lower()
+    if not udid:
+        return False
+    if state == "offline":
+        return True
+    if is_mdns_stub_serial(udid):
+        return True
+    if is_deny_prefix_serial(udid):
+        return True
+    return False
+
+
+def prune_stale_adb_devices() -> Dict[str, Any]:
+    """
+    断开离线、deny 前缀、mDNS 残留等幽灵 adb 设备。
+    Returns: {pruned: [...], errors: [...], devices: 当前列表}
+    """
+    pruned: List[Dict[str, str]] = []
+    errors: List[str] = []
+    for dev in list_usb_devices():
+        if not should_prune_device(dev):
+            continue
+        udid = dev.get("udid") or ""
+        ok, msg = adb_disconnect_device(udid)
+        entry = {"udid": udid, "state": dev.get("state") or "", "message": msg}
+        if ok:
+            pruned.append(entry)
+        else:
+            errors.append(f"{udid}: {msg}")
+    return {
+        "pruned": pruned,
+        "errors": errors,
+        "devices": list_usb_devices(),
+        "real_devices": list_real_usb_devices(),
+        "emulators": list_emulators(),
+    }
+
+
+def collect_device_warnings(devices: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """汇总设备列表中的提示信息。"""
+    pool = devices if devices is not None else list_real_usb_devices()
+    warnings: List[str] = []
+    unauthorized = [d for d in pool if d.get("state") == "unauthorized"]
+    if unauthorized:
+        warnings.append(
+            f"有 {len(unauthorized)} 台设备待授权 USB 调试，连接前请在手机上点击「允许」。"
+        )
+    deny = [d for d in pool if is_deny_prefix_serial(d.get("udid") or "")]
+    if deny:
+        warnings.append(
+            f"检测到 {len(deny)} 台可疑残留设备（如 PQ 开头），可点刷新清理。"
+        )
+    offline = [d for d in pool if d.get("state") == "offline"]
+    if offline:
+        warnings.append(f"有 {len(offline)} 台设备处于离线状态。")
+    return warnings
 
 
 def check_appium_server(*, try_auto_start: bool = False) -> Tuple[bool, str]:

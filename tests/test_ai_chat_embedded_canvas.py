@@ -33,6 +33,17 @@ def test_hermes_allowed_when_fallback_enabled(monkeypatch):
     assert m.hermes_execute_allowed() is True
 
 
+def test_hermes_allowed_for_desktop_when_agent_configured(monkeypatch):
+    monkeypatch.setenv("EMBEDDED_BROWSER_GATEWAY_URL", "http://127.0.0.1:8765")
+    monkeypatch.setenv("EMBEDDED_BROWSER_GATEWAY_SECRET", "test-secret")
+    monkeypatch.delenv("AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK", raising=False)
+    monkeypatch.setenv("HERMES_GATEWAY_URL", "http://127.0.0.1:8642")
+    monkeypatch.setenv("HERMES_API_SERVER_KEY", "k")
+    m = _reload_loop()
+    assert m.hermes_execute_allowed(platform_type="desktop") is True
+    assert m.hermes_execute_allowed(platform_type="web") is False
+
+
 def test_embedded_playwright_headless_defaults_true(monkeypatch):
     monkeypatch.delenv("EMBEDDED_BROWSER_HEADLESS", raising=False)
     monkeypatch.setenv("PLAYWRIGHT_HEADLESS", "0")

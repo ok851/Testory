@@ -2647,6 +2647,36 @@ def api_get_ai_models():
     })
 
 
+@app.route('/api/ai/vision/readiness', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_vision_readiness():
+    """面向用户的视觉自动化就绪状态（画布、网关、本地视觉模型）。"""
+    from vision_platform_readiness import check_vision_automation_readiness
+
+    embedded_sid = (request.args.get('embedded_session_id') or '').strip()
+    payload = check_vision_automation_readiness(
+        user_id=current_user.id,
+        embedded_session_id=embedded_sid,
+    )
+    return jsonify({'success': True, **payload})
+
+
+@app.route('/api/ai/vision/replay/<run_id>/')
+@app.route('/api/ai/vision/replay/<run_id>/index.html')
+@login_required
+def api_ai_vision_replay_html(run_id: str):
+    """打开单次测试步骤回放页（HTML）。"""
+    from flask import abort, send_from_directory
+    from vision_step_report import replay_index_path
+
+    path = replay_index_path(run_id)
+    if not path:
+        abort(404)
+    return send_from_directory(str(path.parent), path.name)
+
+
 @app.route('/api/ai/models/ollama', methods=['GET'])
 @login_required
 @api_error_handler
@@ -3169,13 +3199,58 @@ def _ai_main_session_dom_pack(target_page_url: str, *, strict: bool):
     return snap, ps or None, pr if pr else None, probe_url, ""
 
 
+def _attach_vision_replay_to_execution(execution: dict) -> None:
+    """脚本执行完成后附加回放链接（主 Playwright 与内置画布共用）。"""
+    if not isinstance(execution, dict):
+        return
+    try:
+        from vision_step_report import pop_last_replay_meta
+
+        meta = pop_last_replay_meta()
+        if meta:
+            execution["vision_replay"] = meta
+    except Exception:
+        pass
+
+
+def _embedded_fetch_screenshot_png(user_id: int, embedded_sid: str):
+    """从内置画布网关拉取当前视口 PNG。"""
+    import base64
+
+    j, err = embedded_gateway_json(
+        "GET",
+        f"/internal/session/{embedded_sid}/screenshot",
+        user_id=user_id,
+        timeout_sec=30.0,
+    )
+    if err or not isinstance(j, dict) or not j.get("success"):
+        return None
+    raw = (j.get("data") or "").strip()
+    if not raw:
+        return None
+    try:
+        return base64.b64decode(raw)
+    except Exception:
+        return None
+
+
 def _ai_embedded_run_script_steps_sequentially(user_id: int, embedded_sid: str, script_steps: list) -> list:
     """
     在远程画布会话中逐步调用网关 run-steps（每步单独请求），与 gateway-stream 一致，
     便于 CDP screencast 在步骤间隙刷新 JPEG，实现「边看边跑」。
+  同时记录测试回放（截图 + 中文步骤名）。
     """
+    import time
+
+    from vision_step_report import VisionReplaySession, vision_replay_enabled
+
+    replay_sess = VisionReplaySession.start() if vision_replay_enabled() else None
     results = []
-    for st in script_steps:
+    for idx, st in enumerate(script_steps, start=1):
+        step_t0 = time.perf_counter()
+        step_status = "success"
+        step_msg = ""
+        png = None
         j, err = embedded_gateway_json(
             "POST",
             f"/internal/session/{embedded_sid}/run-steps",
@@ -3184,25 +3259,49 @@ def _ai_embedded_run_script_steps_sequentially(user_id: int, embedded_sid: str, 
             timeout_sec=180.0,
         )
         if err or not isinstance(j, dict) or not j.get("success"):
+            step_status = "error"
+            step_msg = str(err or (j or {}).get("detail") or "远程执行请求失败")
             results.append(
                 {
                     "status": "error",
                     "step": st,
-                    "error": str(err or (j or {}).get("detail") or "远程执行请求失败"),
+                    "error": step_msg,
                 }
             )
+        else:
+            rs0 = (j.get("results") or [{}])[0]
+            if not rs0.get("ok"):
+                step_status = "error"
+                step_msg = str(rs0.get("error") or "远程步骤失败")
+                results.append(
+                    {
+                        "status": "error",
+                        "step": st,
+                        "error": step_msg,
+                    }
+                )
+            else:
+                results.append({"status": "success", "step": st})
+        if replay_sess:
+            png = _embedded_fetch_screenshot_png(user_id, embedded_sid)
+            try:
+                replay_sess.record(
+                    idx,
+                    st if isinstance(st, dict) else {},
+                    step_status,
+                    step_msg,
+                    png,
+                    int((time.perf_counter() - step_t0) * 1000),
+                )
+            except Exception:
+                pass
+        if step_status == "error":
             break
-        rs0 = (j.get("results") or [{}])[0]
-        if not rs0.get("ok"):
-            results.append(
-                {
-                    "status": "error",
-                    "step": st,
-                    "error": str(rs0.get("error") or "远程步骤失败"),
-                }
-            )
-            break
-        results.append({"status": "success", "step": st})
+    if replay_sess:
+        try:
+            replay_sess.finalize()
+        except Exception:
+            pass
     return results
 
 
@@ -3210,6 +3309,13 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
     """有页面快照时：启发式/LLM 选择器修复；随后对 assert 做回放页面探测校正。"""
     if not isinstance(plan_dict, dict) or not isinstance(plan_dict.get("steps"), list):
         return plan_dict, norm_warnings
+    try:
+        from ai_step_normalization import infer_plan_platform_type
+
+        if infer_plan_platform_type(plan_dict) in ("desktop", "android"):
+            return plan_dict, norm_warnings
+    except Exception:
+        pass
     try:
         registry = None
         if snap_data:
@@ -3251,6 +3357,66 @@ def _merge_ai_locator_resolution(plan_dict, snap_data, norm_warnings):
     except Exception as e:
         uat_logger.warning("AI locator merge skipped: %s", e)
     return plan_dict, norm_warnings
+
+
+def _ai_desktop_planning_snapshot() -> tuple:
+    """返回 (snapshot_text, warning) 供桌面用例规划。"""
+    try:
+        from desktop_discovery import desktop_runtime_snapshot, discovery_available
+
+        if not discovery_available():
+            return "", "桌面自动化当前仅支持 Windows"
+        snap = desktop_runtime_snapshot(include_catalog=False)
+        wins = snap.get("windows") or []
+        lines = ["当前可见窗口（生成 attach_window / click 步骤时请引用 title 或 hwnd）："]
+        n = 0
+        for w in wins:
+            title = (w.get("title") or "").strip()
+            if not title:
+                continue
+            n += 1
+            if n > 35:
+                break
+            lines.append(
+                f"  [{n}] title={title!r} hwnd={w.get('hwnd')} pid={w.get('pid')}"
+            )
+        if n == 0:
+            lines.append("  （暂无可见窗口标题）")
+        return "\n".join(lines), ""
+    except Exception as e:
+        return "", f"无法获取桌面快照：{e}"
+
+
+def _ai_execute_desktop_plan_steps(steps: list) -> list:
+    """在本地执行桌面层步骤（AI 运行模式）。"""
+    from desktop_run_context import reset_desktop_run_context
+    from step_executor import enrich_execution_step, sync_execute_step_by_layer
+
+    reset_desktop_run_context()
+    results = []
+    for raw in steps or []:
+        if not isinstance(raw, dict):
+            continue
+        step = enrich_execution_step(dict(raw))
+        if (step.get("automation_layer") or "").strip().lower() != "desktop":
+            step["automation_layer"] = "desktop"
+        try:
+            row = sync_execute_step_by_layer(step)
+            results.append({
+                "ok": True,
+                "action": step.get("action"),
+                "status": row.get("status") if isinstance(row, dict) else "success",
+                "description": step.get("description") or "",
+            })
+        except Exception as exc:
+            results.append({
+                "ok": False,
+                "action": step.get("action"),
+                "error": str(exc),
+                "description": step.get("description") or "",
+            })
+            break
+    return results
 
 
 def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
@@ -3308,7 +3474,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         page_snapshot = ps or None
         probe_registry = pr if pr else None
         probe_url = (pu or target_page_url).strip() or None
-    elif run_execute and platform_type != 'android':
+    elif run_execute and platform_type not in ('android', 'desktop'):
         if not target_page_url:
             return {
                 'success': False,
@@ -3320,7 +3486,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
                 'success': False,
                 'error': (
                     '「运行」需要已连接的内置画布会话（embedded_session_id）。'
-                    '请先在 AI 测试页建立画布实时画面，并确认 embedded_browser_gateway 已启动。'
+                    '请先在 AI 测试页建立画布实时画面；平台会在启动时自动拉起 Browser Runtime。'
                     '（Testory AI (Hermes) 与 Browser Runtime 是不同服务。）'
                     '若确需回退主 Playwright，请在 .env 设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1。'
                 ),
@@ -3332,7 +3498,13 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
         if err:
             code = 400 if ("主浏览器未就绪" in err or "目标 URL 为空" in err) else 500
             return {'success': False, 'error': err, '_http': code}
-    elif (target_page_url or "").strip() and not embedded_sid and not _ai_url_probe_disabled() and platform_type != 'android':
+    elif platform_type == 'desktop':
+        dsnap, dwarn = _ai_desktop_planning_snapshot()
+        if dsnap:
+            page_snapshot = dsnap
+        if dwarn:
+            dom_probe_warning = dwarn
+    elif (target_page_url or "").strip() and not embedded_sid and not _ai_url_probe_disabled() and platform_type not in ('android', 'desktop'):
         # 「仅规划」也抓取 LIVE：只要填写了目标 URL，就为主会话打开该页并探测，避免模型凭空写选择器。
         if _ai_should_open_main_playwright(embedded_sid=embedded_sid):
             snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
@@ -3406,48 +3578,64 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
     }
     if run_execute:
         try:
-            script_steps = ai_plan_steps_to_playwright_script_steps(generated.get('steps') or [])
-            gate_url = (target_page_url or "").strip() or (generated.get("case_url") or "").strip()
-            if (
-                gate_url.startswith(("http://", "https://"))
-                and script_steps
-                and script_steps[0].get("action") != "navigate"
-            ):
-                script_steps = [
-                    {"action": "navigate", "url": gate_url, "description": "（运行）先打开目标页"},
-                ] + script_steps
-            max_n = int(os.environ.get("AI_AGENT_GATEWAY_MAX_STEPS", "40") or 40)
-            script_steps = script_steps[: max(1, max_n)]
-            if not script_steps:
-                out["execution"] = {
-                    "ran": False,
-                    "skipped_reason": "无可映射为脚本的原子步骤（请检查 navigate/选择器等）。",
-                    "results": [],
-                }
-            elif embedded_sid:
-                if not embedded_gateway_enabled():
+            if platform_type == 'desktop':
+                from desktop_runtime import desktop_runtime_available, desktop_runtime_unavailable_reason
+
+                if not desktop_runtime_available():
                     out["execution"] = {
                         "ran": False,
-                        "skipped_reason": "远程 Chromium 网关未配置，无法在内置画布会话中执行。",
+                        "skipped_reason": desktop_runtime_unavailable_reason() or "桌面运行时不可用",
                         "results": [],
                     }
                 else:
-                    exec_results = _ai_embedded_run_script_steps_sequentially(
-                        user_id, embedded_sid, script_steps
-                    )
-                    out["execution"] = {"ran": True, "results": exec_results, "via": "embedded"}
-            elif embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
-                out["execution"] = {
-                    "ran": False,
-                    "skipped_reason": (
-                        "未连接内置画布会话，已跳过主 Playwright 执行。"
-                        "请先建立画布或设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1。"
-                    ),
-                    "results": [],
-                }
+                    exec_results = _ai_execute_desktop_plan_steps(generated.get('steps') or [])
+                    out["execution"] = {"ran": True, "results": exec_results, "via": "desktop"}
+                    _attach_vision_replay_to_execution(out["execution"])
             else:
-                exec_results = sync_execute_script_steps(script_steps)
-                out["execution"] = {"ran": True, "results": exec_results, "via": "main_playwright"}
+                script_steps = ai_plan_steps_to_playwright_script_steps(generated.get('steps') or [])
+                gate_url = (target_page_url or "").strip() or (generated.get("case_url") or "").strip()
+                if (
+                    gate_url.startswith(("http://", "https://"))
+                    and script_steps
+                    and script_steps[0].get("action") != "navigate"
+                ):
+                    script_steps = [
+                        {"action": "navigate", "url": gate_url, "description": "（运行）先打开目标页"},
+                    ] + script_steps
+                max_n = int(os.environ.get("AI_AGENT_GATEWAY_MAX_STEPS", "40") or 40)
+                script_steps = script_steps[: max(1, max_n)]
+                if not script_steps:
+                    out["execution"] = {
+                        "ran": False,
+                        "skipped_reason": "无可映射为脚本的原子步骤（请检查 navigate/选择器等）。",
+                        "results": [],
+                    }
+                elif embedded_sid:
+                    if not embedded_gateway_enabled():
+                        out["execution"] = {
+                            "ran": False,
+                            "skipped_reason": "远程 Chromium 网关未配置，无法在内置画布会话中执行。",
+                            "results": [],
+                        }
+                    else:
+                        exec_results = _ai_embedded_run_script_steps_sequentially(
+                            user_id, embedded_sid, script_steps
+                        )
+                        out["execution"] = {"ran": True, "results": exec_results, "via": "embedded"}
+                        _attach_vision_replay_to_execution(out["execution"])
+                elif embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
+                    out["execution"] = {
+                        "ran": False,
+                        "skipped_reason": (
+                            "未连接内置画布会话，已跳过主 Playwright 执行。"
+                            "请先建立画布或设置 AI_ALLOW_MAIN_PLAYWRIGHT_FALLBACK=1。"
+                        ),
+                        "results": [],
+                    }
+                else:
+                    exec_results = sync_execute_script_steps(script_steps)
+                    out["execution"] = {"ran": True, "results": exec_results, "via": "main_playwright"}
+                    _attach_vision_replay_to_execution(out["execution"])
         except Exception as e:
             uat_logger.exception("ai run-and-record execution")
             out["execution"] = {"ran": True, "error": str(e), "results": []}
@@ -3476,6 +3664,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         return {'success': False, 'error': '当前仅支持本地模型对话', '_http': 400}
 
     embedded_sid = (data.get('embedded_session_id') or data.get('remote_session_id') or '').strip()
+    platform_type = (data.get('platform_type') or 'web').strip().lower()
     target_page_url = (data.get('target_page_url') or '').strip()
     page_snapshot = None
     probe_registry = None
@@ -3483,7 +3672,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
     snap_data = None
     chat_dom_probe_warning = ""
 
-    if embedded_sid:
+    if embedded_sid and platform_type not in ('android', 'desktop'):
         if not embedded_gateway_enabled():
             return {'success': False, 'error': '远程 Chromium 网关未配置', '_http': 503}
         j, err = embedded_gateway_json(
@@ -3505,37 +3694,44 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
         probe_registry = pr if pr else None
         probe_url = (pu or target_page_url).strip() or None
 
-    url_for_probe = (target_page_url or "").strip()
-    if not url_for_probe and isinstance(current_plan, dict):
-        url_for_probe = (current_plan.get("case_url") or "").strip()
-    if snap_data is None and url_for_probe and not embedded_sid and not _ai_url_probe_disabled():
-        if _ai_should_open_main_playwright(embedded_sid=embedded_sid):
-            snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
-                url_for_probe, strict=False
-            )
-            if err:
-                chat_dom_probe_warning = (
-                    "未能抓取 LIVE 页面结构（对话优化）："
-                    f"{err} "
-                    "（选择器约束可能较弱；请填写目标 URL 或确认主浏览器可用。）"
+    if platform_type == 'desktop':
+        dsnap, dwarn = _ai_desktop_planning_snapshot()
+        if dsnap:
+            page_snapshot = dsnap
+        if dwarn:
+            chat_dom_probe_warning = dwarn
+    elif platform_type != 'android':
+        url_for_probe = (target_page_url or "").strip()
+        if not url_for_probe and isinstance(current_plan, dict):
+            url_for_probe = (current_plan.get("case_url") or "").strip()
+        if snap_data is None and url_for_probe and not embedded_sid and not _ai_url_probe_disabled():
+            if _ai_should_open_main_playwright(embedded_sid=embedded_sid):
+                snap_data, page_snapshot, probe_registry, probe_url, err = _ai_main_session_dom_pack(
+                    url_for_probe, strict=False
                 )
-        else:
-            from ai_page_probe import fetch_page_controls_bundle
+                if err:
+                    chat_dom_probe_warning = (
+                        "未能抓取 LIVE 页面结构（对话优化）："
+                        f"{err} "
+                        "（选择器约束可能较弱；请填写目标 URL 或确认主浏览器可用。）"
+                    )
+            else:
+                from ai_page_probe import fetch_page_controls_bundle
 
-            summary, probe_err, headless_registry = fetch_page_controls_bundle(url_for_probe)
-            if headless_registry:
-                page_snapshot = summary or page_snapshot
-                probe_registry = headless_registry
-                probe_url = url_for_probe
-            elif probe_err:
-                chat_dom_probe_warning = (
-                    "未能获取页面实时结构，选择器/断言约束可能较弱："
-                    f"{probe_err}（请确认用例 URL 可访问。）"
-                )
+                summary, probe_err, headless_registry = fetch_page_controls_bundle(url_for_probe)
+                if headless_registry:
+                    page_snapshot = summary or page_snapshot
+                    probe_registry = headless_registry
+                    probe_url = url_for_probe
+                elif probe_err:
+                    chat_dom_probe_warning = (
+                        "未能获取页面实时结构，选择器/断言约束可能较弱："
+                        f"{probe_err}（请确认用例 URL 可访问。）"
+                    )
 
     dpack = _ai_build_dom_pack(snap_data, embed_remote=bool(embedded_sid)) if snap_data else ""
     mem_ctx = _ai_memory_context_block(
-        user_id, message, probe_url=probe_url or url_for_probe or target_page_url or "", project_name=project_name
+        user_id, message, probe_url=probe_url or target_page_url or "", project_name=project_name
     )
     interaction_context = None
     _ic: dict = {}
@@ -3580,6 +3776,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
                 interaction_context=interaction_context,
                 test_scope=(data.get('test_scope') or data.get('scope') or '').strip() or None,
                 embedded_session_id=embedded_sid or None,
+                platform_type=platform_type,
             )
             try:
                 generated, _, tool_meta_extra = run_ai_chat_with_tools(
@@ -6823,16 +7020,29 @@ def api_embedded_browser_status():
     _, _, pub = embedded_gateway_config()
     reachable = False
     reach_err = None
+    auto_start = None
     if embedded_gateway_enabled():
         j, err = embedded_gateway_json('GET', '/health', timeout_sec=2.5)
         reachable = j is not None and bool(j.get('ok'))
         reach_err = err
+        if not reachable:
+            try:
+                from embedded_browser_service_bootstrap import ensure_embedded_gateway_running
+
+                auto_start = ensure_embedded_gateway_running()
+                if auto_start.get("started"):
+                    j, err = embedded_gateway_json('GET', '/health', timeout_sec=2.5)
+                    reachable = j is not None and bool(j.get('ok'))
+                    reach_err = err
+            except Exception as exc:
+                auto_start = {"started": False, "error": str(exc)}
     return jsonify({
         'success': True,
         'enabled': embedded_gateway_enabled(),
         'ws_base_configured': bool(pub),
         'reachable': reachable,
         'reach_error': reach_err,
+        'auto_start': auto_start,
     })
 
 
@@ -6852,6 +7062,12 @@ def api_embedded_browser_session_create():
             'success': False,
             'error': '内嵌网关未配置：请设置 EMBEDDED_BROWSER_GATEWAY_URL 与 EMBEDDED_BROWSER_GATEWAY_SECRET',
         }), 503
+    try:
+        from embedded_browser_service_bootstrap import ensure_embedded_gateway_running
+
+        ensure_embedded_gateway_running()
+    except Exception:
+        pass
     _, _, pub = embedded_gateway_config()
     if not pub:
         return jsonify({
@@ -7378,8 +7594,94 @@ def _validate_step_action_for_case(case_dict, action: str, automation_layer: str
 def api_get_project_cases(project_id):
     raw_ct = (request.args.get("case_type") or "ui").strip().lower()
     case_type = "api" if raw_ct == "api" else "ui"
-    cases = db.get_project_cases(project_id, case_type=case_type)
+    unit_id = request.args.get("unit_id")
+    page_raw = request.args.get("page", type=int)
+    page_size_raw = request.args.get("page_size", type=int)
+    if page_raw is not None or page_size_raw is not None:
+        page = max(1, page_raw or 1)
+        page_size = max(1, min(page_size_raw or 10, 100))
+        cases, total = db.get_project_cases_paginated(
+            project_id,
+            case_type=case_type,
+            unit_id=unit_id,
+            page=page,
+            page_size=page_size,
+        )
+        total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+        return jsonify({
+            'cases': cases,
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': total_pages,
+        })
+    cases = db.get_project_cases(project_id, case_type=case_type, unit_id=unit_id)
     return jsonify({'cases': cases})
+
+
+@app.route('/api/projects/<int:project_id>/units', methods=['GET', 'POST'])
+@login_required
+@project_access_required(min_role='viewer')
+@api_error_handler
+@log_api_request
+def api_project_test_units(project_id):
+    _db = Database()
+    if request.method == 'GET':
+        units = _db.get_test_units(project_id)
+        ungrouped = _db.get_project_cases(project_id, unit_id='ungrouped')
+        return jsonify({
+            'success': True,
+            'units': units,
+            'ungrouped_case_count': len(ungrouped),
+        })
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': '单元名称不能为空'}), 400
+    if not _db.check_project_access(current_user.id, project_id, 'editor'):
+        return jsonify({'success': False, 'error': '无权限'}), 403
+    uid = _db.create_test_unit(
+        project_id,
+        name,
+        description=(data.get('description') or '').strip(),
+        sort_order=int(data.get('sort_order') or 0),
+    )
+    return jsonify({'success': True, 'unit_id': uid})
+
+
+@app.route('/api/projects/<int:project_id>/units/<int:unit_id>', methods=['PUT', 'DELETE'])
+@login_required
+@project_access_required(min_role='editor')
+@api_error_handler
+@log_api_request
+def api_project_test_unit_detail(project_id, unit_id):
+    _db = Database()
+    unit = _db.get_test_unit(unit_id)
+    if not unit or int(unit.get('project_id') or 0) != int(project_id):
+        return jsonify({'success': False, 'error': '单元不存在'}), 404
+    if request.method == 'DELETE':
+        case_count = int(unit.get('case_count') or 0)
+        if not case_count:
+            u = _db.get_test_unit(unit_id)
+            if u:
+                cases = _db.get_project_cases(project_id, unit_id=unit_id)
+                case_count = len(cases)
+        ok = _db.delete_test_unit(unit_id)
+        return jsonify({'success': ok, 'ungrouped_cases': case_count})
+    data = request.get_json(silent=True) or {}
+    name = data.get('name')
+    if name is not None and not str(name).strip():
+        return jsonify({'success': False, 'error': '单元名称不能为空'}), 400
+    ok = _db.update_test_unit(
+        unit_id,
+        name=name,
+        description=data.get('description'),
+        sort_order=data.get('sort_order'),
+    )
+    if not ok:
+        return jsonify({'success': False, 'error': '更新失败或无可更新字段'}), 400
+    return jsonify({'success': ok, 'unit': _db.get_test_unit(unit_id)})
+
 
 # ==================== 测试用例管理API（新版本） ====================
 
@@ -7439,9 +7741,12 @@ def api_create_case_v2():
     if license_info.license_type == LicenseType.FREE.value:
         _db.increment_created_cases(current_user.id)
     
+    unit_id_raw = data.get('unit_id')
+    unit_id = int(unit_id_raw) if unit_id_raw not in (None, '', 0, '0') else None
+
     case_id = db.create_test_case_v2(
         project_id, name, url, description, precondition, expected_result,
-        case_type=case_type, platform=platform,
+        case_type=case_type, platform=platform, unit_id=unit_id,
     )
     return jsonify({'success': True, 'case_id': case_id, 'platform': platform})
 
@@ -7486,8 +7791,22 @@ def api_update_case_v2(case_id):
     description = data.get('description')
     precondition = data.get('precondition')
     expected_result = data.get('expected_result')
-    
-    success = db.update_test_case_v2(case_id, name, url, description, precondition, expected_result)
+    unit_id = data.get('unit_id')
+    if 'unit_id' in data:
+        if unit_id in (None, '', 0, '0'):
+            parsed_unit_id = None
+        else:
+            try:
+                parsed_unit_id = int(unit_id)
+            except (TypeError, ValueError):
+                parsed_unit_id = None
+        success = db.update_test_case_v2(
+            case_id, name, url, description, precondition, expected_result, unit_id=parsed_unit_id
+        )
+    else:
+        success = db.update_test_case_v2(
+            case_id, name, url, description, precondition, expected_result
+        )
     
     if success:
         return jsonify({'success': True})
@@ -13117,6 +13436,43 @@ def api_export_cases_json():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cases/<int:case_id>/export/yaml-preview', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_export_case_yaml_preview(case_id: int):
+    """Phase 5：用例 YAML 预览（人工审阅，非执行格式）。"""
+    from case_yaml_export import build_case_yaml_preview
+
+    _db = Database()
+    case = _db.get_test_case_v2(case_id)
+    if not case:
+        return jsonify({'success': False, 'error': '用例不存在'}), 404
+    if case.get('project_id') and not _db.check_project_access(current_user.id, case['project_id'], 'viewer'):
+        return jsonify({'success': False, 'error': '无权限'}), 403
+    yaml_text = build_case_yaml_preview(_db, case_id)
+    if not yaml_text:
+        return jsonify({'success': False, 'error': '无法生成预览'}), 500
+    return jsonify({'success': True, 'yaml': yaml_text, 'case_id': case_id})
+
+
+@app.route('/api/projects/<int:project_id>/export/yaml-preview', methods=['GET'])
+@login_required
+@project_access_required(min_role='viewer')
+@api_error_handler
+@log_api_request
+def api_export_project_yaml_preview(project_id: int):
+    """Phase 5：按项目/单元批量 YAML 预览。"""
+    from case_yaml_export import build_project_yaml_preview
+
+    unit_id = request.args.get('unit_id')
+    yaml_text = build_project_yaml_preview(Database(), project_id, unit_id=unit_id)
+    if yaml_text is None:
+        return jsonify({'success': False, 'error': '无法生成预览'}), 404
+    return jsonify({'success': True, 'yaml': yaml_text, 'project_id': project_id})
+
 
 @app.route('/api/cases/import/excel', methods=['POST'])
 @login_required

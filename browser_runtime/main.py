@@ -456,7 +456,73 @@ async def _embedded_run_step(page: Page, step: Dict[str, Any]) -> None:
             if exp and txt != exp:
                 raise RuntimeError(f"text_equals 期望 {exp!r} 实际 {txt!r}")
         return
+    if action == "ai_tap":
+        prompt = (step.get("locate_prompt") or step.get("description") or "").strip()
+        if not prompt:
+            raise ValueError("ai_tap 缺少元素描述")
+        await _embedded_vlm_click(page, prompt)
+        return
+    if action == "ai_input":
+        prompt = (step.get("locate_prompt") or step.get("description") or "").strip()
+        text = str(step.get("text") or step.get("input_value") or "")
+        if not prompt:
+            raise ValueError("ai_input 缺少输入框描述")
+        await _embedded_vlm_click(page, prompt)
+        await asyncio.sleep(0.15)
+        await page.keyboard.type(text, delay=25)
+        return
+    if action == "assert_vision":
+        cond = (step.get("description") or step.get("input_value") or "").strip()
+        if not cond:
+            raise ValueError("assert_vision 缺少画面描述")
+        png = await page.screenshot(type="png")
+        from ai_vision_insight import assert_vision_condition_on_png
+
+        ok, reason = await asyncio.to_thread(assert_vision_condition_on_png, png, cond)
+        if not ok:
+            raise RuntimeError(reason or "画面确认未通过")
+        return
+    if action == "wait_vision":
+        cond = (step.get("description") or step.get("input_value") or "").strip()
+        raw_to = str(step.get("selector_value") or step.get("wait_ms") or "30000").strip()
+        try:
+            timeout_ms = int(float(raw_to))
+        except (TypeError, ValueError):
+            timeout_ms = 30000
+        if not cond:
+            raise ValueError("wait_vision 缺少等待描述")
+        deadline = time.time() + max(1.0, timeout_ms / 1000.0)
+        interval = 2.0
+        last_reason = ""
+        from ai_vision_insight import assert_vision_condition_on_png
+
+        while time.time() < deadline:
+            png = await page.screenshot(type="png")
+            ok, reason = await asyncio.to_thread(assert_vision_condition_on_png, png, cond)
+            if ok:
+                return
+            last_reason = reason or last_reason
+            await asyncio.sleep(interval)
+        raise RuntimeError(last_reason or f"等待超时：{cond[:80]}")
     raise ValueError(f"unsupported action: {action}")
+
+
+async def _embedded_vlm_click(page: Page, prompt: str) -> None:
+    """Tier4 视觉点击（内置画布 run-steps）。"""
+    png = await page.screenshot(type="png")
+    vp = page.viewport_size or {"width": 1280, "height": 720}
+    vw = int(vp.get("width") or 1280)
+    vh = int(vp.get("height") or 720)
+
+    def _ground():
+        from ai_vision_grounding import ground_element_from_png
+
+        return ground_element_from_png(png, prompt, viewport_w=vw, viewport_h=vh)
+
+    hit = await asyncio.to_thread(_ground)
+    if not hit:
+        raise RuntimeError(f"无法找到并点击：{prompt[:120]}")
+    await page.mouse.click(hit.cx, hit.cy)
 
 
 def _gateway_secret() -> str:
@@ -824,6 +890,30 @@ async def internal_run_steps(session_id: str, request: Request) -> Dict[str, Any
                 results.append({"index": i, "ok": False, "error": str(e)})
                 break
     return {"success": True, "results": results}
+
+
+@app.get("/internal/session/{session_id}/screenshot")
+async def internal_session_screenshot(session_id: str, request: Request) -> Dict[str, Any]:
+    """当前会话视口 PNG（供测试回放与 CLI screenshot 使用）。"""
+    _require_internal(request)
+    uid = _parse_user_id(request)
+    async with _sessions_lock:
+        rec = _sessions.get(session_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail="session not found")
+        if uid and rec.user_id != uid:
+            raise HTTPException(status_code=403, detail="forbidden")
+        rec.last_seen = time.time()
+        page = rec.page
+    try:
+        png = await page.screenshot(type="png", full_page=False, timeout=15000)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"screenshot failed: {e}") from e
+    return {
+        "success": True,
+        "format": "png",
+        "data": base64.b64encode(png).decode("ascii"),
+    }
 
 
 @app.websocket("/ws/{session_id}")

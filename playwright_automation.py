@@ -3,7 +3,7 @@ import random
 import cv2
 import numpy as np
 from playwright.async_api import async_playwright
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from collections import deque
 import json
 import time
@@ -38,6 +38,14 @@ from locator_tier_utils import (
     merge_candidates_json,
     build_visual_candidate_png_b64,
     build_viewport_coord_candidate,
+    build_vlm_ground_candidate,
+)
+from ai_vision_grounding import (
+    locator_tier_vlm_enabled,
+    locator_vlm_cache_enabled,
+    ground_element_from_png,
+    collect_vlm_prompts,
+    GroundResult,
 )
 from locator_visual_fallback import prepare_template_png_bytes_for_storage
 from locator_visual_fallback import match_template_in_viewport_png
@@ -591,7 +599,7 @@ def _collapse_consecutive_fill_events(events: List[Dict[str, Any]]) -> List[Dict
 
 def _fallback_locator_tuples(primary_selector: str, primary_type: str, locator_candidates_raw: Any) -> List[tuple]:
     """仅 DOM 类候选；visual_template / viewport_coord 由 Tier2/Tier3 单独处理。"""
-    dom_cands, _vis, _coord = split_locator_candidates(locator_candidates_raw)
+    dom_cands, _vis, _coord, _vlm = split_locator_candidates(locator_candidates_raw)
     cands = _normalize_locator_candidate_list(dom_cands)
     cands.sort(key=lambda x: -int(x.get("score") or 0))
     seen = {(str(primary_type).lower(), str(primary_selector or ""))}
@@ -2699,11 +2707,91 @@ class PlaywrightAutomation:
         v = (os.environ.get("LOCATOR_TIER_COORD_ENABLE", "1") or "1").strip().lower()
         return v not in ("0", "false", "no", "off")
 
+    def _locator_tier_vlm_enabled(self) -> bool:
+        return locator_tier_vlm_enabled()
+
+    async def _viewport_size(self, target_page) -> Tuple[int, int]:
+        try:
+            vs = target_page.viewport_size or {}
+            vw = int(vs.get("width") or 1280)
+            vh = int(vs.get("height") or 720)
+        except Exception:
+            vw, vh = 1280, 720
+        return max(1, vw), max(1, vh)
+
+    def _maybe_cache_vlm_ground_result(
+        self,
+        locator_candidates_raw: Any,
+        hit: GroundResult,
+    ) -> Any:
+        """Locate Cache：VLM 成功后将坐标写入 viewport_coord 候选（供下次 Tier3 回放）。"""
+        if not locator_vlm_cache_enabled() or not hit:
+            return locator_candidates_raw
+        try:
+            extra = build_viewport_coord_candidate(hit.fx, hit.fy, score=45)
+            if isinstance(locator_candidates_raw, str) and locator_candidates_raw.strip():
+                return merge_candidates_json(locator_candidates_raw, [extra])
+            if isinstance(locator_candidates_raw, list):
+                return merge_candidates_json(json.dumps(locator_candidates_raw, ensure_ascii=False), [extra])
+            return json.dumps([extra], ensure_ascii=False)
+        except Exception as e:
+            uat_logger.debug("[TIER4_VLM] cache coord skipped: %s", e)
+            return locator_candidates_raw
+
+    async def _try_click_vlm_grounding_tiers(
+        self,
+        target_page,
+        locator_candidates_raw: Any,
+        *,
+        locate_prompt: str = "",
+        description: str = "",
+    ) -> bool:
+        """Tier4：视口截图 + VLM Grounding + mouse.click。"""
+        if not self._locator_tier_vlm_enabled():
+            return False
+        prompts = collect_vlm_prompts(
+            locator_candidates_raw,
+            locate_prompt=locate_prompt,
+            description=description,
+        )
+        if not prompts:
+            return False
+        try:
+            vp_png = await target_page.screenshot(type="png")
+        except Exception as e:
+            uat_logger.warning("[TIER4_VLM] 视口截图失败: %s", e)
+            return False
+        vw, vh = await self._viewport_size(target_page)
+        import asyncio
+
+        for prompt in prompts:
+            hit = await asyncio.to_thread(
+                ground_element_from_png,
+                vp_png,
+                prompt,
+                viewport_w=vw,
+                viewport_h=vh,
+            )
+            if not hit:
+                continue
+            try:
+                await target_page.mouse.click(int(hit.cx), int(hit.cy), delay=30)
+                uat_logger.info(
+                    "[TIER4_VLM] 点击成功 prompt=%r @(%d,%d)",
+                    prompt[:80],
+                    hit.cx,
+                    hit.cy,
+                )
+                return True
+            except Exception as ce:
+                uat_logger.warning("[TIER4_VLM] mouse.click 失败: %s", ce)
+        return False
+
     async def _try_click_visual_locator_tiers(self, target_page, locator_candidates_raw: Any) -> bool:
         """Tier2：视口截图 + 模板匹配 + mouse.click（仅顶层页面，iframe 内未启用）。"""
         if not self._locator_tier_visual_enabled():
             return False
-        _, vis_list, _ = split_locator_candidates(locator_candidates_raw)
+        _, vis_list, _, _ = split_locator_candidates(locator_candidates_raw)
         if not vis_list:
             return False
         try:
@@ -2729,7 +2817,7 @@ class PlaywrightAutomation:
         """Tier3：视口比例坐标点击（弱定位，带像素抖动）。"""
         if not self._locator_tier_coord_enabled():
             return False
-        _, _, coords = split_locator_candidates(locator_candidates_raw)
+        _, _, coords, _ = split_locator_candidates(locator_candidates_raw)
         if not coords:
             return False
         try:
@@ -2760,9 +2848,9 @@ class PlaywrightAutomation:
         return False
 
     async def _try_fill_after_visual_or_coord_click(
-        self, target_page, text: str, locator_candidates_raw: Any
+        self, target_page, text: str, locator_candidates_raw: Any, *, description: str = ""
     ) -> bool:
-        """DOM 与 locator_pack 均失败后：先 Tier2 再 Tier3 点击聚焦，再键盘输入。"""
+        """DOM 与 locator_pack 均失败后：Tier2 → Tier3 → Tier4 点击聚焦，再键盘输入。"""
         if await self._try_click_visual_locator_tiers(target_page, locator_candidates_raw):
             try:
                 await asyncio.sleep(0.12)
@@ -2779,6 +2867,16 @@ class PlaywrightAutomation:
                 return True
             except Exception as ex:
                 uat_logger.warning(f"[TIER_FILL] 坐标降级键入失败: {ex}")
+        if await self._try_click_vlm_grounding_tiers(
+            target_page, locator_candidates_raw, description=description
+        ):
+            try:
+                await asyncio.sleep(0.12)
+                await target_page.keyboard.type(str(text or ""), delay=18)
+                uat_logger.info("[TIER_FILL] VLM 降级后已键入文本")
+                return True
+            except Exception as ex:
+                uat_logger.warning(f"[TIER_FILL] VLM 降级键入失败: {ex}")
         return False
 
     async def _try_web_capture_cdp_click(
@@ -3000,7 +3098,7 @@ class PlaywrightAutomation:
         except Exception:
             pass
 
-    async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None):
+    async def click_element(self, selector: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None, description: str = ""):
         """点击元素。page: 可选，指定在哪个标签页执行（多标签并行时使用）。
         locator_candidates: 录制器生成的 JSON 或列表，主选择器失败时按 score 降级重试。"""
         if await self._try_web_capture_cdp_click(selector, selector_type):
@@ -3528,11 +3626,18 @@ class PlaywrightAutomation:
                     if await self._try_click_viewport_coord_tiers(target_page, tier_source):
                         element_clicked = True
             else:
-                _d, _v, _c = split_locator_candidates(tier_source)
+                _d, _v, _c, _vlm = split_locator_candidates(tier_source)
                 if _v or _c:
                     uat_logger.info(
                         "[TIER2/3] 当前为 iframe 内步骤，跳过视觉/坐标降级（模板与比例基于顶层视口）"
                     )
+            if not element_clicked:
+                if await self._try_click_vlm_grounding_tiers(
+                    target_page,
+                    tier_source,
+                    description=description,
+                ):
+                    element_clicked = True
             if not element_clicked and self._is_login_submit_click(selector, selector_type):
                 if await self._try_login_submit_fallback_click(
                     target_context, selector, skip_if_in_selector=False
@@ -3645,7 +3750,7 @@ class PlaywrightAutomation:
             uat_logger.warning(f"⚠️ [CLICK_DEBUG] 等待页面稳定时出错: {str(e)}")
         
     
-    async def fill_input(self, selector: str, text: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None):
+    async def fill_input(self, selector: str, text: str, selector_type: str = "css", iframe_selector: str = None, iframe_context=None, page=None, locator_candidates=None, description: str = ""):
         # 🔥 添加输入操作总超时控制（30秒）
         try:
             return await asyncio.wait_for(
@@ -4376,8 +4481,10 @@ class PlaywrightAutomation:
                         uat_logger.warning(
                             f"⚠️ [LOCATOR_PACK] 备选填充失败 ({extra_type}={extra_sel[:80]!s}): {_fb_fe}"
                         )
-            if not fill_success and not (iframe_selector or iframe_context) and locator_candidates:
-                if await self._try_fill_after_visual_or_coord_click(target_page, text, locator_candidates):
+            if not fill_success and locator_candidates:
+                if await self._try_fill_after_visual_or_coord_click(
+                    target_page, text, locator_candidates, description=description
+                ):
                     return
             raise Exception(f"无法填充元素: {selector}, 选择器类型: {selector_type}, 所有填充方式均失败")
         
@@ -6365,7 +6472,8 @@ class PlaywrightAutomation:
         """
         if not (expected or "").strip():
             return False
-        if (os.environ.get("LOCAL_VISION_VERIFY", "0").strip().lower() not in ("1", "true", "yes", "on")):
+        v = (os.environ.get("LOCAL_VISION_VERIFY") or "").strip().lower()
+        if v in ("0", "false", "no", "off"):
             return False
         from ai_vision_local import ocr_enabled, text_visible_in_screenshot, vision_enabled
 
@@ -6377,6 +6485,123 @@ class PlaywrightAutomation:
             uat_logger.debug("vision verify screenshot: %s", e)
             return False
         return text_visible_in_screenshot(sh, expected)
+
+    async def _assert_vision_condition(self, target_page, condition_nl: str) -> None:
+        """自然语言画面断言（面向用户的友好错误文案）。"""
+        import asyncio
+
+        from ai_vision_insight import assert_vision_condition_on_png
+
+        cond = (condition_nl or "").strip()
+        if not cond:
+            raise Exception("请描述您希望在画面上看到的内容")
+        try:
+            png = await target_page.screenshot(type="png")
+        except Exception as e:
+            raise Exception("无法截取当前页面画面") from e
+        ok, reason = await asyncio.to_thread(assert_vision_condition_on_png, png, cond)
+        if not ok:
+            raise Exception(reason or "画面与您描述的不一致")
+
+    async def _wait_vision_condition(
+        self,
+        target_page,
+        condition_nl: str,
+        *,
+        timeout_ms: int = 30000,
+        interval_ms: int = 2000,
+    ) -> None:
+        import asyncio
+        import time as _time
+
+        from ai_vision_insight import assert_vision_condition_on_png, wait_vision_enabled
+
+        if not wait_vision_enabled():
+            raise Exception("画面等待功能暂不可用")
+        cond = (condition_nl or "").strip()
+        if not cond:
+            raise Exception("请描述要等待出现的画面内容")
+        deadline = _time.time() + max(1000, int(timeout_ms)) / 1000.0
+        interval = max(500, min(int(interval_ms), 10000))
+        last_reason = ""
+        while _time.time() < deadline:
+            try:
+                png = await target_page.screenshot(type="png")
+            except Exception:
+                await target_page.wait_for_timeout(interval)
+                continue
+            ok, reason = await asyncio.to_thread(assert_vision_condition_on_png, png, cond)
+            if ok:
+                return
+            last_reason = reason or last_reason
+            await target_page.wait_for_timeout(interval)
+        raise Exception(last_reason or f"等待超时：画面上未出现「{cond[:80]}」")
+
+    async def _extract_vision_from_page(self, target_page, prompt_nl: str) -> str:
+        import asyncio
+
+        from ai_vision_insight import extract_vision_from_png
+
+        prompt = (prompt_nl or "").strip()
+        if not prompt:
+            raise Exception("请说明要从画面读取什么信息")
+        try:
+            png = await target_page.screenshot(type="png")
+        except Exception as e:
+            raise Exception("无法截取当前页面画面") from e
+        text, err = await asyncio.to_thread(extract_vision_from_png, png, prompt)
+        if err:
+            raise Exception(err)
+        return text
+
+    async def _record_vision_replay_step(
+        self,
+        step_index: int,
+        step: Dict[str, Any],
+        status: str,
+        message: str,
+        target_page,
+        duration_ms: int,
+    ) -> None:
+        sess = getattr(self, "_vision_replay_session", None)
+        if not sess:
+            return
+        png = None
+        if target_page:
+            try:
+                png = await target_page.screenshot(type="png")
+            except Exception as e:
+                uat_logger.debug("vision replay screenshot: %s", e)
+        try:
+            sess.record(step_index, step or {}, status, message, png, duration_ms)
+        except Exception as e:
+            uat_logger.debug("vision replay record: %s", e)
+
+    async def _try_vlm_ground_click_recovery(
+        self,
+        target_page,
+        step: Dict[str, Any],
+    ) -> bool:
+        """DOM / LLM 自愈失败后的 Tier4 视觉点击恢复。"""
+        goal = (
+            (step.get("description") or "")
+            or (step.get("locate_prompt") or "")
+        ).strip()
+        if not goal or not target_page:
+            return False
+        try:
+            from hermes_heal_bridge import merge_vlm_ground_into_locator_candidates
+
+            lc = merge_vlm_ground_into_locator_candidates(step.get("locator_candidates"), goal)
+            return await self._try_click_vlm_grounding_tiers(
+                target_page,
+                lc,
+                locate_prompt=goal,
+                description=goal,
+            )
+        except Exception as e:
+            uat_logger.debug("vlm ground click recovery: %s", e)
+            return False
 
     async def _verify_element_state_attempt(
         self,
@@ -9063,6 +9288,13 @@ class PlaywrightAutomation:
 
         uat_logger.info(f"开始执行步骤，原始步骤数: {len(steps)}")
 
+        replay_sess = None
+        from vision_step_report import VisionReplaySession, vision_replay_enabled
+
+        if vision_replay_enabled():
+            replay_sess = VisionReplaySession.start()
+            self._vision_replay_session = replay_sess
+
         # 直接执行所有步骤，不进行任何去重
         results = []
         step_index = 0
@@ -9080,6 +9312,11 @@ class PlaywrightAutomation:
 
         for step in steps:
             step_index += 1
+            import time as _step_time
+
+            _step_t0 = _step_time.perf_counter()
+            _step_status = "success"
+            _step_msg = ""
             action = step.get("action")
             uat_logger.info(f"🎯 [STEP_DEBUG] ========== 开始执行步骤 {step_index}/{len(steps)} ==========")
             uat_logger.info(f"🎯 [STEP_DEBUG] 步骤类型: {action}, 详情: {step}")
@@ -9238,6 +9475,10 @@ class PlaywrightAutomation:
                                     uat_logger.warning(
                                         f"[AI_RECOVERY] 点击兜底未成功: {_airec_e}"
                                     )
+                            if not click_success:
+                                click_success = await self._try_vlm_ground_click_recovery(
+                                    target_page, step
+                                )
                         if not click_success:
                             # 如果所有尝试都失败,抛出异常
                             raise Exception(f"无法点击元素,所有选择器尝试均失败: {selector}")
@@ -9741,6 +9982,8 @@ class PlaywrightAutomation:
                         results.append({"status": "success", "step": step})
                     else:
                         err_txt = step_error or ""
+                        _step_status = "error"
+                        _step_msg = err_txt
                         err_row = {"status": "error", "step": step, "error": err_txt}
                         fb = await self.capture_step_failure_bundle(step, err_txt)
                         if fb:
@@ -9748,6 +9991,47 @@ class PlaywrightAutomation:
                         results.append(err_row)
                     
                     # 跳过后续的通用处理
+                    continue
+                elif action == "assert_vision":
+                    cond = (
+                        step.get("description")
+                        or step.get("input_value")
+                        or step.get("locate_prompt")
+                        or ""
+                    ).strip()
+                    await self._assert_vision_condition(target_page, cond)
+                    results.append({"status": "success", "step": step})
+                    continue
+                elif action == "wait_vision":
+                    cond = (
+                        step.get("description")
+                        or step.get("input_value")
+                        or step.get("locate_prompt")
+                        or ""
+                    ).strip()
+                    raw_to = (step.get("selector_value") or step.get("wait_ms") or "30000").strip()
+                    try:
+                        timeout_ms = int(float(raw_to))
+                    except (TypeError, ValueError):
+                        timeout_ms = 30000
+                    await self._wait_vision_condition(target_page, cond, timeout_ms=timeout_ms)
+                    results.append({"status": "success", "step": step})
+                    continue
+                elif action == "extract_vision":
+                    prompt = (
+                        step.get("description")
+                        or step.get("input_value")
+                        or step.get("locate_prompt")
+                        or ""
+                    ).strip()
+                    extracted = await self._extract_vision_from_page(target_page, prompt)
+                    results.append(
+                        {
+                            "status": "success",
+                            "step": step,
+                            "extracted_text": extracted,
+                        }
+                    )
                     continue
                 elif action == "assert":
                     selector = (step.get("selector") or "").strip()
@@ -9768,6 +10052,9 @@ class PlaywrightAutomation:
                             raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
                     elif ctype in ("page_text_contains", "page_text_equals", "page_text_regex"):
                         await self._assert_page_visible_text(target_page, ctype, expected)
+                    elif ctype == "vision_contains":
+                        cond = (step.get("description") or expected or "").strip()
+                        await self._assert_vision_condition(target_page, cond)
                     elif selector:
                         actual = await self.extract_element_text(
                             selector,
@@ -9798,7 +10085,7 @@ class PlaywrightAutomation:
                         ):
                             raise Exception(f"不支持的 assert compare_type: {ctype}")
                     else:
-                        raise Exception("assert 步骤缺少 selector（url / 整页文本类断言除外）")
+                        raise Exception("assert 步骤缺少 selector（url / 整页文本 / 画面确认类断言除外）")
                     uat_logger.info(f"✅ [ASSERT_DEBUG] 断言步骤成功")
                     results.append({"status": "success", "step": step})
                     continue
@@ -9851,6 +10138,8 @@ class PlaywrightAutomation:
             except Exception as e:
                 uat_logger.error(f"❌ [STEP_DEBUG] ========== 步骤 {step_index}/{len(steps)} 执行失败 ==========")
                 uat_logger.error(f"❌ [STEP_DEBUG] 错误详情: {str(e)}")
+                _step_status = "error"
+                _step_msg = str(e)
                 err_row = {"status": "error", "step": step, "error": str(e)}
                 fb = await self.capture_step_failure_bundle(step, str(e))
                 if fb:
@@ -9859,7 +10148,27 @@ class PlaywrightAutomation:
                 # 🔥 修复：异常捕获后添加 break 语句，终止当前用例的步骤循环
                 uat_logger.error(f"❌ [STEP_DEBUG] 步骤执行失败，终止用例执行: {e}")
                 break
+            finally:
+                if replay_sess:
+                    try:
+                        await self._record_vision_replay_step(
+                            step_index,
+                            step,
+                            _step_status,
+                            _step_msg,
+                            target_page,
+                            int((_step_time.perf_counter() - _step_t0) * 1000),
+                        )
+                    except Exception as _vrf:
+                        uat_logger.debug("vision replay finally: %s", _vrf)
         
+        if replay_sess:
+            try:
+                replay_sess.finalize()
+            except Exception as _vfin:
+                uat_logger.debug("vision replay finalize: %s", _vfin)
+            self._vision_replay_session = None
+
         uat_logger.info(f"🎯 [STEP_DEBUG] ========== 所有步骤执行完成,共 {len(results)} 个步骤 ==========")
         return results
     
@@ -10569,6 +10878,15 @@ class PlaywrightAutomation:
         Returns:
             含 step_results、steps_completed、total_steps、all_steps_done 的字典
         """
+        try:
+            from step_executor import case_steps_include_desktop
+            from desktop_run_context import reset_desktop_run_context
+
+            if case_steps_include_desktop(execution_steps):
+                reset_desktop_run_context()
+        except Exception:
+            pass
+
         case_results: List[Dict[str, Any]] = []
         steps_completed = 0
 
@@ -10713,22 +11031,109 @@ class PlaywrightAutomation:
                             recovered = await try_recover_selector_with_llm(
                                 target_page, goal, "click", selector
                             )
-                        if not recovered:
+                        if recovered:
+                            rs, rt = recovered
+                            for _ci in range(_nrep):
+                                await self.click_element(
+                                    rs,
+                                    rt,
+                                    iframe_selector,
+                                    page=target_page,
+                                    locator_candidates=None,
+                                )
+                                if target_page and _ci + 1 < _nrep:
+                                    await target_page.wait_for_timeout(150)
+                        elif not await self._try_vlm_ground_click_recovery(target_page, step):
                             raise
-                        rs, rt = recovered
-                        for _ci in range(_nrep):
-                            await self.click_element(
-                                rs,
-                                rt,
-                                iframe_selector,
-                                page=target_page,
-                                locator_candidates=None,
-                            )
-                            if target_page and _ci + 1 < _nrep:
-                                await target_page.wait_for_timeout(150)
                     results.append({"status": "success", "step": step})
                 else:
                     raise Exception("点击步骤缺少选择器参数")
+
+            elif action == "ai_tap":
+                prompt = (step.get("locate_prompt") or step.get("description") or "").strip()
+                if not prompt:
+                    raise Exception("缺少要点击的元素描述")
+                lc = step.get("locator_candidates")
+                try:
+                    extra = build_vlm_ground_candidate(prompt)
+                    if lc:
+                        lc_str = lc if isinstance(lc, str) else json.dumps(lc, ensure_ascii=False)
+                        lc = merge_candidates_json(lc_str, [extra])
+                    else:
+                        lc = json.dumps([extra], ensure_ascii=False)
+                except Exception as _vlm_b:
+                    uat_logger.debug("ai_tap vlm candidate build: %s", _vlm_b)
+                ok = await self._try_click_vlm_grounding_tiers(
+                    target_page,
+                    lc,
+                    locate_prompt=prompt,
+                    description=prompt,
+                )
+                if not ok:
+                    raise Exception(f"无法找到并点击：{prompt}")
+                results.append({"status": "success", "step": step})
+
+            elif action == "ai_input":
+                prompt = (step.get("locate_prompt") or step.get("description") or "").strip()
+                text = resolve_fill_step_text(step) or str(step.get("input_value") or "")
+                if not prompt:
+                    raise Exception("缺少输入框描述")
+                lc = step.get("locator_candidates")
+                try:
+                    extra = build_vlm_ground_candidate(prompt)
+                    if lc:
+                        lc_str = lc if isinstance(lc, str) else json.dumps(lc, ensure_ascii=False)
+                        lc = merge_candidates_json(lc_str, [extra])
+                    else:
+                        lc = json.dumps([extra], ensure_ascii=False)
+                except Exception as _vlm_b:
+                    uat_logger.debug("ai_input vlm candidate build: %s", _vlm_b)
+                if not await self._try_fill_after_visual_or_coord_click(
+                    target_page, text, lc, description=prompt
+                ):
+                    raise Exception(f"无法找到并填写：{prompt}")
+                results.append({"status": "success", "step": step})
+
+            elif action == "assert_vision":
+                cond = (
+                    step.get("description")
+                    or step.get("input_value")
+                    or step.get("locate_prompt")
+                    or ""
+                ).strip()
+                await self._assert_vision_condition(target_page, cond)
+                results.append({"status": "success", "step": step})
+
+            elif action == "wait_vision":
+                cond = (
+                    step.get("description")
+                    or step.get("input_value")
+                    or step.get("locate_prompt")
+                    or ""
+                ).strip()
+                raw_to = (step.get("selector_value") or step.get("wait_ms") or "30000").strip()
+                try:
+                    timeout_ms = int(float(raw_to))
+                except (TypeError, ValueError):
+                    timeout_ms = 30000
+                await self._wait_vision_condition(target_page, cond, timeout_ms=timeout_ms)
+                results.append({"status": "success", "step": step})
+
+            elif action == "extract_vision":
+                prompt = (
+                    step.get("description")
+                    or step.get("input_value")
+                    or step.get("locate_prompt")
+                    or ""
+                ).strip()
+                extracted = await self._extract_vision_from_page(target_page, prompt)
+                results.append(
+                    {
+                        "status": "success",
+                        "step": step,
+                        "extracted_text": extracted,
+                    }
+                )
                     
             elif action in ["fill", "input"]:
                 selector = resolve_fill_step_selector(step)
@@ -10886,6 +11291,9 @@ class PlaywrightAutomation:
                         raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
                 elif ctype in ("page_text_contains", "page_text_equals", "page_text_regex"):
                     await self._assert_page_visible_text(target_page, ctype, expected)
+                elif ctype == "vision_contains":
+                    cond = (step.get("description") or expected or "").strip()
+                    await self._assert_vision_condition(target_page, cond)
                 elif selector:
                     actual = await self.extract_element_text(
                         selector, selector_type, iframe_selector, page=target_page
@@ -10911,7 +11319,7 @@ class PlaywrightAutomation:
                     ):
                         raise Exception(f"不支持的 assert compare_type: {ctype}")
                 else:
-                    raise Exception("assert 步骤缺少 selector（url / 整页文本类断言除外）")
+                    raise Exception("assert 步骤缺少 selector（url / 整页文本 / 画面确认类断言除外）")
                 results.append({"status": "success", "step": step})
                 
             elif action == "hover":

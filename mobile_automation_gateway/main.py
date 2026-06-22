@@ -27,8 +27,10 @@ from mobile_device_manager import (
     adb_disconnect_device,
     capture_screenshot_png,
     check_mobile_health,
+    format_connect_error,
     get_connected_udid,
     get_device_info,
+    is_deny_prefix_serial,
     list_emulators,
     list_usb_devices,
     pick_default_device,
@@ -123,6 +125,21 @@ async def devices_connect(request: Request) -> Dict[str, Any]:
         if not dev:
             return {"success": False, "error": "未发现已授权设备"}
         udid = dev.get("udid") or ""
+    else:
+        matched = next((d for d in list_usb_devices() if d.get("udid") == udid), None)
+        if matched and matched.get("state") != "device":
+            return {
+                "success": False,
+                "error": format_connect_error(matched),
+                "device_state": matched.get("state") or "",
+                "udid": udid,
+            }
+        if is_deny_prefix_serial(udid):
+            return {
+                "success": False,
+                "error": f"设备 {udid} 为可疑残留连接，请在平台刷新设备列表后重试。",
+                "udid": udid,
+            }
     set_connected_udid(udid)
     info = get_device_info(udid)
     assistant_status: Dict[str, Any] = {}

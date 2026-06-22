@@ -171,5 +171,14 @@ def bootstrap_mobile_services(*, force: bool = False) -> dict:
             time.sleep(0.2)
     except Exception as e:
         out["error"] = str(e)
+
+    try:
+        from mobile_scrcpy_bridge import ensure_bridge_started
+
+        ok, msg = ensure_bridge_started()
+        out["scrcpy_bridge_started"] = ok
+        out["scrcpy_bridge_message"] = msg
+    except Exception as e:
+        out["scrcpy_bridge_error"] = str(e)
     return out
 

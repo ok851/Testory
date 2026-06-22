@@ -1,6 +1,6 @@
 """
 本地视觉 / OCR 辅助：Ollama 多模态（如 moondream、llava）+ 可选 Tesseract。
-环境：LOCAL_VISION_ENABLE=1，LOCAL_VISION_MODEL；OCR：LOCAL_OCR_ENABLE=1。
+环境：LOCAL_VISION_ENABLE（面向用户默认开）；LOCAL_VISION_MODEL；OCR：LOCAL_OCR_ENABLE=1。
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def vision_enabled() -> bool:
-    return _env_bool("LOCAL_VISION_ENABLE", False)
+    return _env_bool("LOCAL_VISION_ENABLE", True)
 
 
 def ocr_enabled() -> bool:

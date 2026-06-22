@@ -82,7 +82,12 @@ def _project_row_to_dict(row: Tuple) -> Dict[str, Any]:
     }
 
 
-def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict[str, Any]:
+def _test_case_row_to_dict(
+    row: Tuple,
+    step_count: Optional[int] = None,
+    unit_id: Optional[int] = None,
+    unit_name: str = "",
+) -> Dict[str, Any]:
     u = row[3] or ""
     out: Dict[str, Any] = {
         "id": row[0],
@@ -100,7 +105,14 @@ def _test_case_row_to_dict(row: Tuple, step_count: Optional[int] = None) -> Dict
     }
     if step_count is not None:
         out["step_count"] = step_count
+    if unit_id is not None:
+        out["unit_id"] = unit_id
+    if unit_name:
+        out["unit_name"] = unit_name
     return out
+
+
+_UPDATE_UNSET = object()
 
 
 class Database:
@@ -282,6 +294,36 @@ class Database:
         try:
             cursor.execute(
                 "UPDATE test_cases SET platform = 'web' WHERE platform IS NULL OR TRIM(platform) = ''"
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS test_units (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                sort_order INTEGER DEFAULT 0,
+                parent_unit_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects (id),
+                FOREIGN KEY (parent_unit_id) REFERENCES test_units (id)
+            )
+        """)
+        try:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_test_units_project ON test_units(project_id)"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE test_cases ADD COLUMN unit_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_test_cases_unit_id ON test_cases(unit_id)"
             )
         except sqlite3.OperationalError:
             pass
@@ -1296,6 +1338,7 @@ class Database:
                 cursor.execute("DELETE FROM defects WHERE project_id = ?", (project_id,))
 
             cursor.execute("DELETE FROM variables WHERE project_id = ?", (project_id,))
+            cursor.execute("DELETE FROM test_units WHERE project_id = ?", (project_id,))
             cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             success = cursor.rowcount > 0
             conn.commit()
@@ -1325,38 +1368,253 @@ class Database:
         n = int(cursor.fetchone()[0])
         conn.close()
         return n
-    
-    def get_project_cases(self, project_id: int, case_type: str = "ui") -> List[Dict[str, Any]]:
-        """获取项目下的测试用例。默认仅 Web 用例（case_type='ui'）；传 case_type='api' 返回接口用例。"""
+
+    # ==================== 测试单元（项目 → 单元 → 用例 → 步骤） ====================
+
+    def create_test_unit(
+        self,
+        project_id: int,
+        name: str,
+        description: str = "",
+        sort_order: int = 0,
+        parent_unit_id: Optional[int] = None,
+    ) -> int:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO test_units (project_id, name, description, sort_order, parent_unit_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (project_id, (name or "").strip(), description or "", int(sort_order or 0), parent_unit_id),
+        )
+        uid = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return int(uid)
+
+    def get_test_units(self, project_id: int) -> List[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT u.id, u.project_id, u.name, u.description, u.sort_order, u.parent_unit_id, u.created_at,
+                   (SELECT COUNT(*) FROM test_cases tc WHERE tc.unit_id = u.id) AS case_count
+            FROM test_units u
+            WHERE u.project_id = ?
+            ORDER BY u.sort_order ASC, u.id ASC
+            """,
+            (project_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "project_id": r[1],
+                "name": r[2],
+                "description": r[3] or "",
+                "sort_order": int(r[4] or 0),
+                "parent_unit_id": r[5],
+                "created_at": _bj_iso(r[6]),
+                "case_count": int(r[7] or 0),
+            }
+            for r in rows
+        ]
+
+    def get_test_unit(self, unit_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, project_id, name, description, sort_order, parent_unit_id, created_at "
+            "FROM test_units WHERE id = ?",
+            (unit_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "project_id": row[1],
+            "name": row[2],
+            "description": row[3] or "",
+            "sort_order": int(row[4] or 0),
+            "parent_unit_id": row[5],
+            "created_at": _bj_iso(row[6]),
+        }
+
+    def update_test_unit(
+        self,
+        unit_id: int,
+        *,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        sort_order: Optional[int] = None,
+    ) -> bool:
+        updates: List[str] = []
+        params: List[Any] = []
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name.strip())
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if sort_order is not None:
+            updates.append("sort_order = ?")
+            params.append(int(sort_order))
+        if not updates:
+            return False
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        params.append(unit_id)
+        cursor.execute(f"UPDATE test_units SET {', '.join(updates)} WHERE id = ?", params)
+        ok = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+
+    def delete_test_unit(self, unit_id: int) -> bool:
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE test_cases SET unit_id = NULL WHERE unit_id = ?", (unit_id,))
+        cursor.execute("DELETE FROM test_units WHERE id = ?", (unit_id,))
+        ok = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+
+    def ensure_default_test_unit(self, project_id: int) -> int:
+        units = self.get_test_units(project_id)
+        if units:
+            return int(units[0]["id"])
+        return self.create_test_unit(project_id, "默认单元", description="系统自动创建")
+
+    def get_project_cases(
+        self,
+        project_id: int,
+        case_type: str = "ui",
+        unit_id: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """获取项目下的测试用例。unit_id: None=全部, 'ungrouped'=未分组, int=指定单元。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         ct_filter = _normalize_case_type(case_type)
-        
+
+        unit_clause = ""
+        unit_params: List[Any] = []
+        if unit_id is not None and str(unit_id).strip().lower() in ("ungrouped", "none", "0"):
+            unit_clause = " AND tc.unit_id IS NULL"
+        elif unit_id is not None and str(unit_id).strip() != "":
+            try:
+                uid = int(unit_id)
+                unit_clause = " AND tc.unit_id = ?"
+                unit_params.append(uid)
+            except (TypeError, ValueError):
+                pass
+
         cursor.execute(
-            """
+            f"""
             SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
                    tc.precondition, tc.expected_result, COALESCE(tc.case_type, 'ui') AS case_type,
                    COALESCE(tc.case_role, 'business') AS case_role,
+                   tc.unit_id, COALESCE(tu.name, '') AS unit_name,
                    COUNT(ts.id) AS step_count
             FROM test_cases tc
             LEFT JOIN test_steps ts ON tc.id = ts.case_id
-            WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?
+            LEFT JOIN test_units tu ON tc.unit_id = tu.id
+            WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?{unit_clause}
             GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
-                     tc.precondition, tc.expected_result, tc.case_type, tc.case_role
+                     tc.precondition, tc.expected_result, tc.case_type, tc.case_role, tc.unit_id, tu.name
             ORDER BY tc.created_at DESC
             """,
-            (project_id, ct_filter),
+            (project_id, ct_filter, *unit_params),
         )
         rows = cursor.fetchall()
-        
+
         cases = []
         for row in rows:
             base = row[:10]
-            sc = int(row[10] or 0)
-            cases.append(_test_case_row_to_dict(base, step_count=sc))
-        
+            uid_val = row[10]
+            unit_name = row[11] or ""
+            sc = int(row[12] or 0)
+            item = _test_case_row_to_dict(base, step_count=sc, unit_id=uid_val, unit_name=unit_name)
+            cases.append(item)
+
         conn.close()
         return cases
+
+    def get_project_cases_paginated(
+        self,
+        project_id: int,
+        case_type: str = "ui",
+        unit_id: Optional[Any] = None,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> tuple:
+        """分页获取项目用例，返回 (cases, total)。"""
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        ct_filter = _normalize_case_type(case_type)
+
+        unit_clause = ""
+        unit_params: List[Any] = []
+        if unit_id is not None and str(unit_id).strip().lower() in ("ungrouped", "none", "0"):
+            unit_clause = " AND tc.unit_id IS NULL"
+        elif unit_id is not None and str(unit_id).strip() != "":
+            try:
+                uid = int(unit_id)
+                unit_clause = " AND tc.unit_id = ?"
+                unit_params.append(uid)
+            except (TypeError, ValueError):
+                pass
+
+        offset = (max(1, int(page)) - 1) * max(1, int(page_size))
+        limit = max(1, int(page_size))
+        cursor.execute(
+            f"""
+            SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                   tc.precondition, tc.expected_result, COALESCE(tc.case_type, 'ui') AS case_type,
+                   COALESCE(tc.case_role, 'business') AS case_role,
+                   tc.unit_id, COALESCE(tu.name, '') AS unit_name,
+                   COUNT(ts.id) AS step_count,
+                   COUNT(*) OVER() AS __total
+            FROM test_cases tc
+            LEFT JOIN test_steps ts ON tc.id = ts.case_id
+            LEFT JOIN test_units tu ON tc.unit_id = tu.id
+            WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?{unit_clause}
+            GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                     tc.precondition, tc.expected_result, tc.case_type, tc.case_role, tc.unit_id, tu.name
+            ORDER BY tc.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (project_id, ct_filter, *unit_params, limit, offset),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            cursor.execute(
+                f"""
+                SELECT COUNT(*) FROM test_cases tc
+                WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?{unit_clause}
+                """,
+                (project_id, ct_filter, *unit_params),
+            )
+            total = int(cursor.fetchone()[0] or 0)
+            conn.close()
+            return [], total
+
+        total = int(rows[0][-1] or 0)
+        cases = []
+        for row in rows:
+            base = row[:10]
+            uid_val = row[10]
+            unit_name = row[11] or ""
+            sc = int(row[12] or 0)
+            item = _test_case_row_to_dict(base, step_count=sc, unit_id=uid_val, unit_name=unit_name)
+            cases.append(item)
+
+        conn.close()
+        return cases, total
     
     # ==================== 测试用例管理方法（新版本） ====================
     
@@ -1371,6 +1629,7 @@ class Database:
         case_type: str = "ui",
         case_role: str = "business",
         platform: str = "web",
+        unit_id: Optional[int] = None,
     ) -> int:
         """创建测试用例（新版本，关联到项目）"""
         conn = self._sqlite_connect()
@@ -1380,9 +1639,10 @@ class Database:
         if role not in ("login_feature", "business", "auth_fixture"):
             role = "business"
         plat = _normalize_platform(platform)
+        uid = int(unit_id) if unit_id else None
         cursor.execute(
-            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role, platform) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (project_id, name, url, description, precondition, expected_result, ct, role, plat),
+            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role, platform, unit_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, name, url, description, precondition, expected_result, ct, role, plat, uid),
         )
         case_id = cursor.lastrowid
         
@@ -1398,12 +1658,12 @@ class Database:
         
         cursor.execute(
             "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, "
-            "COALESCE(case_type, 'ui'), COALESCE(case_role, 'business'), COALESCE(platform, 'web') "
+            "COALESCE(case_type, 'ui'), COALESCE(case_role, 'business'), COALESCE(platform, 'web'), unit_id "
             "FROM test_cases WHERE id = ?",
             (case_id,),
         )
         row = cursor.fetchone()
-        
+
         if row:
             out = {
                 'id': row[0],
@@ -1417,6 +1677,7 @@ class Database:
                 'case_type': _normalize_case_type(row[8]) if len(row) > 8 else 'ui',
                 'case_role': (row[9] or 'business').strip() if len(row) > 9 else 'business',
                 'platform': _normalize_platform(row[10]) if len(row) > 10 else 'web',
+                'unit_id': row[11] if len(row) > 11 else None,
             }
             conn.close()
             return out
@@ -1433,6 +1694,7 @@ class Database:
         precondition: str = None,
         expected_result: str = None,
         platform: str = None,
+        unit_id: Any = _UPDATE_UNSET,
     ) -> bool:
         """更新测试用例（新版本）"""
         conn = self._sqlite_connect()
@@ -1464,6 +1726,10 @@ class Database:
         if platform is not None:
             updates.append("platform = ?")
             params.append(_normalize_platform(platform))
+
+        if unit_id is not _UPDATE_UNSET:
+            updates.append("unit_id = ?")
+            params.append(int(unit_id) if unit_id else None)
         
         if not updates:
             conn.close()

@@ -114,6 +114,30 @@ def stop_embedded_gateway() -> None:
     _BOOTED = False
 
 
+def ensure_embedded_gateway_running(*, wait_sec: float = 15.0) -> dict:
+    """若网关未监听则尝试自动拉起（供 AI 测试页首次访问时自愈）。"""
+    if not embedded_gateway_enabled():
+        return {"started": False, "reason": "not_configured"}
+    if not embedded_auto_start_gateway():
+        return {"started": False, "reason": "auto_start_disabled"}
+    base, _, _ = embedded_gateway_config()
+    parsed = urlparse(base)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or int(os.environ.get("EMBEDDED_BROWSER_GATE_PORT", "8765") or 8765)
+    if _port_listening(host, port):
+        return {"started": True, "already_running": True}
+    try:
+        _start_gateway_process()
+        deadline = time.time() + max(1.0, float(wait_sec))
+        while time.time() < deadline:
+            if _port_listening(host, port):
+                return {"started": True}
+            time.sleep(0.25)
+    except Exception as e:
+        return {"started": False, "error": str(e)}
+    return {"started": False, "reason": "timeout", "hint": "请查看 UAT_DATA_DIR/logs/embedded_gateway.log"}
+
+
 def bootstrap_embedded_browser_services(*, force: bool = False) -> dict:
     """
     在 app 加载 .env 后调用一次。

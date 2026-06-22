@@ -874,6 +874,20 @@
         background: #422006;
         color: #fef3c7;
     }
+    .ai-cap-banner--info {
+        border-color: #93c5fd;
+        background: #eff6ff;
+        color: #1e40af;
+    }
+    html.dark .ai-cap-banner--info {
+        border-color: #3b82f6;
+        background: #1e3a5f;
+        color: #dbeafe;
+    }
+    .ai-vision-replay-link {
+        display: inline-block; margin-top: 6px; padding: 6px 12px; border-radius: 8px;
+        background: #4f46e5; color: #fff !important; text-decoration: none; font-size: 13px; font-weight: 600;
+    }
     .ai-cap-banner code { font-size: 11px; padding: 1px 5px; border-radius: 4px; background: rgba(0,0,0,.08); }
     html.dark .ai-cap-banner code { background: rgba(255,255,255,.12); }
 </style>
@@ -910,7 +924,8 @@
                 </div>
             </div>
             <div id="aiLlmWizardBanner" class="ai-cap-banner ai-cap-banner--warn" role="status" hidden style="margin:8px 16px 0;"></div>
-            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">顶部选择项目、用例与浏览器；左栏与 AI 对话并<strong>生成用例</strong> / <strong>优化</strong>；中栏填写 URL 点「打开」查看页面；顶栏<strong>运行</strong>为生成并执行。已配置内置浏览器网关时中栏为实时画面，否则为简化预览。</p>
+            <div id="aiVisionReadinessBanner" class="ai-cap-banner ai-cap-banner--info" role="status" hidden style="margin:8px 16px 0;"></div>
+            <p class="ai-studio-header__hint" data-i18n="aitest_subtitle">顶部选择<strong>平台类型</strong>（Web / Windows 桌面 / Android）、项目与用例；左栏描述任务后「生成用例」或顶栏「运行」。<strong>Web</strong> 需填写 URL；<strong>Windows 桌面</strong> 测本机应用无需 URL。</p>
             <div class="ai-closure-strip" id="aiClosureStrip" hidden>
                 <span class="ai-closure-strip__label" id="aiClosureStripLabel">已保存用例</span>
                 <button type="button" class="btn-closure" id="aiBtnResolveLocatorsSave">解析定位并写库</button>
@@ -931,14 +946,23 @@
                 </select>
             </label>
             <label class="ctx-grow" style="flex:1 1 160px;"><span>平台类型</span>
-                <select id="aiPlatformTypeSelect" class="ai-pw-browser-select" onchange="aiOnPlatformTypeChange()">
+                <select id="aiPlatformTypeSelect" class="ai-pw-browser-select" onchange="aiOnPlatformTypeChange()" title="Web 需 URL；Windows 桌面测本机应用无需 URL">
                     <option value="web">Web 浏览器</option>
+                    <option value="desktop">Windows 桌面</option>
                     <option value="android">Android 真机</option>
                 </select>
             </label>
-            <label class="ctx-grow" style="flex:1 1 320px;"><span data-i18n="aitest_label_browser">自动化浏览器</span>
+            <label class="ctx-grow ai-web-only-browser-label" style="flex:1 1 320px;"><span data-i18n="aitest_label_browser">自动化浏览器</span>
                 <select id="aiPlaywrightBrowserSelect" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 自动化浏览器；Chrome/Edge 需本机已安装（playwright install chrome / msedge）"></select>
             </label>
+        </div>
+
+        <div id="aiDesktopPanel" class="ai-studio-context-row" style="display:none;" aria-label="desktop windows">
+            <div style="flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="aiRefreshDesktopSnapshot()">刷新窗口列表</button>
+                <span id="aiDesktopSnapshotStatus" style="font-size:12px;color:#64748b;align-self:center;"></span>
+                <pre id="aiDesktopWindowList" style="flex:1 1 100%;margin:0;max-height:140px;overflow:auto;font-size:11px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px;color:#334155;white-space:pre-wrap;">点击「刷新窗口列表」获取当前可见窗口（供 AI 生成 attach_window / click 步骤）。</pre>
+            </div>
         </div>
 
         <div id="aiMobileDevicePanel" class="ai-studio-context-row" style="display:none;" aria-label="mobile devices">
@@ -1004,7 +1028,7 @@
             <section id="aiStageCenter" class="ai-stage-center" aria-label="浏览器舞台">
             <div class="ai-browser-panel" aria-label="内置浏览器" style="flex:1;min-height:0;">
                 <div class="ai-browser-panel__head">
-                    <span>内置浏览器</span>
+                    <span id="aiStageCenterTitle">内置浏览器</span>
                     <div class="ai-browser-panel__head-actions">
                         <button type="button" class="btn btn-secondary btn-sm" id="aiBrowserFullscreenBtn" title="全屏本区域">全屏</button>
                     </div>
@@ -1037,7 +1061,7 @@
                         sandbox="allow-downloads allow-forms allow-modals allow-orientation-lock allow-pointer-lock allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts allow-top-navigation-by-user-activation"
                         referrerpolicy="no-referrer-when-downgrade"
                         src="about:blank"></iframe>
-                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请填写 URL 后点「打开」。已配置内置浏览器网关时此处为实时画面；未配置时为本地预览（部分站点可能无法显示）。</div>
+                    <div class="ai-browser-placeholder" id="aiBrowserPlaceholder">请填写 URL（或从任务描述中写出完整地址）。平台会自动拉起 Browser Runtime 并尝试打开实时画面。</div>
                     <div id="aiBrowserIframeBlockedBanner" class="ai-browser-iframe-banner" hidden role="alert">
                         <div class="ai-browser-iframe-banner__inner">
                             <strong>预览受限</strong>
@@ -1049,7 +1073,7 @@
                     </div>
                     <div id="aiAgentWorkingOverlay" class="ai-agent-overlay is-hidden" aria-live="polite">
                         <span class="ai-pulse" aria-hidden="true"></span>
-                        <span id="aiAgentOverlayText">AI正在工作</span>
+                        <span id="aiAgentOverlayText">AI 正在操作 · 可随时点「停止」暂停</span>
                     </div>
                 </div>
                 </div>
@@ -1177,6 +1201,7 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ai_llm_wizard.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ai_assistant.js') }}"></script>
 <script>
@@ -1251,7 +1276,8 @@
                     history: aiChatMessages,
                     projectId: currentProjectId,
                     projectName: currentProjectName,
-                    targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || ''
+                    targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || '',
+                    platformType: aiGetPlatformType()
                 });
             } catch (e) {}
         }, 350);
@@ -1269,7 +1295,8 @@
                 history: aiChatMessages,
                 projectId: currentProjectId,
                 projectName: currentProjectName,
-                targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || ''
+                targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || '',
+                platformType: aiGetPlatformType()
             });
         } catch (e) {}
     }
@@ -1326,6 +1353,7 @@
             title: (document.getElementById('aiSessionTitle') && document.getElementById('aiSessionTitle').value) || '',
             version: (document.getElementById('aiTaskVersion') && document.getElementById('aiTaskVersion').value) || '',
             goal: (document.getElementById('aiMessageInput') && document.getElementById('aiMessageInput').value) || '',
+            platformType: aiGetPlatformType(),
             plan: latestAiPlan ? JSON.parse(JSON.stringify(latestAiPlan)) : null,
             chatHistory: h
         };
@@ -1339,6 +1367,11 @@
         if (t && s.title != null) t.value = s.title;
         if (v && s.version != null) v.value = s.version;
         if (g && s.goal != null) g.value = s.goal;
+        if (s.platformType) {
+            var ptSel = document.getElementById('aiPlatformTypeSelect');
+            if (ptSel) ptSel.value = s.platformType;
+            if (typeof window.aiOnPlatformTypeChange === 'function') window.aiOnPlatformTypeChange();
+        }
         latestAiPlan = s.plan || null;
         if (latestAiPlan) renderAiPreview(latestAiPlan);
         else {
@@ -1379,6 +1412,42 @@
         return u;
     }
 
+    /** 从 URL 栏、已生成用例、任务文本或所选用例解析目标地址 */
+    function aiResolveTargetUrl() {
+        var inp = document.getElementById('aiTargetUrlInput');
+        var u = (inp && inp.value || '').trim();
+        if (u) return normalizeUrlForEmbed(u);
+        if (latestAiPlan && latestAiPlan.case_url) {
+            u = String(latestAiPlan.case_url).trim();
+            if (u) return normalizeUrlForEmbed(u);
+        }
+        var caseSel = document.getElementById('aiTargetCaseSelect');
+        var caseId = caseSel ? (caseSel.value || '').trim() : '';
+        if (caseId && Array.isArray(allCasesList)) {
+            var c = allCasesList.find(function(x) { return String(x.id) === String(caseId); });
+            if (c) {
+                u = String(c.target_url || c.url || '').trim();
+                if (u) return normalizeUrlForEmbed(u);
+            }
+        }
+        var msg = (document.getElementById('aiMessageInput') && document.getElementById('aiMessageInput').value || '');
+        var m = msg.match(/https?:\/\/[^\s\)\]\"'<>，。；]+/i);
+        if (m && m[0]) return normalizeUrlForEmbed(m[0]);
+        return '';
+    }
+
+    function aiSyncTargetUrlToInput(url) {
+        if (!url) return;
+        var inp = document.getElementById('aiTargetUrlInput');
+        if (inp && !(inp.value || '').trim()) inp.value = url;
+    }
+
+    function aiFocusTargetUrlInput() {
+        var inp = document.getElementById('aiTargetUrlInput');
+        if (!inp) return;
+        try { inp.focus(); inp.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    }
+
     function setAiBrowserIframeBlockedBanner(show) {
         var b = document.getElementById('aiBrowserIframeBlockedBanner');
         if (b) b.hidden = !show;
@@ -1402,8 +1471,10 @@
                 } else if (!d.ws_base_configured) {
                     aiEmbeddedGatewayStatus.lastError = '未设置 EMBEDDED_BROWSER_PUBLIC_WS_BASE（浏览器需能访问该 ws(s) 地址）';
                 } else if (d.enabled && d.ws_base_configured && d.reachable === false) {
-                    aiEmbeddedGatewayStatus.lastError = (d.reach_error || '网关进程未响应').trim()
-                        + '。请确认 EMBEDDED_BROWSER_AUTO_START_GATEWAY=1 并已重启 Flask，或手动执行 python -m embedded_browser_gateway';
+                    var autoHint = (d.auto_start && d.auto_start.started)
+                        ? '（平台已尝试自动启动 Browser Runtime，请稍候再点「打开」或查看 UAT_DATA_DIR/logs/embedded_gateway.log）'
+                        : '（请重启 Testory 或确认 EMBEDDED_BROWSER_AUTO_START_GATEWAY=1）';
+                    aiEmbeddedGatewayStatus.lastError = (d.reach_error || '网关进程未响应').trim() + autoHint;
                 }
             } else {
                 aiEmbeddedGatewayStatus.enabled = false;
@@ -1612,11 +1683,12 @@
 
     async function startRemoteCanvasSession(opts) {
         opts = opts || {};
-        var u = normalizeUrlForEmbed((document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || '');
+        var u = normalizeUrlForEmbed(opts.initialUrl || aiResolveTargetUrl());
         if (!u) {
             if (!opts.auto) alert('请先填写目标页面 URL');
             return false;
         }
+        aiSyncTargetUrlToInput(u);
         if (!aiEmbeddedGatewayStatus.enabled || !aiEmbeddedGatewayStatus.wsConfigured) {
             var le = (aiEmbeddedGatewayStatus.lastError || '').trim();
             var msg;
@@ -1624,7 +1696,7 @@
                 if (le.indexOf('权限') >= 0 || le.indexOf('403') >= 0) {
                     msg = '内置浏览器网关权限不足（' + le + '）。若需使用请联系管理员。';
                 } else if (le) {
-                    msg = '内置浏览器网关不可用：' + le + '。请确认 .env 中 EMBEDDED_BROWSER_* 并已启动 embedded_browser_gateway。';
+                    msg = '内置浏览器网关不可用：' + le + '。平台会在启动时自动拉起 Browser Runtime；若仍失败请查看 UAT_DATA_DIR/logs/embedded_gateway.log。';
                 } else {
                     msg = '未配置内置浏览器网关：请设置 EMBEDDED_BROWSER_GATEWAY_URL、EMBEDDED_BROWSER_GATEWAY_SECRET、EMBEDDED_BROWSER_PUBLIC_WS_BASE。';
                 }
@@ -1798,9 +1870,9 @@
     }
 
     async function openInternalBrowserPage(silent) {
-        const a = document.getElementById('aiTargetUrlInput');
-        const u = normalizeUrlForEmbed(a && a.value || '');
+        const u = aiResolveTargetUrl();
         if (!u) { if (!silent) alert('请先在内置浏览器上方地址栏填写 URL'); return; }
+        aiSyncTargetUrlToInput(u);
         var rw = aiRemoteCanvasState.ws;
         if (rw && rw.readyState === 1 && aiRemoteCanvasState.sessionId) {
             setAiBrowserIframeBlockedBanner(false);
@@ -1907,6 +1979,9 @@
     async function aiEnsureEmbeddedCanvasForRun() {
         await refreshEmbeddedGatewayStatus();
         if (!aiEmbeddedGatewayUsable()) return false;
+        var resolvedUrl = aiResolveTargetUrl();
+        if (!resolvedUrl) return false;
+        aiSyncTargetUrlToInput(resolvedUrl);
         if (aiRemoteCanvasState.sessionId) {
             var wsLive = aiRemoteCanvasState.ws && aiRemoteCanvasState.ws.readyState === 1;
             if (!wsLive && typeof ensureEmbeddedLiveViewConnected === 'function') {
@@ -1916,9 +1991,26 @@
         }
         if (aiEmbeddedSessionActive()) return true;
         if (typeof startRemoteCanvasSession === 'function') {
-            return !!(await startRemoteCanvasSession({ auto: true }));
+            return !!(await startRemoteCanvasSession({ auto: true, initialUrl: resolvedUrl }));
         }
         return false;
+    }
+
+    function aiEmbeddedCanvasBlockReason() {
+        if (!aiEmbeddedGatewayStatus.enabled) {
+            return '未配置内置浏览器（EMBEDDED_BROWSER_*）';
+        }
+        if (!aiEmbeddedGatewayStatus.wsConfigured) {
+            return aiEmbeddedGatewayStatus.lastError || '未配置 EMBEDDED_BROWSER_PUBLIC_WS_BASE';
+        }
+        if (aiEmbeddedGatewayStatus.reachable === false) {
+            return (aiEmbeddedGatewayStatus.lastError || 'Browser Runtime 未响应')
+                + '。请重启 Testory 或查看 UAT_DATA_DIR/logs/embedded_gateway.log';
+        }
+        if (!aiResolveTargetUrl()) {
+            return '请在中栏填写目标 URL（或从任务描述/已选用例中提供可访问的 http(s) 地址）';
+        }
+        return '无法建立实时画面会话，请点中栏「打开」重试';
     }
 
     function aiSkipMainPlaywrightOpen() {
@@ -2153,14 +2245,15 @@
         schedulePersistAiStudioToSession();
     }
 
-    function appendAiChat(role, content) {
+    function appendAiChat(role, content, asHtml) {
         const chat = document.getElementById('aiChatHistory');
         if (!chat) return;
         aiChatMessages.push({ role, content });
         const isUser = role === 'user';
         const item = document.createElement('div');
         item.className = 'ai-chat-msg ai-chat-msg--' + (isUser ? 'user' : 'assistant');
-        item.innerHTML = '<span class="ai-chat-msg__role">' + (isUser ? '你' : 'AI') + '</span><div class="ai-chat-msg__bubble">' + escapeHtml(content) + '</div>';
+        const bubbleHtml = asHtml ? content : escapeHtml(content);
+        item.innerHTML = '<span class="ai-chat-msg__role">' + (isUser ? '你' : 'AI') + '</span><div class="ai-chat-msg__bubble">' + bubbleHtml + '</div>';
         chat.appendChild(item);
         chat.scrollTop = chat.scrollHeight;
         schedulePersistAiStudioToSession();
@@ -2855,12 +2948,15 @@
                     var caveat = '（以上仅为「自动化指令未报错」；登录、跳转、错误提示等是否满足目标，必须以中间画面与用例中的断言/预期结果为准。）';
                     if (sum && sum.total > 0) {
                         if (sum.ok === sum.total) {
-                            appendAiChat('assistant', '已在' + where + '会话执行脚本步骤：' + sum.ok + '/' + sum.total + ' 步未抛异常。详情见服务端日志。' + caveat);
+                            appendAiChat('assistant', '已在' + where + '会话执行脚本步骤：' + sum.ok + '/' + sum.total + ' 步未抛异常。' + caveat);
                         } else {
                             appendAiChat('assistant', '已在' + where + '会话执行脚本步骤：仅 ' + sum.ok + '/' + sum.total + ' 步未抛异常，其余失败或已中断；请查日志与画面。' + caveat);
                         }
                     } else {
                         appendAiChat('assistant', '执行阶段未返回逐步结果（若已跑脚本，请见服务端日志）。' + caveat);
+                    }
+                    if (ex.vision_replay && ex.vision_replay.url) {
+                        appendAiChat('assistant', '<a class="ai-vision-replay-link" href="' + escapeHtml(ex.vision_replay.url) + '" target="_blank" rel="noopener">查看本次测试回放</a>', true);
                     }
                 }
             }
@@ -2869,7 +2965,8 @@
             if (window.HuFirstAiAssistant && typeof HuFirstAiAssistant.saveStudioSession === 'function') {
                 HuFirstAiAssistant.saveStudioSession({
                     plan: latestAiPlan, history: aiChatMessages, projectId: currentProjectId, projectName: currentProjectName,
-                    targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || ''
+                    targetPageUrl: (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value) || '',
+                    platformType: aiGetPlatformType()
                 });
             }
         } catch (e) {}
@@ -3059,6 +3156,60 @@
         }
     }
 
+    function aiGetPlatformType() {
+        return (document.getElementById('aiPlatformTypeSelect') || {}).value || 'web';
+    }
+
+    /** 无 URL 且任务像本机应用时，自动按桌面模式处理 */
+    function aiLooksLikeDesktopGoal(text) {
+        text = String(text || '').trim();
+        if (!text || /https?:\/\//i.test(text)) return false;
+        if (/记事本|计算器|资源管理器|文件管理器|控制面板|桌面应用|本机应用|Windows\s*应用|任务栏|系统设置|attach_window|launch_app/i.test(text)) return true;
+        if (/打开(微信|QQ|钉钉|飞书|Excel|Word|WPS|记事本|计算器|浏览器)/i.test(text)) return true;
+        if (/\.exe\b/i.test(text)) return true;
+        return false;
+    }
+
+    function aiEffectivePlatformType() {
+        var sel = aiGetPlatformType();
+        if (sel === 'desktop' || sel === 'android') return sel;
+        if (aiResolveTargetUrl()) return 'web';
+        if (latestAiPlan && Array.isArray(latestAiPlan.steps)) {
+            for (var i = 0; i < latestAiPlan.steps.length; i++) {
+                if (String((latestAiPlan.steps[i] || {}).automation_layer || '').toLowerCase() === 'desktop') return 'desktop';
+                if (String((latestAiPlan.steps[i] || {}).automation_layer || '').toLowerCase() === 'android') return 'android';
+            }
+        }
+        var msg = (document.getElementById('aiMessageInput') && document.getElementById('aiMessageInput').value || '').trim();
+        if (aiLooksLikeDesktopGoal(msg)) return 'desktop';
+        return 'web';
+    }
+
+    function aiSyncPlatformSelectToTask(opts) {
+        opts = opts || {};
+        var eff = aiEffectivePlatformType();
+        var sel = document.getElementById('aiPlatformTypeSelect');
+        if (sel && sel.value !== eff) {
+            sel.value = eff;
+            if (typeof window.aiOnPlatformTypeChange === 'function') window.aiOnPlatformTypeChange();
+            if (opts.notify && eff === 'desktop') {
+                appendAiChat('assistant', '已识别为本机 Windows 应用任务，已切换为「Windows 桌面」模式（无需 URL）。');
+            } else if (opts.notify && eff === 'android') {
+                appendAiChat('assistant', '已切换为 Android 真机模式。');
+            }
+        }
+        return eff;
+    }
+
+    function aiPlatformRequiresBrowserCanvas(pt) {
+        return (pt || aiEffectivePlatformType()) === 'web';
+    }
+
+    function aiPlatformSkipsBrowserCanvas() {
+        var pt = aiEffectivePlatformType();
+        return pt === 'desktop' || pt === 'android';
+    }
+
     async function aiGeneratePreview(opts) {
         opts = opts || {};
         var executionMode = opts.executionMode || 'plan_only';
@@ -3072,6 +3223,7 @@
             appendAiChat('assistant', '请先在右上角「AI 设置」中注册并选择推理模型，然后再试。');
             return;
         }
+        var ptGen = aiSyncPlatformSelectToTask({ notify: !!opts.notifyPlatformSwitch });
         pushUndoSnapshot();
         if (typeof focusAiStageForAgentRun === 'function') focusAiStageForAgentRun(opts);
         appendAiChat('user', goal);
@@ -3084,13 +3236,14 @@
         const planCtl = new AbortController();
         aiPlanAbort = planCtl;
         syncAiStopButton();
-        setAgentBusy(true, 'AI正在工作');
+        setAgentBusy(true, 'AI 正在操作 · 可随时点「停止」暂停');
         setAgentStatusLine('制定行动…');
         var jobId = null;
         try {
-            const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            const planPayload = { task_type: 'test_case_generation', execution_mode: executionMode, goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl, platform_type: (document.getElementById('aiPlatformTypeSelect') || {}).value || 'web' };
-            if (aiRemoteCanvasState.sessionId) planPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
+            const targetPageUrl = aiResolveTargetUrl();
+            aiSyncTargetUrlToInput(targetPageUrl);
+            const planPayload = { task_type: 'test_case_generation', execution_mode: executionMode, goal, project_name: currentProjectName, model: getSelectedAiModel(), target_page_url: targetPageUrl, platform_type: ptGen };
+            if (aiRemoteCanvasState.sessionId && ptGen === 'web') planPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
             jobId = await aiPostAiTaskAsyncStart('/api/ai/task/plan-async', planPayload, planCtl.signal);
             window.__aiCurrentBgJobId = jobId;
             if (typeof window.uatAiRegisterPendingJob === 'function') window.uatAiRegisterPendingJob(jobId, 'plan');
@@ -3157,21 +3310,26 @@
             return;
         }
         var useCanvasRefine = false;
+        var ptRefine = aiSyncPlatformSelectToTask({ notify: true });
         try {
-            useCanvasRefine = await aiEnsureEmbeddedCanvasForRun();
-            if (!useCanvasRefine && aiEmbeddedGatewayStatus.enabled) {
-                var leR = (aiEmbeddedGatewayStatus.lastError || '').trim();
-                appendAiChat(
-                    'assistant',
-                    '内置画布未就绪，已取消优化（避免弹出主 Playwright / Hermes 浏览器）。'
-                    + (leR ? (' ' + leR) : '')
-                    + ' 请确认 embedded_browser_gateway 已启动并填写目标 URL。'
-                );
-                setAgentStatusLine('画布未就绪 — 未优化');
-                return;
+            if (!aiPlatformRequiresBrowserCanvas(ptRefine)) {
+                useCanvasRefine = false;
+            } else {
+                aiSyncTargetUrlToInput(aiResolveTargetUrl());
+                useCanvasRefine = await aiEnsureEmbeddedCanvasForRun();
+                if (!useCanvasRefine && aiEmbeddedGatewayStatus.enabled) {
+                    var reasonR = aiEmbeddedCanvasBlockReason();
+                    appendAiChat(
+                        'assistant',
+                        '内置画布未就绪，已取消优化（避免弹出主 Playwright / Hermes 浏览器）。 ' + reasonR
+                    );
+                    if (reasonR.indexOf('填写目标 URL') >= 0) aiFocusTargetUrlInput();
+                    setAgentStatusLine('画布未就绪 — 未优化');
+                    return;
+                }
             }
         } catch (eCr) {
-            if (aiEmbeddedGatewayStatus.enabled) {
+            if (aiEmbeddedGatewayStatus.enabled && aiPlatformRequiresBrowserCanvas(ptRefine)) {
                 appendAiChat('assistant', '连接内置画布失败：' + (eCr && eCr.message ? eCr.message : String(eCr)));
                 setAgentStatusLine('画布连接失败');
                 return;
@@ -3192,13 +3350,14 @@
         const chatCtl = new AbortController();
         aiPlanAbort = chatCtl;
         syncAiStopButton();
-        setAgentBusy(true, 'AI正在工作');
+        setAgentBusy(true, 'AI 正在操作 · 可随时点「停止」暂停');
         setAgentStatusLine('优化方案中…');
         var jobId = null;
         try {
-            const targetPageUrl = (document.getElementById('aiTargetUrlInput') && document.getElementById('aiTargetUrlInput').value || '').trim();
-            var chatPayload = { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: sanitizeAiChatHistoryForApi(aiChatMessages), model: getSelectedAiModel(), target_page_url: targetPageUrl };
-            if (aiRemoteCanvasState.sessionId) chatPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
+            const targetPageUrl = aiResolveTargetUrl();
+            aiSyncTargetUrlToInput(targetPageUrl);
+            var chatPayload = { message, project_name: currentProjectName, current_plan: latestAiPlan || {}, history: sanitizeAiChatHistoryForApi(aiChatMessages), model: getSelectedAiModel(), target_page_url: targetPageUrl, platform_type: ptRefine };
+            if (aiRemoteCanvasState.sessionId && ptRefine === 'web') chatPayload.embedded_session_id = aiRemoteCanvasState.sessionId;
             if (window.HuFirstAiAssistant && typeof HuFirstAiAssistant.appendInteractionToPayload === 'function') {
                 var ix = HuFirstAiAssistant.getInteractionContextFromForm('aiIx');
                 chatPayload = HuFirstAiAssistant.appendInteractionToPayload(chatPayload, ix);
@@ -3267,7 +3426,7 @@
         if (gwInput && !forceEx) gwInput.value = '';
         aiGatewayBusy = true;
         syncAiSendButtons();
-        setAgentBusy(true, '网关执行中…');
+        setAgentBusy(true, 'AI 正在按您的描述操作，请留意左侧画面…');
         setAgentStatusLine('识别意图并连接后台自动化会话…');
 
         if (hasSteps && aiEmbeddedGatewayStatus.enabled && !useCanvasGw) {
@@ -3386,18 +3545,23 @@
     }
 
     async function aiRunAgentWorkflow() {
+        var ptRun = aiSyncPlatformSelectToTask({ notify: true });
+        if (ptRun === 'desktop' || ptRun === 'android') {
+            await aiGeneratePreview({ executionMode: 'run_and_record', skipBrowserOpen: true, notifyPlatformSwitch: false });
+            return;
+        }
         var useCanvas = false;
         try {
+            aiSyncTargetUrlToInput(aiResolveTargetUrl());
             useCanvas = await aiEnsureEmbeddedCanvasForRun();
             if (!useCanvas && aiEmbeddedGatewayStatus.enabled) {
-                var le = (aiEmbeddedGatewayStatus.lastError || '').trim();
+                var reasonRun = aiEmbeddedCanvasBlockReason();
                 appendAiChat(
                     'assistant',
-                    '内置画布未就绪，已取消本次运行（避免弹出主 Playwright 窗口）。'
-                    + (le ? (' ' + le) : '')
-                    + ' 请启动 python -m embedded_browser_gateway 并填写目标 URL。'
-                    + ' 说明：Testory AI (Hermes) 与 Browser Runtime（EMBEDDED_BROWSER_*）是两层服务。'
+                    'Web 模式运行需要目标 URL 与实时画面。 ' + reasonRun
+                    + ' 若测试本机 Windows 应用（记事本、微信等），请将顶栏「平台类型」改为 Windows 桌面，无需 URL。'
                 );
+                if (reasonRun.indexOf('填写目标 URL') >= 0) aiFocusTargetUrlInput();
                 setAgentStatusLine('画布未就绪 — 未运行');
                 return;
             }
@@ -3616,6 +3780,11 @@
                 var ta = document.getElementById('aiTargetUrlInput');
                 if (ta) ta.value = s.target_page_url;
             }
+            if (s.platformType || s.platform_type) {
+                var ptR = document.getElementById('aiPlatformTypeSelect');
+                if (ptR) ptR.value = s.platformType || s.platform_type;
+                if (typeof window.aiOnPlatformTypeChange === 'function') window.aiOnPlatformTypeChange();
+            }
             if (s.project_id) {
                 var sp = document.getElementById('aiProjectSelect');
                 if (sp) {
@@ -3637,6 +3806,11 @@
             if (s.target_page_url) {
                 var ta2 = document.getElementById('aiTargetUrlInput');
                 if (ta2) ta2.value = s.target_page_url;
+            }
+            if (s.platformType || s.platform_type) {
+                var ptR2 = document.getElementById('aiPlatformTypeSelect');
+                if (ptR2) ptR2.value = s.platformType || s.platform_type;
+                if (typeof window.aiOnPlatformTypeChange === 'function') window.aiOnPlatformTypeChange();
             }
             if (s.project_id) {
                 var sp2 = document.getElementById('aiProjectSelect');
@@ -3778,6 +3952,24 @@
         }
     }
 
+    async function refreshAiVisionReadiness() {
+        var ban = document.getElementById('aiVisionReadinessBanner');
+        if (!ban) return;
+        try {
+            var sid = (typeof aiRemoteCanvasState !== 'undefined' && aiRemoteCanvasState && aiRemoteCanvasState.sessionId) ? aiRemoteCanvasState.sessionId : '';
+            var url = '/api/ai/vision/readiness' + (sid ? ('?embedded_session_id=' + encodeURIComponent(sid)) : '');
+            var resp = await fetch(url, { credentials: 'same-origin' });
+            var data = await resp.json();
+            if (!data || !data.success) { ban.hidden = true; return; }
+            if (data.ready) { ban.hidden = true; return; }
+            var msg = data.summary || '部分智能功能暂不可用，将自动使用常规方式操作页面';
+            ban.textContent = msg;
+            ban.hidden = false;
+        } catch (e) {
+            ban.hidden = true;
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', async function() {
         await loadProjectList();
         await loadPlaywrightBrowserSelect();
@@ -3786,6 +3978,10 @@
         syncUndoRedoButtons();
         wireAiBrowserUrlSync();
         await refreshEmbeddedGatewayStatus();
+        await refreshAiVisionReadiness();
+        if (aiGetPlatformType() === 'web' && aiEmbeddedGatewayUsable() && aiResolveTargetUrl()) {
+            void startRemoteCanvasSession({ auto: true });
+        }
         await aiRefreshSkillsList();
         wireRemoteCanvasInputOnce();
         document.getElementById('aiEmbeddedCdpCopyBtn') && document.getElementById('aiEmbeddedCdpCopyBtn').addEventListener('click', function(e) {
@@ -3817,6 +4013,15 @@
             currentProjectName = opt ? opt.text : '';
             updateAiOpenCaseListLink();
             await loadAiTargetCases();
+        });
+        const caseSel = document.getElementById('aiTargetCaseSelect');
+        if (caseSel) caseSel.addEventListener('change', function() {
+            var cid = (this.value || '').trim();
+            if (!cid || !Array.isArray(allCasesList)) return;
+            var c = allCasesList.find(function(x) { return String(x.id) === String(cid); });
+            if (!c) return;
+            var u = String(c.target_url || c.url || '').trim();
+            if (u) aiSyncTargetUrlToInput(normalizeUrlForEmbed(u));
         });
         const msg = document.getElementById('aiMessageInput');
         if (msg) msg.addEventListener('input', syncAiSendButtons);
@@ -3888,19 +4093,137 @@
         document.addEventListener('pagehide', function() { flushPersistAiStudioToSession(); });
 
         var _aiMobileMirrorTimer = null;
-        var _aiMobileSession = { sessionId: '', mirrorFrameUrl: '', connected: false };
+        var _aiMobileScrcpyPlayer = null;
+        var _aiMobileSession = {
+            sessionId: '',
+            mirrorFrameUrl: '',
+            mirrorStreamUrl: '',
+            mirrorWsUrl: '',
+            mirrorBackend: 'screencap',
+            connected: false,
+        };
+
+        function aiResolveMirrorWsUrl(raw) {
+            if (!raw) return '';
+            try {
+                var u = new URL(raw, window.location.href);
+                u.hostname = window.location.hostname;
+                u.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                return u.toString();
+            } catch (e) { return raw; }
+        }
+
+        function aiStopMobileMirrorPoll() {
+            if (_aiMobileMirrorTimer) {
+                clearInterval(_aiMobileMirrorTimer);
+                _aiMobileMirrorTimer = null;
+            }
+            if (_aiMobileScrcpyPlayer) {
+                _aiMobileScrcpyPlayer.stop();
+                _aiMobileScrcpyPlayer = null;
+            }
+        }
+
+        function aiStartMobileScreencapPoll() {
+            if (!_aiMobileSession.mirrorFrameUrl) return;
+            var canvas = document.getElementById('aiMobileMirrorCanvas');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            _aiMobileMirrorTimer = setInterval(async function() {
+                try {
+                    var r = await fetch(_aiMobileSession.mirrorFrameUrl, { credentials: 'same-origin' });
+                    var data = await r.json();
+                    if (!data.success || !data.data) return;
+                    var img = new Image();
+                    img.onload = function() {
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        ctx.drawImage(img, 0, 0);
+                        canvas.hidden = false;
+                    };
+                    img.src = 'data:image/png;base64,' + data.data;
+                } catch (e) { /* ignore */ }
+            }, 500);
+        }
+
+        function aiStartMobileMirrorPoll() {
+            aiStopMobileMirrorPoll();
+            var canvas = document.getElementById('aiMobileMirrorCanvas');
+            if (!canvas) return;
+            if (_aiMobileSession.mirrorBackend === 'scrcpy_ws' && global.ScrcpyMirrorPlayer) {
+                var streamUrl = _aiMobileSession.mirrorStreamUrl;
+                var wsUrl = aiResolveMirrorWsUrl(_aiMobileSession.mirrorWsUrl);
+                if (!streamUrl && !wsUrl) {
+                    aiStartMobileScreencapPoll();
+                    return;
+                }
+                _aiMobileScrcpyPlayer = new global.ScrcpyMirrorPlayer({
+                    canvas: canvas,
+                    wsUrl: wsUrl,
+                    onFirstFrame: function() { canvas.hidden = false; },
+                    onFallback: function() { aiStartMobileScreencapPoll(); },
+                });
+                var p = streamUrl
+                    ? _aiMobileScrcpyPlayer.startHttp(streamUrl)
+                    : _aiMobileScrcpyPlayer.start();
+                p.catch(function() { aiStartMobileScreencapPoll(); });
+                return;
+            }
+            aiStartMobileScreencapPoll();
+        }
 
         function aiOnPlatformTypeChange() {
-            var pt = (document.getElementById('aiPlatformTypeSelect') || {}).value || 'web';
+            var pt = aiGetPlatformType();
             var panel = document.getElementById('aiMobileDevicePanel');
+            var desktopPanel = document.getElementById('aiDesktopPanel');
             var browserRow = document.querySelector('.ai-browser-chrome');
+            var browserLabel = document.querySelector('.ai-web-only-browser-label');
+            var stageTitle = document.getElementById('aiStageCenterTitle');
+            var placeholder = document.getElementById('aiBrowserPlaceholder');
             var mobileCanvas = document.getElementById('aiMobileMirrorCanvas');
             var remoteCanvas = document.getElementById('aiBrowserRemoteCanvas');
             if (panel) panel.style.display = pt === 'android' ? 'flex' : 'none';
-            if (browserRow) browserRow.style.display = pt === 'android' ? 'none' : '';
+            if (desktopPanel) desktopPanel.style.display = pt === 'desktop' ? 'flex' : 'none';
+            if (browserRow) browserRow.style.display = (pt === 'android' || pt === 'desktop') ? 'none' : '';
+            if (browserLabel) browserLabel.style.display = (pt === 'android' || pt === 'desktop') ? 'none' : '';
+            if (stageTitle) stageTitle.textContent = pt === 'desktop' ? 'Windows 桌面' : (pt === 'android' ? 'Android 设备' : '内置浏览器');
+            if (placeholder && pt === 'desktop') {
+                placeholder.textContent = '桌面模式无需 URL。在左栏描述要操作的应用与流程，生成/运行将走本机 UIA 自动化。';
+                placeholder.hidden = false;
+            } else if (placeholder && pt === 'web') {
+                placeholder.textContent = '请填写 URL 后点「打开」。平台会自动拉起 Browser Runtime 作为实时画面；未配置时为本地预览。';
+            }
             if (mobileCanvas) mobileCanvas.hidden = pt !== 'android';
             if (remoteCanvas && pt === 'android') remoteCanvas.hidden = true;
             if (pt === 'android') aiRefreshMobileDevices();
+            if (pt === 'desktop') aiRefreshDesktopSnapshot();
+        }
+
+        async function aiRefreshDesktopSnapshot() {
+            var st = document.getElementById('aiDesktopSnapshotStatus');
+            var pre = document.getElementById('aiDesktopWindowList');
+            if (!pre) return;
+            if (st) st.textContent = '加载中…';
+            try {
+                var r = await fetch('/api/desktop/snapshot', { credentials: 'same-origin' });
+                var data = await r.json();
+                if (!data.success) {
+                    if (st) st.textContent = data.error || '无法获取桌面快照';
+                    pre.textContent = data.error || '桌面自动化当前仅支持 Windows。';
+                    return;
+                }
+                var wins = data.windows || [];
+                var lines = ['当前可见窗口（' + wins.length + '）：'];
+                wins.slice(0, 40).forEach(function(w, i) {
+                    lines.push('[' + (i + 1) + '] ' + (w.title || '(无标题)') + '  hwnd=' + (w.hwnd || ''));
+                });
+                pre.textContent = lines.join('\n');
+                if (st) st.textContent = '已刷新 · ' + new Date().toLocaleTimeString();
+            } catch (e) {
+                if (st) st.textContent = '刷新失败';
+                pre.textContent = '刷新失败：' + (e.message || e);
+            }
         }
 
         async function aiRefreshMobileDevices() {
@@ -3926,36 +4249,6 @@
             }
         }
 
-        function aiStopMobileMirrorPoll() {
-            if (_aiMobileMirrorTimer) {
-                clearInterval(_aiMobileMirrorTimer);
-                _aiMobileMirrorTimer = null;
-            }
-        }
-
-        function aiStartMobileMirrorPoll() {
-            aiStopMobileMirrorPoll();
-            if (!_aiMobileSession.mirrorFrameUrl) return;
-            var canvas = document.getElementById('aiMobileMirrorCanvas');
-            if (!canvas) return;
-            var ctx = canvas.getContext('2d');
-            _aiMobileMirrorTimer = setInterval(async function() {
-                try {
-                    var r = await fetch(_aiMobileSession.mirrorFrameUrl, { credentials: 'same-origin' });
-                    var data = await r.json();
-                    if (!data.success || !data.data) return;
-                    var img = new Image();
-                    img.onload = function() {
-                        canvas.width = img.width;
-                        canvas.height = img.height;
-                        ctx.drawImage(img, 0, 0);
-                        canvas.hidden = false;
-                    };
-                    img.src = 'data:image/png;base64,' + data.data;
-                } catch (e) { /* ignore transient */ }
-            }, 500);
-        }
-
         async function aiConnectMobileDevice() {
             var sel = document.getElementById('aiMobileDeviceSelect');
             var st = document.getElementById('aiMobileConnectStatus');
@@ -3979,8 +4272,12 @@
                 }
                 _aiMobileSession.sessionId = data.session_id || '';
                 _aiMobileSession.mirrorFrameUrl = data.mirror_frame_url || '';
+                _aiMobileSession.mirrorStreamUrl = data.mirror_stream_url || '';
+                _aiMobileSession.mirrorWsUrl = data.mirror_ws_url || '';
+                _aiMobileSession.mirrorBackend = data.mirror_backend || 'screencap';
                 _aiMobileSession.connected = true;
-                if (st) st.textContent = '已连接' + (data.scrcpy_started ? '（scrcpy 窗口已启动）' : '');
+                var mirrorHint = data.mirror_backend === 'scrcpy_ws' ? ' · 高帧率 scrcpy 投屏' : '';
+                if (st) st.textContent = '已连接' + mirrorHint + (data.mirror_fallback_reason ? '（' + data.mirror_fallback_reason + '）' : '');
                 aiStartMobileMirrorPoll();
             } catch (e) {
                 if (st) st.textContent = '连接失败：' + (e.message || e);
@@ -3997,13 +4294,22 @@
                     body: JSON.stringify({ session_id: _aiMobileSession.sessionId || '' })
                 });
             } catch (e) { /* ignore */ }
-            _aiMobileSession = { sessionId: '', mirrorFrameUrl: '', connected: false };
+            _aiMobileSession = {
+                sessionId: '',
+                mirrorFrameUrl: '',
+                mirrorStreamUrl: '',
+                mirrorWsUrl: '',
+                mirrorBackend: 'screencap',
+                connected: false,
+            };
             var st = document.getElementById('aiMobileConnectStatus');
             if (st) st.textContent = '已断开';
             var canvas = document.getElementById('aiMobileMirrorCanvas');
             if (canvas) { canvas.hidden = true; }
         }
         window.aiOnPlatformTypeChange = aiOnPlatformTypeChange;
+        window.aiRefreshDesktopSnapshot = aiRefreshDesktopSnapshot;
+        aiOnPlatformTypeChange();
         window.aiRefreshMobileDevices = aiRefreshMobileDevices;
         window.aiConnectMobileDevice = aiConnectMobileDevice;
         window.aiDisconnectMobileDevice = aiDisconnectMobileDevice;

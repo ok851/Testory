@@ -24,6 +24,17 @@ def analyze_steps_for_self_heal(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
                 issues.append(f"第{idx}步 Android 步骤缺少 selector_value")
         if layer == "web" and act in ("click", "input", "verify", "assert") and not (step.get("selector_value") or "").strip():
             issues.append(f"第{idx}步 Web 步骤缺少 selector_value")
+            desc = (step.get("description") or "").strip()
+            if desc and act in ("click", "input"):
+                try:
+                    from hermes_heal_bridge import build_vlm_ground_heal_candidate
+
+                    if build_vlm_ground_heal_candidate(desc):
+                        suggestions.append(
+                            f"第{idx}步可启用智能画面定位（已支持根据描述「{desc[:40]}」自动找控件）"
+                        )
+                except Exception:
+                    pass
         if act == "navigate" and not (step.get("input_value") or step.get("url") or "").strip():
             issues.append(f"第{idx}步 navigate 缺少 URL")
     if issues:

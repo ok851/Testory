@@ -56,6 +56,8 @@ _ASSERT_COMPARE_ALIASES = {
     "visible": "element_visible",
     "exist": "element_exists",
     "exists": "element_exists",
+    "vision": "vision_contains",
+    "vision_assert": "vision_contains",
 }
 
 _TEXT_EQUALS_TYPES = frozenset(

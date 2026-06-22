@@ -184,6 +184,7 @@ _MOBILE_RUNTIME_PLUGIN_IDS = frozenset(
     {
         "mobile-android-platform-tools",
         "mobile-testory-assistant",
+        "mobile-scrcpy",
     }
 )
 
@@ -207,6 +208,10 @@ def _mobile_runtime_installed(plugin_id: str) -> bool:
             prepared = is_assistant_prepared()
             on_device = assistant_installed_on_device(udid) if udid else False
             return prepared or on_device
+        if pid == "mobile-scrcpy":
+            from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+
+            return bool(get_installed_scrcpy_exe())
     except Exception:
         return False
     return False
@@ -345,6 +350,15 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
                     out["status_tone"] = "ok"
             except Exception:
                 pass
+        if pid == "mobile-scrcpy":
+            try:
+                from mobile_scrcpy_bundles import get_installed_scrcpy_exe
+
+                sp = get_installed_scrcpy_exe()
+                if sp:
+                    out["scrcpy_path"] = sp
+            except Exception:
+                pass
     else:
         out["status_label"] = "未安装"
         out["status_tone"] = "muted"
@@ -355,6 +369,10 @@ def enrich_plugin_status(plugin: Dict[str, Any]) -> Dict[str, Any]:
         if pid == "mobile-testory-assistant" and not plugin.get("local_bundle_ready"):
             out["status_label"] = "待配置 APK"
             out["status_tone"] = "warn"
+        if pid == "mobile-scrcpy" and not plugin.get("local_bundle_ready"):
+            if not plugin.get("download_url_configured"):
+                out["status_label"] = "待配置安装包"
+                out["status_tone"] = "warn"
     return out
 
 
@@ -371,6 +389,12 @@ def _all_catalog_items(*, platform_origin: str = "") -> List[Dict[str, Any]]:
         from mobile_assistant_bundles import get_testory_assistant_catalog_entry
 
         items.append(get_testory_assistant_catalog_entry())
+    except Exception:
+        pass
+    try:
+        from mobile_scrcpy_bundles import get_scrcpy_catalog_entry
+
+        items.append(get_scrcpy_catalog_entry())
     except Exception:
         pass
     return items
@@ -613,6 +637,13 @@ def install_plugin_sync(
                     }
                     _save_state(state)
                 return result
+            except Exception as exc:
+                return {"success": False, "error": str(exc)}
+        if pid == "mobile-scrcpy":
+            try:
+                from mobile_scrcpy_bundles import install_scrcpy_bundle
+
+                return install_scrcpy_bundle(progress_cb=progress_cb)
             except Exception as exc:
                 return {"success": False, "error": str(exc)}
         return {"success": False, "error": "未知的运行时插件"}

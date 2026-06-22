@@ -1,6 +1,6 @@
 """
-三层定位契约：DOM 候选（css/xpath/…）→ visual_template → viewport_coord。
-visual_template / viewport_coord 仅由执行器 Tier2/Tier3 消费，不得进入 DOM 递归路径。
+四层定位契约：DOM → visual_template → viewport_coord → vlm_ground。
+Tier2/3/4 仅由执行器消费，不得进入 DOM 递归路径。
 """
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ DOM_CANDIDATE_TYPES = frozenset(
 
 SELECTOR_TYPE_VISUAL = "visual_template"
 SELECTOR_TYPE_VIEWPORT_COORD = "viewport_coord"
+SELECTOR_TYPE_VLM_GROUND = "vlm_ground"
 
 # 模板 PNG 写入 locator_candidates 时的体积上限（解码后约 96KB）
 _MAX_VISUAL_TEMPLATE_BYTES = int(os.environ.get("LOCATOR_VISUAL_TEMPLATE_MAX_BYTES", "98304"))
@@ -70,31 +71,37 @@ def _normalize_candidate_items(raw: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def split_locator_candidates(raw: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+def split_locator_candidates(
+    raw: Any,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Returns (dom_candidates, visual_candidates, coord_candidates).
+    Returns (dom_candidates, visual_candidates, coord_candidates, vlm_candidates).
     未知 selector_type 归入 dom，避免破坏旧数据。
     """
     items = _normalize_candidate_items(raw)
     dom: List[Dict[str, Any]] = []
     visual: List[Dict[str, Any]] = []
     coord: List[Dict[str, Any]] = []
+    vlm: List[Dict[str, Any]] = []
     for it in items:
         st = it.get("selector_type") or ""
         if st == SELECTOR_TYPE_VISUAL:
             visual.append(it)
         elif st == SELECTOR_TYPE_VIEWPORT_COORD:
             coord.append(it)
+        elif st == SELECTOR_TYPE_VLM_GROUND:
+            vlm.append(it)
         else:
             dom.append(it)
     visual.sort(key=lambda x: -int(x.get("score") or 0))
     coord.sort(key=lambda x: -int(x.get("score") or 0))
-    return dom, visual, coord
+    vlm.sort(key=lambda x: -int(x.get("score") or 0))
+    return dom, visual, coord, vlm
 
 
 def dom_candidates_json_for_pack(raw: Any) -> Any:
     """供持久化或递归 fallback：仅保留 DOM 类候选。"""
-    dom, _, _ = split_locator_candidates(raw)
+    dom, _, _, _ = split_locator_candidates(raw)
     if not dom:
         return None
     return json.dumps(dom, ensure_ascii=False)
@@ -183,15 +190,40 @@ def build_viewport_coord_candidate(fx: float, fy: float, score: int = 25) -> Dic
     return {"selector_type": SELECTOR_TYPE_VIEWPORT_COORD, "selector_value": body, "score": int(score)}
 
 
+def parse_vlm_ground_prompt(selector_value: str) -> str:
+    """vlm_ground 候选值：纯文本或 JSON {"prompt":"..."}。"""
+    raw = (selector_value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                return str(obj.get("prompt") or obj.get("locate") or obj.get("text") or "").strip()
+        except Exception:
+            pass
+    return raw
+
+
+def build_vlm_ground_candidate(prompt: str, score: int = 35) -> Dict[str, Any]:
+    p = (prompt or "").strip()
+    if not p:
+        raise ValueError("vlm_ground prompt empty")
+    body = json.dumps({"prompt": p}, ensure_ascii=False)
+    return {"selector_type": SELECTOR_TYPE_VLM_GROUND, "selector_value": body, "score": int(score)}
+
+
 def merge_candidates_json(existing_json: str, extra_items: List[Dict[str, Any]]) -> str:
-    dom, vis, coord = split_locator_candidates(existing_json)
+    dom, vis, coord, vlm = split_locator_candidates(existing_json)
     for it in extra_items:
         st = (it.get("selector_type") or "").strip().lower()
         if st == SELECTOR_TYPE_VISUAL:
             vis.append(it)
         elif st == SELECTOR_TYPE_VIEWPORT_COORD:
             coord.append(it)
+        elif st == SELECTOR_TYPE_VLM_GROUND:
+            vlm.append(it)
         else:
             dom.append(it)
-    merged = dom + vis + coord
+    merged = dom + vis + coord + vlm
     return json.dumps(merged, ensure_ascii=False)

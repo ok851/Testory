@@ -180,6 +180,10 @@ def prepare_desktop_step(step: Dict[str, Any]) -> Dict[str, Any]:
     else:
         spec = {}
 
+    tc = (spec.get("title_contains") or spec.get("title") or "").strip()
+    if tc and not spec.get("window_title_re") and not spec.get("window_title"):
+        spec["window_title_re"] = f".*{re.escape(tc)}.*"
+
     action = (s.get("action") or "").strip()
     iv = (s.get("input_value") or "").strip()
     sel = (s.get("selector_value") or "").strip()
@@ -207,6 +211,15 @@ def prepare_desktop_step(step: Dict[str, Any]) -> Dict[str, Any]:
             if not (s.get("input_value") or "").strip():
                 s["input_value"] = path
     elif action == "attach_window":
+        from desktop_run_context import guess_window_title_from_description, spec_has_window_target
+
+        title_hint = (
+            (s.get("selector_value") or "").strip()
+            or guess_window_title_from_description(s.get("description") or "")
+            or iv
+        )
+        if title_hint.lower() in ("exist", "visible", "clickable", "auto", "ok", "success"):
+            title_hint = guess_window_title_from_description(s.get("description") or "") or iv
         if iv and not spec.get("window_title_re") and not spec.get("window_title"):
             if iv.startswith("re:"):
                 spec["window_title_re"] = iv[3:].strip()
@@ -214,6 +227,9 @@ def prepare_desktop_step(step: Dict[str, Any]) -> Dict[str, Any]:
                 spec["window_title_re"] = iv
             else:
                 spec["window_title_re"] = f".*{re.escape(iv)}.*"
+        if title_hint and not spec_has_window_target(spec):
+            spec["title_contains"] = title_hint
+            spec["window_title_re"] = f".*{re.escape(title_hint)}.*"
         if iv and not spec.get("process"):
             m = _ALIAS_RE.match(iv)
             if m and m.group(1).lower() in load_app_aliases():

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -42,6 +43,8 @@ from desktop_visual_engine import (
     is_legacy_desktop_step,
     resolve_visual_click_point,
 )
+
+_NATIVE_WINDOW_SELECTORS = frozenset({"window", "title", "hwnd", "process"})
 
 try:
     from uat_logger import uat_logger
@@ -313,8 +316,46 @@ class DesktopAutomation:
             os.startfile(path)  # type: ignore[attr-defined]
         else:
             subprocess.Popen([path], shell=False)
-        time.sleep(0.8)
-        return {"status": "success", "action": "launch_app", "verified": True}
+        hwnd, win_title = self._find_hwnd_after_launch(path)
+        if hwnd:
+            from desktop_input import focus_hwnd
+
+            focus_hwnd(hwnd)
+        out: Dict[str, Any] = {
+            "status": "success",
+            "action": "launch_app",
+            "verified": True,
+        }
+        if hwnd:
+            out["hwnd"] = int(hwnd)
+        if win_title:
+            out["window_title"] = win_title
+        return out
+
+    def _find_hwnd_after_launch(self, launch_value: str, timeout: float = 10.0) -> tuple:
+        from desktop_input import get_foreground_hwnd, resolve_hwnd_from_spec, _hwnd_title_class
+        from desktop_run_context import window_hints_for_launch
+
+        hints = window_hints_for_launch(launch_value)
+        if not hints and launch_value:
+            base = launch_value.replace("\\", "/").split("/")[-1]
+            if base and "." in base:
+                hints = [base.rsplit(".", 1)[0]]
+        deadline = time.time() + float(timeout)
+        while time.time() < deadline:
+            for hint in hints:
+                hwnd = resolve_hwnd_from_spec({"window_title_re": f".*{re.escape(hint)}.*"})
+                if hwnd:
+                    title, _ = _hwnd_title_class(hwnd)
+                    return int(hwnd), title or hint
+            fg = get_foreground_hwnd()
+            if fg:
+                title, _ = _hwnd_title_class(fg)
+                for hint in hints:
+                    if hint.lower() in title.lower():
+                        return int(fg), title
+            time.sleep(0.35)
+        return 0, ""
 
     def _send_hotkey(self, keys: str) -> None:
         """简易 pywinauto 风格热键：^c !{F4} %{TAB}。"""
@@ -416,7 +457,7 @@ class DesktopAutomation:
             return self._launch_application(step, spec)
 
         if action == "attach_window":
-            return {"status": "success", "action": action, "verified": True}
+            return self._attach_window(step, spec)
 
         if action in _POINTER_ACTIONS:
             return self._run_visual_pointer(step)
@@ -491,8 +532,12 @@ class DesktopAutomation:
 
         if action == "verify":
             st = (step.get("selector_type") or "").strip().lower()
+            if st in _NATIVE_WINDOW_SELECTORS or st == "":
+                return self._verify_window_exists(step, spec, action="verify")
             if st != "visual":
-                raise RuntimeError("verify 步骤需使用 visual 框选录制")
+                raise RuntimeError(
+                    "verify 步骤需使用 selector_type=window（窗口存在校验）或 visual（框选录制）"
+                )
             self._run_visual_pointer({**step, "action": "click"})
             vt = (
                 (input_value or "").strip()
@@ -512,11 +557,113 @@ class DesktopAutomation:
             return run_desktop_verify_at_point(x, y, vt)
 
         if action == "assert":
+            st = (step.get("selector_type") or "").strip().lower()
+            ct = (compare_type or "").strip().lower()
+            if st in _NATIVE_WINDOW_SELECTORS or st == "" or ct in (
+                "element_exists",
+                "element_visible",
+                "text_contains",
+                "text_equals",
+                "",
+            ):
+                return self._verify_window_exists(step, spec, action="assert")
             raise RuntimeError(
-                "桌面 assert 已废弃 UIA 文本比对，请改用 Web 断言或 visual verify"
+                "桌面 assert 仅支持窗口级校验（selector_type=window）或 visual 步骤；"
+                "控件文本断言请使用框选录制。"
             )
 
         raise ValueError(f"未实现的桌面动作：{action}")
+
+    @staticmethod
+    def _window_title_from_step(step: Dict[str, Any], spec: Dict[str, Any]) -> str:
+        sv = (step.get("selector_value") or "").strip()
+        iv = (step.get("input_value") or "").strip()
+        _skip = frozenset({"exist", "visible", "clickable", "auto", "ok", "success"})
+        if sv and sv.lower() not in _skip:
+            return sv
+        for key in ("title_contains", "window_title", "title"):
+            v = (spec.get(key) or "").strip()
+            if v:
+                return v
+        if iv and iv.lower() not in _skip:
+            return iv
+        return ""
+
+    def _attach_window(self, step: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
+        from desktop_input import get_foreground_hwnd, resolve_hwnd_from_spec, _hwnd_title_class
+        from desktop_run_context import get_desktop_run_context, spec_has_window_target
+
+        ctx = get_desktop_run_context()
+        hwnd = resolve_hwnd_from_spec(spec)
+        if not hwnd and ctx.attached_hwnd:
+            hwnd = int(ctx.attached_hwnd)
+        if not hwnd and ctx.last_window_title_hint:
+            hwnd = resolve_hwnd_from_spec(
+                {"window_title_re": f".*{re.escape(ctx.last_window_title_hint)}.*"}
+            )
+        if not hwnd and not spec_has_window_target(spec):
+            fg = get_foreground_hwnd()
+            hint = self._window_title_from_step(step, spec) or ctx.last_window_title_hint
+            if fg and hint:
+                title, _ = _hwnd_title_class(fg)
+                if hint.lower() in title.lower():
+                    hwnd = fg
+        if not hwnd:
+            hint = self._window_title_from_step(step, spec) or ctx.last_window_title_hint
+            if hint:
+                msg = f"未找到目标窗口：{hint}"
+            elif ctx.last_launch_value:
+                msg = (
+                    f"未找到目标窗口（已启动 {ctx.last_launch_value}，"
+                    "请在 attach_window 填写窗口标题）"
+                )
+            else:
+                msg = "未找到目标窗口（请先执行 launch_app 或在步骤中填写窗口标题）"
+            raise RuntimeError(msg)
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        title, _ = _hwnd_title_class(hwnd)
+        return {
+            "status": "success",
+            "action": "attach_window",
+            "hwnd": int(hwnd),
+            "verified": True,
+            "window_title": title,
+        }
+
+    def _verify_window_exists(
+        self,
+        step: Dict[str, Any],
+        spec: Dict[str, Any],
+        *,
+        action: str = "verify",
+    ) -> Dict[str, Any]:
+        from desktop_input import resolve_hwnd_from_spec
+
+        title = self._window_title_from_step(step, spec)
+        if not title and not spec:
+            raise ValueError(f"{action} 步骤缺少窗口标题（selector_value 或 desktop_spec.title_contains）")
+        if spec and (spec.get("window_title_re") or spec.get("window_title") or spec.get("hwnd")):
+            hwnd = resolve_hwnd_from_spec(spec)
+            if hwnd:
+                return {
+                    "status": "success",
+                    "action": action,
+                    "verified": True,
+                    "hwnd": int(hwnd),
+                    "message": f"窗口已找到：{title or spec}",
+                }
+        if title and self._find_window_by_title(title):
+            return {
+                "status": "success",
+                "action": action,
+                "verified": True,
+                "message": f"窗口已找到：{title}",
+            }
+        raise RuntimeError(f"窗口未找到：{title or '请填写窗口标题'}")
 
     @staticmethod
     def _find_window_by_title(title_sub: str) -> bool:
@@ -654,18 +801,34 @@ def _sync_desktop_execute_remote(step: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def sync_desktop_execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
+    from desktop_run_context import (
+        enrich_desktop_step_with_run_context,
+        update_context_from_step_result,
+    )
+
     step = prepare_desktop_step(step)
+    step = enrich_desktop_step_with_run_context(step)
     if os.environ.get("DESKTOP_GATEWAY_INPROCESS", "").strip() in ("1", "true", "yes"):
-        return _sync_desktop_execute_inprocess(step)
+        result = _sync_desktop_execute_inprocess(step)
+        update_context_from_step_result(step, result)
+        return result
 
     mode = desktop_execution_mode()
     if mode == "inprocess":
-        return _sync_desktop_execute_inprocess(step)
+        result = _sync_desktop_execute_inprocess(step)
+        update_context_from_step_result(step, result)
+        return result
     if mode == "gateway":
-        return _sync_desktop_execute_via_gateway(step)
+        result = _sync_desktop_execute_via_gateway(step)
+        update_context_from_step_result(step, result)
+        return result
     if mode == "remote":
-        return _sync_desktop_execute_remote(step)
-    return _sync_desktop_execute_inprocess(step)
+        result = _sync_desktop_execute_remote(step)
+        update_context_from_step_result(step, result)
+        return result
+    result = _sync_desktop_execute_inprocess(step)
+    update_context_from_step_result(step, result)
+    return result
 
 
 def sync_desktop_inspect(max_depth: int = 4, max_nodes: int = 120) -> List[Dict[str, Any]]:
@@ -809,6 +972,12 @@ def sync_desktop_attach_from_spec(desktop_spec: Dict[str, Any]) -> None:
 
 
 def sync_reset_desktop_automation() -> None:
+    try:
+        from desktop_run_context import reset_desktop_run_context
+
+        reset_desktop_run_context()
+    except Exception:
+        pass
     try:
         w = _get_worker()
         w.execute(w.automation.reset_session, timeout=5)

@@ -13,7 +13,12 @@ from ai_page_probe import (
     registry_step_selector_warnings,
     validate_plan_locators,
 )
-from ai_step_normalization import is_overly_broad_css_selector, repair_raw_ai_steps_for_platform
+from ai_step_normalization import (
+    desktop_template_steps_for_goal,
+    is_overly_broad_css_selector,
+    repair_desktop_ai_steps_inplace,
+    repair_raw_ai_steps_for_platform,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -938,7 +943,12 @@ class LocalAIService:
         )
         parsed = self._parse_plan_with_plain_retry(content, prompt=prompt, model=model, profile=profile)
         out = self._normalize_output(
-            parsed, goal, project_name, using_model, probe_registry=pr if pr else None
+            parsed,
+            goal,
+            project_name,
+            using_model,
+            probe_registry=pr if pr else None,
+            platform_type=(platform_type or "web").strip().lower(),
         )
         meta = out.setdefault("meta", {})
         if profile and isinstance(profile, dict):
@@ -947,7 +957,9 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        self._attach_locator_validation(meta, pu, out.get("steps") or [], probe_registry=pr if pr else None)
+        meta["platform_type"] = (platform_type or "web").strip().lower()
+        if (platform_type or "web").strip().lower() not in ("desktop", "android"):
+            self._attach_locator_validation(meta, pu, out.get("steps") or [], probe_registry=pr if pr else None)
         return out
 
     def refine_case_and_steps(
@@ -985,8 +997,27 @@ class LocalAIService:
             prompt, model, profile, meta_fallback=self.model_mid
         )
         parsed = self._parse_plan_with_plain_retry(content, prompt=prompt, model=model, profile=profile)
+        cp = current_plan if isinstance(current_plan, dict) else {}
+        cp_meta = cp.get("meta") if isinstance(cp.get("meta"), dict) else {}
+        refine_platform = (
+            _norm_str(cp.get("platform"))
+            or _norm_str(cp_meta.get("platform_type"))
+            or "web"
+        ).lower()
+        if refine_platform not in ("web", "desktop", "android"):
+            refine_platform = "web"
+        if refine_platform == "web" and isinstance(cp.get("steps"), list):
+            for st in cp["steps"]:
+                if isinstance(st, dict) and _norm_str(st.get("automation_layer")).lower() == "desktop":
+                    refine_platform = "desktop"
+                    break
         out = self._normalize_output(
-            parsed, user_message, project_name, using_model, probe_registry=pr if pr else None
+            parsed,
+            user_message,
+            project_name,
+            using_model,
+            probe_registry=pr if pr else None,
+            platform_type=refine_platform,
         )
         meta = out.setdefault("meta", {})
         if profile and isinstance(profile, dict):
@@ -995,7 +1026,9 @@ class LocalAIService:
             meta["model"] = using_model
         else:
             meta["provider"] = "local"
-        self._attach_locator_validation(meta, pu, out.get("steps") or [], probe_registry=pr if pr else None)
+        meta["platform_type"] = refine_platform
+        if refine_platform not in ("desktop", "android"):
+            self._attach_locator_validation(meta, pu, out.get("steps") or [], probe_registry=pr if pr else None)
         return out
 
     def _complete_for_model(
@@ -1309,6 +1342,13 @@ class LocalAIService:
                 memory_context=memory_context,
                 page_snapshot=(page_snapshot or "").strip(),
             )
+        if platform == "desktop":
+            return self._build_desktop_prompt(
+                goal,
+                project_name,
+                memory_context=memory_context,
+                page_snapshot=(page_snapshot or "").strip(),
+            )
         mem_block = ""
         if memory_context:
             mem_block = f"\nRetrieved similar context (may be from past runs; verify against the LIVE snapshot):\n{memory_context}\n\n"
@@ -1404,6 +1444,64 @@ class LocalAIService:
             "- Never invent placeholder hosts like example.com / example.org unless the goal explicitly names them; "
             "use the real site implied by the goal (e.g. Baidu search → https://www.baidu.com/ ).\n"
             "OUTPUT FORMAT: respond with that single JSON object only—no markdown, no prose."
+        )
+
+    @staticmethod
+    def _build_desktop_prompt(
+        goal: str,
+        project_name: str,
+        memory_context: Optional[str] = None,
+        page_snapshot: str = "",
+    ) -> str:
+        mem_block = ""
+        if memory_context:
+            mem_block = f"\nRetrieved similar context:\n{memory_context}\n\n"
+        snap_block = ""
+        if (page_snapshot or "").strip():
+            snap_block = (
+                "\nLIVE desktop context (visible windows / processes — use for attach_window titles):\n"
+                f"{page_snapshot.strip()}\n\n"
+            )
+        return (
+            "You are generating a Windows desktop UI test case executed via UIA + vision (NOT a web browser test).\n"
+            "CRITICAL: Do NOT use navigate, css, xpath, or URL fields. Every step MUST have "
+            '"automation_layer": "desktop".\n\n'
+            "Allowed actions ONLY: launch_app, attach_window, click, input, wait, verify, assert, "
+            "hotkey, screenshot, double_click, right_click, extract_text.\n\n"
+            "Rules:\n"
+            "- First step: launch_app (input_value = app name like control, notepad, calc) OR attach_window if app already open.\n"
+            "- launch_app: put executable or alias in input_value (e.g. control, notepad.exe); "
+            'desktop_spec optional JSON e.g. {"app":"control"}; leave selector fields empty.\n'
+            "- attach_window: desktop_spec JSON with title_contains or title matching the window (e.g. 控制面板).\n"
+            "- wait: input_value = seconds (1-30).\n"
+            "- verify/assert on window: selector_type=window, selector_value=window title substring, input_value=exist.\n"
+            "- click/input on controls: use selector_type=name|automation_id|visual and real UIA names from snapshot.\n"
+            "- case_url MUST be empty string.\n\n"
+            "Example for opening Control Panel:\n"
+            "{\n"
+            '  "case_name": "打开控制面板",\n'
+            '  "case_url": "",\n'
+            '  "description": "验证可打开 Windows 控制面板",\n'
+            '  "precondition": "Windows 桌面可用",\n'
+            '  "expected_result": "控制面板窗口可见",\n'
+            '  "steps": [\n'
+            '    {"action":"launch_app","automation_layer":"desktop","input_value":"control",'
+            '"desktop_spec":"{\\"app\\":\\"control\\"}","selector_type":"","selector_value":"",'
+            '"description":"启动控制面板"},\n'
+            '    {"action":"wait","automation_layer":"desktop","input_value":"3",'
+            '"selector_type":"","selector_value":"","description":"等待窗口"},\n'
+            '    {"action":"attach_window","automation_layer":"desktop",'
+            '"desktop_spec":"{\\"title_contains\\":\\"控制面板\\"}","selector_type":"","selector_value":"",'
+            '"description":"附着控制面板窗口"},\n'
+            '    {"action":"verify","automation_layer":"desktop","selector_type":"window",'
+            '"selector_value":"控制面板","input_value":"exist","description":"确认窗口存在"}\n'
+            "  ]\n"
+            "}\n\n"
+            f"Project: {project_name or 'unknown'}\n"
+            f"Goal: {goal}\n"
+            f"{mem_block}"
+            f"{snap_block}"
+            "Output strict JSON only (no markdown). All steps must be desktop-automation compatible."
         )
 
     @staticmethod
@@ -1665,6 +1763,97 @@ class LocalAIService:
             raise ValueError(msg) from last_err
         raise ValueError(msg)
 
+    def _normalize_desktop_output(
+        self,
+        data: Dict[str, Any],
+        goal: str,
+        project_name: str,
+        using_model: str,
+    ) -> Dict[str, Any]:
+        goal_s = _norm_str(goal)
+        case_name = _norm_str(data.get("case_name")) or f"AI桌面用例-{goal_s[:30]}"
+        description = _norm_str(data.get("description"))
+        precondition = _norm_str(data.get("precondition"))
+        expected_result = _norm_str(data.get("expected_result"))
+        raw_steps = data.get("steps") or []
+        if not isinstance(raw_steps, list):
+            raw_steps = []
+
+        repair_warns = repair_desktop_ai_steps_inplace(raw_steps)
+
+        desktop_actions = {
+            "launch_app", "attach_window", "click", "input", "wait", "verify",
+            "extract_text", "assert", "hotkey", "screenshot", "double_click", "right_click",
+        }
+        steps: List[Dict[str, Any]] = []
+        for i, step in enumerate(raw_steps, start=1):
+            if not isinstance(step, dict):
+                continue
+            action = _norm_str(step.get("action")).lower()
+            if action not in desktop_actions:
+                action = "launch_app" if i == 1 else "wait"
+            row: Dict[str, Any] = {
+                "action": action,
+                "automation_layer": "desktop",
+                "selector_type": _norm_str(step.get("selector_type")),
+                "selector_value": _norm_str(step.get("selector_value")),
+                "input_value": _norm_str(step.get("input_value")),
+                "description": _norm_str(step.get("description")) or f"步骤{i}: {action}",
+            }
+            ds = step.get("desktop_spec")
+            if ds is not None:
+                if isinstance(ds, str):
+                    row["desktop_spec"] = ds
+                else:
+                    try:
+                        row["desktop_spec"] = json.dumps(ds, ensure_ascii=False)
+                    except Exception:
+                        row["desktop_spec"] = ""
+            if action == "assert":
+                ct_a = _norm_str(step.get("compare_type"))
+                if ct_a:
+                    row["compare_type"] = ct_a
+            lp = _norm_str(step.get("locate_prompt"))
+            if lp:
+                row["locate_prompt"] = lp
+            steps.append(row)
+
+        if not steps:
+            steps = desktop_template_steps_for_goal(goal_s)
+        if not steps:
+            steps = [
+                {
+                    "action": "launch_app",
+                    "automation_layer": "desktop",
+                    "input_value": _norm_str(data.get("launch_app") or ""),
+                    "selector_type": "",
+                    "selector_value": "",
+                    "description": goal_s or "启动目标应用",
+                }
+            ]
+
+        repair_warns.extend(repair_desktop_ai_steps_inplace(steps))
+
+        meta_out: Dict[str, Any] = {
+            "provider": "local",
+            "model": using_model,
+            "project_name": project_name or "",
+            "platform_type": "desktop",
+        }
+        if repair_warns:
+            meta_out["step_repair_warnings"] = repair_warns
+
+        return {
+            "case_name": case_name,
+            "case_url": "",
+            "platform": "desktop",
+            "description": description or f"AI 桌面自动化：{goal_s}",
+            "precondition": precondition or "Windows 桌面可访问",
+            "expected_result": expected_result,
+            "steps": steps,
+            "meta": meta_out,
+        }
+
     def _normalize_output(
         self,
         data: Dict[str, Any],
@@ -1672,7 +1861,11 @@ class LocalAIService:
         project_name: str,
         using_model: str,
         probe_registry: Optional[List[Dict[str, Any]]] = None,
+        platform_type: str = "web",
     ) -> Dict[str, Any]:
+        plat = (platform_type or "web").strip().lower()
+        if plat == "desktop":
+            return self._normalize_desktop_output(data, goal, project_name, using_model)
         goal_s = _norm_str(goal)
         case_name = _norm_str(data.get("case_name")) or f"AI生成用例-{goal_s[:30]}"
         case_url = _norm_str(data.get("case_url") or data.get("caseUrl"))

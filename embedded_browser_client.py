@@ -36,7 +36,7 @@ def _squash_gateway_http_error_body(raw: str) -> str:
     if s.startswith("<") or "<!doctype" in low[:120] or "<html" in low[:120]:
         return (
             "嵌入式网关返回了 HTML 错误页（多为网关内异常）。"
-            "请查看运行 python -m embedded_browser_gateway 的终端中的报错栈。"
+            "请查看 UAT_DATA_DIR/logs/embedded_gateway.log。"
         )
     if len(s) > 480:
         return s[:480] + "…"
@@ -56,9 +56,10 @@ def _embedded_gateway_friendly_error(exc_str: str, base_url: str) -> str:
         or "拒绝" in s
     ):
         return (
-            f"无法连接嵌入式浏览器网关（{base_url}）：目标计算机积极拒绝连接。"
-            "请在本机**另开终端**，在项目根目录执行 `python -m embedded_browser_gateway` 启动网关进程，"
-            "并确认 .env 中 EMBEDDED_BROWSER_GATEWAY_URL 与网关监听端口一致（默认 http://127.0.0.1:8765）。"
+            f"无法连接内置浏览器网关（{base_url}）：目标计算机积极拒绝连接。"
+            "平台会在启动时自动拉起 Browser Runtime；请重启 Testory 或刷新 AI 测试页重试。"
+            "若仍失败，请查看 UAT_DATA_DIR/logs/embedded_gateway.log，"
+            "并确认 .env 中 EMBEDDED_BROWSER_GATEWAY_URL 与端口一致（默认 http://127.0.0.1:8765）。"
         )
     if "timed out" in low or "timeout" in low:
         return (

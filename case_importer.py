@@ -27,6 +27,16 @@ class CaseImportExporter:
         
         if not os.path.exists(self.export_dir):
             os.makedirs(self.export_dir)
+
+    def _resolve_unit_id(self, project_id: int, unit_name: Optional[str]) -> Optional[int]:
+        """按名称解析单元 ID；不存在则自动创建。"""
+        name = (unit_name or "").strip()
+        if not name:
+            return None
+        for u in self.db.get_test_units(project_id):
+            if (u.get("name") or "").strip() == name:
+                return int(u["id"])
+        return self.db.create_test_unit(project_id, name)
     
     # ==================== Excel 导出 ====================
     
@@ -82,6 +92,10 @@ class CaseImportExporter:
                 case = self.db.get_test_case_v2(case_id)
                 if case:
                     case['steps'] = self.db.get_case_steps(case_id)
+                    if case.get('unit_id') and not case.get('unit_name'):
+                        unit = self.db.get_test_unit(int(case['unit_id']))
+                        if unit:
+                            case['unit_name'] = unit.get('name') or ''
                     cases.append(case)
         elif project_id:
             project_cases = self.db.get_project_cases(project_id)
@@ -94,7 +108,7 @@ class CaseImportExporter:
     def _write_cases_sheet(self, ws, cases: List[Dict]):
         """写入用例Sheet"""
         # 表头
-        headers = ['用例ID', '用例名称', '测试URL', '描述', '前置条件', '预期结果', '项目ID', '创建时间']
+        headers = ['用例ID', '用例名称', '测试URL', '描述', '前置条件', '预期结果', '单元名称', '项目ID', '创建时间']
         
         # 样式
         header_font = Font(bold=True, color="FFFFFF")
@@ -123,8 +137,9 @@ class CaseImportExporter:
             ws.cell(row=row, column=4, value=case.get('description', '')).border = thin_border
             ws.cell(row=row, column=5, value=case.get('precondition', '')).border = thin_border
             ws.cell(row=row, column=6, value=case.get('expected_result', '')).border = thin_border
-            ws.cell(row=row, column=7, value=case.get('project_id', '')).border = thin_border
-            ws.cell(row=row, column=8, value=case.get('created_at', '')).border = thin_border
+            ws.cell(row=row, column=7, value=case.get('unit_name', '')).border = thin_border
+            ws.cell(row=row, column=8, value=case.get('project_id', '')).border = thin_border
+            ws.cell(row=row, column=9, value=case.get('created_at', '')).border = thin_border
         
         # 调整列宽
         ws.column_dimensions['A'].width = 10
@@ -133,8 +148,9 @@ class CaseImportExporter:
         ws.column_dimensions['D'].width = 40
         ws.column_dimensions['E'].width = 30
         ws.column_dimensions['F'].width = 30
-        ws.column_dimensions['G'].width = 10
-        ws.column_dimensions['H'].width = 20
+        ws.column_dimensions['G'].width = 20
+        ws.column_dimensions['H'].width = 10
+        ws.column_dimensions['I'].width = 20
     
     def _write_steps_sheet(self, ws, cases: List[Dict]):
         """写入步骤Sheet"""
@@ -193,7 +209,7 @@ class CaseImportExporter:
         ws_cases = wb.active
         ws_cases.title = "测试用例"
         
-        headers = ['用例名称*', '测试URL', '描述', '前置条件', '预期结果', '项目ID*']
+        headers = ['用例名称*', '测试URL', '描述', '前置条件', '预期结果', '单元名称', '项目ID*']
         header_font = Font(bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="667EEA", end_color="667EEA", fill_type="solid")
         
@@ -208,7 +224,8 @@ class CaseImportExporter:
         ws_cases.cell(row=2, column=3, value="测试用户登录功能")
         ws_cases.cell(row=2, column=4, value="用户已注册")
         ws_cases.cell(row=2, column=5, value="登录成功跳转首页")
-        ws_cases.cell(row=2, column=6, value="1")
+        ws_cases.cell(row=2, column=6, value="登录模块")
+        ws_cases.cell(row=2, column=7, value="1")
         
         # 步骤Sheet
         ws_steps = wb.create_sheet("测试步骤")
@@ -247,6 +264,7 @@ class CaseImportExporter:
             "- 描述: 用例描述",
             "- 前置条件: 执行用例前的条件",
             "- 预期结果: 用例执行的预期结果",
+            "- 单元名称: 可选，用例所属测试单元（不存在则自动创建）",
             "- 项目ID*: 必填，用例所属项目的ID",
             "",
             "【测试步骤 Sheet】",
@@ -346,6 +364,8 @@ class CaseImportExporter:
                     col_map['expected_result'] = i
                 elif '项目' in h_lower or 'project' in h_lower:
                     col_map['project_id'] = i
+                elif '单元' in h_lower or 'unit' in h_lower:
+                    col_map['unit_name'] = i
         
         for row_num in range(2, ws.max_row + 1):
             row_data = [cell.value for cell in ws[row_num]]
@@ -360,10 +380,13 @@ class CaseImportExporter:
                     results['errors'].append(f"行 {row_num}: 用例名称不能为空")
                     continue
                 
-                project_id = row_data[col_map.get('project_id', 5)] if col_map.get('project_id') is not None else default_project_id
+                project_id = row_data[col_map.get('project_id', 6)] if col_map.get('project_id') is not None else default_project_id
                 if not project_id:
                     results['errors'].append(f"行 {row_num}: 项目ID不能为空")
                     continue
+
+                unit_name = row_data[col_map.get('unit_name', 5)] if col_map.get('unit_name') is not None else None
+                unit_id = self._resolve_unit_id(int(project_id), str(unit_name) if unit_name else None)
                 
                 case_id = self.db.create_test_case_v2(
                     project_id=int(project_id),
@@ -371,7 +394,8 @@ class CaseImportExporter:
                     url=str(row_data[col_map.get('url', 1)] or '') if col_map.get('url') is not None else '',
                     description=str(row_data[col_map.get('description', 2)] or '') if col_map.get('description') is not None else '',
                     precondition=str(row_data[col_map.get('precondition', 3)] or '') if col_map.get('precondition') is not None else '',
-                    expected_result=str(row_data[col_map.get('expected_result', 4)] or '') if col_map.get('expected_result') is not None else ''
+                    expected_result=str(row_data[col_map.get('expected_result', 4)] or '') if col_map.get('expected_result') is not None else '',
+                    unit_id=unit_id,
                 )
                 
                 results['cases_created'] += 1
@@ -473,6 +497,7 @@ class CaseImportExporter:
                 'description': case.get('description', ''),
                 'precondition': case.get('precondition', ''),
                 'expected_result': case.get('expected_result', ''),
+                'unit_name': case.get('unit_name', ''),
                 'steps': []
             }
             
@@ -551,7 +576,8 @@ class CaseImportExporter:
                     url=case_data.get('url', ''),
                     description=case_data.get('description', ''),
                     precondition=case_data.get('precondition', ''),
-                    expected_result=case_data.get('expected_result', '')
+                    expected_result=case_data.get('expected_result', ''),
+                    unit_id=self._resolve_unit_id(project_id, case_data.get('unit_name')),
                 )
                 
                 results['cases_created'] += 1

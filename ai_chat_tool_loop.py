@@ -63,11 +63,18 @@ def _ai_allow_main_playwright_fallback() -> bool:
     )
 
 
-def hermes_execute_allowed(*, embedded_session_id: str = "") -> bool:
+def hermes_execute_allowed(*, embedded_session_id: str = "", platform_type: str = "web") -> bool:
     """
-    已配置内置浏览器运行时：仅当 CDP 已 attach 到画布会话时允许 hermes_execute（同一 Chromium）；
-    未 attach 时禁止（避免 Hermes 另开浏览器）。未配置画布网关时始终允许。
+    Web：画布 CDP attach 后允许 hermes_execute（同一 Chromium）。
+    Desktop：Hermes 已配置时允许 OS 层探索。
     """
+    plat = (platform_type or "web").strip().lower()
+    if plat == "desktop":
+        from agent_gateway_client import agent_gateway_configured
+
+        return agent_gateway_configured()
+    if plat == "android":
+        return False
     if not embedded_gateway_enabled():
         return True
     if _ai_allow_main_playwright_fallback():
@@ -79,9 +86,9 @@ def hermes_execute_allowed(*, embedded_session_id: str = "") -> bool:
     return False
 
 
-def openclaw_execute_allowed(*, embedded_session_id: str = "") -> bool:
+def openclaw_execute_allowed(*, embedded_session_id: str = "", platform_type: str = "web") -> bool:
     """Deprecated alias for hermes_execute_allowed."""
-    return hermes_execute_allowed(embedded_session_id=embedded_session_id)
+    return hermes_execute_allowed(embedded_session_id=embedded_session_id, platform_type=platform_type)
 
 
 def _agent_execute_tool_schema() -> Dict[str, Any]:
@@ -169,6 +176,7 @@ def _build_system_prompt(
     interaction_note: str,
     test_scope: str,
     embedded_session_id: str = "",
+    platform_type: str = "web",
 ) -> str:
     plan_preview = json.dumps(current_plan or {}, ensure_ascii=False)
     if len(plan_preview) > 12000:
@@ -187,7 +195,15 @@ def _build_system_prompt(
         "",
         "## Hermes Agent 与多轮工具",
     ]
-    if embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
+    plat = (platform_type or "web").strip().lower()
+    if plat == "desktop":
+        parts_agent = [
+            "【重要】当前为 **Windows 桌面** 测试场景，无需 URL。",
+            "可调用 hermes_execute 让 Hermes 在本机操作系统层探索（启动应用、点按窗口、输入文字等）；",
+            "完成后用 refine_test_plan 写入 automation_layer=desktop 的可复现步骤。",
+            "步骤应使用 launch_app / attach_window / click / input 等桌面动作，不要使用 navigate。",
+        ]
+    elif embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
         if hermes_cdp_attached():
             parts_agent = [
                 "【重要】平台已连接内置画布 Chromium（CDP attach）。浏览器操作应优先调用 hermes_execute，",
@@ -220,12 +236,22 @@ def _build_system_prompt(
             "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
         ]
     parts.extend(parts_agent)
+    if plat != "desktop":
+        parts.extend([
+            "",
+            "## 输出用例质量",
+            "最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
+            "整系统/模块任务时：steps 应覆盖完整流程（含 navigate、必要 wait、click/input、关键 assert），步数可较多；避免只给 3～5 步骨架。",
+            "若 LIVE 快照存在：步骤应优先 probe_index 或快照中的 recommended 选择器，勿臆造 class。",
+        ])
+    else:
+        parts.extend([
+            "",
+            "## 输出用例质量（Windows 桌面）",
+            "最终必须输出且仅输出一个 JSON 对象。case_url 留空。每步 automation_layer=desktop。",
+            "禁止 navigate/css/xpath。首步 launch_app 或 attach_window；窗口校验用 selector_type=window。",
+        ])
     parts.extend([
-        "",
-        "## 输出用例质量",
-        "最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
-        "整系统/模块任务时：steps 应覆盖完整流程（含 navigate、必要 wait、click/input、关键 assert），步数可较多；避免只给 3～5 步骨架。",
-        "若 LIVE 快照存在：步骤应优先 probe_index 或快照中的 recommended 选择器，勿臆造 class。",
         "",
         f"项目名: {project_name or 'unknown'}",
         f"当前计划 JSON:\n{plan_preview}",
@@ -238,7 +264,8 @@ def _build_system_prompt(
     if mem:
         parts.append(f"检索记忆:\n{mem}")
     if snap:
-        parts.append(f"LIVE 页面快照（优先使用其中定位）:\n{snap}")
+        snap_label = "桌面窗口快照（优先引用 title/hwnd）" if plat == "desktop" else "LIVE 页面快照（优先使用其中定位）"
+        parts.append(f"{snap_label}:\n{snap}")
     if dom:
         parts.append(f"DOM 摘要:\n{dom}")
     return "\n\n".join(parts)
@@ -325,6 +352,7 @@ class ChatToolLoopParams:
     interaction_context: Optional[Dict[str, Any]]
     test_scope: Optional[str] = None
     embedded_session_id: Optional[str] = None
+    platform_type: str = "web"
 
 
 def _handle_agent_execute(
@@ -373,7 +401,8 @@ def run_ai_chat_with_tools(
     Caller should run apply_step_normalization_to_plan on generated_plan_dict.
     """
     embed_sid = (params.embedded_session_id or "").strip()
-    allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid)
+    plat = (params.platform_type or "web").strip().lower()
+    allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid, platform_type=plat)
     tools = chat_tool_schemas(allow_hermes=allow_agent)
     agent_client = get_agent_gateway_client()
 
@@ -393,6 +422,7 @@ def run_ai_chat_with_tools(
         interaction_note=ic_note,
         test_scope=(params.test_scope or "").strip() if params.test_scope else "",
         embedded_session_id=embed_sid,
+        platform_type=plat,
     )
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
