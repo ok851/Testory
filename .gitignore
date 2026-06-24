@@ -24,6 +24,7 @@ agent-tools/
 node_modules/
 .npm-cache/
 static/vendor/tauri/
+src-tauri/target/
 src-tauri/gen/
 %UAT_DATA_DIR%/hermes/*.lock
 %UAT_DATA_DIR%/hermes/*.pid

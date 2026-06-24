@@ -187,12 +187,20 @@ def device_scrcpy_ws_enabled() -> bool:
 
 
 def scrcpy_available() -> bool:
+    """scrcpy.exe 或内置/插件 scrcpy-server 任一可用即视为可投屏。"""
     path = scrcpy_path()
-    if not path or path == "scrcpy":
-        import shutil
+    if path and path not in ("scrcpy", "scrcpy.exe") and Path(path).is_file():
+        return True
+    import shutil
 
-        return bool(shutil.which("scrcpy"))
-    return Path(path).is_file()
+    if shutil.which("scrcpy"):
+        return True
+    try:
+        from mobile_scrcpy_bridge import find_scrcpy_server_jar
+
+        return bool(find_scrcpy_server_jar())
+    except Exception:
+        return False
 
 
 def scrcpy_max_size() -> int:

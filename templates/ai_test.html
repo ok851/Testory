@@ -4094,6 +4094,9 @@
 
         var _aiMobileMirrorTimer = null;
         var _aiMobileScrcpyPlayer = null;
+        var _aiMobileConfig = null;
+        var _aiMobileScrcpyAltTried = false;
+        var _aiMobileScrcpyGotFrame = false;
         var _aiMobileSession = {
             sessionId: '',
             mirrorFrameUrl: '',
@@ -4102,6 +4105,52 @@
             mirrorBackend: 'screencap',
             connected: false,
         };
+
+        function aiScrcpyAutoFallbackEnabled() {
+            return !!(_aiMobileConfig && _aiMobileConfig.scrcpy_auto_fallback);
+        }
+
+        function aiWebCodecsSupported() {
+            return !!(global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.webCodecsSupported && global.ScrcpyMirrorPlayer.webCodecsSupported());
+        }
+
+        function aiWebCodecsUnavailableMessage() {
+            if (global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.getWebCodecsUnavailableMessage) {
+                return global.ScrcpyMirrorPlayer.getWebCodecsUnavailableMessage();
+            }
+            return '当前显示环境不支持 H.264 硬件解码（WebCodecs）';
+        }
+
+        function aiIsWebCodecsRelatedError(msg) {
+            if (global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.isWebCodecsRelatedError) {
+                return global.ScrcpyMirrorPlayer.isWebCodecsRelatedError(msg);
+            }
+            return /WebCodecs|VideoDecoder|硬件解码/i.test(msg || '');
+        }
+
+        function aiFallbackToScreencapForWebCodecs() {
+            if (_aiMobileScrcpyPlayer) {
+                _aiMobileScrcpyPlayer.stop();
+                _aiMobileScrcpyPlayer = null;
+            }
+            aiStartMobileScreencapPoll();
+        }
+
+        function aiEnsureWebCodecsForScrcpyMirror() {
+            if (aiWebCodecsSupported()) return true;
+            aiFallbackToScreencapForWebCodecs();
+            return false;
+        }
+
+        async function aiEnsureMobileConfig() {
+            if (_aiMobileConfig) return _aiMobileConfig;
+            try {
+                var r = await fetch('/api/mobile/config', { credentials: 'same-origin' });
+                var data = await r.json();
+                if (data && data.success) _aiMobileConfig = data;
+            } catch (e) { /* ignore */ }
+            return _aiMobileConfig;
+        }
 
         function aiResolveMirrorWsUrl(raw) {
             if (!raw) return '';
@@ -4122,6 +4171,124 @@
                 _aiMobileScrcpyPlayer.stop();
                 _aiMobileScrcpyPlayer = null;
             }
+        }
+
+        function aiScrcpyMirrorFailed(msg) {
+            if (_aiMobileScrcpyGotFrame) return;
+            if (aiIsWebCodecsRelatedError(msg)) {
+                aiFallbackToScreencapForWebCodecs();
+                return;
+            }
+            if (!aiScrcpyAutoFallbackEnabled()) {
+                console.warn('[ai-test] scrcpy 无画面，保持 scrcpy 模式:', msg || '');
+                return;
+            }
+            aiStartMobileScreencapPoll();
+        }
+
+        function aiRetryScrcpyAlternateTransport(reason) {
+            if (_aiMobileScrcpyAltTried) return false;
+            var wasHttp = !!(_aiMobileScrcpyPlayer && _aiMobileScrcpyPlayer._httpAbort);
+            var wasWs = !!(_aiMobileScrcpyPlayer && _aiMobileScrcpyPlayer._ws);
+            if (!wasHttp && !wasWs) return false;
+            if (_aiMobileScrcpyPlayer) {
+                _aiMobileScrcpyPlayer.stop();
+                _aiMobileScrcpyPlayer = null;
+            }
+            _aiMobileScrcpyAltTried = true;
+            _aiMobileScrcpyGotFrame = false;
+            if (wasWs && _aiMobileSession.mirrorStreamUrl) {
+                aiStartScrcpyHttpMirror(true);
+                return true;
+            }
+            if (wasHttp && _aiMobileSession.mirrorWsUrl) {
+                aiStartScrcpyWsMirror(true);
+                return true;
+            }
+            return false;
+        }
+
+        function aiBuildScrcpyPlayer() {
+            var canvas = document.getElementById('aiMobileMirrorCanvas');
+            if (!canvas || !global.ScrcpyMirrorPlayer || !aiWebCodecsSupported()) return null;
+            return new global.ScrcpyMirrorPlayer({
+                canvas: canvas,
+                wsUrl: aiResolveMirrorWsUrl(_aiMobileSession.mirrorWsUrl),
+                onFirstFrame: function() {
+                    _aiMobileScrcpyGotFrame = true;
+                    canvas.hidden = false;
+                },
+                onError: function(msg) {
+                    if (_aiMobileScrcpyGotFrame) return;
+                    if (aiRetryScrcpyAlternateTransport(msg)) return;
+                    if (aiIsWebCodecsRelatedError(msg)) {
+                        aiScrcpyMirrorFailed(msg);
+                        return;
+                    }
+                    if (!aiScrcpyAutoFallbackEnabled()) return;
+                    aiScrcpyMirrorFailed(msg);
+                },
+                onFallback: function(msg) {
+                    if (_aiMobileScrcpyGotFrame) return;
+                    if (aiRetryScrcpyAlternateTransport(msg)) return;
+                    aiScrcpyMirrorFailed(msg);
+                },
+            });
+        }
+
+        function aiStartScrcpyHttpMirror(skipWsFallback) {
+            if (!aiEnsureWebCodecsForScrcpyMirror()) return;
+            if (!skipWsFallback && !_aiMobileSession.mirrorStreamUrl && _aiMobileSession.mirrorWsUrl) {
+                aiStartScrcpyWsMirror(false);
+                return;
+            }
+            var canvas = document.getElementById('aiMobileMirrorCanvas');
+            if (!canvas || !_aiMobileSession.mirrorStreamUrl) {
+                aiScrcpyMirrorFailed('缺少 scrcpy HTTP 流地址');
+                return;
+            }
+            _aiMobileScrcpyPlayer = aiBuildScrcpyPlayer();
+            if (!_aiMobileScrcpyPlayer) {
+                aiFallbackToScreencapForWebCodecs();
+                return;
+            }
+            _aiMobileScrcpyPlayer.startHttp(_aiMobileSession.mirrorStreamUrl).catch(function(e) {
+                if (_aiMobileScrcpyGotFrame) return;
+                if (!skipWsFallback && _aiMobileSession.mirrorWsUrl) {
+                    aiStartScrcpyWsMirror(true);
+                    return;
+                }
+                aiScrcpyMirrorFailed(e.message || String(e));
+            });
+        }
+
+        function aiStartScrcpyWsMirror(skipHttpFallback) {
+            if (!aiEnsureWebCodecsForScrcpyMirror()) return;
+            if (!skipHttpFallback && !_aiMobileSession.mirrorWsUrl && _aiMobileSession.mirrorStreamUrl) {
+                aiStartScrcpyHttpMirror(false);
+                return;
+            }
+            if (!_aiMobileSession.mirrorWsUrl || !global.ScrcpyMirrorPlayer) {
+                if (!skipHttpFallback && _aiMobileSession.mirrorStreamUrl) {
+                    aiStartScrcpyHttpMirror(true);
+                    return;
+                }
+                aiScrcpyMirrorFailed('缺少 scrcpy WebSocket 地址');
+                return;
+            }
+            _aiMobileScrcpyPlayer = aiBuildScrcpyPlayer();
+            if (!_aiMobileScrcpyPlayer) {
+                aiFallbackToScreencapForWebCodecs();
+                return;
+            }
+            _aiMobileScrcpyPlayer.start().catch(function(e) {
+                if (_aiMobileScrcpyGotFrame) return;
+                if (!skipHttpFallback && _aiMobileSession.mirrorStreamUrl) {
+                    aiStartScrcpyHttpMirror(true);
+                    return;
+                }
+                aiScrcpyMirrorFailed(e.message || String(e));
+            });
         }
 
         function aiStartMobileScreencapPoll() {
@@ -4151,26 +4318,21 @@
             aiStopMobileMirrorPoll();
             var canvas = document.getElementById('aiMobileMirrorCanvas');
             if (!canvas) return;
+            _aiMobileScrcpyAltTried = false;
+            _aiMobileScrcpyGotFrame = false;
             if (_aiMobileSession.mirrorBackend === 'scrcpy_ws' && global.ScrcpyMirrorPlayer) {
-                var streamUrl = _aiMobileSession.mirrorStreamUrl;
-                var wsUrl = aiResolveMirrorWsUrl(_aiMobileSession.mirrorWsUrl);
-                if (!streamUrl && !wsUrl) {
-                    aiStartMobileScreencapPoll();
+                if (_aiMobileSession.mirrorStreamUrl) {
+                    aiStartScrcpyHttpMirror(false);
                     return;
                 }
-                _aiMobileScrcpyPlayer = new global.ScrcpyMirrorPlayer({
-                    canvas: canvas,
-                    wsUrl: wsUrl,
-                    onFirstFrame: function() { canvas.hidden = false; },
-                    onFallback: function() { aiStartMobileScreencapPoll(); },
-                });
-                var p = streamUrl
-                    ? _aiMobileScrcpyPlayer.startHttp(streamUrl)
-                    : _aiMobileScrcpyPlayer.start();
-                p.catch(function() { aiStartMobileScreencapPoll(); });
-                return;
+                if (_aiMobileSession.mirrorWsUrl) {
+                    aiStartScrcpyWsMirror(false);
+                    return;
+                }
             }
-            aiStartMobileScreencapPoll();
+            if (_aiMobileSession.mirrorBackend === 'screencap' || aiScrcpyAutoFallbackEnabled()) {
+                aiStartMobileScreencapPoll();
+            }
         }
 
         function aiOnPlatformTypeChange() {
@@ -4259,6 +4421,7 @@
             }
             if (st) st.textContent = '正在连接…';
             try {
+                await aiEnsureMobileConfig();
                 var r = await fetch('/api/mobile/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

@@ -6,6 +6,26 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
+#[cfg(windows)]
+fn configure_webview2_runtime() {
+    const FLAG: &str = "--enable-features=WebCodecs";
+    const KEY: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+    match std::env::var(KEY) {
+        Ok(extra) if extra.contains("WebCodecs") => {}
+        Ok(extra) => {
+            let merged = if extra.is_empty() {
+                FLAG.to_string()
+            } else {
+                format!("{extra} {FLAG}")
+            };
+            std::env::set_var(KEY, merged);
+        }
+        Err(_) => {
+            std::env::set_var(KEY, FLAG);
+        }
+    }
+}
+
 use reqwest::Client;
 use tauri::{
     AppHandle, Manager, RunEvent, Url, WindowEvent,
@@ -26,6 +46,8 @@ pub struct AppState {
 }
 
 pub fn run() {
+    #[cfg(windows)]
+    configure_webview2_runtime();
     tauri::Builder::default()
         .manage(AppState {
             flask: Mutex::new(None),

@@ -201,7 +201,7 @@ def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dic
             payload["mirror_backend"] = "screencap"
             payload["mirror_fallback_reason"] = "未找到 scrcpy-server，已降级为截图投屏"
             return payload
-        warm_ok, warm_err = warm_scrcpy_session(udid, timeout=12.0)
+        warm_ok, warm_err = warm_scrcpy_session(udid)
         if not warm_ok:
             payload["mirror_backend"] = "screencap"
             payload["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败，已降级为截图投屏"
@@ -422,7 +422,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
-        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started
+        from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started, scrcpy_mirror_diagnostics
         from mobile_env_config import resolve_mirror_backend, scrcpy_available
 
         ensure_bridge_started()
@@ -431,13 +431,27 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
             from mobile_device_manager import get_connected_udid
 
             udid = get_connected_udid() or ""
-        return jsonify({
+        diag = scrcpy_mirror_diagnostics(udid)
+        out: Dict[str, Any] = {
             "success": True,
             "udid": udid,
             "mirror_backend": resolve_mirror_backend(udid),
             "scrcpy_available": scrcpy_available(),
             "bridge": bridge_health(),
-        })
+            **diag,
+        }
+        if request.args.get("warm") == "1" and udid:
+            from mobile_scrcpy_bridge import warm_scrcpy_session
+
+            warm_ok, warm_err = warm_scrcpy_session(udid)
+            out["scrcpy_warm_ok"] = warm_ok
+            out["scrcpy_warm_error"] = "" if warm_ok else warm_err
+            if warm_ok:
+                out["mirror_backend"] = "scrcpy_ws"
+                out["mirror_fallback_reason"] = ""
+            elif out.get("mirror_backend") == "scrcpy_ws":
+                out["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败"
+        return jsonify(out)
 
     @app.route("/api/mobile/mirror/start", methods=["POST"])
     @login_required

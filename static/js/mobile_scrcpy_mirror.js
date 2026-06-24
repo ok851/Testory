@@ -1,9 +1,52 @@
 /**
- * scrcpy H.264 WebSocket → WebCodecs → Canvas（模拟器高帧率投屏）
+ * scrcpy H.264 WebSocket → WebCodecs → Canvas（高帧率投屏）
  * scrcpy-server 输出 Annex-B H.264，需转为 AVCC 并正确标记 key/delta 帧。
+ * 桌面壳（Tauri / pywebview + WebView2）与系统浏览器均通过内嵌 Chromium 解码，非独立 scrcpy 窗口。
  */
 (function (global) {
     'use strict';
+
+    function getMirrorClientEnv() {
+        if (global.__TAURI__ || global.__TAURI_INTERNALS__) {
+            return 'tauri';
+        }
+        if (document.body && document.body.classList.contains('testory-desktop-client')) {
+            return 'desktop';
+        }
+        return 'browser';
+    }
+
+    function webCodecsSupported() {
+        try {
+            return (
+                typeof VideoDecoder !== 'undefined' &&
+                typeof EncodedVideoChunk !== 'undefined' &&
+                typeof VideoFrame !== 'undefined'
+            );
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function getWebCodecsUnavailableMessage() {
+        var env = getMirrorClientEnv();
+        var origin = '';
+        try {
+            origin = global.location && global.location.origin ? global.location.origin : '';
+        } catch (e) { /* ignore */ }
+        if (env === 'desktop' || env === 'tauri') {
+            return (
+                '当前桌面软件窗口的内嵌 WebView 不支持 H.264 硬件解码（WebCodecs），与 scrcpy 插件是否安装无关。' +
+                '请升级 Microsoft Edge WebView2 运行库至最新版' +
+                (origin ? '，或在 Chrome/Edge 中打开 ' + origin + '/mobile-testing 使用高帧投屏' : '')
+            );
+        }
+        return '当前显示环境不支持 H.264 硬件解码（WebCodecs），请使用 Chrome / Edge 94 及以上版本打开本平台';
+    }
+
+    function isWebCodecsRelatedError(msg) {
+        return /WebCodecs|VideoDecoder|硬件解码|ReadableStream/i.test(msg || '');
+    }
 
     function byteToHex(b) {
         return ('0' + (b & 0xff).toString(16).toUpperCase()).slice(-2);
@@ -461,7 +504,7 @@
         this._onStreamActivity();
         this._ensureDecoder();
         if (!this._decoder) {
-            this.onError('当前浏览器不支持 WebCodecs');
+            this.onError(getWebCodecsUnavailableMessage());
             return;
         }
 
@@ -579,6 +622,9 @@
     }
 
     ScrcpyMirrorPlayer.prototype.start = function () {
+        if (!webCodecsSupported()) {
+            return Promise.reject(new Error(getWebCodecsUnavailableMessage()));
+        }
         this.stop();
         this._running = true;
         this._frameCount = 0;
@@ -589,6 +635,9 @@
 
     ScrcpyMirrorPlayer.prototype.startHttp = function (streamUrl) {
         var self = this;
+        if (!webCodecsSupported()) {
+            return Promise.reject(new Error(getWebCodecsUnavailableMessage()));
+        }
         this.stop();
         this._running = true;
         this._stoppingIntentionally = false;
@@ -672,6 +721,11 @@
             screen_height: screenH,
         });
     };
+
+    ScrcpyMirrorPlayer.webCodecsSupported = webCodecsSupported;
+    ScrcpyMirrorPlayer.getMirrorClientEnv = getMirrorClientEnv;
+    ScrcpyMirrorPlayer.getWebCodecsUnavailableMessage = getWebCodecsUnavailableMessage;
+    ScrcpyMirrorPlayer.isWebCodecsRelatedError = isWebCodecsRelatedError;
 
     global.ScrcpyMirrorPlayer = ScrcpyMirrorPlayer;
 })(window);

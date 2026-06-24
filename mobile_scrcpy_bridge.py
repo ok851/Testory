@@ -20,9 +20,10 @@ import subprocess
 import threading
 import time
 import zlib
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Set, Tuple, Union
+from typing import Any, Deque, Dict, Optional, Set, Tuple, Union
 
 _SC_PACKET_PTS_MASK = 0x3FFFFFFFFFFFFFFF
 _SC_PACKET_FLAG_CONFIG = 1 << 63
@@ -119,6 +120,34 @@ def _bridge_ready() -> bool:
     return bool(_bridge_thread and _bridge_thread.is_alive() and _bridge_listening)
 
 
+def _bridge_connect_host(host: str) -> str:
+    return "127.0.0.1" if host in ("0.0.0.0", "", "*") else host
+
+
+def _foreign_bridge_healthy(host: str, port: int) -> bool:
+    """端口被占用时，确认是否为可用的 WebSocket bridge（非裸 TCP 误占）。"""
+    check_host = _bridge_connect_host(host)
+    sock: Optional[socket.socket] = None
+    try:
+        sock = socket.create_connection((check_host, port), timeout=2)
+        sock.settimeout(2)
+        sock.sendall(
+            b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+            b"Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            b"Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        data = sock.recv(128)
+        return b"101" in data or b"Upgrade" in data
+    except OSError:
+        return False
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
 def _service_listening(host: str, port: int) -> bool:
     if _bridge_ready():
         return True
@@ -183,7 +212,7 @@ def _sync_scrcpy_server_to_vendor() -> None:
             return
 
 
-def _find_scrcpy_server_jar() -> Optional[str]:
+def find_scrcpy_server_jar() -> Optional[str]:
     """定位 scrcpy-server（与 scrcpy 可执行文件同目录或 vendor）。"""
     _sync_scrcpy_server_to_vendor()
     candidates: list[Path] = []
@@ -209,6 +238,34 @@ def _find_scrcpy_server_jar() -> Optional[str]:
     return None
 
 
+def _find_scrcpy_server_jar() -> Optional[str]:
+    return find_scrcpy_server_jar()
+
+
+def _parse_version_from_jar_path(jar_path: str) -> Optional[str]:
+    m = re.search(r"scrcpy-server[-_]?v?([\d.]+)", jar_path or "", re.I)
+    return m.group(1) if m else None
+
+
+def _exe_scrcpy_version() -> Optional[str]:
+    exe = scrcpy_path()
+    if not exe or exe in ("scrcpy", "scrcpy.exe") or not Path(exe).is_file():
+        return None
+    try:
+        r = subprocess.run(
+            [exe, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        text = (r.stdout or "") + (r.stderr or "")
+        m = re.search(r"([\d]+\.[\d]+(?:\.[\d]+)?)", text)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
 def _run_adb(serial: str, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
     cmd = [adb_path()]
     if serial:
@@ -221,28 +278,16 @@ def _scrcpy_server_version() -> str:
     cached = getattr(_scrcpy_server_version, "_cache", None)
     if cached:
         return cached
-    versions: list[str] = []
-    exe = scrcpy_path()
-    if exe and exe not in ("scrcpy", "scrcpy.exe") and Path(exe).is_file():
-        try:
-            r = subprocess.run(
-                [exe, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=8,
-                check=False,
-            )
-            text = (r.stdout or "") + (r.stderr or "")
-            m = re.search(r"([\d]+\.[\d]+(?:\.[\d]+)?)", text)
-            if m:
-                versions.append(m.group(1))
-        except Exception:
-            pass
     jar = _find_scrcpy_server_jar() or ""
-    m = re.search(r"scrcpy-server[-_]?v?([\d.]+)", jar, re.I)
-    if m:
-        versions.append(m.group(1))
-    ver = versions[0] if versions else "2.4"
+    jar_ver = _parse_version_from_jar_path(jar)
+    exe_ver = _exe_scrcpy_version()
+    # JAR 版本优先，避免 exe 3.x 与 bundled 2.4 server 不匹配
+    if jar_ver:
+        ver = jar_ver
+    elif exe_ver:
+        ver = exe_ver
+    else:
+        ver = "2.4"
     _scrcpy_server_version._cache = ver
     return ver
 
@@ -250,10 +295,51 @@ def _scrcpy_server_version() -> str:
 def _version_candidates() -> list[str]:
     primary = _scrcpy_server_version()
     out: list[str] = []
-    for v in (primary, "2.4", "2.1", "3.1", "3.0"):
+    if primary.startswith("3."):
+        fallbacks = ("3.1", "3.0", "2.4")
+    else:
+        fallbacks = ("2.4", "2.1")
+    for v in (primary, *fallbacks):
         if v and v not in out:
             out.append(v)
     return out
+
+
+def scrcpy_warm_timeout() -> float:
+    raw = (os.environ.get("MOBILE_SCRCPY_WARM_TIMEOUT") or "20").strip()
+    try:
+        return max(8.0, min(60.0, float(raw)))
+    except ValueError:
+        return 20.0
+
+
+def scrcpy_mirror_diagnostics(udid: str = "") -> Dict[str, Any]:
+    """供 mirror/status API 暴露的 scrcpy 诊断字段（不触发 warm）。"""
+    from mobile_env_config import resolve_mirror_backend, scrcpy_available
+
+    serial = (udid or "").strip()
+    backend = resolve_mirror_backend(serial)
+    jar = _find_scrcpy_server_jar() or ""
+    diag: Dict[str, Any] = {
+        "mirror_backend_selected": backend,
+        "scrcpy_available": scrcpy_available(),
+        "scrcpy_server_jar": jar,
+        "scrcpy_server_version": _scrcpy_server_version(),
+        "version_candidates": _version_candidates(),
+        "scrcpy_warm_timeout_sec": scrcpy_warm_timeout(),
+        "scrcpy_session_active": False,
+        "mirror_fallback_reason": "",
+    }
+    if serial:
+        sess = _get_persistent_device(serial)
+        diag["scrcpy_session_active"] = bool(sess and sess.running)
+    if backend != "scrcpy_ws":
+        if not scrcpy_available():
+            diag["mirror_fallback_reason"] = "scrcpy 不可用（未找到 scrcpy.exe 或 scrcpy-server）"
+        return diag
+    if not jar:
+        diag["mirror_fallback_reason"] = "未找到 scrcpy-server，已降级为截图投屏"
+    return diag
 
 
 def ensure_scrcpy_device_session(serial: str) -> Tuple[Optional["ScrcpyDeviceSession"], str]:
@@ -307,6 +393,64 @@ class ScrcpyDeviceSession:
         self._version = _scrcpy_server_version()
         self.running = False
         self._control_lock = threading.Lock()
+        self._stderr_lines: Deque[str] = deque(maxlen=20)
+        self._stderr_thread: Optional[threading.Thread] = None
+
+    def _stderr_hint(self) -> str:
+        if not self._stderr_lines:
+            return ""
+        return "; ".join(list(self._stderr_lines)[-5:])
+
+    def _start_stderr_drain(self) -> None:
+        proc = self._shell_proc
+        if not proc or not proc.stderr:
+            return
+        self._stderr_lines.clear()
+
+        def _drain() -> None:
+            assert proc.stderr is not None
+            try:
+                for raw in proc.stderr:
+                    text = raw.decode("utf-8", errors="replace").strip()
+                    if text:
+                        self._stderr_lines.append(text)
+            except Exception:
+                pass
+
+        self._stderr_thread = threading.Thread(
+            target=_drain,
+            name=f"scrcpy-stderr-{self.serial}",
+            daemon=True,
+        )
+        self._stderr_thread.start()
+
+    def _wait_tcp_handshake(self, deadline: float) -> socket.socket:
+        last_err: Optional[Exception] = None
+        while time.time() < deadline:
+            proc = self._shell_proc
+            if proc and proc.poll() is not None:
+                hint = self._stderr_hint()
+                msg = "scrcpy-server 进程已退出"
+                if hint:
+                    msg += f"：{hint}"
+                raise RuntimeError(msg)
+            try:
+                sock = socket.create_connection(("127.0.0.1", self.local_port), timeout=2)
+                sock.settimeout(20.0)
+                dummy = sock.recv(1)
+                if dummy:
+                    return sock
+                sock.close()
+            except OSError as exc:
+                last_err = exc
+            time.sleep(0.35)
+        hint = self._stderr_hint()
+        msg = "scrcpy 连接握手失败：请确认手机已解锁，并重试连接"
+        if hint:
+            msg += f"（{hint}）"
+        elif last_err:
+            msg += f"（{last_err}）"
+        raise RuntimeError(msg)
 
     def start(self) -> None:
         if not self._server_jar:
@@ -322,8 +466,21 @@ class ScrcpyDeviceSession:
                 return
             except Exception as exc:
                 last_err = exc
+                hint = self._stderr_hint()
+                if hint:
+                    uat_logger.warning(
+                        "scrcpy 版本 %s 启动失败 serial=%s: %s | stderr: %s",
+                        ver,
+                        self.serial,
+                        exc,
+                        hint,
+                    )
                 self.stop()
-        raise RuntimeError(str(last_err) if last_err else "scrcpy 启动失败")
+        err_msg = str(last_err) if last_err else "scrcpy 启动失败"
+        hint = self._stderr_hint()
+        if hint and hint not in err_msg:
+            err_msg = f"{err_msg}（{hint}）"
+        raise RuntimeError(err_msg)
 
     def _start_once(self) -> None:
         serial = self.serial
@@ -370,32 +527,11 @@ class ScrcpyDeviceSession:
         self._shell_proc = subprocess.Popen(
             [adb_path(), "-s", serial, "shell", shell_cmd],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
         )
-        time.sleep(2.5)
-        sock = None
-        for connect_try in range(3):
-            try:
-                sock = socket.create_connection(("127.0.0.1", self.local_port), timeout=14)
-                sock.settimeout(20.0)
-                dummy = sock.recv(1)
-                if dummy:
-                    break
-                sock.close()
-                sock = None
-            except OSError:
-                if sock:
-                    try:
-                        sock.close()
-                    except Exception:
-                        pass
-                    sock = None
-            time.sleep(0.8)
-        if not sock:
-            raise RuntimeError(
-                "scrcpy 连接握手失败：请确认手机已解锁，并重试连接"
-            )
+        self._start_stderr_drain()
+        sock = self._wait_tcp_handshake(time.time() + 15.0)
         device_name = self._read_exact(sock, 64)
         uat_logger.info(
             "scrcpy 已连接: serial=%s version=%s device=%s",
@@ -566,6 +702,7 @@ class ScrcpyDeviceSession:
                 except Exception:
                     pass
             self._shell_proc = None
+        self._stderr_thread = None
         try:
             _run_adb(self.serial, "forward", "--remove", f"tcp:{self.local_port}")
         except Exception:
@@ -695,11 +832,12 @@ def iter_scrcpy_http_stream(serial: str):
         relay.unsubscribe(sid)
 
 
-def warm_scrcpy_session(serial: str, *, timeout: float = 20.0) -> Tuple[bool, str]:
+def warm_scrcpy_session(serial: str, *, timeout: Optional[float] = None) -> Tuple[bool, str]:
     """连接设备时预热 scrcpy，成功则保持会话供 HTTP 流复用。"""
     serial = (serial or "").strip()
     if not serial:
         return False, "缺少 serial"
+    warm_timeout = scrcpy_warm_timeout() if timeout is None else max(8.0, float(timeout))
     last_err = ""
     for attempt in range(2):
         if attempt > 0:
@@ -712,7 +850,7 @@ def warm_scrcpy_session(serial: str, *, timeout: float = 20.0) -> Tuple[bool, st
             continue
         sid, pkt_queue = relay.subscribe()
         try:
-            deadline = time.time() + max(8.0, timeout)
+            deadline = time.time() + warm_timeout
             while time.time() < deadline:
                 try:
                     packet = pkt_queue.get(timeout=0.35)
@@ -903,10 +1041,17 @@ def ensure_bridge_started() -> Tuple[bool, str]:
     with _lock:
         if _bridge_ready():
             return True, "bridge 已在运行"
-        if _tcp_port_in_use(host, port) and not (_bridge_thread and _bridge_thread.is_alive()):
+        if _tcp_port_in_use(host, port) and not _bridge_ready():
+            check_host = _bridge_connect_host(host)
+            if _foreign_bridge_healthy(check_host, port):
+                return True, f"scrcpy bridge 端口 {port} 已有可用服务，将直接复用"
+            uat_logger.warning(
+                "scrcpy bridge 端口 %s 被占用但非 WebSocket 服务，无法启动 bridge",
+                port,
+            )
             return (
-                True,
-                f"scrcpy bridge 端口 {port} 已有服务在监听（可能为其它 app.py 实例），将直接复用",
+                False,
+                f"端口 {port} 被占用且非 scrcpy bridge，请结束占用进程或修改 MOBILE_SCRCPY_BRIDGE_PORT",
             )
         if _bridge_failed_msg and not (_bridge_thread and _bridge_thread.is_alive()):
             return False, _bridge_failed_msg
@@ -983,8 +1128,13 @@ def stop_all_bridge_sessions() -> None:
         sessions = list(_active_sessions.values())
         _active_sessions.clear()
         _clients_by_serial.clear()
+    loop = _bridge_loop
     for sess in sessions:
         try:
-            sess.device.stop()
+            if loop and loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(sess.stop(), loop)
+                fut.result(timeout=5)
+            else:
+                asyncio.run(sess.stop())
         except Exception:
             pass

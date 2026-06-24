@@ -261,7 +261,7 @@
         badge.className = 'ms-mirror-mode ms-mirror-mode--' + m;
         if (m === 'scrcpy') {
             badge.textContent = '高帧率 scrcpy';
-            badge.title = detail || 'H.264 硬件视频流（WebCodecs）';
+            badge.title = detail || 'H.264 硬件视频流（需 WebView/浏览器支持 WebCodecs）';
         } else if (m === 'connecting') {
             badge.textContent = '投屏连接中…';
             badge.title = detail || '正在建立 scrcpy 视频流';
@@ -305,6 +305,43 @@
         return !!(b && b.scrcpy_auto_fallback);
     }
 
+    function webCodecsSupported() {
+        return !!(global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.webCodecsSupported && global.ScrcpyMirrorPlayer.webCodecsSupported());
+    }
+
+    function webCodecsUnavailableMessage() {
+        if (global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.getWebCodecsUnavailableMessage) {
+            return global.ScrcpyMirrorPlayer.getWebCodecsUnavailableMessage();
+        }
+        return '当前显示环境不支持 H.264 硬件解码（WebCodecs）';
+    }
+
+    function isWebCodecsRelatedError(msg) {
+        if (global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.isWebCodecsRelatedError) {
+            return global.ScrcpyMirrorPlayer.isWebCodecsRelatedError(msg);
+        }
+        return /WebCodecs|VideoDecoder|硬件解码/i.test(msg || '');
+    }
+
+    function fallbackToScreencapForWebCodecs() {
+        var hint = webCodecsUnavailableMessage();
+        if (state.scrcpyPlayer) {
+            state.scrcpyPlayer.stop();
+            state.scrcpyPlayer = null;
+        }
+        updateMirrorModeBadge('screencap', hint);
+        setStatus(hint + '，已自动切换截图投屏', 'warn');
+        startScreencapMirror();
+    }
+
+    function ensureWebCodecsForScrcpyMirror() {
+        if (webCodecsSupported()) {
+            return true;
+        }
+        fallbackToScreencapForWebCodecs();
+        return false;
+    }
+
     function retryScrcpyAlternateTransport(reason) {
         if (state._scrcpyAltTried) return false;
         var wasHttp = !!(state.scrcpyPlayer && state.scrcpyPlayer._httpAbort);
@@ -332,6 +369,10 @@
 
     function scrcpyMirrorFailed(msg) {
         if (isMirrorAbortError({ message: msg })) return;
+        if (isWebCodecsRelatedError(msg)) {
+            fallbackToScreencapForWebCodecs();
+            return;
+        }
         var p = state.scrcpyPlayer;
         if (state.scrcpyGotFrame || (p && (p._gotFrame || p._notifiedFrame))) {
             return;
@@ -340,7 +381,7 @@
             if (retryScrcpyAlternateTransport(msg)) return;
             if (!scrcpyAutoFallbackEnabled()) {
                 updateMirrorModeBadge('connecting', 'scrcpy 等待视频帧');
-                setStatus((msg || 'scrcpy 无画面') + '。仍保持 scrcpy，请断开重连或确认插件市场 scrcpy 已安装', 'warn');
+                setStatus((msg || 'scrcpy 无画面') + '。仍保持 scrcpy 通道，请断开重连或查看日志', 'warn');
                 return;
             }
         }
@@ -352,6 +393,7 @@
     function buildScrcpyPlayer() {
         var canvas = $('msMirrorCanvas');
         if (!canvas || !global.ScrcpyMirrorPlayer) return null;
+        if (!webCodecsSupported()) return null;
         return new global.ScrcpyMirrorPlayer({
             canvas: canvas,
             wsUrl: state.mirrorWsUrl,
@@ -424,6 +466,7 @@
     }
 
     function startScrcpyHttpMirror(skipWsFallback) {
+        if (!ensureWebCodecsForScrcpyMirror()) return;
         if (!state.mirrorStreamUrl) {
             startScrcpyWsMirror(skipWsFallback);
             return;
@@ -435,7 +478,7 @@
             state.scrcpyPlayer._mirrorEpoch = epoch;
         }
         if (!state.scrcpyPlayer) {
-            scrcpyMirrorFailed('浏览器不支持 WebCodecs');
+            fallbackToScreencapForWebCodecs();
             return;
         }
         setStatus('高帧率投屏连接中（HTTP）…', '');
@@ -455,6 +498,7 @@
     }
 
     function startScrcpyWsMirror(skipHttpFallback) {
+        if (!ensureWebCodecsForScrcpyMirror()) return;
         if (!state.mirrorWsUrl || !global.ScrcpyMirrorPlayer) {
             if (!skipHttpFallback && state.mirrorStreamUrl) {
                 startScrcpyHttpMirror(true);
@@ -470,7 +514,7 @@
             state.scrcpyPlayer._mirrorEpoch = epoch;
         }
         if (!state.scrcpyPlayer) {
-            scrcpyMirrorFailed('浏览器不支持 WebCodecs');
+            fallbackToScreencapForWebCodecs();
             return;
         }
         setStatus('高帧率投屏连接中（WebSocket）…', '');

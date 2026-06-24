@@ -8,9 +8,10 @@ from unittest.mock import MagicMock, patch
 from mobile_env_config import (
     device_scrcpy_ws_enabled,
     resolve_mirror_backend,
+    scrcpy_available,
     scrcpy_mirror_fps,
 )
-from mobile_scrcpy_bridge import _handle_ws_control_message
+from mobile_scrcpy_bridge import _handle_ws_control_message, _version_candidates
 from mobile_mirror import start_scrcpy_mirror
 
 
@@ -33,6 +34,41 @@ def test_resolve_mirror_backend_no_scrcpy_screencap(monkeypatch):
     monkeypatch.setenv("MOBILE_DEVICE_SCRCPY", "1")
     monkeypatch.setattr("mobile_env_config.scrcpy_available", lambda: False)
     assert resolve_mirror_backend("device-serial") == "screencap"
+
+
+def test_scrcpy_available_with_server_jar_only(monkeypatch, tmp_path):
+    monkeypatch.delenv("SCRCPY_PATH", raising=False)
+    jar = tmp_path / "scrcpy-server"
+    jar.write_bytes(b"x" * 2000)
+    monkeypatch.setattr("mobile_scrcpy_bridge.find_scrcpy_server_jar", lambda: str(jar))
+    monkeypatch.setattr(
+        "mobile_scrcpy_bundles.get_installed_scrcpy_exe",
+        lambda: None,
+    )
+    monkeypatch.setattr("mobile_env_config.scrcpy_path", lambda: "scrcpy")
+    assert scrcpy_available() is True
+
+
+def test_version_candidates_prefers_jar_major(monkeypatch):
+    monkeypatch.setattr(
+        "mobile_scrcpy_bridge._scrcpy_server_version",
+        lambda: "2.4",
+    )
+    out = _version_candidates()
+    assert out[0] == "2.4"
+    assert "3.1" not in out
+
+
+def test_scrcpy_mirror_diagnostics_without_device(monkeypatch):
+    from mobile_scrcpy_bridge import scrcpy_mirror_diagnostics
+
+    monkeypatch.setattr("mobile_env_config.scrcpy_available", lambda: True)
+    monkeypatch.setattr("mobile_env_config.resolve_mirror_backend", lambda u: "scrcpy_ws")
+    monkeypatch.setattr("mobile_scrcpy_bridge._find_scrcpy_server_jar", lambda: "/tmp/jar")
+    diag = scrcpy_mirror_diagnostics("")
+    assert diag["mirror_backend_selected"] == "scrcpy_ws"
+    assert diag["scrcpy_server_jar"] == "/tmp/jar"
+    assert "version_candidates" in diag
 
 
 def test_scrcpy_mirror_fps_default(monkeypatch):

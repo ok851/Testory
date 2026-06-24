@@ -189,8 +189,8 @@
 {% else %}
 <script id="__mobileStudioCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=openclaw_gateway_configured)|tojson }}</script>
 {% endif %}
-<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}?v=20260622e"></script>
+<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}?v=20260624a"></script>
 <script src="{{ url_for('static', filename='js/mobile_agent_panel.js') }}"></script>
-<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260622e"></script>
+<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260624a"></script>
 <script src="{{ url_for('static', filename='js/mobile_playground.js') }}?v=20260622e"></script>
 {% endblock %}

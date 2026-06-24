@@ -102,6 +102,18 @@ class DesktopWindowApi:
         )
 
 
+def _configure_webview2_runtime() -> None:
+    """尽量启用 WebView2 的 WebCodecs，供画布 H.264 投屏解码。"""
+    if sys.platform != "win32":
+        return
+    flag = "--enable-features=WebCodecs"
+    key = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+    extra = (os.environ.get(key) or "").strip()
+    if flag in extra:
+        return
+    os.environ[key] = f"{extra} {flag}".strip()
+
+
 def run_native_shell(
     *,
     root: Path,
@@ -110,6 +122,7 @@ def run_native_shell(
     startup_failed_message: Callable[[], str],
     on_closed: Callable[[], None],
 ) -> int:
+    _configure_webview2_runtime()
     try:
         import webview
     except ImportError:
