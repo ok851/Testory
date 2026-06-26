@@ -111,6 +111,7 @@
             <div class="ms-phone-toolbar">
                 <span id="msMirrorMode" class="ms-mirror-mode ms-mirror-mode--idle" title="投屏方式">未连接</span>
                 <span id="msDeviceDim" class="ms-muted">分辨率 —</span>
+                <span id="msRecordMeta" class="ms-muted ms-toolbar-hint">连接后可点击屏幕直接操作设备</span>
             </div>
             <div class="ms-phone-stage">
                 <div id="msPhoneShell" class="ms-phone-shell">
@@ -189,8 +190,8 @@
 {% else %}
 <script id="__mobileStudioCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=openclaw_gateway_configured)|tojson }}</script>
 {% endif %}
-<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}?v=20260624a"></script>
+<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}?v=20260626b"></script>
 <script src="{{ url_for('static', filename='js/mobile_agent_panel.js') }}"></script>
-<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260624a"></script>
+<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260626b"></script>
 <script src="{{ url_for('static', filename='js/mobile_playground.js') }}?v=20260622e"></script>
 {% endblock %}

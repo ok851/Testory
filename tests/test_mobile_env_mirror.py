@@ -182,6 +182,19 @@ def test_mirror_payload_downgrades_when_warm_fails(monkeypatch):
 
     monkeypatch.setattr("mobile_env_config.scrcpy_available", lambda: True)
     monkeypatch.setattr("mobile_env_config.resolve_mirror_backend", lambda udid: "scrcpy_ws")
+    monkeypatch.setattr(
+        "mobile_scrcpy_bridge.scrcpy_mirror_diagnostics",
+        lambda udid="": {
+            "scrcpy_server_version": "2.4",
+            "version_candidates": ["2.4"],
+            "scrcpy_session_active": False,
+            "mirror_fallback_reason": "",
+            "mirror_backend_selected": "scrcpy_ws",
+            "scrcpy_available": True,
+            "scrcpy_server_jar": "/tmp/jar",
+            "scrcpy_warm_timeout_sec": 20.0,
+        },
+    )
     monkeypatch.setattr("mobile_scrcpy_bridge.ensure_bridge_started", lambda: (True, ""))
     monkeypatch.setattr(
         "mobile_scrcpy_bridge.bridge_health",
@@ -202,6 +215,19 @@ def test_mirror_payload_keeps_scrcpy_when_warm_ok(monkeypatch):
     monkeypatch.setattr("mobile_env_config.scrcpy_available", lambda: True)
     monkeypatch.setattr("mobile_env_config.resolve_mirror_backend", lambda udid: "scrcpy_ws")
     monkeypatch.setattr("mobile_env_config.scrcpy_bridge_url", lambda host="": "ws://127.0.0.1:8767")
+    monkeypatch.setattr(
+        "mobile_scrcpy_bridge.scrcpy_mirror_diagnostics",
+        lambda udid="": {
+            "scrcpy_server_version": "2.4",
+            "version_candidates": ["2.4"],
+            "scrcpy_session_active": True,
+            "mirror_fallback_reason": "",
+            "mirror_backend_selected": "scrcpy_ws",
+            "scrcpy_available": True,
+            "scrcpy_server_jar": "/tmp/jar",
+            "scrcpy_warm_timeout_sec": 20.0,
+        },
+    )
     monkeypatch.setattr("mobile_scrcpy_bridge.ensure_bridge_started", lambda: (True, ""))
     monkeypatch.setattr(
         "mobile_scrcpy_bridge.bridge_health",
@@ -215,3 +241,28 @@ def test_mirror_payload_keeps_scrcpy_when_warm_ok(monkeypatch):
     assert payload["mirror_backend"] == "scrcpy_ws"
     assert payload.get("scrcpy_warmed") is True
     assert "mirror_stream_url" in payload
+    assert payload.get("client_mirror_hint")
+    assert payload.get("scrcpy_server_version") == "2.4"
+
+
+def test_mirror_payload_includes_diagnostics_when_screencap(monkeypatch):
+    from mobile_routes import _mirror_payload
+
+    monkeypatch.setattr("mobile_env_config.resolve_mirror_backend", lambda udid: "screencap")
+    monkeypatch.setattr(
+        "mobile_scrcpy_bridge.scrcpy_mirror_diagnostics",
+        lambda udid="": {
+            "scrcpy_server_version": "2.4",
+            "version_candidates": ["2.4"],
+            "scrcpy_session_active": False,
+            "mirror_fallback_reason": "scrcpy 不可用",
+            "mirror_backend_selected": "screencap",
+            "scrcpy_available": False,
+            "scrcpy_server_jar": "",
+            "scrcpy_warm_timeout_sec": 20.0,
+        },
+    )
+    payload = _mirror_payload("REAL001", "sess-1")
+    assert payload["mirror_backend"] == "screencap"
+    assert payload.get("client_mirror_hint")
+    assert payload.get("mirror_fallback_reason") == "scrcpy 不可用"

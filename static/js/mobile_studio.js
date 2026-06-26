@@ -6,6 +6,7 @@
 
     var INTERACTION_RECORD = 'record';
     var INTERACTION_CAPTURE = 'capture_element';
+    var INTERACTION_OPERATE = 'operate';
     var FRAME_INTERVAL_MS = 900;
     var PEEK_INTERVAL_MS = 320;
     var PEEK_MIN_PX = 6;
@@ -20,7 +21,7 @@
         deviceHeight: 1920,
         connected: false,
         pointerDown: null,
-        interactionMode: INTERACTION_RECORD,
+        interactionMode: INTERACTION_OPERATE,
         alsoTapOnRecord: true,
         diagnosticsCache: null,
         runningStepId: null,
@@ -316,15 +317,22 @@
         return '当前显示环境不支持 H.264 硬件解码（WebCodecs）';
     }
 
+    function h264UnavailableMessage() {
+        if (global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.getH264UnavailableMessage) {
+            return global.ScrcpyMirrorPlayer.getH264UnavailableMessage();
+        }
+        return webCodecsUnavailableMessage();
+    }
+
     function isWebCodecsRelatedError(msg) {
         if (global.ScrcpyMirrorPlayer && global.ScrcpyMirrorPlayer.isWebCodecsRelatedError) {
             return global.ScrcpyMirrorPlayer.isWebCodecsRelatedError(msg);
         }
-        return /WebCodecs|VideoDecoder|硬件解码/i.test(msg || '');
+        return /WebCodecs|VideoDecoder|硬件解码|avc1|H\.264/i.test(msg || '');
     }
 
-    function fallbackToScreencapForWebCodecs() {
-        var hint = webCodecsUnavailableMessage();
+    function fallbackToScreencapForWebCodecs(customHint) {
+        var hint = customHint || webCodecsUnavailableMessage();
         if (state.scrcpyPlayer) {
             state.scrcpyPlayer.stop();
             state.scrcpyPlayer = null;
@@ -334,12 +342,25 @@
         startScreencapMirror();
     }
 
+    function fallbackToScreencapForH264() {
+        fallbackToScreencapForWebCodecs(h264UnavailableMessage());
+    }
+
     function ensureWebCodecsForScrcpyMirror() {
-        if (webCodecsSupported()) {
-            return true;
-        }
-        fallbackToScreencapForWebCodecs();
-        return false;
+        return new Promise(function (resolve) {
+            if (!global.ScrcpyMirrorPlayer) {
+                fallbackToScreencapForWebCodecs('缺少 scrcpy 播放器组件');
+                resolve(false);
+                return;
+            }
+            if (!webCodecsSupported()) {
+                fallbackToScreencapForWebCodecs();
+                resolve(false);
+                return;
+            }
+            /* VideoDecoder API 存在即尝试 scrcpy；isConfigSupported 误报时不提前阻断 */
+            resolve(true);
+        });
     }
 
     function retryScrcpyAlternateTransport(reason) {
@@ -380,8 +401,15 @@
         if (state.mirrorBackend === 'scrcpy_ws') {
             if (retryScrcpyAlternateTransport(msg)) return;
             if (!scrcpyAutoFallbackEnabled()) {
-                updateMirrorModeBadge('connecting', 'scrcpy 等待视频帧');
-                setStatus((msg || 'scrcpy 无画面') + '。仍保持 scrcpy 通道，请断开重连或查看日志', 'warn');
+                // 判断是否是流断开（非初始化失败）
+                var isStreamLost = /流已结束|已断开|连接失败/i.test(msg || '');
+                if (isStreamLost) {
+                    updateMirrorModeBadge('connecting', 'scrcpy 等待重连');
+                    setStatus('scrcpy 通道已断开且无法自动恢复，请检查设备连接后点击「一键连接」重新投屏', 'warn');
+                } else {
+                    updateMirrorModeBadge('connecting', 'scrcpy 等待视频帧');
+                    setStatus((msg || 'scrcpy 无画面') + '。仍保持 scrcpy 通道，请断开重连或查看日志', 'warn');
+                }
                 return;
             }
         }
@@ -465,71 +493,87 @@
         });
     }
 
-    function startScrcpyHttpMirror(skipWsFallback) {
-        if (!ensureWebCodecsForScrcpyMirror()) return;
-        if (!state.mirrorStreamUrl) {
-            startScrcpyWsMirror(skipWsFallback);
-            return;
-        }
-        var epoch = (state._mirrorEpoch = (state._mirrorEpoch || 0) + 1);
-        state.mirrorRunning = true;
-        state.scrcpyPlayer = buildScrcpyPlayer();
-        if (state.scrcpyPlayer) {
-            state.scrcpyPlayer._mirrorEpoch = epoch;
-        }
-        if (!state.scrcpyPlayer) {
-            fallbackToScreencapForWebCodecs();
-            return;
-        }
-        setStatus('高帧率投屏连接中（HTTP）…', '');
-        state.scrcpyPlayer.startHttp(state.mirrorStreamUrl).catch(function (e) {
-            if (!state.mirrorRunning || epoch !== state._mirrorEpoch) return;
-            if (isMirrorAbortError(e)) return;
-            if (state.scrcpyPlayer && state.scrcpyPlayer._mirrorEpoch === epoch) {
-                state.scrcpyPlayer = null;
-            }
-            if (!skipWsFallback && state.mirrorWsUrl) {
-                setStatus('HTTP 投屏失败，尝试 WebSocket…', 'warn');
-                startScrcpyWsMirror(true);
+    function startScrcpyHttpMirror(skipWsFallback, skipProbe) {
+        function run() {
+            if (!state.mirrorStreamUrl) {
+                startScrcpyWsMirror(skipWsFallback, true);
                 return;
             }
-            scrcpyMirrorFailed(e.message || String(e));
+            var epoch = (state._mirrorEpoch = (state._mirrorEpoch || 0) + 1);
+            state.mirrorRunning = true;
+            state.scrcpyPlayer = buildScrcpyPlayer();
+            if (state.scrcpyPlayer) {
+                state.scrcpyPlayer._mirrorEpoch = epoch;
+            }
+            if (!state.scrcpyPlayer) {
+                fallbackToScreencapForH264();
+                return;
+            }
+            setStatus('高帧率投屏连接中（HTTP）…', '');
+            state.scrcpyPlayer.startHttp(state.mirrorStreamUrl).catch(function (e) {
+                if (!state.mirrorRunning || epoch !== state._mirrorEpoch) return;
+                if (isMirrorAbortError(e)) return;
+                if (state.scrcpyPlayer && state.scrcpyPlayer._mirrorEpoch === epoch) {
+                    state.scrcpyPlayer = null;
+                }
+                if (!skipWsFallback && state.mirrorWsUrl) {
+                    setStatus('HTTP 投屏失败，尝试 WebSocket…', 'warn');
+                    startScrcpyWsMirror(true, true);
+                    return;
+                }
+                scrcpyMirrorFailed(e.message || String(e));
+            });
+        }
+        if (skipProbe) {
+            run();
+            return;
+        }
+        ensureWebCodecsForScrcpyMirror().then(function (ok) {
+            if (ok) run();
         });
     }
 
-    function startScrcpyWsMirror(skipHttpFallback) {
-        if (!ensureWebCodecsForScrcpyMirror()) return;
-        if (!state.mirrorWsUrl || !global.ScrcpyMirrorPlayer) {
-            if (!skipHttpFallback && state.mirrorStreamUrl) {
-                startScrcpyHttpMirror(true);
+    function startScrcpyWsMirror(skipHttpFallback, skipProbe) {
+        function run() {
+            if (!state.mirrorWsUrl || !global.ScrcpyMirrorPlayer) {
+                if (!skipHttpFallback && state.mirrorStreamUrl) {
+                    startScrcpyHttpMirror(true, true);
+                    return;
+                }
+                scrcpyMirrorFailed('缺少 scrcpy WebSocket 地址');
                 return;
             }
-            scrcpyMirrorFailed('缺少 scrcpy WebSocket 地址');
-            return;
-        }
-        var epoch = (state._mirrorEpoch = (state._mirrorEpoch || 0) + 1);
-        state.mirrorRunning = true;
-        state.scrcpyPlayer = buildScrcpyPlayer();
-        if (state.scrcpyPlayer) {
-            state.scrcpyPlayer._mirrorEpoch = epoch;
-        }
-        if (!state.scrcpyPlayer) {
-            fallbackToScreencapForWebCodecs();
-            return;
-        }
-        setStatus('高帧率投屏连接中（WebSocket）…', '');
-        state.scrcpyPlayer.start().catch(function (e) {
-            if (!state.mirrorRunning || epoch !== state._mirrorEpoch) return;
-            if (isMirrorAbortError(e)) return;
-            if (state.scrcpyPlayer && state.scrcpyPlayer._mirrorEpoch === epoch) {
-                state.scrcpyPlayer = null;
+            var epoch = (state._mirrorEpoch = (state._mirrorEpoch || 0) + 1);
+            state.mirrorRunning = true;
+            state.scrcpyPlayer = buildScrcpyPlayer();
+            if (state.scrcpyPlayer) {
+                state.scrcpyPlayer._mirrorEpoch = epoch;
             }
-            if (!skipHttpFallback && state.mirrorStreamUrl) {
-                setStatus('WebSocket 投屏失败，尝试 HTTP…', 'warn');
-                startScrcpyHttpMirror(true);
+            if (!state.scrcpyPlayer) {
+                fallbackToScreencapForH264();
                 return;
             }
-            scrcpyMirrorFailed(e.message || String(e));
+            setStatus('高帧率投屏连接中（WebSocket）…', '');
+            state.scrcpyPlayer.start().catch(function (e) {
+                if (!state.mirrorRunning || epoch !== state._mirrorEpoch) return;
+                if (isMirrorAbortError(e)) return;
+                if (state.scrcpyPlayer && state.scrcpyPlayer._mirrorEpoch === epoch) {
+                    state.scrcpyPlayer = null;
+                }
+                if (!skipHttpFallback && state.mirrorStreamUrl) {
+                    setStatus('WebSocket 投屏失败，尝试 HTTP…', 'warn');
+                    startScrcpyHttpMirror(true, true);
+                    return;
+                }
+                scrcpyMirrorFailed(e.message || String(e));
+            });
+        }
+        if (skipProbe) {
+            run();
+            return;
+        }
+        ensureWebCodecsForScrcpyMirror().then(function (ok) {
+            if (ok) run();
         });
     }
 
@@ -616,11 +660,14 @@
         if (!state.mirrorUrl && !state.mirrorStreamUrl && !state.mirrorWsUrl) return;
         if (state.mirrorBackend === 'scrcpy_ws' && (state.mirrorStreamUrl || state.mirrorWsUrl)) {
             state._scrcpyAltTried = false;
-            if (state.mirrorStreamUrl && global.ScrcpyMirrorPlayer) {
-                startScrcpyHttpMirror();
-            } else if (state.mirrorWsUrl && global.ScrcpyMirrorPlayer) {
-                startScrcpyWsMirror();
-            }
+            ensureWebCodecsForScrcpyMirror().then(function (ok) {
+                if (!ok) return;
+                if (state.mirrorStreamUrl && global.ScrcpyMirrorPlayer) {
+                    startScrcpyHttpMirror(false, true);
+                } else if (state.mirrorWsUrl && global.ScrcpyMirrorPlayer) {
+                    startScrcpyWsMirror(false, true);
+                }
+            });
             return;
         }
         startScreencapMirror();
@@ -866,14 +913,14 @@
                         setStatus(e.message || String(e), 'err');
                     });
                 } else {
-                    recordTapAt(ev.clientX, ev.clientY).catch(function (e) {
+                    operateTapAt(ev.clientX, ev.clientY).catch(function (e) {
                         setStatus(e.message || String(e), 'err');
                     });
                 }
             } else if (state.interactionMode === INTERACTION_CAPTURE) {
                 setStatus('捕获元素模式下请单击，勿拖拽', 'warn');
             } else {
-                recordSwipeAt(state.pointerDown.x, state.pointerDown.y, ev.clientX, ev.clientY)
+                operateSwipeAt(state.pointerDown.x, state.pointerDown.y, ev.clientX, ev.clientY)
                     .catch(function (e) { setStatus(e.message || String(e), 'err'); });
             }
             state.pointerDown = null;
@@ -901,6 +948,22 @@
             state.deviceWidth = data.device.width || 1080;
             state.deviceHeight = data.device.height || 1920;
         }
+        // 保存 warm 诊断信息（含设备预检 + 参数档位）
+        state._scrcpyWarmDiag = data.scrcpy_warm_diagnostics || null;
+        if (state._scrcpyWarmDiag && state._scrcpyWarmDiag.device_diagnostics) {
+            state._deviceDiag = state._scrcpyWarmDiag.device_diagnostics;
+        } else {
+            state._deviceDiag = data.device_diagnostics || null;
+        }
+        // 保存当前使用的参数档位信息
+        if (data.scrcpy_current_profile) {
+            state._scrcpyProfile = {
+                name: data.scrcpy_current_profile,
+                fps: data.scrcpy_current_fps,
+                bitrate: data.scrcpy_current_bitrate,
+                maxSize: data.scrcpy_current_max_size,
+            };
+        }
         layoutMirrorCanvas();
         startAssistantPolling();
         connectAgentWs();
@@ -913,15 +976,29 @@
         if (state.mirrorBackend === 'scrcpy_ws') {
             updateMirrorModeBadge('connecting', '正在建立 scrcpy 视频流');
         } else {
-            updateMirrorModeBadge(
-                'screencap',
-                data.mirror_fallback_reason || 'adb screencap 截图轮询'
-            );
+            var fallbackMsg = data.mirror_fallback_reason || 'adb screencap 截图轮询';
+            updateMirrorModeBadge('screencap', fallbackMsg);
+            // 如果有设备诊断信息，在状态栏展示关键提示
+            if (state._deviceDiag && state._deviceDiag.warnings && state._deviceDiag.warnings.length > 0) {
+                fallbackMsg += ' | ⚠ ' + state._deviceDiag.warnings[0];
+            }
+            if (state._scrcpyWarmDiag && state._scrcpyWarmDiag.scrcpy_server_version) {
+                fallbackMsg += ' (scrcpy-server ' + state._scrcpyWarmDiag.scrcpy_server_version + ')';
+            }
+        }
+        if (data.client_mirror_hint && state.mirrorBackend === 'scrcpy_ws') {
+            state.clientMirrorHint = data.client_mirror_hint;
+        }
+        if (data.scrcpy_warmed && state.mirrorBackend === 'scrcpy_ws') {
+            state.scrcpyWarmed = true;
         }
         var msg = '已连接 ' + (data.device && data.device.model ? data.device.model : state.udid);
         if (data.is_emulator || isEmulatorUdid(state.udid)) msg += '（模拟器）';
         if (state.mirrorBackend === 'scrcpy_ws') msg += ' · 投屏连接中';
         else if (data.mirror_fallback_reason) msg += ' · ' + data.mirror_fallback_reason;
+        if (data.scrcpy_server_version && state.mirrorBackend === 'scrcpy_ws') {
+            msg += ' · scrcpy-server ' + data.scrcpy_server_version;
+        }
         if (data.plugin_ready) msg += ' · 插件就绪';
         else if (data.assistant_needs_install) {
             var devVer = data.assistant_version_on_device || 0;
@@ -980,7 +1057,7 @@
     }
 
     function setInteractionMode(mode) {
-        state.interactionMode = mode || INTERACTION_RECORD;
+        state.interactionMode = mode || INTERACTION_OPERATE;
         document.querySelectorAll('.ms-mode-btn').forEach(function (btn) {
             var on = btn.getAttribute('data-mode') === state.interactionMode;
             btn.classList.toggle('ms-mode-btn--active', on);
@@ -989,8 +1066,10 @@
         var probeEl = $('msProbeInfo');
         if (state.interactionMode === INTERACTION_CAPTURE) {
             if (meta) meta.textContent = '当前：捕获元素（悬停高亮，单击写入定位）';
+        } else if (state.interactionMode === INTERACTION_OPERATE) {
+            if (meta) meta.textContent = '当前：直接操作（单击点击、拖拽滑动，同步到手机）';
         } else {
-            if (meta) meta.textContent = '当前：录制（单击写点击、拖拽写滑动）';
+            if (meta) meta.textContent = '当前：录制（请在手机上操作并使用「开始录制」）';
             if (probeEl) probeEl.style.display = 'none';
             state.highlightBounds = null;
             drawHighlight(null);
@@ -1051,54 +1130,62 @@
         else setStatus('回放结束，' + (data.failed || 0) + ' 步失败', 'err');
     }
 
-    async function recordTapAt(clientX, clientY) {
-        if (!state.caseId) {
-            setStatus('请先选择用例再录制步骤', 'warn');
-            return;
-        }
+    async function operateTapAt(clientX, clientY) {
+        if (!state.connected || !state.udid) return;
         var pt = mapCanvasToDevice(clientX, clientY);
-        setStatus('正在录制点击…', '');
-        var data = await apiJson('/api/mobile/record-step', {
+        var player = state.scrcpyPlayer;
+        if (player && state.scrcpyGotFrame && player.sendTap) {
+            if (player.sendTap(pt.x, pt.y, state.deviceWidth, state.deviceHeight)) {
+                return;
+            }
+        }
+        await apiJson('/api/mobile/tap-at', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ x: pt.x, y: pt.y, udid: state.udid }),
+        });
+    }
+
+    async function operateSwipeAt(x1, y1, x2, y2) {
+        if (!state.connected || !state.udid) return;
+        var p1 = mapCanvasToDevice(x1, y1);
+        var p2 = mapCanvasToDevice(x2, y2);
+        var player = state.scrcpyPlayer;
+        if (player && state.scrcpyGotFrame && player.sendSwipe) {
+            if (player.sendSwipe(p1.x, p1.y, p2.x, p2.y, state.deviceWidth, state.deviceHeight)) {
+                return;
+            }
+        }
+        await apiJson('/api/mobile/swipe-at', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                case_id: state.caseId,
-                x: pt.x,
-                y: pt.y,
+                x1: p1.x,
+                y1: p1.y,
+                x2: p2.x,
+                y2: p2.y,
                 udid: state.udid,
-                kind: 'coord',
-                also_tap: !!state.alsoTapOnRecord,
-                source: 'mirror',
             }),
         });
-        pushSessionAction({ type: 'tap', x: pt.x, y: pt.y });
-        await loadSteps();
-        setStatus((data.step && data.step.description) || ('已录制点击 (' + pt.x + ',' + pt.y + ')'), 'ok');
-        fetchFrame();
+    }
+
+    async function recordTapAt(clientX, clientY) {
+        var pt = mapCanvasToDevice(clientX, clientY);
+        await operateTapAt(clientX, clientY);
+        if (!state.caseId) {
+            setStatus('已点击 (' + pt.x + ',' + pt.y + ')', 'ok');
+            return;
+        }
+        setStatus('画布点选录制已停用，请点击已同步到设备；步骤请在手机上录制或使用 Playground', 'warn');
     }
 
     async function recordSwipeAt(x1, y1, x2, y2) {
+        await operateSwipeAt(x1, y1, x2, y2);
         if (!state.caseId) {
-            setStatus('请先选择用例再录制步骤', 'warn');
+            setStatus('已滑动', 'ok');
             return;
         }
-        var p1 = mapCanvasToDevice(x1, y1);
-        var p2 = mapCanvasToDevice(x2, y2);
-        setStatus('正在录制滑动…', '');
-        var data = await apiJson('/api/mobile/record-swipe-step', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                case_id: state.caseId,
-                x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
-                udid: state.udid,
-                also_swipe: !!state.alsoTapOnRecord,
-            }),
-        });
-        pushSessionAction({ type: 'swipe', x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
-        await loadSteps();
-        setStatus((data.step && data.step.description) || '已录制滑动', 'ok');
-        fetchFrame();
+        setStatus('画布滑动录制已停用，操作已同步到设备', 'warn');
     }
 
     async function captureElementAt(clientX, clientY) {
@@ -1888,7 +1975,7 @@
             state.alsoTapOnRecord = !!tapChk.checked;
         }
         renderRecordingTimeline();
-        setInteractionMode(INTERACTION_RECORD);
+        setInteractionMode(INTERACTION_OPERATE);
         /* mirror 画布交互已移除 */
     }
 

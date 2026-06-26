@@ -186,11 +186,19 @@ def _resolve_request_udid(body: Optional[Dict[str, Any]] = None) -> str:
 
 def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dict[str, Any]:
     from mobile_env_config import resolve_mirror_backend, scrcpy_bridge_url
+    from mobile_scrcpy_bridge import scrcpy_mirror_diagnostics
 
     backend = resolve_mirror_backend(udid)
+    diag = scrcpy_mirror_diagnostics(udid)
     payload: Dict[str, Any] = {
         "mirror_backend": backend,
         "mirror_frame_url": f"/api/mobile/mirror/frame?session_id={session_id}&udid={udid}",
+        "scrcpy_server_version": diag.get("scrcpy_server_version"),
+        "version_candidates": diag.get("version_candidates"),
+        "scrcpy_session_active": diag.get("scrcpy_session_active"),
+        "client_mirror_hint": (
+            "高帧率投屏需浏览器或桌面 WebView 支持 WebCodecs H.264（avc1）解码"
+        ),
     }
     if backend == "scrcpy_ws":
         from mobile_scrcpy_bridge import bridge_health, ensure_bridge_started, warm_scrcpy_session
@@ -205,6 +213,9 @@ def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dic
         if not warm_ok:
             payload["mirror_backend"] = "screencap"
             payload["mirror_fallback_reason"] = warm_err or "scrcpy 预热失败，已降级为截图投屏"
+            payload["scrcpy_session_active"] = False
+            # 附带设备诊断信息，帮助用户排查
+            payload["scrcpy_warm_diagnostics"] = scrcpy_mirror_diagnostics(udid)
             return payload
         from urllib.parse import quote
 
@@ -214,6 +225,25 @@ def _mirror_payload(udid: str, session_id: str, *, client_host: str = "") -> Dic
         payload["mirror_ws_url"] = f"{scrcpy_bridge_url(client_host)}/?serial={udid}"
         payload["bridge"] = health
         payload["scrcpy_warmed"] = True
+        warm_diag = scrcpy_mirror_diagnostics(udid)
+        payload["scrcpy_session_active"] = warm_diag.get("scrcpy_session_active")
+    elif diag.get("mirror_fallback_reason"):
+        payload["mirror_fallback_reason"] = diag.get("mirror_fallback_reason")
+    # 始终尝试附带设备诊断信息（即使不是 scrcpy_ws 后端）
+    if payload.get("mirror_backend") != "scrcpy_ws" and udid:
+        try:
+            from mobile_scrcpy_bridge import _diagnose_device_for_scrcpy
+            quick_diag = _diagnose_device_for_scrcpy(udid)
+            payload["device_diagnostics"] = {
+                "sdk_level": quick_diag.get("sdk_level"),
+                "total_memory_mb": quick_diag.get("total_memory_mb"),
+                "screen_ok": quick_diag.get("screen_ok"),
+                "screen_msg": quick_diag.get("screen_msg"),
+                "warnings": quick_diag.get("warnings", []),
+                "recommended_profile": quick_diag.get("recommended_profile"),
+            }
+        except Exception:
+            pass
     return payload
 
 
@@ -295,6 +325,119 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if blocked:
             return blocked
         return jsonify({"success": True, **check_mobile_health()})
+
+    @app.route("/api/mobile/scrcpy-diagnostics", methods=["GET"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_scrcpy_diagnostics():
+        """返回设备 scrcpy 详细诊断信息（预检 + 参数档位 + 会话状态）。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        udid = request.args.get("udid", "").strip()
+        if not udid:
+            from mobile_device_manager import get_connected_udid
+            udid = get_connected_udid() or ""
+        from mobile_scrcpy_bridge import (
+            scrcpy_mirror_diagnostics,
+            _diagnose_device_for_scrcpy,
+            _generate_param_profiles,
+            bridge_health,
+        )
+
+        diag = scrcpy_mirror_diagnostics(udid)
+        bridge = bridge_health()
+
+        result: Dict[str, Any] = {
+            "success": True,
+            "udid": udid,
+            "scrcpy_diagnostics": diag,
+            "bridge": bridge,
+        }
+
+        # 如果设备已连接，进行实时预检
+        if udid:
+            try:
+                device_diag = _diagnose_device_for_scrcpy(udid)
+                result["device_diagnostics"] = {
+                    "sdk_level": device_diag.get("sdk_level"),
+                    "total_memory_mb": device_diag.get("total_memory_mb"),
+                    "storage_free_mb": device_diag.get("storage_free_mb"),
+                    "cpu_abi": device_diag.get("cpu_abi"),
+                    "screen_ok": device_diag.get("screen_ok"),
+                    "screen_msg": device_diag.get("screen_msg"),
+                    "has_encoder": device_diag.get("has_encoder"),
+                    "encoder_msg": device_diag.get("encoder_msg"),
+                    "warnings": device_diag.get("warnings", []),
+                    "recommended_profile": device_diag.get("recommended_profile"),
+                }
+                profiles = _generate_param_profiles(device_diag)
+                result["param_profiles"] = [
+                    {
+                        "name": p.profile_name,
+                        "max_fps": p.max_fps,
+                        "video_bit_rate": p.video_bit_rate,
+                        "max_size": p.max_size,
+                        "codec_options": p.codec_options,
+                    }
+                    for p in profiles
+                ]
+            except Exception as exc:
+                result["device_diagnostics_error"] = str(exc)
+
+        return jsonify(result)
+
+    @app.route("/api/mobile/mirror/scrcpy-restart", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_mirror_scrcpy_restart():
+        """手动重启指定设备的 scrcpy 会话（断开旧通道 + 重新启动 + 预热）。"""
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        from urllib.parse import unquote
+
+        serial = unquote(
+            (request.args.get("serial") or request.args.get("udid") or "").strip()
+        )
+        if not serial:
+            return jsonify({"success": False, "error": "缺少 serial"}), 400
+
+        from mobile_scrcpy_bridge import (
+            stop_scrcpy_device_session,
+            warm_scrcpy_session,
+            scrcpy_mirror_diagnostics,
+            bridge_health,
+            get_scrcpy_relay,
+        )
+
+        # ① 停止旧会话和 relay
+        try:
+            relay = get_scrcpy_relay(serial)
+            relay.stop()
+        except Exception:
+            pass
+        stop_scrcpy_device_session(serial)
+
+        # ② 重新预热（启动新会话）
+        warm_ok, warm_err = warm_scrcpy_session(serial, timeout=45.0)
+
+        if not warm_ok:
+            return jsonify({
+                "success": False,
+                "error": warm_err or "scrcpy 重启失败",
+                "diagnostics": scrcpy_mirror_diagnostics(serial),
+            }), 503
+
+        # ③ 返回成功信息
+        return jsonify({
+            "success": True,
+            "message": "scrcpy 会话已重启",
+            "diagnostics": scrcpy_mirror_diagnostics(serial),
+            "bridge": bridge_health(),
+        })
 
     @app.route("/api/mobile/devices", methods=["GET"])
     @login_required

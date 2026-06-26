@@ -23,7 +23,7 @@ import zlib
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional, Set, Tuple, Union
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple, Union
 
 _SC_PACKET_PTS_MASK = 0x3FFFFFFFFFFFFFFF
 _SC_PACKET_FLAG_CONFIG = 1 << 63
@@ -93,6 +93,48 @@ def _stable_serial_port(serial: str) -> int:
     key = (serial or "emulator-5554").strip() or "emulator-5554"
     bucket = zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF
     return 27183 + (bucket % 500)
+
+
+def _stable_serial_scid(serial: str) -> str:
+    """scrcpy 3.x 会话 ID（8 位 hex，按 serial 稳定生成）。"""
+    key = (serial or "emulator-5554").strip() or "emulator-5554"
+    bucket = zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF
+    return f"{bucket:08x}"
+
+
+def _version_major(version: str) -> int:
+    m = re.match(r"(\d+)", (version or "").strip())
+    return int(m.group(1)) if m else 2
+
+
+def _abstract_socket_name(version: str, scid: str) -> str:
+    """adb forward 目标 abstract socket（3.x 需 scrcpy_<scid>）。"""
+    if _version_major(version) >= 3:
+        return f"localabstract:scrcpy_{scid}"
+    return "localabstract:scrcpy"
+
+
+def _read_exact_sock(sock: socket.socket, n: int) -> bytes:
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("scrcpy socket 已关闭")
+        buf += chunk
+    return buf
+
+
+def read_forward_handshake(sock: socket.socket) -> bytes:
+    """
+    forward 隧道握手：标准协议先 1 字节 dummy(0x00) 再 64 字节 device name；
+    旧版 server 无 dummy 时首字节即 device name 起始。
+    """
+    first = sock.recv(1)
+    if not first:
+        raise ConnectionError("scrcpy socket 已关闭")
+    if first == b"\x00":
+        return _read_exact_sock(sock, 64)
+    return first + _read_exact_sock(sock, 63)
 
 
 def _scrcpy_control_enabled() -> bool:
@@ -281,7 +323,7 @@ def _scrcpy_server_version() -> str:
     jar = _find_scrcpy_server_jar() or ""
     jar_ver = _parse_version_from_jar_path(jar)
     exe_ver = _exe_scrcpy_version()
-    # JAR 版本优先，避免 exe 3.x 与 bundled 2.4 server 不匹配
+    # 文件名带版本号时优先 JAR；裸 scrcpy-server 则用 exe --version
     if jar_ver:
         ver = jar_ver
     elif exe_ver:
@@ -293,16 +335,49 @@ def _scrcpy_server_version() -> str:
 
 
 def _version_candidates() -> list[str]:
+    """返回版本候选列表（按优先级从高到低），基于实际 jar 文件名和可执行文件版本。"""
     primary = _scrcpy_server_version()
     out: list[str] = []
-    if primary.startswith("3."):
-        fallbacks = ("3.1", "3.0", "2.4")
+
+    # 核心候选（基于主版本）
+    base = re.match(r"(\d+)\.(\d+)", primary)
+    if base:
+        major, minor = int(base.group(1)), int(base.group(2))
+        # 按主版本添加候选
+        if major >= 3:
+            # 3.x: 精确版本 → 3.1 → 3.0 → 2.7 → 2.4
+            out.append(primary)
+            if primary not in ("3.1", "3.0"):
+                out.append("3.1")
+                out.append("3.0")
+            out.append("2.7")
+            out.append("2.4")
+        elif major == 2:
+            # 2.x: 精确版本 → 2.7 → 2.4 → 2.1
+            out.append(primary)
+            if minor < 7 and "2.7" not in out:
+                out.append("2.7")
+            if "2.4" not in out:
+                out.append("2.4")
+            if "2.1" not in out:
+                out.append("2.1")
+        else:
+            out.append(primary)
+            out.append("2.4")
+            out.append("2.1")
     else:
-        fallbacks = ("2.4", "2.1")
-    for v in (primary, *fallbacks):
-        if v and v not in out:
-            out.append(v)
-    return out
+        out.append(primary)
+        if primary != "2.4":
+            out.append("2.4")
+        if "2.1" not in out:
+            out.append("2.1")
+
+    # 去重
+    deduped: list[str] = []
+    for v in out:
+        if v and v not in deduped:
+            deduped.append(v)
+    return deduped
 
 
 def scrcpy_warm_timeout() -> float:
@@ -311,6 +386,442 @@ def scrcpy_warm_timeout() -> float:
         return max(8.0, min(60.0, float(raw)))
     except ValueError:
         return 20.0
+
+
+# ── 设备预检与自适应参数 ────────────────────────────────────────────
+
+def _adb_exec(serial: str, shell_args: str, timeout: int = 15) -> Tuple[int, str, str]:
+    """执行 adb shell 命令，返回 (returncode, stdout, stderr)。"""
+    r = _run_adb(serial, "shell", shell_args, timeout=timeout)
+    return r.returncode, (r.stdout or b"").decode("utf-8", errors="replace"), (r.stderr or b"").decode("utf-8", errors="replace")
+
+
+def _read_adb_prop(serial: str, key: str, default: str = "") -> Tuple[bool, str]:
+    """读取 Android 系统属性，返回 (成功, 值)。"""
+    code, out, err = _adb_exec(serial, f"getprop {key}", timeout=10)
+    val = (out + err).strip()
+    if val and code == 0:
+        return True, val
+    return False, default
+
+
+def _check_device_screen_on(serial: str) -> Tuple[bool, str]:
+    """检查设备屏幕状态（亮/灭、锁定/解锁）。"""
+    # 方法1：dumpsys power 检查屏幕亮灭
+    code, out, err = _adb_exec(serial, "dumpsys power", timeout=10)
+    text = (out + err).lower()
+    screen_on = ("mWakefulness=Awake" in text or
+                 "mWakefulness=1" in text or
+                 "displaypowerstate=on" in text or
+                 "mscreenon=true" in text or
+                 "mscreenonearly=true" in text or
+                 "mstate=on" in text)
+
+    # 方法2：dumpsys window 检查锁定状态
+    code2, out2, err2 = _adb_exec(serial, "dumpsys window", timeout=10)
+    text2 = (out2 + err2).lower()
+
+    # 多种锁定状态特征
+    has_keyguard = "mkeyguard" in text2 or "keyguard" in text2
+    keyguard_showing = "mshowing=true" in text2
+    keyguard_dismissed = "mdismissed=true" in text2
+    dreaming = "mdreaming=true" in text2
+
+    if dreaming:
+        locked = True  # 设备正在休眠
+    elif has_keyguard:
+        # 有锁屏组件：正在显示 且 未解散 = 锁屏中
+        locked = keyguard_showing and not keyguard_dismissed
+    else:
+        # 无法判断锁屏状态，假定未锁定
+        locked = False
+
+    if screen_on and not locked:
+        return True, "屏幕已点亮且解锁"
+    elif screen_on:
+        return False, "屏幕已点亮但可能处于锁屏状态，请解锁手机"
+    else:
+        return False, "屏幕已熄灭，请点亮并解锁手机"
+
+
+def _try_wake_screen(serial: str) -> bool:
+    """尝试通过电源键唤醒屏幕。"""
+    try:
+        _run_adb(serial, "shell", "input keyevent 26", timeout=5)
+        _run_adb(serial, "shell", "input keyevent 82", timeout=5)  # 解锁键（大部分设备）
+        time.sleep(0.5)
+        ok, msg = _check_device_screen_on(serial)
+        if ok:
+            uat_logger.info("scrcpy 唤醒屏幕成功 serial=%s", serial)
+        else:
+            uat_logger.warning("scrcpy 唤醒屏幕后状态: %s", msg)
+        return ok
+    except Exception as exc:
+        uat_logger.debug("scrcpy 唤醒屏幕异常 serial=%s: %s", serial, exc)
+        return False
+
+
+def _get_android_sdk_level(serial: str) -> int:
+    """获取设备 Android SDK 版本（整数）。"""
+    ok, val = _read_adb_prop(serial, "ro.build.version.sdk")
+    if ok and val:
+        try:
+            return int(val)
+        except ValueError:
+            pass
+    # 回退: 从 release 版本号推断
+    ok2, rel = _read_adb_prop(serial, "ro.build.version.release")
+    if ok2 and rel:
+        try:
+            major = int(rel.split(".")[0])
+            mapping = {14: 34, 13: 33, 12: 31, 11: 30, 10: 29, 9: 28, 8: 26, 7: 24, 6: 23, 5: 21, 4: 19}
+            return mapping.get(major, 28)
+        except ValueError:
+            pass
+    return 28  # 默认假定 Android 9+
+
+
+def _get_device_memory_mb(serial: str) -> int:
+    """获取设备总内存（MB），失败返回 0（未知）。"""
+    code, out, err = _adb_exec(serial, "cat /proc/meminfo", timeout=10)
+    text = out + err
+    for line in text.split("\n"):
+        if line.lower().startswith("memtotal:"):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    return int(parts[1]) // 1024  # kB → MB
+                except ValueError:
+                    pass
+    # 回退: dumpsys meminfo
+    code2, out2, err2 = _adb_exec(serial, "dumpsys meminfo", timeout=10)
+    text2 = out2 + err2
+    for line in text2.split("\n"):
+        if "total ram:" in line.lower():
+            import re as _re
+            m = _re.search(r"([\d,]+)\s*k", line.lower().replace(",", ""))
+            if m:
+                try:
+                    return int(m.group(1)) // 1024
+                except ValueError:
+                    pass
+    return 0
+
+
+def _check_device_storage_mb(serial: str, path: str = "/data/local/tmp") -> int:
+    """检查设备存储空间（MB），失败返回 -1。"""
+    code, out, err = _adb_exec(serial, f"df -k {path}", timeout=10)
+    text = out + err
+    for line in text.split("\n"):
+        if "Filesystem" in line or "文件系统" in line or not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) >= 4:
+            try:
+                available = int(parts[3]) // 1024  # kB → MB
+                return available
+            except ValueError:
+                pass
+    return -1
+
+
+def _check_device_cpu_abi(serial: str) -> str:
+    """检测设备 CPU 架构。"""
+    ok, val = _read_adb_prop(serial, "ro.product.cpu.abi")
+    if ok and val:
+        return val.strip()
+    ok2, val2 = _read_adb_prop(serial, "ro.product.cpu.abilist")
+    if ok2 and val2:
+        return val2.strip().split(",")[0]
+    return "arm64-v8a"  # 默认
+
+
+def _check_hardware_encoder(serial: str) -> Tuple[bool, str]:
+    """检查设备是否支持 H.264 硬件编码器。"""
+    code, out, err = _adb_exec(serial, "dumpsys media.codec", timeout=10)
+    text = (out + err).lower()
+    if "omx." in text:
+        # 检查是否有 H.264/AVC 编码器
+        if "video/avc" in text or "h.264" in text or "h264" in text:
+            return True, "设备支持 H.264 硬件编码器 (OMX)"
+    # 回退: 检测 MediaCodec 列表
+    code2, out2, err2 = _adb_exec(serial, "ls /dev/video* 2>/dev/null; echo ---; ls /sys/class/video4linux/ 2>/dev/null", timeout=10)
+    text2 = (out2 + err2).strip()
+    if text2 and text2 != "---":
+        return True, "检测到 V4L2 视频设备"
+    # 大多数现代 Android 设备都支持
+    return True, "假定支持 H.264 编码（现代设备均支持）"
+
+
+def _diagnose_device_for_scrcpy(serial: str) -> Dict[str, Any]:
+    """设备预检：收集所有可能影响 scrcpy 启动的信息。"""
+    diag: Dict[str, Any] = {
+        "serial": serial,
+        "screen_ok": False,
+        "screen_msg": "",
+        "sdk_level": 28,
+        "total_memory_mb": 0,
+        "storage_free_mb": -1,
+        "cpu_abi": "",
+        "has_encoder": False,
+        "encoder_msg": "",
+        "warnings": [],
+        "recommended_profile": "balanced",
+    }
+
+    # 1. 屏幕状态
+    diag["screen_ok"], diag["screen_msg"] = _check_device_screen_on(serial)
+    if not diag["screen_ok"]:
+        diag["warnings"].append(diag["screen_msg"])
+
+    # 2. Android SDK 版本
+    diag["sdk_level"] = _get_android_sdk_level(serial)
+    if diag["sdk_level"] < 21:
+        diag["warnings"].append(f"Android SDK {diag['sdk_level']} 版本过低（需 ≥ 21）")
+    elif diag["sdk_level"] < 24:
+        diag["warnings"].append(f"Android SDK {diag['sdk_level']} 较低，可能不完全兼容")
+
+    # 3. 内存
+    diag["total_memory_mb"] = _get_device_memory_mb(serial)
+    if 0 < diag["total_memory_mb"] < 2048:
+        diag["recommended_profile"] = "conservative"
+        diag["warnings"].append(f"设备内存较小（{diag['total_memory_mb']}MB），建议使用保守参数")
+    elif diag["total_memory_mb"] >= 4096:
+        diag["recommended_profile"] = "aggressive"
+
+    # 4. 存储
+    diag["storage_free_mb"] = _check_device_storage_mb(serial)
+    if 0 <= diag["storage_free_mb"] < 50:
+        diag["warnings"].append(f"/data/local/tmp 可用空间不足（{diag['storage_free_mb']}MB），scrcpy-server 可能推送失败")
+
+    # 5. CPU 架构
+    diag["cpu_abi"] = _check_device_cpu_abi(serial)
+
+    # 6. 编码器
+    diag["has_encoder"], diag["encoder_msg"] = _check_hardware_encoder(serial)
+
+    # 7. 综合推荐
+    if diag["sdk_level"] < 24 or diag["total_memory_mb"] < 2048:
+        diag["recommended_profile"] = "conservative"
+    elif diag["sdk_level"] < 21:
+        diag["recommended_profile"] = "minimal"
+
+    return diag
+
+
+def _analyze_scrcpy_stderr(stderr_text: str) -> Dict[str, Any]:
+    """
+    分析 scrcpy-server stderr 输出，识别具体失败原因。
+    返回 {"type": 错误类型, "message": 中文描述, "retry_with_lower": 是否需要降参数重试}
+    """
+    text = (stderr_text or "").lower()
+    result: Dict[str, Any] = {
+        "type": "unknown",
+        "message": "",
+        "retry_with_lower": False,
+        "fatal": False,
+    }
+
+    # 编码器创建失败（最常见，需要降参数重试）
+    if "fail to create encoder" in text or "create encoder" in text or "encoder error" in text:
+        result["type"] = "encoder_create_fail"
+        result["message"] = "设备编码器创建失败，可能是分辨率/码率过高"
+        result["retry_with_lower"] = True
+        return result
+
+    if "unsupported resolution" in text or "unsupported size" in text or "invalid size" in text:
+        result["type"] = "resolution_unsupported"
+        result["message"] = "设备不支持当前分辨率"
+        result["retry_with_lower"] = True
+        return result
+
+    if "bitrate" in text and ("too high" in text or "unsupported" in text or "invalid" in text):
+        result["type"] = "bitrate_too_high"
+        result["message"] = "码率过高，设备编码器不支持"
+        result["retry_with_lower"] = True
+        return result
+
+    if "max_fps" in text and ("unsupported" in text or "invalid" in text):
+        result["type"] = "fps_unsupported"
+        result["message"] = "帧率设置不被设备支持"
+        result["retry_with_lower"] = True
+        return result
+
+    # Java 类加载错误（jar 版本与设备不兼容）
+    if "noclassdeffounderror" in text or "classnotfoundexception" in text:
+        result["type"] = "class_not_found"
+        result["message"] = "scrcpy-server 版本与设备不兼容（类缺失），请尝试其他版本"
+        result["fatal"] = False
+        return result
+
+    if "unsupportedclassversionerror" in text:
+        result["type"] = "unsupported_class_version"
+        result["message"] = "scrcpy-server 编译版本过高，设备 Java 运行时版本不足"
+        result["fatal"] = False
+        return result
+
+    # 原生库加载失败
+    if "unsatisfiedlinkerror" in text or "library" in text and "load" in text:
+        result["type"] = "native_library_fail"
+        result["message"] = "scrcpy-server 原生库与设备 CPU 架构不匹配"
+        result["fatal"] = True
+        return result
+
+    # 权限/安全限制
+    if "securityexception" in text or "permission denied" in text:
+        result["type"] = "permission_denied"
+        result["message"] = "设备安全策略禁止 scrcpy-server 运行（SELinux/权限限制）"
+        result["fatal"] = True
+        return result
+
+    # 显示服务
+    if "unable to find a compatible display" in text or "display" in text and ("not found" in text or "error" in text):
+        result["type"] = "display_not_found"
+        result["message"] = "设备显示服务异常或屏幕完全关闭"
+        result["fatal"] = True
+        return result
+
+    # 内存不足
+    if "outofmemoryerror" in text or "out of memory" in text:
+        result["type"] = "out_of_memory"
+        result["message"] = "设备内存不足，scrcpy-server 无法启动"
+        result["retry_with_lower"] = True
+        return result
+
+    # app_process 找不到
+    if "app_process" in text and ("not found" in text or "error" in text):
+        result["type"] = "app_process_missing"
+        result["message"] = "设备缺少 app_process，可能是非标准 Android 系统"
+        result["fatal"] = True
+        return result
+
+    # 未知错误
+    if text:
+        result["type"] = "unknown_error"
+        result["message"] = f"scrcpy-server 报错: {stderr_text[:200]}"
+    return result
+
+
+# ── 自适应参数配置 ──────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ScrcpyDeviceParams:
+    """scrcpy-server 启动参数档位。"""
+    profile_name: str  # aggressive / balanced / conservative / minimal
+    max_fps: int
+    video_bit_rate: int
+    max_size: int  # 0 = 原生分辨率
+    codec_options: str = ""
+
+    def to_server_args(self, version: str, scid: str, control_enabled: bool) -> list:
+        args = [
+            f"max_fps={self.max_fps}",
+            f"video_bit_rate={self.video_bit_rate}",
+            "tunnel_forward=true",
+            f"control={'true' if control_enabled else 'false'}",
+            "audio=false",
+            "show_touches=false",
+            "send_frame_meta=true",
+            "log_level=error",
+        ]
+        if _version_major(version) >= 3:
+            args.append(f"scid={scid}")
+        if self.max_size > 0:
+            args.insert(1, f"max_size={self.max_size}")
+        if self.codec_options:
+            args.append(f"video_codec_options={self.codec_options}")
+        return args
+
+
+def _generate_param_profiles(diag: Dict[str, Any]) -> List[ScrcpyDeviceParams]:
+    """
+    根据设备诊断结果生成参数档位列表（从最合适到最保守）。
+    设备越好，初始档位越高；失败后自动降档。
+    """
+    sdk = diag.get("sdk_level", 28)
+    mem = diag.get("total_memory_mb", 2048)
+    screen_ok = diag.get("screen_ok", True)
+
+    # 从 env 读取用户自定义（优先）
+    env_max_fps = scrcpy_mirror_fps()
+    try:
+        env_bitrate = max(2_000_000, min(20_000_000, int(
+            os.environ.get("MOBILE_SCRCPY_VIDEO_BITRATE", "12000000"))))
+    except ValueError:
+        env_bitrate = 12_000_000
+    env_max_size = scrcpy_max_size()
+    env_codec = (os.environ.get("MOBILE_SCRCPY_CODEC_OPTIONS") or "").strip()
+
+    profiles: List[ScrcpyDeviceParams] = []
+
+    # ── 档位1：激进档（设备条件好 + 用户未自定义时使用） ──
+    if sdk >= 28 and mem >= 3072:
+        profiles.append(ScrcpyDeviceParams(
+            profile_name="aggressive",
+            max_fps=min(env_max_fps, 60),
+            video_bit_rate=min(env_bitrate, 12_000_000),
+            max_size=env_max_size,
+            codec_options=env_codec,
+        ))
+
+    # ── 档位2：均衡档（大多数设备推荐初始使用） ──
+    profiles.append(ScrcpyDeviceParams(
+        profile_name="balanced",
+        max_fps=min(env_max_fps, 30),
+        video_bit_rate=min(env_bitrate, 8_000_000),
+        max_size=env_max_size if env_max_size > 0 else 1920,
+        codec_options=env_codec,
+    ))
+
+    # ── 档位3：保守档（内存不足或低版本 Android） ──
+    profiles.append(ScrcpyDeviceParams(
+        profile_name="conservative",
+        max_fps=min(env_max_fps, 20),
+        video_bit_rate=min(env_bitrate, 4_000_000),
+        max_size=1400 if env_max_size <= 0 else min(env_max_size, 1400),
+        codec_options=env_codec,
+    ))
+
+    # ── 档位4：最低档（极端兼容） ──
+    profiles.append(ScrcpyDeviceParams(
+        profile_name="minimal",
+        max_fps=min(env_max_fps, 10),
+        video_bit_rate=min(env_bitrate, 2_000_000),
+        max_size=960 if env_max_size <= 0 else min(env_max_size, 960),
+        codec_options=env_codec,
+    ))
+
+    # 重新排序：把推荐档位放在第一位，只向更低档位回退（不尝试更激进档位）
+    rec = diag.get("recommended_profile", "balanced")
+    rec_idx = {"aggressive": 0, "balanced": 1, "conservative": 2, "minimal": 3}
+    start_idx = rec_idx.get(rec, 1)
+    # 从推荐档位开始，只往后（更保守方向）重试，不往后更激进方向
+    profiles = profiles[start_idx:]
+
+    # 如果屏幕黑着，跳过激进档
+    if not screen_ok:
+        profiles = [p for p in profiles if p.profile_name != "aggressive"]
+
+    if len(profiles) == 0:
+        # 保底
+        profiles.append(ScrcpyDeviceParams(
+            profile_name="minimal",
+            max_fps=10,
+            video_bit_rate=2_000_000,
+            max_size=960,
+            codec_options="",
+        ))
+
+    # 去重（按参数值）
+    seen: set = set()
+    deduped: List[ScrcpyDeviceParams] = []
+    for p in profiles:
+        key = (p.max_fps, p.video_bit_rate, p.max_size, p.codec_options)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(p)
+    return deduped
 
 
 def scrcpy_mirror_diagnostics(udid: str = "") -> Dict[str, Any]:
@@ -333,6 +844,30 @@ def scrcpy_mirror_diagnostics(udid: str = "") -> Dict[str, Any]:
     if serial:
         sess = _get_persistent_device(serial)
         diag["scrcpy_session_active"] = bool(sess and sess.running)
+        if sess and sess.running:
+            diag["scrcpy_current_profile"] = (
+                sess._current_params.profile_name if sess._current_params else None
+            )
+            diag["scrcpy_current_fps"] = (
+                sess._current_params.max_fps if sess._current_params else None
+            )
+            diag["scrcpy_current_bitrate"] = (
+                sess._current_params.video_bit_rate if sess._current_params else None
+            )
+            diag["scrcpy_current_max_size"] = (
+                sess._current_params.max_size if sess._current_params else None
+            )
+        if sess and sess._device_diag:
+            diag["device_diagnostics"] = {
+                "sdk_level": sess._device_diag.get("sdk_level"),
+                "total_memory_mb": sess._device_diag.get("total_memory_mb"),
+                "storage_free_mb": sess._device_diag.get("storage_free_mb"),
+                "cpu_abi": sess._device_diag.get("cpu_abi"),
+                "screen_ok": sess._device_diag.get("screen_ok"),
+                "screen_msg": sess._device_diag.get("screen_msg"),
+                "warnings": sess._device_diag.get("warnings", []),
+                "recommended_profile": sess._device_diag.get("recommended_profile"),
+            }
     if backend != "scrcpy_ws":
         if not scrcpy_available():
             diag["mirror_fallback_reason"] = "scrcpy 不可用（未找到 scrcpy.exe 或 scrcpy-server）"
@@ -381,7 +916,7 @@ def stop_scrcpy_device_session(serial: str) -> None:
 
 
 class ScrcpyDeviceSession:
-    """单设备 scrcpy-server 会话（H.264 over TCP）。"""
+    """单设备 scrcpy-server 会话（H.264 over TCP），支持自动预检与自适应参数重试。"""
 
     def __init__(self, serial: str) -> None:
         self.serial = serial
@@ -395,11 +930,18 @@ class ScrcpyDeviceSession:
         self._control_lock = threading.Lock()
         self._stderr_lines: Deque[str] = deque(maxlen=20)
         self._stderr_thread: Optional[threading.Thread] = None
+        self._current_params: Optional[ScrcpyDeviceParams] = None
+        self._device_diag: Optional[Dict[str, Any]] = None
 
     def _stderr_hint(self) -> str:
         if not self._stderr_lines:
             return ""
         return "; ".join(list(self._stderr_lines)[-5:])
+
+    def _stderr_full(self) -> str:
+        if not self._stderr_lines:
+            return ""
+        return "\n".join(self._stderr_lines)
 
     def _start_stderr_drain(self) -> None:
         proc = self._shell_proc
@@ -424,7 +966,7 @@ class ScrcpyDeviceSession:
         )
         self._stderr_thread.start()
 
-    def _wait_tcp_handshake(self, deadline: float) -> socket.socket:
+    def _wait_tcp_handshake(self, deadline: float) -> Tuple[socket.socket, bytes]:
         last_err: Optional[Exception] = None
         while time.time() < deadline:
             proc = self._shell_proc
@@ -437,11 +979,11 @@ class ScrcpyDeviceSession:
             try:
                 sock = socket.create_connection(("127.0.0.1", self.local_port), timeout=2)
                 sock.settimeout(20.0)
-                dummy = sock.recv(1)
-                if dummy:
-                    return sock
-                sock.close()
+                device_name = read_forward_handshake(sock)
+                return sock, device_name
             except OSError as exc:
+                last_err = exc
+            except ConnectionError as exc:
                 last_err = exc
             time.sleep(0.35)
         hint = self._stderr_hint()
@@ -452,78 +994,44 @@ class ScrcpyDeviceSession:
             msg += f"（{last_err}）"
         raise RuntimeError(msg)
 
-    def start(self) -> None:
-        if not self._server_jar:
-            raise RuntimeError(
-                "未找到 scrcpy-server。请安装 scrcpy 并将 scrcpy-server 置于 scrcpy.exe 同目录，"
-                "或复制到 static/vendor/scrcpy-server"
-            )
-        last_err: Optional[Exception] = None
-        for ver in _version_candidates():
-            self._version = ver
-            try:
-                self._start_once()
-                return
-            except Exception as exc:
-                last_err = exc
-                hint = self._stderr_hint()
-                if hint:
-                    uat_logger.warning(
-                        "scrcpy 版本 %s 启动失败 serial=%s: %s | stderr: %s",
-                        ver,
-                        self.serial,
-                        exc,
-                        hint,
-                    )
-                self.stop()
-        err_msg = str(last_err) if last_err else "scrcpy 启动失败"
-        hint = self._stderr_hint()
-        if hint and hint not in err_msg:
-            err_msg = f"{err_msg}（{hint}）"
-        raise RuntimeError(err_msg)
-
-    def _start_once(self) -> None:
+    def _do_start_once(self, params: ScrcpyDeviceParams) -> None:
+        """使用指定参数档位启动 scrcpy-server 一次。"""
         serial = self.serial
         remote = "/data/local/tmp/scrcpy-server.jar"
+
+        # ① 推送 jar
         push = _run_adb(serial, "push", self._server_jar, remote, timeout=60)
         if push.returncode != 0:
             err = (push.stderr or push.stdout or b"").decode("utf-8", errors="replace")
+            # 检查是否是存储空间不足
+            if "no space" in err.lower() or "space" in err.lower():
+                free_mb = _check_device_storage_mb(serial)
+                raise RuntimeError(
+                    f"推送 scrcpy-server 失败（设备存储不足，{free_mb}MB 可用）：{err}"
+                )
             raise RuntimeError(f"推送 scrcpy-server 失败：{err}")
 
+        # ② adb forward
+        scid = _stable_serial_scid(serial)
+        abstract = _abstract_socket_name(self._version, scid)
         _run_adb(serial, "forward", "--remove", f"tcp:{self.local_port}")
-        fwd = _run_adb(serial, "forward", f"tcp:{self.local_port}", "localabstract:scrcpy")
+        fwd = _run_adb(serial, "forward", f"tcp:{self.local_port}", abstract)
         if fwd.returncode != 0:
             err = (fwd.stderr or fwd.stdout or b"").decode("utf-8", errors="replace")
             raise RuntimeError(f"adb forward 失败：{err}")
 
-        max_fps = scrcpy_mirror_fps()
-        max_size = scrcpy_max_size()
-        try:
-            video_bit_rate = max(
-                2_000_000,
-                min(20_000_000, int(os.environ.get("MOBILE_SCRCPY_VIDEO_BITRATE", "12000000"))),
-            )
-        except ValueError:
-            video_bit_rate = 12_000_000
-        server_args = [
-            f"max_fps={max_fps}",
-            f"video_bit_rate={video_bit_rate}",
-            "tunnel_forward=true",
-            f"control={'true' if _scrcpy_control_enabled() else 'false'}",
-            "audio=false",
-            "show_touches=false",
-            "send_frame_meta=true",
-            "log_level=error",
-        ]
-        if max_size > 0:
-            server_args.insert(1, f"max_size={max_size}")
-        codec_opts = (os.environ.get("MOBILE_SCRCPY_CODEC_OPTIONS") or "").strip()
-        if codec_opts:
-            server_args.append(f"video_codec_options={codec_opts}")
+        # ③ 构建 shell 命令
+        server_args = params.to_server_args(
+            self._version,
+            scid,
+            _scrcpy_control_enabled(),
+        )
         shell_cmd = (
             f"CLASSPATH={remote} app_process / com.genymobile.scrcpy.Server "
             f"{self._version} {' '.join(server_args)}"
         )
+
+        # ④ 启动进程
         self._shell_proc = subprocess.Popen(
             [adb_path(), "-s", serial, "shell", shell_cmd],
             stdout=subprocess.DEVNULL,
@@ -531,15 +1039,23 @@ class ScrcpyDeviceSession:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
         )
         self._start_stderr_drain()
-        sock = self._wait_tcp_handshake(time.time() + 15.0)
-        device_name = self._read_exact(sock, 64)
+
         uat_logger.info(
-            "scrcpy 已连接: serial=%s version=%s device=%s",
-            serial,
-            self._version,
+            "scrcpy 尝试启动: serial=%s version=%s profile=%s fps=%d bitrate=%d max_size=%d",
+            serial, self._version, params.profile_name,
+            params.max_fps, params.video_bit_rate, params.max_size,
+        )
+
+        # ⑤ TCP 握手
+        sock, device_name = self._wait_tcp_handshake(time.time() + 15.0)
+        uat_logger.info(
+            "scrcpy 已连接: serial=%s version=%s profile=%s device=%s",
+            serial, self._version, params.profile_name,
             device_name.split(b"\x00")[0].decode("utf-8", errors="replace"),
         )
         self._socket = sock
+
+        # ⑥ 控制通道
         if _scrcpy_control_enabled():
             try:
                 ctrl = socket.create_connection(("127.0.0.1", self.local_port), timeout=8)
@@ -548,7 +1064,141 @@ class ScrcpyDeviceSession:
             except Exception as exc:
                 uat_logger.warning("scrcpy 控制通道未连接 serial=%s: %s", serial, exc)
                 self._control_socket = None
+        self._current_params = params
         self.running = True
+
+    def start(self) -> None:
+        """启动 scrcpy-server，支持预检诊断、屏幕唤醒、自适应参数降级重试。"""
+        if not self._server_jar:
+            raise RuntimeError(
+                "未找到 scrcpy-server。请安装 scrcpy 并将 scrcpy-server 置于 scrcpy.exe 同目录，"
+                "或复制到 static/vendor/scrcpy-server"
+            )
+
+        # ── 阶段0：设备预检诊断 ──
+        uat_logger.info("scrcpy 开始设备预检 serial=%s", self.serial)
+        self._device_diag = _diagnose_device_for_scrcpy(self.serial)
+        uat_logger.info(
+            "scrcpy 预检结果 serial=%s: sdk=%d mem=%dMB storage=%dMB screen=%s profile=%s "
+            "warnings=%s",
+            self.serial,
+            self._device_diag["sdk_level"],
+            self._device_diag["total_memory_mb"],
+            self._device_diag["storage_free_mb"],
+            "OK" if self._device_diag["screen_ok"] else "BLACK/LOCKED",
+            self._device_diag["recommended_profile"],
+            self._device_diag["warnings"],
+        )
+
+        # ── 阶段0.5：尝试唤醒屏幕 ──
+        if not self._device_diag["screen_ok"]:
+            uat_logger.warning(
+                "scrcpy 设备屏幕未点亮/锁定 serial=%s，尝试唤醒…", self.serial
+            )
+            _try_wake_screen(self.serial)
+            # 重新检查
+            screen_ok, screen_msg = _check_device_screen_on(self.serial)
+            self._device_diag["screen_ok"] = screen_ok
+            self._device_diag["screen_msg"] = screen_msg
+            uat_logger.info(
+                "scrcpy 唤醒后屏幕状态 serial=%s: %s", self.serial, screen_msg
+            )
+
+        # ── 生成参数档位 ──
+        param_profiles = _generate_param_profiles(self._device_diag)
+        uat_logger.info(
+            "scrcpy 参数档位 serial=%s: %s",
+            self.serial,
+            ", ".join(p.profile_name for p in param_profiles),
+        )
+
+        # ── 阶段1-2：参数档位 × 版本候选 双层重试 ──
+        all_errors: List[Dict[str, Any]] = []
+        skipped_versions: Set[str] = set()
+        tried_profiles: List[str] = []
+        start_deadline = time.time() + 60.0  # 总时限 60 秒
+
+        for params in param_profiles:
+            if time.time() > start_deadline:
+                uat_logger.warning("scrcpy 启动超时（60s），未尝试: %s", params.profile_name)
+                break
+            profile_tried = False
+            for ver in _version_candidates():
+                if time.time() > start_deadline:
+                    uat_logger.warning("scrcpy 启动超时（60s），跳过版本: %s", ver)
+                    break
+                if ver in skipped_versions:
+                    uat_logger.debug("scrcpy 跳过已排除版本 %s serial=%s", ver, self.serial)
+                    continue
+
+                self._version = ver
+                try:
+                    self._do_start_once(params)
+                    uat_logger.info(
+                        "scrcpy ✅ 启动成功: serial=%s version=%s profile=%s",
+                        self.serial, ver, params.profile_name,
+                    )
+                    return  # 成功！
+                except Exception as exc:
+                    err_str = str(exc)
+                    stderr_full = self._stderr_full()
+                    stderr_analysis = _analyze_scrcpy_stderr(stderr_full)
+
+                    err_info = {
+                        "version": ver,
+                        "profile": params.profile_name,
+                        "error": err_str,
+                        "stderr_analysis": stderr_analysis,
+                    }
+                    all_errors.append(err_info)
+                    profile_tried = True
+
+                    uat_logger.warning(
+                        "scrcpy 启动失败: serial=%s version=%s profile=%s (%s/%s/%s) error=%s stderr_analysis=%s",
+                        self.serial, ver, params.profile_name,
+                        params.max_fps, params.video_bit_rate, params.max_size,
+                        err_str[:200],
+                        stderr_analysis.get("type", "unknown"),
+                    )
+                    if stderr_full:
+                        uat_logger.warning(
+                            "scrcpy stderr serial=%s: %s", self.serial, stderr_full[:500]
+                        )
+
+                    # 根据 stderr 分析决定是否跳过此版本
+                    if stderr_analysis.get("fatal"):
+                        skipped_versions.add(ver)
+                        uat_logger.warning(
+                            "scrcpy 版本 %s 致命错误，跳过此版本: %s",
+                            ver, stderr_analysis.get("message", ""),
+                        )
+
+                    # 编码器类错误：跳过剩余版本，直接降参数档位
+                    if stderr_analysis.get("retry_with_lower"):
+                        uat_logger.info(
+                            "scrcpy 编码器瓶颈，跳过剩余版本候选，直接降参数档位"
+                        )
+                        break  # 跳出版本重试循环，进入下一个参数档位
+
+                    # 非致命也非降参数类错误：尝试下一个版本
+                    self.stop()
+
+            if profile_tried:
+                tried_profiles.append(params.profile_name)
+
+            # 如果当前档位的所有版本都失败了且不是"降参数"类型
+            # 继续下一个档位（通过外层循环自动进行）
+
+        # ── 所有重试均失败 ──
+        error_summary = "; ".join(
+            f"[{e['profile']}/{e['version']}]{e['error'][:120]}"
+            for e in all_errors[-6:]  # 最多展示最后6次错误
+        )
+        final_msg = f"scrcpy 启动失败（已尝试 {len(all_errors)} 次）"
+        if error_summary:
+            final_msg += f"：{error_summary}"
+        uat_logger.error("scrcpy ❌ 全部重试失败 serial=%s: %s", self.serial, final_msg)
+        raise RuntimeError(final_msg)
 
     def _inject_touch_event(
         self,
@@ -680,6 +1330,8 @@ class ScrcpyDeviceSession:
 
     def stop(self) -> None:
         self.running = False
+        self._current_params = None
+        self._device_diag = None
         if self._control_socket:
             try:
                 self._control_socket.close()
@@ -715,7 +1367,11 @@ def _get_persistent_device(serial: str) -> Optional[ScrcpyDeviceSession]:
 
 
 class ScrcpyFrameRelay:
-    """单设备单 scrcpy 会话 + 单读取线程，向 HTTP/WS 多客户端广播帧。"""
+    """单设备单 scrcpy 会话 + 单读取线程，向 HTTP/WS 多客户端广播帧。
+
+    当 scrcpy-server 异常退出时自动重启会话（最多 3 次），避免 HTTP/WS 流断开。"""
+
+    _MAX_SESSION_RESTARTS = 3  # 会话自动重启上限
 
     def __init__(self, serial: str) -> None:
         self.serial = (serial or "").strip()
@@ -724,6 +1380,15 @@ class ScrcpyFrameRelay:
         self._subscribers: Dict[int, queue.Queue] = {}
         self._next_sub_id = 0
         self._reader_thread: Optional[threading.Thread] = None
+        # 健康追踪
+        self._last_frame_time: float = 0.0
+        self._session_restart_count: int = 0
+
+    @property
+    def seconds_since_last_frame(self) -> float:
+        if not self._last_frame_time:
+            return -1.0
+        return time.time() - self._last_frame_time
 
     def ensure_started(self) -> Tuple[bool, str]:
         sess, err = ensure_scrcpy_device_session(self.serial)
@@ -755,15 +1420,78 @@ class ScrcpyFrameRelay:
             self._subscribers.pop(sid, None)
 
     def _reader_loop(self) -> None:
+        """读取帧并广播到所有订阅者。
+
+        当 scrcpy-server 进程异常退出时，自动尝试重启会话：
+        - 检测到 session 停止后等待约 1.2s（10 个迭代周期）
+        - 然后尝试重启，最多 3 次
+        - 每次重启使用递增延迟（1.5s → 3s → 6s）
+        """
+        consecutive_dead: int = 0
+        self._session_restart_count = 0
         while not self._stopped:
             sess = _get_persistent_device(self.serial)
             if not sess or not sess.running:
+                consecutive_dead += 1
+                # 首次检测到 session 死亡时记录日志
+                if consecutive_dead == 1:
+                    uat_logger.warning(
+                        "scrcpy relay 检测到会话停止 serial=%s (restart_count=%d/%d)",
+                        self.serial,
+                        self._session_restart_count,
+                        self._MAX_SESSION_RESTARTS,
+                    )
+                # 等待 ~1.2 秒确认不是瞬态后，尝试重启
+                if consecutive_dead >= 10:
+                    if self._session_restart_count < self._MAX_SESSION_RESTARTS:
+                        delay = 1.5 * (2 ** self._session_restart_count)
+                        uat_logger.info(
+                            "scrcpy relay 尝试重启会话 serial=%s (attempt %d/%d, delay=%.1fs)",
+                            self.serial,
+                            self._session_restart_count + 1,
+                            self._MAX_SESSION_RESTARTS,
+                            delay,
+                        )
+                        time.sleep(delay)
+                        # 清理已死的 persistent session，确保能创建新的
+                        self._clean_dead_session()
+                        ok, err = ensure_scrcpy_device_session(self.serial)
+                        if ok:
+                            self._session_restart_count += 1
+                            consecutive_dead = 0
+                            uat_logger.info(
+                                "scrcpy relay 会话重启成功 serial=%s (attempt %d)",
+                                self.serial,
+                                self._session_restart_count,
+                            )
+                            continue
+                        else:
+                            self._session_restart_count += 1
+                            uat_logger.error(
+                                "scrcpy relay 会话重启失败 serial=%s (attempt %d): %s",
+                                self.serial,
+                                self._session_restart_count,
+                                err,
+                            )
+                            consecutive_dead = 0
+                    else:
+                        # 已达重启上限，保持等待但不再重试
+                        uat_logger.error(
+                            "scrcpy relay 已达重启上限 serial=%s，等待用户手动重连",
+                            self.serial,
+                        )
                 time.sleep(0.12)
                 continue
+            # session 健康，重置计数器
+            consecutive_dead = 0
+            if self._session_restart_count > 0:
+                self._session_restart_count = 0
+                uat_logger.info("scrcpy relay 会话恢复正常 serial=%s", self.serial)
             packet = sess.read_packet()
             if not packet:
                 time.sleep(0.02)
                 continue
+            self._last_frame_time = time.time()
             with self._lock:
                 subs = list(self._subscribers.values())
             for sub_q in subs:
@@ -778,6 +1506,17 @@ class ScrcpyFrameRelay:
                         sub_q.put_nowait(packet)
                     except queue.Full:
                         pass
+
+    def _clean_dead_session(self) -> None:
+        """清理已停止的 persistent session（避免 ensure_scrcpy_device_session 判定为已有 running 会话）。"""
+        with _persistent_lock:
+            sess = _persistent_sessions.get(self.serial)
+            if sess and not sess.running:
+                try:
+                    sess.stop()
+                except Exception:
+                    pass
+                del _persistent_sessions[self.serial]
 
     def stop(self) -> None:
         self._stopped = True
@@ -802,7 +1541,11 @@ def get_scrcpy_relay(serial: str) -> ScrcpyFrameRelay:
 def iter_scrcpy_http_stream(serial: str):
     """
     经 Flask 同源 HTTP 输出 H.264（uint32 长度前缀 + payload）。
+
     与预热会话共用帧广播，避免重复拉起 scrcpy-server 或争抢 read_packet。
+
+    当 scrcpy-server 异常退出时，不立即断开 HTTP 流，而是等待 relay 自动重启会话
+    （最多等待 30 秒），给 relay._reader_loop 中的自动重启机制留出恢复时间。
     """
     serial = (serial or "").strip()
     if not serial:
@@ -814,6 +1557,9 @@ def iter_scrcpy_http_stream(serial: str):
         return
     uat_logger.info("scrcpy HTTP 流开始 serial=%s", serial)
     sid, pkt_queue = relay.subscribe()
+    idle_since: Optional[float] = None  # session 死亡时间戳
+    max_idle_seconds = 30.0  # 等待 relay 重启的最大时长
+    warned_idle = False
     try:
         while not relay._stopped:
             try:
@@ -821,15 +1567,57 @@ def iter_scrcpy_http_stream(serial: str):
             except queue.Empty:
                 sess = _get_persistent_device(serial)
                 if not sess or not sess.running:
-                    break
+                    now = time.time()
+                    if idle_since is None:
+                        idle_since = now
+                        uat_logger.warning(
+                            "scrcpy HTTP 检测到会话停止 serial=%s，等待 relay 自动重启 (max %ds)",
+                            serial, int(max_idle_seconds),
+                        )
+                    elif now - idle_since > max_idle_seconds:
+                        uat_logger.error(
+                            "scrcpy HTTP 等待会话重启超时 serial=%s (%.1fs)，断开流",
+                            serial, now - idle_since,
+                        )
+                        break
+                    elif not warned_idle and now - idle_since > 10.0:
+                        warned_idle = True
+                        uat_logger.warning(
+                            "scrcpy HTTP 会话仍不可用 serial=%s，继续等待 (已等 %.0fs)",
+                            serial, now - idle_since,
+                        )
+                    # 使用短超时快速检查 session 是否恢复
+                    try:
+                        packet = pkt_queue.get(timeout=2.0)
+                        # 收到了 packet，session 已恢复
+                        idle_since = None
+                        warned_idle = False
+                        uat_logger.info("scrcpy HTTP 会话已恢复 serial=%s", serial)
+                    except queue.Empty:
+                        continue
+                else:
+                    continue
+            if isinstance(packet, ScrcpyPacket) and not packet.payload:
+                # 空载荷（可能是心跳或异常），跳过
                 continue
             if not packet:
+                # sentinel：relay 明确要求断开
+                uat_logger.info("scrcpy HTTP 收到断开信令 serial=%s", serial)
                 break
+            # 收到有效帧，重置空闲状态
+            if idle_since is not None:
+                idle_since = None
+                warned_idle = False
+                uat_logger.info("scrcpy HTTP 会话恢复 serial=%s", serial)
             yield pack_scrcpy_frame(packet)
+    except GeneratorExit:
+        # Flask 客户端主动断开（正常情况），不记录为异常
+        pass
     except Exception as exc:
-        uat_logger.warning("scrcpy HTTP 流结束 serial=%s: %s", serial, exc)
+        uat_logger.warning("scrcpy HTTP 流异常结束 serial=%s: %s", serial, exc)
     finally:
         relay.unsubscribe(sid)
+        uat_logger.info("scrcpy HTTP 流结束 serial=%s", serial)
 
 
 def warm_scrcpy_session(serial: str, *, timeout: Optional[float] = None) -> Tuple[bool, str]:

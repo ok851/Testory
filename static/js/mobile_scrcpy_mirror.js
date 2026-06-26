@@ -28,6 +28,68 @@
         }
     }
 
+    var _h264SupportCache = null;
+    var H264_CODEC_CANDIDATES = ['avc1.42E01E', 'avc1.4D401E', 'avc1.640028', 'avc1.64001E'];
+
+    function h264WebCodecsSupported() {
+        if (!webCodecsSupported()) {
+            return Promise.resolve(false);
+        }
+        if (_h264SupportCache !== null) {
+            return Promise.resolve(_h264SupportCache);
+        }
+        if (typeof VideoDecoder === 'undefined' || typeof VideoDecoder.isConfigSupported !== 'function') {
+            _h264SupportCache = true;
+            return Promise.resolve(true);
+        }
+        var idx = 0;
+        function tryNext() {
+            if (idx >= H264_CODEC_CANDIDATES.length) {
+                /* 部分浏览器 isConfigSupported 误报；仍尝试 scrcpy，由解码超时再降级 */
+                _h264SupportCache = true;
+                return Promise.resolve(true);
+            }
+            var codec = H264_CODEC_CANDIDATES[idx++];
+            return VideoDecoder.isConfigSupported({ codec: codec, optimizeForLatency: true })
+                .then(function (result) {
+                    if (result && result.supported) {
+                        _h264SupportCache = true;
+                        return true;
+                    }
+                    return tryNext();
+                })
+                .catch(function () {
+                    return tryNext();
+                });
+        }
+        return tryNext();
+    }
+
+    function h264WebCodecsStrictlyUnsupported() {
+        return h264WebCodecsSupported().then(function (ok) {
+            return !ok;
+        });
+    }
+
+    function getH264UnavailableMessage() {
+        if (!webCodecsSupported()) {
+            return getWebCodecsUnavailableMessage();
+        }
+        var env = getMirrorClientEnv();
+        var origin = '';
+        try {
+            origin = global.location && global.location.origin ? global.location.origin : '';
+        } catch (e) { /* ignore */ }
+        if (env === 'desktop' || env === 'tauri') {
+            return (
+                '当前内嵌 WebView 不支持 H.264 硬件解码（WebCodecs avc1），与 scrcpy 插件安装无关。' +
+                '请升级 Microsoft Edge WebView2 运行库至最新版' +
+                (origin ? '，或在 Chrome/Edge 中打开 ' + origin + '/mobile-testing' : '')
+            );
+        }
+        return '当前浏览器不支持 H.264 硬件解码（WebCodecs avc1），请使用 Chrome / Edge 94+ 打开本平台';
+    }
+
     function getWebCodecsUnavailableMessage() {
         var env = getMirrorClientEnv();
         var origin = '';
@@ -45,7 +107,7 @@
     }
 
     function isWebCodecsRelatedError(msg) {
-        return /WebCodecs|VideoDecoder|硬件解码|ReadableStream/i.test(msg || '');
+        return /WebCodecs|VideoDecoder|硬件解码|ReadableStream|avc1|H\.264/i.test(msg || '');
     }
 
     function byteToHex(b) {
@@ -647,47 +709,71 @@
         this._stash = new Uint8Array(0);
         this._packetCount = 0;
         this._decodeTimerArmed = false;
+        this._reconnectAttempt = 0;
+        this._maxHttpReconnect = 3;
         this._armConnectTimer();
-        return fetch(streamUrl, {
-            credentials: 'same-origin',
-            signal: self._httpAbort.signal,
-        }).then(function (resp) {
-            if (!self._running) return;
-            if (!resp.ok) {
-                throw new Error('scrcpy HTTP ' + resp.status);
-            }
-            if (!resp.body || !resp.body.getReader) {
-                throw new Error('浏览器不支持 ReadableStream');
-            }
-            var reader = resp.body.getReader();
-            function pump() {
-                if (!self._running) return Promise.resolve();
-                return reader.read().then(function (chunk) {
-                    if (!self._running) return;
-                    if (chunk.done) {
-                        if (self._stoppingIntentionally) return;
-                        throw new Error('scrcpy HTTP 流已结束');
-                    }
-                    self._stash = feedFramed(self._stash, chunk.value, function (meta, packet) {
-                        self._handlePacket(packet, meta);
+
+        function httpConnectOnce() {
+            self._httpAbort = new AbortController();
+            self._armConnectTimer();
+            return fetch(streamUrl, {
+                credentials: 'same-origin',
+                signal: self._httpAbort.signal,
+            }).then(function (resp) {
+                if (!self._running) return;
+                if (!resp.ok) {
+                    throw new Error('scrcpy HTTP ' + resp.status);
+                }
+                if (!resp.body || !resp.body.getReader) {
+                    throw new Error('浏览器不支持 ReadableStream');
+                }
+                var reader = resp.body.getReader();
+                function pump() {
+                    if (!self._running) return Promise.resolve();
+                    return reader.read().then(function (chunk) {
+                        if (!self._running) return;
+                        if (chunk.done) {
+                            if (self._stoppingIntentionally) return;
+                            throw new Error('scrcpy HTTP 流已结束');
+                        }
+                        self._stash = feedFramed(self._stash, chunk.value, function (meta, packet) {
+                            self._handlePacket(packet, meta);
+                        });
+                        return pump();
                     });
-                    return pump();
-                });
-            }
-            return pump();
-        }).catch(function (err) {
-            if (!self._running || self._stoppingIntentionally) {
-                return;
-            }
-            if (err && err.name === 'AbortError') {
-                return;
-            }
-            var msg = err && err.message ? String(err.message) : String(err);
-            if (/aborted/i.test(msg)) {
-                return;
-            }
-            throw err;
-        });
+                }
+                return pump();
+            }).catch(function (err) {
+                if (!self._running || self._stoppingIntentionally) {
+                    return;
+                }
+                if (err && err.name === 'AbortError') {
+                    return;
+                }
+                var msg = err && err.message ? String(err.message) : String(err);
+                if (/aborted/i.test(msg)) {
+                    return;
+                }
+                // 流意外结束：自动重连（给后端 relay 会话重启留出时间）
+                if (/流已结束/.test(msg) && self._reconnectAttempt < self._maxHttpReconnect) {
+                    self._reconnectAttempt += 1;
+                    if (self.onReconnect) {
+                        self.onReconnect(self._reconnectAttempt, self._maxHttpReconnect);
+                    }
+                    self._resetDecoder();
+                    self._gotFrame = false;
+                    self._notifiedFrame = false;
+                    self._packetCount = 0;
+                    return new Promise(function (resolve, reject) {
+                        setTimeout(function () {
+                            httpConnectOnce().then(resolve, reject);
+                        }, Math.min(4000, 1000 * self._reconnectAttempt));
+                    });
+                }
+                throw err;
+            });
+        }
+        return httpConnectOnce();
     };
 
     ScrcpyMirrorPlayer.prototype._sendControl = function (payload) {
@@ -723,8 +809,11 @@
     };
 
     ScrcpyMirrorPlayer.webCodecsSupported = webCodecsSupported;
+    ScrcpyMirrorPlayer.h264WebCodecsSupported = h264WebCodecsSupported;
+    ScrcpyMirrorPlayer.h264WebCodecsStrictlyUnsupported = h264WebCodecsStrictlyUnsupported;
     ScrcpyMirrorPlayer.getMirrorClientEnv = getMirrorClientEnv;
     ScrcpyMirrorPlayer.getWebCodecsUnavailableMessage = getWebCodecsUnavailableMessage;
+    ScrcpyMirrorPlayer.getH264UnavailableMessage = getH264UnavailableMessage;
     ScrcpyMirrorPlayer.isWebCodecsRelatedError = isWebCodecsRelatedError;
 
     global.ScrcpyMirrorPlayer = ScrcpyMirrorPlayer;

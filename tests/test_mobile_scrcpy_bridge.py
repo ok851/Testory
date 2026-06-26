@@ -2,7 +2,56 @@
 import socket
 from unittest.mock import patch
 
-from mobile_scrcpy_bridge import _tcp_port_in_use, bridge_health
+from mobile_scrcpy_bridge import (
+    _abstract_socket_name,
+    _stable_serial_scid,
+    _tcp_port_in_use,
+    bridge_health,
+    read_forward_handshake,
+)
+
+
+class _FakeSock:
+    """Minimal socket mock for handshake tests."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+        self._pos = 0
+
+    def recv(self, n: int) -> bytes:
+        chunk = self._data[self._pos : self._pos + n]
+        self._pos += len(chunk)
+        return chunk
+
+
+def test_read_forward_handshake_with_dummy_byte():
+    device_name = b"MyDevice" + b"\x00" * (64 - len(b"MyDevice"))
+    sock = _FakeSock(b"\x00" + device_name)
+    assert read_forward_handshake(sock) == device_name
+
+
+def test_read_forward_handshake_legacy_no_dummy():
+    device_name = b"LegacyDev" + b"\x00" * (64 - len(b"LegacyDev"))
+    sock = _FakeSock(device_name)
+    assert read_forward_handshake(sock) == device_name
+
+
+def test_stable_serial_scid_deterministic():
+    a = _stable_serial_scid("device-1")
+    b = _stable_serial_scid("device-1")
+    assert a == b
+    assert len(a) == 8
+    assert all(c in "0123456789abcdef" for c in a)
+
+
+def test_abstract_socket_name_v2():
+    scid = _stable_serial_scid("serial-a")
+    assert _abstract_socket_name("2.4", scid) == "localabstract:scrcpy"
+
+
+def test_abstract_socket_name_v3():
+    scid = _stable_serial_scid("serial-b")
+    assert _abstract_socket_name("3.1", scid) == f"localabstract:scrcpy_{scid}"
 
 
 def test_tcp_port_in_use_free_port():
