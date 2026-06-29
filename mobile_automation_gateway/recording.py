@@ -66,10 +66,34 @@ def is_recording(udid: str) -> bool:
         return bool(_recording_sessions.get(udid, {}).get("active"))
 
 
+def clear_live_steps(udid: str) -> None:
+    """清空桌面端 live 缓冲，避免新录制混入旧步骤。"""
+    udid = (udid or "").strip()
+    if not udid:
+        return
+    with _recording_lock:
+        _live_steps[udid] = []
+
+
+def _deactivate_session(udid: str) -> None:
+    """停止旧轮询线程并清空会话，确保下次录制从空白开始。"""
+    udid = (udid or "").strip()
+    if not udid:
+        return
+    with _recording_lock:
+        sess = _recording_sessions.get(udid)
+        if sess:
+            sess["active"] = False
+        _live_steps[udid] = []
+
+
 def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> Dict[str, Any]:
     udid = (udid or "").strip()
     if not udid:
         return {"success": False, "error": "缺少 udid"}
+    # 原缺陷：未先停旧会话/清缓冲，poll 线程可能仍持有上一轮步骤。
+    _deactivate_session(udid)
+    time.sleep(0.05)
     ok, msg = plugin_rpc.ensure_plugin_tunnel(udid)
     if not ok:
         return {"success": False, "error": msg}
@@ -87,7 +111,7 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
 
         # 与设备端 SessionForegroundGuard 双保险：PC 侧也先发 Home，减少助手界面误录。
         adb_press_home(udid)
-        time.sleep(0.25)
+        time.sleep(0.15)
     except Exception:
         pass
     try:
@@ -128,18 +152,31 @@ def stop_recording_session(udid: str) -> Dict[str, Any]:
 
 
 def _start_poll_thread(udid: str) -> None:
+    # 原缺陷：旧 poll 线程仍存活时直接 return，新录制无法拉取设备事件。
     t = _poll_threads.get(udid)
     if t is not None and t.is_alive():
-        return
+        with _recording_lock:
+            sess = _recording_sessions.get(udid)
+            if sess and sess.get("active"):
+                return
+        time.sleep(0.2)
 
     def _worker() -> None:
         disconnect_since: Optional[float] = None
+        screen_w, screen_h = 0, 0
         while True:
             with _recording_lock:
                 sess = _recording_sessions.get(udid)
                 if not sess or not sess.get("active"):
                     break
                 screenshot_per_step = bool(sess.get("screenshot_per_step"))
+            if screen_w <= 0 or screen_h <= 0:
+                try:
+                    from mobile_adb_control import adb_get_screen_size
+
+                    screen_w, screen_h = adb_get_screen_size(udid)
+                except Exception:
+                    screen_w, screen_h = 1080, 1920
             try:
                 ok, _ = plugin_rpc.ping_plugin(udid)
                 if not ok:
@@ -160,12 +197,13 @@ def _start_poll_thread(udid: str) -> None:
                 for raw in raw_steps:
                     if not isinstance(raw, dict):
                         continue
-                    step = normalize_assistant_event(raw)
+                    step = normalize_assistant_event(raw, screen_width=screen_w, screen_height=screen_h)
                     screenshot_b64 = ""
                     if screenshot_per_step:
                         try:
-                            img, fmt = plugin_rpc.take_screenshot(udid)
+                            img, shot_meta = plugin_rpc.take_screenshot(udid)
                             screenshot_b64 = base64.b64encode(img).decode("ascii")
+                            fmt = shot_meta.get("format", "png") if isinstance(shot_meta, dict) else str(shot_meta or "png")
                             step.setdefault("mobile_spec", {})["screenshot_format"] = fmt
                         except Exception:
                             try:

@@ -201,76 +201,65 @@ async def plugin_install(request: Request) -> Dict[str, Any]:
     return result
 
 
+_PHONE_ONLY_MSG = "该功能已移至手机 Testory 助手，PC 端仅支持配对与步骤同步管理"
+
+
+def _deprecated_phone_only() -> Dict[str, Any]:
+    return {"success": False, "error": _PHONE_ONLY_MSG, "deprecated": True}
+
+
 @app.post("/internal/recording/start")
 async def recording_start(request: Request) -> Dict[str, Any]:
     _require_auth(request)
-    body = await request.json()
-    udid = (body.get("udid") or get_connected_udid() or "").strip()
-    screenshot = bool(body.get("screenshot_per_step", False))
-    return rec_mod.start_recording_session(udid, screenshot_per_step=screenshot)
+    return _deprecated_phone_only()
 
 
 @app.post("/internal/recording/pause")
 async def recording_pause(request: Request) -> Dict[str, Any]:
     _require_auth(request)
-    body = await request.json()
-    udid = (body.get("udid") or get_connected_udid() or "").strip()
-    return rec_mod.pause_recording_session(udid)
+    return _deprecated_phone_only()
 
 
 @app.post("/internal/recording/resume")
 async def recording_resume(request: Request) -> Dict[str, Any]:
     _require_auth(request)
-    body = await request.json()
-    udid = (body.get("udid") or get_connected_udid() or "").strip()
-    return rec_mod.resume_recording_session(udid)
+    return _deprecated_phone_only()
 
 
 @app.get("/internal/recording/live-steps")
 async def recording_live_steps(request: Request, udid: str = "") -> Dict[str, Any]:
     _require_auth(request)
-    udid = (udid or get_connected_udid() or "").strip()
-    steps = rec_mod.get_live_steps(udid)
-    st = rec_mod.recording_status(udid)
-    return {"success": True, "udid": udid, "steps": steps, "live_steps": steps, **st}
+    return _deprecated_phone_only()
 
 
 @app.post("/internal/recording/stop")
 async def recording_stop(request: Request) -> Dict[str, Any]:
     _require_auth(request)
-    body = await request.json()
-    udid = (body.get("udid") or get_connected_udid() or "").strip()
-    return rec_mod.stop_recording_session(udid)
+    return _deprecated_phone_only()
+
+
+@app.post("/internal/recording/clear")
+async def recording_clear(request: Request) -> Dict[str, Any]:
+    _require_auth(request)
+    return _deprecated_phone_only()
 
 
 @app.get("/internal/recording/status")
 async def recording_status(request: Request, udid: str = "") -> Dict[str, Any]:
     _require_auth(request)
-    return {"success": True, **rec_mod.recording_status(udid or get_connected_udid() or "")}
+    return _deprecated_phone_only()
 
 
 @app.post("/internal/replay/run")
 async def replay_run(request: Request) -> Dict[str, Any]:
     _require_auth(request)
-    body = await request.json()
-    udid = (body.get("udid") or get_connected_udid() or "").strip()
-    steps = body.get("steps") or []
-    from_index = int(body.get("from_index") or 0)
-    if not isinstance(steps, list):
-        return {"success": False, "error": "steps 须为数组"}
-    return replay_mod.run_steps(udid, steps, from_index=from_index)
+    return _deprecated_phone_only()
 
 
 @app.post("/internal/replay/step")
 async def replay_step(request: Request) -> Dict[str, Any]:
     _require_auth(request)
-    body = await request.json()
-    udid = (body.get("udid") or get_connected_udid() or "").strip()
-    step = body.get("step") or {}
-    idx = int(body.get("step_index") or 0)
-    result = replay_mod.execute_step(udid, step, step_index=idx)
-    ok = result.get("status") != "error"
-    return {"success": ok, "result": result}
+    return _deprecated_phone_only()
 
 
 @app.post("/internal/inspect/page-source")
@@ -298,11 +287,14 @@ async def inspect_screenshot(request: Request) -> Dict[str, Any]:
         if use_plugin:
             ok, msg = plugin_rpc.ensure_plugin_tunnel(udid)
             if ok:
-                data, fmt = plugin_rpc.take_screenshot(udid)
+                data, shot_meta = plugin_rpc.take_screenshot(udid)
+                fmt = shot_meta.get("format", "png") if isinstance(shot_meta, dict) else str(shot_meta or "png")
                 return {
                     "success": True,
                     "format": fmt,
                     "image_base64": base64.b64encode(data).decode("ascii"),
+                    "width": shot_meta.get("width", 0) if isinstance(shot_meta, dict) else 0,
+                    "height": shot_meta.get("height", 0) if isinstance(shot_meta, dict) else 0,
                     "source": "plugin",
                 }
         data = capture_screenshot_png(udid)

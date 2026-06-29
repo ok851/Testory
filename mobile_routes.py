@@ -73,6 +73,16 @@ def _require_mobile_enabled():
         }), 403
     return None
 
+
+def _mobile_phone_only_response():
+    """PC 端不再驱动录制/回放/运行，仅保留同步管理。"""
+    return jsonify({
+        "success": False,
+        "error": "该功能已移至手机 Testory 助手，PC 端仅支持配对与步骤同步管理",
+        "deprecated": True,
+    }), 410
+
+
 def execute_mobile_case(
     case_id: int,
     case: Dict[str, Any],
@@ -86,93 +96,17 @@ def execute_mobile_case(
     job_update: Optional[Callable[..., None]] = None,
     job_cancelled: Optional[Callable[[], bool]] = None,
 ) -> Tuple[Any, int]:
-    """执行纯 Android 用例（经 Mobile Agent 插件回放）。"""
-    if not mobile_runtime_available():
-        from mobile_env_config import mobile_runtime_unavailable_reason
-
-        reason = mobile_runtime_unavailable_reason() or "移动端不可用"
-        run_id = db.create_run_history(case_id, "error", 0, reason, "", "")
-        return jsonify({"success": False, "status": "error", "error": reason, "run_id": run_id}), 400
-
-    from mobile_device_manager import get_connected_udid
-
-    caps = dict(capabilities or {})
-    resolved_udid = (udid or caps.get("udid") or get_connected_udid() or "").strip()
-    if not resolved_udid:
-        run_id = db.create_run_history(case_id, "error", 0, "请先连接设备", "", "")
-        return jsonify({"success": False, "status": "error", "error": "请先连接设备", "run_id": run_id}), 400
-
-    if not mobile_agent_enabled():
-        run_id = db.create_run_history(case_id, "error", 0, "移动端 Agent 未启动", "", "")
-        return jsonify({"success": False, "status": "error", "error": "移动端 Agent 未启动", "run_id": run_id}), 503
-
-    exec_steps: List[Dict[str, Any]] = []
-    for step in steps:
-        if job_cancelled and job_cancelled():
-            run_id = db.create_run_history(case_id, "stopped", 0, "用户已停止执行", "", "")
-            return jsonify({"success": False, "status": "stopped", "error": "用户已停止执行", "run_id": run_id}), 200
-        exec_step = dict(step)
-        exec_step["selector_value"] = db.resolve_variables(
-            step.get("selector_value", ""),
-            project_id=case.get("project_id"),
-            case_id=case_id,
-        )
-        exec_step["input_value"] = db.resolve_variables(
-            step.get("input_value", ""),
-            project_id=case.get("project_id"),
-            case_id=case_id,
-        )
-        exec_steps.append(exec_step)
-
-    if job_update:
-        job_update(message=f"正在通过 Mobile Agent 回放 {len(exec_steps)} 步…")
-
-    replay_result = agent_replay_steps(resolved_udid, exec_steps)
-    screenshots: List[str] = []
-    step_results_list = replay_result.get("results") or []
-    for r in step_results_list:
-        if r.get("screenshot"):
-            screenshots.append(r["screenshot"])
-
-    duration = round(time.time() - start_time, 2)
-    if not replay_result.get("success"):
-        err = replay_result.get("error") or "回放失败"
-        run_id = db.create_run_history(case_id, "error", duration, err, "", case.get("expected_result") or "")
-        return jsonify({"success": False, "status": "error", "error": err, "run_id": run_id, "step_results": step_results_list}), 200
-
-    run_id = db.create_run_history(case_id, "success", duration, "", "", case.get("expected_result") or "")
-    try:
-        conn = __import__("sqlite3").connect(db.db_path)
-        conn.execute(
-            "UPDATE run_history SET screenshots = ? WHERE id = ?",
-            (json.dumps(screenshots), run_id),
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-    for i, step in enumerate(steps):
-        sr = step_results_list[i] if i < len(step_results_list) else {}
-        db.create_step_result(
-            run_id,
-            step.get("id"),
-            step.get("step_order", i + 1),
-            step.get("action") or "",
-            step.get("selector_value") or "",
-            step.get("input_value") or "",
-            step.get("description") or "",
-            sr.get("status") or "success",
-            sr.get("error") or "",
-            sr.get("screenshot") or "",
-            0,
-        )
+    """执行纯 Android 用例 — 已移至手机助手，PC 不再回放。"""
+    msg = "PC 端已不再执行移动端用例，请在手机 Testory 助手内运行"
+    run_id = db.create_run_history(case_id, "error", 0, msg, "", "")
     return jsonify({
-        "success": True,
-        "status": "success",
-        "duration": duration,
+        "success": False,
+        "status": "error",
+        "error": msg,
         "run_id": run_id,
-        "step_results": step_results_list,
-    }), 200
+        "deprecated": True,
+    }), 410
+
 
 def _resolve_request_udid(body: Optional[Dict[str, Any]] = None) -> str:
     body = body if isinstance(body, dict) else {}
@@ -519,20 +453,11 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @_roles("admin", "tester", "project_manager", "test_lead")
     @api_error_handler
     def api_mobile_arm():
-        """开始录制（手机端物理操作）。"""
+        """已移除：请在手机助手内录制。"""
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
-        body = request.get_json(silent=True) or {}
-        udid = (body.get("udid") or "").strip()
-        from mobile_device_manager import get_connected_udid
-
-        if not udid:
-            udid = get_connected_udid() or ""
-        screenshot = bool(body.get("screenshot_per_step", True))
-        result = agent_start_recording(udid, screenshot_per_step=screenshot)
-        status = 200 if result.get("success") else 503
-        return jsonify(result), status
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/disarm", methods=["POST"])
     @login_required
@@ -542,13 +467,7 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
-        body = request.get_json(silent=True) or {}
-        udid = (body.get("udid") or "").strip()
-        from mobile_device_manager import get_connected_udid
-
-        if not udid:
-            udid = get_connected_udid() or ""
-        return jsonify(agent_stop_recording(udid))
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/bridge/<action>", methods=["POST"])
     @login_required
@@ -897,54 +816,11 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @api_error_handler
     @log_api_request
     def api_mobile_replay_actions():
-        """按录制会话在设备上回放点击/滑动序列。"""
+        """已移除：请在手机助手内回放。"""
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
-        body = request.get_json(silent=True) or {}
-        actions = body.get("actions") or []
-        if not isinstance(actions, list) or not actions:
-            return jsonify({"success": False, "error": "缺少 actions"}), 400
-
-        udid = (body.get("udid") or "").strip()
-        from mobile_device_manager import get_connected_udid
-
-        if not udid:
-            udid = get_connected_udid() or ""
-        if not udid:
-            return jsonify({"success": False, "error": "请先连接设备"}), 400
-
-        import time
-
-        delay_ms = max(0, min(5000, int(body.get("delay_ms") or 600)))
-        steps = []
-        for act in actions:
-            kind = (act.get("type") or "").strip().lower()
-            if kind == "tap":
-                x, y = int(act.get("x")), int(act.get("y"))
-                steps.append({
-                    "action": "tap",
-                    "selector_type": "viewport_coord",
-                    "selector_value": json.dumps({"x": x, "y": y}),
-                    "mobile_spec": {"viewport_coord": {"x": x, "y": y}},
-                })
-            elif kind == "swipe":
-                steps.append({
-                    "action": "swipe",
-                    "mobile_spec": {
-                        "x1": int(act.get("x1")),
-                        "y1": int(act.get("y1")),
-                        "x2": int(act.get("x2")),
-                        "y2": int(act.get("y2")),
-                    },
-                })
-        from_index = int(body.get("from_index") or 0)
-        result = agent_replay_steps(udid, steps[from_index:])
-        return jsonify({
-            "success": bool(result.get("success")),
-            "results": result.get("results") or [],
-            "error": result.get("error"),
-        })
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/cases/<int:case_id>/steps", methods=["GET"])
     @login_required
@@ -1192,124 +1068,8 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
-        from database import Database
+        return _mobile_phone_only_response()
 
-        body = request.get_json(silent=True) or {}
-        case_id = body.get("case_id")
-        if not case_id:
-            return jsonify({"success": False, "error": "缺少 case_id"}), 400
-        try:
-            case_id = int(case_id)
-        except (TypeError, ValueError):
-            return jsonify({"success": False, "error": "case_id 无效"}), 400
-
-        use_sync = body.get("use_sync") in (True, "true", 1, "1")
-        if use_sync:
-            from app import load_case_and_steps
-            from mobile_sync_store import enqueue_run_job
-
-            db = Database()
-            case, steps = load_case_and_steps(case_id, db)
-            if not case:
-                return jsonify({"success": False, "error": "测试用例不存在"}), 404
-            if not steps:
-                return jsonify({"success": False, "error": "该用例没有步骤"}), 400
-            exec_steps: List[Dict[str, Any]] = []
-            for step in steps:
-                s = dict(step)
-                s["selector_value"] = db.resolve_variables(
-                    step.get("selector_value", ""),
-                    project_id=case.get("project_id"),
-                    case_id=case_id,
-                )
-                s["input_value"] = db.resolve_variables(
-                    step.get("input_value", ""),
-                    project_id=case.get("project_id"),
-                    case_id=case_id,
-                )
-                exec_steps.append(s)
-            job_id = enqueue_run_job(
-                case_id=case_id,
-                steps=exec_steps,
-                user_id=current_user.id,
-                device_id=(body.get("device_id") or body.get("udid") or "").strip(),
-                source="pc",
-            )
-            return jsonify({
-                "success": True,
-                "status": "dispatched",
-                "sync_job_id": job_id,
-                "message": "已下发到已配对手机，请在 Testory Assistant 中执行",
-            })
-
-        db = Database()
-        from app import load_case_and_steps, _case_run_cancelled, _case_run_lock, _case_run_jobs, _case_job_update
-
-        case, steps = load_case_and_steps(case_id, db)
-        if not case:
-            return jsonify({"success": False, "error": "测试用例不存在"}), 404
-        if not steps:
-            return jsonify({"success": False, "error": "该用例没有步骤"}), 400
-
-        user_id = current_user.id
-        start_time = time.time()
-
-        machine_lock_acquired = False
-        try:
-            from execution_lock import ExecutionLockError, acquire as acquire_machine_lock, release as release_machine_lock
-
-            machine_lock_acquired = acquire_machine_lock(
-                owner=f"mobile_run:{case_id}:user:{user_id}", timeout_sec=120
-            )
-            if not machine_lock_acquired:
-                return jsonify({
-                    "success": False,
-                    "error": "本机已有自动化任务在执行，请稍后再试。",
-                    "lock": "busy",
-                }), 409
-        except ExecutionLockError as lock_exc:
-            return jsonify({"success": False, "error": str(lock_exc), "lock": "busy"}), 409
-        except ImportError:
-            release_machine_lock = None  # type: ignore
-
-        with _case_run_lock:
-            _case_run_jobs[user_id] = {
-                "active": True,
-                "cancel_requested": False,
-                "case_id": case_id,
-                "case_name": case.get("name", ""),
-                "total_steps": len(steps),
-                "completed_steps": 0,
-                "current_step_order": 0,
-                "current_action": "",
-                "message": "准备执行 Android 用例...",
-                "started_at": start_time,
-                "platform": "android",
-            }
-
-        try:
-            resp, status = execute_mobile_case(
-                case_id,
-                case,
-                steps,
-                db,
-                user_id,
-                start_time,
-                capabilities=body.get("capabilities") if isinstance(body.get("capabilities"), dict) else None,
-                udid=(body.get("udid") or "").strip(),
-                job_update=lambda **kw: _case_job_update(user_id, **kw),
-                job_cancelled=lambda: _case_run_cancelled(user_id),
-            )
-            return resp, status
-        finally:
-            with _case_run_lock:
-                if user_id in _case_run_jobs:
-                    _case_run_jobs[user_id]["active"] = False
-            if machine_lock_acquired:
-                try:
-                    release_machine_lock()
-                except Exception:
-                    pass
     @app.route("/api/mobile/check-env", methods=["GET"])
     @login_required
     @api_error_handler
@@ -1357,12 +1117,9 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @api_error_handler
     def api_mobile_recording_start():
         blocked = _require_mobile_enabled()
-        if blocked: return blocked
-        body = request.get_json(silent=True) or {}
-        udid = _resolve_request_udid(body)
-        screenshot = bool(body.get("screenshot_per_step", False))
-        result = agent_start_recording(udid, screenshot_per_step=screenshot)
-        return jsonify(result), 200 if result.get("success") else 503
+        if blocked:
+            return blocked
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/recording/stop", methods=["POST"])
     @login_required
@@ -1370,11 +1127,9 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @api_error_handler
     def api_mobile_recording_stop():
         blocked = _require_mobile_enabled()
-        if blocked: return blocked
-        body = request.get_json(silent=True) or {}
-        udid = _resolve_request_udid(body)
-        result = agent_stop_recording(udid)
-        return jsonify(result)
+        if blocked:
+            return blocked
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/recording/pause", methods=["POST"])
     @login_required
@@ -1382,10 +1137,9 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @api_error_handler
     def api_mobile_recording_pause():
         blocked = _require_mobile_enabled()
-        if blocked: return blocked
-        body = request.get_json(silent=True) or {}
-        udid = _resolve_request_udid(body)
-        return jsonify(agent_pause_recording(udid))
+        if blocked:
+            return blocked
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/recording/resume", methods=["POST"])
     @login_required
@@ -1393,47 +1147,46 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @api_error_handler
     def api_mobile_recording_resume():
         blocked = _require_mobile_enabled()
-        if blocked: return blocked
-        body = request.get_json(silent=True) or {}
-        udid = _resolve_request_udid(body)
-        return jsonify(agent_resume_recording(udid))
+        if blocked:
+            return blocked
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/recording/steps", methods=["GET"])
     @login_required
     @api_error_handler
     def api_mobile_recording_steps():
-        udid = (request.args.get("udid") or "").strip()
-        case_id = int(request.args.get("case_id") or 0)
-        live = agent_live_recording_steps(udid) if udid else {"steps": [], "live_steps": []}
-        steps = live.get("live_steps") or live.get("steps") or []
-        if not steps and case_id:
-            try:
-                db = db_factory()
-                steps = db.get_case_steps(case_id, page=1, page_size=500)
-            except Exception:
-                pass
-        return jsonify({
-            "success": True,
-            "steps": steps,
-            "live_steps": steps,
-            "recording_active": bool(live.get("active")),
-        })
+        return _mobile_phone_only_response()
+
+    @app.route("/api/mobile/recording/clear", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_recording_clear():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        return _mobile_phone_only_response()
+
+    @app.route("/api/mobile/recording/save-steps", methods=["POST"])
+    @login_required
+    @_roles("admin", "tester", "project_manager", "test_lead")
+    @api_error_handler
+    def api_mobile_recording_save_steps():
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/recording/steps/update", methods=["POST"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")
     @api_error_handler
     def api_mobile_recording_steps_update():
-        body = request.get_json(silent=True) or {}
-        return jsonify({"success": True, "message": "步骤已更新"})
+        return _mobile_phone_only_response()
 
     @app.route("/api/mobile/recording/steps/delete", methods=["POST"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")
     @api_error_handler
     def api_mobile_recording_steps_delete():
-        body = request.get_json(silent=True) or {}
-        return jsonify({"success": True, "message": "步骤已删除"})
+        return _mobile_phone_only_response()
 
     # Register mobile-to-PC sync routes (pairing, cases, run jobs)
     try:

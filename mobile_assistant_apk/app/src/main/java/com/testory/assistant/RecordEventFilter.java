@@ -23,7 +23,41 @@ final class RecordEventFilter {
     private static long lastAcceptedMs;
     private static String lastAcceptedKey = "";
 
+    private static long lastTouchGestureMs;
+    private static long lastTouchSwipeMs;
+    private static String lastTouchGestureKey = "";
+
     private RecordEventFilter() {
+    }
+
+    /** 触摸管线已产出步骤时标记，抑制紧随其后的 VIEW_CLICKED 重复录制。 */
+    static void markTouchGesture(JSONObject payload) {
+        if (payload == null) return;
+        long now = System.currentTimeMillis();
+        lastTouchGestureMs = now;
+        String type = payload.optString("type", "");
+        if ("swipe".equals(type) || "scroll".equals(type)) {
+            lastTouchSwipeMs = now;
+        }
+        int x = payload.optInt("x", 0);
+        int y = payload.optInt("y", 0);
+        lastTouchGestureKey = type + "|" + x + "," + y;
+    }
+
+    static boolean wasRecentTouchGesture() {
+        return System.currentTimeMillis() - lastTouchGestureMs < 180;
+    }
+
+    static boolean wasRecentTouchSwipe() {
+        return System.currentTimeMillis() - lastTouchSwipeMs < 300;
+    }
+
+    static void resetDedupe() {
+        lastAcceptedMs = 0L;
+        lastAcceptedKey = "";
+        lastTouchGestureMs = 0L;
+        lastTouchSwipeMs = 0L;
+        lastTouchGestureKey = "";
     }
 
     static boolean shouldSkip(AccessibilityEvent event, JSONObject payload) {
@@ -39,7 +73,14 @@ final class RecordEventFilter {
         if ("swipe".equals(type) || "scroll".equals(type)) {
             int dx = Math.abs(payload.optInt("scroll_delta_x", 0));
             int dy = Math.abs(payload.optInt("scroll_delta_y", 0));
-            if (dx < MIN_SWIPE_DELTA_PX && dy < MIN_SWIPE_DELTA_PX) {
+            int x1 = payload.optInt("x1", 0);
+            int y1 = payload.optInt("y1", 0);
+            int x2 = payload.optInt("x2", 0);
+            int y2 = payload.optInt("y2", 0);
+            int gestureDx = Math.abs(x2 - x1);
+            int gestureDy = Math.abs(y2 - y1);
+            if (dx < MIN_SWIPE_DELTA_PX && dy < MIN_SWIPE_DELTA_PX
+                    && gestureDx < MIN_SWIPE_DELTA_PX && gestureDy < MIN_SWIPE_DELTA_PX) {
                 return true;
             }
         }
@@ -132,10 +173,5 @@ final class RecordEventFilter {
         JSONArray bounds = payload.optJSONArray("bounds");
         return type + "|" + (bounds != null ? bounds.toString() : "")
                 + "|" + payload.optJSONObject("node");
-    }
-
-    static void resetDedupe() {
-        lastAcceptedMs = 0L;
-        lastAcceptedKey = "";
     }
 }

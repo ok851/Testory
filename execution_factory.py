@@ -78,25 +78,9 @@ class ExecutorFactory:
         selector_value: str = "",
         input_value: str = "",
     ) -> Dict[str, Any]:
-        from mobile_agent_client import agent_replay_step
-        from mobile_device_manager import get_connected_udid
-
-        exec_step = self.prepare_step(step)
-        if selector_value:
-            exec_step["selector_value"] = selector_value
-        if input_value:
-            exec_step["input_value"] = input_value
-        err = self.validate_step(exec_step)
-        if err:
-            raise ValueError(err)
-        udid = get_connected_udid() or ""
-        payload = agent_replay_step(udid, exec_step)
-        if not payload.get("success"):
-            raise RuntimeError(payload.get("error") or "Mobile Agent 执行失败")
-        result = payload.get("result") or {}
-        if result.get("status") == "error":
-            raise RuntimeError(result.get("error") or "步骤执行失败")
-        return result
+        raise RuntimeError(
+            "PC 端已不再执行移动端步骤，请在手机 Testory 助手内运行用例"
+        )
 
     def execute_step(
         self,

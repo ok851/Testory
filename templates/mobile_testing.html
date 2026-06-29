@@ -1,22 +1,18 @@
 {% extends "base.html" %}
-{% block title %}移动端测试 - {{ product_name }}{% endblock %}
+{% block title %}移动端同步 - {{ product_name }}{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile_studio.css') }}">
 <style>
 .ms-btn--install { background:#f0fdf4; color:#065f46; border:1px solid #6ee7b7; }
 .ms-btn--install:hover { background:#d1fae5; }
 .ms-btn--install:disabled { opacity:0.45; cursor:not-allowed; }
-.ms-step-action-tag { display:inline-block; font-size:0.7rem; padding:1px 6px; border-radius:3px; background:#e0e7ff; color:#3730a3; margin-right:4px; }
-.ms-step-live { cursor:pointer; padding:6px 8px; border-radius:4px; margin:2px 0; transition:background .15s; border-left:3px solid transparent; }
-.ms-step-live:hover { background:#f1f5f9; }
-.ms-step-live--active { background:#ecfdf5; border-left-color:#10b981; font-weight:600; }
 .ms-toast { position:fixed; bottom:1rem; right:1rem; z-index:9999; padding:0.75rem 1.25rem; border-radius:8px; font-size:0.9rem; box-shadow:0 4px 12px rgba(0,0,0,.15); animation:msSlideUp .3s ease; max-width:24rem; }
 .ms-toast--ok { background:#065f46; color:#fff; }
 .ms-toast--err { background:#991b1b; color:#fff; }
 .ms-toast--warn { background:#92400e; color:#fff; }
 @keyframes msSlideUp { from { opacity:0; transform:translateY(1rem); } to { opacity:1; transform:translateY(0); } }
-.ms-empty-hint { text-align:center; padding:2rem 1rem; color:#94a3b8; }
-.ms-empty-hint i { font-size:2rem; display:block; margin-bottom:0.5rem; }
+.ms-sync-hint { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; font-size:0.9rem; line-height:1.6; color:#475569; }
+.ms-sync-hint ol { margin:0.5rem 0 0 1.2rem; padding:0; }
 </style>
 {% endblock %}
 {% block body_class %}bg-slate-100 dark:bg-gray-950 min-h-screen{% endblock %}
@@ -24,8 +20,8 @@
 <div class="ms-page">
     <header class="ms-page-header">
         <div>
-            <h1 class="ms-title"><i class="fas fa-mobile-alt text-emerald-500"></i> 移动端测试</h1>
-            <p class="ms-subtitle">连接设备 · 录制操作 · 一键回放</p>
+            <h1 class="ms-title"><i class="fas fa-mobile-alt text-emerald-500"></i> 移动端同步</h1>
+            <p class="ms-subtitle">配对手机 · 管理同步步骤（录制与运行在手机上完成）</p>
         </div>
         <div class="ms-header-actions">
             <span id="msConnectBadge" class="ms-connect-badge">未连接</span>
@@ -36,11 +32,10 @@
     {% if mobile_disabled %}
     <div class="ms-disabled-banner">
         <p>{{ mobile_disabled_reason }}</p>
-        <p class="ms-muted">移动端测试未在本版本中启用，请联系管理员或软件供应商。</p>
+        <p class="ms-muted">移动端功能未在本版本中启用，请联系管理员或软件供应商。</p>
     </div>
     {% else %}
     <div class="ms-layout">
-        <!-- ===== 左侧：准备 ===== -->
         <aside class="ms-panel ms-panel--left">
             <div class="ms-panel-scroll">
             <section class="ms-section">
@@ -50,7 +45,7 @@
             </section>
 
             <section class="ms-section">
-                <h2 class="ms-section-title"><i class="fas fa-plug text-emerald-500"></i> 连接设备</h2>
+                <h2 class="ms-section-title"><i class="fas fa-plug text-emerald-500"></i> 连接设备（安装插件）</h2>
                 <div class="ms-device-tabs" role="tablist">
                     <button type="button" class="ms-device-tab ms-device-tab--active" data-tab="real" id="msTabReal">USB</button>
                     <button type="button" class="ms-device-tab" data-tab="wireless" id="msTabWireless">无线</button>
@@ -63,7 +58,7 @@
                     <div class="ms-row ms-row--wrap" style="margin-top:0.5rem;">
                         <button type="button" id="msBtnConnect" class="ms-btn ms-btn--primary">连接设备</button>
                         <button type="button" id="msBtnDisconnect" class="ms-btn ms-btn--ghost" disabled>断开</button>
-                        <button type="button" id="msBtnInstallPlugin" class="ms-btn ms-btn--install" disabled title="安装手机端测试插件">安装插件</button>
+                        <button type="button" id="msBtnInstallPlugin" class="ms-btn ms-btn--install" disabled title="安装手机端 Testory 助手">安装助手</button>
                     </div>
                 </div>
                 <div class="ms-device-panel" id="msPanelWireless">
@@ -77,19 +72,9 @@
                 <div id="msStatus" class="ms-status" style="margin-top:0.5rem;"></div>
             </section>
 
-            <section class="ms-section">
-                <h2 class="ms-section-title"><i class="fas fa-folder-open text-emerald-500"></i> 项目与用例</h2>
-                <select id="msProjectSelect" class="ms-input"></select>
-                <select id="msCaseSelect" class="ms-input"></select>
-                <div class="ms-row ms-row--wrap" style="margin-top:0.5rem;">
-                    <button type="button" id="msBtnRun" class="ms-btn ms-btn--success" disabled>运行用例</button>
-                    <button type="button" id="msBtnOpenSteps" class="ms-btn ms-btn--ghost" disabled>编辑步骤</button>
-                </div>
-            </section>
-
             <section class="ms-section ms-section--sync">
-                <h2 class="ms-section-title"><i class="fas fa-link text-emerald-500"></i> 手机端配对</h2>
-                <p class="ms-muted" style="margin-bottom:0.5rem;">手机打开 Testory Assistant → 输入下方 PC 地址与配对码 → 点「配对」</p>
+                <h2 class="ms-section-title"><i class="fas fa-link text-emerald-500"></i> 手机配对</h2>
+                <p class="ms-muted" style="margin-bottom:0.5rem;">手机打开 Testory 助手 → 输入下方 PC 地址与配对码 → 点「配对」</p>
                 <div class="ms-row">
                     <code id="msSyncUrlHint" style="font-size:0.8rem;padding:4px 8px;background:#f1f5f9;border-radius:4px;flex:1;">—</code>
                 </div>
@@ -103,81 +88,30 @@
             </div>
         </aside>
 
-        <!-- ===== 右侧：工作区 ===== -->
         <aside class="ms-panel ms-panel--right">
             <div class="ms-panel-scroll">
-            <section class="ms-section ms-section--record">
-                <h2 class="ms-section-title"><i class="fas fa-record-vinyl text-red-500"></i> 操作录制</h2>
-                <p class="ms-muted" style="margin-bottom:0.5rem;">连上设备 → 选好用例 → 点「开始录制」→ 在手机上操作</p>
-                <div class="ms-row ms-row--wrap">
-                    <button type="button" id="msBtnStartRecord" class="ms-btn ms-btn--danger" disabled>开始录制</button>
-                    <button type="button" id="msBtnStopRecord" class="ms-btn ms-btn--ghost" disabled>停止</button>
-                    <button type="button" id="msBtnPauseRecord" class="ms-btn ms-btn--ghost" disabled style="font-size:0.8rem;">暂停</button>
+            <section class="ms-section">
+                <h2 class="ms-section-title"><i class="fas fa-info-circle text-emerald-500"></i> 使用说明</h2>
+                <div class="ms-sync-hint">
+                    <strong>录制与回放请在手机上完成</strong>
+                    <ol>
+                        <li>在手机上安装并开启 Testory 助手无障碍</li>
+                        <li>在本页完成配对后，在手机上录制用例步骤</li>
+                        <li>手机端点击「同步用例」或「保存到 PC」</li>
+                        <li>在下方选择用例，点击「编辑步骤」在 PC 上管理</li>
+                    </ol>
                 </div>
-                <p id="msRecordHint" class="ms-muted" style="display:none;margin-top:0.25rem;color:#dc2626 !important;">⏺ 录制中 — 请在手机上操作，操作将自动记录</p>
-            </section>
-
-            <section class="ms-section ms-section--steps">
-                <h2 class="ms-section-title"><i class="fas fa-list-ol text-emerald-500"></i> 操作步骤 <span id="msLiveStepCount" class="ms-badge">0</span></h2>
-                <div id="msLiveSteps" class="ms-step-list">
-                    <div class="ms-empty-hint"><i class="fas fa-hand-pointer"></i>连接设备并开始录制后<br>操作步骤将显示在这里</div>
-                </div>
-                <div class="ms-row ms-row--wrap" style="margin-top:0.75rem;">
-                    <button type="button" id="msBtnReplaySession" class="ms-btn ms-btn--primary" disabled>▶ 回放全部</button>
-                    <button type="button" id="msBtnReplayFrom" class="ms-btn ms-btn--ghost" disabled style="font-size:0.8rem;">从此步回放</button>
-                    <button type="button" id="msBtnClearSession" class="ms-btn ms-btn--ghost" disabled style="font-size:0.8rem;color:#ef4444;">清空</button>
-                </div>
-                <details class="ms-setup-panel" style="margin-top:0.75rem;">
-                    <summary>回放选项</summary>
-                    <label class="ms-check-label"><input type="checkbox" id="msChkHandleDialogs" checked> 自动处理系统弹窗</label>
-                    <label class="ms-check-label"><input type="checkbox" id="msChkCrossResolution" checked> 跨分辨率坐标适配</label>
-                    <label class="ms-check-label">步骤超时：<input type="number" id="msReplayTimeout" class="ms-input" value="30" min="5" max="120" style="width:5rem;display:inline;"> 秒</label>
-                </details>
             </section>
 
             <section class="ms-section">
-                <h2 class="ms-section-title"><i class="fas fa-edit text-emerald-500"></i> 步骤详情</h2>
-                <p id="msStepDetailEmpty" class="ms-muted">点击步骤列表中的某一步查看和编辑</p>
-                <div id="msStepDetailPanel" style="display:none;">
-                    <div class="ms-form-group">
-                        <label class="ms-form-label">操作类型</label>
-                        <select id="msStepEditAction" class="ms-input">
-                            <option value="tap">点击</option><option value="swipe">滑动</option>
-                            <option value="input_text">输入文字</option><option value="long_press">长按</option>
-                            <option value="wait">等待</option>
-                        </select>
-                    </div>
-                    <div class="ms-form-group" id="msStepCoordGroup">
-                        <label class="ms-form-label">坐标 (X, Y)</label>
-                        <div class="ms-row">
-                            <input type="number" id="msStepEditX" class="ms-input" placeholder="X" style="width:5rem;">
-                            <input type="number" id="msStepEditY" class="ms-input" placeholder="Y" style="width:5rem;">
-                        </div>
-                    </div>
-                    <div class="ms-form-group" id="msStepSwipeGroup" style="display:none;">
-                        <label class="ms-form-label">终点 (X2, Y2)</label>
-                        <div class="ms-row">
-                            <input type="number" id="msStepEditX2" class="ms-input" placeholder="X2" style="width:5rem;">
-                            <input type="number" id="msStepEditY2" class="ms-input" placeholder="Y2" style="width:5rem;">
-                        </div>
-                    </div>
-                    <div class="ms-form-group" id="msStepInputGroup" style="display:none;">
-                        <label class="ms-form-label">输入内容</label>
-                        <input type="text" id="msStepEditInput" class="ms-input" placeholder="要输入的文字">
-                    </div>
-                    <div class="ms-form-group" id="msStepWaitGroup" style="display:none;">
-                        <label class="ms-form-label">等待 (毫秒)</label>
-                        <input type="number" id="msStepEditWait" class="ms-input" value="1000" min="100" max="30000" style="width:6rem;">
-                    </div>
-                    <div class="ms-form-group">
-                        <label class="ms-form-label">描述</label>
-                        <input type="text" id="msStepEditDesc" class="ms-input" placeholder="步骤说明">
-                    </div>
-                    <div class="ms-row ms-row--wrap" style="margin-top:0.5rem;">
-                        <button type="button" id="msBtnSaveStep" class="ms-btn ms-btn--primary">保存</button>
-                        <button type="button" id="msBtnDeleteStep" class="ms-btn ms-btn--ghost" style="color:#ef4444;">删除</button>
-                    </div>
+                <h2 class="ms-section-title"><i class="fas fa-folder-open text-emerald-500"></i> 已同步用例</h2>
+                <select id="msProjectSelect" class="ms-input"></select>
+                <select id="msCaseSelect" class="ms-input"></select>
+                <div class="ms-row ms-row--wrap" style="margin-top:0.75rem;">
+                    <button type="button" id="msBtnOpenSteps" class="ms-btn ms-btn--primary" disabled>编辑步骤</button>
+                    <button type="button" id="msBtnRefreshCases" class="ms-btn ms-btn--ghost">刷新列表</button>
                 </div>
+                <p id="msCaseMeta" class="ms-muted" style="margin-top:0.75rem;">选择项目与用例后可查看步骤数量</p>
             </section>
             </div>
         </aside>
@@ -192,5 +126,5 @@
 {% else %}
 <script id="__mobileStudioCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=openclaw_gateway_configured)|tojson }}</script>
 {% endif %}
-<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260629c"></script>
+<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260630a"></script>
 {% endblock %}

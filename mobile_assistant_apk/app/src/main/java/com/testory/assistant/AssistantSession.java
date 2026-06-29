@@ -20,6 +20,8 @@ public final class AssistantSession {
     public static final int LOCAL_PROJECT_ID = -1;
 
     private static volatile long suppressRecordingUntilMs;
+    private static final AtomicBoolean coverModeActive = new AtomicBoolean(false);
+    private static final AtomicBoolean recordingPaused = new AtomicBoolean(false);
     private static final AtomicReference<Long> localCaseId = new AtomicReference<>(-1L);
     private static final AtomicReference<String> recordingContextPackage = new AtomicReference<>("");
     private static volatile Runnable stepsUpdatedListener;
@@ -47,6 +49,7 @@ public final class AssistantSession {
         if (MODE_IDLE.equals(m)) {
             HighlightOverlay.hide();
             recordingContextPackage.set("");
+            recordingPaused.set(false);
         }
     }
 
@@ -114,12 +117,29 @@ public final class AssistantSession {
         return v == null ? -1L : v;
     }
 
+    static boolean isCoverModeActive() {
+        return coverModeActive.get();
+    }
+
+    static void setCoverModeActive(boolean active) {
+        coverModeActive.set(active);
+    }
+
     static void suppressRecordingFor(long ms) {
         suppressRecordingUntilMs = System.currentTimeMillis() + Math.max(0, ms);
     }
 
     static boolean isRecordingSuppressed() {
-        return System.currentTimeMillis() < suppressRecordingUntilMs;
+        return System.currentTimeMillis() < suppressRecordingUntilMs
+                || PerformingActionGuard.isPerforming();
+    }
+
+    static void setRecordingPaused(boolean paused) {
+        recordingPaused.set(paused);
+    }
+
+    static boolean isRecordingPaused() {
+        return recordingPaused.get();
     }
 
     static void setStepsUpdatedListener(Runnable listener) {

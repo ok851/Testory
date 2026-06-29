@@ -249,13 +249,17 @@ def get_page_source(udid: str) -> Dict[str, Any]:
     return _rpc_call(udid, "getPageSource", {}, timeout=10.0)
 
 
-def take_screenshot(udid: str) -> Tuple[bytes, str]:
+def take_screenshot(udid: str) -> Tuple[bytes, Dict[str, Any]]:
     res = _rpc_call(udid, "takeScreenshot", {}, timeout=15.0)
     b64 = res.get("image_base64") or res.get("data") or ""
     fmt = (res.get("format") or "jpeg").lower()
     if not b64:
         raise RuntimeError("插件未返回截图数据")
-    return base64.b64decode(b64), fmt
+    return base64.b64decode(b64), {
+        "format": fmt,
+        "width": int(res.get("width") or 0),
+        "height": int(res.get("height") or 0),
+    }
 
 
 def plugin_tap(udid: str, *, selector_type: str = "", selector_value: str = "", x: int = 0, y: int = 0) -> Dict[str, Any]:
@@ -333,11 +337,14 @@ def seconds_since_ping(udid: str) -> float:
 
 
 def dismiss_dialogs(udid: str) -> Dict[str, Any]:
-    """尝试点击屏幕中部关闭常见系统弹窗（轻量降级）。"""
+    """尝试点击常见系统弹窗按钮。"""
     try:
-        return plugin_tap(udid, x=540, y=1200)
+        return _rpc_call(udid, "dismissDialogs", {}, timeout=8.0)
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        try:
+            return plugin_tap(udid, x=540, y=1200)
+        except Exception:
+            return {"ok": False, "error": str(exc)}
 
 
 def _step_mobile_spec(step: Dict[str, Any]) -> Dict[str, Any]:
@@ -353,28 +360,108 @@ def _step_mobile_spec(step: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def _resolve_tap_coords(step: Dict[str, Any], spec: Dict[str, Any]) -> Tuple[int, int]:
+    """解析点击坐标：viewport_coord > rx/ry > node_rx/node_ry + bounds。"""
+    x = y = 0
+    st = (step.get("selector_type") or "").strip()
+    sv = (step.get("selector_value") or "").strip()
+    vc = spec.get("viewport_coord") if isinstance(spec.get("viewport_coord"), dict) else {}
+    x = int(vc.get("x") or spec.get("x") or 0)
+    y = int(vc.get("y") or spec.get("y") or 0)
+    if st == "viewport_coord" and sv:
+        try:
+            coord = json.loads(sv)
+            x = int(coord.get("x") or x)
+            y = int(coord.get("y") or y)
+            rx = coord.get("rx")
+            ry = coord.get("ry")
+            sw = int(spec.get("screen_width") or 0)
+            sh = int(spec.get("screen_height") or 0)
+            if rx is not None and ry is not None and sw > 0 and sh > 0:
+                x = int(round(float(rx) * sw))
+                y = int(round(float(ry) * sh))
+        except Exception:
+            pass
+    if (x <= 0 and y <= 0) and vc:
+        rx = vc.get("rx")
+        ry = vc.get("ry")
+        sw = int(spec.get("screen_width") or 0)
+        sh = int(spec.get("screen_height") or 0)
+        if rx is not None and ry is not None and sw > 0 and sh > 0:
+            x = int(round(float(rx) * sw))
+            y = int(round(float(ry) * sh))
+    # SoloPi: 节点内相对坐标
+    if (x <= 0 and y <= 0) and spec.get("node_rx") is not None and spec.get("node_ry") is not None:
+        bounds = spec.get("bounds")
+        if isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
+            left, top, right, bottom = [int(v) for v in bounds[:4]]
+            bw, bh = right - left, bottom - top
+            if bw > 0 and bh > 0:
+                x = left + int(round(float(spec["node_rx"]) * bw))
+                y = top + int(round(float(spec["node_ry"]) * bh))
+    return x, y
+
+
+def _resolve_swipe_coords(spec: Dict[str, Any]) -> Tuple[int, int, int, int]:
+    sw = int(spec.get("screen_width") or 0)
+    sh = int(spec.get("screen_height") or 0)
+    x1 = int(spec.get("x1") or 0)
+    y1 = int(spec.get("y1") or 0)
+    x2 = int(spec.get("x2") or x1)
+    y2 = int(spec.get("y2") or y1)
+    if sw > 0 and sh > 0:
+        if spec.get("rx1") is not None:
+            x1 = int(round(float(spec["rx1"]) * sw))
+        if spec.get("ry1") is not None:
+            y1 = int(round(float(spec["ry1"]) * sh))
+        if spec.get("rx2") is not None:
+            x2 = int(round(float(spec["rx2"]) * sw))
+        if spec.get("ry2") is not None:
+            y2 = int(round(float(spec["ry2"]) * sh))
+    return x1, y1, x2, y2
+
+
+def plugin_long_press(
+    udid: str,
+    *,
+    selector_type: str = "",
+    selector_value: str = "",
+    x: int = 0,
+    y: int = 0,
+) -> Dict[str, Any]:
+    return _rpc_call(
+        udid,
+        "longPress",
+        {
+            "selectorType": selector_type,
+            "selectorValue": selector_value,
+            "x": x,
+            "y": y,
+        },
+        timeout=15.0,
+    )
+
+
 def replay_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict[str, Any]:
     """将用例步骤映射为插件 tap/swipe/input RPC。"""
     action = (step.get("action") or "").strip().lower()
     spec = _step_mobile_spec(step)
 
     if action in ("tap", "click"):
-        x = y = 0
+        x, y = _resolve_tap_coords(step, spec)
         st = (step.get("selector_type") or "").strip()
         sv = (step.get("selector_value") or "").strip()
-        vc = spec.get("viewport_coord") if isinstance(spec.get("viewport_coord"), dict) else {}
-        x = int(vc.get("x") or spec.get("x") or 0)
-        y = int(vc.get("y") or spec.get("y") or 0)
         res = plugin_tap(udid, selector_type=st, selector_value=sv, x=x, y=y)
         return {"status": "success" if res.get("ok") else "error", **res}
+    if action in ("long_press", "long-press"):
+        x, y = _resolve_tap_coords(step, spec)
+        st = (step.get("selector_type") or "").strip()
+        sv = (step.get("selector_value") or "").strip()
+        res = plugin_long_press(udid, selector_type=st, selector_value=sv, x=x, y=y)
+        return {"status": "success" if res.get("ok") else "error", **res}
     if action == "swipe":
-        res = plugin_swipe(
-            udid,
-            x1=int(spec.get("x1") or 0),
-            y1=int(spec.get("y1") or 0),
-            x2=int(spec.get("x2") or 0),
-            y2=int(spec.get("y2") or 0),
-        )
+        x1, y1, x2, y2 = _resolve_swipe_coords(spec)
+        res = plugin_swipe(udid, x1=x1, y1=y1, x2=x2, y2=y2)
         return {"status": "success" if res.get("ok") else "error", **res}
     if action in ("input_text", "input", "type"):
         res = plugin_input(

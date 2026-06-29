@@ -70,6 +70,12 @@ public final class RecordingOverlay {
         MAIN.post(RecordingOverlay::updateStatusText);
     }
 
+    /** 坐标点是否落在悬浮条区域（Cover 模式透传触摸给控制条）。 */
+    static boolean hitTestPoint(int x, int y) {
+        if (overlayBounds.isEmpty()) return false;
+        return overlayBounds.contains(x, y);
+    }
+
     /** 事件 bounds 与悬浮条重叠则忽略（避免录制到暂停/结束操作）。 */
     static boolean hitTest(Rect eventBounds) {
         if (eventBounds == null || overlayBounds.isEmpty()) return false;

@@ -263,3 +263,11 @@ def parse_wm_size(output: str) -> Tuple[int, int]:
     if m:
         return int(m.group(1)), int(m.group(2))
     return 1080, 1920
+
+
+def adb_get_screen_size(udid: str) -> Tuple[int, int]:
+    """读取设备屏幕分辨率，供录制归一化百分比坐标。"""
+    code, out, _ = _adb_shell(udid, "wm", "size", timeout=8)
+    if code == 0 and out:
+        return parse_wm_size(out)
+    return 1080, 1920

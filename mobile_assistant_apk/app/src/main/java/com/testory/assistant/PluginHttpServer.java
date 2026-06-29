@@ -148,32 +148,11 @@ public final class PluginHttpServer extends NanoHTTPD {
             case "getStatus":
                 return buildStatus();
             case "startRecording":
-                if (!AssistantSession.isAccessibilityReady()) {
-                    throw new IllegalStateException("无障碍服务未就绪，请在系统设置中开启 Testory 助手");
-                }
-                boolean shot = params.optBoolean("screenshotPerStep", false);
-                AssistantSession.setScreenshotPerStep(shot);
-                long caseId = params.optLong("caseId", AssistantSession.getLocalCaseId());
-                if (caseId > 0) AssistantSession.setLocalCaseId(caseId);
-                setAgentRecordingActive(true);
-                clearEventQueues();
-                RecordingController.startRecording(appContext, caseId > 0 ? caseId : AssistantSession.getLocalCaseId(), true);
-                JSONObject out = ok("recording");
-                out.put("preparing_desktop", true);
-                return out;
             case "stopRecording":
-                setAgentRecordingActive(false);
-                RecordingController.stopRecording(appContext);
-                return ok("stopped");
             case "pauseRecording":
-                RecordingController.pauseRecording(appContext);
-                return ok("paused");
             case "resumeRecording":
-                RecordingController.resumeRecording(appContext);
-                return ok("resumed");
             case "pollSteps":
-                int limit = params.optInt("limit", 20);
-                return pollSteps(limit);
+                return deprecatedRpc(method);
             case "getPageSource":
                 return getPageSourceTree();
             case "takeScreenshot":
@@ -184,9 +163,21 @@ public final class PluginHttpServer extends NanoHTTPD {
                 return performSwipe(params);
             case "input":
                 return performInput(params);
+            case "longPress":
+                return performLongPress(params);
+            case "dismissDialogs":
+                return dismissDialogsJson();
             default:
                 throw new IllegalArgumentException("未知方法: " + method);
         }
+    }
+
+    private static JSONObject deprecatedRpc(String method) throws Exception {
+        return new JSONObject()
+                .put("ok", false)
+                .put("deprecated", true)
+                .put("error", "PC 端录制已移除，请在手机 Testory 助手内录制并同步")
+                .put("method", method);
     }
 
     private static JSONObject ok(String msg) throws Exception {
@@ -279,12 +270,13 @@ public final class PluginHttpServer extends NanoHTTPD {
         if (png == null || png.length == 0) {
             throw new IllegalStateException("screenshot_unavailable");
         }
+        android.util.DisplayMetrics dm = appContext.getResources().getDisplayMetrics();
         String b64 = Base64.encodeToString(png, Base64.NO_WRAP);
         return new JSONObject()
                 .put("format", "png")
                 .put("data", b64)
-                .put("width", 0)
-                .put("height", 0);
+                .put("width", dm.widthPixels)
+                .put("height", dm.heightPixels);
     }
 
     private JSONObject performTap(JSONObject params) throws Exception {
@@ -316,6 +308,24 @@ public final class PluginHttpServer extends NanoHTTPD {
         String st = params.optString("selectorType", "");
         String sv = params.optString("selectorValue", "");
         boolean ok = svc.performInput(st, sv, text);
+        return new JSONObject().put("ok", ok);
+    }
+
+    private JSONObject dismissDialogsJson() throws Exception {
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) throw new IllegalStateException("无障碍服务未就绪");
+        boolean ok = DialogDismissHelper.tryDismiss(svc);
+        return new JSONObject().put("ok", ok);
+    }
+
+    private JSONObject performLongPress(JSONObject params) throws Exception {
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc == null) throw new IllegalStateException("无障碍服务未就绪");
+        int x = params.optInt("x", 0);
+        int y = params.optInt("y", 0);
+        String st = params.optString("selectorType", "");
+        String sv = params.optString("selectorValue", "");
+        boolean ok = svc.performLongPress(st, sv, x, y);
         return new JSONObject().put("ok", ok);
     }
 
