@@ -206,8 +206,33 @@ async def recording_start(request: Request) -> Dict[str, Any]:
     _require_auth(request)
     body = await request.json()
     udid = (body.get("udid") or get_connected_udid() or "").strip()
-    screenshot = bool(body.get("screenshot_per_step", True))
+    screenshot = bool(body.get("screenshot_per_step", False))
     return rec_mod.start_recording_session(udid, screenshot_per_step=screenshot)
+
+
+@app.post("/internal/recording/pause")
+async def recording_pause(request: Request) -> Dict[str, Any]:
+    _require_auth(request)
+    body = await request.json()
+    udid = (body.get("udid") or get_connected_udid() or "").strip()
+    return rec_mod.pause_recording_session(udid)
+
+
+@app.post("/internal/recording/resume")
+async def recording_resume(request: Request) -> Dict[str, Any]:
+    _require_auth(request)
+    body = await request.json()
+    udid = (body.get("udid") or get_connected_udid() or "").strip()
+    return rec_mod.resume_recording_session(udid)
+
+
+@app.get("/internal/recording/live-steps")
+async def recording_live_steps(request: Request, udid: str = "") -> Dict[str, Any]:
+    _require_auth(request)
+    udid = (udid or get_connected_udid() or "").strip()
+    steps = rec_mod.get_live_steps(udid)
+    st = rec_mod.recording_status(udid)
+    return {"success": True, "udid": udid, "steps": steps, "live_steps": steps, **st}
 
 
 @app.post("/internal/recording/stop")

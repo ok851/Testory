@@ -231,6 +231,14 @@ def stop_recording(udid: str) -> Dict[str, Any]:
     return _rpc_call(udid, "stopRecording", {}, timeout=10.0)
 
 
+def pause_recording(udid: str) -> Dict[str, Any]:
+    return _rpc_call(udid, "pauseRecording", {}, timeout=10.0)
+
+
+def resume_recording(udid: str) -> Dict[str, Any]:
+    return _rpc_call(udid, "resumeRecording", {}, timeout=10.0)
+
+
 def poll_steps(udid: str, *, limit: int = 20) -> List[Dict[str, Any]]:
     res = _rpc_call(udid, "pollSteps", {"limit": max(1, limit)}, timeout=5.0)
     steps = res.get("steps") or []
@@ -322,3 +330,92 @@ def seconds_since_ping(udid: str) -> float:
         if not st:
             return 9999.0
         return time.time() - float(st.get("last_ping") or 0)
+
+
+def dismiss_dialogs(udid: str) -> Dict[str, Any]:
+    """尝试点击屏幕中部关闭常见系统弹窗（轻量降级）。"""
+    try:
+        return plugin_tap(udid, x=540, y=1200)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _step_mobile_spec(step: Dict[str, Any]) -> Dict[str, Any]:
+    spec = step.get("mobile_spec")
+    if isinstance(spec, dict):
+        return spec
+    if isinstance(spec, str) and spec.strip():
+        try:
+            parsed = json.loads(spec)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def replay_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict[str, Any]:
+    """将用例步骤映射为插件 tap/swipe/input RPC。"""
+    action = (step.get("action") or "").strip().lower()
+    spec = _step_mobile_spec(step)
+
+    if action in ("tap", "click"):
+        x = y = 0
+        st = (step.get("selector_type") or "").strip()
+        sv = (step.get("selector_value") or "").strip()
+        vc = spec.get("viewport_coord") if isinstance(spec.get("viewport_coord"), dict) else {}
+        x = int(vc.get("x") or spec.get("x") or 0)
+        y = int(vc.get("y") or spec.get("y") or 0)
+        res = plugin_tap(udid, selector_type=st, selector_value=sv, x=x, y=y)
+        return {"status": "success" if res.get("ok") else "error", **res}
+    if action == "swipe":
+        res = plugin_swipe(
+            udid,
+            x1=int(spec.get("x1") or 0),
+            y1=int(spec.get("y1") or 0),
+            x2=int(spec.get("x2") or 0),
+            y2=int(spec.get("y2") or 0),
+        )
+        return {"status": "success" if res.get("ok") else "error", **res}
+    if action in ("input_text", "input", "type"):
+        res = plugin_input(
+            udid,
+            text=str(step.get("input_value") or ""),
+            selector_type=(step.get("selector_type") or ""),
+            selector_value=(step.get("selector_value") or ""),
+        )
+        return {"status": "success" if res.get("ok") else "error", **res}
+    if action == "open_app":
+        if should_skip_open_app_step(step):
+            return {"status": "success", "message": "已跳过启动器/系统自动切换步骤"}
+        try:
+            from mobile_adb_control import adb_launch_app
+
+            spec = _step_mobile_spec(step)
+            pkg = str(step.get("input_value") or spec.get("app_package") or spec.get("appPackage") or "")
+            activity = str(spec.get("app_activity") or spec.get("appActivity") or "") or None
+            info = adb_launch_app(udid, pkg, activity, wait_foreground=True, timeout_sec=10.0)
+            return {"status": "success", "message": f"已启动 {info.get('app_label') or pkg}"}
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+    if action in ("press_home", "home"):
+        from mobile_adb_control import adb_press_home
+
+        adb_press_home(udid)
+        return {"status": "success"}
+    if action in ("press_back", "back"):
+        from mobile_adb_control import adb_press_back
+
+        adb_press_back(udid)
+        return {"status": "success"}
+    if action == "wait":
+        import time as _time
+
+        try:
+            sec = float(step.get("input_value") or step.get("wait_ms") or 1)
+            if sec > 100:
+                sec = sec / 1000.0
+        except (TypeError, ValueError):
+            sec = 1.0
+        _time.sleep(min(max(sec, 0), 120))
+        return {"status": "success"}
+    return {"status": "error", "error": f"不支持的步骤类型: {action}"}

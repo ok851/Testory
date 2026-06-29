@@ -7,7 +7,7 @@ WebSocket 同步点击/滚动/导航/键盘。
   EMBEDDED_BROWSER_GATEWAY_SECRET  与 Flask 共用，必填。
   EMBEDDED_BROWSER_IDLE_SEC        无 WS 活动回收秒数，默认 1800。
   EMBEDDED_BROWSER_GATE_PORT       监听端口，默认 8765。
-  EMBEDDED_BROWSER_HEADLESS        画布 Chromium 是否无头，默认 1（仅画布投屏，不另弹窗）；未设时不用 PLAYWRIGHT_HEADLESS。
+
   PLAYWRIGHT_HEADLESS              主站 Playwright 用；画布优先 EMBEDDED_BROWSER_HEADLESS。
   PLAYWRIGHT_BROWSER               默认 chromium；可选 chrome / edge / firefox / webkit（与主站一致）。
   EMBEDDED_INSPECT_EVAL_RETRIES    inspect 快照遇「导航销毁上下文」时重试次数，默认 6。

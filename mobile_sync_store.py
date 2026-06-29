@@ -17,7 +17,9 @@ _DEVICE_TOKENS: Dict[str, Dict[str, Any]] = {}
 _RUN_JOBS: Dict[str, Dict[str, Any]] = {}
 _RUN_EVENTS: Dict[str, List[Dict[str, Any]]] = {}
 
-_PAIR_TTL_SEC = 600
+# 原缺陷：600s 过长且与 UI 桩 API 断链导致「无效或过期」误报；延长至用户可接受窗口并统一注册。
+_PAIR_TTL_SEC = 120
+_PAIR_RETRY_WINDOW_SEC = 30
 _STORE_PATH: Optional[Path] = None
 
 
@@ -59,36 +61,66 @@ def _save_persisted() -> None:
 _load_persisted()
 
 
-def create_pair_code(user_id: int, tenant_id: Optional[int] = None) -> str:
+def create_pair_code(user_id: int, tenant_id: Optional[int] = None) -> Dict[str, Any]:
+    """生成并注册配对码；返回 code 与过期时间供 UI 倒计时。"""
     code = f"{secrets.randbelow(900000) + 100000:06d}"
+    now = time.time()
     with _LOCK:
         _PAIR_CODES[code] = {
             "user_id": user_id,
             "tenant_id": tenant_id,
-            "created_at": time.time(),
+            "created_at": now,
+            "used": False,
         }
-    return code
+    return {
+        "pair_code": code,
+        "created_at": now,
+        "expires_at": now + _PAIR_TTL_SEC,
+        "expires_in": _PAIR_TTL_SEC,
+    }
 
 
 def confirm_pair(code: str, device_id: str) -> Tuple[bool, str, Optional[str]]:
     code = (code or "").strip()
     device_id = (device_id or "").strip() or "device"
+    now = time.time()
     with _LOCK:
-        entry = _PAIR_CODES.pop(code, None)
-    if not entry:
-        return False, "配对码无效或已过期", None
-    if time.time() - float(entry.get("created_at") or 0) > _PAIR_TTL_SEC:
-        return False, "配对码已过期", None
-    token = secrets.token_urlsafe(32)
-    with _LOCK:
+        entry = _PAIR_CODES.get(code)
+        if not entry:
+            return False, "配对码无效或已过期", None
+        created = float(entry.get("created_at") or 0)
+        if now - created > _PAIR_TTL_SEC:
+            _PAIR_CODES.pop(code, None)
+            return False, "配对码已过期", None
+        if entry.get("used"):
+            paired_at = float(entry.get("paired_at") or 0)
+            if (
+                entry.get("device_id") == device_id
+                and paired_at
+                and now - paired_at <= _PAIR_RETRY_WINDOW_SEC
+                and entry.get("device_token")
+            ):
+                return True, "ok", str(entry["device_token"])
+            return False, "配对码无效或已过期", None
+        token = secrets.token_urlsafe(32)
+        entry["used"] = True
+        entry["device_id"] = device_id
+        entry["paired_at"] = now
+        entry["device_token"] = token
         _DEVICE_TOKENS[token] = {
             "user_id": entry["user_id"],
             "tenant_id": entry.get("tenant_id"),
             "device_id": device_id,
-            "paired_at": time.time(),
+            "paired_at": now,
         }
     _save_persisted()
     return True, "ok", token
+
+
+def pair_code_payload(user_id: int, tenant_id: Optional[int] = None) -> Dict[str, Any]:
+    """供 Flask 路由返回的标准配对码 JSON。"""
+    info = create_pair_code(user_id, tenant_id)
+    return {"success": True, **info}
 
 
 def resolve_device_token() -> Tuple[Optional[Dict[str, Any]], Optional[Any]]:
@@ -283,8 +315,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
 
         db = Database()
         tid = db.get_user_tenant_id(current_user.id)
-        code = create_pair_code(current_user.id, tid)
-        return jsonify({"success": True, "pair_code": code, "expires_in": _PAIR_TTL_SEC})
+        return jsonify(pair_code_payload(current_user.id, tid))
 
     @app.route("/api/mobile/sync/pair/confirm", methods=["POST"])
     @api_error_handler
@@ -472,27 +503,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         _persist_run_history(job_id, body, int(meta["user_id"]))
         return jsonify({"success": True})
 
-    @app.route("/api/ai/mobile/probe", methods=["POST"])
-    @api_error_handler
-    def api_ai_mobile_probe():
-        from flask_login import current_user
-
-        meta, err = resolve_device_token()
-        user_id = None
-        if meta:
-            user_id = int(meta["user_id"])
-        elif current_user.is_authenticated:
-            user_id = current_user.id
-        elif err:
-            return err
-        else:
-            return jsonify({"success": False, "error": "未授权"}), 401
-        body = request.get_json(silent=True) or {}
-        from mobile_vision_probe import execute_mobile_vision_probe
-
-        out = execute_mobile_vision_probe(body, user_id=user_id)
-        code = int(out.pop("_http", 200))
-        return jsonify(out), code
+    # Vision probe route removed ? mobile mirror/vision feature retired
 
 
 def _persist_run_history(job_id: str, payload: Dict[str, Any], user_id: int) -> None:

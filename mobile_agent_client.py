@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
@@ -133,6 +134,29 @@ def agent_stop_recording(udid: str = "") -> Dict[str, Any]:
     if err and not payload:
         return {"success": False, "error": err}
     return payload or {"success": False, "error": err or "unknown"}
+
+
+def agent_pause_recording(udid: str = "") -> Dict[str, Any]:
+    payload, err = mobile_agent_json("POST", "/internal/recording/pause", body={"udid": udid})
+    if err and not payload:
+        return {"success": False, "error": err}
+    return payload or {"success": False, "error": err or "unknown"}
+
+
+def agent_resume_recording(udid: str = "") -> Dict[str, Any]:
+    payload, err = mobile_agent_json("POST", "/internal/recording/resume", body={"udid": udid})
+    if err and not payload:
+        return {"success": False, "error": err}
+    return payload or {"success": False, "error": err or "unknown"}
+
+
+def agent_live_recording_steps(udid: str = "") -> Dict[str, Any]:
+    udid = (udid or "").strip()
+    path = f"/internal/recording/live-steps?udid={urllib.parse.quote(udid)}" if udid else "/internal/recording/live-steps"
+    payload, err = mobile_agent_json("GET", path)
+    if err and not payload:
+        return {"success": False, "error": err, "steps": [], "live_steps": []}
+    return payload or {"success": False, "error": err or "unknown", "steps": [], "live_steps": []}
 
 
 def agent_replay_steps(udid: str, steps: list, *, from_index: int = 0) -> Dict[str, Any]:

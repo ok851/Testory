@@ -14,6 +14,7 @@ from mobile_automation_gateway import plugin_rpc
 
 _recording_lock = threading.Lock()
 _recording_sessions: Dict[str, Dict[str, Any]] = {}
+_live_steps: Dict[str, List[Dict[str, Any]]] = {}
 _poll_threads: Dict[str, threading.Thread] = {}
 _ws_clients: Set[Any] = set()
 _ws_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -73,6 +74,23 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
     if not ok:
         return {"success": False, "error": msg}
     try:
+        status = plugin_rpc.plugin_status(udid)
+    except Exception as exc:
+        return {"success": False, "error": f"无法连接设备插件: {exc}"}
+    if not status.get("accessibility_enabled"):
+        return {
+            "success": False,
+            "error": "无障碍服务未就绪。请在手机「Testory 助手」中开启无障碍后再录制。",
+        }
+    try:
+        from mobile_adb_control import adb_press_home
+
+        # 与设备端 SessionForegroundGuard 双保险：PC 侧也先发 Home，减少助手界面误录。
+        adb_press_home(udid)
+        time.sleep(0.25)
+    except Exception:
+        pass
+    try:
         plugin_rpc.start_recording(udid, screenshot_per_step=screenshot_per_step)
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -83,9 +101,15 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
             "started_at": time.time(),
             "step_count": 0,
         }
+        _live_steps[udid] = []
     _start_poll_thread(udid)
     broadcast_event("recording_started", {"udid": udid})
-    return {"success": True, "udid": udid, "message": "录制已开始"}
+    return {
+        "success": True,
+        "udid": udid,
+        "message": "正在返回桌面，录制就绪后请操作手机",
+        "preparing_desktop": True,
+    }
 
 
 def stop_recording_session(udid: str) -> Dict[str, Any]:
@@ -94,12 +118,13 @@ def stop_recording_session(udid: str) -> Dict[str, Any]:
         sess = _recording_sessions.get(udid)
         if sess:
             sess["active"] = False
+        live = list(_live_steps.get(udid) or [])
     try:
         plugin_rpc.stop_recording(udid)
     except Exception:
         pass
-    broadcast_event("recording_stopped", {"udid": udid})
-    return {"success": True, "udid": udid}
+    broadcast_event("recording_stopped", {"udid": udid, "step_count": len(live)})
+    return {"success": True, "udid": udid, "steps": live, "step_count": len(live)}
 
 
 def _start_poll_thread(udid: str) -> None:
@@ -162,14 +187,48 @@ def _start_poll_thread(udid: str) -> None:
                             _recording_sessions[udid]["step_count"] = int(
                                 _recording_sessions[udid].get("step_count") or 0
                             ) + 1
+                        buf = _live_steps.setdefault(udid, [])
+                        buf.append(step)
                     broadcast_event("step", payload)
             except Exception as exc:
                 broadcast_event("error", {"udid": udid, "error": str(exc)})
-            time.sleep(0.35)
+            time.sleep(0.12)
 
     t = threading.Thread(target=_worker, daemon=True, name=f"mobile-rec-poll-{udid}")
     _poll_threads[udid] = t
     t.start()
+
+
+def get_live_steps(udid: str) -> List[Dict[str, Any]]:
+    udid = (udid or "").strip()
+    with _recording_lock:
+        return list(_live_steps.get(udid) or [])
+
+
+def pause_recording_session(udid: str) -> Dict[str, Any]:
+    udid = (udid or "").strip()
+    try:
+        plugin_rpc.pause_recording(udid)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    with _recording_lock:
+        sess = _recording_sessions.get(udid)
+        if sess:
+            sess["paused"] = True
+    return {"success": True, "udid": udid, "message": "录制已暂停"}
+
+
+def resume_recording_session(udid: str) -> Dict[str, Any]:
+    udid = (udid or "").strip()
+    try:
+        plugin_rpc.resume_recording(udid)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    with _recording_lock:
+        sess = _recording_sessions.get(udid)
+        if sess:
+            sess["paused"] = False
+    return {"success": True, "udid": udid, "message": "录制已继续"}
 
 
 def recording_status(udid: str = "") -> Dict[str, Any]:

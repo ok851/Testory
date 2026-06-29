@@ -35,6 +35,19 @@ public final class ReplayEngine {
             return out;
         }
 
+        // 原缺陷：回放前强制拉起步骤中的 app_package，桌面/跨应用场景第一步即失败。
+        // 新逻辑：按步骤语义软恢复上下文，仅显式 open_app 才强制启动。
+        AppLauncher.Result prep = ReplayContextHelper.prepareSession(
+                svc.getApplicationContext(), svc, runnable);
+        if (!prep.success) {
+            JSONObject out = new JSONObject();
+            out.put("success", false);
+            out.put("error", prep.message);
+            out.put("error_code", prep.errorCode);
+            out.put("results", new JSONArray());
+            return out;
+        }
+
         JSONArray results = new JSONArray();
         for (int i = 0; i < runnable.size(); i++) {
             if (RunSession.isCancelled()) {
@@ -52,7 +65,7 @@ public final class ReplayEngine {
                 out.put("results", results);
                 return out;
             }
-            Thread.sleep(500);
+            Thread.sleep(350);
         }
         JSONObject out = new JSONObject();
         out.put("success", true);
@@ -72,28 +85,33 @@ public final class ReplayEngine {
         try {
             boolean ok;
             if ("open_app".equals(action)) {
-                String pkg = step.optString("input_value", "");
-                if (pkg.isEmpty() && spec != null) {
-                    pkg = spec.optString("appPackage", spec.optString("app_package", ""));
-                }
-                String activity = spec != null
-                        ? spec.optString("appActivity", spec.optString("app_activity", "")) : "";
-                ok = svc.launchPackage(pkg, activity);
-                if (!ok) {
-                    result.put("status", "error");
-                    result.put("error", "无法启动应用: " + pkg);
-                    return result;
+                if (ReplayContextHelper.shouldSkipOpenAppStep(step)) {
+                    ok = true;
+                    result.put("message", "已跳过启动器/系统自动切换步骤");
+                } else {
+                    String pkg = ReplayContextHelper.openAppPackage(step);
+                    String activity = ReplayContextHelper.openAppActivity(step);
+                    AppLauncher.Result launch = AppLauncher.launch(
+                            svc.getApplicationContext(),
+                            svc,
+                            pkg,
+                            activity,
+                            AppLauncher.DEFAULT_TIMEOUT_MS);
+                    ok = launch.success;
+                    if (!ok) {
+                        result.put("status", "error");
+                        result.put("error", launch.message);
+                        result.put("error_code", launch.errorCode);
+                        return result;
+                    }
+                    result.put("message", "已启动 " + launch.appLabel);
                 }
             } else if ("press_home".equals(action) || "home".equals(action)) {
                 ok = svc.goHome();
             } else if ("press_back".equals(action) || "back".equals(action)) {
                 ok = svc.goBack();
             } else if ("tap".equals(action) || "click".equals(action)) {
-                if (!svc.ensureAppContext(spec)) {
-                    result.put("status", "error");
-                    result.put("error", "无法切换到目标应用");
-                    return result;
-                }
+                maybeSoftRestore(svc, step);
                 int[] coord = resolveCoord(st, sv, spec);
                 int x = coord[0];
                 int y = coord[1];
@@ -106,11 +124,7 @@ public final class ReplayEngine {
                     return result;
                 }
             } else if ("long_press".equals(action) || "long-press".equals(action)) {
-                if (!svc.ensureAppContext(spec)) {
-                    result.put("status", "error");
-                    result.put("error", "无法切换到目标应用");
-                    return result;
-                }
+                maybeSoftRestore(svc, step);
                 int[] coord = resolveCoord(st, sv, spec);
                 int x = coord[0];
                 int y = coord[1];
@@ -121,11 +135,6 @@ public final class ReplayEngine {
                     return result;
                 }
             } else if ("swipe".equals(action)) {
-                if (!svc.ensureAppContext(spec)) {
-                    result.put("status", "error");
-                    result.put("error", "无法切换到目标应用");
-                    return result;
-                }
                 int x1 = spec != null ? spec.optInt("x1", 0) : 0;
                 int y1 = spec != null ? spec.optInt("y1", 0) : 0;
                 int x2 = spec != null ? spec.optInt("x2", x1) : x1;
@@ -137,11 +146,7 @@ public final class ReplayEngine {
                     return result;
                 }
             } else if ("input_text".equals(action) || "input".equals(action) || "type".equals(action)) {
-                if (!svc.ensureAppContext(spec)) {
-                    result.put("status", "error");
-                    result.put("error", "无法切换到目标应用");
-                    return result;
-                }
+                maybeSoftRestore(svc, step);
                 ok = svc.performInput(st, sv, step.optString("input_value", ""));
                 if (!ok) {
                     result.put("status", "error");
@@ -172,14 +177,27 @@ public final class ReplayEngine {
         return result;
     }
 
+    /** 元素定位类步骤尽力恢复上下文；坐标类步骤不强制启动应用。 */
+    private static void maybeSoftRestore(AssistantAccessibilityService svc, JSONObject step) {
+        if (AppLauncher.isCoordinateStep(step)) return;
+        String pkg = AppLauncher.extractContextPackage(step);
+        if (pkg.isEmpty() || AppLauncher.isSkippablePackage(pkg)) return;
+        AppLauncher.softRestoreContext(
+                svc.getApplicationContext(), svc, pkg, AppLauncher.DEFAULT_TIMEOUT_MS);
+    }
+
     private static int[] resolveCoord(String st, String sv, JSONObject spec) {
         int x = 0;
         int y = 0;
+        double rx = -1;
+        double ry = -1;
         if ("viewport_coord".equals(st) && sv != null && !sv.isEmpty()) {
             try {
                 JSONObject coord = new JSONObject(sv);
                 x = coord.optInt("x", 0);
                 y = coord.optInt("y", 0);
+                rx = coord.optDouble("rx", -1);
+                ry = coord.optDouble("ry", -1);
             } catch (Exception ignored) {
             }
         }
@@ -188,7 +206,17 @@ public final class ReplayEngine {
                 JSONObject vc = spec.getJSONObject("viewport_coord");
                 x = vc.optInt("x", 0);
                 y = vc.optInt("y", 0);
+                if (rx < 0) rx = vc.optDouble("rx", -1);
+                if (ry < 0) ry = vc.optDouble("ry", -1);
             } catch (Exception ignored) {
+            }
+        }
+        if ((rx >= 0 && ry >= 0) && spec != null) {
+            int sw = spec.optInt("screen_width", 0);
+            int sh = spec.optInt("screen_height", 0);
+            if (sw > 0 && sh > 0) {
+                x = (int) Math.round(rx * sw);
+                y = (int) Math.round(ry * sh);
             }
         }
         return new int[]{x, y};

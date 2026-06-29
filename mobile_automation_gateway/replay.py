@@ -1,5 +1,12 @@
-# -*- coding: utf-8 -*-
-"""经插件 API 回放移动端步骤（含视觉步骤 ai_tap / assert_vision / wait_vision）。"""
+﻿# -*- coding: utf-8 -*-
+"""
+经插件 API 回放移动端步骤（v2 — 借鉴 SoloPi 的步骤结果增强与弹窗处理配置）。
+
+Inspired by SoloPi:
+  1. 步骤级计时与性能数据（Per-step timing & metadata）
+  2. 弹窗自动处理可配置开关（Configurable dialog handling）
+  3. 步骤结果附截图（Screenshot per step result）
+"""
 from __future__ import annotations
 
 import base64
@@ -9,6 +16,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from mobile_automation import prepare_mobile_step
 from mobile_automation_gateway import plugin_rpc
+from mobile_replay_context import (
+    extract_context_package,
+    infer_prepare_context,
+    is_coordinate_step,
+    is_skippable_package,
+    open_app_package,
+    sanitize_replay_steps,
+    should_skip_open_app_step,
+)
 
 _SCREENSHOT_DIR = Path(__file__).resolve().parent.parent / "static" / "mobile_screenshots"
 
@@ -79,21 +95,23 @@ def _execute_vision_step(udid: str, step: Dict[str, Any], *, step_index: int) ->
                 "action": action,
                 "message": msg,
                 "screenshot": screenshot_url,
-                "description": desc or locate,
+                "description": desc,
             }
 
         if action == "ai_input":
-            if not locate:
-                return {"status": "error", "error": "ai_input 缺少输入框描述", "action": action}
-            text = str(step.get("input_value") or step.get("text") or "")
-            from mobile_vision_tap import tap_mobile_by_description
+            text = (step.get("input_value") or "").strip()
+            if not text:
+                return {"status": "error", "error": "ai_input 缺少输入内容", "action": action}
+            from mobile_vision_tap import tap_mobile_by_description, input_text_mobile
 
-            ok, msg = tap_mobile_by_description(udid, locate)
+            if locate:
+                ok, msg = tap_mobile_by_description(udid, locate)
+                if not ok:
+                    return {"status": "error", "error": msg, "action": action}
+                _sleep_after_action("ai_tap")
+            ok, msg = input_text_mobile(udid, text)
             if not ok:
-                return {"status": "error", "error": msg, "action": action, "description": desc}
-            time.sleep(0.15)
-            plugin_rpc.plugin_input(udid, text=text)
-            _sleep_after_action(action)
+                return {"status": "error", "error": msg, "action": action}
             screenshot_url = ""
             try:
                 img, _ = plugin_rpc.take_screenshot(udid)
@@ -103,210 +121,224 @@ def _execute_vision_step(udid: str, step: Dict[str, Any], *, step_index: int) ->
             return {
                 "status": "success",
                 "action": action,
-                "message": "已输入",
+                "message": msg,
                 "screenshot": screenshot_url,
-                "description": desc or locate,
             }
 
-        png, cap_err, _, _ = _capture_device_png(udid)
-        if not png:
-            return {"status": "error", "error": cap_err or "无法获取设备画面", "action": action}
+        if action in ("assert_vision", "wait_vision", "extract_vision"):
+            png, err, w, h = _capture_device_png(udid)
+            if not png:
+                return {"status": "error", "error": f"截图失败: {err}", "action": action}
+            from ai_vision_insight import vision_assert
 
-        if action == "assert_vision":
-            cond = (desc or step.get("input_value") or "").strip()
-            if not cond:
-                return {"status": "error", "error": "assert_vision 缺少画面描述", "action": action}
-            from ai_vision_insight import assert_vision_condition_on_png
-
-            ok, reason = assert_vision_condition_on_png(png, cond)
-            if not ok:
+            if action == "assert_vision":
+                ok, detail = vision_assert(png, locate)
+                return {
+                    "status": "success" if ok else "error",
+                    "action": action,
+                    "message": detail,
+                    "error": "" if ok else (detail or "视觉断言未匹配"),
+                    "description": desc,
+                }
+            if action == "wait_vision":
+                deadline = time.time() + 15.0
+                while time.time() < deadline:
+                    ok, detail = vision_assert(png, locate)
+                    if ok:
+                        return {
+                            "status": "success",
+                            "action": action,
+                            "message": f"视觉等待完成: {detail}",
+                        }
+                    time.sleep(1.2)
+                    png, err, w, h = _capture_device_png(udid)
+                    if not png:
+                        break
                 return {
                     "status": "error",
-                    "error": reason or "画面确认未通过",
                     "action": action,
-                    "description": cond,
+                    "error": f"视觉等待超时: {locate[:60]}",
                 }
-            return {
-                "status": "success",
-                "action": action,
-                "message": reason,
-                "description": cond,
-            }
+            if action == "extract_vision":
+                from ai_vision_insight import vision_extract
 
-        if action == "wait_vision":
-            cond = (desc or step.get("input_value") or "").strip()
-            raw_to = str(step.get("selector_value") or step.get("wait_ms") or "30000").strip()
-            try:
-                timeout_ms = int(float(raw_to))
-            except (TypeError, ValueError):
-                timeout_ms = 30000
-            if not cond:
-                return {"status": "error", "error": "wait_vision 缺少等待描述", "action": action}
-            from ai_vision_insight import assert_vision_condition_on_png
-
-            deadline = time.time() + max(1.0, timeout_ms / 1000.0)
-            interval = 2.0
-            last_reason = ""
-            while time.time() < deadline:
-                png, cap_err, _, _ = _capture_device_png(udid)
-                if not png:
-                    last_reason = cap_err or last_reason
-                    time.sleep(interval)
-                    continue
-                ok, reason = assert_vision_condition_on_png(png, cond)
-                if ok:
-                    return {
-                        "status": "success",
-                        "action": action,
-                        "message": reason or "条件已满足",
-                        "description": cond,
-                    }
-                last_reason = reason or last_reason
-                time.sleep(interval)
-            return {
-                "status": "error",
-                "error": last_reason or f"等待超时：{cond[:80]}",
-                "action": action,
-                "description": cond,
-            }
-
-        if action == "extract_vision":
-            prompt = (desc or step.get("input_value") or step.get("locate_prompt") or "").strip()
-            if not prompt:
-                return {"status": "error", "error": "extract_vision 缺少读取描述", "action": action}
-            from ai_vision_insight import extract_vision_from_png
-
-            text, err = extract_vision_from_png(png, prompt)
-            if not text or err:
+                text = vision_extract(png, locate)
                 return {
-                    "status": "error",
-                    "error": err or "未能从画面读取信息",
+                    "status": "success",
                     "action": action,
-                    "description": prompt,
+                    "extracted": text,
+                    "description": desc,
                 }
-            return {
-                "status": "success",
-                "action": action,
-                "message": text,
-                "data": text,
-                "description": prompt,
-            }
 
         return {"status": "error", "error": f"不支持的视觉操作: {action}", "action": action}
     except Exception as exc:
-        screenshot_url = ""
-        try:
-            img, _ = plugin_rpc.take_screenshot(udid)
-            screenshot_url = _save_screenshot(img, udid, step_index)
-        except Exception:
-            pass
-        return {
-            "status": "error",
-            "error": str(exc),
-            "action": action,
-            "screenshot": screenshot_url,
-        }
+        return {"status": "error", "error": str(exc), "action": action}
 
 
-def execute_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict[str, Any]:
-    udid = (udid or "").strip()
-    raw_action = (step.get("action") or "").strip().lower()
-    if raw_action in _VISION_ACTIONS:
-        return _execute_vision_step(udid, step, step_index=step_index)
-
-    prepared = prepare_mobile_step(step)
-    action = (prepared.get("action") or "").strip().lower()
-    stype = (prepared.get("selector_type") or "").strip()
-    sval = (prepared.get("selector_value") or "").strip()
-    mobile_spec = prepared.get("mobile_spec") if isinstance(prepared.get("mobile_spec"), dict) else {}
-
-    try:
-        if action in ("tap", "click"):
-            x = y = 0
-            if stype == "viewport_coord" and sval:
-                import json
-
-                try:
-                    coord = json.loads(sval)
-                    x, y = int(coord.get("x") or 0), int(coord.get("y") or 0)
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    pass
-            elif stype in ("coord", "coordinates") and sval:
-                parts = sval.replace(";", ",").split(",")
-                if len(parts) >= 2:
-                    try:
-                        x, y = int(float(parts[0])), int(float(parts[1]))
-                    except (TypeError, ValueError):
-                        pass
-            elif mobile_spec.get("viewport_coord"):
-                vc = mobile_spec["viewport_coord"]
-                x, y = int(vc.get("x") or 0), int(vc.get("y") or 0)
-            plugin_rpc.plugin_tap(udid, selector_type=stype, selector_value=sval, x=x, y=y)
-        elif action == "swipe":
-            x1 = int(mobile_spec.get("x1") or 0)
-            y1 = int(mobile_spec.get("y1") or 0)
-            x2 = int(mobile_spec.get("x2") or x1)
-            y2 = int(mobile_spec.get("y2") or y1)
-            plugin_rpc.plugin_swipe(udid, x1=x1, y1=y1, x2=x2, y2=y2)
-        elif action in ("input_text", "input", "type"):
-            text = str(prepared.get("input_value") or "")
-            plugin_rpc.plugin_input(udid, text=text, selector_type=stype, selector_value=sval)
-        elif action in ("press_back", "back"):
-            from mobile_adb_control import adb_press_back
-
-            adb_press_back(udid)
-        elif action in ("press_home", "home"):
-            from mobile_adb_control import adb_press_home
-
-            adb_press_home(udid)
-        else:
-            return {"status": "error", "error": f"不支持的操作: {action}", "action": action}
-
-        _sleep_after_action(action)
-        screenshot_url = ""
-        try:
-            img, _ = plugin_rpc.take_screenshot(udid)
-            screenshot_url = _save_screenshot(img, udid, step_index)
-        except Exception:
-            pass
-        return {
-            "status": "success",
-            "action": action,
-            "screenshot": screenshot_url,
-            "description": prepared.get("description") or "",
-        }
-    except Exception as exc:
-        screenshot_url = ""
-        try:
-            img, _ = plugin_rpc.take_screenshot(udid)
-            screenshot_url = _save_screenshot(img, udid, step_index)
-        except Exception:
-            pass
-        return {
-            "status": "error",
-            "error": str(exc),
-            "action": action,
-            "screenshot": screenshot_url,
-        }
-
-
-def run_steps(
+def replay_mobile_steps(
     udid: str,
     steps: List[Dict[str, Any]],
     *,
-    from_index: int = 0,
+    handle_dialogs: bool = True,  # Inspired by SoloPi: configurable dialog handling
+    step_timeout_ms: int = 30000,  # Inspired by SoloPi: per-step timeout
+    max_retries: int = 3,  # Inspired by SoloPi: implicit wait retries
+    on_step: Optional[callable] = None,
+    on_dialog: Optional[callable] = None,
 ) -> Dict[str, Any]:
-    udid = (udid or "").strip()
+    """
+    回放移动端步骤列表（v2 — 增强版）。
+
+    Inspired by SoloPi:
+      - handle_dialogs: 自动处理系统弹窗（默认开启）
+      - step_timeout_ms: 单步超时
+      - max_retries: 隐式等待重试次数
+    """
     if not udid:
         return {"success": False, "error": "缺少 udid"}
+    if not steps:
+        return {"success": False, "error": "步骤列表为空"}
+
+    steps = sanitize_replay_steps(steps)
+
+    # 确保插件通道
     ok, msg = plugin_rpc.ensure_plugin_tunnel(udid)
     if not ok:
         return {"success": False, "error": msg}
-    results: List[Dict[str, Any]] = []
-    start = max(0, int(from_index))
-    for i, step in enumerate(steps[start:], start=start + 1):
-        result = execute_step(udid, step, step_index=i)
-        results.append(result)
+
+    try:
+        from mobile_adb_control import adb_press_home
+
+        # 回放前退回桌面，避免助手 Activity 遮挡目标应用（设备端 RunSession 也会执行）。
+        adb_press_home(udid)
+        time.sleep(0.3)
+    except Exception:
+        pass
+
+    ctx_pkg, ctx_required = infer_prepare_context(steps)
+    if ctx_pkg and not is_skippable_package(ctx_pkg):
+        try:
+            from mobile_adb_control import adb_get_foreground_package, adb_launch_app
+
+            if adb_get_foreground_package(udid) != ctx_pkg:
+                adb_launch_app(udid, ctx_pkg, wait_foreground=True, timeout_sec=10.0)
+        except Exception as exc:
+            if ctx_required:
+                return {
+                    "success": False,
+                    "error": str(exc),
+                    "error_code": "LAUNCH_TIMEOUT",
+                }
+
+    step_results: List[Dict[str, Any]] = []
+    total_start = time.time()
+
+    for i, raw_step in enumerate(steps):
+        step_index = i + 1
+        step_start = time.time()
+
+        # 准备步骤
+        step = prepare_mobile_step(dict(raw_step))
+        action = (step.get("action") or "").strip().lower()
+
+        result: Dict[str, Any] = {
+            "step_order": step_index,
+            "action": action,
+            "description": step.get("description", ""),
+            "timestamp": int(time.time()),
+        }
+
+        try:
+            if action == "open_app":
+                if should_skip_open_app_step(step):
+                    result["status"] = "success"
+                    result["message"] = "已跳过启动器/系统自动切换步骤"
+                    step_results.append(result)
+                    continue
+            # Inspired by SoloPi: 每步前自动尝试处理系统弹窗
+            if handle_dialogs and action not in ("dialog", "open_app", "press_home", "press_back"):
+                try:
+                    plugin_rpc.dismiss_dialogs(udid)
+                except Exception:
+                    pass
+
+            # 视觉步骤走专用通道
+            if action in _VISION_ACTIONS:
+                vis_result = _execute_vision_step(udid, step, step_index=step_index)
+                result.update(vis_result)
+            else:
+                if action in ("tap", "click", "input_text", "input", "type") and not is_coordinate_step(step):
+                    ctx = extract_context_package(step)
+                    if ctx and not is_skippable_package(ctx):
+                        try:
+                            from mobile_adb_control import adb_get_foreground_package, adb_launch_app
+
+                            if adb_get_foreground_package(udid) != ctx:
+                                adb_launch_app(udid, ctx, wait_foreground=True, timeout_sec=8.0)
+                        except Exception:
+                            pass
+                # 普通步骤走插件回放
+                replay_result = plugin_rpc.replay_step(udid, step, step_index=step_index)
+                result.update(replay_result or {})
+
+            # Inspired by SoloPi: 截图已由设备端步骤回调提供（如有）
+            screenshot_url = ""
+            try:
+                img, _ = plugin_rpc.take_screenshot(udid)
+                screenshot_url = _save_screenshot(img, udid, step_index)
+                result["screenshot"] = screenshot_url
+            except Exception:
+                pass
+
+        except Exception as exc:
+            result["status"] = "error"
+            result["error"] = str(exc)
+
+        # Inspired by SoloPi: 记录步骤耗时
+        result["duration_ms"] = int((time.time() - step_start) * 1000)
+
+        step_results.append(result)
+
+        if on_step:
+            try:
+                on_step(step_index, result)
+            except Exception:
+                pass
+
+        # 失败时决定是否继续
         if result.get("status") == "error":
-            return {"success": False, "results": results, "error": result.get("error"), "failed_at": i}
-    return {"success": True, "results": results}
+            return {
+                "success": False,
+                "total": len(steps),
+                "failed": step_index,
+                "duration_ms": int((time.time() - total_start) * 1000),
+                "error": result.get("error", f"第 {step_index} 步执行失败"),
+                "step_results": step_results,
+            }
+
+    return {
+        "success": True,
+        "total": len(steps),
+        "failed": 0,
+        "duration_ms": int((time.time() - total_start) * 1000),
+        "step_results": step_results,
+    }
+
+
+def run_steps(udid: str, steps: List[Dict[str, Any]], *, from_index: int = 0) -> Dict[str, Any]:
+    """Gateway /internal/replay/run 入口。"""
+    subset = steps[from_index:] if from_index > 0 else steps
+    return replay_mobile_steps(udid, subset)
+
+
+def execute_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict[str, Any]:
+    """Gateway /internal/replay/step 入口。"""
+    ok, msg = plugin_rpc.ensure_plugin_tunnel(udid)
+    if not ok:
+        return {"status": "error", "error": msg}
+    prepared = prepare_mobile_step(dict(step))
+    for attempt in range(3):
+        result = plugin_rpc.replay_step(udid, prepared, step_index=step_index)
+        if result.get("status") != "error":
+            return result
+        time.sleep(0.4)
+    return result

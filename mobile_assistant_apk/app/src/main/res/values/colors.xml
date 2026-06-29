@@ -1,10 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ta_bg">#F1F5F9</color>
+    <color name="ta_bg">#F0F2F5</color>
     <color name="ta_card">#FFFFFF</color>
-    <color name="ta_text">#0F172A</color>
-    <color name="ta_muted">#64748B</color>
-    <color name="ta_primary">#059669</color>
-    <color name="ta_record">#2563EB</color>
-    <color name="ta_danger">#DC2626</color>
+    <color name="ta_text">#333333</color>
+    <color name="ta_muted">#6B7280</color>
+    <color name="ta_primary">#5A6B7D</color>
+    <color name="ta_primary_dark">#4A5568</color>
+    <color name="ta_on_primary">#FFFFFF</color>
+    <color name="ta_record">#C53030</color>
+    <color name="ta_record_bg">#F7EDED</color>
+    <color name="ta_danger">#991B1B</color>
+    <color name="ta_warn">#B45309</color>
+    <color name="ta_success">#2F855A</color>
+    <color name="ta_accent">#5A6B7D</color>
+    <color name="ta_surface">#E8EAED</color>
+    <color name="ta_divider">#D1D5DB</color>
+    <color name="ta_code_text">#404040</color>
+    <color name="ta_overlay_bg">#E62D3748</color>
+    <color name="ta_a11y_blue">#2563EB</color>
 </resources>

@@ -41,7 +41,7 @@ public final class HighlightOverlay {
         int pad = dp(app, 2);
         FrameLayout box = new FrameLayout(app);
         GradientDrawable border = new GradientDrawable();
-        border.setStroke(dp(app, 3), 0xFF059669);
+        border.setStroke(dp(app, 3), 0xFF5A6B7D);
         border.setColor(0x33059669);
         border.setCornerRadius(dp(app, 4));
         box.setBackground(border);

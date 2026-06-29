@@ -3,6 +3,9 @@ package com.testory.assistant;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import android.content.Context;
+import android.util.DisplayMetrics;
+
 /** 与 PC 端 mobile_assistant_events.normalize_assistant_event 对齐的步骤归一化。 */
 final class StepNormalizer {
 
@@ -59,6 +62,7 @@ final class StepNormalizer {
             vc.put("y", cy);
             mobileSpec.put("viewport_coord", vc);
         }
+        applyScreenMetrics(mobileSpec);
 
         JSONObject step = new JSONObject();
         step.put("step_order", order);
@@ -80,7 +84,7 @@ final class StepNormalizer {
             step.put("action", "input_text");
             step.put("input_value", raw.optString("text", raw.optString("input_value", "")));
             step.put("description", raw.optString("description", "输入文本"));
-            applySelector(step, node, cx, cy);
+            applySelector(step, node, cx, cy, mobileSpec);
             applyPackage(mobileSpec, raw);
             step.put("mobile_spec", mobileSpec);
             return step;
@@ -101,7 +105,7 @@ final class StepNormalizer {
         step.put("action", action);
         step.put("description", describeNode(node, type, cx, cy));
         step.put("input_value", "");
-        applySelector(step, node, cx, cy);
+        applySelector(step, node, cx, cy, mobileSpec);
         applyPackage(mobileSpec, raw);
         step.put("mobile_spec", mobileSpec);
         return step;
@@ -127,66 +131,65 @@ final class StepNormalizer {
         if (pkg.isEmpty()) {
             pkg = raw.optString("app_package", "");
         }
+        if (pkg.isEmpty()) {
+            pkg = AssistantSession.getRecordingContextPackage();
+        }
         if (!pkg.isEmpty() && !"com.testory.assistant".equals(pkg)) {
-            mobileSpec.put("app_package", pkg);
-            mobileSpec.put("appPackage", pkg);
+            mobileSpec.put("context_package", pkg);
         }
     }
 
+    private static void applyScreenMetrics(JSONObject mobileSpec) throws Exception {
+        Context ctx = AssistantApplicationHolder.get();
+        if (ctx == null) return;
+        DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+        int sw = dm.widthPixels;
+        int sh = dm.heightPixels;
+        if (sw <= 0 || sh <= 0) return;
+        mobileSpec.put("screen_width", sw);
+        mobileSpec.put("screen_height", sh);
+        JSONObject vc = mobileSpec.optJSONObject("viewport_coord");
+        if (vc == null) return;
+        int x = vc.optInt("x", 0);
+        int y = vc.optInt("y", 0);
+        if (x > 0 || y > 0) {
+            vc.put("rx", Math.round(x * 10000.0 / sw) / 10000.0);
+            vc.put("ry", Math.round(y * 10000.0 / sh) / 10000.0);
+        }
+    }
+
+    // Improved swipe spec: use scroll deltas when available, fallback to screen-relative defaults
     private static void applySwipeSpec(
             JSONObject spec, JSONObject raw, JSONArray bounds, int cx, int cy) throws Exception {
         int dx = raw.optInt("scroll_delta_x", 0);
         int dy = raw.optInt("scroll_delta_y", 0);
-        int dist = 320;
+        int dist = 400;  // increased from 320 for more noticeable swipe
         if (bounds != null && bounds.length() >= 4) {
             if (dx != 0 || dy != 0) {
+                // Use actual scroll deltas for accurate swipe replication
                 spec.put("x1", cx - dx);
                 spec.put("y1", cy - dy);
                 spec.put("x2", cx + dx);
                 spec.put("y2", cy + dy);
                 return;
             }
-            if (dy < 0) {
-                spec.put("x1", cx);
-                spec.put("y1", cy + dist / 2);
-                spec.put("x2", cx);
-                spec.put("y2", cy - dist / 2);
-                return;
-            }
-            if (dy > 0) {
-                spec.put("x1", cx);
-                spec.put("y1", cy - dist / 2);
-                spec.put("x2", cx);
-                spec.put("y2", cy + dist / 2);
-                return;
-            }
-            if (dx < 0) {
-                spec.put("x1", cx + dist / 2);
-                spec.put("y1", cy);
-                spec.put("x2", cx - dist / 2);
-                spec.put("y2", cy);
-                return;
-            }
-            if (dx > 0) {
-                spec.put("x1", cx - dist / 2);
-                spec.put("y1", cy);
-                spec.put("x2", cx + dist / 2);
-                spec.put("y2", cy);
-                return;
-            }
+            // No deltas: use bounds center with sensible defaults
+            // vertical scroll: swipe upward (typical scroll-down gesture)
             spec.put("x1", cx);
             spec.put("y1", cy + dist / 2);
             spec.put("x2", cx);
             spec.put("y2", cy - dist / 2);
             return;
         }
+        // Absolute fallback: use common center-screen coordinates
         spec.put("x1", 540);
         spec.put("y1", 1600);
         spec.put("x2", 540);
         spec.put("y2", 800);
     }
 
-    private static void applySelector(JSONObject step, JSONObject node, int cx, int cy) throws Exception {
+    private static void applySelector(
+            JSONObject step, JSONObject node, int cx, int cy, JSONObject mobileSpec) throws Exception {
         if (node != null && node.has("resource_id")
                 && !node.optString("resource_id", "").isEmpty()) {
             step.put("selector_type", "id");
@@ -210,6 +213,11 @@ final class StepNormalizer {
             JSONObject coord = new JSONObject();
             coord.put("x", cx);
             coord.put("y", cy);
+            JSONObject vc = mobileSpec.optJSONObject("viewport_coord");
+            if (vc != null) {
+                if (vc.has("rx")) coord.put("rx", vc.getDouble("rx"));
+                if (vc.has("ry")) coord.put("ry", vc.getDouble("ry"));
+            }
             step.put("selector_value", coord.toString());
             return;
         }

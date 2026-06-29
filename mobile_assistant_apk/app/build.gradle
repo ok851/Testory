@@ -10,8 +10,8 @@ android {
         applicationId "com.testory.assistant"
         minSdk 24
         targetSdk 34
-        versionCode 10
-        versionName "1.1.8"
+        versionCode 15
+        versionName "1.2.4"
         buildConfigField "int", "WS_PORT", "19223"
         buildConfigField "String", "WS_HOST", "\"127.0.0.1\""
     }
@@ -38,4 +38,17 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
+}
+
+// Auto-copy APK to plugin_bundles after build (so PC install button uses latest)
+task copyApkToBundles(type: Copy) {
+    dependsOn 'assembleDebug'
+    from "$buildDir/outputs/apk/debug/app-debug.apk"
+    into "${rootProject.projectDir}/../config/plugin_bundles"
+    rename { 'testory-assistant.apk' }
+}
+tasks.whenTaskAdded { task ->
+    if (task.name == 'assembleDebug') {
+        task.finalizedBy 'copyApkToBundles'
+    }
 }

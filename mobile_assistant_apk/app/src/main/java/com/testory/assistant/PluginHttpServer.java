@@ -27,6 +27,9 @@ public final class PluginHttpServer extends NanoHTTPD {
 
     private static volatile PluginHttpServer instance;
     private static final CopyOnWriteArrayList<JSONObject> pendingSteps = new CopyOnWriteArrayList<>();
+    /** Agent pollSteps 消费后镜像给本地 overlay/落库，避免双消费抢队列。 */
+    private static final CopyOnWriteArrayList<JSONObject> mirroredSteps = new CopyOnWriteArrayList<>();
+    private static volatile boolean agentRecordingActive;
 
     private final Context appContext;
 
@@ -62,6 +65,22 @@ public final class PluginHttpServer extends NanoHTTPD {
 
     static int getPort() {
         return instance != null ? instance.getListeningPort() : -1;
+    }
+
+    static void setAgentRecordingActive(boolean active) {
+        agentRecordingActive = active;
+        if (!active) {
+            mirroredSteps.clear();
+        }
+    }
+
+    static boolean isAgentRecordingActive() {
+        return agentRecordingActive;
+    }
+
+    static void clearEventQueues() {
+        pendingSteps.clear();
+        mirroredSteps.clear();
     }
 
     static void enqueueStep(JSONObject step) {
@@ -129,16 +148,29 @@ public final class PluginHttpServer extends NanoHTTPD {
             case "getStatus":
                 return buildStatus();
             case "startRecording":
-                boolean shot = params.optBoolean("screenshotPerStep", true);
+                if (!AssistantSession.isAccessibilityReady()) {
+                    throw new IllegalStateException("无障碍服务未就绪，请在系统设置中开启 Testory 助手");
+                }
+                boolean shot = params.optBoolean("screenshotPerStep", false);
                 AssistantSession.setScreenshotPerStep(shot);
-                AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
                 long caseId = params.optLong("caseId", AssistantSession.getLocalCaseId());
                 if (caseId > 0) AssistantSession.setLocalCaseId(caseId);
-                RecordingController.startRecording(appContext, caseId > 0 ? caseId : AssistantSession.getLocalCaseId());
-                return ok("recording");
+                setAgentRecordingActive(true);
+                clearEventQueues();
+                RecordingController.startRecording(appContext, caseId > 0 ? caseId : AssistantSession.getLocalCaseId(), true);
+                JSONObject out = ok("recording");
+                out.put("preparing_desktop", true);
+                return out;
             case "stopRecording":
+                setAgentRecordingActive(false);
                 RecordingController.stopRecording(appContext);
                 return ok("stopped");
+            case "pauseRecording":
+                RecordingController.pauseRecording(appContext);
+                return ok("paused");
+            case "resumeRecording":
+                RecordingController.resumeRecording(appContext);
+                return ok("resumed");
             case "pollSteps":
                 int limit = params.optInt("limit", 20);
                 return pollSteps(limit);
@@ -171,12 +203,32 @@ public final class PluginHttpServer extends NanoHTTPD {
         return o;
     }
 
+    /** 本地 overlay/落库：Agent 模式读镜像队列，纯本地模式读 pendingSteps。 */
+    static org.json.JSONArray drainPendingSteps(int limit) {
+        CopyOnWriteArrayList<JSONObject> source =
+                agentRecordingActive ? mirroredSteps : pendingSteps;
+        List<JSONObject> out = new ArrayList<>();
+        int n = 0;
+        for (JSONObject step : source) {
+            out.add(step);
+            source.remove(step);
+            if (++n >= limit) break;
+        }
+        org.json.JSONArray arr = new org.json.JSONArray();
+        for (JSONObject s : out) arr.put(s);
+        return arr;
+    }
+
+    /** PC pollSteps 专用：从 pending 取出并镜像，供本地 UI 在 Agent 模式下展示。 */
     private JSONObject pollSteps(int limit) throws Exception {
         List<JSONObject> out = new ArrayList<>();
         int n = 0;
         for (JSONObject step : pendingSteps) {
             out.add(step);
             pendingSteps.remove(step);
+            if (agentRecordingActive) {
+                mirroredSteps.add(step);
+            }
             if (++n >= limit) break;
         }
         JSONArray arr = new JSONArray();
@@ -233,20 +285,6 @@ public final class PluginHttpServer extends NanoHTTPD {
                 .put("data", b64)
                 .put("width", 0)
                 .put("height", 0);
-    }
-
-    /** 供 MainActivity 本地轮询录制步骤。 */
-    static org.json.JSONArray drainPendingSteps(int limit) {
-        List<JSONObject> out = new ArrayList<>();
-        int n = 0;
-        for (JSONObject step : pendingSteps) {
-            out.add(step);
-            pendingSteps.remove(step);
-            if (++n >= limit) break;
-        }
-        org.json.JSONArray arr = new org.json.JSONArray();
-        for (JSONObject s : out) arr.put(s);
-        return arr;
     }
 
     private JSONObject performTap(JSONObject params) throws Exception {

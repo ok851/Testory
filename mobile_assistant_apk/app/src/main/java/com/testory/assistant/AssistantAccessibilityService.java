@@ -20,6 +20,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class AssistantAccessibilityService extends AccessibilityService {
 
-    private static final int FOCUS_RECORD_DELAY_MS = 380;
+    private static final int FOCUS_RECORD_DELAY_MS = 80;
 
     private String armedMode = AssistantSession.MODE_IDLE;
     private String lastRecordedPackage = "";
@@ -39,6 +40,8 @@ public class AssistantAccessibilityService extends AccessibilityService {
     private long lastDirectClickMs = 0L;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable pendingFocusRecord;
+    private Runnable pendingInputRecord;
+    private JSONObject pendingInputPayload;
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -62,6 +65,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                 && type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
             if (AssistantSession.MODE_RECORD.equals(armedMode)) {
+                recordTouchFromEvent(event);
                 scheduleFocusClickRecord(event);
             }
             return;
@@ -109,13 +113,24 @@ public class AssistantAccessibilityService extends AccessibilityService {
             payload.put("package", pkgCs.toString());
         }
 
+        // Scroll/swipe: extract bounds from source node if available, reduce dedup window
         if (type == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            if (System.currentTimeMillis() - lastScrollEventMs < 400) return null;
+            if (System.currentTimeMillis() - lastScrollEventMs < 80) return null;
             lastScrollEventMs = System.currentTimeMillis();
             payload.put("type", "swipe");
             payload.put("description", describeScroll(event));
             payload.put("scroll_delta_x", event.getScrollDeltaX());
             payload.put("scroll_delta_y", event.getScrollDeltaY());
+            // Extract source bounds for coordinate resolution
+            try {
+                AccessibilityNodeInfo srcNode = event.getSource();
+                if (srcNode != null) {
+                    android.graphics.Rect r = new android.graphics.Rect();
+                    srcNode.getBoundsInScreen(r);
+                    payload.put("bounds", rectToJson(r));
+                    srcNode.recycle();
+                }
+            } catch (Exception ignored) {}
         } else if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             if (!AssistantSession.MODE_RECORD.equals(armedMode)) return null;
             payload.put("type", "input");
@@ -123,6 +138,8 @@ public class AssistantAccessibilityService extends AccessibilityService {
                     ? event.getText().get(0) : null;
             String raw = text != null ? text.toString() : "";
             payload.put("text", maskIfSensitive(event, raw));
+            scheduleInputRecord(event, payload);
+            return null;
         } else if (type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) {
             payload.put("type", "long-press");
         } else {
@@ -134,9 +151,10 @@ public class AssistantAccessibilityService extends AccessibilityService {
         Rect bounds = null;
         if (src != null) {
             payload.put("node", nodeToJson(src));
-            bounds = new Rect();
-            src.getBoundsInScreen(bounds);
-            payload.put("bounds", rectToJson(bounds));
+            bounds = TouchCoordBuffer.boundsFromSource(src);
+            if (bounds != null) {
+                payload.put("bounds", rectToJson(bounds));
+            }
             src.recycle();
         } else if (forcedType != null) {
             AccessibilityNodeInfo root = getRootInActiveWindow();
@@ -163,7 +181,51 @@ public class AssistantAccessibilityService extends AccessibilityService {
         if (AssistantSession.MODE_CAPTURE.equals(armedMode) && bounds != null) {
             HighlightOverlay.show(this, bounds);
         }
+        TouchCoordBuffer.applyToPayload(payload);
         return payload;
+    }
+
+    private void recordTouchFromEvent(AccessibilityEvent event) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                float x = event.getScrollX();
+                float y = event.getScrollY();
+                if (x > 0 || y > 0) {
+                    TouchCoordBuffer.recordTouch((int) x, (int) y);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void scheduleInputRecord(AccessibilityEvent event, JSONObject payload) {
+        cancelPendingInputRecord();
+        try {
+            pendingInputPayload = new JSONObject(payload.toString());
+        } catch (Exception e) {
+            pendingInputPayload = payload;
+        }
+        pendingInputRecord = () -> {
+            try {
+                if (pendingInputPayload != null) {
+                    pendingInputPayload.put("ts", System.currentTimeMillis());
+                    enqueueRecordPayload(event, pendingInputPayload);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                pendingInputPayload = null;
+                pendingInputRecord = null;
+            }
+        };
+        mainHandler.postDelayed(pendingInputRecord, 200);
+    }
+
+    private void cancelPendingInputRecord() {
+        if (pendingInputRecord != null) {
+            mainHandler.removeCallbacks(pendingInputRecord);
+            pendingInputRecord = null;
+        }
+        pendingInputPayload = null;
     }
 
     private void enqueueRecordPayload(AccessibilityEvent event, JSONObject payload) {
@@ -188,7 +250,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
         src.recycle();
         cancelPendingFocusRecord();
         pendingFocusRecord = () -> {
-            if (System.currentTimeMillis() - lastDirectClickMs < 500) {
+            if (System.currentTimeMillis() - lastDirectClickMs < 150) {
                 nodeCopy.recycle();
                 return;
             }
@@ -229,15 +291,12 @@ public class AssistantAccessibilityService extends AccessibilityService {
             if (pkg.isEmpty() || "com.testory.assistant".equals(pkg)) return;
             if (pkg.equals(lastRecordedPackage)) return;
             long now = System.currentTimeMillis();
-            if (now - lastAppSwitchMs < 700) return;
+            if (now - lastAppSwitchMs < 500) return;
             lastAppSwitchMs = now;
             lastRecordedPackage = pkg;
-            JSONObject payload = new JSONObject();
-            payload.put("type", "open_app");
-            payload.put("package", pkg);
-            payload.put("ts", System.currentTimeMillis());
-            payload.put("description", "打开 " + friendlyPackageLabel(pkg));
-            enqueueRecordPayload(event, payload);
+            // 原缺陷：每次窗口切换都写入 open_app 步骤，回放第一步常误启动桌面/启动器而失败。
+            // 新逻辑：仅更新内存上下文，由后续 tap/swipe 步骤携带 context_package。
+            AssistantSession.setRecordingContextPackage(pkg);
         } catch (Exception ignored) {
         }
     }
@@ -295,46 +354,53 @@ public class AssistantAccessibilityService extends AccessibilityService {
         armedMode = mode == null ? AssistantSession.MODE_IDLE : mode;
         if (AssistantSession.MODE_IDLE.equals(armedMode)) {
             cancelPendingFocusRecord();
+            cancelPendingInputRecord();
             HighlightOverlay.hide();
             lastRecordedPackage = "";
         }
     }
 
     String getForegroundPackage() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                List<android.view.accessibility.AccessibilityWindowInfo> windows = getWindows();
+                if (windows != null) {
+                    for (android.view.accessibility.AccessibilityWindowInfo window : windows) {
+                        if (window == null || !window.isActive()) continue;
+                        AccessibilityNodeInfo root = window.getRoot();
+                        if (root == null) continue;
+                        try {
+                            CharSequence pkg = root.getPackageName();
+                            String name = pkg != null ? pkg.toString() : "";
+                            if (!name.isEmpty() && !"com.testory.assistant".equals(name)) {
+                                return name;
+                            }
+                        } finally {
+                            root.recycle();
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) return "";
         CharSequence pkg = root.getPackageName();
         String out = pkg != null ? pkg.toString() : "";
         root.recycle();
+        if ("com.testory.assistant".equals(out)) {
+            String ctx = AssistantSession.getRecordingContextPackage();
+            if (ctx != null && !ctx.isEmpty()) return ctx;
+        }
         return out;
     }
 
-    boolean ensureAppContext(JSONObject spec) throws InterruptedException {
-        if (spec == null) return true;
-        String pkg = spec.optString("app_package", "");
-        if (pkg.isEmpty()) {
-            pkg = spec.optString("appPackage", "");
-        }
-        if (pkg.isEmpty() || "com.testory.assistant".equals(pkg)) return true;
-        if (pkg.equals(getForegroundPackage())) return true;
-        String activity = spec.optString("app_activity", spec.optString("appActivity", ""));
-        return launchPackage(pkg, activity);
+    AppLauncher.Result launchPackageResult(String pkg, String activity) {
+        return AppLauncher.launch(this, this, pkg, activity, AppLauncher.DEFAULT_TIMEOUT_MS);
     }
 
-    boolean launchPackage(String pkg, String activity) throws InterruptedException {
-        if (pkg == null || pkg.isEmpty()) return false;
-        Intent intent;
-        if (activity != null && !activity.isEmpty()) {
-            intent = new Intent();
-            intent.setComponent(new ComponentName(pkg, activity));
-        } else {
-            intent = getPackageManager().getLaunchIntentForPackage(pkg);
-            if (intent == null) return false;
-        }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        startActivity(intent);
-        Thread.sleep(900);
-        return pkg.equals(getForegroundPackage()) || !getForegroundPackage().isEmpty();
+    boolean launchPackage(String pkg, String activity) {
+        return launchPackageResult(pkg, activity).success;
     }
 
     boolean goBack() {
@@ -567,6 +633,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         cancelPendingFocusRecord();
+        cancelPendingInputRecord();
         AssistantSession.unbindService(this);
         HighlightOverlay.hide();
         PluginHttpServer.stopServer();

@@ -42,6 +42,13 @@ public final class RunOverlay {
         });
     }
 
+    static void setHiddenForLaunch(boolean hidden) {
+        MAIN.post(() -> {
+            if (panel == null) return;
+            panel.setVisibility(hidden ? android.view.View.GONE : android.view.View.VISIBLE);
+        });
+    }
+
     private static void showOnMain(AccessibilityService svc) {
         hideOnMain();
         Context ctx = svc;
@@ -56,7 +63,7 @@ public final class RunOverlay {
         root.setPadding(padH, padV, padH, padV);
 
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xE60F766E);
+        bg.setColor(0xE62D3748);
         bg.setCornerRadius(dp(ctx, 20));
         root.setBackground(bg);
 
@@ -75,7 +82,7 @@ public final class RunOverlay {
         stopBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         stopBtn.setPadding(dp(ctx, 10), dp(ctx, 4), dp(ctx, 10), dp(ctx, 4));
         GradientDrawable d = new GradientDrawable();
-        d.setColor(0xFFDC2626);
+        d.setColor(0xFF991B1B);
         d.setCornerRadius(dp(ctx, 12));
         stopBtn.setBackground(d);
         stopBtn.setClickable(true);

@@ -1322,18 +1322,6 @@ try:
 except ImportError:
     pass
 
-try:
-    from mobile_sync_store import register_sync_routes
-
-    register_sync_routes(
-        app,
-        api_error_handler=api_error_handler,
-        login_required=login_required,
-        role_required=role_required,
-    )
-except ImportError:
-    pass
-
 # 主页路由
 @app.route('/')
 @login_required

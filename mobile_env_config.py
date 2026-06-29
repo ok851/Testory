@@ -266,15 +266,12 @@ def scrcpy_bridge_url(client_host: str = "") -> str:
 
 
 def resolve_mirror_backend(udid: str = "") -> str:
+    """[投屏已下线] 统一使用截图模式。"""
     del udid
     backend = mirror_backend()
     if backend != "auto":
         return backend
-    if device_scrcpy_ws_enabled() and scrcpy_available():
-        return "scrcpy_ws"
     return "screencap"
-
-
 def default_device_name() -> str:
     cfg = _load_mobile_defaults()
     return (

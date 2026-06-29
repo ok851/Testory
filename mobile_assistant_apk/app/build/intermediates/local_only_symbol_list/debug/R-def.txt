@@ -1,12 +1,23 @@
 R_DEF: Internal format may change without notice
 local
+color ta_a11y_blue
+color ta_accent
 color ta_bg
 color ta_card
+color ta_code_text
 color ta_danger
+color ta_divider
 color ta_muted
+color ta_on_primary
+color ta_overlay_bg
 color ta_primary
+color ta_primary_dark
 color ta_record
+color ta_record_bg
+color ta_success
+color ta_surface
 color ta_text
+color ta_warn
 drawable ic_launcher
 drawable section_card
 id btnPair
@@ -16,14 +27,15 @@ id btnStartRecord
 id btnStopRecord
 id btnStopRun
 id btnSyncCases
-id btnVisionProbe
 id caseSpinner
 id hintText
 id modeText
 id openAccessibilityBtn
 id projectSpinner
 id recordStatusText
+id statusDot
 id statusText
+id stepCountText
 id stepsListText
 id syncBaseUrl
 id syncPairCode
@@ -41,6 +53,7 @@ string btn_stop_record
 string btn_stop_run
 string btn_sync_cases
 string btn_vision_probe
+string home_failed_hint
 string label_case_select
 string label_project_filter
 string local_draft_case
@@ -52,8 +65,11 @@ string mode_record
 string no_steps
 string open_accessibility
 string pair_ok
+string preparing_record
+string preparing_replay
 string project_fallback
 string recording_active
+string recording_ready
 string recording_stopped
 string run_cancelled
 string run_failed
@@ -72,6 +88,7 @@ string status_a11y_pending
 string status_need_accessibility
 string status_ready
 string status_waiting_platform
+string step_count
 string sync_base_url_hint
 string sync_ok
 string sync_pair_code_hint

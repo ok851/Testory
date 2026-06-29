@@ -1,9 +1,9 @@
 {
-  "last_report_path": "D:\\mkst_baixiang\\Python_Code\\NewUITestPlatform\\NewUITestPlatform\\%UAT_DATA_DIR%\\hermes\\logs\\curator\\20260622-091200",
-  "last_run_at": "2026-06-22T09:12:00.949092+00:00",
-  "last_run_duration_seconds": 0.084297,
+  "last_report_path": "D:\\mkst_baixiang\\Python_Code\\NewUITestPlatform\\NewUITestPlatform\\%UAT_DATA_DIR%\\hermes\\logs\\curator\\20260629-093037",
+  "last_run_at": "2026-06-29T09:30:37.717744+00:00",
+  "last_run_duration_seconds": 0.080805,
   "last_run_summary": "auto: no changes; llm: skipped (no candidates)",
   "last_run_summary_shown_at": null,
   "paused": false,
-  "run_count": 2
+  "run_count": 3
 }

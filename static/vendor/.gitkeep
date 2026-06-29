@@ -1,3 +1,0 @@
-# Place official scrcpy-server binary here for high-FPS canvas mirror.
-# Copy from scrcpy release zip (same folder as scrcpy.exe), e.g.:
-#   scrcpy-win64-v3.1/scrcpy-server -> static/vendor/scrcpy-server

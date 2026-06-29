@@ -21,6 +21,7 @@ public final class AssistantSession {
 
     private static volatile long suppressRecordingUntilMs;
     private static final AtomicReference<Long> localCaseId = new AtomicReference<>(-1L);
+    private static final AtomicReference<String> recordingContextPackage = new AtomicReference<>("");
     private static volatile Runnable stepsUpdatedListener;
 
     private static volatile AssistantAccessibilityService serviceInstance;
@@ -45,6 +46,7 @@ public final class AssistantSession {
         }
         if (MODE_IDLE.equals(m)) {
             HighlightOverlay.hide();
+            recordingContextPackage.set("");
         }
     }
 
@@ -122,6 +124,14 @@ public final class AssistantSession {
 
     static void setStepsUpdatedListener(Runnable listener) {
         stepsUpdatedListener = listener;
+    }
+
+    static void setRecordingContextPackage(String pkg) {
+        recordingContextPackage.set(pkg == null ? "" : pkg.trim());
+    }
+
+    static String getRecordingContextPackage() {
+        return recordingContextPackage.get();
     }
 
     static void notifyStepsUpdated() {

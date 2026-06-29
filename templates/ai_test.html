@@ -1201,7 +1201,7 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/mobile_scrcpy_mirror.js') }}"></script>
+
 <script src="{{ url_for('static', filename='js/ai_llm_wizard.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ai_assistant.js') }}"></script>
 <script>
@@ -4107,7 +4107,7 @@
         };
 
         function aiScrcpyAutoFallbackEnabled() {
-            return !!(_aiMobileConfig && _aiMobileConfig.scrcpy_auto_fallback);
+
         }
 
         function aiWebCodecsSupported() {
@@ -4180,7 +4180,7 @@
                 return;
             }
             if (!aiScrcpyAutoFallbackEnabled()) {
-                console.warn('[ai-test] scrcpy 无画面，保持 scrcpy 模式:', msg || '');
+
                 return;
             }
             aiStartMobileScreencapPoll();
@@ -4244,7 +4244,7 @@
             }
             var canvas = document.getElementById('aiMobileMirrorCanvas');
             if (!canvas || !_aiMobileSession.mirrorStreamUrl) {
-                aiScrcpyMirrorFailed('缺少 scrcpy HTTP 流地址');
+
                 return;
             }
             _aiMobileScrcpyPlayer = aiBuildScrcpyPlayer();
@@ -4273,7 +4273,7 @@
                     aiStartScrcpyHttpMirror(true);
                     return;
                 }
-                aiScrcpyMirrorFailed('缺少 scrcpy WebSocket 地址');
+
                 return;
             }
             _aiMobileScrcpyPlayer = aiBuildScrcpyPlayer();
@@ -4320,7 +4320,7 @@
             if (!canvas) return;
             _aiMobileScrcpyAltTried = false;
             _aiMobileScrcpyGotFrame = false;
-            if (_aiMobileSession.mirrorBackend === 'scrcpy_ws' && global.ScrcpyMirrorPlayer) {
+
                 if (_aiMobileSession.mirrorStreamUrl) {
                     aiStartScrcpyHttpMirror(false);
                     return;
@@ -4439,7 +4439,7 @@
                 _aiMobileSession.mirrorWsUrl = data.mirror_ws_url || '';
                 _aiMobileSession.mirrorBackend = data.mirror_backend || 'screencap';
                 _aiMobileSession.connected = true;
-                var mirrorHint = data.mirror_backend === 'scrcpy_ws' ? ' · 高帧率 scrcpy 投屏' : '';
+
                 if (st) st.textContent = '已连接' + mirrorHint + (data.mirror_fallback_reason ? '（' + data.mirror_fallback_reason + '）' : '');
                 aiStartMobileMirrorPoll();
             } catch (e) {

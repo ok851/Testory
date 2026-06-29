@@ -11,12 +11,30 @@ public final class RecordingController {
     }
 
     static void startRecording(Context ctx, long caseId) {
+        startRecording(ctx, caseId, false);
+    }
+
+    static void startRecording(Context ctx, long caseId, boolean agentMode) {
         AssistantApplicationHolder.init(ctx);
-        RecordingSession.start(ctx, caseId, RecordingSession.defaultListener(ctx));
+        if (!agentMode) {
+            // 原缺陷：PC Agent 录制后 agentRecordingActive 仍为 true，本地 drain 读空镜像队列。
+            PluginHttpServer.setAgentRecordingActive(false);
+        }
+        RecordingSession.start(ctx, caseId, RecordingSession.defaultListener(ctx), agentMode);
     }
 
     static void stopRecording(Context ctx) {
         AssistantApplicationHolder.init(ctx);
         RecordingSession.stop(ctx);
+    }
+
+    static void pauseRecording(Context ctx) {
+        AssistantApplicationHolder.init(ctx);
+        RecordingSession.pause();
+    }
+
+    static void resumeRecording(Context ctx) {
+        AssistantApplicationHolder.init(ctx);
+        RecordingSession.resume();
     }
 }

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -27,7 +28,7 @@ final class RecordingSession {
         public void run() {
             if (!draining || activeCaseId < 0) return;
             drainSteps();
-            HANDLER.postDelayed(this, 700);
+            HANDLER.postDelayed(this, PluginHttpServer.isAgentRecordingActive() ? 100 : 120);
         }
     };
 
@@ -35,21 +36,39 @@ final class RecordingSession {
     }
 
     static void start(Context ctx, long caseId, RecordingOverlay.Listener listener) {
+        start(ctx, caseId, listener, false);
+    }
+
+    static void start(Context ctx, long caseId, RecordingOverlay.Listener listener, boolean agentMode) {
+        final long sessionId = caseId;
         activeCaseId = caseId;
         overlayListener = listener;
         AssistantSession.setLocalCaseId(caseId);
-        RecordEventFilter.resetDedupe();
-        AssistantSession.suppressRecordingFor(2000);
-        draining = true;
+        draining = false;
         HANDLER.removeCallbacks(drainRunnable);
-        RecordingOverlay.clearSteps();
-        RecordingOverlay.show(ctx, listener);
-        // 延迟武装，避免「开始录制」按钮的 CLICK 事件被写入
-        HANDLER.postDelayed(() -> {
-            if (!draining) return;
+        AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
+
+        // 原缺陷：先 show overlay + 150ms 延迟 + 200ms 抑制，导致首几次操作丢失。
+        // 新逻辑：先退回桌面并清空队列，就绪后立即 armed（目标 <200ms 额外等待）。
+        SessionForegroundGuard.retreatToDesktop(ctx, (desktopReady, message) -> {
+            if (activeCaseId != sessionId) return;
+            if (!message.isEmpty() && ctx != null) {
+                Toast.makeText(ctx.getApplicationContext(), message, Toast.LENGTH_LONG).show();
+            }
+            RecordingOverlay.clearSteps();
+            RecordingOverlay.show(ctx, listener);
+            draining = true;
+            AssistantSession.suppressRecordingFor(desktopReady ? 60 : 120);
             AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
+            AssistantAccessibilityService svc = AssistantSession.getService();
+            if (svc != null) {
+                String fg = svc.getForegroundPackage();
+                if (fg != null && !fg.isEmpty() && !"com.testory.assistant".equals(fg)) {
+                    AssistantSession.setRecordingContextPackage(fg);
+                }
+            }
             HANDLER.post(drainRunnable);
-        }, 450);
+        });
     }
 
     static void stop(Context ctx) {
@@ -95,7 +114,7 @@ final class RecordingSession {
         if (activeCaseId < 0) return;
         Context ctx = AssistantApplicationHolder.get();
         if (ctx == null) return;
-        JSONArray batch = PluginHttpServer.drainPendingSteps(30);
+        JSONArray batch = PluginHttpServer.drainPendingSteps(40);
         if (batch.length() == 0) return;
         try {
             LocalStore store = LocalStore.get(ctx);

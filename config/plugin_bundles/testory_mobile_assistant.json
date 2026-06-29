@@ -1,13 +1,13 @@
 {
   "id": "mobile-testory-assistant",
   "name": "Testory 移动端助手",
-  "version": "1.1.8",
-  "apk_version_code": 10,
-  "apk_version_name": "1.1.8",
+  "version": "1.2.4",
+  "apk_version_code": 15,
+  "apk_version_name": "1.2.4",
   "package": "com.testory.assistant",
   "apk_filename": "testory-assistant.apk",
-  "description": "Android 无障碍录制插件：手机端物理操作录制，经 Agent JSON-RPC 回传步骤与关键帧截图。",
-  "features": ["无障碍录制", "JSON-RPC", "adb forward", "关键帧截图", "本机录制运行", "PC 同步"],
+  "description": "Android 录制回放插件：手机端操作录制、步骤回放、PC 同步。",
+  "features": ["操作录制", "步骤回放", "PC 同步", "弹窗自动处理", "跨分辨率适配"],
   "local_bundle_search": [
     "config/plugin_bundles/testory-assistant.apk"
   ]

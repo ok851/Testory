@@ -37,7 +37,11 @@ public final class SyncClient {
     }
 
     static String getBaseUrl(Context ctx) {
-        return prefs(ctx).getString("base_url", "http://127.0.0.1:5000");
+        String saved = prefs(ctx).getString("base_url", "");
+        if (saved.isEmpty() || "http://127.0.0.1:5000".equals(saved)) {
+            return "http://192.168.2.38:5000";
+        }
+        return saved;
     }
 
     static void saveToken(Context ctx, String token) {
@@ -156,20 +160,6 @@ public final class SyncClient {
         });
     }
 
-    static void probeVision(Context ctx, String goal, String screenshotB64, JSONObject tree, Callback cb) {
-        EXEC.execute(() -> {
-            try {
-                JSONObject body = new JSONObject();
-                body.put("goal", goal);
-                body.put("screenshot_base64", screenshotB64);
-                body.put("a11y_tree", tree);
-                JSONObject resp = post(ctx, "/api/ai/mobile/probe", body);
-                postMain(cb, resp, resp.optBoolean("success") ? null : resp.optString("error", "生成失败"));
-            } catch (Exception e) {
-                postMain(cb, null, friendlyError(e));
-            }
-        });
-    }
 
     private static JSONObject get(Context ctx, String path) throws Exception {
         return request(ctx, "GET", path, null);

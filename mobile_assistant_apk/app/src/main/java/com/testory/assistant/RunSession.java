@@ -1,6 +1,7 @@
 package com.testory.assistant;
 
 import android.content.Context;
+import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -44,15 +45,20 @@ final class RunSession {
         running = true;
         cancelled = false;
         RunOverlay.show(ctx, RunSession::cancel);
-        RunOverlay.setStatus("系统级运行 0/" + steps.size());
+        RunOverlay.setStatus("正在返回桌面，准备执行…");
 
         new Thread(() -> {
             JSONObject result = null;
             try {
-                Thread.sleep(350);
+                boolean desktop = SessionForegroundGuard.retreatToDesktopBlocking(ctx, SessionForegroundGuard.DEFAULT_TIMEOUT_MS);
+                if (!desktop) {
+                    Toast.makeText(ctx.getApplicationContext(),
+                            "未能自动返回桌面，请手动按 Home 键", Toast.LENGTH_LONG).show();
+                }
                 if (cancelled) {
                     result = cancelledResult();
                 } else {
+                    RunOverlay.setStatus("系统级运行 0/" + steps.size());
                     result = ReplayEngine.runSteps(steps, (index, stepResult) -> {
                         RunOverlay.setStatus("运行 " + index + "/" + steps.size());
                     });

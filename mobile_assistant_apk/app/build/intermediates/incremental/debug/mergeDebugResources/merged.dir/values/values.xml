@@ -872,13 +872,24 @@
     <color name="switch_thumb_disabled_material_light">#ffbdbdbd</color>
     <color name="switch_thumb_normal_material_dark">#ffbdbdbd</color>
     <color name="switch_thumb_normal_material_light">#fff1f1f1</color>
-    <color name="ta_bg">#F1F5F9</color>
+    <color name="ta_a11y_blue">#2563EB</color>
+    <color name="ta_accent">#5A6B7D</color>
+    <color name="ta_bg">#F0F2F5</color>
     <color name="ta_card">#FFFFFF</color>
-    <color name="ta_danger">#DC2626</color>
-    <color name="ta_muted">#64748B</color>
-    <color name="ta_primary">#059669</color>
-    <color name="ta_record">#2563EB</color>
-    <color name="ta_text">#0F172A</color>
+    <color name="ta_code_text">#404040</color>
+    <color name="ta_danger">#991B1B</color>
+    <color name="ta_divider">#D1D5DB</color>
+    <color name="ta_muted">#6B7280</color>
+    <color name="ta_on_primary">#FFFFFF</color>
+    <color name="ta_overlay_bg">#E62D3748</color>
+    <color name="ta_primary">#5A6B7D</color>
+    <color name="ta_primary_dark">#4A5568</color>
+    <color name="ta_record">#C53030</color>
+    <color name="ta_record_bg">#F7EDED</color>
+    <color name="ta_success">#2F855A</color>
+    <color name="ta_surface">#E8EAED</color>
+    <color name="ta_text">#333333</color>
+    <color name="ta_warn">#B45309</color>
     <color name="tooltip_background_dark">#e6616161</color>
     <color name="tooltip_background_light">#e6FFFFFF</color>
     <dimen name="abc_action_bar_content_inset_material">16dp</dimen>
@@ -1887,10 +1898,10 @@
     <string name="abc_shareactionprovider_share_with">Share with</string>
     <string name="abc_shareactionprovider_share_with_application">Share with <ns2:g example="Mail" id="application_name">%s</ns2:g></string>
     <string name="abc_toolbar_collapse_description">Collapse</string>
-    <string name="accessibility_desc">Testory 移动端助手：录制操作与捕获元素，数据仅发往本机测试平台（127.0.0.1）。</string>
+    <string name="accessibility_desc">录制操作与回放步骤，数据仅发往本机测试平台。</string>
     <string name="all_projects">全部项目</string>
     <string name="androidx_startup" translatable="false">androidx.startup</string>
-    <string name="app_name">Testory Assistant</string>
+    <string name="app_name">Testory 助手</string>
     <string name="appbar_scrolling_view_behavior" translatable="false">com.google.android.material.appbar.AppBarLayout$ScrollingViewBehavior</string>
     <string name="bottom_sheet_behavior" translatable="false">com.google.android.material.bottomsheet.BottomSheetBehavior</string>
     <string description="A description of an accessibility action to collapse the bottom sheet [CHAR LIMIT=NONE]" name="bottomsheet_action_collapse">Collapse the bottom sheet</string>
@@ -1898,14 +1909,14 @@
     <string description="A description of an action that a user of an accessibility service can perform to expand a bottomsheet halfway to its full height. [CHAR LIMIT=25]" name="bottomsheet_action_expand_halfway">Expand halfway</string>
     <string description="An accessibility feedback when the bottom sheet drag handle is clicked [CHAR LIMIT=NONE]" name="bottomsheet_drag_handle_clicked">Drag handle double-tapped</string>
     <string description="The content description of bottom sheet drag handles [CHAR LIMIT=NONE]" name="bottomsheet_drag_handle_content_description">Drag handle</string>
-    <string name="btn_pair">配对 PC</string>
-    <string name="btn_run_case">运行用例</string>
+    <string name="btn_pair">配对</string>
+    <string name="btn_run_case">运行</string>
     <string name="btn_save_to_pc">保存到 PC</string>
     <string name="btn_start_record">开始录制</string>
-    <string name="btn_stop_record">停止录制</string>
-    <string name="btn_stop_run">停止运行</string>
+    <string name="btn_stop_record">停止</string>
+    <string name="btn_stop_run">停止</string>
     <string name="btn_sync_cases">同步用例</string>
-    <string name="btn_vision_probe">看屏生成用例</string>
+    <string name="btn_vision_probe">看屏生成</string>
     <string name="character_counter_content_description">Characters entered %1$d of %2$d</string>
     <string name="character_counter_overflowed_content_description">Character limit exceeded %1$d of %2$d</string>
     <string name="character_counter_pattern" translatable="false">%1$d/%2$d</string>
@@ -1918,11 +1929,12 @@
     <string name="fab_transformation_scrim_behavior" translatable="false">com.google.android.material.transformation.FabTransformationScrimBehavior</string>
     <string name="fab_transformation_sheet_behavior" translatable="false">com.google.android.material.transformation.FabTransformationSheetBehavior</string>
     <string name="hide_bottom_view_on_scroll_behavior" translatable="false">com.google.android.material.behavior.HideBottomViewOnScrollBehavior</string>
+    <string name="home_failed_hint">未能自动返回桌面，请手动按 Home 键</string>
     <string description="Content description for an icon that appears in the title area of a dialog" name="icon_content_description">Dialog Icon</string>
     <string name="item_view_role_description">Tab</string>
     <string name="label_case_select">用例</string>
     <string name="label_project_filter">项目</string>
-    <string name="local_draft_case">本地录制草稿</string>
+    <string name="local_draft_case">本地录制</string>
     <string name="local_recordings">本地录制</string>
     <string name="m3_exceed_max_badge_text_suffix" translatable="false"><ns2:g example="Some te" id="part of a long text">%1$s</ns2:g><ns2:g example="…" id="suffix">%2$s</ns2:g></string>
     <string name="m3_ref_typeface_brand_medium" translatable="false">sans-serif-medium</string>
@@ -1940,7 +1952,7 @@
     <string name="m3_sys_motion_easing_standard" translatable="false">cubic-bezier(0.2, 0, 0, 1)</string>
     <string name="m3_sys_motion_easing_standard_accelerate" translatable="false">cubic-bezier(0.3, 0, 1, 1)</string>
     <string name="m3_sys_motion_easing_standard_decelerate" translatable="false">cubic-bezier(0, 0, 0, 1)</string>
-    <string name="main_hint_jsonrpc">无需配置网络。开启无障碍后，Testory Agent 将通过 adb forward 连接本机 JSON-RPC 服务；也可在本 App 内直接录制与运行。\n\n请点击上方按钮，在系统设置中启用「Testory Assistant」（仅需一次）。</string>
+    <string name="main_hint_jsonrpc">开启无障碍后即可使用。Testory Agent 通过 adb forward 连接；也可在本 App 内直接录制与运行。\n\n点击上方按钮，在系统设置中启用「Testory 助手」（仅需一次）。</string>
     <string name="material_clock_display_divider" translatable="false">:</string>
     <string description="Description for the toggle to choose between AM and PM [CHAR_LIMIT=NONE]" name="material_clock_toggle_content_description">Select AM or PM</string>
     <string description="Spoken suffix for an hour in the 24-hour clock [CHAR_LIMIT=10]" name="material_hour_24h_suffix"><ns2:g id="number">%1$s</ns2:g> hours</string>
@@ -1963,9 +1975,9 @@
     <string description="Suffix for time in 12-hour standard, after noon. [CHAR_LIMIT=2]" name="material_timepicker_pm">PM</string>
     <string description="Title for the dialog with a time picker. [CHAR_LIMIT=32]" name="material_timepicker_select_time">Select time</string>
     <string name="material_timepicker_text_input_mode_description">Switch to text input mode for the time input.</string>
-    <string name="mode_capture">当前模式：捕获元素</string>
-    <string name="mode_idle">当前模式：待机</string>
-    <string name="mode_record">当前模式：录制</string>
+    <string name="mode_capture">捕获元素</string>
+    <string name="mode_idle">待机</string>
+    <string name="mode_record">录制中</string>
     <string description="Content description for new notification (no number count) [CHAR_LIMIT=NONE]" name="mtrl_badge_numberless_content_description">New notification</string>
     <string name="mtrl_checkbox_button_icon_path_checked" translatable="false">M14,18.2 11.4,15.6 10,17 14,21 22,13 20.6,11.6z</string>
     <string name="mtrl_checkbox_button_icon_path_group_name" translatable="false">icon</string>
@@ -2042,16 +2054,19 @@
     <string name="path_password_eye_mask_strike_through" translatable="false">M2,4.27 L19.73,22 L22.27,19.46 L4.54,1.73 L4.54,1 L23,1 L23,23 L1,23 L1,4.27 Z</string>
     <string name="path_password_eye_mask_visible" translatable="false">M2,4.27 L2,4.27 L4.54,1.73 L4.54,1.73 L4.54,1 L23,1 L23,23 L1,23 L1,4.27 Z</string>
     <string name="path_password_strike_through" translatable="false">M3.27,4.27 L19.74,20.74</string>
+    <string name="preparing_record">正在返回桌面，准备录制…</string>
+    <string name="preparing_replay">正在返回桌面，准备执行…</string>
     <string name="project_fallback">项目 #%1$d</string>
-    <string name="recording_active">录制中 — 右上角悬浮条可暂停/结束，可在桌面/任意 App 操作（跨应用步骤会自动记录）</string>
+    <string name="recording_active">录制中</string>
+    <string name="recording_ready">录制就绪，请操作手机</string>
     <string name="recording_stopped">录制已停止</string>
-    <string name="run_cancelled">已停止运行</string>
-    <string name="run_failed">运行失败</string>
-    <string name="run_started">系统级运行中…</string>
-    <string name="run_success">运行成功</string>
-    <string name="run_switch_app_hint">系统级运行中，无需切换 App，底部可点「停止」</string>
+    <string name="run_cancelled">已停止</string>
+    <string name="run_failed">运行失败: %1$s</string>
+    <string name="run_started">运行中…</string>
+    <string name="run_success">运行完成</string>
+    <string name="run_switch_app_hint">系统级运行中，无需切换 App</string>
     <string name="save_to_pc_need_pair">请先配对 PC</string>
-    <string name="save_to_pc_need_project">请选择 PC 项目（先同步用例或配对后重试）</string>
+    <string name="save_to_pc_need_project">请先同步用例</string>
     <string name="save_to_pc_no_steps">该用例无步骤</string>
     <string name="save_to_pc_ok">已保存到 PC（用例 #%1$d）</string>
     <string name="search_menu_title">Search</string>
@@ -2063,17 +2078,18 @@
     <string name="section_record">录制</string>
     <string name="section_run">运行用例</string>
     <string name="section_steps">步骤列表</string>
-    <string name="section_sync">与 PC 同步</string>
+    <string name="section_sync">配对 PC</string>
     <string description="Title of the side sheet&apos;s accessibility pane that is spoken by TalkBack when the side sheet appears on screen. [CHAR_LIMIT=NONE]" name="side_sheet_accessibility_pane_title">Side Sheet</string>
     <string name="side_sheet_behavior" translatable="false">com.google.android.material.sidesheet.SideSheetBehavior</string>
-    <string name="status_a11y_pending">无障碍已开启，正在连接服务…若超过 10 秒仍如此，请关闭再打开「Testory Assistant」或重启本 App</string>
+    <string name="status_a11y_pending">无障碍已开启，正在连接…</string>
     <string name="status_bar_notification_info_overflow">999+</string>
     <string name="status_need_accessibility">请先开启无障碍服务</string>
-    <string name="status_ready">已就绪，可在平台或本 App 录制/运行</string>
-    <string name="status_waiting_platform">已连接无障碍，等待平台连接…</string>
-    <string name="sync_base_url_hint">PC 地址（USB 可用 127.0.0.1:5000）</string>
+    <string name="status_ready">就绪，可录制或运行</string>
+    <string name="status_waiting_platform">已连接，等待平台…</string>
+    <string name="step_count">共 %1$d 步</string>
+    <string name="sync_base_url_hint">PC 地址</string>
     <string name="sync_ok">同步完成</string>
-    <string name="sync_pair_code_hint">6 位配对码（在 PC 移动端页获取）</string>
+    <string name="sync_pair_code_hint">6 位配对码</string>
     <style name="AlertDialog.AppCompat" parent="Base.AlertDialog.AppCompat"/>
     <style name="AlertDialog.AppCompat.Light" parent="Base.AlertDialog.AppCompat.Light"/>
     <style name="Animation.AppCompat.Dialog" parent="Base.Animation.AppCompat.Dialog"/>
@@ -6471,8 +6487,8 @@
     <item name="windowNoTitle">true</item>
   </style>
     <style name="Theme.TestoryAssistant" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">#059669</item>
-        <item name="colorPrimaryVariant">#047857</item>
+        <item name="colorPrimary">#5A6B7D</item>
+        <item name="colorPrimaryVariant">#4A5568</item>
         <item name="colorOnPrimary">#FFFFFF</item>
     </style>
     <style name="ThemeOverlay.AppCompat" parent="Base.ThemeOverlay.AppCompat"/>

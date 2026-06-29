@@ -103,7 +103,7 @@ class DesktopWindowApi:
 
 
 def _configure_webview2_runtime() -> None:
-    """尽量启用 WebView2 的 WebCodecs，供画布 H.264 投屏解码。"""
+
     if sys.platform != "win32":
         return
     flag = "--enable-features=WebCodecs"

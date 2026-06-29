@@ -27,6 +27,21 @@ import java.util.concurrent.Executors;
  */
 public class MainActivity extends AppCompatActivity {
 
+    private static java.lang.ref.WeakReference<MainActivity> visibleInstance;
+
+    /** 录制/回放前将助手 Activity 退到后台，避免遮挡与误录。 */
+    static void moveTaskToBackIfVisible() {
+        MainActivity act = visibleInstance != null ? visibleInstance.get() : null;
+        if (act != null && !act.isFinishing()) {
+            act.runOnUiThread(() -> {
+                try {
+                    act.moveTaskToBack(true);
+                } catch (Exception ignored) {
+                }
+            });
+        }
+    }
+
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService bg = Executors.newSingleThreadExecutor();
 
@@ -52,7 +67,7 @@ public class MainActivity extends AppCompatActivity {
         public void run() {
             refreshStatus();
             if (recording) pollRecordedSteps();
-            handler.postDelayed(this, 900);
+            handler.postDelayed(this, recording ? 500 : 900);
         }
     };
 
@@ -106,7 +121,6 @@ public class MainActivity extends AppCompatActivity {
         findViewById(R.id.btnPair).setOnClickListener(v -> pairWithPc());
         findViewById(R.id.btnSyncCases).setOnClickListener(v -> syncCasesFromPc());
         findViewById(R.id.btnSaveToPc).setOnClickListener(v -> saveCaseToPc());
-        findViewById(R.id.btnVisionProbe).setOnClickListener(v -> runVisionProbe());
 
         ensureDraftCase();
         setupSpinnerListeners();
@@ -146,6 +160,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        visibleInstance = new java.lang.ref.WeakReference<>(this);
         syncUiToRecordedCase();
         handler.post(refreshRunnable);
         handler.postDelayed(runPollRunnable, 2000);
@@ -153,6 +168,9 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        if (visibleInstance != null && visibleInstance.get() == this) {
+            visibleInstance = null;
+        }
         if (!recording) {
             handler.removeCallbacks(refreshRunnable);
         }
@@ -162,6 +180,9 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        if (visibleInstance != null && visibleInstance.get() == this) {
+            visibleInstance = null;
+        }
         AssistantSession.setStepsUpdatedListener(null);
         super.onDestroy();
     }
@@ -292,7 +313,7 @@ public class MainActivity extends AppCompatActivity {
 
         if (serviceLive && server) {
             statusView.setText(R.string.status_ready);
-            statusView.setTextColor(0xFF059669);
+            statusView.setTextColor(0xFF2F855A);
         } else if (serviceLive || a11ySetting) {
             statusView.setText(server ? R.string.status_ready : R.string.status_waiting_platform);
             statusView.setTextColor(0xFFB45309);
@@ -317,6 +338,9 @@ public class MainActivity extends AppCompatActivity {
             modeView.setText(R.string.mode_capture);
         } else {
             modeView.setText(R.string.mode_record);
+            if (recording) {
+                recordStatusView.setText(R.string.recording_ready);
+            }
         }
     }
 
@@ -329,19 +353,27 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void doStartLocalRecording() {
+        if (!AssistantSession.isAccessibilityReady()) {
+            toast("请先开启无障碍服务");
+            return;
+        }
         activeCaseId = selectedCaseId();
         if (activeCaseId < 0) {
             ensureDraftCase();
             activeCaseId = AssistantSession.getLocalCaseId();
         }
         if (activeCaseId < 0) activeCaseId = selectedCaseId();
+        if (activeCaseId < 0) {
+            toast("无法创建录制草稿，请重试");
+            return;
+        }
         AssistantSession.setLocalCaseId(activeCaseId);
         reloadProjectSpinner();
         focusCaseById(activeCaseId);
-        RecordingController.startRecording(this, activeCaseId);
         recording = true;
-        recordStatusView.setText(R.string.recording_active);
-        toast(getString(R.string.recording_active));
+        recordStatusView.setText(R.string.preparing_record);
+        toast(getString(R.string.preparing_record));
+        RecordingController.startRecording(this, activeCaseId);
     }
 
     private void stopLocalRecording() {
@@ -399,22 +431,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void pollRecordedSteps() {
-        long cid = resolveStepsCaseId();
-        if (cid < 0) return;
-        activeCaseId = cid;
-        JSONArray batch = PluginHttpServer.drainPendingSteps(20);
-        if (batch.length() == 0) return;
-        try {
-            LocalStore store = LocalStore.get(this);
-            for (int i = 0; i < batch.length(); i++) {
-                JSONObject raw = batch.getJSONObject(i);
-                JSONObject step = RecordStepConverter.toDbStep(raw, 0);
-                if (RecordEventFilter.isAssistantStep(step)) continue;
-                store.appendNormalizedStep(cid, step);
-            }
-            refreshStepsList();
-        } catch (Exception ignored) {
-        }
+        // 原缺陷：与 RecordingSession.drainSteps 重复消费 pendingSteps，导致步骤被抢空或落库失败。
+        refreshStepsList();
     }
 
     private long resolveStepsCaseId() {
@@ -470,7 +488,7 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
                 long sessionId = LocalStore.get(this).startRunSession(cid);
-                runOnUiThread(() -> toast(getString(R.string.run_started)));
+                runOnUiThread(() -> toast(getString(R.string.preparing_replay)));
                 RunSession.start(this, steps, result -> bg.execute(() -> {
                     try {
                         LocalStore.get(this).finishRunSession(sessionId,
@@ -735,58 +753,6 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private void runVisionProbe() {
-        if (SyncClient.getToken(this).isEmpty()) {
-            toast("请先配对 PC");
-            return;
-        }
-        bg.execute(() -> {
-            try {
-                AssistantAccessibilityService svc = AssistantSession.getService();
-                if (svc == null) {
-                    runOnUiThread(() -> toast("无障碍未就绪"));
-                    return;
-                }
-                byte[] png = svc.captureScreenshotPng();
-                if (png == null) {
-                    runOnUiThread(() -> toast("截图不可用（需 Android 11+）"));
-                    return;
-                }
-                JSONObject treeResp = new JSONObject();
-                treeResp.put("tree", new JSONObject());
-                SyncClient.probeVision(this, "分析当前屏幕并生成 3-5 步 Android 测试步骤",
-                        android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP),
-                        treeResp, new SyncClient.Callback() {
-                            @Override
-                            public void onSuccess(JSONObject data) {
-                                try {
-                                    JSONObject plan = data.optJSONObject("plan");
-                                    if (plan == null) {
-                                        toast("未生成 plan");
-                                        return;
-                                    }
-                                    JSONArray steps = plan.optJSONArray("steps");
-                                    long cid = selectedCaseId();
-                                    if (cid < 0) ensureDraftCase();
-                                    cid = selectedCaseId();
-                                    LocalStore.get(MainActivity.this).replaceSteps(cid, steps);
-                                    refreshStepsList();
-                                    toast("已生成 " + (steps != null ? steps.length() : 0) + " 步");
-                                } catch (Exception e) {
-                                    toast(e.getMessage());
-                                }
-                            }
-
-                            @Override
-                            public void onError(String message) {
-                                toast(message);
-                            }
-                        });
-            } catch (Exception e) {
-                runOnUiThread(() -> toast(e.getMessage()));
-            }
-        });
-    }
 
     private void openAccessibilitySettings() {
         try {

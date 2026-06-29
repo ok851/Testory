@@ -20,11 +20,11 @@
         "source": "C:\\Users\\zxcyb\\.gradle\\daemon\\8.4\\com.testory.assistant.app-main-33:\\mipmap-anydpi-v26\\ic_launcher.xml"
     },
     {
-        "merged": "C:\\Users\\zxcyb\\.gradle\\daemon\\8.4\\com.testory.assistant.app-merged_res-31:\\xml_accessibility_service_config.xml.flat",
-        "source": "C:\\Users\\zxcyb\\.gradle\\daemon\\8.4\\com.testory.assistant.app-main-33:\\xml\\accessibility_service_config.xml"
-    },
-    {
         "merged": "C:\\Users\\zxcyb\\.gradle\\daemon\\8.4\\com.testory.assistant.app-merged_res-31:\\drawable_ic_launcher.xml.flat",
         "source": "C:\\Users\\zxcyb\\.gradle\\daemon\\8.4\\com.testory.assistant.app-main-33:\\drawable\\ic_launcher.xml"
+    },
+    {
+        "merged": "C:\\Users\\zxcyb\\.gradle\\daemon\\8.4\\com.testory.assistant.app-merged_res-31:\\xml_accessibility_service_config.xml.flat",
+        "source": "C:\\Users\\zxcyb\\.gradle\\daemon\\8.4\\com.testory.assistant.app-main-33:\\xml\\accessibility_service_config.xml"
     }
 ]

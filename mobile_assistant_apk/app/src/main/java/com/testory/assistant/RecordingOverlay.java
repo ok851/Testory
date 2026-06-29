@@ -84,7 +84,7 @@ public final class RecordingOverlay {
             statusLabel.setText(stepCount > 0 ? ("录制 " + stepCount + " 步") : "录制中");
         }
         if (dotView != null) {
-            dotView.setTextColor(paused ? 0xFFFBBF24 : 0xFFEF4444);
+            dotView.setTextColor(paused ? 0xFFB45309 : 0xFFC53030);
         }
         if (pauseBtn != null) {
             pauseBtn.setText(paused ? "继续" : "暂停");
@@ -121,7 +121,7 @@ public final class RecordingOverlay {
         root.setPadding(padH, padV, padH, padV);
 
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0xE610172A);
+        bg.setColor(0xE62D3748);
         bg.setCornerRadius(dp(ctx, 20));
         bg.setStroke(dp(ctx, 1), 0x44FFFFFF);
         root.setBackground(bg);
@@ -131,7 +131,7 @@ public final class RecordingOverlay {
 
         dotView = new TextView(ctx);
         dotView.setText("●");
-        dotView.setTextColor(0xFFEF4444);
+        dotView.setTextColor(0xFFC53030);
         dotView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         dotView.setPadding(0, 0, dp(ctx, 4), 0);
         root.addView(dotView);
@@ -146,7 +146,7 @@ public final class RecordingOverlay {
         statusLabel.setLayoutParams(statusLp);
         root.addView(statusLabel);
 
-        pauseBtn = makeButton(ctx, "暂停", 0xFF334155);
+        pauseBtn = makeButton(ctx, "暂停", 0xFF5A6B7D);
         pauseBtn.setOnClickListener(v -> onOverlayTap(() -> {
             Listener l = listener != null ? listener : activeListener;
             if (l == null) return;
@@ -161,7 +161,7 @@ public final class RecordingOverlay {
         }));
         root.addView(pauseBtn);
 
-        TextView stopBtn = makeButton(ctx, "结束", 0xFFDC2626);
+        TextView stopBtn = makeButton(ctx, "结束", 0xFF991B1B);
         LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);

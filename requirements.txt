@@ -41,4 +41,4 @@ certifi>=2024.2.2
 charset-normalizer>=3.3.0
 idna>=3.6
 # Web capture extension WebSocket bridge
-websockets>=12.0  # mobile scrcpy WebSocket bridge (MOBILE_MIRROR_BACKEND=scrcpy_ws)
+
