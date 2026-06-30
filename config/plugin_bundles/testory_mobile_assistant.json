@@ -1,9 +1,9 @@
 {
   "id": "mobile-testory-assistant",
   "name": "Testory 移动端助手",
-  "version": "1.2.4",
-  "apk_version_code": 15,
-  "apk_version_name": "1.2.4",
+  "version": "1.2.6",
+  "apk_version_code": 17,
+  "apk_version_name": "1.2.6",
   "package": "com.testory.assistant",
   "apk_filename": "testory-assistant.apk",
   "description": "Android 录制回放插件：手机端操作录制、步骤回放、PC 同步。",

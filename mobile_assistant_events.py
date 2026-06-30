@@ -13,6 +13,49 @@ import json
 from typing import Any, Dict, Optional, Tuple
 
 
+def _apply_swipe_spec(
+    event: Dict[str, Any],
+    mobile_spec: Dict[str, Any],
+    cx: int,
+    cy: int,
+) -> None:
+    """Mirror StepNormalizer.applySwipeSpec — use scroll deltas when present."""
+    try:
+        x1 = event.get("x1")
+        x2 = event.get("x2")
+        if x1 is not None and x2 is not None:
+            mobile_spec.update({
+                "x1": int(x1),
+                "y1": int(event.get("y1") or event.get("from_y") or cy),
+                "x2": int(x2),
+                "y2": int(event.get("y2") or event.get("to_y") or cy),
+            })
+            return
+    except (TypeError, ValueError):
+        pass
+
+    dx = int(event.get("scroll_delta_x") or 0)
+    dy = int(event.get("scroll_delta_y") or 0)
+    dist = 400
+    if dx or dy:
+        mobile_spec.update({
+            "x1": cx - dx,
+            "y1": cy - dy,
+            "x2": cx + dx,
+            "y2": cy + dy,
+        })
+        return
+    if cx or cy:
+        mobile_spec.update({
+            "x1": cx,
+            "y1": cy + dist // 2,
+            "x2": cx,
+            "y2": cy - dist // 2,
+        })
+        return
+    mobile_spec.update({"x1": 540, "y1": 1600, "x2": 540, "y2": 800})
+
+
 def _bounds_center(bounds: Any) -> Tuple[int, int]:
     if isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
         l, t, r, b = [int(x) for x in bounds[:4]]
@@ -159,12 +202,11 @@ def normalize_assistant_event(
         }
 
     if etype in ("scroll", "swipe", "view_scrolled"):
-        x1 = int(event.get("x1") or event.get("from_x") or cx)
-        y1 = int(event.get("y1") or event.get("from_y") or cy)
-        x2 = int(event.get("x2") or event.get("to_x") or x1)
-        y2 = int(event.get("y2") or event.get("to_y") or y1)
-        mobile_spec.update({"x1": x1, "y1": y1, "x2": x2, "y2": y2})
-        # Inspired by SoloPi: 滑动也记录百分比坐标
+        _apply_swipe_spec(event, mobile_spec, cx, cy)
+        x1 = int(mobile_spec.get("x1") or 0)
+        y1 = int(mobile_spec.get("y1") or 0)
+        x2 = int(mobile_spec.get("x2") or 0)
+        y2 = int(mobile_spec.get("y2") or 0)
         if screen_width > 0 and screen_height > 0:
             mobile_spec.update({
                 "rx1": round(x1 / screen_width, 4),

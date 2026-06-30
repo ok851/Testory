@@ -368,12 +368,18 @@ def replay_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict
         res = plugin_tap(udid, selector_type=st, selector_value=sv, x=x, y=y)
         return {"status": "success" if res.get("ok") else "error", **res}
     if action == "swipe":
+        x1 = int(spec.get("x1") or 0)
+        y1 = int(spec.get("y1") or 0)
+        x2 = int(spec.get("x2") or 0)
+        y2 = int(spec.get("y2") or 0)
+        if x1 == x2 and y1 == y2:
+            return {"status": "error", "error": "滑动坐标无效（起止点相同）"}
         res = plugin_swipe(
             udid,
-            x1=int(spec.get("x1") or 0),
-            y1=int(spec.get("y1") or 0),
-            x2=int(spec.get("x2") or 0),
-            y2=int(spec.get("y2") or 0),
+            x1=x1,
+            y1=y1,
+            x2=x2,
+            y2=y2,
         )
         return {"status": "success" if res.get("ok") else "error", **res}
     if action in ("input_text", "input", "type"):

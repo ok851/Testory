@@ -134,12 +134,15 @@ def _start_poll_thread(udid: str) -> None:
 
     def _worker() -> None:
         disconnect_since: Optional[float] = None
+        screen_width = 0
+        screen_height = 0
         while True:
             with _recording_lock:
                 sess = _recording_sessions.get(udid)
                 if not sess or not sess.get("active"):
                     break
                 screenshot_per_step = bool(sess.get("screenshot_per_step"))
+                started_at = float(sess.get("started_at") or 0)
             try:
                 ok, _ = plugin_rpc.ping_plugin(udid)
                 if not ok:
@@ -156,11 +159,32 @@ def _start_poll_thread(udid: str) -> None:
                         break
                 else:
                     disconnect_since = None
+                try:
+                    status = plugin_rpc.plugin_status(udid)
+                    screen_width = int(status.get("screen_width") or screen_width or 0)
+                    screen_height = int(status.get("screen_height") or screen_height or 0)
+                    armed = str(status.get("armed_mode") or "").strip().lower()
+                    agent_active = bool(status.get("agent_recording_active", True))
+                    if not agent_active and armed == "idle" and time.time() - started_at > 1.5:
+                        broadcast_event(
+                            "recording_stopped",
+                            {"udid": udid, "step_count": len(_live_steps.get(udid) or []), "source": "device"},
+                        )
+                        with _recording_lock:
+                            if udid in _recording_sessions:
+                                _recording_sessions[udid]["active"] = False
+                        break
+                except Exception:
+                    pass
                 raw_steps = plugin_rpc.poll_steps(udid, limit=10)
                 for raw in raw_steps:
                     if not isinstance(raw, dict):
                         continue
-                    step = normalize_assistant_event(raw)
+                    step = normalize_assistant_event(
+                        raw,
+                        screen_width=screen_width,
+                        screen_height=screen_height,
+                    )
                     screenshot_b64 = ""
                     if screenshot_per_step:
                         try:

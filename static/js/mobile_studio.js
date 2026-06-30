@@ -72,8 +72,6 @@
         setBtn('msBtnOpenSteps', hasCase);
         // 记录按钮不再要求先选用例，连接设备即可
         setBtn('msBtnStartRecord', con && !rec);
-        setBtn('msBtnStopRecord', con && rec);
-        setBtn('msBtnPauseRecord', rec && !state.recordingPaused);
         setBtn('msBtnReplaySession', con && hasSteps);
         setBtn('msBtnReplayFrom', con && hasSteps && state.selectedLiveIndex >= 0);
         setBtn('msBtnClearSession', hasSteps && !rec);
@@ -230,6 +228,24 @@
         } catch (e) { setStatus('启动录制失败: ' + e.message, 'err'); refreshAllButtons(); return; }
     }
 
+    async function syncRecordingEndedFromDevice() {
+        state.recording = false;
+        state.recordingPaused = false;
+        stopAssistantPolling();
+        disconnectRecordingWs();
+        try {
+            var data = await apiJson('/api/mobile/recording/steps?udid=' + encodeURIComponent(state.udid) + '&case_id=' + (state.caseId || 0));
+            var steps = data.live_steps || data.steps || [];
+            if (steps.length) {
+                state.liveSteps = steps.map(function (s, i) { return { index: i, step: s }; });
+            }
+        } catch (e) {}
+        refreshAllButtons();
+        renderLiveSteps();
+        if (state.caseId) await loadSteps();
+        setStatus('手机端已结束录制，共 ' + state.liveSteps.length + ' 步', 'ok');
+    }
+
     function connectRecordingWs() {
         disconnectRecordingWs();
         var wsUrl = state.agentWsUrl || (state.bootstrap && state.bootstrap.agent_ws_url) || '';
@@ -246,6 +262,8 @@
                         if (msg.payload.udid && state.udid && msg.payload.udid !== state.udid) return;
                         state.liveSteps.push({ index: state.liveSteps.length, step: step });
                         renderLiveSteps(); refreshAllButtons();
+                    } else if (msg.type === 'recording_stopped') {
+                        syncRecordingEndedFromDevice();
                     }
                 } catch (e) {}
             };
@@ -286,9 +304,15 @@
     function stopAssistantPolling() { if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; } }
 
     async function pollSteps() {
-        if (!state.connected || !state.udid || !state.recording) return;
+        if (!state.connected || !state.udid) return;
+        if (!state.recording && !state.liveSteps.length) return;
         try {
             var data = await apiJson('/api/mobile/recording/steps?udid=' + encodeURIComponent(state.udid) + '&case_id=' + (state.caseId || 0));
+            if (state.recording && data.recording_active === false) {
+                await syncRecordingEndedFromDevice();
+                return;
+            }
+            if (!state.recording) return;
             var steps = data.live_steps || data.steps || [];
             if (steps.length > state.liveSteps.length) {
                 state.liveSteps = steps.map(function (s, i) { return { index: i, step: s }; });
@@ -521,8 +545,6 @@
         $('msBtnWirelessConnect').addEventListener('click', wirelessConnect);
         $('msBtnInstallPlugin').addEventListener('click', installAssistant);
         $('msBtnStartRecord').addEventListener('click', startRecording);
-        $('msBtnStopRecord').addEventListener('click', stopRecording);
-        $('msBtnPauseRecord').addEventListener('click', pauseRecording);
         $('msBtnReplaySession').addEventListener('click', replayAll);
         $('msBtnReplayFrom').addEventListener('click', replayFrom);
         $('msBtnClearSession').addEventListener('click', clearSteps);

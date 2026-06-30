@@ -108,13 +108,11 @@
             <div class="ms-panel-scroll">
             <section class="ms-section ms-section--record">
                 <h2 class="ms-section-title"><i class="fas fa-record-vinyl text-red-500"></i> 操作录制</h2>
-                <p class="ms-muted" style="margin-bottom:0.5rem;">连上设备 → 选好用例 → 点「开始录制」→ 在手机上操作</p>
+                <p class="ms-muted" style="margin-bottom:0.5rem;">连上设备 → 点「开始录制」→ 在手机上操作；暂停/结束请使用手机右上角悬浮条</p>
                 <div class="ms-row ms-row--wrap">
                     <button type="button" id="msBtnStartRecord" class="ms-btn ms-btn--danger" disabled>开始录制</button>
-                    <button type="button" id="msBtnStopRecord" class="ms-btn ms-btn--ghost" disabled>停止</button>
-                    <button type="button" id="msBtnPauseRecord" class="ms-btn ms-btn--ghost" disabled style="font-size:0.8rem;">暂停</button>
                 </div>
-                <p id="msRecordHint" class="ms-muted" style="display:none;margin-top:0.25rem;color:#dc2626 !important;">⏺ 录制中 — 请在手机上操作，操作将自动记录</p>
+                <p id="msRecordHint" class="ms-muted" style="display:none;margin-top:0.25rem;color:#dc2626 !important;">⏺ 录制中 — 请在手机上操作；结束录制请点手机悬浮条「结束」</p>
             </section>
 
             <section class="ms-section ms-section--steps">
@@ -192,5 +190,5 @@
 {% else %}
 <script id="__mobileStudioCapsJson" type="application/json">{{ dict(chat_tools=ai_chat_tools_env_enabled, hermes=hermes_gateway_configured, openclaw=openclaw_gateway_configured)|tojson }}</script>
 {% endif %}
-<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260629c"></script>
+<script src="{{ url_for('static', filename='js/mobile_studio.js') }}?v=20260630a"></script>
 {% endblock %}
