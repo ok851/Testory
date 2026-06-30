@@ -10,7 +10,16 @@ public final class AssistantSession {
     public static final String MODE_RECORD = "record";
     public static final String MODE_CAPTURE = "capture_element";
 
+    /** 录制悬浮条阶段（对标 SoloPi displayDialog / touchBlockMode）。 */
+    enum OverlayRecordPhase {
+        IDLE,
+        OVERLAY_WARMUP,
+        RECORDING,
+        OVERLAY_CONTROL
+    }
+
     private static final AtomicReference<String> armedMode = new AtomicReference<>(MODE_IDLE);
+    private static volatile OverlayRecordPhase overlayRecordPhase = OverlayRecordPhase.IDLE;
     private static final AtomicReference<String> platformUdid = new AtomicReference<>("");
     private static final AtomicReference<Integer> caseId = new AtomicReference<>(null);
     private static final AtomicBoolean socketConnected = new AtomicBoolean(false);
@@ -47,6 +56,10 @@ public final class AssistantSession {
         if (MODE_IDLE.equals(m)) {
             HighlightOverlay.hide();
             recordingContextPackage.set("");
+            if (overlayRecordPhase == OverlayRecordPhase.RECORDING
+                    || overlayRecordPhase == OverlayRecordPhase.OVERLAY_WARMUP) {
+                overlayRecordPhase = OverlayRecordPhase.IDLE;
+            }
         }
     }
 
@@ -120,6 +133,18 @@ public final class AssistantSession {
 
     static boolean isRecordingSuppressed() {
         return System.currentTimeMillis() < suppressRecordingUntilMs;
+    }
+
+    static void setOverlayRecordPhase(OverlayRecordPhase phase) {
+        overlayRecordPhase = phase == null ? OverlayRecordPhase.IDLE : phase;
+    }
+
+    static OverlayRecordPhase getOverlayRecordPhase() {
+        return overlayRecordPhase;
+    }
+
+    static boolean isOverlayRecordingAcceptingEvents() {
+        return overlayRecordPhase == OverlayRecordPhase.RECORDING;
     }
 
     static void setStepsUpdatedListener(Runnable listener) {

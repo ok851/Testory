@@ -159,6 +159,23 @@ final class StepNormalizer {
     }
 
     // Improved swipe spec: use scroll deltas when available, fallback to screen-relative defaults
+    static void enrichSwipePayload(JSONObject payload) throws Exception {
+        if (payload == null) return;
+        JSONArray bounds = payload.optJSONArray("bounds");
+        int cx = 0;
+        int cy = 0;
+        if (bounds != null && bounds.length() >= 4) {
+            cx = (bounds.getInt(0) + bounds.getInt(2)) / 2;
+            cy = (bounds.getInt(1) + bounds.getInt(3)) / 2;
+        }
+        JSONObject spec = new JSONObject();
+        applySwipeSpec(spec, payload, bounds, cx, cy);
+        payload.put("x1", spec.getInt("x1"));
+        payload.put("y1", spec.getInt("y1"));
+        payload.put("x2", spec.getInt("x2"));
+        payload.put("y2", spec.getInt("y2"));
+    }
+
     private static void applySwipeSpec(
             JSONObject spec, JSONObject raw, JSONArray bounds, int cx, int cy) throws Exception {
         int dx = raw.optInt("scroll_delta_x", 0);

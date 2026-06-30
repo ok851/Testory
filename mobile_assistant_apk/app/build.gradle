@@ -10,8 +10,8 @@ android {
         applicationId "com.testory.assistant"
         minSdk 24
         targetSdk 34
-        versionCode 15
-        versionName "1.2.4"
+        versionCode 17
+        versionName "1.2.6"
         buildConfigField "int", "WS_PORT", "19223"
         buildConfigField "String", "WS_HOST", "\"127.0.0.1\""
     }
@@ -38,6 +38,7 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
+    testImplementation 'junit:junit:4.13.2'
 }
 
 // Auto-copy APK to plugin_bundles after build (so PC install button uses latest)

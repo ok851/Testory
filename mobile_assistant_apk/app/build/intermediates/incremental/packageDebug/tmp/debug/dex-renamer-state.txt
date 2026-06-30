@@ -1,4 +1,4 @@
-#Mon Jun 29 17:48:45 CST 2026
+#Tue Jun 30 18:12:16 CST 2026
 base.2=D\:\\mkst_baixiang\\Python_Code\\NewUITestPlatform\\NewUITestPlatform\\mobile_assistant_apk\\app\\build\\intermediates\\dex\\debug\\mergeProjectDexDebug\\3\\classes.dex
 path.2=3/classes.dex
 base.1=D\:\\mkst_baixiang\\Python_Code\\NewUITestPlatform\\NewUITestPlatform\\mobile_assistant_apk\\app\\build\\intermediates\\dex\\debug\\mergeProjectDexDebug\\0\\classes.dex

@@ -18,6 +18,8 @@ final class RecordingSession {
 
     private static final String TAG = "RecordingSession";
     private static final Handler HANDLER = new Handler(Looper.getMainLooper());
+    /** 悬浮条布局就绪后再 armed，仅用于 overlay 空间过滤，不阻塞事件入队。 */
+    private static final int FORCE_ARM_MS = 900;
 
     private static long activeCaseId = -1L;
     private static boolean draining;
@@ -47,34 +49,59 @@ final class RecordingSession {
         draining = false;
         HANDLER.removeCallbacks(drainRunnable);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
+        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.IDLE);
 
-        // 原缺陷：先 show overlay + 150ms 延迟 + 200ms 抑制，导致首几次操作丢失。
-        // 新逻辑：先退回桌面并清空队列，就绪后立即 armed（目标 <200ms 额外等待）。
         SessionForegroundGuard.retreatToDesktop(ctx, (desktopReady, message) -> {
             if (activeCaseId != sessionId) return;
             if (!message.isEmpty() && ctx != null) {
                 Toast.makeText(ctx.getApplicationContext(), message, Toast.LENGTH_LONG).show();
             }
+            RecordEventFilter.resetDedupe();
+            TouchCoordBuffer.reset();
             RecordingOverlay.clearSteps();
-            RecordingOverlay.show(ctx, listener);
-            draining = true;
-            AssistantSession.suppressRecordingFor(desktopReady ? 60 : 120);
-            AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
-            AssistantAccessibilityService svc = AssistantSession.getService();
-            if (svc != null) {
-                String fg = svc.getForegroundPackage();
-                if (fg != null && !fg.isEmpty() && !"com.testory.assistant".equals(fg)) {
-                    AssistantSession.setRecordingContextPackage(fg);
-                }
-            }
-            HANDLER.post(drainRunnable);
+            AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.RECORDING);
+            RecordingOverlay.show(ctx, listener, null);
+            finishRecordingArm(ctx, sessionId);
+            HANDLER.postDelayed(() -> forceArmIfNeeded(ctx, sessionId), FORCE_ARM_MS);
         });
+    }
+
+    private static void forceArmIfNeeded(Context ctx, long sessionId) {
+        if (activeCaseId != sessionId) return;
+        if (AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
+            return;
+        }
+        Log.w(TAG, "force arm after " + FORCE_ARM_MS + "ms safety timeout");
+        finishRecordingArm(ctx, sessionId);
+    }
+
+    private static void finishRecordingArm(Context ctx, long sessionId) {
+        if (activeCaseId != sessionId) return;
+        if (AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
+            return;
+        }
+        draining = true;
+        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.RECORDING);
+        AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
+        Log.i(TAG, "recording armed (caseId=" + sessionId + ")");
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc != null) {
+            String fg = svc.getForegroundPackage();
+            if (fg != null && !fg.isEmpty() && !"com.testory.assistant".equals(fg)) {
+                AssistantSession.setRecordingContextPackage(fg);
+            }
+        }
+        HANDLER.post(drainRunnable);
     }
 
     static void stop(Context ctx) {
         draining = false;
         HANDLER.removeCallbacks(drainRunnable);
         drainSteps();
+        if (PluginHttpServer.isAgentRecordingActive()) {
+            PluginHttpServer.setAgentRecordingActive(false);
+        }
+        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.IDLE);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
         RecordingOverlay.hide();
         activeCaseId = -1L;
@@ -88,6 +115,7 @@ final class RecordingSession {
 
     static void resume() {
         AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
+        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.RECORDING);
         RecordingOverlay.setPaused(false);
     }
 

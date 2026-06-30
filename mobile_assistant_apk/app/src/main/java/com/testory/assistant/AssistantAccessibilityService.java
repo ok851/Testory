@@ -63,10 +63,13 @@ public class AssistantAccessibilityService extends AccessibilityService {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                && type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
+                && (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END
+                || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START)) {
             if (AssistantSession.MODE_RECORD.equals(armedMode)) {
                 recordTouchFromEvent(event);
-                scheduleFocusClickRecord(event);
+                if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
+                    scheduleFocusClickRecord(event);
+                }
             }
             return;
         }
@@ -131,6 +134,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
                     srcNode.recycle();
                 }
             } catch (Exception ignored) {}
+            StepNormalizer.enrichSwipePayload(payload);
         } else if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             if (!AssistantSession.MODE_RECORD.equals(armedMode)) return null;
             payload.put("type", "input");
@@ -174,10 +178,6 @@ public class AssistantAccessibilityService extends AccessibilityService {
             }
         }
 
-        if (AssistantSession.MODE_RECORD.equals(armedMode) && bounds != null
-                && RecordingOverlay.hitTest(bounds)) {
-            return null;
-        }
         if (AssistantSession.MODE_CAPTURE.equals(armedMode) && bounds != null) {
             HighlightOverlay.show(this, bounds);
         }
@@ -187,12 +187,16 @@ public class AssistantAccessibilityService extends AccessibilityService {
 
     private void recordTouchFromEvent(AccessibilityEvent event) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                float x = event.getScrollX();
-                float y = event.getScrollY();
-                if (x > 0 || y > 0) {
-                    TouchCoordBuffer.recordTouch((int) x, (int) y);
+            AccessibilityNodeInfo src = event.getSource();
+            if (src != null) {
+                Rect r = new Rect();
+                src.getBoundsInScreen(r);
+                int cx = r.centerX();
+                int cy = r.centerY();
+                if (cx > 0 || cy > 0) {
+                    TouchCoordBuffer.recordTouch(cx, cy);
                 }
+                src.recycle();
             }
         } catch (Exception ignored) {
         }
@@ -230,6 +234,15 @@ public class AssistantAccessibilityService extends AccessibilityService {
 
     private void enqueueRecordPayload(AccessibilityEvent event, JSONObject payload) {
         if (payload == null) return;
+        if (AssistantSession.MODE_RECORD.equals(armedMode)) {
+            if (AssistantSession.getOverlayRecordPhase()
+                    == AssistantSession.OverlayRecordPhase.OVERLAY_CONTROL) {
+                return;
+            }
+            if (RecordingOverlay.shouldIgnoreStep(payload)) {
+                return;
+            }
+        }
         if (RecordEventFilter.shouldSkip(event, payload)) return;
         PluginHttpServer.enqueueStep(payload);
     }
@@ -266,6 +279,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
                 Rect bounds = new Rect();
                 nodeCopy.getBoundsInScreen(bounds);
                 payload.put("bounds", rectToJson(bounds));
+                TouchCoordBuffer.applyToPayload(payload);
                 enqueueRecordPayload(null, payload);
             } catch (Exception ignored) {
             } finally {

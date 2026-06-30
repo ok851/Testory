@@ -16,15 +16,24 @@ import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import org.json.JSONObject;
+
 /** 录制时在屏幕右上角显示紧凑悬浮条（须从无障碍服务上下文添加）。 */
 public final class RecordingOverlay {
 
     private static final String TAG = "RecordingOverlay";
+    private static final int OVERLAY_CONTROL_MS = 175;
+    private static final int READY_TIMEOUT_MS = 300;
 
     public interface Listener {
         void onStop();
         void onPause();
         void onResume();
+    }
+
+    public interface ReadyListener {
+        void onOverlayReady();
+        void onOverlayReadyTimeout();
     }
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -37,22 +46,36 @@ public final class RecordingOverlay {
     private static Listener activeListener;
     private static int stepCount;
     private static volatile Rect overlayBounds = new Rect();
+    private static int hitSlopPx;
+    private static ReadyListener pendingReadyListener;
+    private static boolean readyNotified;
+    private static Runnable readyTimeoutRunnable;
+    private static Runnable overlayControlEndRunnable;
 
     private RecordingOverlay() {
     }
 
     static void show(Context ctx, Listener listener) {
+        show(ctx, listener, null);
+    }
+
+    static void show(Context ctx, Listener listener, ReadyListener readyListener) {
         activeListener = listener;
+        pendingReadyListener = readyListener;
+        readyNotified = false;
         AssistantAccessibilityService svc = AssistantSession.getService();
         if (svc == null) {
             Log.w(TAG, "accessibility not ready, skip overlay");
+            if (readyListener != null) {
+                readyListener.onOverlayReadyTimeout();
+            }
             return;
         }
         MAIN.post(() -> showOnMain(svc, listener));
     }
 
     static void hide() {
-        MAIN.post(RecordingOverlay::hideOnMain);
+        MAIN.post(() -> hideOnMain(true));
     }
 
     static void setPaused(boolean value) {
@@ -70,10 +93,14 @@ public final class RecordingOverlay {
         MAIN.post(RecordingOverlay::updateStatusText);
     }
 
-    /** 事件 bounds 与悬浮条重叠则忽略（避免录制到暂停/结束操作）。 */
+    /** @deprecated 使用 {@link #shouldIgnoreStep(JSONObject)} */
     static boolean hitTest(Rect eventBounds) {
-        if (eventBounds == null || overlayBounds.isEmpty()) return false;
-        return Rect.intersects(overlayBounds, eventBounds);
+        return OverlaySpatialFilter.intersectsOverlay(
+                overlayBounds, hitSlopPx, 0, 0, eventBounds);
+    }
+
+    static boolean shouldIgnoreStep(JSONObject payload) {
+        return OverlaySpatialFilter.shouldIgnorePayload(overlayBounds, hitSlopPx, payload);
     }
 
     private static void updateStatusText() {
@@ -89,6 +116,12 @@ public final class RecordingOverlay {
         if (pauseBtn != null) {
             pauseBtn.setText(paused ? "继续" : "暂停");
         }
+        scheduleBoundsRefresh();
+    }
+
+    private static void scheduleBoundsRefresh() {
+        if (panel == null) return;
+        panel.post(RecordingOverlay::refreshOverlayBounds);
     }
 
     private static void refreshOverlayBounds() {
@@ -102,14 +135,54 @@ public final class RecordingOverlay {
                 loc[0], loc[1],
                 loc[0] + panel.getWidth(),
                 loc[1] + panel.getHeight());
+        maybeNotifyReady();
+    }
+
+    private static void maybeNotifyReady() {
+        if (readyNotified || pendingReadyListener == null) return;
+        if (overlayBounds.isEmpty() || overlayBounds.width() <= 0 || overlayBounds.height() <= 0) {
+            return;
+        }
+        readyNotified = true;
+        cancelReadyTimeout();
+        ReadyListener listener = pendingReadyListener;
+        pendingReadyListener = null;
+        if (listener != null) {
+            listener.onOverlayReady();
+        }
+    }
+
+    private static void scheduleReadyTimeout() {
+        cancelReadyTimeout();
+        readyTimeoutRunnable = () -> {
+            if (readyNotified) return;
+            readyNotified = true;
+            refreshOverlayBounds();
+            ReadyListener listener = pendingReadyListener;
+            pendingReadyListener = null;
+            Log.w(TAG, "overlay layout ready timeout (" + READY_TIMEOUT_MS + "ms)");
+            if (listener != null) {
+                listener.onOverlayReadyTimeout();
+            }
+        };
+        MAIN.postDelayed(readyTimeoutRunnable, READY_TIMEOUT_MS);
+    }
+
+    private static void cancelReadyTimeout() {
+        if (readyTimeoutRunnable != null) {
+            MAIN.removeCallbacks(readyTimeoutRunnable);
+            readyTimeoutRunnable = null;
+        }
     }
 
     private static void showOnMain(AccessibilityService svc, Listener listener) {
-        hideOnMain();
+        // 重绘 overlay 时勿重置录制阶段，否则 WARMUP 无法进入 RECORDING。
+        hideOnMain(false);
         Context ctx = svc;
         windowManager = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
         if (windowManager == null) return;
 
+        hitSlopPx = dp(ctx, 3);
         stepCount = 0;
         paused = false;
 
@@ -192,6 +265,7 @@ public final class RecordingOverlay {
         try {
             windowManager.addView(root, lp);
             panel = root;
+            scheduleReadyTimeout();
             root.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
                 @Override
                 public void onGlobalLayout() {
@@ -206,12 +280,34 @@ public final class RecordingOverlay {
             panel = null;
             statusLabel = null;
             overlayBounds = new Rect();
+            if (!readyNotified && pendingReadyListener != null) {
+                readyNotified = true;
+                ReadyListener cb = pendingReadyListener;
+                pendingReadyListener = null;
+                cb.onOverlayReadyTimeout();
+            }
         }
     }
 
     private static void onOverlayTap(Runnable action) {
-        AssistantSession.suppressRecordingFor(500);
+        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.OVERLAY_CONTROL);
+        if (overlayControlEndRunnable != null) {
+            MAIN.removeCallbacks(overlayControlEndRunnable);
+        }
         if (action != null) action.run();
+        overlayControlEndRunnable = () -> {
+            overlayControlEndRunnable = null;
+            if (AssistantSession.getOverlayRecordPhase()
+                    != AssistantSession.OverlayRecordPhase.OVERLAY_CONTROL) {
+                return;
+            }
+            if (AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
+                AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.RECORDING);
+            } else {
+                AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.IDLE);
+            }
+        };
+        MAIN.postDelayed(overlayControlEndRunnable, OVERLAY_CONTROL_MS);
     }
 
     private static TextView makeButton(Context ctx, String label, int color) {
@@ -228,7 +324,12 @@ public final class RecordingOverlay {
         return btn;
     }
 
-    private static void hideOnMain() {
+    private static void hideOnMain(boolean resetPhase) {
+        cancelReadyTimeout();
+        if (overlayControlEndRunnable != null) {
+            MAIN.removeCallbacks(overlayControlEndRunnable);
+            overlayControlEndRunnable = null;
+        }
         if (panel != null && windowManager != null) {
             try {
                 windowManager.removeView(panel);
@@ -242,7 +343,13 @@ public final class RecordingOverlay {
         paused = false;
         stepCount = 0;
         activeListener = null;
+        pendingReadyListener = null;
+        readyNotified = false;
         overlayBounds = new Rect();
+        hitSlopPx = 0;
+        if (resetPhase) {
+            AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.IDLE);
+        }
     }
 
     private static int dp(Context ctx, int value) {

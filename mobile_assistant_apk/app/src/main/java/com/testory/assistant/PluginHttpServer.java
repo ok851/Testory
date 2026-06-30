@@ -199,7 +199,12 @@ public final class PluginHttpServer extends NanoHTTPD {
         o.put("port", getPort());
         o.put("accessibility_enabled", AssistantSession.isAccessibilityReady());
         o.put("armed_mode", AssistantSession.getArmedMode());
+        o.put("overlay_record_phase", AssistantSession.getOverlayRecordPhase().name());
+        o.put("agent_recording_active", PluginHttpServer.isAgentRecordingActive());
         o.put("package", appContext.getPackageName());
+        android.util.DisplayMetrics dm = appContext.getResources().getDisplayMetrics();
+        o.put("screen_width", dm.widthPixels);
+        o.put("screen_height", dm.heightPixels);
         return o;
     }
 
