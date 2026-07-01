@@ -16,7 +16,7 @@ final class TouchGestureClassifier {
     /** 最小滑动位移 */
     private static final int MIN_SWIPE_PX = 40;
     /** 有效点击最小时长，过滤注入回声/幽灵 UP */
-    private static final long MIN_TAP_MS = 50;
+    private static final long MIN_TAP_MS = 20;
     /** 无 MOVE 时最小位移才记为 click */
     private static final int MIN_TAP_MOVE_PX = 8;
 
@@ -85,7 +85,9 @@ final class TouchGestureClassifier {
                 return buildPointPayload("long-press", endX, endY, "长按 (" + endX + "," + endY + ")");
             }
             if (duration < MIN_TAP_MS) return null;
-            if (!moved && dx < MIN_TAP_MOVE_PX && dy < MIN_TAP_MOVE_PX) return null;
+            // TYPE_TOUCH_INTERACTION events have no MOVE in between, so moved is always false for taps
+            // A tap with zero displacement is valid - do not discard it
+            // Only filter out truly zero-duration/noise events via MIN_TAP_MS
             return buildPointPayload("click", endX, endY, "点击 (" + endX + "," + endY + ")");
         }
         if (distance(startX, startY, endX, endY) < CLICK_RANGE_PX && duration >= LONG_CLICK_MS) {

@@ -148,19 +148,11 @@ public final class PluginHttpServer extends NanoHTTPD {
             case "getStatus":
                 return buildStatus();
             case "startRecording":
-                return startRecording(params);
             case "stopRecording":
-                RecordingSession.stop(appContext);
-                PluginHttpServer.setAgentRecordingActive(false);
-                return ok("recording stopped");
             case "pauseRecording":
-                RecordingSession.pause();
-                return ok("recording paused");
             case "resumeRecording":
-                RecordingSession.resume();
-                return ok("recording resumed");
             case "pollSteps":
-                return pollSteps(params.optInt("limit", 20));
+                return deprecatedRpc(method);
             case "getPageSource":
                 return getPageSourceTree();
             case "takeScreenshot":
@@ -192,33 +184,6 @@ public final class PluginHttpServer extends NanoHTTPD {
         return new JSONObject().put("ok", true).put("message", msg);
     }
 
-    private JSONObject startRecording(JSONObject params) throws Exception {
-        boolean screenshotPerStep = params.optBoolean("screenshotPerStep", true);
-        AssistantSession.setScreenshotPerStep(screenshotPerStep);
-        // PC agent recording: enable mirror path so local drain reads from mirroredSteps
-        PluginHttpServer.setAgentRecordingActive(true);
-        long caseId = ensureDraftCase();
-        if (caseId < 0) {
-            return new JSONObject().put("ok", false).put("error", "无法创建录制草稿");
-        }
-        RecordingSession.start(appContext, caseId, RecordingSession.defaultListener(appContext), true);
-        return ok("recording started");
-    }
-
-    /** 获取本地草稿用例ID，不存在则创建。 */
-    private long ensureDraftCase() {
-        try {
-            LocalStore store = LocalStore.get(appContext);
-            java.util.List<JSONObject> cases = store.listCasesByProject(AssistantSession.LOCAL_PROJECT_ID);
-            if (cases.isEmpty()) {
-                return store.upsertCase("PC录制草稿", null, AssistantSession.LOCAL_PROJECT_ID, "本地录制");
-            }
-            return cases.get(0).optLong("id", -1L);
-        } catch (Exception e) {
-            return -1L;
-        }
-    }
-
     private JSONObject buildStatus() throws Exception {
         JSONObject o = new JSONObject();
         o.put("server_running", isRunning());
@@ -234,11 +199,10 @@ public final class PluginHttpServer extends NanoHTTPD {
         return o;
     }
 
-    /** Drain steps: read from pendingSteps (local) or mirroredSteps (PC agent), never stall. */
+    /** 本地 overlay/落库：Agent 模式读镜像队列，纯本地模式读 pendingSteps。 */
     static org.json.JSONArray drainPendingSteps(int limit) {
-        // When PC agent is actively polling, read from mirroredSteps to avoid race
-        // For local-only recording, drain directly from pendingSteps
-        CopyOnWriteArrayList<JSONObject> source = agentRecordingActive ? mirroredSteps : pendingSteps;
+        // PC pollSteps 已始终 mirror，本地始终读 mirror避免争夺
+        CopyOnWriteArrayList<JSONObject> source = mirroredSteps;
         List<JSONObject> out = new ArrayList<>();
         int n = 0;
         for (JSONObject step : source) {
@@ -253,17 +217,14 @@ public final class PluginHttpServer extends NanoHTTPD {
 
     /** PC pollSteps 专用：从 pending 取出并镜像，供本地 UI 在 Agent 模式下展示。 */
     private JSONObject pollSteps(int limit) throws Exception {
-        // 修复：原子性取出步骤，避免遍历时 remove 漏步骤
         List<JSONObject> out = new ArrayList<>();
-        int toDrain = Math.min(limit, pendingSteps.size());
-        for (int i = 0; i < toDrain; i++) {
-            try {
-                JSONObject step = pendingSteps.remove(0);
-                out.add(step);
-                mirroredSteps.add(step);
-            } catch (IndexOutOfBoundsException e) {
-                break;
-            }
+        int n = 0;
+        for (JSONObject step : pendingSteps) {
+            out.add(step);
+            pendingSteps.remove(step);
+            // 始终 mirror，供本地 overlay 消费，避免与 PC poll 争夺
+            mirroredSteps.add(step);
+            if (++n >= limit) break;
         }
         JSONArray arr = new JSONArray();
         for (JSONObject s : out) arr.put(s);

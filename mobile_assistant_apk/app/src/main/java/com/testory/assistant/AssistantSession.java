@@ -10,6 +10,14 @@ public final class AssistantSession {
     public static final String MODE_RECORD = "record";
     public static final String MODE_CAPTURE = "capture_element";
 
+    /** 录制悬浮条阶段（对标 SoloPi displayDialog / touchBlockMode）。 */
+    enum OverlayRecordPhase {
+        IDLE,
+        OVERLAY_WARMUP,
+        RECORDING,
+        OVERLAY_CONTROL
+    }
+
     private static final AtomicReference<String> armedMode = new AtomicReference<>(MODE_IDLE);
     private static final AtomicReference<String> platformUdid = new AtomicReference<>("");
     private static final AtomicReference<Integer> caseId = new AtomicReference<>(null);
@@ -20,6 +28,7 @@ public final class AssistantSession {
     public static final int LOCAL_PROJECT_ID = -1;
 
     private static volatile long suppressRecordingUntilMs;
+    private static volatile OverlayRecordPhase overlayRecordPhase = OverlayRecordPhase.IDLE;
     private static final AtomicBoolean coverModeActive = new AtomicBoolean(false);
     private static final AtomicBoolean recordingPaused = new AtomicBoolean(false);
     private static final AtomicReference<Long> localCaseId = new AtomicReference<>(-1L);
@@ -50,6 +59,10 @@ public final class AssistantSession {
             HighlightOverlay.hide();
             recordingContextPackage.set("");
             recordingPaused.set(false);
+            if (overlayRecordPhase == OverlayRecordPhase.RECORDING
+                    || overlayRecordPhase == OverlayRecordPhase.OVERLAY_WARMUP) {
+                overlayRecordPhase = OverlayRecordPhase.IDLE;
+            }
         }
     }
 
@@ -140,6 +153,18 @@ public final class AssistantSession {
 
     static boolean isRecordingPaused() {
         return recordingPaused.get();
+    }
+
+    static void setOverlayRecordPhase(OverlayRecordPhase phase) {
+        overlayRecordPhase = phase == null ? OverlayRecordPhase.IDLE : phase;
+    }
+
+    static OverlayRecordPhase getOverlayRecordPhase() {
+        return overlayRecordPhase;
+    }
+
+    static boolean isOverlayRecordingAcceptingEvents() {
+        return overlayRecordPhase == OverlayRecordPhase.RECORDING;
     }
 
     static void setStepsUpdatedListener(Runnable listener) {

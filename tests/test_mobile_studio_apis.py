@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """移动端工作室 API 与助手事件测试。"""
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ class TestEmulatorRecognition(unittest.TestCase):
 
 class TestAssistantEvents(unittest.TestCase):
     def test_normalize_click_with_resource_id(self):
+        """v3: text 优先于 resource_id 作为定位策略。"""
         from mobile_assistant_events import normalize_assistant_event
 
         step = normalize_assistant_event({
@@ -46,8 +47,9 @@ class TestAssistantEvents(unittest.TestCase):
             "bounds": [10, 20, 110, 70],
         })
         self.assertEqual(step["action"], "tap")
-        self.assertEqual(step["selector_type"], "id")
-        self.assertEqual(step["selector_value"], "com.app:id/login")
+        # v3: text 优先 — "登录" 比 "com.app:id/login" 更易读
+        self.assertEqual(step["selector_type"], "accessibility_id")
+        self.assertEqual(step["selector_value"], "登录")
         self.assertEqual(step["automation_layer"], "android")
 
     def test_normalize_swipe(self):
@@ -86,3 +88,4 @@ class TestPluginCatalog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

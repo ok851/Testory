@@ -79,21 +79,28 @@ public class AssistantAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // Cover 脉冲模式：触摸由 Cover 拦截+注入，禁用被动 touch/click 避免重复步骤
+        // Cover 脉冲模式：触摸由 Cover 拦截+注入，禁用被动 click/long_click 避免重复步骤。
+        // 修复原缺陷：
+        // 1. TYPE_TOUCH_INTERACTION_START/END 不应被过滤，它们是滑动手势的坐标来源。
+        // 2. TYPE_VIEW_SCROLLED 不应被过滤，它是滑动距离/方向的主要来源。
+        // 仅过滤 VIEW_CLICKED/LONG_CLICKED/SELECTED（Cover 注入手势后会触发这些事件）。
+        // Design inspired by mobile-automation-guide: 手势分类应基于完整的触摸生命周期。
         if (AssistantSession.isCoverModeActive()) {
             if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
                 // 仍录制文本输入
-            } else if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
-                    || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END
-                    || type == AccessibilityEvent.TYPE_VIEW_CLICKED
+            } else if (type == AccessibilityEvent.TYPE_VIEW_CLICKED
                     || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
-                    || type == AccessibilityEvent.TYPE_VIEW_SCROLLED
                     || type == AccessibilityEvent.TYPE_VIEW_SELECTED) {
                 return;
             }
+            // 注意：TYPE_TOUCH_INTERACTION_START/END 和 TYPE_VIEW_SCROLLED 不再被过滤，
+            // 以确保滑动手势能被正确捕获和录制。
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !AssistantSession.isCoverModeActive()) {
+        // 修复原缺陷：移除 !AssistantSession.isCoverModeActive() 条件，
+        // 使触摸交互事件在 Cover 模式下也能被捕获，用于滑动手势识别。
+        // Design inspired by mobile-automation-guide: 完整的触摸生命周期是手势分类的基础。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START) {
                 int[] pt = extractTouchPoint(event);
                 TouchGestureClassifier.get().onStart(pt[0], pt[1]);
@@ -131,10 +138,29 @@ public class AssistantAccessibilityService extends AccessibilityService {
                         }
                         RecordEventFilter.markTouchGesture(gesture);
                         enqueueRecordPayload(event, gesture);
+                        return;
                     }
+                    // gesture 为 null 时不 return，让 VIEW_CLICKED 兜底
                 }
-                return;
             }
+        }
+
+        // 低版本 Android 兜底：API < 31 无 TYPE_TOUCH_INTERACTION_* 事件，
+        // 通过 TYPE_VIEW_SCROLLED 的 scroll_delta 推断滑动方向和距离。
+        // Design inspired by mobile-automation-guide: 多策略回退确保兼容性。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                && type == AccessibilityEvent.TYPE_VIEW_SCROLLED
+                && AssistantSession.MODE_RECORD.equals(armedMode)) {
+            if (!RecordEventFilter.wasRecentTouchSwipe()) {
+                try {
+                    JSONObject payload = buildPayload(event, null);
+                    if (payload != null) {
+                        enqueueRecordPayload(event, payload);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            return;
         }
 
         if (type == AccessibilityEvent.TYPE_VIEW_SELECTED) {
@@ -251,6 +277,30 @@ public class AssistantAccessibilityService extends AccessibilityService {
                     bounds = new Rect();
                     focused.getBoundsInScreen(bounds);
                     payload.put("bounds", rectToJson(bounds));
+                    focused.recycle();
+                }
+                root.recycle();
+            }
+        }
+
+        // 修复原缺陷：当 event.getSource() 返回 null 且非 forcedType 时，
+        // 仍尝试获取当前焦点节点信息，避免桌面图标点击时 node 为空。
+        // Design inspired by mobile-automation-guide: 多策略回退获取元素信息。
+        if (!payload.has("node") && !payload.has("bounds")) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root != null) {
+                // 尝试获取当前焦点节点
+                AccessibilityNodeInfo focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY);
+                if (focused == null) {
+                    focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+                }
+                if (focused != null) {
+                    payload.put("node", nodeToJson(focused));
+                    bounds = new Rect();
+                    focused.getBoundsInScreen(bounds);
+                    if (bounds.width() > 0 || bounds.height() > 0) {
+                        payload.put("bounds", rectToJson(bounds));
+                    }
                     focused.recycle();
                 }
                 root.recycle();
@@ -408,13 +458,64 @@ public class AssistantAccessibilityService extends AccessibilityService {
             if (pkg.equals(lastRecordedPackage)) return;
             long now = System.currentTimeMillis();
             if (now - lastAppSwitchMs < 500) return;
+
+            String prevPkg = lastRecordedPackage;
             lastAppSwitchMs = now;
             lastRecordedPackage = pkg;
-            // 原缺陷：每次窗口切换都写入 open_app 步骤，回放第一步常误启动桌面/启动器而失败。
-            // 新逻辑：仅更新内存上下文，由后续 tap/swipe 步骤携带 context_package。
+
+            // 始终更新内存上下文
             AssistantSession.setRecordingContextPackage(pkg);
+
+            // 仅当从桌面/启动器 切到 目标应用 时，才生成 open_app 步骤。
+            // 排除内部页面切换产生的误录。
+            // Design inspired by mobile-automation-guide: 应用启动应记录可读应用名。
+            if (isLauncherPackage(prevPkg) && !isLauncherPackage(pkg) && !isSystemUiPackage(pkg)) {
+                JSONObject payload = new JSONObject();
+                payload.put("ts", now);
+                payload.put("type", "open_app");
+                payload.put("package", pkg);
+                payload.put("app_label", resolveAppLabelLocal(pkg));
+                payload.put("description", "打开应用[" + resolveAppLabelLocal(pkg) + "]");
+                payload.put("source", "a11y_switch");
+                PluginHttpServer.enqueueStep(payload);
+            }
         } catch (Exception ignored) {
         }
+    }
+
+    /** 判断是否为桌面/启动器包名。 */
+    private boolean isLauncherPackage(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return true;
+        return pkg.contains("launcher") || pkg.contains("home")
+                || pkg.contains("trebuchet") || pkg.contains("pixel")
+                || "com.sec.android.app.launcher".equals(pkg)
+                || "com.huawei.android.launcher".equals(pkg)
+                || "com.miui.home".equals(pkg)
+                || "com.oppo.launcher".equals(pkg)
+                || "com.vivo.launcher".equals(pkg)
+                || "com.google.android.apps.nexuslauncher".equals(pkg)
+                || "com.android.launcher3".equals(pkg);
+    }
+
+    private boolean isSystemUiPackage(String pkg) {
+        if (pkg == null) return false;
+        return "com.android.systemui".equals(pkg)
+                || "android".equals(pkg)
+                || pkg.contains("permissioncontroller");
+    }
+
+    private String resolveAppLabelLocal(String packageName) {
+        if (packageName == null || packageName.isEmpty()) return "未知应用";
+        try {
+            PackageManager pm = getPackageManager();
+            android.content.pm.ApplicationInfo info = pm.getApplicationInfo(packageName, 0);
+            CharSequence label = pm.getApplicationLabel(info);
+            if (label != null && label.length() > 0) {
+                return label.toString();
+            }
+        } catch (Exception ignored) {
+        }
+        return packageName;
     }
 
     private String friendlyPackageLabel(String pkg) {
@@ -1011,3 +1112,5 @@ public class AssistantAccessibilityService extends AccessibilityService {
         super.onDestroy();
     }
 }
+
+

@@ -31,6 +31,10 @@ final class NodeLocatorHelper {
         if (deepest == null) return;
         try {
             JSONObject opNode = exportOperationNode(deepest);
+            // 修复原缺陷：最深节点可能没有 text/content_desc（如自定义容器），
+            // 需要从子节点或父节点回退获取可读文本。
+            // Design inspired by mobile-automation-guide: 多策略回退获取元素描述。
+            enrichNodeText(deepest, opNode);
             payload.put("operation_node", opNode);
             payload.put("node", opNode);
             Rect bounds = boundsOf(deepest);
@@ -44,6 +48,95 @@ final class NodeLocatorHelper {
         } finally {
             deepest.recycle();
         }
+    }
+
+    /**
+     * 增强节点文本获取：当节点本身无 text/content_desc 时，
+     * 尝试从子节点获取文本，或从父节点获取描述。
+     * 原缺陷：微信等应用的自定义 View 容器本身无文本，导致步骤显示混淆后的 resource_id。
+     * Design inspired by mobile-automation-guide: 元素描述应尽可能从可见文本中获取。
+     */
+    private static void enrichNodeText(AccessibilityNodeInfo node, JSONObject opNode) {
+        if (node == null || opNode == null) return;
+        String existingText = opNode.optString("text", "");
+        String existingDesc = opNode.optString("content_desc", "");
+        if (!existingText.isEmpty() || !existingDesc.isEmpty()) return;
+
+        // 策略 1：从子节点获取文本（常见于自定义容器包裹 TextView）
+        String childText = findChildText(node, 0, 3);
+        if (childText != null && !childText.isEmpty()) {
+            try {
+                opNode.put("text", childText);
+                opNode.put("text_source", "child_node");
+            } catch (Exception ignored) {}
+            return;
+        }
+
+        // 策略 2：从父节点获取 contentDescription
+        try {
+            AccessibilityNodeInfo parent = node.getParent();
+            if (parent != null) {
+                CharSequence parentDesc = parent.getContentDescription();
+                if (parentDesc != null && parentDesc.length() > 0) {
+                    opNode.put("content_desc", parentDesc.toString());
+                    opNode.put("text_source", "parent_desc");
+                }
+                CharSequence parentText = parent.getText();
+                if (parentText != null && parentText.length() > 0) {
+                    opNode.put("text", parentText.toString());
+                    opNode.put("text_source", "parent_text");
+                }
+                parent.recycle();
+            }
+        } catch (Exception ignored) {}
+
+        // 策略 3：从 assistant_nodes 中提取第一个有文本的节点
+        JSONArray assistants = opNode.optJSONArray("assistant_nodes");
+        if (assistants != null && assistants.length() > 0) {
+            for (int i = 0; i < assistants.length(); i++) {
+                JSONObject an = assistants.optJSONObject(i);
+                if (an == null) continue;
+                String at = an.optString("text", "");
+                if (!at.isEmpty()) {
+                    try {
+                        opNode.put("text", at);
+                        opNode.put("text_source", "assistant_node");
+                    } catch (Exception ignored) {}
+                    return;
+                }
+                String ad = an.optString("content_desc", "");
+                if (!ad.isEmpty()) {
+                    try {
+                        opNode.put("content_desc", ad);
+                        opNode.put("text_source", "assistant_node");
+                    } catch (Exception ignored) {}
+                    return;
+                }
+            }
+        }
+    }
+
+    /** 递归查找子节点中的文本内容。 */
+    private static String findChildText(AccessibilityNodeInfo node, int depth, int maxDepth) {
+        if (node == null || depth > maxDepth) return null;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            CharSequence t = child.getText();
+            if (t != null && t.length() > 0) {
+                child.recycle();
+                return t.toString();
+            }
+            CharSequence d = child.getContentDescription();
+            if (d != null && d.length() > 0) {
+                child.recycle();
+                return d.toString();
+            }
+            String deeper = findChildText(child, depth + 1, maxDepth);
+            child.recycle();
+            if (deeper != null) return deeper;
+        }
+        return null;
     }
 
     static JSONObject exportOperationNode(AccessibilityNodeInfo n) throws Exception {

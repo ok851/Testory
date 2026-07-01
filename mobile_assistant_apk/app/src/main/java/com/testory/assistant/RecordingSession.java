@@ -49,6 +49,11 @@ final class RecordingSession {
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
         AssistantSession.setRecordingPaused(false);
         PerformingActionGuard.reset();
+        // 清理上一轮状态，避免残留步骤混入新录制
+        PluginHttpServer.clearEventQueues();
+        RecordEventFilter.resetDedupe();
+        TouchCoordBuffer.reset();
+        RecordingOverlay.hide();
 
         SessionForegroundGuard.retreatToDesktop(ctx, (desktopReady, message) -> {
             if (activeCaseId != sessionId) return;
@@ -56,32 +61,20 @@ final class RecordingSession {
                 Toast.makeText(ctx.getApplicationContext(), message, Toast.LENGTH_LONG).show();
             }
             RecordingOverlay.clearSteps();
-            AssistantAccessibilityService svc = AssistantSession.getService();
-            // SoloPi：Cover 在下、控制条在上，armed 仅在 Cover 就绪后开启。
-            RecordCoverView.show(svc, () -> {
-                if (ctx != null) {
-                    Toast.makeText(
-                            ctx.getApplicationContext(),
-                            "触摸层不可用，已切换备用录制模式",
-                            Toast.LENGTH_LONG).show();
-                }
-                finishArming(ctx, listener, desktopReady, false);
-            }, coverShown -> {
-                if (activeCaseId != sessionId) return;
-                RecordingOverlay.show(ctx, listener);
-                finishArming(ctx, listener, desktopReady, coverShown);
-            });
+            RecordingOverlay.show(ctx, listener);
+            finishArming(ctx, listener, desktopReady);
         });
     }
 
     private static void finishArming(
             Context ctx,
             RecordingOverlay.Listener listener,
-            boolean desktopReady,
-            boolean coverShown) {
+            boolean desktopReady) {
         if (activeCaseId < 0) return;
         draining = true;
-        AssistantSession.suppressRecordingFor(desktopReady ? 80 : 120);
+        // 降低抑制时间：原来 80-120ms 容易错过首屏操作，
+        // 40-60ms 足够跳过 Home 键释放的噪声事件。
+        AssistantSession.suppressRecordingFor(desktopReady ? 40 : 60);
         AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
         AssistantAccessibilityService live = AssistantSession.getService();
         if (live != null) {
@@ -93,10 +86,10 @@ final class RecordingSession {
         if (ctx != null) {
             Toast.makeText(
                     ctx.getApplicationContext(),
-                    coverShown ? "录制已开始，可直接操作手机" : "录制已开始（备用模式）",
+                    "录制已开始",
                     Toast.LENGTH_SHORT).show();
         }
-        Log.i(TAG, "recording armed cover=" + coverShown);
+        Log.i(TAG, "recording armed");
         HANDLER.post(drainRunnable);
     }
 
@@ -107,7 +100,6 @@ final class RecordingSession {
         PerformingActionGuard.reset();
         AssistantSession.setRecordingPaused(false);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
-        RecordCoverView.hide();
         RecordingOverlay.hide();
         activeCaseId = -1L;
         overlayListener = null;
@@ -116,13 +108,11 @@ final class RecordingSession {
     static void pause() {
         AssistantSession.setRecordingPaused(true);
         RecordingOverlay.setPaused(true);
-        RecordCoverView.hideForPause();
     }
 
     static void resume() {
         AssistantSession.setRecordingPaused(false);
         RecordingOverlay.setPaused(false);
-        RecordCoverView.enterTouchBlockMode();
     }
 
     static RecordingOverlay.Listener defaultListener(final Context ctx) {
@@ -144,30 +134,40 @@ final class RecordingSession {
         };
     }
 
+    private static final java.util.concurrent.ExecutorService DB_WRITER =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "testory-rec-db");
+                t.setDaemon(true);
+                return t;
+            });
+
     private static void drainSteps() {
         if (activeCaseId < 0) return;
-        Context ctx = AssistantApplicationHolder.get();
+        final Context ctx = AssistantApplicationHolder.get();
         if (ctx == null) return;
-        JSONArray batch = PluginHttpServer.drainPendingSteps(40);
+        final JSONArray batch = PluginHttpServer.drainPendingSteps(40);
         if (batch.length() == 0) return;
-        try {
-            LocalStore store = LocalStore.get(ctx);
-            List<JSONObject> existing = store.getSteps(activeCaseId);
-            int baseOrder = existing.size();
-            for (int i = 0; i < batch.length(); i++) {
-                JSONObject raw = batch.getJSONObject(i);
-                JSONObject step = RecordStepConverter.toDbStep(raw, baseOrder + i + 1);
-                if (RecordEventFilter.isAssistantStep(step)) {
-                    continue;
+        // DB 写入移到后台线程，避免阻塞主线程 Handler
+        DB_WRITER.execute(() -> {
+            try {
+                LocalStore store = LocalStore.get(ctx);
+                List<JSONObject> existing = store.getSteps(activeCaseId);
+                int baseOrder = existing.size();
+                for (int i = 0; i < batch.length(); i++) {
+                    JSONObject raw = batch.getJSONObject(i);
+                    JSONObject step = RecordStepConverter.toDbStep(raw, baseOrder + i + 1);
+                    if (RecordEventFilter.isAssistantStep(step)) {
+                        continue;
+                    }
+                    store.appendNormalizedStep(activeCaseId, step);
+                    String label = step.optString("action", "tap")
+                            + " — " + step.optString("description", "");
+                    RecordingOverlay.addStep(label);
                 }
-                store.appendNormalizedStep(activeCaseId, step);
-                String label = step.optString("action", "tap")
-                        + " — " + step.optString("description", "");
-                RecordingOverlay.addStep(label);
+                AssistantSession.notifyStepsUpdated();
+            } catch (Exception e) {
+                Log.w(TAG, "drainSteps failed", e);
             }
-            AssistantSession.notifyStepsUpdated();
-        } catch (Exception e) {
-            Log.w(TAG, "drainSteps failed", e);
-        }
+        });
     }
 }

@@ -10,7 +10,7 @@ final class RecordEventFilter {
 
     private static final String ASSISTANT_PKG = "com.testory.assistant";
     private static final long MERGE_WINDOW_MS = 30;
-    private static final long DEDUP_WINDOW_MS = 120;
+    private static final long DEDUP_WINDOW_MS = 60;
     private static final int MIN_SWIPE_DELTA_PX = 30;
     private static final String[] ASSISTANT_UI_TEXT = {
             "暂停", "结束", "录制中", "已暂停", "开启无障碍", "Testory Assistant",
@@ -49,7 +49,7 @@ final class RecordEventFilter {
     }
 
     static boolean wasRecentTouchSwipe() {
-        return System.currentTimeMillis() - lastTouchSwipeMs < 300;
+        return System.currentTimeMillis() - lastTouchSwipeMs < 120;
     }
 
     static void resetDedupe() {
@@ -104,7 +104,8 @@ final class RecordEventFilter {
                 if (node != null) {
                     return isDuplicate(payload);
                 }
-                return isDuplicate(payload);
+                // 无 bounds、无坐标、无节点：用宽松窗口去重
+                return isDuplicateLenient(payload);
             }
         }
         if (isDuplicate(payload)) {
@@ -150,9 +151,15 @@ final class RecordEventFilter {
         String type = payload.optString("type", "");
         String key = dedupeKey(payload);
         // 点击按坐标区分，避免 120ms 内连续点不同位置被误判为重复。
-        long window = ("click".equals(type) || "long-press".equals(type))
-                ? (key.equals(lastAcceptedKey) ? 25L : 60L)
-                : (key.equals(lastAcceptedKey) ? MERGE_WINDOW_MS : DEDUP_WINDOW_MS);
+        long window;
+        if ("click".equals(type) || "long-press".equals(type)) {
+            window = key.equals(lastAcceptedKey) ? 25L : 60L;
+        } else if ("swipe".equals(type) || "scroll".equals(type)) {
+            // 滑动窗口极短：只合并同一手势的重复事件，不丢弃后续滑动
+            window = key.equals(lastAcceptedKey) ? 20L : 30L;
+        } else {
+            window = key.equals(lastAcceptedKey) ? MERGE_WINDOW_MS : DEDUP_WINDOW_MS;
+        }
         if (now - lastAcceptedMs < window && key.equals(lastAcceptedKey)) {
             return true;
         }
@@ -161,14 +168,46 @@ final class RecordEventFilter {
         return false;
     }
 
+    /** 宽松去重：仅在极短时间窗口内跳过，适用于无坐标无节点事件。 */
+    private static boolean isDuplicateLenient(JSONObject payload) {
+        long now = payload.optLong("ts", System.currentTimeMillis());
+        if (now - lastAcceptedMs < 60) {
+            return true;
+        }
+        lastAcceptedMs = now;
+        return false;
+    }
+
     private static String dedupeKey(JSONObject payload) {
         String type = payload.optString("type", "");
         int x = payload.optInt("x", 0);
         int y = payload.optInt("y", 0);
         if ("click".equals(type) || "long-press".equals(type)) {
+            if (x > 0 || y > 0) {
+                return type + "|" + x + "," + y;
+            }
             JSONArray bounds = payload.optJSONArray("bounds");
-            return type + "|" + x + "," + y + "|"
-                    + (bounds != null ? bounds.toString() : "");
+            if (bounds != null && bounds.length() >= 4) {
+                int cx = (bounds.optInt(0, 0) + bounds.optInt(2, 0)) / 2;
+                int cy = (bounds.optInt(1, 0) + bounds.optInt(3, 0)) / 2;
+                return type + "|" + cx + "," + cy;
+            }
+            JSONObject node = payload.optJSONObject("node");
+            if (node != null) {
+                String rid = node.optString("resource_id", "");
+                String text = node.optString("text", "");
+                return type + "|node:" + rid + ":" + text;
+            }
+            return type + "|ts|" + (payload.optLong("ts", 0) / 200);
+        }
+        // 滑动用坐标起止点+时间戳区分，避免同区域连续滑动被误去重
+        if ("swipe".equals(type) || "scroll".equals(type)) {
+            int x1 = payload.optInt("x1", 0);
+            int y1 = payload.optInt("y1", 0);
+            int x2 = payload.optInt("x2", 0);
+            int y2 = payload.optInt("y2", 0);
+            return type + "|" + x1 + "," + y1 + "->" + x2 + "," + y2
+                    + "|ts" + (payload.optLong("ts", 0) / 50);
         }
         JSONArray bounds = payload.optJSONArray("bounds");
         return type + "|" + (bounds != null ? bounds.toString() : "")

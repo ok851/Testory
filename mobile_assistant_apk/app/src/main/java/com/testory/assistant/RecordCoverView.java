@@ -17,14 +17,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * SoloPi Cover 脉冲模式（对齐 CaseRecordManager touchBlockMode）：
- * <ol>
- *   <li>touchBlockMode：Cover 可见并拦截触摸，TouchGestureClassifier 分类</li>
- *   <li>收到手势 → 立即隐藏 Cover（setServiceToNormalMode）</li>
- *   <li>导出节点 + 注入手势到下层应用（dispatchGesture / performAction）</li>
- *   <li>完成后再次显示 Cover（setServiceToTouchBlockMode），等待下一次操作</li>
- * </ol>
- * Cover 隐藏期间用户触摸直达应用，与正常使用一致；仅「等待下一次操作」时 Cover 拦截。
+ * Cover 视觉层：仅用于显示录制状态，触摸直达应用。
+ * 触摸事件由 AccessibilityService TYPE_TOUCH_INTERACTION 捕获，
+ * 桌面触摸由 PC 端 getevent 捕获。
  */
 public final class RecordCoverView {
 
@@ -45,6 +40,8 @@ public final class RecordCoverView {
     private static long startMs;
     /** SoloPi touchBlockMode：true = Cover 可见并拦截 */
     private static volatile boolean touchBlockMode = true;
+    /** 上一次触摸事件时间戳（用于去重） */
+    private static long lastTouchMs = 0L;
 
     private RecordCoverView() {
     }
@@ -227,21 +224,18 @@ public final class RecordCoverView {
             startY = y;
             startMs = System.currentTimeMillis();
             TouchGestureClassifier.get().onStart(x, y);
-            return true;
         }
         if (action == MotionEvent.ACTION_MOVE) {
             TouchGestureClassifier.get().onMove(x, y);
-            return true;
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             handleTouchUp(x, y);
-            return true;
         }
-        return true;
+        return false;  // 不拦截，触摸直达应用
     }
 
     private static void handleTouchUp(int x, int y) {
-        if (!touchBlockMode || PerformingActionGuard.isPerforming()) {
+        if (PerformingActionGuard.isPerforming()) {
             return;
         }
         AssistantAccessibilityService svc = AssistantSession.getService();
@@ -276,12 +270,11 @@ public final class RecordCoverView {
                         svc, type, gx, gy, x1, y1, x2, y2, fd);
                 payload.put("source", "cover");
                 RecordEventFilter.markTouchGesture(payload);
-                PluginHttpServer.enqueueStep(payload);
-                Log.d(TAG, "enqueue cover step type=" + type + " @" + gx + "," + gy);
+                // 触摸已直达应用，不再重复注入，仅更新叠加层显示
+                Log.d(TAG, "cover step type=" + type + " @" + gx + "," + gy);
                 MAIN.post(() -> RecordingOverlay.addStep(payload.optString("description", type)));
 
-                svc.performCoverRecordedAction(type, payload, x1, y1, x2, y2, fd,
-                        RecordCoverView::finishDispatchCycle);
+                finishDispatchCycle();
             } catch (Exception e) {
                 Log.w(TAG, "handleTouchUp failed", e);
                 MAIN.post(RecordCoverView::finishDispatchCycle);
@@ -295,10 +288,11 @@ public final class RecordCoverView {
             PerformingActionGuard.finishPerforming();
             enterTouchBlockMode();
         };
+        // 触摸已直达应用，缩短恢复时间
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            MAIN.postDelayed(restore, 200);
+            MAIN.postDelayed(restore, 80);
         } else {
-            MAIN.post(() -> MAIN.postDelayed(restore, 200));
+            MAIN.post(() -> MAIN.postDelayed(restore, 80));
         }
     }
 

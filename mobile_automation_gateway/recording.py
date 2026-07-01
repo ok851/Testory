@@ -164,6 +164,7 @@ def _start_poll_thread(udid: str) -> None:
     def _worker() -> None:
         disconnect_since: Optional[float] = None
         screen_w, screen_h = 0, 0
+        consecutive_errors = 0
         while True:
             with _recording_lock:
                 sess = _recording_sessions.get(udid)
@@ -182,10 +183,10 @@ def _start_poll_thread(udid: str) -> None:
                 if not ok:
                     if disconnect_since is None:
                         disconnect_since = time.time()
-                    elif time.time() - disconnect_since >= 5.0:
+                    elif time.time() - disconnect_since >= 8.0:
                         broadcast_event(
                             "plugin_disconnected",
-                            {"udid": udid, "message": "插件通信中断超过 5 秒，录制已暂停"},
+                            {"udid": udid, "message": "插件通信中断超过 8 秒，录制已暂停"},
                         )
                         with _recording_lock:
                             if udid in _recording_sessions:
@@ -193,27 +194,12 @@ def _start_poll_thread(udid: str) -> None:
                         break
                 else:
                     disconnect_since = None
-                raw_steps = plugin_rpc.poll_steps(udid, limit=10)
+                raw_steps = plugin_rpc.poll_steps(udid, limit=20)
                 for raw in raw_steps:
                     if not isinstance(raw, dict):
                         continue
                     step = normalize_assistant_event(raw, screen_width=screen_w, screen_height=screen_h)
-                    screenshot_b64 = ""
-                    if screenshot_per_step:
-                        try:
-                            img, shot_meta = plugin_rpc.take_screenshot(udid)
-                            screenshot_b64 = base64.b64encode(img).decode("ascii")
-                            fmt = shot_meta.get("format", "png") if isinstance(shot_meta, dict) else str(shot_meta or "png")
-                            step.setdefault("mobile_spec", {})["screenshot_format"] = fmt
-                        except Exception:
-                            try:
-                                from mobile_device_manager import capture_screenshot_png
-
-                                img = capture_screenshot_png(udid)
-                                screenshot_b64 = base64.b64encode(img).decode("ascii")
-                                step.setdefault("mobile_spec", {})["screenshot_format"] = "png"
-                            except Exception:
-                                pass
+                    screenshot_b64 = ""  # 先不截图，保证步骤优先
                     payload = {
                         "udid": udid,
                         "step": step,
@@ -228,9 +214,28 @@ def _start_poll_thread(udid: str) -> None:
                         buf = _live_steps.setdefault(udid, [])
                         buf.append(step)
                     broadcast_event("step", payload)
+                # 批量截图：仅在有新步骤且开启截图时，取一张最新截图
+                if raw_steps and screenshot_per_step:
+                    try:
+                        img, _ = plugin_rpc.take_screenshot(udid)
+                        if img:
+                            broadcast_event("screenshot_update", {
+                                "udid": udid,
+                                "screenshot_base64": base64.b64encode(img).decode("ascii"),
+                                "step_count": len(raw_steps),
+                            })
+                    except Exception:
+                        pass
             except Exception as exc:
                 broadcast_event("error", {"udid": udid, "error": str(exc)})
-            time.sleep(0.12)
+                consecutive_errors += 1
+                if consecutive_errors > 10:
+                    with _recording_lock:
+                        if udid in _recording_sessions:
+                            _recording_sessions[udid]["active"] = False
+                    break
+                continue
+            time.sleep(0.15)
 
     t = threading.Thread(target=_worker, daemon=True, name=f"mobile-rec-poll-{udid}")
     _poll_threads[udid] = t
