@@ -54,8 +54,11 @@ def _wait_after_action_ms() -> int:
 def _capture_device_png(udid: str) -> Tuple[Optional[bytes], str, int, int]:
     try:
         img, meta = plugin_rpc.take_screenshot(udid)
-        w = int((meta or {}).get("width") or 1080)
-        h = int((meta or {}).get("height") or 1920)
+        if isinstance(meta, dict):
+            w = int(meta.get("width") or 1080)
+            h = int(meta.get("height") or 1920)
+        else:
+            w, h = 1080, 1920
         return img, "", w, h
     except Exception as exc:
         return None, str(exc), 1080, 1920
@@ -276,8 +279,12 @@ def replay_mobile_steps(
                                 adb_launch_app(udid, ctx, wait_foreground=True, timeout_sec=8.0)
                         except Exception:
                             pass
-                # 普通步骤走插件回放
-                replay_result = plugin_rpc.replay_step(udid, step, step_index=step_index)
+                replay_result = None
+                for attempt in range(max(1, max_retries)):
+                    replay_result = plugin_rpc.replay_step(udid, step, step_index=step_index)
+                    if replay_result.get("status") != "error":
+                        break
+                    time.sleep(0.35)
                 result.update(replay_result or {})
 
             # Inspired by SoloPi: 截图已由设备端步骤回调提供（如有）
@@ -324,10 +331,24 @@ def replay_mobile_steps(
     }
 
 
-def run_steps(udid: str, steps: List[Dict[str, Any]], *, from_index: int = 0) -> Dict[str, Any]:
+def run_steps(
+    udid: str,
+    steps: List[Dict[str, Any]],
+    *,
+    from_index: int = 0,
+    handle_dialogs: bool = True,
+    step_timeout_ms: int = 30000,
+    max_retries: int = 3,
+) -> Dict[str, Any]:
     """Gateway /internal/replay/run 入口。"""
     subset = steps[from_index:] if from_index > 0 else steps
-    return replay_mobile_steps(udid, subset)
+    return replay_mobile_steps(
+        udid,
+        subset,
+        handle_dialogs=handle_dialogs,
+        step_timeout_ms=step_timeout_ms,
+        max_retries=max_retries,
+    )
 
 
 def execute_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict[str, Any]:

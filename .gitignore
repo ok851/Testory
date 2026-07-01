@@ -29,3 +29,7 @@ src-tauri/gen/
 %UAT_DATA_DIR%/hermes/*.lock
 %UAT_DATA_DIR%/hermes/*.pid
 %UAT_DATA_DIR%/hermes/gateway_state.json
+# Android 构建产物（不应跟踪，每次构建都会变化）
+mobile_assistant_apk/.gradle/
+mobile_assistant_apk/app/build/
+config/plugin_bundles/*.apk

@@ -10,16 +10,7 @@ public final class AssistantSession {
     public static final String MODE_RECORD = "record";
     public static final String MODE_CAPTURE = "capture_element";
 
-    /** 录制悬浮条阶段（对标 SoloPi displayDialog / touchBlockMode）。 */
-    enum OverlayRecordPhase {
-        IDLE,
-        OVERLAY_WARMUP,
-        RECORDING,
-        OVERLAY_CONTROL
-    }
-
     private static final AtomicReference<String> armedMode = new AtomicReference<>(MODE_IDLE);
-    private static volatile OverlayRecordPhase overlayRecordPhase = OverlayRecordPhase.IDLE;
     private static final AtomicReference<String> platformUdid = new AtomicReference<>("");
     private static final AtomicReference<Integer> caseId = new AtomicReference<>(null);
     private static final AtomicBoolean socketConnected = new AtomicBoolean(false);
@@ -29,6 +20,8 @@ public final class AssistantSession {
     public static final int LOCAL_PROJECT_ID = -1;
 
     private static volatile long suppressRecordingUntilMs;
+    private static final AtomicBoolean coverModeActive = new AtomicBoolean(false);
+    private static final AtomicBoolean recordingPaused = new AtomicBoolean(false);
     private static final AtomicReference<Long> localCaseId = new AtomicReference<>(-1L);
     private static final AtomicReference<String> recordingContextPackage = new AtomicReference<>("");
     private static volatile Runnable stepsUpdatedListener;
@@ -56,10 +49,7 @@ public final class AssistantSession {
         if (MODE_IDLE.equals(m)) {
             HighlightOverlay.hide();
             recordingContextPackage.set("");
-            if (overlayRecordPhase == OverlayRecordPhase.RECORDING
-                    || overlayRecordPhase == OverlayRecordPhase.OVERLAY_WARMUP) {
-                overlayRecordPhase = OverlayRecordPhase.IDLE;
-            }
+            recordingPaused.set(false);
         }
     }
 
@@ -127,24 +117,29 @@ public final class AssistantSession {
         return v == null ? -1L : v;
     }
 
+    static boolean isCoverModeActive() {
+        return coverModeActive.get();
+    }
+
+    static void setCoverModeActive(boolean active) {
+        coverModeActive.set(active);
+    }
+
     static void suppressRecordingFor(long ms) {
         suppressRecordingUntilMs = System.currentTimeMillis() + Math.max(0, ms);
     }
 
     static boolean isRecordingSuppressed() {
-        return System.currentTimeMillis() < suppressRecordingUntilMs;
+        return System.currentTimeMillis() < suppressRecordingUntilMs
+                || PerformingActionGuard.isPerforming();
     }
 
-    static void setOverlayRecordPhase(OverlayRecordPhase phase) {
-        overlayRecordPhase = phase == null ? OverlayRecordPhase.IDLE : phase;
+    static void setRecordingPaused(boolean paused) {
+        recordingPaused.set(paused);
     }
 
-    static OverlayRecordPhase getOverlayRecordPhase() {
-        return overlayRecordPhase;
-    }
-
-    static boolean isOverlayRecordingAcceptingEvents() {
-        return overlayRecordPhase == OverlayRecordPhase.RECORDING;
+    static boolean isRecordingPaused() {
+        return recordingPaused.get();
     }
 
     static void setStepsUpdatedListener(Runnable listener) {

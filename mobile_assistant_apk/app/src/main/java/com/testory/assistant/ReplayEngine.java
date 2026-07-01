@@ -54,6 +54,8 @@ public final class ReplayEngine {
                 return RunSession.cancelledResult();
             }
             JSONObject step = runnable.get(i);
+            ContentChangeWatcher.sleepUntilStable();
+            DialogDismissHelper.tryDismiss(svc);
             JSONObject result = executeStep(svc, step, i + 1);
             results.put(result);
             if (cb != null) cb.onStep(i + 1, result);
@@ -112,10 +114,28 @@ public final class ReplayEngine {
                 ok = svc.goBack();
             } else if ("tap".equals(action) || "click".equals(action)) {
                 maybeSoftRestore(svc, step);
-                int[] coord = resolveCoord(st, sv, spec);
+                int[] coord = OperationNodeLocator.resolveTapFromStep(svc, step);
                 int x = coord[0];
                 int y = coord[1];
-                ok = svc.performTap(st, sv, x, y);
+                if (x == 0 && y == 0) {
+                    coord = resolveCoord(st, sv, spec);
+                    x = coord[0];
+                    y = coord[1];
+                }
+                ok = svc.performTapSelectorFirst(st, sv, x, y,
+                        spec != null ? spec.optJSONObject("operation_node") : null);
+                if (!ok && spec != null) {
+                    ok = tryLaunchTargetPackage(svc, spec);
+                }
+                if (!ok && "accessibility_id".equals(st) && sv != null && !sv.isEmpty()) {
+                    String pkg = AppLauncher.resolvePackageByLabel(
+                            svc.getApplicationContext(), sv);
+                    if (!pkg.isEmpty()) {
+                        ok = AppLauncher.launch(
+                                svc.getApplicationContext(), svc, pkg, "",
+                                AppLauncher.DEFAULT_TIMEOUT_MS).success;
+                    }
+                }
                 if (!ok) {
                     result.put("status", "error");
                     result.put("error", x > 0 && y > 0
@@ -125,21 +145,26 @@ public final class ReplayEngine {
                 }
             } else if ("long_press".equals(action) || "long-press".equals(action)) {
                 maybeSoftRestore(svc, step);
-                int[] coord = resolveCoord(st, sv, spec);
+                int[] coord = OperationNodeLocator.resolveTapFromStep(svc, step);
                 int x = coord[0];
                 int y = coord[1];
-                ok = svc.performLongPress(st, sv, x, y);
+                if (x == 0 && y == 0) {
+                    coord = resolveCoord(st, sv, spec);
+                    x = coord[0];
+                    y = coord[1];
+                }
+                ok = svc.performLongPressSelectorFirst(st, sv, x, y,
+                        spec != null ? spec.optJSONObject("operation_node") : null);
                 if (!ok) {
                     result.put("status", "error");
                     result.put("error", "长按失败");
                     return result;
                 }
             } else if ("swipe".equals(action)) {
-                int x1 = spec != null ? spec.optInt("x1", 0) : 0;
-                int y1 = spec != null ? spec.optInt("y1", 0) : 0;
-                int x2 = spec != null ? spec.optInt("x2", x1) : x1;
-                int y2 = spec != null ? spec.optInt("y2", y1) : y1;
-                ok = svc.performSwipe(x1, y1, x2, y2);
+                int[] p1 = resolveSwipeCoords(spec, "x1", "y1", "rx1", "ry1");
+                int[] p2 = resolveSwipeCoords(spec, "x2", "y2", "rx2", "ry2");
+                long dur = spec != null ? spec.optLong("action_duration_ms", 320) : 320;
+                ok = svc.performSwipe(p1[0], p1[1], p2[0], p2[1], dur);
                 if (!ok) {
                     result.put("status", "error");
                     result.put("error", "滑动手势失败");
@@ -177,13 +202,28 @@ public final class ReplayEngine {
         return result;
     }
 
-    /** 元素定位类步骤尽力恢复上下文；坐标类步骤不强制启动应用。 */
     private static void maybeSoftRestore(AssistantAccessibilityService svc, JSONObject step) {
         if (AppLauncher.isCoordinateStep(step)) return;
         String pkg = AppLauncher.extractContextPackage(step);
         if (pkg.isEmpty() || AppLauncher.isSkippablePackage(pkg)) return;
         AppLauncher.softRestoreContext(
                 svc.getApplicationContext(), svc, pkg, AppLauncher.DEFAULT_TIMEOUT_MS);
+    }
+
+    private static boolean tryLaunchTargetPackage(AssistantAccessibilityService svc, JSONObject spec) {
+        if (svc == null || spec == null) return false;
+        String pkg = spec.optString("target_package", "");
+        if (pkg.isEmpty()) {
+            pkg = spec.optString("app_package", spec.optString("appPackage", ""));
+        }
+        if (pkg.isEmpty() || AppLauncher.isSkippablePackage(pkg)) return false;
+        AppLauncher.Result launch = AppLauncher.launch(
+                svc.getApplicationContext(),
+                svc,
+                pkg,
+                "",
+                AppLauncher.DEFAULT_TIMEOUT_MS);
+        return launch.success;
     }
 
     private static int[] resolveCoord(String st, String sv, JSONObject spec) {
@@ -219,6 +259,36 @@ public final class ReplayEngine {
                 y = (int) Math.round(ry * sh);
             }
         }
+        // SoloPi: 节点内相对坐标 + 当前 bounds 解析点击位置
+        if ((x <= 0 && y <= 0) && spec != null && spec.has("node_rx") && spec.has("node_ry")) {
+            org.json.JSONArray bounds = spec.optJSONArray("bounds");
+            if (bounds != null && bounds.length() >= 4) {
+                int left = bounds.optInt(0);
+                int top = bounds.optInt(1);
+                int right = bounds.optInt(2);
+                int bottom = bounds.optInt(3);
+                int bw = right - left;
+                int bh = bottom - top;
+                if (bw > 0 && bh > 0) {
+                    x = left + (int) Math.round(spec.optDouble("node_rx") * bw);
+                    y = top + (int) Math.round(spec.optDouble("node_ry") * bh);
+                }
+            }
+        }
         return new int[]{x, y};
+    }
+
+    private static int[] resolveSwipeCoords(JSONObject spec, String keyX, String keyY, String keyRx, String keyRy) {
+        int val = spec != null ? spec.optInt(keyX, 0) : 0;
+        int vy = spec != null ? spec.optInt(keyY, 0) : 0;
+        if (spec != null && spec.has(keyRx) && spec.has(keyRy)) {
+            int sw = spec.optInt("screen_width", 0);
+            int sh = spec.optInt("screen_height", 0);
+            if (sw > 0 && sh > 0) {
+                val = (int) Math.round(spec.optDouble(keyRx) * sw);
+                vy = (int) Math.round(spec.optDouble(keyRy) * sh);
+            }
+        }
+        return new int[]{val, vy};
     }
 }

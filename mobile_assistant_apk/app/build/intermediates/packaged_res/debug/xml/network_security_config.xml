@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <!-- 本地测试平台常用 HTTP（127.0.0.1 / 局域网 IP / 模拟器 10.0.2.2） -->
-    <base-config cleartextTrafficPermitted="true">
-        <trust-anchors>
-            <certificates src="system" />
-        </trust-anchors>
-    </base-config>
-</network-security-config>

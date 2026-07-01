@@ -18,8 +18,6 @@ final class RecordingSession {
 
     private static final String TAG = "RecordingSession";
     private static final Handler HANDLER = new Handler(Looper.getMainLooper());
-    /** 悬浮条布局就绪后再 armed，仅用于 overlay 空间过滤，不阻塞事件入队。 */
-    private static final int FORCE_ARM_MS = 900;
 
     private static long activeCaseId = -1L;
     private static boolean draining;
@@ -30,7 +28,7 @@ final class RecordingSession {
         public void run() {
             if (!draining || activeCaseId < 0) return;
             drainSteps();
-            HANDLER.postDelayed(this, PluginHttpServer.isAgentRecordingActive() ? 100 : 120);
+            HANDLER.postDelayed(this, 120);
         }
     };
 
@@ -49,48 +47,56 @@ final class RecordingSession {
         draining = false;
         HANDLER.removeCallbacks(drainRunnable);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
-        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.IDLE);
+        AssistantSession.setRecordingPaused(false);
+        PerformingActionGuard.reset();
 
         SessionForegroundGuard.retreatToDesktop(ctx, (desktopReady, message) -> {
             if (activeCaseId != sessionId) return;
             if (!message.isEmpty() && ctx != null) {
                 Toast.makeText(ctx.getApplicationContext(), message, Toast.LENGTH_LONG).show();
             }
-            RecordEventFilter.resetDedupe();
-            TouchCoordBuffer.reset();
             RecordingOverlay.clearSteps();
-            AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.RECORDING);
-            RecordingOverlay.show(ctx, listener, null);
-            finishRecordingArm(ctx, sessionId);
-            HANDLER.postDelayed(() -> forceArmIfNeeded(ctx, sessionId), FORCE_ARM_MS);
+            AssistantAccessibilityService svc = AssistantSession.getService();
+            // SoloPi：Cover 在下、控制条在上，armed 仅在 Cover 就绪后开启。
+            RecordCoverView.show(svc, () -> {
+                if (ctx != null) {
+                    Toast.makeText(
+                            ctx.getApplicationContext(),
+                            "触摸层不可用，已切换备用录制模式",
+                            Toast.LENGTH_LONG).show();
+                }
+                finishArming(ctx, listener, desktopReady, false);
+            }, coverShown -> {
+                if (activeCaseId != sessionId) return;
+                RecordingOverlay.show(ctx, listener);
+                finishArming(ctx, listener, desktopReady, coverShown);
+            });
         });
     }
 
-    private static void forceArmIfNeeded(Context ctx, long sessionId) {
-        if (activeCaseId != sessionId) return;
-        if (AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
-            return;
-        }
-        Log.w(TAG, "force arm after " + FORCE_ARM_MS + "ms safety timeout");
-        finishRecordingArm(ctx, sessionId);
-    }
-
-    private static void finishRecordingArm(Context ctx, long sessionId) {
-        if (activeCaseId != sessionId) return;
-        if (AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
-            return;
-        }
+    private static void finishArming(
+            Context ctx,
+            RecordingOverlay.Listener listener,
+            boolean desktopReady,
+            boolean coverShown) {
+        if (activeCaseId < 0) return;
         draining = true;
-        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.RECORDING);
+        AssistantSession.suppressRecordingFor(desktopReady ? 80 : 120);
         AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
-        Log.i(TAG, "recording armed (caseId=" + sessionId + ")");
-        AssistantAccessibilityService svc = AssistantSession.getService();
-        if (svc != null) {
-            String fg = svc.getForegroundPackage();
+        AssistantAccessibilityService live = AssistantSession.getService();
+        if (live != null) {
+            String fg = live.getForegroundPackage();
             if (fg != null && !fg.isEmpty() && !"com.testory.assistant".equals(fg)) {
                 AssistantSession.setRecordingContextPackage(fg);
             }
         }
+        if (ctx != null) {
+            Toast.makeText(
+                    ctx.getApplicationContext(),
+                    coverShown ? "录制已开始，可直接操作手机" : "录制已开始（备用模式）",
+                    Toast.LENGTH_SHORT).show();
+        }
+        Log.i(TAG, "recording armed cover=" + coverShown);
         HANDLER.post(drainRunnable);
     }
 
@@ -98,25 +104,25 @@ final class RecordingSession {
         draining = false;
         HANDLER.removeCallbacks(drainRunnable);
         drainSteps();
-        if (PluginHttpServer.isAgentRecordingActive()) {
-            PluginHttpServer.setAgentRecordingActive(false);
-        }
-        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.IDLE);
+        PerformingActionGuard.reset();
+        AssistantSession.setRecordingPaused(false);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
+        RecordCoverView.hide();
         RecordingOverlay.hide();
         activeCaseId = -1L;
         overlayListener = null;
     }
 
     static void pause() {
-        AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
+        AssistantSession.setRecordingPaused(true);
         RecordingOverlay.setPaused(true);
+        RecordCoverView.hideForPause();
     }
 
     static void resume() {
-        AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
-        AssistantSession.setOverlayRecordPhase(AssistantSession.OverlayRecordPhase.RECORDING);
+        AssistantSession.setRecordingPaused(false);
         RecordingOverlay.setPaused(false);
+        RecordCoverView.enterTouchBlockMode();
     }
 
     static RecordingOverlay.Listener defaultListener(final Context ctx) {

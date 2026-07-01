@@ -45,12 +45,26 @@ public class AssistantAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        try {
+            handleAccessibilityEvent(event);
+        } catch (Throwable t) {
+            android.util.Log.e("TestoryA11y", "onAccessibilityEvent failed", t);
+        }
+    }
+
+    private void handleAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || AssistantSession.MODE_IDLE.equals(armedMode)) return;
+        if (AssistantSession.MODE_RECORD.equals(armedMode) && AssistantSession.isRecordingPaused()) {
+            return;
+        }
         if (AssistantSession.MODE_RECORD.equals(armedMode) && AssistantSession.isRecordingSuppressed()) {
             return;
         }
 
         int type = event.getEventType();
+        if (ContentChangeWatcher.isWindowContentEvent(type)) {
+            ContentChangeWatcher.notifyContentChanged();
+        }
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             handleAppSwitchRecord(event);
             handleDialog(event);
@@ -58,24 +72,73 @@ public class AssistantAccessibilityService extends AccessibilityService {
         }
 
         if (type == AccessibilityEvent.TYPE_VIEW_FOCUSED) {
-            scheduleFocusClickRecord(event);
-            return;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-                && (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END
-                || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START)) {
-            if (AssistantSession.MODE_RECORD.equals(armedMode)) {
-                recordTouchFromEvent(event);
-                if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
-                    scheduleFocusClickRecord(event);
-                }
+            // 录制模式不用 focus 推断 click，避免 Launcher 幽灵步骤；仅 capture 模式保留。
+            if (AssistantSession.MODE_CAPTURE.equals(armedMode)) {
+                scheduleFocusClickRecord(event);
             }
             return;
         }
 
+        // Cover 脉冲模式：触摸由 Cover 拦截+注入，禁用被动 touch/click 避免重复步骤
+        if (AssistantSession.isCoverModeActive()) {
+            if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+                // 仍录制文本输入
+            } else if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
+                    || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END
+                    || type == AccessibilityEvent.TYPE_VIEW_CLICKED
+                    || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
+                    || type == AccessibilityEvent.TYPE_VIEW_SCROLLED
+                    || type == AccessibilityEvent.TYPE_VIEW_SELECTED) {
+                return;
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !AssistantSession.isCoverModeActive()) {
+            if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START) {
+                int[] pt = extractTouchPoint(event);
+                TouchGestureClassifier.get().onStart(pt[0], pt[1]);
+                TouchCoordBuffer.beginInteraction(pt[0], pt[1]);
+                return;
+            }
+            if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
+                if (AssistantSession.MODE_RECORD.equals(armedMode)) {
+                    int[] pt = extractTouchPoint(event);
+                    TouchCoordBuffer.recordTouch(pt[0], pt[1]);
+                    JSONObject gesture = TouchGestureClassifier.get().onEnd(pt[0], pt[1]);
+                    if (gesture == null) {
+                        gesture = TouchCoordBuffer.finishInteraction(pt[0], pt[1]);
+                    }
+                    if (gesture != null) {
+                        int gx = gesture.optInt("x", pt[0]);
+                        int gy = gesture.optInt("y", pt[1]);
+                        if ("swipe".equals(gesture.optString("type"))) {
+                            gx = (gesture.optInt("x1", 0) + gesture.optInt("x2", 0)) / 2;
+                            gy = (gesture.optInt("y1", 0) + gesture.optInt("y2", 0)) / 2;
+                        }
+                        if ("swipe".equals(gesture.optString("type"))) {
+                            int sx = gesture.optInt("x1", pt[0]);
+                            int sy = gesture.optInt("y1", pt[1]);
+                            NodeLocatorHelper.enrichPayload(this, gesture, sx, sy);
+                        } else {
+                            NodeLocatorHelper.enrichPayload(this, gesture, gx, gy);
+                        }
+                        CharSequence pkgCs = event.getPackageName();
+                        if (pkgCs != null && pkgCs.length() > 0) {
+                            try {
+                                gesture.put("package", pkgCs.toString());
+                            } catch (Exception ignored) {
+                            }
+                        }
+                        RecordEventFilter.markTouchGesture(gesture);
+                        enqueueRecordPayload(event, gesture);
+                    }
+                }
+                return;
+            }
+        }
+
         if (type == AccessibilityEvent.TYPE_VIEW_SELECTED) {
-            if (AssistantSession.MODE_RECORD.equals(armedMode)) {
+            if (AssistantSession.MODE_CAPTURE.equals(armedMode)) {
                 cancelPendingFocusRecord();
                 try {
                     JSONObject payload = buildPayload(event, "click");
@@ -93,10 +156,18 @@ public class AssistantAccessibilityService extends AccessibilityService {
             return;
         }
 
+        if (type == AccessibilityEvent.TYPE_VIEW_SCROLLED && RecordEventFilter.wasRecentTouchSwipe()) {
+            return;
+        }
+
         cancelPendingFocusRecord();
         if (type == AccessibilityEvent.TYPE_VIEW_CLICKED
                 || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) {
             lastDirectClickMs = System.currentTimeMillis();
+            // SoloPi 模式：触摸管线已录制的 click/long-press 不再重复录 a11y 事件
+            if (RecordEventFilter.wasRecentTouchGesture()) {
+                return;
+            }
         }
 
         try {
@@ -131,10 +202,18 @@ public class AssistantAccessibilityService extends AccessibilityService {
                     android.graphics.Rect r = new android.graphics.Rect();
                     srcNode.getBoundsInScreen(r);
                     payload.put("bounds", rectToJson(r));
+                    int cx = r.centerX();
+                    int cy = r.centerY();
+                    int dx = event.getScrollDeltaX();
+                    int dy = event.getScrollDeltaY();
+                    // 原缺陷：仅有 scroll_delta 时 x1==x2，桌面端显示/回放均为零位移滑动。
+                    payload.put("x1", cx);
+                    payload.put("y1", cy);
+                    payload.put("x2", cx - dx * 4);
+                    payload.put("y2", cy - dy * 4);
                     srcNode.recycle();
                 }
             } catch (Exception ignored) {}
-            StepNormalizer.enrichSwipePayload(payload);
         } else if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             if (!AssistantSession.MODE_RECORD.equals(armedMode)) return null;
             payload.put("type", "input");
@@ -178,27 +257,59 @@ public class AssistantAccessibilityService extends AccessibilityService {
             }
         }
 
+        if (AssistantSession.MODE_RECORD.equals(armedMode) && bounds != null
+                && RecordingOverlay.hitTest(bounds)) {
+            return null;
+        }
         if (AssistantSession.MODE_CAPTURE.equals(armedMode) && bounds != null) {
             HighlightOverlay.show(this, bounds);
         }
         TouchCoordBuffer.applyToPayload(payload);
+        String payloadType = payload.optString("type", "");
+        if (AssistantSession.MODE_RECORD.equals(armedMode) && bounds != null
+                && ("click".equals(payloadType) || "long-press".equals(payloadType))) {
+            int cx = (bounds.left + bounds.right) / 2;
+            int cy = (bounds.top + bounds.bottom) / 2;
+            NodeLocatorHelper.enrichPayload(this, payload, cx, cy);
+        }
         return payload;
     }
 
-    private void recordTouchFromEvent(AccessibilityEvent event) {
+    /** 从触摸/滚动类无障碍事件中尽量提取屏幕坐标（多字段回退）。 */
+    private int[] extractTouchPoint(AccessibilityEvent event) {
+        int x = 0;
+        int y = 0;
+        if (event == null) return new int[]{x, y};
         try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                x = event.getScrollX();
+                y = event.getScrollY();
+            }
+        } catch (Exception ignored) {
+        }
+        if (x <= 0 && y <= 0) {
             AccessibilityNodeInfo src = event.getSource();
             if (src != null) {
                 Rect r = new Rect();
                 src.getBoundsInScreen(r);
-                int cx = r.centerX();
-                int cy = r.centerY();
-                if (cx > 0 || cy > 0) {
-                    TouchCoordBuffer.recordTouch(cx, cy);
+                if (r.width() > 0 || r.height() > 0) {
+                    x = r.centerX();
+                    y = r.centerY();
                 }
                 src.recycle();
             }
-        } catch (Exception ignored) {
+        }
+        if (x <= 0 && y <= 0) {
+            x = TouchCoordBuffer.getLastX();
+            y = TouchCoordBuffer.getLastY();
+        }
+        return new int[]{x, y};
+    }
+
+    private void recordTouchFromEvent(AccessibilityEvent event) {
+        int[] pt = extractTouchPoint(event);
+        if (pt[0] > 0 || pt[1] > 0) {
+            TouchCoordBuffer.recordTouch(pt[0], pt[1]);
         }
     }
 
@@ -234,15 +345,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
 
     private void enqueueRecordPayload(AccessibilityEvent event, JSONObject payload) {
         if (payload == null) return;
-        if (AssistantSession.MODE_RECORD.equals(armedMode)) {
-            if (AssistantSession.getOverlayRecordPhase()
-                    == AssistantSession.OverlayRecordPhase.OVERLAY_CONTROL) {
-                return;
-            }
-            if (RecordingOverlay.shouldIgnoreStep(payload)) {
-                return;
-            }
-        }
+        if (PerformingActionGuard.isPerforming()) return;
         if (RecordEventFilter.shouldSkip(event, payload)) return;
         PluginHttpServer.enqueueStep(payload);
     }
@@ -279,7 +382,6 @@ public class AssistantAccessibilityService extends AccessibilityService {
                 Rect bounds = new Rect();
                 nodeCopy.getBoundsInScreen(bounds);
                 payload.put("bounds", rectToJson(bounds));
-                TouchCoordBuffer.applyToPayload(payload);
                 enqueueRecordPayload(null, payload);
             } catch (Exception ignored) {
             } finally {
@@ -422,10 +524,15 @@ public class AssistantAccessibilityService extends AccessibilityService {
     }
 
     boolean performLongPress(String selectorType, String selectorValue, int x, int y) {
-        if (x > 0 && y > 0 && dispatchLongPress(x, y)) {
-            return true;
-        }
+        return performLongPressSelectorFirst(selectorType, selectorValue, x, y, null);
+    }
+
+    boolean performLongPressSelectorFirst(
+            String selectorType, String selectorValue, int x, int y, JSONObject opNode) {
         AccessibilityNodeInfo node = findNode(selectorType, selectorValue);
+        if (node == null && opNode != null) {
+            node = OperationNodeLocator.findLiveNode(this, wrapOpNode(opNode));
+        }
         if (node != null) {
             boolean ok = node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
             node.recycle();
@@ -438,41 +545,289 @@ public class AssistantAccessibilityService extends AccessibilityService {
     }
 
     boolean performTap(String selectorType, String selectorValue, int x, int y) {
-        if (x > 0 && y > 0 && dispatchTap(x, y)) {
-            return true;
-        }
+        return performTapSelectorFirst(selectorType, selectorValue, x, y, null);
+    }
+
+    boolean performTapSelectorFirst(
+            String selectorType, String selectorValue, int x, int y, JSONObject opNode) {
         AccessibilityNodeInfo node = findNode(selectorType, selectorValue);
+        if (node == null && opNode != null) {
+            node = OperationNodeLocator.findLiveNode(this, wrapOpNode(opNode));
+        }
         if (node != null) {
             boolean ok = node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
             node.recycle();
             if (ok) return true;
         }
-        if (x > 0 && y > 0) {
+        if (x > 0 || y > 0) {
             return dispatchTap(x, y);
         }
         return false;
     }
 
     boolean performSwipe(int x1, int y1, int x2, int y2) {
+        return performSwipe(x1, y1, x2, y2, 320);
+    }
+
+    boolean performSwipe(int x1, int y1, int x2, int y2, long durationMs) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
         if (x1 == 0 && y1 == 0 && x2 == 0 && y2 == 0) return false;
+        long dur = Math.max(80, Math.min(durationMs > 0 ? durationMs : 320, 2000));
         Path path = new Path();
         path.moveTo(x1, y1);
         path.lineTo(x2, y2);
         GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, 320);
+                new GestureDescription.StrokeDescription(path, 0, dur);
         GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
         return dispatchGestureSync(gesture);
+    }
+
+    /** Cover 录制：Cover 已隐藏后注入手势，完成后回调恢复 touchBlockMode。 */
+    void performCoverRecordedAction(
+            String type,
+            JSONObject payload,
+            int x1,
+            int y1,
+            int x2,
+            int y2,
+            long durationMs,
+            Runnable onComplete) {
+        mainHandler.post(() -> {
+            Runnable done = () -> {
+                if (onComplete != null) {
+                    onComplete.run();
+                }
+            };
+            try {
+                if ("swipe".equals(type)) {
+                    long dur = effectiveSwipeDurationMs(x1, y1, x2, y2, durationMs);
+                    dispatchCoverSwipeAsync(x1, y1, x2, y2, dur, done);
+                    return;
+                }
+                JSONObject spec = payload != null ? payload.optJSONObject("operation_node") : null;
+                String st = "";
+                String sv = "";
+                if (spec != null) {
+                    if (spec.has("resource_id")) {
+                        st = "id";
+                        sv = spec.optString("resource_id");
+                    } else if (spec.has("content_desc")) {
+                        st = "accessibility_id";
+                        sv = spec.optString("content_desc");
+                    }
+                }
+                int x = payload != null ? payload.optInt("x", 0) : 0;
+                int y = payload != null ? payload.optInt("y", 0) : 0;
+                if ("long-press".equals(type) || "long_press".equals(type)) {
+                    if (trySelectorAction(st, sv, spec, true, x, y)) {
+                        done.run();
+                        return;
+                    }
+                    dispatchCoverLongPressAsync(x, y, done);
+                    return;
+                }
+                if (trySelectorAction(st, sv, spec, false, x, y)) {
+                    done.run();
+                    return;
+                }
+                dispatchCoverTapAsync(x, y, done);
+            } catch (Exception e) {
+                android.util.Log.w("TestoryA11y", "performCoverRecordedAction failed", e);
+                done.run();
+            }
+        });
+    }
+
+    void performCoverRecordedAction(
+            String type,
+            JSONObject payload,
+            int x1,
+            int y1,
+            int x2,
+            int y2,
+            long durationMs) {
+        performCoverRecordedAction(type, payload, x1, y1, x2, y2, durationMs, null);
+    }
+
+    private static long effectiveSwipeDurationMs(int x1, int y1, int x2, int y2, long durationMs) {
+        long dur = Math.max(80, Math.min(durationMs > 0 ? durationMs : 320, 2000));
+        int dx = Math.abs(x2 - x1);
+        int dy = Math.abs(y2 - y1);
+        if (Math.max(dx, dy) >= 120 && dur < 280) {
+            dur = 280;
+        }
+        return dur;
+    }
+
+    private boolean trySelectorAction(
+            String selectorType,
+            String selectorValue,
+            JSONObject opNode,
+            boolean longPress,
+            int x,
+            int y) {
+        AccessibilityNodeInfo node = findNode(selectorType, selectorValue);
+        if (node == null && opNode != null) {
+            node = OperationNodeLocator.findLiveNode(this, wrapOpNode(opNode));
+        }
+        if (node == null) return false;
+        int action = longPress
+                ? AccessibilityNodeInfo.ACTION_LONG_CLICK
+                : AccessibilityNodeInfo.ACTION_CLICK;
+        boolean ok = node.performAction(action);
+        node.recycle();
+        if (ok) return true;
+        return x <= 0 && y <= 0;
+    }
+
+    private void dispatchCoverTapAsync(int x, int y, Runnable onComplete) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || x <= 0 || y <= 0) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, 80);
+        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+        dispatchCoverGestureAsync(gesture, onComplete);
+    }
+
+    private void dispatchCoverLongPressAsync(int x, int y, Runnable onComplete) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || x <= 0 || y <= 0) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, 650);
+        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+        dispatchCoverGestureAsync(gesture, onComplete);
+    }
+
+    private void dispatchCoverSwipeAsync(int x1, int y1, int x2, int y2, long durationMs, Runnable onComplete) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        if (x1 == 0 && y1 == 0 && x2 == 0 && y2 == 0) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        Path path = new Path();
+        path.moveTo(x1, y1);
+        path.lineTo(x2, y2);
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, durationMs);
+        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+        dispatchCoverGestureAsync(gesture, onComplete);
+    }
+
+    private void dispatchCoverGestureAsync(GestureDescription gesture, Runnable onComplete) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || gesture == null) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        boolean dispatched = dispatchGesture(gesture, new GestureResultCallback() {
+            @Override
+            public void onCompleted(GestureDescription gestureDescription) {
+                if (onComplete != null) onComplete.run();
+            }
+
+            @Override
+            public void onCancelled(GestureDescription gestureDescription) {
+                if (onComplete != null) onComplete.run();
+            }
+        }, null);
+        if (!dispatched) {
+            android.util.Log.w("TestoryA11y", "dispatchCoverGestureAsync not dispatched");
+            if (onComplete != null) onComplete.run();
+        }
+    }
+
+    private void dispatchCoverTapAsync(int x, int y) {
+        dispatchCoverTapAsync(x, y, null);
+    }
+
+    private void dispatchCoverLongPressAsync(int x, int y) {
+        dispatchCoverLongPressAsync(x, y, null);
+    }
+
+    private void dispatchCoverSwipeAsync(int x1, int y1, int x2, int y2, long durationMs) {
+        dispatchCoverSwipeAsync(x1, y1, x2, y2, durationMs, null);
+    }
+
+    private void dispatchCoverGestureAsync(GestureDescription gesture) {
+        dispatchCoverGestureAsync(gesture, null);
+    }
+
+    private void dispatchTapAsync(int x, int y) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || x <= 0 || y <= 0) return;
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, 80);
+        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+        dispatchGestureAsync(gesture);
+    }
+
+    private void dispatchLongPressAsync(int x, int y) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || x <= 0 || y <= 0) return;
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, 650);
+        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+        dispatchGestureAsync(gesture);
+    }
+
+    private void dispatchSwipeAsync(int x1, int y1, int x2, int y2, long durationMs) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+        if (x1 == 0 && y1 == 0 && x2 == 0 && y2 == 0) return;
+        long dur = Math.max(80, Math.min(durationMs > 0 ? durationMs : 320, 2000));
+        Path path = new Path();
+        path.moveTo(x1, y1);
+        path.lineTo(x2, y2);
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, dur);
+        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
+        dispatchGestureAsync(gesture);
+    }
+
+    private void dispatchGestureAsync(GestureDescription gesture) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || gesture == null) return;
+        dispatchGesture(gesture, null, null);
     }
 
     boolean performInput(String selectorType, String selectorValue, String text) {
         AccessibilityNodeInfo node = findNode(selectorType, selectorValue);
         if (node == null) return false;
+        if (!node.isFocused()) {
+            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
         Bundle args = new Bundle();
         args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
         boolean ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
         node.recycle();
         return ok;
+    }
+
+    private static JSONObject wrapOpNode(JSONObject opNode) {
+        try {
+            JSONObject step = new JSONObject();
+            JSONObject spec = new JSONObject();
+            spec.put("operation_node", opNode);
+            step.put("mobile_spec", spec);
+            return step;
+        } catch (Exception e) {
+            return new JSONObject();
+        }
     }
 
     boolean goHome() {
@@ -649,6 +1004,8 @@ public class AssistantAccessibilityService extends AccessibilityService {
         cancelPendingFocusRecord();
         cancelPendingInputRecord();
         AssistantSession.unbindService(this);
+        RecordCoverView.hide();
+        RecordingOverlay.hide();
         HighlightOverlay.hide();
         PluginHttpServer.stopServer();
         super.onDestroy();

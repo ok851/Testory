@@ -118,68 +118,47 @@ def agent_plugin_status(udid: str = "") -> Dict[str, Any]:
     return payload or {"success": False, "error": err or "unknown"}
 
 
+_PHONE_ONLY_ERR = "该功能已移至手机 Testory 助手，PC 端仅支持配对与步骤同步管理"
+
+
 def agent_start_recording(udid: str = "", *, screenshot_per_step: bool = True) -> Dict[str, Any]:
-    payload, err = mobile_agent_json(
-        "POST",
-        "/internal/recording/start",
-        body={"udid": udid, "screenshot_per_step": screenshot_per_step},
-    )
-    if err and not payload:
-        return {"success": False, "error": err}
-    return payload or {"success": False, "error": err or "unknown"}
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True}
 
 
 def agent_stop_recording(udid: str = "") -> Dict[str, Any]:
-    payload, err = mobile_agent_json("POST", "/internal/recording/stop", body={"udid": udid})
-    if err and not payload:
-        return {"success": False, "error": err}
-    return payload or {"success": False, "error": err or "unknown"}
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True}
 
 
 def agent_pause_recording(udid: str = "") -> Dict[str, Any]:
-    payload, err = mobile_agent_json("POST", "/internal/recording/pause", body={"udid": udid})
-    if err and not payload:
-        return {"success": False, "error": err}
-    return payload or {"success": False, "error": err or "unknown"}
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True}
 
 
 def agent_resume_recording(udid: str = "") -> Dict[str, Any]:
-    payload, err = mobile_agent_json("POST", "/internal/recording/resume", body={"udid": udid})
-    if err and not payload:
-        return {"success": False, "error": err}
-    return payload or {"success": False, "error": err or "unknown"}
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True}
 
 
 def agent_live_recording_steps(udid: str = "") -> Dict[str, Any]:
-    udid = (udid or "").strip()
-    path = f"/internal/recording/live-steps?udid={urllib.parse.quote(udid)}" if udid else "/internal/recording/live-steps"
-    payload, err = mobile_agent_json("GET", path)
-    if err and not payload:
-        return {"success": False, "error": err, "steps": [], "live_steps": []}
-    return payload or {"success": False, "error": err or "unknown", "steps": [], "live_steps": []}
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True, "steps": [], "live_steps": []}
 
 
-def agent_replay_steps(udid: str, steps: list, *, from_index: int = 0) -> Dict[str, Any]:
-    payload, err = mobile_agent_json(
-        "POST",
-        "/internal/replay/run",
-        body={"udid": udid, "steps": steps, "from_index": from_index},
-        timeout_sec=600.0,
-    )
-    if err and not payload:
-        return {"success": False, "error": err}
-    return payload or {"success": False, "error": err or "unknown"}
+def agent_clear_recording_steps(udid: str = "") -> Dict[str, Any]:
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True}
+
+
+def agent_replay_steps(
+    udid: str,
+    steps: list,
+    *,
+    from_index: int = 0,
+    handle_dialogs: bool = True,
+    step_timeout_ms: int = 30000,
+    max_retries: int = 3,
+) -> Dict[str, Any]:
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True}
 
 
 def agent_replay_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict[str, Any]:
-    payload, err = mobile_agent_json(
-        "POST",
-        "/internal/replay/step",
-        body={"udid": udid, "step": step, "step_index": step_index},
-    )
-    if err and not payload:
-        return {"success": False, "error": err}
-    return payload or {"success": False, "error": err or "unknown"}
+    return {"success": False, "error": _PHONE_ONLY_ERR, "deprecated": True}
 
 
 def agent_screenshot(udid: str = "", *, use_plugin: bool = True) -> Dict[str, Any]:

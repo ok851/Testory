@@ -167,6 +167,31 @@ final class AppLauncher {
         return pkg;
     }
 
+    /** 按桌面显示名称解析包名（用于 Launcher 图标点击 → open_app）。 */
+    static String resolvePackageByLabel(Context ctx, String label) {
+        if (ctx == null || label == null) return "";
+        String want = label.trim();
+        if (want.isEmpty()) return "";
+        try {
+            PackageManager pm = ctx.getPackageManager();
+            List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
+            String fallback = "";
+            for (ApplicationInfo info : apps) {
+                CharSequence appLabel = pm.getApplicationLabel(info);
+                if (appLabel == null || appLabel.length() == 0) continue;
+                String candidate = appLabel.toString().trim();
+                if (!want.equals(candidate)) continue;
+                if (pmGetLaunchIntent(ctx, info.packageName) != null) {
+                    return info.packageName;
+                }
+                if (fallback.isEmpty()) fallback = info.packageName;
+            }
+            return fallback;
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
     private static String normalizePackage(String pkg) {
         return pkg == null ? "" : pkg.trim();
     }

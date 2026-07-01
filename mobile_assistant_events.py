@@ -71,7 +71,7 @@ def _bounds_center(bounds: Any) -> Tuple[int, int]:
 
 def suggest_locator_from_node(node: Dict[str, Any]) -> Tuple[str, str]:
     """
-    Inspired by SoloPi: locator priority — id > accessibility_id > text > class.
+    Inspired by SoloPi: locator priority — id > accessibility_id > xpath > text > class.
     """
     rid = (node.get("resource_id") or node.get("resource-id") or "").strip()
     if rid:
@@ -79,6 +79,9 @@ def suggest_locator_from_node(node: Dict[str, Any]) -> Tuple[str, str]:
     desc = (node.get("content_desc") or node.get("content-desc") or "").strip()
     if desc:
         return "accessibility_id", desc
+    xpath = (node.get("xpath") or "").strip()
+    if xpath:
+        return "xpath", xpath
     text = (node.get("text") or "").strip()
     if text:
         return "android_uiautomator", f'new UiSelector().text("{text}")'
@@ -105,7 +108,10 @@ def normalize_assistant_event(
     """
     etype = (event.get("type") or event.get("action") or "").strip().lower()
     node = event.get("node") if isinstance(event.get("node"), dict) else {}
-    bounds = event.get("bounds") or node.get("bounds")
+    op_node = event.get("operation_node") if isinstance(event.get("operation_node"), dict) else {}
+    if not node and op_node:
+        node = op_node
+    bounds = event.get("bounds") or node.get("bounds") or op_node.get("bounds")
     cx, cy = _bounds_center(bounds)
     if event.get("x") is not None and event.get("y") is not None:
         try:
@@ -127,6 +133,32 @@ def normalize_assistant_event(
 
     if bounds is not None:
         mobile_spec["bounds"] = bounds
+
+    # SoloPi: 节点内相对坐标（跨分辨率回放）
+    if event.get("node_rx") is not None and event.get("node_ry") is not None:
+        try:
+            mobile_spec["node_rx"] = float(event["node_rx"])
+            mobile_spec["node_ry"] = float(event["node_ry"])
+        except (TypeError, ValueError):
+            pass
+
+    if event.get("action_duration_ms") is not None:
+        try:
+            mobile_spec["action_duration_ms"] = int(event["action_duration_ms"])
+        except (TypeError, ValueError):
+            pass
+
+    if op_node:
+        mobile_spec["operation_node"] = op_node
+    if isinstance(event.get("local_click_pos"), dict):
+        mobile_spec["local_click_pos"] = event["local_click_pos"]
+    ss = event.get("screen_size")
+    if isinstance(ss, dict):
+        try:
+            mobile_spec["screen_width"] = int(ss.get("width") or 0)
+            mobile_spec["screen_height"] = int(ss.get("height") or 0)
+        except (TypeError, ValueError):
+            pass
 
     # Inspired by SoloPi: resolution-adaptive coordinates
     if cx or cy:
