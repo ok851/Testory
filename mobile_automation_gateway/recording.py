@@ -16,6 +16,7 @@ _recording_lock = threading.Lock()
 _recording_sessions: Dict[str, Dict[str, Any]] = {}
 _live_steps: Dict[str, List[Dict[str, Any]]] = {}
 _poll_threads: Dict[str, threading.Thread] = {}
+_poll_stop_events: Dict[str, threading.Event] = {}
 _ws_clients: Set[Any] = set()
 _ws_loop: Optional[asyncio.AbstractEventLoop] = None
 _ws_lock = threading.Lock()
@@ -80,11 +81,19 @@ def _deactivate_session(udid: str) -> None:
     udid = (udid or "").strip()
     if not udid:
         return
+    stop_evt = _poll_stop_events.get(udid)
+    if stop_evt:
+        stop_evt.set()
     with _recording_lock:
         sess = _recording_sessions.get(udid)
         if sess:
             sess["active"] = False
+    t = _poll_threads.get(udid)
+    if t is not None and t.is_alive():
+        t.join(timeout=3.0)
+    with _recording_lock:
         _live_steps[udid] = []
+    _poll_stop_events.pop(udid, None)
 
 
 def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> Dict[str, Any]:
@@ -138,34 +147,47 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
 
 def stop_recording_session(udid: str) -> Dict[str, Any]:
     udid = (udid or "").strip()
+    # 通知轮询线程停止
+    stop_evt = _poll_stop_events.get(udid)
+    if stop_evt:
+        stop_evt.set()
     with _recording_lock:
         sess = _recording_sessions.get(udid)
         if sess:
             sess["active"] = False
-        live = list(_live_steps.get(udid) or [])
+    # 通知设备端停止录制
     try:
         plugin_rpc.stop_recording(udid)
     except Exception:
         pass
+    # 等待轮询线程退出，确保所有已拉取的步骤都写入 _live_steps
+    t = _poll_threads.get(udid)
+    if t is not None and t.is_alive():
+        t.join(timeout=3.0)
+    # 线程退出后再读取最终步骤列表
+    with _recording_lock:
+        live = list(_live_steps.get(udid) or [])
     broadcast_event("recording_stopped", {"udid": udid, "step_count": len(live)})
     return {"success": True, "udid": udid, "steps": live, "step_count": len(live)}
 
 
 def _start_poll_thread(udid: str) -> None:
-    # 原缺陷：旧 poll 线程仍存活时直接 return，新录制无法拉取设备事件。
-    t = _poll_threads.get(udid)
-    if t is not None and t.is_alive():
-        with _recording_lock:
-            sess = _recording_sessions.get(udid)
-            if sess and sess.get("active"):
-                return
-        time.sleep(0.2)
+    # 先停止旧线程
+    old_evt = _poll_stop_events.get(udid)
+    if old_evt:
+        old_evt.set()
+    old_t = _poll_threads.get(udid)
+    if old_t is not None and old_t.is_alive():
+        old_t.join(timeout=2.0)
+
+    stop_event = threading.Event()
+    _poll_stop_events[udid] = stop_event
 
     def _worker() -> None:
         disconnect_since: Optional[float] = None
         screen_w, screen_h = 0, 0
         consecutive_errors = 0
-        while True:
+        while not stop_event.is_set():
             with _recording_lock:
                 sess = _recording_sessions.get(udid)
                 if not sess or not sess.get("active"):

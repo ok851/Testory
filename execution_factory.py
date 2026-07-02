@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-执行器工厂：统一步骤 → Web（Playwright）/ 桌面（pywinauto）/ Android（Appium）分发。
+执行器工厂：统一步骤 → Web（Playwright）/ 桌面（pywinauto）/ Mobile（Maestro/Appium）分发。
+
+v2.0: 集成 Maestro 引擎作为移动端主力执行器。
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from step_executor import (
     case_steps_include_android,
     case_steps_include_desktop,
     case_steps_include_web,
+    convert_db_step_to_flow_step,
     ensure_mixed_run_environment,
     enrich_execution_step,
     is_desktop_step,
@@ -25,6 +28,16 @@ from step_executor import (
 
 class ExecutorFactory:
     """架构图「执行器工厂」：按 automation_layer 路由单步与用例环境校验。"""
+
+    def __init__(self):
+        self._mobile_dispatcher = None  # 延迟初始化
+
+    def _get_mobile_dispatcher(self):
+        if self._mobile_dispatcher is None:
+            from mobile_engine.engine_dispatcher import MobileEngineDispatcher
+
+            self._mobile_dispatcher = MobileEngineDispatcher()
+        return self._mobile_dispatcher
 
     def validate_case_environment(self, steps: List[Dict[str, Any]]) -> Optional[str]:
         return ensure_mixed_run_environment(steps)
@@ -78,9 +91,70 @@ class ExecutorFactory:
         selector_value: str = "",
         input_value: str = "",
     ) -> Dict[str, Any]:
-        raise RuntimeError(
-            "PC 端已不再执行移动端步骤，请在手机 Testory 助手内运行用例"
-        )
+        """
+        移动端步骤执行 — 通过 Maestro 引擎或视觉兜底。
+        v2.0: 恢复 PC 端移动执行能力，移除旧 Appium 依赖。
+        """
+        dispatcher = self._get_mobile_dispatcher()
+
+        # 确保设备已连接
+        if not dispatcher.current_device:
+            from mobile_device_manager import get_connected_udid, get_device_info
+
+            udid = get_connected_udid() or ""
+            if not udid:
+                raise RuntimeError("未连接 Android 设备，请先连接真机或模拟器")
+            info = get_device_info(udid)
+            from mobile_engine.engine_interface import DeviceInfo
+
+            device = DeviceInfo(
+                udid=udid,
+                platform="android",
+                model=info.get("model", ""),
+                screen_width=info.get("width", 1080),
+                screen_height=info.get("height", 1920),
+                density=info.get("density", 420),
+                is_emulator=udid.startswith("emulator-"),
+            )
+            dispatcher._maestro.connect_device(device)
+
+        # 将数据库步骤转为 FlowStep 并执行
+        flow_step = convert_db_step_to_flow_step(step)
+        result = dispatcher._maestro.execute_step(flow_step)
+
+        # 转为兼容现有 dict 格式
+        return {
+            "status": "success" if result.is_success else "error",
+            "action": result.action,
+            "description": result.description,
+            "duration": result.duration_ms / 1000.0,
+            "error": result.error,
+            "screenshot": result.screenshot_path,
+            "healed": result.healed_locator is not None,
+        }
+
+    def execute_mobile_flow(
+        self,
+        db_steps: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        执行完整的移动端测试流（从数据库步骤列表）。
+
+        Returns:
+            包含 FlowResult 摘要的 dict
+        """
+        dispatcher = self._get_mobile_dispatcher()
+
+        # 转换步骤
+        from mobile_engine.maestro.maestro_flow_generator import MaestroFlowGenerator
+
+        gen = MaestroFlowGenerator()
+        flow = gen._convert_db_steps(db_steps)
+
+        # 执行
+        result = dispatcher._maestro.execute_flow(flow)
+
+        return result.to_dict()
 
     def execute_step(
         self,

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 经插件 API 回放移动端步骤（v2 — 借鉴 SoloPi 的步骤结果增强与弹窗处理配置）。
 
@@ -185,6 +185,8 @@ def replay_mobile_steps(
     handle_dialogs: bool = True,  # Inspired by SoloPi: configurable dialog handling
     step_timeout_ms: int = 30000,  # Inspired by SoloPi: per-step timeout
     max_retries: int = 3,  # Inspired by SoloPi: implicit wait retries
+    continue_on_error: bool = False,
+    screenshot_per_step: bool = False,
     on_step: Optional[callable] = None,
     on_dialog: Optional[callable] = None,
 ) -> Dict[str, Any]:
@@ -195,6 +197,8 @@ def replay_mobile_steps(
       - handle_dialogs: 自动处理系统弹窗（默认开启）
       - step_timeout_ms: 单步超时
       - max_retries: 隐式等待重试次数
+      - continue_on_error: 单步失败时是否继续执行后续步骤
+      - screenshot_per_step: 是否每步截图（默认关闭以提升性能）
     """
     if not udid:
         return {"success": False, "error": "缺少 udid"}
@@ -288,13 +292,12 @@ def replay_mobile_steps(
                 result.update(replay_result or {})
 
             # Inspired by SoloPi: 截图已由设备端步骤回调提供（如有）
-            screenshot_url = ""
-            try:
-                img, _ = plugin_rpc.take_screenshot(udid)
-                screenshot_url = _save_screenshot(img, udid, step_index)
-                result["screenshot"] = screenshot_url
-            except Exception:
-                pass
+            if screenshot_per_step:
+                try:
+                    img, _ = plugin_rpc.take_screenshot(udid)
+                    result["screenshot"] = _save_screenshot(img, udid, step_index)
+                except Exception:
+                    pass
 
         except Exception as exc:
             result["status"] = "error"
@@ -313,14 +316,15 @@ def replay_mobile_steps(
 
         # 失败时决定是否继续
         if result.get("status") == "error":
-            return {
-                "success": False,
-                "total": len(steps),
-                "failed": step_index,
-                "duration_ms": int((time.time() - total_start) * 1000),
-                "error": result.get("error", f"第 {step_index} 步执行失败"),
-                "step_results": step_results,
-            }
+            if not continue_on_error:
+                return {
+                    "success": False,
+                    "total": len(steps),
+                    "failed": step_index,
+                    "duration_ms": int((time.time() - total_start) * 1000),
+                    "error": result.get("error", f"第 {step_index} 步执行失败"),
+                    "step_results": step_results,
+                }
 
     return {
         "success": True,
@@ -339,6 +343,8 @@ def run_steps(
     handle_dialogs: bool = True,
     step_timeout_ms: int = 30000,
     max_retries: int = 3,
+    continue_on_error: bool = False,
+    screenshot_per_step: bool = False,
 ) -> Dict[str, Any]:
     """Gateway /internal/replay/run 入口。"""
     subset = steps[from_index:] if from_index > 0 else steps
@@ -348,6 +354,8 @@ def run_steps(
         handle_dialogs=handle_dialogs,
         step_timeout_ms=step_timeout_ms,
         max_retries=max_retries,
+        continue_on_error=continue_on_error,
+        screenshot_per_step=screenshot_per_step,
     )
 
 

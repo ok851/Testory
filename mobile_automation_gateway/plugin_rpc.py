@@ -342,7 +342,12 @@ def dismiss_dialogs(udid: str) -> Dict[str, Any]:
         return _rpc_call(udid, "dismissDialogs", {}, timeout=8.0)
     except Exception as exc:
         try:
-            return plugin_tap(udid, x=540, y=1200)
+            # 根据设备屏幕尺寸动态计算弹窗按钮位置（屏幕中心偏下）
+            from mobile_adb_control import adb_get_screen_size
+            sw, sh = adb_get_screen_size(udid)
+            x = sw // 2
+            y = int(sh * 0.625)
+            return plugin_tap(udid, x=x, y=y)
         except Exception:
             return {"ok": False, "error": str(exc)}
 
@@ -501,7 +506,8 @@ def replay_step(udid: str, step: Dict[str, Any], *, step_index: int = 0) -> Dict
 
         try:
             sec = float(step.get("input_value") or step.get("wait_ms") or 1)
-            if sec > 100:
+            # 统一约定：input_value 单位为秒，wait_ms 单位为毫秒
+            if step.get("wait_ms") is not None:
                 sec = sec / 1000.0
         except (TypeError, ValueError):
             sec = 1.0

@@ -17,15 +17,22 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Cover 视觉层：仅用于显示录制状态，触摸直达应用。
- * 触摸事件由 AccessibilityService TYPE_TOUCH_INTERACTION 捕获，
- * 桌面触摸由 PC 端 getevent 捕获。
+ * Cover 视觉层：全屏透明覆盖，基于 SoloPi/Maestro 的「拦截→隐藏→注入→恢复」循环。
+ * <p>
+ * 核心原理：Cover 通过 {@code setClickable(true)} 拦截完整的触摸手势
+ * （DOWN→MOVE→UP），录制后立即隐藏 Cover 并将手势通过
+ * {@link AccessibilityService#dispatchGesture} 注入回应用层，确保
+ * 应用（包括 Launcher 桌面）始终能收到触摸事件。
+ * <p>
+ * 悬浮窗（RecordingOverlay）使用 TYPE_APPLICATION_OVERLAY，z-order 高于
+ * 本 Cover（TYPE_ACCESSIBILITY_OVERLAY），可正常接收点击。
  */
 public final class RecordCoverView {
 
     private static final String TAG = "RecordCoverView";
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    /** 后台线程池：专门执行 OperationNodeExporter 节点导出，避免阻塞手势注入流水线 */
     private static final ExecutorService COVER_WORKER =
             Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "testory-cover");
@@ -153,6 +160,9 @@ public final class RecordCoverView {
 
         View panel = new View(svc);
         panel.setBackgroundColor(0x01000000);
+        // 关键：setClickable(true) 使 View.onTouchEvent() 返回 true，
+        // 从而消费 ACTION_DOWN 并建立触摸目标链，Cover 得以接收完整手势
+        // （DOWN→MOVE→UP）用于录制。录制完成后通过 dispatchGesture 注入回去。
         panel.setClickable(true);
         panel.setEnabled(true);
         panel.setFocusable(false);
@@ -200,6 +210,19 @@ public final class RecordCoverView {
         AssistantSession.setCoverModeActive(false);
     }
 
+    /**
+     * Cover 触摸事件入口。
+     * <p>
+     * 返回值含义与常规 View 不同：Cover 是 WindowManager 的顶层悬浮窗口，
+     * setClickable(true) 使 View.onTouchEvent() 返回 true，确保 ACTION_DOWN
+     * 被 Cover 窗口「认领」，后续 MOVE/UP 继续派发给 Cover，从而录制完整手势。
+     * 录制完成后通过隐藏 Cover + dispatchGesture 将手势注入回应用。
+     * <p>
+     * 悬浮窗命中检测：hitTestPoint 识别 RecordingOverlay 区域，
+     * 返回 false 使 Cover.onTouchEvent 消费事件 → 防止事件泄漏到 Cover 之下。
+     * 但 RecordingOverlay 使用 TYPE_APPLICATION_OVERLAY（z-order 更高），
+     * 其按钮点击不会到达此处，hitTest 仅作防御性兜底。
+     */
     private static boolean onCoverTouch(View v, MotionEvent event) {
         if (!AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
             return false;
@@ -215,6 +238,7 @@ public final class RecordCoverView {
         }
         int x = (int) event.getRawX();
         int y = (int) event.getRawY();
+        // 防御性检查：即使 RecordingOverlay z-order 更高，仍拒绝录制悬浮窗区域手势
         if (RecordingOverlay.hitTestPoint(x, y)) {
             return false;
         }
@@ -231,9 +255,19 @@ public final class RecordCoverView {
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             handleTouchUp(x, y);
         }
-        return false;  // 不拦截，触摸直达应用
+        return false;  // onTouchListener 不消费，由 View.onTouchEvent 消费（setClickable=true）
     }
 
+    /**
+     * 手势终止处理（Maestro / SoloPi 注入流水线）。
+     * <p>
+     * P0#2 修复：原实现中 TouchGestureClassifier.onEnd() 对快速点击（&lt;20ms）
+     * 返回 null 后直接 return，Cover 不进入 dispatchMode → 触摸被 Cover 消费但
+     * 既不注入也不录制 → 用户每次点击都需要多次尝试。
+     * <p>
+     * 修复方案：gesture 为 null 时仍执行注入流程（以短 tap 形式），确保
+     * 应用始终收到触摸，Cover 不会永久阻塞 UI 交互。
+     */
     private static void handleTouchUp(int x, int y) {
         if (PerformingActionGuard.isPerforming()) {
             return;
@@ -242,44 +276,72 @@ public final class RecordCoverView {
         if (svc == null) return;
         long duration = System.currentTimeMillis() - startMs;
         JSONObject gesture = TouchGestureClassifier.get().onEnd(x, y);
+
+        // 防御：即使 classifier 拒绝手势（快速点击 <20ms 返回 null），
+        // 仍需注入到应用并让 Cover 进入 dispatchMode，防止触摸永久被吞。
+        final int x1 = startX;
+        final int y1 = startY;
+        final int x2 = (gesture != null) ? gesture.optInt("x2", startX) : startX;
+        final int y2 = (gesture != null) ? gesture.optInt("y2", startY) : startY;
+        final long fd = duration;
+        final String type;
+        final JSONObject fGesture;
+
         if (gesture == null) {
-            return;
+            // 分类器拒绝 → 兜底为坐标点击注入
+            type = "click";
+            fGesture = null;
+            Log.d(TAG, "[CoverTouch] gesture null (rejected by classifier), injecting fallback tap at (" + x1 + "," + y1 + ") dur=" + duration + "ms");
+        } else {
+            type = gesture.optString("type", "click");
+            fGesture = gesture;
         }
 
-        final int fx1 = startX;
-        final int fy1 = startY;
-        final int fx = x;
-        final int fy = y;
-        final long fd = duration;
-        final JSONObject fGesture = gesture;
-
-        // SoloPi：先隐藏 Cover，再导出节点并注入（此时触摸可直达应用）
+        // Step 1: 立即隐藏 Cover（同帧同步），触摸可直达应用
         enterDispatchMode();
         PerformingActionGuard.beginPerforming(Math.max(320, fd + 200));
 
-        COVER_WORKER.execute(() -> {
-            try {
-                String type = fGesture.optString("type", "click");
-                int gx = fGesture.optInt("x", fx);
-                int gy = fGesture.optInt("y", fy);
-                int x1 = fGesture.optInt("x1", fx1);
-                int y1 = fGesture.optInt("y1", fy1);
-                int x2 = fGesture.optInt("x2", fx);
-                int y2 = fGesture.optInt("y2", fy);
-                JSONObject payload = OperationNodeExporter.exportTouchAction(
-                        svc, type, gx, gy, x1, y1, x2, y2, fd);
-                payload.put("source", "cover");
-                RecordEventFilter.markTouchGesture(payload);
-                // 触摸已直达应用，不再重复注入，仅更新叠加层显示
-                Log.d(TAG, "cover step type=" + type + " @" + gx + "," + gy);
-                MAIN.post(() -> RecordingOverlay.addStep(payload.optString("description", type)));
-
-                finishDispatchCycle();
-            } catch (Exception e) {
-                Log.w(TAG, "handleTouchUp failed", e);
-                MAIN.post(RecordCoverView::finishDispatchCycle);
-            }
+        // Step 2: 立即注入手势（mainHandler.post，在 coverPanel.setVisibility(GONE) 后生效）
+        svc.performCoverRecordedAction(type, null, x1, y1, x2, y2, fd, () -> {
+            RecordCoverView.finishDispatchCycle();
         });
+
+        // Step 3: 异步导出节点信息 + 落库（仅有效手势）
+        if (fGesture != null) {
+            final int gx = fGesture.optInt("x", x2);
+            final int gy = fGesture.optInt("y", y2);
+            final String fType = type;
+            COVER_WORKER.execute(() -> {
+                try {
+                    JSONObject payload = OperationNodeExporter.exportTouchAction(
+                            svc, fType, gx, gy, x1, y1, x2, y2, fd);
+                    payload.put("source", "cover");
+                    RecordEventFilter.markTouchGesture(payload);
+                    PluginHttpServer.enqueueStep(payload);
+                    Log.d(TAG, "cover step type=" + fType + " @" + gx + "," + gy);
+                    MAIN.post(() -> RecordingOverlay.addStep(payload.optString("description", fType)));
+                } catch (Exception e) {
+                    Log.w(TAG, "[CoverTouch] exportTouchAction failed, type=" + fType, e);
+                    try {
+                        JSONObject fallback = new JSONObject();
+                        fallback.put("ts", System.currentTimeMillis());
+                        fallback.put("type", fType);
+                        fallback.put("x", x1);
+                        fallback.put("y", y1);
+                        if ("swipe".equals(fType)) {
+                            fallback.put("x1", x1);
+                            fallback.put("y1", y1);
+                            fallback.put("x2", x2);
+                            fallback.put("y2", y2);
+                        }
+                        fallback.put("source", "cover");
+                        fallback.put("description", fType + " (" + x1 + "," + y1 + ")");
+                        RecordEventFilter.markTouchGesture(fallback);
+                        PluginHttpServer.enqueueStep(fallback);
+                    } catch (Exception ignored) {}
+                }
+            });
+        }
     }
 
     /** 注入完成 / 失败后恢复拦截（SoloPi 约 200ms 后再进入 touchBlockMode） */

@@ -63,7 +63,8 @@ final class NodeLocatorHelper {
         if (!existingText.isEmpty() || !existingDesc.isEmpty()) return;
 
         // 策略 1：从子节点获取文本（常见于自定义容器包裹 TextView）
-        String childText = findChildText(node, 0, 3);
+        // 增加搜索深度到 5 层，覆盖更多嵌套场景（如 vivo 导航栏按钮）
+        String childText = findChildText(node, 0, 5);
         if (childText != null && !childText.isEmpty()) {
             try {
                 opNode.put("text", childText);
@@ -72,7 +73,7 @@ final class NodeLocatorHelper {
             return;
         }
 
-        // 策略 2：从父节点获取 contentDescription
+        // 策略 2：从父节点获取 contentDescription/text
         try {
             AccessibilityNodeInfo parent = node.getParent();
             if (parent != null) {
@@ -80,13 +81,24 @@ final class NodeLocatorHelper {
                 if (parentDesc != null && parentDesc.length() > 0) {
                     opNode.put("content_desc", parentDesc.toString());
                     opNode.put("text_source", "parent_desc");
+                    parent.recycle();
+                    return;
                 }
                 CharSequence parentText = parent.getText();
                 if (parentText != null && parentText.length() > 0) {
                     opNode.put("text", parentText.toString());
                     opNode.put("text_source", "parent_text");
+                    parent.recycle();
+                    return;
                 }
+                // 策略 2b：从父节点的子节点（即兄弟节点）获取文本
+                String siblingText = findChildText(parent, 0, 2);
                 parent.recycle();
+                if (siblingText != null && !siblingText.isEmpty()) {
+                    opNode.put("text", siblingText);
+                    opNode.put("text_source", "sibling_node");
+                    return;
+                }
             }
         } catch (Exception ignored) {}
 

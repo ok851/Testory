@@ -122,6 +122,14 @@ public final class ReplayEngine {
                     x = coord[0];
                     y = coord[1];
                 }
+                // 兜底：如果坐标仍为 0，尝试从 bounds 中心获取
+                if (x == 0 && y == 0 && spec != null) {
+                    org.json.JSONArray bounds = spec.optJSONArray("bounds");
+                    if (bounds != null && bounds.length() >= 4) {
+                        x = (bounds.optInt(0, 0) + bounds.optInt(2, 0)) / 2;
+                        y = (bounds.optInt(1, 0) + bounds.optInt(3, 0)) / 2;
+                    }
+                }
                 ok = svc.performTapSelectorFirst(st, sv, x, y,
                         spec != null ? spec.optJSONObject("operation_node") : null);
                 if (!ok && spec != null) {
@@ -163,11 +171,37 @@ public final class ReplayEngine {
             } else if ("swipe".equals(action)) {
                 int[] p1 = resolveSwipeCoords(spec, "x1", "y1", "rx1", "ry1");
                 int[] p2 = resolveSwipeCoords(spec, "x2", "y2", "rx2", "ry2");
+                // 兜底: 如果坐标均为 0，尝试从 description 或默认屏幕中心解析
+                if ((p1[0] == 0 && p1[1] == 0) || (p2[0] == 0 && p2[1] == 0)) {
+                    int[] fallback = resolveSwipeFallback(spec, step, svc);
+                    p1[0] = p1[0] != 0 || p1[1] != 0 ? p1[0] : fallback[0];
+                    p1[1] = p1[0] != 0 || p1[1] != 0 ? p1[1] : fallback[1];
+                    p2[0] = p2[0] != 0 || p2[1] != 0 ? p2[0] : fallback[2];
+                    p2[1] = p2[0] != 0 || p2[1] != 0 ? p2[1] : fallback[3];
+                }
+                // 二次兜底：从 selector_value 的 viewport_coord 解析
+                if ((p1[0] == 0 && p1[1] == 0) || (p2[0] == 0 && p2[1] == 0)) {
+                    int[] vp = resolveCoordFromStep(step);
+                    if (vp[0] > 0 || vp[1] > 0) {
+                        int[] fb = resolveSwipeFallback(spec, step, svc);
+                        p1[0] = p1[0] != 0 ? p1[0] : vp[0];
+                        p1[1] = p1[1] != 0 ? p1[1] : vp[1];
+                        p2[0] = p2[0] != 0 ? p2[0] : fb[2];
+                        p2[1] = p2[1] != 0 ? p2[1] : fb[3];
+                    }
+                }
+                if (p1[0] == 0 && p1[1] == 0 && p2[0] == 0 && p2[1] == 0) {
+                    // 最终兜底：使用屏幕默认上滑
+                    int[] df = resolveSwipeFallback(spec, step, svc);
+                    p1[0] = df[0]; p1[1] = df[1];
+                    p2[0] = df[2]; p2[1] = df[3];
+                }
                 long dur = spec != null ? spec.optLong("action_duration_ms", 320) : 320;
+                if (dur <= 0 || dur > 5000) dur = 320;
                 ok = svc.performSwipe(p1[0], p1[1], p2[0], p2[1], dur);
                 if (!ok) {
                     result.put("status", "error");
-                    result.put("error", "滑动手势失败");
+                    result.put("error", "滑动手势失败 (" + p1[0] + "," + p1[1] + "→" + p2[0] + "," + p2[1] + ")");
                     return result;
                 }
             } else if ("input_text".equals(action) || "input".equals(action) || "type".equals(action)) {
@@ -290,5 +324,36 @@ public final class ReplayEngine {
             }
         }
         return new int[]{val, vy};
+    }
+
+    /** 从步骤的 selector_value (viewport_coord) 中提取坐标 */
+    private static int[] resolveCoordFromStep(JSONObject step) {
+        int x = 0, y = 0;
+        try {
+            String st = step.optString("selector_type", "");
+            String sv = step.optString("selector_value", "");
+            if ("viewport_coord".equals(st) && sv != null && !sv.isEmpty()) {
+                JSONObject coord = new JSONObject(sv);
+                x = coord.optInt("x", 0);
+                y = coord.optInt("y", 0);
+            }
+        } catch (Exception ignored) {}
+        return new int[]{x, y};
+    }
+
+    /** 滑动坐标兜底: 使用屏幕中心点作为默认滑动路径 */
+    private static int[] resolveSwipeFallback(JSONObject spec, JSONObject step,
+                                              AssistantAccessibilityService svc) {
+        int sw = spec != null ? spec.optInt("screen_width", 0) : 0;
+        int sh = spec != null ? spec.optInt("screen_height", 0) : 0;
+        if (sw <= 0 || sh <= 0) {
+            android.util.DisplayMetrics dm = svc.getApplicationContext()
+                    .getResources().getDisplayMetrics();
+            sw = dm.widthPixels;
+            sh = dm.heightPixels;
+        }
+        int cx = sw / 2;
+        // 默认上滑: 从屏幕 70% 滑到 30%
+        return new int[]{cx, sh * 7 / 10, cx, sh * 3 / 10};
     }
 }

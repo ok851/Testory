@@ -47,6 +47,44 @@ COMMON_APP_LABELS: Dict[str, str] = {
     "com.android.deskclock": "时钟",
     "com.android.calculator2": "计算器",
     "com.android.email": "邮件",
+    # vivo 常见应用
+    "com.vivo.health": "vivo健康",
+    "com.vivo.weather": "天气",
+    "com.vivo.gallery": "相册",
+    "com.vivo.browser": "浏览器",
+    "com.vivo.calculator": "计算器",
+    "com.vivo.timer": "闹钟",
+    "com.vivo.note": "便签",
+    "com.vivo.music": "音乐",
+    "com.vivo.vivokaraoke": "唱K",
+    "com.vivo.video": "视频",
+    "com.vivo.appstore": "应用商店",
+    "com.vivo.space": "i管家",
+    "com.bbk.calendar": "日历",
+    "com.bbk.cloud": "云服务",
+    "com.bbk.theme": "主题",
+    "com.bbk.SuperPowerSave": "超级省电",
+    "com.iqoo.weather": "天气",
+    # 小米常见应用
+    "com.miui.calculator": "计算器",
+    "com.miui.weather2": "天气",
+    "com.miui.notes": "便签",
+    "com.miui.gallery": "相册",
+    "com.miui.player": "音乐",
+    "com.miui.video": "视频",
+    "com.miui.compass": "指南针",
+    # 华为常见应用
+    "com.huawei.camera": "相机",
+    "com.huawei.gallery": "图库",
+    "com.huawei.music": "音乐",
+    "com.huawei.video": "视频",
+    "com.huawei.calculator": "计算器",
+    "com.huawei.notepad": "备忘录",
+    # OPPO 常见应用
+    "com.coloros.gallery3d": "相册",
+    "com.coloros.calculator": "计算器",
+    "com.coloros.weather2": "天气",
+    "com.heytap.market": "应用商店",
 }
 
 
@@ -237,10 +275,10 @@ def normalize_assistant_event(
                 description = f"打开应用[{resolved_label}]"
             else:
                 description = "打开应用"
-        mobile_spec: Dict[str, Any] = {"source": "assistant"}
+        open_app_spec: Dict[str, Any] = {"source": "assistant"}
         if pkg:
-            mobile_spec["app_package"] = pkg
-            mobile_spec["appPackage"] = pkg
+            open_app_spec["app_package"] = pkg
+            open_app_spec["appPackage"] = pkg
         return {
             "action": "open_app",
             "selector_type": "",
@@ -248,7 +286,7 @@ def normalize_assistant_event(
             "input_value": pkg,
             "description": description,
             "automation_layer": "android",
-            "mobile_spec": mobile_spec,
+            "mobile_spec": open_app_spec,
         }
 
     stype, sval = suggest_locator_from_node(node)

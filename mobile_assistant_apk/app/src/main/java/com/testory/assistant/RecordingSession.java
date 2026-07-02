@@ -22,6 +22,7 @@ final class RecordingSession {
     private static long activeCaseId = -1L;
     private static boolean draining;
     private static RecordingOverlay.Listener overlayListener;
+    private static volatile TouchEventCapture touchCapture;
 
     private static final Runnable drainRunnable = new Runnable() {
         @Override
@@ -61,7 +62,8 @@ final class RecordingSession {
                 Toast.makeText(ctx.getApplicationContext(), message, Toast.LENGTH_LONG).show();
             }
             RecordingOverlay.clearSteps();
-            RecordingOverlay.show(ctx, listener);
+            // P0 修复：RecordingOverlay.show() 移到 finishArming() 中 Cover 之后调用，
+            // 确保悬浮窗始终在 Cover 上层（修复无悬浮窗权限时 Cover 遮挡按钮的问题）。
             finishArming(ctx, listener, desktopReady);
         });
     }
@@ -90,6 +92,28 @@ final class RecordingSession {
                     Toast.LENGTH_SHORT).show();
         }
         Log.i(TAG, "recording armed");
+        // 启动 getevent 触摸捕获（参考 SoloPi TouchEventTracker）
+        // 确保桌面/Launcher 等不触发 TYPE_VIEW_SCROLLED 的场景也能捕获滑动
+        startTouchCapture();
+        // 先激活 Cover 透明覆盖层，再激活 RecordingOverlay：
+        // Cover 使用 TYPE_ACCESSIBILITY_OVERLAY，
+        // RecordingOverlay 使用 TYPE_APPLICATION_OVERLAY（z-order 更高），
+        // 确保悬浮窗「暂停/结束」按钮始终可点击，不会被 Cover 拦截。
+        // 原缺陷：顺序颠倒，Cover 后添加导致覆盖悬浮窗，按钮触摸被 Cover 消费。
+        // P0 修复：Cover 先添加，RecordingOverlay 后添加。
+        // Cover 使用 TYPE_ACCESSIBILITY_OVERLAY (2032)，
+        // RecordingOverlay 使用 TYPE_APPLICATION_OVERLAY (2038) 或无权限降级，
+        // 后添加 → 悬浮窗始终在 Cover 上层，按钮可正常点击。
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc != null) {
+            RecordCoverView.show(svc, () -> {
+                Log.w(TAG, "RecordCoverView show failed");
+            });
+        }
+        // RecordingOverlay 必须在 Cover 之后添加，确保 z-order 在 Cover 之上
+        if (ctx != null) {
+            RecordingOverlay.show(ctx, listener);
+        }
         HANDLER.post(drainRunnable);
     }
 
@@ -101,6 +125,9 @@ final class RecordingSession {
         AssistantSession.setRecordingPaused(false);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
         RecordingOverlay.hide();
+        RecordCoverView.hide();
+        // 停止 getevent 触摸捕获
+        stopTouchCapture();
         activeCaseId = -1L;
         overlayListener = null;
     }
@@ -169,5 +196,39 @@ final class RecordingSession {
                 Log.w(TAG, "drainSteps failed", e);
             }
         });
+    }
+
+    /** 启动 getevent 触摸捕获（参考 SoloPi TouchEventTracker）。 */
+    private static void startTouchCapture() {
+        stopTouchCapture();
+        try {
+            TouchEventCapture capture = new TouchEventCapture("");
+            // 获取屏幕分辨率
+            Context ctx = AssistantApplicationHolder.get();
+            if (ctx != null) {
+                android.util.DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+                capture.setScreenSize(dm.widthPixels, dm.heightPixels);
+            }
+            capture.setListener(gesture -> {
+                // getevent 手势回调：将步骤写入 PluginHttpServer 队列
+                RecordEventFilter.markTouchGesture(gesture);
+                PluginHttpServer.enqueueStep(gesture);
+            });
+            capture.start();
+            touchCapture = capture;
+            Log.i(TAG, "getevent touch capture started");
+        } catch (Exception e) {
+            Log.w(TAG, "startTouchCapture failed", e);
+        }
+    }
+
+    /** 停止 getevent 触摸捕获。 */
+    private static void stopTouchCapture() {
+        TouchEventCapture capture = touchCapture;
+        if (capture != null) {
+            capture.stop();
+            touchCapture = null;
+            Log.i(TAG, "getevent touch capture stopped");
+        }
     }
 }

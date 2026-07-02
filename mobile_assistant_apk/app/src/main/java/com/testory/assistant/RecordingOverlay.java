@@ -2,12 +2,15 @@ package com.testory.assistant;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -15,6 +18,7 @@ import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 /** 录制时在屏幕右上角显示紧凑悬浮条（须从无障碍服务上下文添加）。 */
 public final class RecordingOverlay {
@@ -114,7 +118,10 @@ public final class RecordingOverlay {
         hideOnMain();
         Context ctx = svc;
         windowManager = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
-        if (windowManager == null) return;
+        if (windowManager == null) {
+            Log.e(TAG, "[OverlayShow] windowManager is null, cannot create overlay");
+            return;
+        }
 
         stepCount = 0;
         paused = false;
@@ -136,14 +143,14 @@ public final class RecordingOverlay {
         }
 
         dotView = new TextView(ctx);
-        dotView.setText("●");
+        dotView.setText("\u25CF");
         dotView.setTextColor(0xFFC53030);
         dotView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         dotView.setPadding(0, 0, dp(ctx, 4), 0);
         root.addView(dotView);
 
         statusLabel = new TextView(ctx);
-        statusLabel.setText("录制中");
+        statusLabel.setText("\u5F55\u5236\u4E2D");
         statusLabel.setTextColor(0xFFFFFFFF);
         statusLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         statusLabel.setMaxLines(1);
@@ -152,7 +159,7 @@ public final class RecordingOverlay {
         statusLabel.setLayoutParams(statusLp);
         root.addView(statusLabel);
 
-        pauseBtn = makeButton(ctx, "暂停", 0xFF5A6B7D);
+        pauseBtn = makeButton(ctx, "\u6682\u505C", 0xFF5A6B7D);
         pauseBtn.setOnClickListener(v -> onOverlayTap(() -> {
             Listener l = listener != null ? listener : activeListener;
             if (l == null) return;
@@ -167,7 +174,7 @@ public final class RecordingOverlay {
         }));
         root.addView(pauseBtn);
 
-        TextView stopBtn = makeButton(ctx, "结束", 0xFF991B1B);
+        TextView stopBtn = makeButton(ctx, "\u7ED3\u675F", 0xFF991B1B);
         LinearLayout.LayoutParams stopLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -179,15 +186,33 @@ public final class RecordingOverlay {
         }));
         root.addView(stopBtn);
 
-        int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-                : WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+        // P0#1: 悬浮窗权限全版本适配
+        // TYPE_APPLICATION_OVERLAY 需 SYSTEM_ALERT_WINDOW 权限 (SDK 23+)，
+        // 无权限时静默降级为 TYPE_ACCESSIBILITY_OVERLAY（无障碍上下文可用）。
+        // 两个 window type 都不需要用户额外授权（AccessibilityService 已授权）。
+        int overlayType;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && !Settings.canDrawOverlays(ctx)) {
+            // 无悬浮窗权限 → 降级为无障碍覆盖层
+            overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                    : WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+            Log.w(TAG, "[OverlayShow] SYSTEM_ALERT_WINDOW not granted, fallback to TYPE_ACCESSIBILITY_OVERLAY."
+                    + " Please grant overlay permission for best z-order.");
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            overlayType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            overlayType = WindowManager.LayoutParams.TYPE_PHONE;
+        } else {
+            overlayType = WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+        }
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 overlayType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
         );
@@ -198,6 +223,7 @@ public final class RecordingOverlay {
         try {
             windowManager.addView(root, lp);
             panel = root;
+            Log.i(TAG, "[OverlayShow] window added successfully, type=" + overlayType);
             root.getViewTreeObserver().addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
                 @Override
                 public void onGlobalLayout() {
@@ -207,8 +233,18 @@ public final class RecordingOverlay {
                     }
                 }
             });
+        } catch (SecurityException se) {
+            Log.e(TAG, "[OverlayShow] SecurityException: SYSTEM_ALERT_WINDOW permission denied."
+                    + " Please enable overlay permission in Settings.", se);
+            panel = null;
+            statusLabel = null;
+            overlayBounds = new Rect();
+            // 如果降级方案也失败，提示用户手动授权
+            MAIN.post(() -> Toast.makeText(ctx,
+                    "\u60AC\u6D6E\u7A97\u6743\u9650\u672A\u5F00\u542F\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u6253\u5F00\u201C\u663E\u793A\u5728\u5176\u4ED6\u5E94\u7528\u4E0A\u5C42\u201D",
+                    Toast.LENGTH_LONG).show());
         } catch (Exception e) {
-            Log.w(TAG, "overlay addView failed", e);
+            Log.e(TAG, "[OverlayShow] addView failed, type=" + overlayType, e);
             panel = null;
             statusLabel = null;
             overlayBounds = new Rect();

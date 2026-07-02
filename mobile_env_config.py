@@ -441,3 +441,139 @@ def _mobile_agent_ws_public() -> str:
         return mobile_agent_ws_url()
     except ImportError:
         return ""
+
+
+# =====================================================================
+# Maestro 专用配置
+# =====================================================================
+
+def maestro_home() -> str:
+    """Maestro CLI 安装根目录 (默认项目 .maestro/)"""
+    cfg = _load_mobile_defaults()
+    return (os.environ.get("MAESTRO_HOME") or cfg.get("maestro_home") or "").strip()
+
+
+def maestro_version() -> str:
+    """指定 Maestro 版本 (默认最新稳定版)"""
+    return (
+        os.environ.get("MAESTRO_VERSION") or _load_mobile_defaults().get("maestro_version") or ""
+    ).strip()
+
+
+def maestro_timeout_seconds() -> int:
+    """Maestro 单次执行超时 (秒, 默认 600)"""
+    raw = os.environ.get("MAESTRO_TIMEOUT") or ""
+    try:
+        return max(30, min(3600, int(raw))) if raw else 600
+    except ValueError:
+        return 600
+
+
+def maestro_auto_install() -> bool:
+    """是否自动下载 Maestro (默认 1)"""
+    return _truthy("MAESTRO_AUTO_INSTALL", "1")
+
+
+def maestro_auto_inject_dialogs() -> bool:
+    """是否自动注入系统弹窗处理逻辑 (默认 1)"""
+    return _truthy("MAESTRO_AUTO_INJECT_DIALOGS", "1")
+
+
+def maestro_driver_startup_timeout_ms() -> int:
+    """Maestro 驱动启动超时 (毫秒)"""
+    raw = os.environ.get("MAESTRO_DRIVER_STARTUP_TIMEOUT") or "60000"
+    try:
+        return max(10000, min(300000, int(raw)))
+    except ValueError:
+        return 60000
+
+
+def maestro_env_extra() -> Dict[str, str]:
+    """Maestro 执行时的额外环境变量 (JSON 格式)"""
+    raw = (os.environ.get("MAESTRO_ENV_EXTRA") or "").strip()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+
+def visual_fallback_enabled() -> bool:
+    """是否启用视觉兜底适配器 (默认 1)"""
+    return _truthy("MOBILE_VISUAL_FALLBACK", "1")
+
+
+def visual_min_confidence() -> float:
+    """视觉匹配置信度阈值 (默认 0.75)"""
+    raw = os.environ.get("MOBILE_VISUAL_MIN_CONFIDENCE") or "0.75"
+    try:
+        return max(0.3, min(1.0, float(raw)))
+    except ValueError:
+        return 0.75
+
+
+def self_healing_enabled() -> bool:
+    """是否启用自愈定位 (默认 1)"""
+    return _truthy("MOBILE_SELF_HEALING", "1")
+
+
+def layered_locator_strategy() -> str:
+    """
+    分层定位策略模式:
+    - strict: 仅用最高优先级定位符
+    - cascade: 按优先级级联回退 (默认)
+    - ai_first: AI 视觉优先
+    """
+    raw = (os.environ.get("MOBILE_LOCATOR_STRATEGY") or "cascade").strip().lower()
+    if raw in ("strict", "cascade", "ai_first"):
+        return raw
+    return "cascade"
+
+
+def device_pool_max_workers() -> int:
+    """多设备并行最大工作进程数 (默认 4)"""
+    raw = os.environ.get("MOBILE_DEVICE_POOL_WORKERS") or "4"
+    try:
+        return max(1, min(16, int(raw)))
+    except ValueError:
+        return 4
+
+
+def maestro_jvm_args() -> str:
+    """Maestro JVM 启动参数 (如 -Xmx2g)"""
+    return (os.environ.get("MAESTRO_JVM_ARGS") or "-Xmx1g").strip()
+
+
+def cloud_device_endpoint() -> str:
+    """云真机 STF 代理端点"""
+    return (os.environ.get("MOBILE_CLOUD_ENDPOINT") or "").strip()
+
+
+def install_java_required() -> bool:
+    """安装脚本是否自动检测/安装 Java (Windows 一键脚本)"""
+    return _truthy("ENABLE_MOBILE", "0")
+
+
+def ios_enabled() -> bool:
+    """是否启用 iOS 设备支持"""
+    return _truthy("ENABLE_IOS", "0")
+
+
+def idb_path() -> str:
+    """idb (iOS Device Bridge) 路径"""
+    return os.environ.get("IDB_PATH") or "idb"
+
+
+def maestro_debug_mode() -> bool:
+    """是否输出 Maestro 调试日志"""
+    return _truthy("MAESTRO_DEBUG", "0")
+
+
+def maestro_report_retention_days() -> int:
+    """Maestro 报告保留天数 (默认 7)"""
+    raw = os.environ.get("MAESTRO_REPORT_RETENTION_DAYS") or "7"
+    try:
+        return max(1, min(90, int(raw)))
+    except ValueError:
+        return 7

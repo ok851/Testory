@@ -34,9 +34,8 @@ final class ReplayContextHelper {
                 AppLauncher.Result r = AppLauncher.launch(ctx, svc, pkg, openAppActivity(step),
                         AppLauncher.DEFAULT_TIMEOUT_MS);
                 if (r.success) return r;
-                if (!hasOnlyCoordinateStepsAfter(steps, step)) {
-                    return r;
-                }
+                // 原缺陷：open_app 启动失败时直接终止回放，导致后续步骤全部跳过。
+                // 新逻辑：启动失败时继续执行后续步骤（用户可能已手动打开应用）。
                 continue;
             }
             if ("press_home".equals(action) || "home".equals(action)
@@ -50,7 +49,9 @@ final class ReplayContextHelper {
                 if (r.success || AppLauncher.isCoordinateStep(step)) {
                     return AppLauncher.Result.ok(ctxPkg, r.appLabel, "context_soft");
                 }
-                return r;
+                // 原缺陷：上下文恢复失败时直接终止回放。
+                // 新逻辑：继续执行后续步骤，让步骤级重试机制处理。
+                return AppLauncher.Result.ok(ctxPkg, r.appLabel, "context_soft_failed");
             }
             break;
         }

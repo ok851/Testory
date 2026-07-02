@@ -61,7 +61,8 @@
         var hasCase = !!state.caseId;
         setBtn('msBtnConnect', !con);
         setBtn('msBtnDisconnect', con);
-        setBtn('msBtnInstallPlugin', con && !state.assistantInstalled);
+        // 已连接时始终可点击安装/更新助手（模拟器可能需要重装）
+        setBtn('msBtnInstallPlugin', con);
         setBtn('msBtnOpenSteps', hasCase);
     }
 
@@ -126,7 +127,8 @@
 
     async function wirelessConnect() {
         var ip = ($('msWirelessIp') && $('msWirelessIp').value || '').trim();
-        var port = ($('msWirelessPort') && $('msWirelessPort').value || '5555').trim();
+        var port = ($('msWirelessPort') && $('msWirelessPort').value || '').trim();
+        if (!port) { setStatus('请填写端口', 'warn'); return; }
         var code = ($('msWirelessCode') && $('msWirelessCode').value || '').trim();
         if (!ip) { setStatus('请输入手机 IP', 'warn'); return; }
         setStatus('正在无线连接…', 'warn');

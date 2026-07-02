@@ -120,6 +120,101 @@ def is_mobile_step(step: Dict[str, Any]) -> bool:
     return normalize_automation_layer(step) == "android"
 
 
+def convert_db_step_to_flow_step(step: Dict[str, Any]) -> Any:
+    """
+    将数据库 test_steps 记录转换为 FlowStep 内部 DSL。
+    
+    供 ExecutorFactory 和新引擎路由使用。
+    """
+    try:
+        from mobile_engine.engine_interface import (
+            FlowStep,
+            LocatorInfo,
+            LocatorStrategy,
+        )
+    except ImportError:
+        raise RuntimeError("移动引擎模块未安装")
+
+    action = (step.get("action") or "").strip().lower()
+    sel_type = (step.get("selector_type") or step.get("strategy") or "").strip()
+    sel_value = (step.get("selector_value") or "").strip()
+
+    # action 别名映射
+    alias_map = {
+        "click": "tap",
+        "fill": "input",
+        "open_app": "launch_app",
+        "close_app": "stop_app",
+        "verify": "assert",
+        "assert_text": "assert",
+        "tap_image": "tap",
+        "wait_image": "wait",
+    }
+    mapped_action = alias_map.get(action, action)
+
+    # 构建 LocatorInfo
+    locator = None
+    if sel_value:
+        strat = LocatorStrategy.ACCESSIBILITY_ID
+        if sel_type in ("text", "name"):
+            strat = LocatorStrategy.TEXT
+        elif sel_type in ("id", "css"):
+            strat = LocatorStrategy.ID
+        elif sel_type in ("xpath",):
+            strat = LocatorStrategy.SEMANTIC
+        elif sel_type in ("visual", "visual_template"):
+            strat = LocatorStrategy.VISUAL
+        elif sel_type in ("semantic",):
+            strat = LocatorStrategy.SEMANTIC
+
+        locator = LocatorInfo(
+            strategy=strat,
+            value=sel_value,
+            semantic_desc=step.get("description", ""),
+            visual_template_path=step.get("visual_template_path", ""),
+        )
+
+    # 解析坐标 (mobile_spec)
+    tap_x = None
+    tap_y = None
+    ms = step.get("mobile_spec") or {}
+    if isinstance(ms, str):
+        try:
+            import json
+
+            ms = json.loads(ms)
+        except Exception:
+            ms = {}
+    if isinstance(ms, dict):
+        try:
+            if ms.get("x") is not None and ms.get("y") is not None:
+                tap_x = int(ms["x"])
+                tap_y = int(ms["y"])
+            elif ms.get("tap_x") is not None and ms.get("tap_y") is not None:
+                tap_x = int(ms["tap_x"])
+                tap_y = int(ms["tap_y"])
+        except (ValueError, TypeError):
+            pass
+
+    return FlowStep(
+        action=mapped_action,
+        description=step.get("description") or "",
+        locator=locator,
+        input_value=(step.get("input_value") or ""),
+        swipe_direction=(step.get("swipe_direction") or ""),
+        swipe_start=(step.get("swipe_start") or ""),
+        swipe_end=(step.get("swipe_end") or ""),
+        swipe_duration_ms=int(step.get("swipe_duration_ms") or 400),
+        assert_type=step.get("compare_type") or "visible",
+        wait_timeout_ms=int(step.get("wait_timeout_ms") or 10000),
+        maestro_label=step.get("maestro_label") or "",
+        maestro_optional=bool(step.get("maestro_optional", False)),
+        maestro_retry=int(step.get("maestro_retry") or 0),
+        tap_x=tap_x,
+        tap_y=tap_y,
+    )
+
+
 DESKTOP_POINTER_ACTIONS = frozenset({"click", "double_click", "right_click"})
 
 

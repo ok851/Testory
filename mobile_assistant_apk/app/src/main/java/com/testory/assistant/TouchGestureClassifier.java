@@ -9,12 +9,12 @@ import org.json.JSONObject;
  */
 final class TouchGestureClassifier {
 
-    /** SoloPi: 100px 内视为点击 */
-    private static final int CLICK_RANGE_PX = 100;
-    /** SoloPi: 500ms 以上视为长按 */
+    /** 80px 内视为点击 (降低阈值，桌面/Launcher 小范围手势不应误判) */
+    private static final int CLICK_RANGE_PX = 80;
+    /** 500ms 以上视为长按 */
     private static final long LONG_CLICK_MS = 500;
-    /** 最小滑动位移 */
-    private static final int MIN_SWIPE_PX = 40;
+    /** 最小滑动位移 (降低以适配桌面轻扫) */
+    private static final int MIN_SWIPE_PX = 30;
     /** 有效点击最小时长，过滤注入回声/幽灵 UP */
     private static final long MIN_TAP_MS = 20;
     /** 无 MOVE 时最小位移才记为 click */

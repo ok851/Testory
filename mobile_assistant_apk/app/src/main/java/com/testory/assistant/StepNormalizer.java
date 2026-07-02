@@ -1,6 +1,7 @@
 package com.testory.assistant;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.util.DisplayMetrics;
 
@@ -286,10 +287,12 @@ final class StepNormalizer {
             String rid = opNode.getString("resource_id");
             // 提取可读部分：去掉包名前缀，取 "/" 后的 ID 部分
             String shortId = rid.contains("/") ? rid.substring(rid.lastIndexOf("/") + 1) : rid;
-            step.put("selector_type", "id");
-            // 使用可读的短 ID 作为 selector_value，而非完整的 resource_id
-            step.put("selector_value", shortId);
-            return;
+            // 跳过混淆后的短 ID（如 h6y、a1b），回退到 xpath 或坐标
+            if (shortId.length() > 4 || !shortId.matches("[a-z0-9]+")) {
+                step.put("selector_type", "id");
+                step.put("selector_value", shortId);
+                return;
+            }
         }
         // 优先级 4：xpath
         if (opNode != null && opNode.has("xpath")
@@ -340,7 +343,12 @@ final class StepNormalizer {
             String rid = primary.optString("resource_id", "");
             if (!rid.isEmpty()) {
                 String shortId = rid.contains("/") ? rid.substring(rid.lastIndexOf("/") + 1) : rid;
-                return "点击 " + trunc(shortId, 24);
+                // 如果短 ID 看起来是混淆后的（长度 <= 4 且全小写字母数字），跳过，使用坐标兜底
+                if (shortId.length() <= 4 && shortId.matches("[a-z0-9]+")) {
+                    // 继续检查 secondary node
+                } else {
+                    return "点击 " + trunc(shortId, 24);
+                }
             }
         }
         // 尝试 secondary node
@@ -389,6 +397,19 @@ final class StepNormalizer {
                         return labelText;
                     }
                 }
+                // 回退：尝试从 launcher Activity 的 label 获取
+                Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
+                if (launchIntent != null && launchIntent.getComponent() != null) {
+                    android.content.pm.ActivityInfo ai = pm.getActivityInfo(
+                            launchIntent.getComponent(), 0);
+                    if (ai != null) {
+                        CharSequence actLabel = ai.loadLabel(pm);
+                        if (actLabel != null && actLabel.length() > 0
+                                && !actLabel.toString().equals(packageName)) {
+                            return actLabel.toString();
+                        }
+                    }
+                }
             }
         } catch (PackageManager.NameNotFoundException ignored) {
         } catch (Exception ignored) {
@@ -428,5 +449,39 @@ final class StepNormalizer {
         COMMON_APP_LABELS.put("com.android.deskclock", "时钟");
         COMMON_APP_LABELS.put("com.android.calculator2", "计算器");
         COMMON_APP_LABELS.put("com.android.email", "邮件");
+        // vivo 常见应用
+        COMMON_APP_LABELS.put("com.vivo.health", "vivo健康");
+        COMMON_APP_LABELS.put("com.vivo.weather", "天气");
+        COMMON_APP_LABELS.put("com.vivo.gallery", "相册");
+        COMMON_APP_LABELS.put("com.vivo.browser", "浏览器");
+        COMMON_APP_LABELS.put("com.vivo.calculator", "计算器");
+        COMMON_APP_LABELS.put("com.vivo.timer", "闹钟");
+        COMMON_APP_LABELS.put("com.vivo.note", "便签");
+        COMMON_APP_LABELS.put("com.vivo.music", "音乐");
+        COMMON_APP_LABELS.put("com.vivo.video", "视频");
+        COMMON_APP_LABELS.put("com.vivo.appstore", "应用商店");
+        COMMON_APP_LABELS.put("com.vivo.space", "i管家");
+        COMMON_APP_LABELS.put("com.bbk.calendar", "日历");
+        COMMON_APP_LABELS.put("com.bbk.cloud", "云服务");
+        COMMON_APP_LABELS.put("com.bbk.theme", "主题");
+        // 小米常见应用
+        COMMON_APP_LABELS.put("com.miui.calculator", "计算器");
+        COMMON_APP_LABELS.put("com.miui.weather2", "天气");
+        COMMON_APP_LABELS.put("com.miui.notes", "便签");
+        COMMON_APP_LABELS.put("com.miui.gallery", "相册");
+        COMMON_APP_LABELS.put("com.miui.player", "音乐");
+        COMMON_APP_LABELS.put("com.miui.video", "视频");
+        // 华为常见应用
+        COMMON_APP_LABELS.put("com.huawei.camera", "相机");
+        COMMON_APP_LABELS.put("com.huawei.gallery", "图库");
+        COMMON_APP_LABELS.put("com.huawei.music", "音乐");
+        COMMON_APP_LABELS.put("com.huawei.video", "视频");
+        COMMON_APP_LABELS.put("com.huawei.calculator", "计算器");
+        COMMON_APP_LABELS.put("com.huawei.notepad", "备忘录");
+        // OPPO 常见应用
+        COMMON_APP_LABELS.put("com.coloros.gallery3d", "相册");
+        COMMON_APP_LABELS.put("com.coloros.calculator", "计算器");
+        COMMON_APP_LABELS.put("com.coloros.weather2", "天气");
+        COMMON_APP_LABELS.put("com.heytap.market", "应用商店");
     }
 }

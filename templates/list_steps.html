@@ -5628,6 +5628,35 @@ function changePage(page) {
             try {
                 if (!currentCaseId) throw new Error(t('steps_run_case_missing'));
 
+                // Android 用例：通过同步队列下发到手机端执行
+                var casePlatform = (currentCasePlatform || '').toLowerCase();
+                if (casePlatform === 'android') {
+                    try {
+                        var syncResp = await fetch('/api/mobile/sync/run', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ case_id: currentCaseId }),
+                        });
+                        var syncData = await parseApiJsonResponse(syncResp);
+                        if (syncResp.ok && syncData.success) {
+                            txt.textContent = '已下发到手机端，请在 Testory 助手中查看执行进度';
+                            showToast('用例已下发到手机端执行（job: ' + (syncData.job_id || '') + '，共 ' + (syncData.step_count || 0) + ' 步）', 'success');
+                        } else {
+                            txt.textContent = '下发失败: ' + (syncData.error || '未知错误');
+                            showToast('下发失败: ' + (syncData.error || '未知错误'), 'error');
+                        }
+                    } catch (e) {
+                        txt.textContent = '下发失败: ' + e.message;
+                        showToast('下发失败: ' + e.message, 'error');
+                    }
+                    if (runButton) {
+                        runButton.disabled = false;
+                        runButton.textContent = t('steps_run') || '▶ 运行用例';
+                    }
+                    if (stopButton) stopButton.disabled = true;
+                    return;
+                }
+
                 if (runCaseStatusTimer) clearInterval(runCaseStatusTimer);
                 runCaseStatusTimer = setInterval(async () => {
                     try {

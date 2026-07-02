@@ -39,7 +39,7 @@ public final class SyncClient {
     static String getBaseUrl(Context ctx) {
         String saved = prefs(ctx).getString("base_url", "");
         if (saved.isEmpty() || "http://127.0.0.1:5000".equals(saved)) {
-            return "http://192.168.2.38:5000";
+            return "";
         }
         return saved;
     }

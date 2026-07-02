@@ -1013,6 +1013,135 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_defect_comments_defect ON defect_comments(defect_id)")
         except sqlite3.Error:
             pass
+
+        # =====================================================================
+        # Maestro 移动引擎相关表 (v2.0)
+        # =====================================================================
+
+        # Maestro 测试流定义表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS maestro_flows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id INTEGER,
+                project_id INTEGER,
+                name TEXT NOT NULL,
+                description TEXT,
+                yaml_content TEXT,
+                app_package TEXT,
+                app_activity TEXT,
+                platform TEXT DEFAULT 'android',
+                version INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (case_id) REFERENCES test_cases (id),
+                FOREIGN KEY (project_id) REFERENCES projects (id)
+            )
+        ''')
+
+        # Maestro 本地版本管理表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS maestro_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version TEXT NOT NULL UNIQUE,
+                jar_path TEXT NOT NULL,
+                sha256 TEXT,
+                is_active INTEGER DEFAULT 1,
+                downloaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 增强 element_repository 表（自愈字段）
+        for col_spec in [
+            ("locator_candidates", "TEXT"),
+            ("semantic_desc", "TEXT"),
+            ("visual_template_path", "TEXT"),
+            ("heuristic_selector", "TEXT"),
+            ("last_success_at", "TIMESTAMP"),
+            ("success_count", "INTEGER DEFAULT 0"),
+            ("fail_count", "INTEGER DEFAULT 0"),
+        ]:
+            col_name, col_type = col_spec
+            try:
+                cursor.execute(
+                    f"ALTER TABLE element_repository ADD COLUMN {col_name} {col_type}"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+        # 移动设备配置表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS mobile_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                udid TEXT NOT NULL UNIQUE,
+                platform TEXT DEFAULT 'android',
+                device_name TEXT,
+                model TEXT,
+                os_version TEXT,
+                screen_width INTEGER,
+                screen_height INTEGER,
+                is_emulator INTEGER DEFAULT 0,
+                connection_type TEXT DEFAULT 'usb',
+                last_connected TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                config_json TEXT
+            )
+        ''')
+
+        # test_cases 新增 mobile_engine 字段
+        try:
+            cursor.execute(
+                "ALTER TABLE test_cases ADD COLUMN mobile_engine TEXT DEFAULT 'maestro'"
+            )
+        except sqlite3.OperationalError:
+            pass
+
+        # run_history 新增引擎信息字段
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN engine_type TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN device_udid TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN flow_name TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN self_healed_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        # step_results 新增自愈信息字段
+        try:
+            cursor.execute("ALTER TABLE step_results ADD COLUMN healed_locator TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE step_results ADD COLUMN locator_strategy TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE step_results ADD COLUMN visual_confidence REAL")
+        except sqlite3.OperationalError:
+            pass
+
+        # test_steps 新增 Maestro 扩展字段
+        for col_spec in [
+            ("maestro_label", "TEXT"),
+            ("maestro_optional", "BOOLEAN DEFAULT FALSE"),
+            ("maestro_retry", "INTEGER DEFAULT 0"),
+            ("wait_timeout_ms", "INTEGER DEFAULT 10000"),
+            ("swipe_start", "TEXT"),
+            ("swipe_end", "TEXT"),
+        ]:
+            col_name, col_type = col_spec
+            try:
+                cursor.execute(
+                    f"ALTER TABLE test_steps ADD COLUMN {col_name} {col_type}"
+                )
+            except sqlite3.OperationalError:
+                pass
     
     def create_test_case(self, name: str, description: str = "", url: str = "") -> int:
         """创建测试用例"""

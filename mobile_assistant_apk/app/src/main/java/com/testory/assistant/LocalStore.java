@@ -111,6 +111,99 @@ public final class LocalStore extends SQLiteOpenHelper {
         return db.insert("cases", null, cv);
     }
 
+    // ---- CRUD 扩展 ----
+
+    /** 新建本地用例 */
+    long createCase(String name, int projectId) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put("name", name);
+        cv.put("remote_id", (Integer) null);
+        cv.put("project_id", projectId);
+        cv.put("project_name", "");
+        cv.put("updated_at", System.currentTimeMillis());
+        return db.insert("cases", null, cv);
+    }
+
+    /** 重命名用例 */
+    boolean renameCase(long caseId, String newName) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put("name", newName);
+        cv.put("updated_at", System.currentTimeMillis());
+        int rows = db.update("cases", cv, "id=?", new String[]{String.valueOf(caseId)});
+        return rows > 0;
+    }
+
+    /** 删除用例 (级联删除步骤) */
+    boolean deleteCase(long caseId) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete("run_sessions", "case_id=?", new String[]{String.valueOf(caseId)});
+            db.delete("steps", "case_id=?", new String[]{String.valueOf(caseId)});
+            int rows = db.delete("cases", "id=?", new String[]{String.valueOf(caseId)});
+            db.setTransactionSuccessful();
+            return rows > 0;
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    /** 清空用例所有步骤 (保留用例本身) */
+    boolean clearSteps(long caseId) {
+        SQLiteDatabase db = getWritableDatabase();
+        int rows = db.delete("steps", "case_id=?", new String[]{String.valueOf(caseId)});
+        return rows >= 0;
+    }
+
+    /** 获取用例步骤数量 */
+    int getStepCount(long caseId) {
+        SQLiteDatabase db = getReadableDatabase();
+        try (Cursor c = db.rawQuery(
+                "SELECT COUNT(*) FROM steps WHERE case_id=?", new String[]{String.valueOf(caseId)})) {
+            if (c.moveToFirst()) return c.getInt(0);
+        }
+        return 0;
+    }
+
+    /** 删除单条步骤 */
+    boolean deleteStep(long stepId) {
+        SQLiteDatabase db = getWritableDatabase();
+        int rows = db.delete("steps", "id=?", new String[]{String.valueOf(stepId)});
+        return rows > 0;
+    }
+
+    /** 移动步骤顺序 (交换 step_order) */
+    boolean swapStepOrder(long stepIdA, long stepIdB) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            Cursor ca = db.query("steps", new String[]{"step_order"}, "id=?",
+                    new String[]{String.valueOf(stepIdA)}, null, null, null);
+            Cursor cb = db.query("steps", new String[]{"step_order"}, "id=?",
+                    new String[]{String.valueOf(stepIdB)}, null, null, null);
+            if (!ca.moveToFirst() || !cb.moveToFirst()) return false;
+            int orderA = ca.getInt(0);
+            int orderB = cb.getInt(0);
+            ca.close();
+            cb.close();
+
+            ContentValues cvA = new ContentValues();
+            cvA.put("step_order", orderB);
+            db.update("steps", cvA, "id=?", new String[]{String.valueOf(stepIdA)});
+
+            ContentValues cvB = new ContentValues();
+            cvB.put("step_order", orderA);
+            db.update("steps", cvB, "id=?", new String[]{String.valueOf(stepIdB)});
+
+            db.setTransactionSuccessful();
+            return true;
+        } finally {
+            db.endTransaction();
+        }
+    }
+
     void replaceSteps(long caseId, JSONArray steps) throws Exception {
         SQLiteDatabase db = getWritableDatabase();
         db.delete("steps", "case_id=?", new String[]{String.valueOf(caseId)});
