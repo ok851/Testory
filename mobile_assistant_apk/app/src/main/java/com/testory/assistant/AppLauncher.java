@@ -37,12 +37,33 @@ final class AppLauncher {
             "com.android.launcher",
             "com.android.launcher3",
             "com.miui.home",
+            "com.mi.android.globallauncher",
             "com.huawei.android.launcher",
+            "com.huawei.android.totemweather",
             "com.oppo.launcher",
+            "com.oppo.quicksearchbox",
+            "com.coloros.launcher",
             "com.bbk.launcher2",
+            "com.vivo.launcher",
             "com.sec.android.app.launcher",
+            "com.sec.android.app.launcher.activity",
             "com.oneplus.launcher",
-            "com.google.android.apps.launcher"
+            "com.google.android.apps.launcher",
+            "com.microsoft.launcher",
+            "com.actionlauncher.playstore",
+            "com.nova.launcher",
+            "com.teslacoilsw.launcher",
+            "me.mvp.pixel_live_wallpaper_launcher",
+            "com.amdroid.apolauncher",
+            "org.cyanogenmod.trebuchet",
+            "net.oneplus.launcher",
+            "com.zui.launcher",
+            "com.letv.android.desktop",
+            "com.smartisanos.launcher",
+            "com.meizu.flyme.launcher",
+            "com.lge.launcher3",
+            "com.asus.launcher",
+            "com.htc.launcher"
     ));
 
     static final class Result {
@@ -152,7 +173,12 @@ final class AppLauncher {
         if (pkg == null || pkg.isEmpty()) return true;
         if (SKIP_PACKAGES.contains(pkg)) return true;
         String lower = pkg.toLowerCase(Locale.US);
-        return lower.contains("launcher") || lower.endsWith(".home");
+        return lower.contains("launcher")
+                || lower.endsWith(".home")
+                || lower.endsWith(".desktop")
+                || lower.endsWith(".totemweather")
+                || lower.contains("quicksearchbox")
+                || lower.startsWith("com.miui.") && lower.contains("home");
     }
 
     static String friendlyLabel(Context ctx, String pkg) {

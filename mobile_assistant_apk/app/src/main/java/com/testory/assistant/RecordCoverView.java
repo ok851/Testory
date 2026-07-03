@@ -103,6 +103,7 @@ public final class RecordCoverView {
         runOnMain(() -> {
             if (coverPanel != null) {
                 coverPanel.setVisibility(View.VISIBLE);
+                coverPanel.setClickable(true);
                 Log.d(TAG, "touchBlockMode ON");
             }
         });
@@ -114,6 +115,7 @@ public final class RecordCoverView {
         runOnMain(() -> {
             if (coverPanel != null) {
                 coverPanel.setVisibility(View.GONE);
+                coverPanel.setClickable(false);
                 Log.d(TAG, "touchBlockMode OFF (dispatch)");
             }
         });
@@ -213,49 +215,13 @@ public final class RecordCoverView {
     /**
      * Cover 触摸事件入口。
      * <p>
-     * 返回值含义与常规 View 不同：Cover 是 WindowManager 的顶层悬浮窗口，
-     * setClickable(true) 使 View.onTouchEvent() 返回 true，确保 ACTION_DOWN
-     * 被 Cover 窗口「认领」，后续 MOVE/UP 继续派发给 Cover，从而录制完整手势。
-     * 录制完成后通过隐藏 Cover + dispatchGesture 将手势注入回应用。
+     * Airtest 风格：Cover 不再用于录制拦截，仅作为回放护盾短暂显示。
+     * 任何情况下都直接透传触摸到下层应用，不做录制。
      * <p>
-     * 悬浮窗命中检测：hitTestPoint 识别 RecordingOverlay 区域，
-     * 返回 false 使 Cover.onTouchEvent 消费事件 → 防止事件泄漏到 Cover 之下。
-     * 但 RecordingOverlay 使用 TYPE_APPLICATION_OVERLAY（z-order 更高），
-     * 其按钮点击不会到达此处，hitTest 仅作防御性兜底。
+     * 返回 false 让事件继续传递到下层窗口。
      */
     private static boolean onCoverTouch(View v, MotionEvent event) {
-        if (!AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
-            return false;
-        }
-        if (AssistantSession.isRecordingPaused()) {
-            return false;
-        }
-        if (!touchBlockMode || PerformingActionGuard.isPerforming()) {
-            return false;
-        }
-        if (AssistantSession.isRecordingSuppressed()) {
-            return true;
-        }
-        int x = (int) event.getRawX();
-        int y = (int) event.getRawY();
-        // 防御性检查：即使 RecordingOverlay z-order 更高，仍拒绝录制悬浮窗区域手势
-        if (RecordingOverlay.hitTestPoint(x, y)) {
-            return false;
-        }
-        int action = event.getActionMasked();
-        if (action == MotionEvent.ACTION_DOWN) {
-            startX = x;
-            startY = y;
-            startMs = System.currentTimeMillis();
-            TouchGestureClassifier.get().onStart(x, y);
-        }
-        if (action == MotionEvent.ACTION_MOVE) {
-            TouchGestureClassifier.get().onMove(x, y);
-        }
-        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-            handleTouchUp(x, y);
-        }
-        return false;  // onTouchListener 不消费，由 View.onTouchEvent 消费（setClickable=true）
+        return false;
     }
 
     /**
@@ -299,7 +265,7 @@ public final class RecordCoverView {
 
         // Step 1: 立即隐藏 Cover（同帧同步），触摸可直达应用
         enterDispatchMode();
-        PerformingActionGuard.beginPerforming(Math.max(320, fd + 200));
+        PerformingActionGuard.beginPerforming(Math.max(120, fd + 60));
 
         // Step 2: 立即注入手势（mainHandler.post，在 coverPanel.setVisibility(GONE) 后生效）
         svc.performCoverRecordedAction(type, null, x1, y1, x2, y2, fd, () -> {
@@ -344,17 +310,17 @@ public final class RecordCoverView {
         }
     }
 
-    /** 注入完成 / 失败后恢复拦截（SoloPi 约 200ms 后再进入 touchBlockMode） */
+    /** 注入完成 / 失败后恢复拦截（SoloPi 约 200ms 后再进入 touchBlockMode）。 */
     static void finishDispatchCycle() {
         Runnable restore = () -> {
             PerformingActionGuard.finishPerforming();
             enterTouchBlockMode();
         };
-        // 触摸已直达应用，缩短恢复时间
+        // 注入完成后立即恢复拦截，减少死区
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            MAIN.postDelayed(restore, 80);
+            MAIN.post(restore);
         } else {
-            MAIN.post(() -> MAIN.postDelayed(restore, 80));
+            MAIN.post(restore);
         }
     }
 

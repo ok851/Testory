@@ -170,18 +170,26 @@ public class RecordReplayFragment extends Fragment {
                     handler.post(() -> Toast.makeText(ctx, "该用例无步骤", Toast.LENGTH_SHORT).show());
                     return;
                 }
-                handler.post(() -> runStatusText.setText("回放中..."));
-                JSONObject result = ReplayEngine.runSteps(steps, (idx, r) -> {
-                    handler.post(() -> runStatusText.setText("步骤 " + idx + ": " + r.optString("status")));
-                });
                 handler.post(() -> {
-                    boolean ok = result.optBoolean("success", false);
-                    runStatusText.setText(ok ? "回放完成 ✓" : "回放失败: " + result.optString("error", ""));
-                    Toast.makeText(ctx, ok ? "回放完成" : "回放失败", Toast.LENGTH_SHORT).show();
+                    runStatusText.setText("回放中...");
+                    btnRunCase.setEnabled(false);
+                    btnStopRun.setEnabled(true);
+                });
+                // 使用 RunSession 启动回放，确保先退出桌面
+                RunSession.start(ctx, steps, result -> {
+                    handler.post(() -> {
+                        boolean ok = result.optBoolean("success", false);
+                        runStatusText.setText(ok ? "回放完成 ✓" : "回放失败: " + result.optString("error", ""));
+                        btnRunCase.setEnabled(true);
+                        btnStopRun.setEnabled(false);
+                        Toast.makeText(ctx, ok ? "回放完成" : "回放失败", Toast.LENGTH_SHORT).show();
+                    });
                 });
             } catch (Exception e) {
                 handler.post(() -> {
                     runStatusText.setText("回放异常: " + e.getMessage());
+                    btnRunCase.setEnabled(true);
+                    btnStopRun.setEnabled(false);
                     Toast.makeText(ctx, "回放失败: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 });
             }

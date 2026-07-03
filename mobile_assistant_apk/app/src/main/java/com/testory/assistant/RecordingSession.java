@@ -56,6 +56,12 @@ final class RecordingSession {
         TouchCoordBuffer.reset();
         RecordingOverlay.hide();
 
+        // Airtest 风格：PC Agent 录制时，设备端仅显示状态条，不执行桌面回退、不启动 drain、不捕获触摸。
+        if (agentMode) {
+            startAgentMode(ctx, caseId, listener);
+            return;
+        }
+
         SessionForegroundGuard.retreatToDesktop(ctx, (desktopReady, message) -> {
             if (activeCaseId != sessionId) return;
             if (!message.isEmpty() && ctx != null) {
@@ -78,43 +84,44 @@ final class RecordingSession {
         // 40-60ms 足够跳过 Home 键释放的噪声事件。
         AssistantSession.suppressRecordingFor(desktopReady ? 40 : 60);
         AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
-        AssistantAccessibilityService live = AssistantSession.getService();
-        if (live != null) {
-            String fg = live.getForegroundPackage();
-            if (fg != null && !fg.isEmpty() && !"com.testory.assistant".equals(fg)) {
-                AssistantSession.setRecordingContextPackage(fg);
-            }
-        }
+        // 不在录制启动时设置 context_package，因为此时可能还在桌面
+        // context_package 应该在用户实际操作时由触摸事件动态确定
         if (ctx != null) {
             Toast.makeText(
                     ctx.getApplicationContext(),
                     "录制已开始",
                     Toast.LENGTH_SHORT).show();
         }
-        Log.i(TAG, "recording armed");
-        // 启动 getevent 触摸捕获（参考 SoloPi TouchEventTracker）
-        // 确保桌面/Launcher 等不触发 TYPE_VIEW_SCROLLED 的场景也能捕获滑动
-        startTouchCapture();
-        // 先激活 Cover 透明覆盖层，再激活 RecordingOverlay：
-        // Cover 使用 TYPE_ACCESSIBILITY_OVERLAY，
-        // RecordingOverlay 使用 TYPE_APPLICATION_OVERLAY（z-order 更高），
-        // 确保悬浮窗「暂停/结束」按钮始终可点击，不会被 Cover 拦截。
-        // 原缺陷：顺序颠倒，Cover 后添加导致覆盖悬浮窗，按钮触摸被 Cover 消费。
-        // P0 修复：Cover 先添加，RecordingOverlay 后添加。
-        // Cover 使用 TYPE_ACCESSIBILITY_OVERLAY (2032)，
-        // RecordingOverlay 使用 TYPE_APPLICATION_OVERLAY (2038) 或无权限降级，
-        // 后添加 → 悬浮窗始终在 Cover 上层，按钮可正常点击。
-        AssistantAccessibilityService svc = AssistantSession.getService();
-        if (svc != null) {
-            RecordCoverView.show(svc, () -> {
-                Log.w(TAG, "RecordCoverView show failed");
-            });
-        }
-        // RecordingOverlay 必须在 Cover 之后添加，确保 z-order 在 Cover 之上
+        Log.i(TAG, "recording armed, waiting for user operations...");
+        // Airtest 风格：设备端不再拦截触摸。
+        // Cover 已移除，录制由 PC 端 ADB getevent 负责；
+        // 设备端仅显示 RecordingOverlay 状态条。
         if (ctx != null) {
             RecordingOverlay.show(ctx, listener);
         }
         HANDLER.post(drainRunnable);
+    }
+
+    /** PC Agent 录制模式：仅显示状态条与设置 armed mode，不拦截触摸、不 drain 步骤。 */
+    private static void startAgentMode(
+            Context ctx,
+            long caseId,
+            RecordingOverlay.Listener listener) {
+        if (activeCaseId < 0) return;
+        draining = false;
+        AssistantSession.suppressRecordingFor(40);
+        AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
+        PluginHttpServer.setAgentRecordingActive(true);
+        if (ctx != null) {
+            Toast.makeText(
+                    ctx.getApplicationContext(),
+                    "PC 录制已就绪",
+                    Toast.LENGTH_SHORT).show();
+        }
+        Log.i(TAG, "recording armed (agent mode), PC will capture touch via adb getevent");
+        if (ctx != null) {
+            RecordingOverlay.show(ctx, listener);
+        }
     }
 
     static void stop(Context ctx) {
@@ -125,11 +132,10 @@ final class RecordingSession {
         AssistantSession.setRecordingPaused(false);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
         RecordingOverlay.hide();
-        RecordCoverView.hide();
-        // 停止 getevent 触摸捕获
-        stopTouchCapture();
+        // Airtest 风格：Cover 已移除，无需 hide/stopTouchCapture。
         activeCaseId = -1L;
         overlayListener = null;
+        PluginHttpServer.setAgentRecordingActive(false);
     }
 
     static void pause() {

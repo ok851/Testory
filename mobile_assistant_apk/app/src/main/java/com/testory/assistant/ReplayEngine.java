@@ -16,7 +16,7 @@ public final class ReplayEngine {
     private ReplayEngine() {
     }
 
-    public static JSONObject runSteps(List<JSONObject> steps, Callback cb) throws Exception {
+    public static JSONObject runSteps(List<JSONObject> steps, RunSession.CancellationToken token, Callback cb) throws Exception {
         AssistantAccessibilityService svc = AssistantSession.getService();
         if (svc == null) {
             throw new IllegalStateException("无障碍服务未就绪");
@@ -50,7 +50,7 @@ public final class ReplayEngine {
 
         JSONArray results = new JSONArray();
         for (int i = 0; i < runnable.size(); i++) {
-            if (RunSession.isCancelled()) {
+            if (token != null && token.isCancelled()) {
                 return RunSession.cancelledResult();
             }
             JSONObject step = runnable.get(i);

@@ -11,7 +11,7 @@ import android.os.Looper;
  */
 final class SessionForegroundGuard {
 
-    static final int DEFAULT_TIMEOUT_MS = 3000;
+    static final int DEFAULT_TIMEOUT_MS = 5000;
     private static final int POLL_MS = 50;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
@@ -54,6 +54,14 @@ final class SessionForegroundGuard {
                 home.addCategory(Intent.CATEGORY_HOME);
                 home.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 ctx.startActivity(home);
+                homeSent = true;
+            } catch (Exception ignored) {
+            }
+        }
+        // 兜底2：通过 shell input keyevent HOME 方式
+        if (!homeSent) {
+            try {
+                Runtime.getRuntime().exec("input keyevent 3");
                 homeSent = true;
             } catch (Exception ignored) {
             }

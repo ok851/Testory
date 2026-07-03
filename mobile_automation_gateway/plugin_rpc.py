@@ -239,10 +239,13 @@ def resume_recording(udid: str) -> Dict[str, Any]:
     return _rpc_call(udid, "resumeRecording", {}, timeout=10.0)
 
 
-def poll_steps(udid: str, *, limit: int = 20) -> List[Dict[str, Any]]:
+def poll_steps(udid: str, *, limit: int = 20) -> Dict[str, Any]:
     res = _rpc_call(udid, "pollSteps", {"limit": max(1, limit)}, timeout=5.0)
     steps = res.get("steps") or []
-    return steps if isinstance(steps, list) else []
+    return {
+        "steps": steps if isinstance(steps, list) else [],
+        "recording_active": bool(res.get("recording_active", True)),
+    }
 
 
 def get_page_source(udid: str) -> Dict[str, Any]:

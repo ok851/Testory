@@ -16,7 +16,13 @@ final class RunSession {
     }
 
     private static volatile boolean running;
-    private static volatile boolean cancelled;
+    private static volatile CancellationToken currentToken;
+
+    static final class CancellationToken {
+        private volatile boolean cancelled;
+        void cancel() { cancelled = true; }
+        boolean isCancelled() { return cancelled; }
+    }
 
     private RunSession() {
     }
@@ -26,7 +32,8 @@ final class RunSession {
     }
 
     static void cancel() {
-        cancelled = true;
+        CancellationToken token = currentToken;
+        if (token != null) token.cancel();
     }
 
     static void start(Context ctx, List<JSONObject> steps, Callback callback) {
@@ -43,7 +50,8 @@ final class RunSession {
             return;
         }
         running = true;
-        cancelled = false;
+        CancellationToken token = new CancellationToken();
+        currentToken = token;
         RunOverlay.show(ctx, RunSession::cancel);
         RunOverlay.setStatus("正在返回桌面，准备执行…");
 
@@ -55,11 +63,11 @@ final class RunSession {
                     Toast.makeText(ctx.getApplicationContext(),
                             "未能自动返回桌面，请手动按 Home 键", Toast.LENGTH_LONG).show();
                 }
-                if (cancelled) {
+                if (token.isCancelled()) {
                     result = cancelledResult();
                 } else {
                     RunOverlay.setStatus("系统级运行 0/" + steps.size());
-                    result = ReplayEngine.runSteps(steps, (index, stepResult) -> {
+                    result = ReplayEngine.runSteps(steps, token, (index, stepResult) -> {
                         RunOverlay.setStatus("运行 " + index + "/" + steps.size());
                     });
                 }
@@ -73,15 +81,11 @@ final class RunSession {
                 }
             } finally {
                 running = false;
-                cancelled = false;
+                currentToken = null;
                 RunOverlay.hide();
                 if (callback != null && result != null) callback.onFinished(result);
             }
         }, "testory-run-session").start();
-    }
-
-    static boolean isCancelled() {
-        return cancelled;
     }
 
     static JSONObject cancelledResult() throws Exception {

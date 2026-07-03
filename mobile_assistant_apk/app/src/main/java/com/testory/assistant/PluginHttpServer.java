@@ -253,7 +253,6 @@ public final class PluginHttpServer extends NanoHTTPD {
 
     /** PC pollSteps 专用：从 pending 取出并镜像，供本地 UI 在 Agent 模式下展示。 */
     private JSONObject pollSteps(int limit) throws Exception {
-        // 修复：原子性取出步骤，避免遍历时 remove 漏步骤
         List<JSONObject> out = new ArrayList<>();
         int toDrain = Math.min(limit, pendingSteps.size());
         for (int i = 0; i < toDrain; i++) {
@@ -267,7 +266,9 @@ public final class PluginHttpServer extends NanoHTTPD {
         }
         JSONArray arr = new JSONArray();
         for (JSONObject s : out) arr.put(s);
-        return new JSONObject().put("steps", arr);
+        return new JSONObject()
+                .put("steps", arr)
+                .put("recording_active", AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode()));
     }
 
     private JSONObject getPageSourceTree() throws Exception {

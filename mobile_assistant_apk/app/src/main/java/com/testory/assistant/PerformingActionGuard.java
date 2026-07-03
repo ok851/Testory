@@ -19,11 +19,11 @@ final class PerformingActionGuard {
     }
 
     static void beginPerforming(long durationMs) {
-        long guardMs = Math.max(80, durationMs);
+        long guardMs = Math.max(50, Math.min(durationMs + 30, 200));
         performingUntilMs = System.currentTimeMillis() + guardMs;
-        AssistantSession.suppressRecordingFor(guardMs + 80);
-        scheduleRestoreFallback(guardMs + 80);
-        Log.d(TAG, "beginPerforming ms=" + durationMs);
+        AssistantSession.suppressRecordingFor(Math.max(40, guardMs + 30));
+        scheduleRestoreFallback(guardMs + 60);
+        Log.d(TAG, "beginPerforming ms=" + durationMs + " guardMs=" + guardMs);
     }
 
     private static void scheduleRestoreFallback(long delayMs) {

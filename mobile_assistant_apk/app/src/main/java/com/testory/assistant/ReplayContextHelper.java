@@ -23,39 +23,14 @@ final class ReplayContextHelper {
         if (steps == null || steps.isEmpty()) {
             return AppLauncher.Result.ok("", "", "empty");
         }
-        for (JSONObject step : steps) {
-            if (step == null || RecordEventFilter.isAssistantStep(step)) continue;
-            String action = step.optString("action", "").toLowerCase();
-            if ("open_app".equals(action)) {
-                String pkg = openAppPackage(step);
-                if (AppLauncher.isSkippablePackage(pkg)) {
-                    continue;
-                }
-                AppLauncher.Result r = AppLauncher.launch(ctx, svc, pkg, openAppActivity(step),
-                        AppLauncher.DEFAULT_TIMEOUT_MS);
-                if (r.success) return r;
-                // 原缺陷：open_app 启动失败时直接终止回放，导致后续步骤全部跳过。
-                // 新逻辑：启动失败时继续执行后续步骤（用户可能已手动打开应用）。
-                continue;
-            }
-            if ("press_home".equals(action) || "home".equals(action)
-                    || "press_back".equals(action) || "back".equals(action)) {
-                return AppLauncher.Result.ok("", "", "navigation");
-            }
-            String ctxPkg = AppLauncher.extractContextPackage(step);
-            if (!ctxPkg.isEmpty() && !AppLauncher.isSkippablePackage(ctxPkg)) {
-                AppLauncher.Result r = AppLauncher.softRestoreContext(
-                        ctx, svc, ctxPkg, AppLauncher.DEFAULT_TIMEOUT_MS);
-                if (r.success || AppLauncher.isCoordinateStep(step)) {
-                    return AppLauncher.Result.ok(ctxPkg, r.appLabel, "context_soft");
-                }
-                // 原缺陷：上下文恢复失败时直接终止回放。
-                // 新逻辑：继续执行后续步骤，让步骤级重试机制处理。
-                return AppLauncher.Result.ok(ctxPkg, r.appLabel, "context_soft_failed");
-            }
-            break;
-        }
-        return AppLauncher.Result.ok("", "", "no_context_needed");
+        // 回放前已经退到桌面，不需要额外准备
+        // 第一个步骤如果是点击桌面图标（context_package 是 launcher 或空的），不需要启动应用
+        // 后续步骤会通过 maybeSoftRestore 动态恢复上下文
+        // 关键修复：不要在 prepareSession 中启动应用，因为：
+        // 1. 用户可能录制的是桌面操作（点击图标启动应用）
+        // 2. 退到桌面后，前台应用是 launcher，context_package 检查会失败
+        // 3. 让第一个 open_app 步骤或 tap 步骤自己处理应用启动
+        return AppLauncher.Result.ok("", "", "desktop_ready");
     }
 
     static boolean shouldSkipOpenAppStep(JSONObject step) {

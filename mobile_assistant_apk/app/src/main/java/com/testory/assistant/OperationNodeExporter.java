@@ -74,8 +74,12 @@ final class OperationNodeExporter {
 
         String pkg = svc instanceof AssistantAccessibilityService
                 ? ((AssistantAccessibilityService) svc).getForegroundPackage() : "";
-        if (pkg != null && !pkg.isEmpty() && !"com.testory.assistant".equals(pkg)) {
+        if (pkg != null && !pkg.isEmpty()) {
             payload.put("package", pkg);
+            // 动态更新录制上下文：用户实际操作的应用才是正确的 context_package
+            if (!"com.testory.assistant".equals(pkg) && AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
+                AssistantSession.setRecordingContextPackage(pkg);
+            }
         }
         return payload;
     }

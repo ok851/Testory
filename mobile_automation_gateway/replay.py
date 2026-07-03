@@ -72,6 +72,115 @@ def _sleep_after_action(action: str) -> None:
         time.sleep(delay / 1000.0)
 
 
+def _resolve_step_coords(step: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """从步骤中解析坐标，返回 (x, y) 或 None。"""
+    spec = step.get("mobile_spec") or {}
+    vc = spec.get("viewport_coord")
+    if isinstance(vc, dict):
+        x = int(vc.get("x") or 0)
+        y = int(vc.get("y") or 0)
+        if x or y:
+            return x, y
+    st = (step.get("selector_type") or "").strip()
+    sv = (step.get("selector_value") or "").strip()
+    if st == "viewport_coord" and sv:
+        try:
+            import json
+            coord = json.loads(sv)
+            x = int(coord.get("x") or 0)
+            y = int(coord.get("y") or 0)
+            if x or y:
+                return x, y
+        except Exception:
+            pass
+    bounds = spec.get("bounds")
+    if isinstance(bounds, (list, tuple)) and len(bounds) >= 4:
+        x = (int(bounds[0]) + int(bounds[2])) // 2
+        y = (int(bounds[1]) + int(bounds[3])) // 2
+        if x or y:
+            return x, y
+    return None
+
+
+def _resolve_swipe_coords(step: Dict[str, Any]) -> Optional[Tuple[int, int, int, int, int]]:
+    """解析滑动步骤起止坐标和时长，返回 (x1, y1, x2, y2, duration_ms) 或 None。"""
+    spec = step.get("mobile_spec") or {}
+    x1 = int(spec.get("x1") or 0)
+    y1 = int(spec.get("y1") or 0)
+    x2 = int(spec.get("x2") or 0)
+    y2 = int(spec.get("y2") or 0)
+    duration = int(spec.get("action_duration_ms") or 300)
+    if not duration:
+        duration = 300
+    if (x1 or y1) and (x2 or y2):
+        return x1, y1, x2, y2, duration
+    return None
+
+
+def _execute_step_adb_first(udid: str, step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Airtest 风格：优先用 ADB input 执行坐标级操作，失败返回 None 让上层 fallback。"""
+    try:
+        from mobile_adb_control import adb_keyevent, adb_swipe, adb_tap
+    except Exception:
+        return None
+
+    action = (step.get("action") or "").strip().lower()
+    if action in ("tap", "click"):
+        coords = _resolve_step_coords(step)
+        if coords:
+            x, y = coords
+            adb_tap(udid, x, y)
+            return {"status": "success", "action": action, "via": "adb", "x": x, "y": y}
+    elif action in ("long_press", "long-press"):
+        # ADB 没有独立 long_press，用较长的 swipe 同一点模拟
+        coords = _resolve_step_coords(step)
+        if coords:
+            x, y = coords
+            adb_swipe(udid, x, y, x, y, duration_ms=600)
+            return {"status": "success", "action": action, "via": "adb", "x": x, "y": y}
+    elif action == "swipe":
+        swipe = _resolve_swipe_coords(step)
+        if swipe:
+            x1, y1, x2, y2, duration = swipe
+            adb_swipe(udid, x1, y1, x2, y2, duration_ms=duration)
+            return {"status": "success", "action": action, "via": "adb"}
+    elif action in ("press_home", "home"):
+        adb_keyevent(udid, 3)
+        return {"status": "success", "action": action, "via": "adb"}
+    elif action in ("press_back", "back"):
+        adb_keyevent(udid, 4)
+        return {"status": "success", "action": action, "via": "adb"}
+    elif action in ("input_text", "input", "type"):
+        text = str(step.get("input_value") or "")
+        # ADB input text 不支持中文，含中文时强制 fallback 到 RPC
+        if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+            return None
+        # 先 tap 输入框坐标，再 adb input text
+        coords = _resolve_step_coords(step)
+        if coords and text:
+            x, y = coords
+            adb_tap(udid, x, y)
+            time.sleep(0.15)
+            _adb_input_text(udid, text)
+            return {"status": "success", "action": action, "via": "adb"}
+    return None
+
+
+def _adb_input_text(udid: str, text: str) -> None:
+    """通过 ADB shell input text 输入文本，处理特殊字符。"""
+    import subprocess
+    from mobile_device_manager import adb_path
+    # 转义 shell 特殊字符
+    safe = text.replace(" ", "%s").replace("&", "\\&").replace(";", "\\;").replace("|", "\\|")
+    if not safe:
+        return
+    cmd = [adb_path()]
+    if udid:
+        cmd.extend(["-s", udid])
+    cmd.extend(["shell", "input", "text", safe])
+    subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=15)
+
+
 def _execute_vision_step(udid: str, step: Dict[str, Any], *, step_index: int) -> Dict[str, Any]:
     action = (step.get("action") or "").strip().lower()
     desc = (step.get("description") or "").strip()
@@ -283,13 +392,19 @@ def replay_mobile_steps(
                                 adb_launch_app(udid, ctx, wait_foreground=True, timeout_sec=8.0)
                         except Exception:
                             pass
-                replay_result = None
-                for attempt in range(max(1, max_retries)):
-                    replay_result = plugin_rpc.replay_step(udid, step, step_index=step_index)
-                    if replay_result.get("status") != "error":
-                        break
-                    time.sleep(0.35)
-                result.update(replay_result or {})
+                # Airtest 风格：优先使用 ADB input 执行坐标级操作
+                adb_result = _execute_step_adb_first(udid, step)
+                if adb_result and adb_result.get("status") != "error":
+                    result.update(adb_result)
+                else:
+                    # fallback：控件定位、中文输入、无障碍手势等场景
+                    replay_result = None
+                    for attempt in range(max(1, max_retries)):
+                        replay_result = plugin_rpc.replay_step(udid, step, step_index=step_index)
+                        if replay_result.get("status") != "error":
+                            break
+                        time.sleep(0.35)
+                    result.update(replay_result or {})
 
             # Inspired by SoloPi: 截图已由设备端步骤回调提供（如有）
             if screenshot_per_step:
