@@ -256,10 +256,40 @@ public class RecordReplayFragment extends Fragment {
                     sb.append(line);
                 }
                 String text = sb.length() > 0 ? sb.toString() : "等待操作...";
+                int stepCount = steps.size();
+                // 同时更新 spinner 中的步数（录制过程中也显示最新步数）
+                int currentStepsInSpinner = 0;
+                final int spinnerPos = caseSpinner.getSelectedItemPosition();
+                final String currentLabel = (String) caseSpinner.getAdapter().getItem(spinnerPos);
+                if (currentLabel != null) {
+                    try {
+                        int parenIdx = currentLabel.lastIndexOf('(');
+                        if (parenIdx > 0) {
+                            String numPart = currentLabel.substring(parenIdx + 1, currentLabel.indexOf("步)"));
+                            currentStepsInSpinner = Integer.parseInt(numPart.trim());
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+                final boolean needsSpinnerUpdate = stepCount != currentStepsInSpinner;
                 handler.post(() -> {
                     stepsListText.setText(text);
-                    stepCountTag.setText(steps.size() + " 步");
+                    stepCountTag.setText(stepCount + " 步");
                     if (!steps.isEmpty()) stepsPreviewCard.setVisibility(View.VISIBLE);
+                    // 录制过程中同步更新 spinner 步数
+                    if (needsSpinnerUpdate && currentLabel != null) {
+                        int parenIdx = currentLabel.lastIndexOf('(');
+                        String baseName = parenIdx > 0
+                                ? currentLabel.substring(0, parenIdx).trim()
+                                : currentLabel.trim();
+                        String newLabel = baseName + " (" + stepCount + "步)";
+                        ArrayAdapter<String> adapter = (ArrayAdapter<String>) caseSpinner.getAdapter();
+                        if (adapter != null) {
+                            adapter.remove(currentLabel);
+                            adapter.insert(newLabel, spinnerPos);
+                            adapter.notifyDataSetChanged();
+                        }
+                    }
                 });
             } catch (Exception ignored) {}
         });

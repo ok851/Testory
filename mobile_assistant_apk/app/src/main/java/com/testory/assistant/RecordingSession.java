@@ -126,7 +126,15 @@ final class RecordingSession {
     static void stop(Context ctx) {
         draining = false;
         HANDLER.removeCallbacks(drainRunnable);
-        drainSteps();
+        // 关键修复：等待 drainSteps 的 DB 写入完成后再清理状态。
+        // 原缺陷：drainSteps() 使用后台 DB_WRITER 线程写入 DB，
+        // stop() 不等待完成就设置 activeCaseId=-1 并 hide UI，
+        // 导致最后一批步骤可能未写入 DB，重启后用例丢失。
+        try {
+            drainStepsSync();
+        } catch (Exception e) {
+            Log.w(TAG, "drainStepsSync failed on stop", e);
+        }
         PerformingActionGuard.reset();
         AssistantSession.setRecordingPaused(false);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
@@ -135,6 +143,34 @@ final class RecordingSession {
         activeCaseId = -1L;
         overlayListener = null;
         PluginHttpServer.setAgentRecordingActive(false);
+    }
+
+    /**
+     * 同步版本的 drainSteps：在当前线程中等待 DB 写入完成。
+     * 用于 stop() 时确保所有步骤已持久化。
+     */
+    private static void drainStepsSync() {
+        if (activeCaseId < 0) return;
+        final Context ctx = AssistantApplicationHolder.get();
+        if (ctx == null) return;
+        final JSONArray batch = PluginHttpServer.drainPendingSteps(200);
+        if (batch.length() == 0) return;
+        try {
+            LocalStore store = LocalStore.get(ctx);
+            List<JSONObject> existing = store.getSteps(activeCaseId);
+            int baseOrder = existing.size();
+            for (int i = 0; i < batch.length(); i++) {
+                JSONObject raw = batch.getJSONObject(i);
+                JSONObject step = RecordStepConverter.toDbStep(raw, baseOrder + i + 1);
+                if (RecordEventFilter.isAssistantStep(step)) {
+                    continue;
+                }
+                store.appendNormalizedStep(activeCaseId, step);
+            }
+            Log.i(TAG, "drainStepsSync persisted " + batch.length() + " steps for case " + activeCaseId);
+        } catch (Exception e) {
+            Log.w(TAG, "drainStepsSync DB write failed", e);
+        }
     }
 
     static void pause() {
