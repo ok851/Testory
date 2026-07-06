@@ -218,11 +218,14 @@ def plugin_status(udid: str) -> Dict[str, Any]:
         return {"reachable": False, "error": str(exc)}
 
 
-def start_recording(udid: str, *, screenshot_per_step: bool = True) -> Dict[str, Any]:
+def start_recording(
+    udid: str, *, screenshot_per_step: bool = True, agent_mode: bool = False
+) -> Dict[str, Any]:
+    """通知设备端开始录制。agent_mode 参数已废弃，设备端始终本地录制。"""
     return _rpc_call(
         udid,
         "startRecording",
-        {"screenshotPerStep": screenshot_per_step},
+        {"screenshotPerStep": screenshot_per_step, "agentMode": agent_mode},
         timeout=10.0,
     )
 

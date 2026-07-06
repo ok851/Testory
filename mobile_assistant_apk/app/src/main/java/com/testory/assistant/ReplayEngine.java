@@ -130,6 +130,12 @@ public final class ReplayEngine {
                         y = (bounds.optInt(1, 0) + bounds.optInt(3, 0)) / 2;
                     }
                 }
+                // 强制拦截无效坐标，避免静默执行无效手势
+                if (x <= 0 && y <= 0) {
+                    result.put("status", "error");
+                    result.put("error", "坐标无效 (" + x + "," + y + ")，无法执行点击");
+                    return result;
+                }
                 ok = svc.performTapSelectorFirst(st, sv, x, y,
                         spec != null ? spec.optJSONObject("operation_node") : null);
                 if (!ok && spec != null) {
@@ -160,6 +166,12 @@ public final class ReplayEngine {
                     coord = resolveCoord(st, sv, spec);
                     x = coord[0];
                     y = coord[1];
+                }
+                // 强制拦截无效坐标，避免静默执行无效手势
+                if (x <= 0 && y <= 0) {
+                    result.put("status", "error");
+                    result.put("error", "坐标无效 (" + x + "," + y + ")，无法执行长按");
+                    return result;
                 }
                 ok = svc.performLongPressSelectorFirst(st, sv, x, y,
                         spec != null ? spec.optJSONObject("operation_node") : null);
@@ -195,6 +207,12 @@ public final class ReplayEngine {
                     int[] df = resolveSwipeFallback(spec, step, svc);
                     p1[0] = df[0]; p1[1] = df[1];
                     p2[0] = df[2]; p2[1] = df[3];
+                }
+                // 强制拦截无效坐标，避免静默执行无效手势
+                if (p1[0] == 0 && p1[1] == 0 && p2[0] == 0 && p2[1] == 0) {
+                    result.put("status", "error");
+                    result.put("error", "滑动坐标无效，无法执行滑动");
+                    return result;
                 }
                 long dur = spec != null ? spec.optLong("action_duration_ms", 320) : 320;
                 if (dur <= 0 || dur > 5000) dur = 320;
@@ -265,6 +283,23 @@ public final class ReplayEngine {
         int y = 0;
         double rx = -1;
         double ry = -1;
+
+        // 优先从 selector_value_json 提取 fallback 坐标（复合定位）
+        try {
+            String svJson = spec != null ? spec.optString("selector_value_json", "") : "";
+            if (svJson.isEmpty()) {
+                svJson = spec != null ? spec.optString("selector_value", "") : "";
+            }
+            if (!svJson.isEmpty() && svJson.startsWith("{")) {
+                JSONObject svObj = new JSONObject(svJson);
+                if (svObj.has("fallback_x")) x = svObj.optInt("fallback_x", 0);
+                if (svObj.has("fallback_y")) y = svObj.optInt("fallback_y", 0);
+                if (x > 0 || y > 0) {
+                    return new int[]{x, y};
+                }
+            }
+        } catch (Exception ignored) {}
+
         if ("viewport_coord".equals(st) && sv != null && !sv.isEmpty()) {
             try {
                 JSONObject coord = new JSONObject(sv);

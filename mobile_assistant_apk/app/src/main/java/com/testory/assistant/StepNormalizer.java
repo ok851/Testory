@@ -158,10 +158,86 @@ final class StepNormalizer {
         step.put("action", action);
         // 使用增强版 describeNode：优先 operation_node > node > 坐标
         step.put("description", raw.optString("description", describeNode(opNodeRef, node, type, cx, cy)));
-        applySelector(step, node, cx, cy, mobileSpec);
+        // 关键修复：对于有坐标的步骤，始终保留 viewport_coord 作为 fallback
+        // 原缺陷：如果 operation_node 存在，selector_type 设为 accessibility_id，
+        // 但回放时节点可能无法匹配，且 selector_type 不是 viewport_coord 导致无法 fallback 到坐标。
+        // Design inspired by mobile-automation-guide: 回放应有多重定位策略。
+        applySelectorWithFallback(step, node, cx, cy, mobileSpec);
         applyPackage(mobileSpec, raw);
         step.put("mobile_spec", mobileSpec);
         return step;
+    }
+
+    /**
+     * 增强版定位策略选择器：优先节点定位，同时保留坐标作为 fallback。
+     * 原缺陷：applySelector 仅设置单一 selector_type，回放时节点无法匹配则完全失败。
+     * 新逻辑：设置 accessibility_id/id/xpath 作为主定位，同时将坐标写入 selector_value 和 mobile_spec.viewport_coord。
+     * Design inspired by mobile-automation-guide: 元素定位应有多重回退策略。
+     */
+    private static void applySelectorWithFallback(
+            JSONObject step, JSONObject node, int cx, int cy, JSONObject mobileSpec) throws Exception {
+        JSONObject opNode = mobileSpec.optJSONObject("operation_node");
+        if (opNode == null) opNode = node;
+
+        // 优先级 1：text（最易读）
+        if (opNode != null && opNode.has("text") && !opNode.optString("text", "").isEmpty()) {
+            step.put("selector_type", "accessibility_id");
+            step.put("selector_value", opNode.getString("text"));
+            // 同时保留坐标作为 fallback
+            preserveViewportCoord(step, cx, cy, mobileSpec);
+            return;
+        }
+        // 优先级 2：content_desc
+        if (opNode != null && opNode.has("content_desc")
+                && !opNode.optString("content_desc", "").isEmpty()) {
+            step.put("selector_type", "accessibility_id");
+            step.put("selector_value", opNode.getString("content_desc"));
+            preserveViewportCoord(step, cx, cy, mobileSpec);
+            return;
+        }
+        // 优先级 3：resource_id 可读部分
+        if (opNode != null && opNode.has("resource_id")
+                && !opNode.optString("resource_id", "").isEmpty()) {
+            String rid = opNode.getString("resource_id");
+            String shortId = rid.contains("/") ? rid.substring(rid.lastIndexOf("/") + 1) : rid;
+            if (shortId.length() > 4 || !shortId.matches("[a-z0-9]+")) {
+                step.put("selector_type", "id");
+                step.put("selector_value", shortId);
+                preserveViewportCoord(step, cx, cy, mobileSpec);
+                return;
+            }
+        }
+        // 优先级 4：xpath
+        if (opNode != null && opNode.has("xpath")
+                && !opNode.optString("xpath", "").isEmpty()) {
+            step.put("selector_type", "xpath");
+            step.put("selector_value", opNode.getString("xpath"));
+            preserveViewportCoord(step, cx, cy, mobileSpec);
+            return;
+        }
+        // 兜底：纯坐标定位，但也要保留 fallback 坐标
+        preserveViewportCoord(step, cx, cy, mobileSpec);
+        applySelector(step, node, cx, cy, mobileSpec);
+    }
+
+    /** 将坐标写入 selector_value 和 mobile_spec.viewport_coord，确保回放时能 fallback。 */
+    private static void preserveViewportCoord(JSONObject step, int cx, int cy, JSONObject mobileSpec) throws Exception {
+        if (cx > 0 || cy > 0) {
+            // 写入 mobile_spec.viewport_coord（供 ReplayEngine 解析）
+            JSONObject vc = mobileSpec.optJSONObject("viewport_coord");
+            if (vc == null) {
+                vc = new JSONObject();
+                mobileSpec.put("viewport_coord", vc);
+            }
+            vc.put("x", cx);
+            vc.put("y", cy);
+            // 同时写入 selector_value_json（复合定位：节点优先，坐标 fallback）
+            JSONObject selectorValue = new JSONObject();
+            selectorValue.put("primary", step.optString("selector_value", ""));
+            selectorValue.put("fallback_x", cx);
+            selectorValue.put("fallback_y", cy);
+            step.put("selector_value_json", selectorValue.toString());
+        }
     }
 
     private static JSONObject navigationStep(int order, String action, String desc) throws Exception {

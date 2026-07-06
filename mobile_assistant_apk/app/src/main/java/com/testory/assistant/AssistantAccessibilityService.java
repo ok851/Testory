@@ -72,6 +72,25 @@ public class AssistantAccessibilityService extends AccessibilityService {
             return;
         }
 
+        // 本地录制模式（非 PC Agent）：
+        // 使用 AccessibilityService 的 TYPE_TOUCH_INTERACTION 和 TYPE_VIEW_CLICKED 事件录制
+        // 原缺陷：依赖 getevent 但实际无法工作，导致无录制源
+        // 新逻辑：始终使用 a11y 服务作为录制源，放弃 getevent 方案
+        if (AssistantSession.MODE_RECORD.equals(armedMode)
+                && !PluginHttpServer.isAgentRecordingActive()) {
+            int type = event.getEventType();
+            // 仅过滤 VIEW_CLICKED/LONG_CLICKED（当触摸管线已产出步骤时会被抑制）
+            // TYPE_TOUCH_INTERACTION_START/END 必须保留，这是主要录制源
+            if (type == AccessibilityEvent.TYPE_VIEW_CLICKED
+                    || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) {
+                // 仅当触摸管线已产出步骤时跳过，避免重复录制
+                if (RecordEventFilter.wasRecentTouchGesture()) {
+                    return;
+                }
+                // 否则保留，作为触摸事件未捕获时的兜底
+            }
+        }
+
         int type = event.getEventType();
         if (ContentChangeWatcher.isWindowContentEvent(type)) {
             ContentChangeWatcher.notifyContentChanged();
@@ -108,14 +127,15 @@ public class AssistantAccessibilityService extends AccessibilityService {
             // 以确保滑动手势能被正确捕获和录制。
         }
 
-        // P0 修复：Cover 模式激活时，触摸交互事件由 Cover 的 handleTouchUp 完整处理
-        // （分类+注入+录制），a11y 管线不应重复处理，否则导致：
-        // 1. 后台持续记录重复步骤（Cover View 自身生成 a11y 事件）
-        // 2. TouchGestureClassifier 单例状态被 a11y 事件污染，干扰 Cover 分类
-        // Design inspired by mobile-automation-guide: 完整的触摸生命周期是手势分类的基础。
+        if (TouchEventOverlay.isVisible()) {
+            if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
+                    || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
+                return;
+            }
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (AssistantSession.isCoverModeActive()) {
-                // Cover 模式：触摸由 Cover 拦截并完整处理，跳过 a11y 触摸事件
                 if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
                         || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
                     return;
@@ -123,12 +143,6 @@ public class AssistantAccessibilityService extends AccessibilityService {
             }
             if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START) {
                 int[] pt = extractTouchPoint(event);
-                // 如果 START 事件坐标为 0，使用当前前台应用的焦点节点坐标作为起点
-                if (pt[0] <= 0 && pt[1] <= 0) {
-                    int[] fallback = extractFallbackTouchPoint();
-                    pt[0] = fallback[0];
-                    pt[1] = fallback[1];
-                }
                 TouchGestureClassifier.get().onStart(pt[0], pt[1]);
                 TouchCoordBuffer.beginInteraction(pt[0], pt[1]);
                 return;
@@ -136,7 +150,6 @@ public class AssistantAccessibilityService extends AccessibilityService {
             if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
                 if (AssistantSession.MODE_RECORD.equals(armedMode)) {
                     int[] pt = extractTouchPoint(event);
-                    // 如果 END 事件坐标也为 0，使用 TouchCoordBuffer 缓存
                     if (pt[0] <= 0 && pt[1] <= 0) {
                         pt[0] = TouchCoordBuffer.getLastX();
                         pt[1] = TouchCoordBuffer.getLastY();
@@ -171,7 +184,6 @@ public class AssistantAccessibilityService extends AccessibilityService {
                         enqueueRecordPayload(event, gesture);
                         return;
                     }
-                    // gesture 为 null 时不 return，让 VIEW_CLICKED 兜底
                 }
             }
         }
@@ -375,6 +387,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
         int x = 0;
         int y = 0;
         if (event == null) return new int[]{x, y};
+        
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 x = event.getScrollX();
@@ -382,8 +395,15 @@ public class AssistantAccessibilityService extends AccessibilityService {
             }
         } catch (Exception ignored) {
         }
-        // getScrollX/Y 在 TYPE_TOUCH_INTERACTION 事件上常返回 0，
-        // 需要额外回退：尝试从 event.getSource() 的 bounds 获取坐标。
+        
+        if (x <= 0 && y <= 0) {
+            int[] coords = extractTouchPointReflection(event);
+            if (coords[0] > 0 || coords[1] > 0) {
+                x = coords[0];
+                y = coords[1];
+            }
+        }
+        
         if (x <= 0 && y <= 0) {
             AccessibilityNodeInfo src = event.getSource();
             if (src != null) {
@@ -396,10 +416,37 @@ public class AssistantAccessibilityService extends AccessibilityService {
                 src.recycle();
             }
         }
-        // 最终回退：使用 TouchCoordBuffer 缓存的最近触摸坐标
+        
         if (x <= 0 && y <= 0) {
             x = TouchCoordBuffer.getLastX();
             y = TouchCoordBuffer.getLastY();
+        }
+        
+        return new int[]{x, y};
+    }
+
+    /** 通过反射获取 AccessibilityEvent 的触摸坐标（API 31+ TYPE_TOUCH_INTERACTION 事件专用）。 */
+    private int[] extractTouchPointReflection(AccessibilityEvent event) {
+        int x = 0, y = 0;
+        try {
+            java.lang.reflect.Field xField = event.getClass().getDeclaredField("mX");
+            java.lang.reflect.Field yField = event.getClass().getDeclaredField("mY");
+            xField.setAccessible(true);
+            yField.setAccessible(true);
+            x = xField.getInt(event);
+            y = yField.getInt(event);
+        } catch (Exception ignored) {
+        }
+        if (x <= 0 && y <= 0) {
+            try {
+                java.lang.reflect.Field xField = event.getClass().getDeclaredField("x");
+                java.lang.reflect.Field yField = event.getClass().getDeclaredField("y");
+                xField.setAccessible(true);
+                yField.setAccessible(true);
+                x = xField.getInt(event);
+                y = yField.getInt(event);
+            } catch (Exception ignored) {
+            }
         }
         return new int[]{x, y};
     }
@@ -412,21 +459,28 @@ public class AssistantAccessibilityService extends AccessibilityService {
     private int[] extractFallbackTouchPoint() {
         int x = 0;
         int y = 0;
+        
         try {
             AccessibilityNodeInfo root = getRootInActiveWindow();
             if (root != null) {
-                Rect r = new Rect();
-                root.getBoundsInScreen(r);
-                if (r.width() > 0 && r.height() > 0) {
-                    // 使用屏幕中心作为兜底坐标
-                    x = r.centerX();
-                    y = r.centerY();
+                AccessibilityNodeInfo focused = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY);
+                if (focused == null) {
+                    focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+                }
+                if (focused != null) {
+                    Rect r = new Rect();
+                    focused.getBoundsInScreen(r);
+                    if (r.width() > 0 || r.height() > 0) {
+                        x = r.centerX();
+                        y = r.centerY();
+                    }
+                    focused.recycle();
                 }
                 root.recycle();
             }
         } catch (Exception ignored) {
         }
-        // 如果仍然为 0，使用默认屏幕中心
+        
         if (x <= 0 && y <= 0) {
             try {
                 Context ctx = AssistantApplicationHolder.get();
@@ -537,6 +591,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
 
     private void handleAppSwitchRecord(AccessibilityEvent event) {
         if (!AssistantSession.MODE_RECORD.equals(armedMode)) return;
+        if (TouchEventOverlay.isVisible()) return;
         try {
             CharSequence pkgCs = event.getPackageName();
             if (pkgCs == null) return;
@@ -550,16 +605,8 @@ public class AssistantAccessibilityService extends AccessibilityService {
             lastAppSwitchMs = now;
             lastRecordedPackage = pkg;
 
-            // 始终更新内存上下文
             AssistantSession.setRecordingContextPackage(pkg);
 
-            // 仅当从桌面/启动器 切到 目标应用 时，才生成 open_app 步骤。
-            // 排除内部页面切换产生的误录。
-            // 过滤桌面中间页面（如 vivo 速览/负一屏），避免误录为目标应用。
-            // 关键去重：如果 500ms 内有触摸手势（CoverView 或 TYPE_TOUCH_INTERACTION），
-            // 说明用户点击了应用图标，触摸手势已录制为 tap 步骤，
-            // 不再重复生成 open_app 步骤，避免回放时执行两条重复操作。
-            // Design inspired by mobile-automation-guide: 应用启动应记录可读应用名。
             if (isLauncherPackage(prevPkg) && !isLauncherPackage(pkg) && !isSystemUiPackage(pkg)
                     && !isLauncherIntermediatePackage(pkg)
                     && !RecordEventFilter.wasRecentTouchGesture()) {

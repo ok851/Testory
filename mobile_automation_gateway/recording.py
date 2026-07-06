@@ -11,14 +11,12 @@ from typing import Any, Dict, List, Optional, Set
 from mobile_assistant_events import normalize_assistant_event
 
 from mobile_automation_gateway import plugin_rpc
-from mobile_automation_gateway.adb_touch_recorder import AdbTouchRecorder
 
 _recording_lock = threading.Lock()
 _recording_sessions: Dict[str, Dict[str, Any]] = {}
 _live_steps: Dict[str, List[Dict[str, Any]]] = {}
 _poll_threads: Dict[str, threading.Thread] = {}
 _poll_stop_events: Dict[str, threading.Event] = {}
-_touch_recorders: Dict[str, AdbTouchRecorder] = {}
 _ws_clients: Set[Any] = set()
 _ws_loop: Optional[asyncio.AbstractEventLoop] = None
 _ws_lock = threading.Lock()
@@ -93,13 +91,6 @@ def _deactivate_session(udid: str) -> None:
     t = _poll_threads.get(udid)
     if t is not None and t.is_alive():
         t.join(timeout=3.0)
-    # 停止 ADB 触摸录制器
-    recorder = _touch_recorders.pop(udid, None)
-    if recorder is not None:
-        try:
-            recorder.stop()
-        except Exception:
-            pass
     with _recording_lock:
         _live_steps[udid] = []
     _poll_stop_events.pop(udid, None)
@@ -137,7 +128,7 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
-    # Airtest 风格：PC 端启动 ADB getevent 触摸录制器
+    # 通知设备端开始录制（手机端自行录制，PC 端不介入）
     screen_w, screen_h = 1080, 1920
     try:
         from mobile_adb_control import adb_get_screen_size
@@ -145,10 +136,6 @@ def start_recording_session(udid: str, *, screenshot_per_step: bool = True) -> D
         screen_w, screen_h = adb_get_screen_size(udid)
     except Exception:
         pass
-    recorder = AdbTouchRecorder(udid, screen_width=screen_w, screen_height=screen_h)
-    _touch_recorders[udid] = recorder
-    recorder.start()
-
     with _recording_lock:
         _recording_sessions[udid] = {
             "active": True,
@@ -183,29 +170,26 @@ def stop_recording_session(udid: str) -> Dict[str, Any]:
             current_count = int(sess.get("step_count") or 0)
     broadcast_event("recording_stopped", {"udid": udid, "step_count": current_count})
 
-    # 2. 停止 ADB 触摸录制器并 flush 最后事件
-    recorder = _touch_recorders.pop(udid, None)
-    remaining_gestures = []
-    if recorder is not None:
-        try:
-            remaining_gestures = recorder.stop()
-        except Exception:
-            pass
-
-    # 将最后的手势写入缓冲
-    if remaining_gestures:
-        _append_gestures(udid, remaining_gestures)
-
-    # 3. 通知设备端停止录制（清理 overlay 和 armed mode）
+    # 2. 通知设备端停止录制（清理 overlay 和 armed mode）
     try:
         plugin_rpc.stop_recording(udid)
     except Exception:
         pass
 
-    # 4. 等待轮询线程退出，确保所有已拉取的步骤都写入 _live_steps
+    # 3. 等待轮询线程退出，确保所有已拉取的步骤都写入 _live_steps
     t = _poll_threads.get(udid)
     if t is not None and t.is_alive():
         t.join(timeout=3.0)
+
+    # 4. 从设备端拉取最终步骤
+    try:
+        final_poll = plugin_rpc.poll_steps(udid, limit=100)
+        if isinstance(final_poll, dict):
+            final_steps = final_poll.get("steps") or []
+            if final_steps:
+                _append_device_steps(udid, final_steps)
+    except Exception:
+        pass
 
     # 5. 读取最终步骤列表并返回
     with _recording_lock:
@@ -213,47 +197,21 @@ def stop_recording_session(udid: str) -> Dict[str, Any]:
     return {"success": True, "udid": udid, "steps": live, "step_count": len(live)}
 
 
-def _gesture_to_event(gesture: Any, screen_w: int, screen_h: int) -> Dict[str, Any]:
-    """将 ADB 录制器识别出的手势转为 normalize_assistant_event 可接受的原始事件。"""
-    if gesture.type == "tap":
-        return {
-            "type": "click",
-            "x": gesture.x,
-            "y": gesture.y,
-            "ts": gesture.ts,
-        }
-    if gesture.type == "long_press":
-        return {
-            "type": "long-press",
-            "x": gesture.x,
-            "y": gesture.y,
-            "ts": gesture.ts,
-        }
-    if gesture.type == "swipe":
-        return {
-            "type": "swipe",
-            "x1": gesture.x1,
-            "y1": gesture.y1,
-            "x2": gesture.x2,
-            "y2": gesture.y2,
-            "action_duration_ms": gesture.duration_ms,
-            "ts": gesture.ts,
-        }
-    return {"type": "click", "x": 0, "y": 0, "ts": gesture.ts}
-
-
-def _append_gestures(udid: str, gestures: List[Any]) -> None:
-    """将手势列表归一化后写入 live steps 并广播 step 事件。"""
+def _append_device_steps(udid: str, device_steps: List[Dict[str, Any]]) -> None:
+    """将设备端步骤归一化后写入 live steps 并广播 step 事件。"""
     with _recording_lock:
         sess = _recording_sessions.get(udid)
         if not sess:
             return
         screen_w = int(sess.get("screen_width") or 1080)
         screen_h = int(sess.get("screen_height") or 1920)
-        for gesture in gestures:
-            raw = _gesture_to_event(gesture, screen_w, screen_h)
-            step = normalize_assistant_event(raw, screen_width=screen_w, screen_height=screen_h)
-            sess["step_count"] = int(sess.get("step_count") or 0) + 1
+    for raw in device_steps:
+        step = normalize_assistant_event(raw, screen_width=screen_w, screen_height=screen_h)
+        with _recording_lock:
+            s = _recording_sessions.get(udid)
+            if not s:
+                return
+            s["step_count"] = int(s.get("step_count") or 0) + 1
             buf = _live_steps.setdefault(udid, [])
             buf.append(step)
             _schedule_broadcast({"type": "step", "payload": {"udid": udid, "step": step, "raw": raw}})
@@ -297,15 +255,14 @@ def _start_poll_thread(udid: str) -> None:
                 else:
                     disconnect_since = None
 
-                # Airtest 风格：步骤来自 PC 端 ADB getevent 录制器
-                recorder = _touch_recorders.get(udid)
-                gestures = recorder.drain() if recorder else []
-                if gestures:
-                    _append_gestures(udid, gestures)
+                # 从设备端获取实时步骤
+                raw_status = plugin_rpc.poll_steps(udid, limit=20)
+                poll_result = raw_status if isinstance(raw_status, dict) else {"recording_active": True}
+                device_steps = poll_result.get("steps") or []
+                if device_steps:
+                    _append_device_steps(udid, device_steps)
 
                 # 心跳：检查设备端是否仍认为在录制（仅作兜底，PC 端停止已即时广播）
-                raw_status = plugin_rpc.poll_steps(udid, limit=1)
-                poll_result = raw_status if isinstance(raw_status, dict) else {"recording_active": True}
                 with _recording_lock:
                     still_active = bool(_recording_sessions.get(udid, {}).get("active"))
                 if still_active and not poll_result.get("recording_active", True):
@@ -319,7 +276,7 @@ def _start_poll_thread(udid: str) -> None:
                     break
 
                 # 截图：有新步骤或开启截图时更新
-                if gestures and screenshot_per_step:
+                if device_steps and screenshot_per_step:
                     try:
                         img, _ = plugin_rpc.take_screenshot(udid)
                         if img:

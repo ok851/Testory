@@ -43,6 +43,15 @@ public class RecordReplayFragment extends Fragment {
     private final Runnable refreshRunnable = new Runnable() {
         @Override
         public void run() {
+            // 同步全局录制状态：悬浮窗或其他途径停止后，自动刷新本地 UI
+            if (recording && !AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
+                recording = false;
+                recordStatusTag.setText("已停止");
+                btnStartRecord.setEnabled(true);
+                btnStopRecord.setEnabled(false);
+                recordInfoText.setText("录制已停止，点击「运行回放」执行步骤");
+                loadCases();
+            }
             if (recording) pollSteps();
             handler.postDelayed(this, recording ? 500 : 900);
         }

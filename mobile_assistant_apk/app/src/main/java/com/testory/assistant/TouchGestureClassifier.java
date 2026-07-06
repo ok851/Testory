@@ -85,15 +85,16 @@ final class TouchGestureClassifier {
                 return buildPointPayload("long-press", endX, endY, "长按 (" + endX + "," + endY + ")");
             }
             if (duration < MIN_TAP_MS) return null;
-            // TYPE_TOUCH_INTERACTION events have no MOVE in between, so moved is always false for taps
-            // A tap with zero displacement is valid - do not discard it
-            // Only filter out truly zero-duration/noise events via MIN_TAP_MS
+            if (endX <= 0 && endY <= 0) return null;
             return buildPointPayload("click", endX, endY, "点击 (" + endX + "," + endY + ")");
         }
         if (distance(startX, startY, endX, endY) < CLICK_RANGE_PX && duration >= LONG_CLICK_MS) {
             return buildPointPayload("long-press", endX, endY, "长按 (" + endX + "," + endY + ")");
         }
-        return buildSwipePayload(startX, startY, endX, endY, duration);
+        if (endX <= 0 && endY <= 0) return null;
+        int sx = startX > 0 ? startX : endX;
+        int sy = startY > 0 ? startY : endY - 300;
+        return buildSwipePayload(sx, sy, endX, endY, duration);
     }
 
     private static double distance(int x1, int y1, int x2, int y2) {

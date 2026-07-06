@@ -80,12 +80,8 @@ final class RecordingSession {
             boolean desktopReady) {
         if (activeCaseId < 0) return;
         draining = true;
-        // 降低抑制时间：原来 80-120ms 容易错过首屏操作，
-        // 40-60ms 足够跳过 Home 键释放的噪声事件。
         AssistantSession.suppressRecordingFor(desktopReady ? 40 : 60);
         AssistantSession.setArmedMode(AssistantSession.MODE_RECORD);
-        // 不在录制启动时设置 context_package，因为此时可能还在桌面
-        // context_package 应该在用户实际操作时由触摸事件动态确定
         if (ctx != null) {
             Toast.makeText(
                     ctx.getApplicationContext(),
@@ -93,9 +89,12 @@ final class RecordingSession {
                     Toast.LENGTH_SHORT).show();
         }
         Log.i(TAG, "recording armed, waiting for user operations...");
-        // Airtest 风格：设备端不再拦截触摸。
-        // Cover 已移除，录制由 PC 端 ADB getevent 负责；
-        // 设备端仅显示 RecordingOverlay 状态条。
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc != null) {
+            TouchEventOverlay.show(svc);
+        } else if (ctx != null) {
+            TouchEventOverlay.show(ctx);
+        }
         if (ctx != null) {
             RecordingOverlay.show(ctx, listener);
         }
@@ -118,7 +117,13 @@ final class RecordingSession {
                     "PC 录制已就绪",
                     Toast.LENGTH_SHORT).show();
         }
-        Log.i(TAG, "recording armed (agent mode), PC will capture touch via adb getevent");
+        Log.i(TAG, "recording armed (agent mode)");
+        AssistantAccessibilityService svc = AssistantSession.getService();
+        if (svc != null) {
+            TouchEventOverlay.show(svc);
+        } else if (ctx != null) {
+            TouchEventOverlay.show(ctx);
+        }
         if (ctx != null) {
             RecordingOverlay.show(ctx, listener);
         }
@@ -131,8 +136,8 @@ final class RecordingSession {
         PerformingActionGuard.reset();
         AssistantSession.setRecordingPaused(false);
         AssistantSession.setArmedMode(AssistantSession.MODE_IDLE);
+        TouchEventOverlay.hide();
         RecordingOverlay.hide();
-        // Airtest 风格：Cover 已移除，无需 hide/stopTouchCapture。
         activeCaseId = -1L;
         overlayListener = null;
         PluginHttpServer.setAgentRecordingActive(false);
@@ -204,37 +209,4 @@ final class RecordingSession {
         });
     }
 
-    /** 启动 getevent 触摸捕获（参考 SoloPi TouchEventTracker）。 */
-    private static void startTouchCapture() {
-        stopTouchCapture();
-        try {
-            TouchEventCapture capture = new TouchEventCapture("");
-            // 获取屏幕分辨率
-            Context ctx = AssistantApplicationHolder.get();
-            if (ctx != null) {
-                android.util.DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
-                capture.setScreenSize(dm.widthPixels, dm.heightPixels);
-            }
-            capture.setListener(gesture -> {
-                // getevent 手势回调：将步骤写入 PluginHttpServer 队列
-                RecordEventFilter.markTouchGesture(gesture);
-                PluginHttpServer.enqueueStep(gesture);
-            });
-            capture.start();
-            touchCapture = capture;
-            Log.i(TAG, "getevent touch capture started");
-        } catch (Exception e) {
-            Log.w(TAG, "startTouchCapture failed", e);
-        }
-    }
-
-    /** 停止 getevent 触摸捕获。 */
-    private static void stopTouchCapture() {
-        TouchEventCapture capture = touchCapture;
-        if (capture != null) {
-            capture.stop();
-            touchCapture = null;
-            Log.i(TAG, "getevent touch capture stopped");
-        }
-    }
 }

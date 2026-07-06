@@ -34,6 +34,7 @@ public final class AssistantSession {
     private static final AtomicReference<Long> localCaseId = new AtomicReference<>(-1L);
     private static final AtomicReference<String> recordingContextPackage = new AtomicReference<>("");
     private static volatile Runnable stepsUpdatedListener;
+    private static final AtomicBoolean geteventCaptureActive = new AtomicBoolean(false);
 
     private static volatile AssistantAccessibilityService serviceInstance;
 
@@ -182,6 +183,16 @@ public final class AssistantSession {
     static void notifyStepsUpdated() {
         Runnable r = stepsUpdatedListener;
         if (r != null) r.run();
+    }
+
+    /** 标记 getevent 触摸录制器是否活跃（用于决定 a11y 是否需要 fallback）。 */
+    static void setGeteventCaptureActive(boolean active) {
+        geteventCaptureActive.set(active);
+    }
+
+    /** 判断 getevent 触摸录制器是否活跃。 */
+    static boolean isGeteventCaptureActive() {
+        return geteventCaptureActive.get();
     }
 
     private static String normalizeMode(String mode) {
