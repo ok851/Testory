@@ -29,12 +29,10 @@ public final class AssistantSession {
 
     private static volatile long suppressRecordingUntilMs;
     private static volatile OverlayRecordPhase overlayRecordPhase = OverlayRecordPhase.IDLE;
-    private static final AtomicBoolean coverModeActive = new AtomicBoolean(false);
     private static final AtomicBoolean recordingPaused = new AtomicBoolean(false);
     private static final AtomicReference<Long> localCaseId = new AtomicReference<>(-1L);
     private static final AtomicReference<String> recordingContextPackage = new AtomicReference<>("");
     private static volatile Runnable stepsUpdatedListener;
-    private static final AtomicBoolean geteventCaptureActive = new AtomicBoolean(false);
 
     private static volatile AssistantAccessibilityService serviceInstance;
 
@@ -131,14 +129,6 @@ public final class AssistantSession {
         return v == null ? -1L : v;
     }
 
-    static boolean isCoverModeActive() {
-        return coverModeActive.get();
-    }
-
-    static void setCoverModeActive(boolean active) {
-        coverModeActive.set(active);
-    }
-
     static void suppressRecordingFor(long ms) {
         suppressRecordingUntilMs = System.currentTimeMillis() + Math.max(0, ms);
     }
@@ -183,16 +173,6 @@ public final class AssistantSession {
     static void notifyStepsUpdated() {
         Runnable r = stepsUpdatedListener;
         if (r != null) r.run();
-    }
-
-    /** 标记 getevent 触摸录制器是否活跃（用于决定 a11y 是否需要 fallback）。 */
-    static void setGeteventCaptureActive(boolean active) {
-        geteventCaptureActive.set(active);
-    }
-
-    /** 判断 getevent 触摸录制器是否活跃。 */
-    static boolean isGeteventCaptureActive() {
-        return geteventCaptureActive.get();
     }
 
     private static String normalizeMode(String mode) {

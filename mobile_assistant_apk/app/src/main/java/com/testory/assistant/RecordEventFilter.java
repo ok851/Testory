@@ -26,6 +26,8 @@ final class RecordEventFilter {
     private static long lastTouchGestureMs;
     private static long lastTouchSwipeMs;
     private static String lastTouchGestureKey = "";
+    /** getevent 与 a11y 事件的时序差可能超过 180ms，增加到 300ms */
+    private static final long TOUCH_GESTURE_SUPPRESS_MS = 300;
 
     private RecordEventFilter() {
     }
@@ -45,7 +47,7 @@ final class RecordEventFilter {
     }
 
     static boolean wasRecentTouchGesture() {
-        return System.currentTimeMillis() - lastTouchGestureMs < 180;
+        return System.currentTimeMillis() - lastTouchGestureMs < TOUCH_GESTURE_SUPPRESS_MS;
     }
 
     static boolean wasRecentTouchSwipe() {

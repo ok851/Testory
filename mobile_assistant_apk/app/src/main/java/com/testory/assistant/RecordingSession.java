@@ -22,7 +22,6 @@ final class RecordingSession {
     private static long activeCaseId = -1L;
     private static boolean draining;
     private static RecordingOverlay.Listener overlayListener;
-    private static volatile TouchEventCapture touchCapture;
 
     private static final Runnable drainRunnable = new Runnable() {
         @Override
@@ -89,12 +88,12 @@ final class RecordingSession {
                     Toast.LENGTH_SHORT).show();
         }
         Log.i(TAG, "recording armed, waiting for user operations...");
-        AssistantAccessibilityService svc = AssistantSession.getService();
-        if (svc != null) {
-            TouchEventOverlay.show(svc);
-        } else if (ctx != null) {
-            TouchEventOverlay.show(ctx);
-        }
+
+        // 纯 AccessibilityService 录制模式：
+        // getevent 在非 root 设备上不可用（Permission denied），TouchEventOverlay 会导致重复录制。
+        // 录制完全依赖 AccessibilityService 的 TYPE_TOUCH_INTERACTION/VIEW_CLICKED/VIEW_SCROLLED 事件。
+        // 桌面滑动依赖 TYPE_VIEW_SCROLLED（主流厂商 Launcher 支持），不支持的 Launcher 需使用 PC Agent 模式。
+
         if (ctx != null) {
             RecordingOverlay.show(ctx, listener);
         }
@@ -118,12 +117,7 @@ final class RecordingSession {
                     Toast.LENGTH_SHORT).show();
         }
         Log.i(TAG, "recording armed (agent mode)");
-        AssistantAccessibilityService svc = AssistantSession.getService();
-        if (svc != null) {
-            TouchEventOverlay.show(svc);
-        } else if (ctx != null) {
-            TouchEventOverlay.show(ctx);
-        }
+        // Agent 模式：PC 端通过 ADB getevent 录制，设备端不需要 Overlay
         if (ctx != null) {
             RecordingOverlay.show(ctx, listener);
         }

@@ -5,7 +5,10 @@ import android.os.Looper;
 import android.util.Log;
 
 /**
- * SoloPi performingAction 门控：注入期间禁止重复录制。
+ * 回放护盾：回放执行手势注入期间，禁止录制管线将注入的回声事件录为新步骤。
+ * <p>
+ * 历史变更：原来还用于 Cover 拦截注入期间防止回声（Cover 已移除拦截功能），
+ * 现在仅服务于回放引擎的 performingAction 门控。
  */
 final class PerformingActionGuard {
 

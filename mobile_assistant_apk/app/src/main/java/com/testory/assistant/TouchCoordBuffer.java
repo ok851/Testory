@@ -12,7 +12,7 @@ import org.json.JSONArray;
  */
 final class TouchCoordBuffer {
 
-    private static final long MATCH_WINDOW_MS = 80;
+    private static final long MATCH_WINDOW_MS = 500;
     private static final int TAP_RADIUS_PX = 24;
     private static final int MIN_SWIPE_PX = 40;
 

@@ -94,6 +94,8 @@ final class TouchEventCapture {
     // 屏幕分辨率
     private int screenWidth = 1080;
     private int screenHeight = 1920;
+    /** 是否成功初始化 getevent（用于判断是否降级） */
+    private volatile boolean initialized = false;
 
     private TouchEventListener listener;
 
@@ -112,6 +114,11 @@ final class TouchEventCapture {
     void setScreenSize(int width, int height) {
         this.screenWidth = width;
         this.screenHeight = height;
+    }
+
+    /** getevent 是否成功启动并进入读取循环（用于决定是否降级到 Overlay） */
+    boolean isInitialized() {
+        return initialized;
     }
 
     synchronized void start() {
@@ -142,13 +149,16 @@ final class TouchEventCapture {
         try {
             // 先解析触摸设备分辨率
             parseTouchDeviceResolution();
+            // 自动获取屏幕分辨率（参考 SoloPi 的 wm size 方案）
+            autoDetectScreenSize();
 
             // 启动 getevent -lt 读取触摸事件
             // 在非 root 设备上可能失败（Permission denied），此时静默退出
             String[] cmd = buildCmd("getevent", "-lt");
             process = Runtime.getRuntime().exec(cmd);
             geteventAvailable = true;
-            AssistantSession.setGeteventCaptureActive(true);
+            initialized = true;
+            // getevent 模式不再被录制使用（非 root 不可用），保留此类仅供 PC Agent ADB 模式
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream()), 4096);
 
@@ -166,9 +176,46 @@ final class TouchEventCapture {
             }
         } finally {
             running = false;
-            if (geteventAvailable) {
-                AssistantSession.setGeteventCaptureActive(false);
+            geteventAvailable = false;
+            initialized = false;
+        }
+    }
+
+    /**
+     * 自动获取屏幕分辨率（参考 SoloPi CmdTools）。
+     * 通过 wm size 命令获取实际屏幕分辨率，用于坐标映射。
+     */
+    private void autoDetectScreenSize() {
+        try {
+            String[] cmd = buildCmd("wm", "size");
+            Process p = Runtime.getRuntime().exec(cmd);
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(p.getInputStream()), 4096);
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                // 格式：Physical size: 1080x2400 或 Override size: 1080x2400
+                if (line.contains("x") && (line.contains("Physical") || line.contains("Override"))) {
+                    String[] parts = line.split(":");
+                    if (parts.length >= 2) {
+                        String sizeStr = parts[parts.length - 1].trim();
+                        String[] dims = sizeStr.split("x");
+                        if (dims.length == 2) {
+                            int w = Integer.parseInt(dims[0].trim());
+                            int h = Integer.parseInt(dims[1].trim());
+                            if (w > 0 && h > 0) {
+                                screenWidth = w;
+                                screenHeight = h;
+                                Log.i(TAG, "auto-detected screen size: " + w + "x" + h);
+                            }
+                        }
+                    }
+                }
             }
+            reader.close();
+            p.destroy();
+        } catch (Exception e) {
+            Log.w(TAG, "autoDetectScreenSize failed, using default " + screenWidth + "x" + screenHeight, e);
         }
     }
 

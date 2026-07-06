@@ -7,48 +7,27 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
-import org.json.JSONObject;
-
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
 /**
- * Cover 视觉层：全屏透明覆盖，基于 SoloPi/Maestro 的「拦截→隐藏→注入→恢复」循环。
+ * Cover 视觉层：全屏透明覆盖层（仅保留基本生命周期，用于回放护盾等场景）。
  * <p>
- * 核心原理：Cover 通过 {@code setClickable(true)} 拦截完整的触摸手势
- * （DOWN→MOVE→UP），录制后立即隐藏 Cover 并将手势通过
- * {@link AccessibilityService#dispatchGesture} 注入回应用层，确保
- * 应用（包括 Launcher 桌面）始终能收到触摸事件。
+ * 历史变更：移除了 SoloPi/Maestro 风格的「拦截→隐藏→注入→恢复」触摸拦截流水线。
+ * 录制触摸事件现在完全通过 getevent 旁路监听 + AccessibilityService 事件捕获，
+ * 不再依赖 Cover 层拦截触摸。
  * <p>
- * 悬浮窗（RecordingOverlay）使用 TYPE_APPLICATION_OVERLAY，z-order 高于
- * 本 Cover（TYPE_ACCESSIBILITY_OVERLAY），可正常接收点击。
+ * 设计参考 SoloPi：getevent 在 Linux input 层面读取触摸数据，不侵入事件分发链，
+ * 悬浮窗（RecordingOverlay）仅作为控制面板，触摸事件自然穿透到下层应用。
  */
 public final class RecordCoverView {
 
     private static final String TAG = "RecordCoverView";
 
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    /** 后台线程池：专门执行 OperationNodeExporter 节点导出，避免阻塞手势注入流水线 */
-    private static final ExecutorService COVER_WORKER =
-            Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "testory-cover");
-                t.setDaemon(true);
-                return t;
-            });
 
     private static View coverPanel;
     private static WindowManager windowManager;
-    private static int startX;
-    private static int startY;
-    private static long startMs;
-    /** SoloPi touchBlockMode：true = Cover 可见并拦截 */
-    private static volatile boolean touchBlockMode = true;
-    /** 上一次触摸事件时间戳（用于去重） */
-    private static long lastTouchMs = 0L;
 
     private RecordCoverView() {
     }
@@ -87,74 +66,6 @@ public final class RecordCoverView {
         return coverPanel != null;
     }
 
-    static boolean isTouchBlockMode() {
-        return touchBlockMode;
-    }
-
-    /** SoloPi setServiceToTouchBlockModeNoDelay */
-    static void enterTouchBlockMode() {
-        if (AssistantSession.isRecordingPaused()) {
-            return;
-        }
-        if (!AssistantSession.MODE_RECORD.equals(AssistantSession.getArmedMode())) {
-            return;
-        }
-        touchBlockMode = true;
-        runOnMain(() -> {
-            if (coverPanel != null) {
-                coverPanel.setVisibility(View.VISIBLE);
-                coverPanel.setClickable(true);
-                Log.d(TAG, "touchBlockMode ON");
-            }
-        });
-    }
-
-    /** SoloPi setServiceToNormalModeNoDelay — 注入前隐藏 Cover，触摸直达应用 */
-    static void enterDispatchMode() {
-        touchBlockMode = false;
-        runOnMain(() -> {
-            if (coverPanel != null) {
-                coverPanel.setVisibility(View.GONE);
-                coverPanel.setClickable(false);
-                Log.d(TAG, "touchBlockMode OFF (dispatch)");
-            }
-        });
-    }
-
-    static void setTouchEnabled(boolean enabled) {
-        if (enabled) {
-            enterTouchBlockMode();
-        } else {
-            hideForPause();
-        }
-    }
-
-    static void setTouchCaptureEnabled(boolean enabled) {
-        setTouchEnabled(enabled);
-    }
-
-    /** 暂停：Cover 隐藏，用户可自由操作 */
-    static void hideForPause() {
-        touchBlockMode = false;
-        MAIN.post(() -> {
-            if (coverPanel != null) {
-                coverPanel.setVisibility(View.GONE);
-            }
-        });
-    }
-
-    static void setPassThroughMode(boolean passThrough) {
-        if (passThrough) {
-            enterDispatchMode();
-        } else {
-            enterTouchBlockMode();
-        }
-    }
-
-    static boolean isPassThroughMode() {
-        return !touchBlockMode;
-    }
-
     private static void showOnMain(AccessibilityService svc) {
         hideOnMain();
         windowManager = (WindowManager) svc.getSystemService(AccessibilityService.WINDOW_SERVICE);
@@ -162,13 +73,9 @@ public final class RecordCoverView {
 
         View panel = new View(svc);
         panel.setBackgroundColor(0x01000000);
-        // 关键：setClickable(true) 使 View.onTouchEvent() 返回 true，
-        // 从而消费 ACTION_DOWN 并建立触摸目标链，Cover 得以接收完整手势
-        // （DOWN→MOVE→UP）用于录制。录制完成后通过 dispatchGesture 注入回去。
-        panel.setClickable(true);
-        panel.setEnabled(true);
+        // 不再设置 setClickable(true)：Cover 不再拦截触摸事件。
+        // 触摸录制已改为 getevent 旁路监听（参考 SoloPi TouchEventTracker）。
         panel.setFocusable(false);
-        panel.setOnTouchListener(RecordCoverView::onCoverTouch);
 
         int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
@@ -179,6 +86,7 @@ public final class RecordCoverView {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 overlayType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
@@ -188,14 +96,10 @@ public final class RecordCoverView {
         try {
             windowManager.addView(panel, lp);
             coverPanel = panel;
-            touchBlockMode = true;
-            AssistantSession.setCoverModeActive(true);
-            Log.i(TAG, "Cover overlay shown (pulse block mode)");
+            Log.i(TAG, "Cover overlay shown (pass-through mode, no touch interception)");
         } catch (Exception e) {
             Log.w(TAG, "Cover addView failed", e);
             coverPanel = null;
-            touchBlockMode = false;
-            AssistantSession.setCoverModeActive(false);
         }
     }
 
@@ -208,120 +112,6 @@ public final class RecordCoverView {
         }
         coverPanel = null;
         windowManager = null;
-        touchBlockMode = true;
-        AssistantSession.setCoverModeActive(false);
-    }
-
-    /**
-     * Cover 触摸事件入口。
-     * <p>
-     * Airtest 风格：Cover 不再用于录制拦截，仅作为回放护盾短暂显示。
-     * 任何情况下都直接透传触摸到下层应用，不做录制。
-     * <p>
-     * 返回 false 让事件继续传递到下层窗口。
-     */
-    private static boolean onCoverTouch(View v, MotionEvent event) {
-        return false;
-    }
-
-    /**
-     * 手势终止处理（Maestro / SoloPi 注入流水线）。
-     * <p>
-     * P0#2 修复：原实现中 TouchGestureClassifier.onEnd() 对快速点击（&lt;20ms）
-     * 返回 null 后直接 return，Cover 不进入 dispatchMode → 触摸被 Cover 消费但
-     * 既不注入也不录制 → 用户每次点击都需要多次尝试。
-     * <p>
-     * 修复方案：gesture 为 null 时仍执行注入流程（以短 tap 形式），确保
-     * 应用始终收到触摸，Cover 不会永久阻塞 UI 交互。
-     */
-    private static void handleTouchUp(int x, int y) {
-        if (PerformingActionGuard.isPerforming()) {
-            return;
-        }
-        AssistantAccessibilityService svc = AssistantSession.getService();
-        if (svc == null) return;
-        long duration = System.currentTimeMillis() - startMs;
-        JSONObject gesture = TouchGestureClassifier.get().onEnd(x, y);
-
-        // 防御：即使 classifier 拒绝手势（快速点击 <20ms 返回 null），
-        // 仍需注入到应用并让 Cover 进入 dispatchMode，防止触摸永久被吞。
-        final int x1 = startX;
-        final int y1 = startY;
-        final int x2 = (gesture != null) ? gesture.optInt("x2", startX) : startX;
-        final int y2 = (gesture != null) ? gesture.optInt("y2", startY) : startY;
-        final long fd = duration;
-        final String type;
-        final JSONObject fGesture;
-
-        if (gesture == null) {
-            // 分类器拒绝 → 兜底为坐标点击注入
-            type = "click";
-            fGesture = null;
-            Log.d(TAG, "[CoverTouch] gesture null (rejected by classifier), injecting fallback tap at (" + x1 + "," + y1 + ") dur=" + duration + "ms");
-        } else {
-            type = gesture.optString("type", "click");
-            fGesture = gesture;
-        }
-
-        // Step 1: 立即隐藏 Cover（同帧同步），触摸可直达应用
-        enterDispatchMode();
-        PerformingActionGuard.beginPerforming(Math.max(120, fd + 60));
-
-        // Step 2: 立即注入手势（mainHandler.post，在 coverPanel.setVisibility(GONE) 后生效）
-        svc.performCoverRecordedAction(type, null, x1, y1, x2, y2, fd, () -> {
-            RecordCoverView.finishDispatchCycle();
-        });
-
-        // Step 3: 异步导出节点信息 + 落库（仅有效手势）
-        if (fGesture != null) {
-            final int gx = fGesture.optInt("x", x2);
-            final int gy = fGesture.optInt("y", y2);
-            final String fType = type;
-            COVER_WORKER.execute(() -> {
-                try {
-                    JSONObject payload = OperationNodeExporter.exportTouchAction(
-                            svc, fType, gx, gy, x1, y1, x2, y2, fd);
-                    payload.put("source", "cover");
-                    RecordEventFilter.markTouchGesture(payload);
-                    PluginHttpServer.enqueueStep(payload);
-                    Log.d(TAG, "cover step type=" + fType + " @" + gx + "," + gy);
-                    MAIN.post(() -> RecordingOverlay.addStep(payload.optString("description", fType)));
-                } catch (Exception e) {
-                    Log.w(TAG, "[CoverTouch] exportTouchAction failed, type=" + fType, e);
-                    try {
-                        JSONObject fallback = new JSONObject();
-                        fallback.put("ts", System.currentTimeMillis());
-                        fallback.put("type", fType);
-                        fallback.put("x", x1);
-                        fallback.put("y", y1);
-                        if ("swipe".equals(fType)) {
-                            fallback.put("x1", x1);
-                            fallback.put("y1", y1);
-                            fallback.put("x2", x2);
-                            fallback.put("y2", y2);
-                        }
-                        fallback.put("source", "cover");
-                        fallback.put("description", fType + " (" + x1 + "," + y1 + ")");
-                        RecordEventFilter.markTouchGesture(fallback);
-                        PluginHttpServer.enqueueStep(fallback);
-                    } catch (Exception ignored) {}
-                }
-            });
-        }
-    }
-
-    /** 注入完成 / 失败后恢复拦截（SoloPi 约 200ms 后再进入 touchBlockMode）。 */
-    static void finishDispatchCycle() {
-        Runnable restore = () -> {
-            PerformingActionGuard.finishPerforming();
-            enterTouchBlockMode();
-        };
-        // 注入完成后立即恢复拦截，减少死区
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            MAIN.post(restore);
-        } else {
-            MAIN.post(restore);
-        }
     }
 
     private static void runOnMain(Runnable r) {

@@ -33,12 +33,16 @@ import java.util.concurrent.atomic.AtomicReference;
 public class AssistantAccessibilityService extends AccessibilityService {
 
     private static final int FOCUS_RECORD_DELAY_MS = 80;
+    private static final int TAP_RADIUS = 48;
 
     private String armedMode = AssistantSession.MODE_IDLE;
     private String lastRecordedPackage = "";
     private long lastAppSwitchMs = 0L;
     private long lastScrollEventMs = 0L;
     private long lastDirectClickMs = 0L;
+    /** 最近一次触摸坐标（桌面图标点击时 TYPE_VIEW_CLICKED 可能不触发，用此兜底） */
+    private int lastTouchX = 0;
+    private int lastTouchY = 0;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable pendingFocusRecord;
     private Runnable pendingInputRecord;
@@ -56,7 +60,7 @@ public class AssistantAccessibilityService extends AccessibilityService {
     private void handleAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || AssistantSession.MODE_IDLE.equals(armedMode)) return;
 
-        // P0 修复：顶层过滤自身包名事件，防止悬浮窗、Cover、Toast 等自身 UI 事件泄漏到录制管线。
+        // P0 修复：顶层过滤自身包名事件，防止悬浮窗、Toast 等自身 UI 事件泄漏到录制管线。
         // 参考 SoloPi AccessibilityServiceImpl L94-96：第一时间丢弃自身包名事件。
         // 原有分散在各事件类型中的 if 过滤仅覆盖 CLICKED/TOUCH_INTERACTION 两类，
         // 其余 TYPES_ALL_MASK 下的 Windows事件/Notification 等仍可能从自身 UI 泄漏。
@@ -72,22 +76,20 @@ public class AssistantAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // 本地录制模式（非 PC Agent）：
-        // 使用 AccessibilityService 的 TYPE_TOUCH_INTERACTION 和 TYPE_VIEW_CLICKED 事件录制
-        // 原缺陷：依赖 getevent 但实际无法工作，导致无录制源
-        // 新逻辑：始终使用 a11y 服务作为录制源，放弃 getevent 方案
+        // 纯 AccessibilityService 录制模式：
+        // VIEW_CLICKED/LONG_CLICKED 作为 click 的兜底录制源，
+        // TYPE_TOUCH_INTERACTION (API 31+) 作为高精度触摸坐标源，
+        // TYPE_VIEW_SCROLLED 作为滑动兜底源。
         if (AssistantSession.MODE_RECORD.equals(armedMode)
                 && !PluginHttpServer.isAgentRecordingActive()) {
             int type = event.getEventType();
-            // 仅过滤 VIEW_CLICKED/LONG_CLICKED（当触摸管线已产出步骤时会被抑制）
-            // TYPE_TOUCH_INTERACTION_START/END 必须保留，这是主要录制源
             if (type == AccessibilityEvent.TYPE_VIEW_CLICKED
                     || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) {
-                // 仅当触摸管线已产出步骤时跳过，避免重复录制
+                // TOUCH_INTERACTION 已通过 markTouchGesture 标记，
+                // VIEW_CLICKED 事件可能是同一操作的回声，需去重
                 if (RecordEventFilter.wasRecentTouchGesture()) {
                     return;
                 }
-                // 否则保留，作为触摸事件未捕获时的兜底
             }
         }
 
@@ -109,40 +111,15 @@ public class AssistantAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // Cover 脉冲模式：触摸由 Cover 拦截+注入，禁用被动 click/long_click 避免重复步骤。
-        // 修复原缺陷：
-        // 1. TYPE_TOUCH_INTERACTION_START/END 不应被过滤，它们是滑动手势的坐标来源。
-        // 2. TYPE_VIEW_SCROLLED 不应被过滤，它是滑动距离/方向的主要来源。
-        // 仅过滤 VIEW_CLICKED/LONG_CLICKED/SELECTED（Cover 注入手势后会触发这些事件）。
-        // Design inspired by mobile-automation-guide: 手势分类应基于完整的触摸生命周期。
-        if (AssistantSession.isCoverModeActive()) {
-            if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
-                // 仍录制文本输入
-            } else if (type == AccessibilityEvent.TYPE_VIEW_CLICKED
-                    || type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
-                    || type == AccessibilityEvent.TYPE_VIEW_SELECTED) {
-                return;
-            }
-            // 注意：TYPE_TOUCH_INTERACTION_START/END 和 TYPE_VIEW_SCROLLED 不再被过滤，
-            // 以确保滑动手势能被正确捕获和录制。
-        }
-
-        if (TouchEventOverlay.isVisible()) {
-            if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
-                    || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
-                return;
-            }
-        }
+        // 纯 AccessibilityService 录制模式：不使用 getevent（非 root 不可用），
+        // 不使用 TouchEventOverlay（导致重复录制）。
+        // 所有触摸事件通过 TYPE_TOUCH_INTERACTION/VIEW_CLICKED/VIEW_SCROLLED 捕获。
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (AssistantSession.isCoverModeActive()) {
-                if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
-                        || type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END) {
-                    return;
-                }
-            }
             if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START) {
                 int[] pt = extractTouchPoint(event);
+                lastTouchX = pt[0];
+                lastTouchY = pt[1];
                 TouchGestureClassifier.get().onStart(pt[0], pt[1]);
                 TouchCoordBuffer.beginInteraction(pt[0], pt[1]);
                 return;
@@ -266,6 +243,13 @@ public class AssistantAccessibilityService extends AccessibilityService {
             payload.put("scroll_delta_y", event.getScrollDeltaY());
             // Extract source bounds for coordinate resolution
             try {
+                Context appCtx = AssistantApplicationHolder.get();
+                int screenW = 1080, screenH = 1920;
+                if (appCtx != null) {
+                    android.util.DisplayMetrics dm = appCtx.getResources().getDisplayMetrics();
+                    screenW = dm.widthPixels;
+                    screenH = dm.heightPixels;
+                }
                 AccessibilityNodeInfo srcNode = event.getSource();
                 if (srcNode != null) {
                     android.graphics.Rect r = new android.graphics.Rect();
@@ -275,26 +259,49 @@ public class AssistantAccessibilityService extends AccessibilityService {
                     int cy = r.centerY();
                     int dx = event.getScrollDeltaX();
                     int dy = event.getScrollDeltaY();
-                    // 原缺陷：仅有 scroll_delta 时 x1==x2，桌面端显示/回放均为零位移滑动。
+                    // 修复：dx/dy 通常为 1-3px，乘以固定倍数不可靠。
+                    // 改为使用屏幕宽度/高度的 30% 作为滑动距离，方向由 delta 符号决定。
                     payload.put("x1", cx);
                     payload.put("y1", cy);
-                    payload.put("x2", cx - dx * 4);
-                    payload.put("y2", cy - dy * 4);
+                    if (dx != 0) {
+                        // 水平滑动：从中心出发，滑动屏幕宽度 30%
+                        int swipeLen = Math.abs(screenW * 3 / 10);
+                        payload.put("x2", dx > 0 ? cx - swipeLen : cx + swipeLen);
+                        payload.put("y2", cy);
+                    } else if (dy != 0) {
+                        // 垂直滑动：从中心出发，滑动屏幕高度 30%
+                        int swipeLen = Math.abs(screenH * 3 / 10);
+                        payload.put("x2", cx);
+                        payload.put("y2", dy > 0 ? cy - swipeLen : cy + swipeLen);
+                    } else {
+                        payload.put("x2", cx);
+                        payload.put("y2", cy);
+                    }
+                    payload.put("screen_width", screenW);
+                    payload.put("screen_height", screenH);
                     srcNode.recycle();
                 } else {
                     // getSource() 返回 null 时（自定义 View），使用屏幕中心作为兜底
                     int dx = event.getScrollDeltaX();
                     int dy = event.getScrollDeltaY();
-                    Context appCtx = AssistantApplicationHolder.get();
-                    if (appCtx != null) {
-                        android.util.DisplayMetrics dm = appCtx.getResources().getDisplayMetrics();
-                        int cx = dm.widthPixels / 2;
-                        int cy = dm.heightPixels / 2;
-                        payload.put("x1", cx);
-                        payload.put("y1", cy);
-                        payload.put("x2", cx - dx * 4);
-                        payload.put("y2", cy - dy * 4);
+                    int cx = screenW / 2;
+                    int cy = screenH / 2;
+                    payload.put("x1", cx);
+                    payload.put("y1", cy);
+                    if (dx != 0) {
+                        int swipeLen = Math.abs(screenW * 3 / 10);
+                        payload.put("x2", dx > 0 ? cx - swipeLen : cx + swipeLen);
+                        payload.put("y2", cy);
+                    } else if (dy != 0) {
+                        int swipeLen = Math.abs(screenH * 3 / 10);
+                        payload.put("x2", cx);
+                        payload.put("y2", dy > 0 ? cy - swipeLen : cy + swipeLen);
+                    } else {
+                        payload.put("x2", cx);
+                        payload.put("y2", cy);
                     }
+                    payload.put("screen_width", screenW);
+                    payload.put("screen_height", screenH);
                 }
             } catch (Exception ignored) {}
         } else if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
@@ -372,6 +379,49 @@ public class AssistantAccessibilityService extends AccessibilityService {
             HighlightOverlay.show(this, bounds);
         }
         TouchCoordBuffer.applyToPayload(payload);
+        // 修复：当以上所有策略都未获取到 bounds 时，
+        // 使用最近触摸坐标（lastTouchX/Y）创建合成 bounds。
+        // 桌面图标点击时 event.getSource() 和焦点节点都可能为 null，
+        // TouchCoordBuffer 的 500ms 窗口也可能因时序问题未命中。
+        // API < 31 设备无 TYPE_TOUCH_INTERACTION，lastTouchX/Y 始终为 0，
+        // 此时使用屏幕中心作为兜底（总比 0,0 好，回放时至少能产生有效手势）。
+        if (!payload.has("bounds")) {
+            int tx = lastTouchX > 0 ? lastTouchX : 0;
+            int ty = lastTouchY > 0 ? lastTouchY : 0;
+            // API < 31 兜底：lastTouchX/Y 为 0 时使用屏幕中心
+            if (tx <= 0 && ty <= 0) {
+                try {
+                    Context appCtx = AssistantApplicationHolder.get();
+                    if (appCtx != null) {
+                        android.util.DisplayMetrics dm = appCtx.getResources().getDisplayMetrics();
+                        tx = dm.widthPixels / 2;
+                        ty = dm.heightPixels / 2;
+                    }
+                } catch (Exception ignored) {
+                }
+                if (tx <= 0) tx = 540;
+                if (ty <= 0) ty = 960;
+            }
+            JSONArray tb = new JSONArray();
+            tb.put(Math.max(0, tx - TAP_RADIUS));
+            tb.put(Math.max(0, ty - TAP_RADIUS));
+            tb.put(tx + TAP_RADIUS);
+            tb.put(ty + TAP_RADIUS);
+            try {
+                payload.put("bounds", tb);
+                payload.put("x", tx);
+                payload.put("y", ty);
+            } catch (Exception ignored) {
+            }
+            // 关键修复：更新局部 bounds 变量，确保后续 enrichPayload 能执行。
+            // 原缺陷：仅写入 payload JSON 但未更新局部 bounds，
+            // 导致 enrichPayload 的 bounds!=null 检查失败，坐标不写入 operation_node。
+            bounds = new Rect(
+                    Math.max(0, tx - TAP_RADIUS),
+                    Math.max(0, ty - TAP_RADIUS),
+                    tx + TAP_RADIUS,
+                    ty + TAP_RADIUS);
+        }
         String payloadType = payload.optString("type", "");
         if (AssistantSession.MODE_RECORD.equals(armedMode) && bounds != null
                 && ("click".equals(payloadType) || "long-press".equals(payloadType))) {
@@ -591,7 +641,6 @@ public class AssistantAccessibilityService extends AccessibilityService {
 
     private void handleAppSwitchRecord(AccessibilityEvent event) {
         if (!AssistantSession.MODE_RECORD.equals(armedMode)) return;
-        if (TouchEventOverlay.isVisible()) return;
         try {
             CharSequence pkgCs = event.getPackageName();
             if (pkgCs == null) return;
@@ -609,7 +658,11 @@ public class AssistantAccessibilityService extends AccessibilityService {
 
             if (isLauncherPackage(prevPkg) && !isLauncherPackage(pkg) && !isSystemUiPackage(pkg)
                     && !isLauncherIntermediatePackage(pkg)
-                    && !RecordEventFilter.wasRecentTouchGesture()) {
+                    && !RecordEventFilter.wasRecentTouchGesture()
+                    // 修复：桌面点击图标时 VIEW_CLICKED 已记录 click 步骤，
+                    // 紧随的 WINDOW_STATE_CHANGED 产生 open_app 步骤，导致同一操作生成两个步骤。
+                    // 如果最近 500ms 内已有 click 步骤，跳过 open_app（语义重复）。
+                    && (now - lastDirectClickMs > 500)) {
                 JSONObject payload = new JSONObject();
                 payload.put("ts", now);
                 payload.put("type", "open_app");
@@ -617,7 +670,21 @@ public class AssistantAccessibilityService extends AccessibilityService {
                 payload.put("app_label", resolveAppLabelLocal(pkg));
                 payload.put("description", "打开应用[" + resolveAppLabelLocal(pkg) + "]");
                 payload.put("source", "a11y_switch");
+                // 携带最近触摸坐标，确保回放时可以定位到图标位置
+                if (lastTouchX > 0 && lastTouchY > 0) {
+                    payload.put("x", lastTouchX);
+                    payload.put("y", lastTouchY);
+                    Context appCtx = AssistantApplicationHolder.get();
+                    if (appCtx != null) {
+                        android.util.DisplayMetrics dm = appCtx.getResources().getDisplayMetrics();
+                        payload.put("screen_width", dm.widthPixels);
+                        payload.put("screen_height", dm.heightPixels);
+                    }
+                }
                 PluginHttpServer.enqueueStep(payload);
+                // 重置触摸坐标，避免被后续 open_app 复用
+                lastTouchX = 0;
+                lastTouchY = 0;
             }
         } catch (Exception ignored) {
         }
@@ -857,189 +924,9 @@ public class AssistantAccessibilityService extends AccessibilityService {
         return dispatchGestureSync(gesture);
     }
 
-    /** Cover 录制：Cover 已隐藏后注入手势，完成后回调恢复 touchBlockMode。 */
-    void performCoverRecordedAction(
-            String type,
-            JSONObject payload,
-            int x1,
-            int y1,
-            int x2,
-            int y2,
-            long durationMs,
-            Runnable onComplete) {
-        mainHandler.post(() -> {
-            Runnable done = () -> {
-                if (onComplete != null) {
-                    onComplete.run();
-                }
-            };
-            try {
-                if ("swipe".equals(type)) {
-                    long dur = effectiveSwipeDurationMs(x1, y1, x2, y2, durationMs);
-                    dispatchCoverSwipeAsync(x1, y1, x2, y2, dur, done);
-                    return;
-                }
-                JSONObject spec = payload != null ? payload.optJSONObject("operation_node") : null;
-                String st = "";
-                String sv = "";
-                if (spec != null) {
-                    if (spec.has("resource_id")) {
-                        st = "id";
-                        sv = spec.optString("resource_id");
-                    } else if (spec.has("content_desc")) {
-                        st = "accessibility_id";
-                        sv = spec.optString("content_desc");
-                    }
-                }
-                // P0 修复：payload 为 null 时（Cover handleTouchUp 调用），
-                // 使用传入的 x1/y1 原始触摸坐标，而非从 null payload 取默认 0。
-                // 原缺陷：payload=null → x=0,y=0 → dispatchCoverTapAsync 跳过注入
-                // → Cover 隐藏但手势未注入 → 触摸被永久吞掉。
-                int x = (payload != null) ? payload.optInt("x", x1) : x1;
-                int y = (payload != null) ? payload.optInt("y", y1) : y1;
-                if ("long-press".equals(type) || "long_press".equals(type)) {
-                    if (trySelectorAction(st, sv, spec, true, x, y)) {
-                        done.run();
-                        return;
-                    }
-                    dispatchCoverLongPressAsync(x > 0 ? x : x1, y > 0 ? y : y1, done);
-                    return;
-                }
-                if (trySelectorAction(st, sv, spec, false, x, y)) {
-                    done.run();
-                    return;
-                }
-                dispatchCoverTapAsync(x > 0 ? x : x1, y > 0 ? y : y1, done);
-            } catch (Exception e) {
-                android.util.Log.w("TestoryA11y", "performCoverRecordedAction failed", e);
-                done.run();
-            }
-        });
-    }
-
-    void performCoverRecordedAction(
-            String type,
-            JSONObject payload,
-            int x1,
-            int y1,
-            int x2,
-            int y2,
-            long durationMs) {
-        performCoverRecordedAction(type, payload, x1, y1, x2, y2, durationMs, null);
-    }
-
-    private static long effectiveSwipeDurationMs(int x1, int y1, int x2, int y2, long durationMs) {
-        long dur = Math.max(80, Math.min(durationMs > 0 ? durationMs : 320, 2000));
-        int dx = Math.abs(x2 - x1);
-        int dy = Math.abs(y2 - y1);
-        if (Math.max(dx, dy) >= 120 && dur < 280) {
-            dur = 280;
-        }
-        return dur;
-    }
-
-    private boolean trySelectorAction(
-            String selectorType,
-            String selectorValue,
-            JSONObject opNode,
-            boolean longPress,
-            int x,
-            int y) {
-        AccessibilityNodeInfo node = findNode(selectorType, selectorValue);
-        if (node == null && opNode != null) {
-            node = OperationNodeLocator.findLiveNode(this, wrapOpNode(opNode));
-        }
-        if (node == null) return false;
-        int action = longPress
-                ? AccessibilityNodeInfo.ACTION_LONG_CLICK
-                : AccessibilityNodeInfo.ACTION_CLICK;
-        boolean ok = node.performAction(action);
-        node.recycle();
-        if (ok) return true;
-        return x <= 0 && y <= 0;
-    }
-
-    private void dispatchCoverTapAsync(int x, int y, Runnable onComplete) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || x <= 0 || y <= 0) {
-            if (onComplete != null) onComplete.run();
-            return;
-        }
-        Path path = new Path();
-        path.moveTo(x, y);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, 80);
-        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
-        dispatchCoverGestureAsync(gesture, onComplete);
-    }
-
-    private void dispatchCoverLongPressAsync(int x, int y, Runnable onComplete) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || x <= 0 || y <= 0) {
-            if (onComplete != null) onComplete.run();
-            return;
-        }
-        Path path = new Path();
-        path.moveTo(x, y);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, 650);
-        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
-        dispatchCoverGestureAsync(gesture, onComplete);
-    }
-
-    private void dispatchCoverSwipeAsync(int x1, int y1, int x2, int y2, long durationMs, Runnable onComplete) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-            if (onComplete != null) onComplete.run();
-            return;
-        }
-        if (x1 == 0 && y1 == 0 && x2 == 0 && y2 == 0) {
-            if (onComplete != null) onComplete.run();
-            return;
-        }
-        Path path = new Path();
-        path.moveTo(x1, y1);
-        path.lineTo(x2, y2);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, durationMs);
-        GestureDescription gesture = new GestureDescription.Builder().addStroke(stroke).build();
-        dispatchCoverGestureAsync(gesture, onComplete);
-    }
-
-    private void dispatchCoverGestureAsync(GestureDescription gesture, Runnable onComplete) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || gesture == null) {
-            if (onComplete != null) onComplete.run();
-            return;
-        }
-        boolean dispatched = dispatchGesture(gesture, new GestureResultCallback() {
-            @Override
-            public void onCompleted(GestureDescription gestureDescription) {
-                if (onComplete != null) onComplete.run();
-            }
-
-            @Override
-            public void onCancelled(GestureDescription gestureDescription) {
-                if (onComplete != null) onComplete.run();
-            }
-        }, null);
-        if (!dispatched) {
-            android.util.Log.w("TestoryA11y", "dispatchCoverGestureAsync not dispatched");
-            if (onComplete != null) onComplete.run();
-        }
-    }
-
-    private void dispatchCoverTapAsync(int x, int y) {
-        dispatchCoverTapAsync(x, y, null);
-    }
-
-    private void dispatchCoverLongPressAsync(int x, int y) {
-        dispatchCoverLongPressAsync(x, y, null);
-    }
-
-    private void dispatchCoverSwipeAsync(int x1, int y1, int x2, int y2, long durationMs) {
-        dispatchCoverSwipeAsync(x1, y1, x2, y2, durationMs, null);
-    }
-
-    private void dispatchCoverGestureAsync(GestureDescription gesture) {
-        dispatchCoverGestureAsync(gesture, null);
-    }
+    // --- 以下为回用手势注入方法（回放引擎使用） ---
+    // 已移除：Cover 拦截注入流水线、getevent 旁路监听
+    // 录制完全通过 AccessibilityService 事件捕获
 
     private void dispatchTapAsync(int x, int y) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || x <= 0 || y <= 0) return;
