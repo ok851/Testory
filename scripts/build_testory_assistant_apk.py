@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APK_PROJECT = ROOT / "mobile_assistant_apk"
+APK_PROJECT = ROOT / "mobile_assistant_apk_v2"  # v2 Kotlin/Compose project
 OUTPUT_APK = ROOT / "config" / "plugin_bundles" / "testory-assistant.apk"
 GRADLE_VERSION = "8.4"
 CMDTOOLS_URL = "https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip"

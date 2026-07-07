@@ -305,6 +305,11 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
             return lambda f: f
         return role_required(*args)
 
+    # ── 健康检查（无认证，供移动端探测服务器可达性）──
+    @app.route("/api/ping", methods=["GET"])
+    def api_ping():
+        return jsonify({"success": True, "message": "pong", "server": "testory"})
+
     @app.route("/api/mobile/sync/pair/init", methods=["POST"])
     @login_required
     @_roles("admin", "tester", "project_manager", "test_lead")

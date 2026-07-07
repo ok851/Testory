@@ -13,7 +13,8 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 _PLUGIN_ID = "mobile-testory-assistant"
-_PACKAGE = "com.testory.assistant"
+_PACKAGE = "com.testory.assistant.v2"  # v2 APK package
+_LEGACY_PACKAGE = "com.testory.assistant"  # v1 legacy fallback
 _ROOT = Path(__file__).resolve().parent
 _MANIFEST_PATH = _ROOT / "config" / "plugin_bundles" / "testory_mobile_assistant.json"
 _STAGED_APK_NAME = "testory-assistant.apk"
@@ -47,6 +48,11 @@ def _manifest() -> Dict[str, Any]:
 
 def resolve_assistant_apk_path() -> Optional[Path]:
     """安装包内置 APK（发布目录 / 开发构建产物）。"""
+    # 优先使用 gradle 最新构建产物（无需手动复制）
+    gradle_build = _ROOT / "mobile_assistant_apk_v2" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    if gradle_build.is_file():
+        return gradle_build.resolve()
+
     manifest = _manifest()
     filename = manifest.get("apk_filename") or _STAGED_APK_NAME
     patterns = manifest.get("local_bundle_search") or [
@@ -207,7 +213,7 @@ def prepare_testory_assistant(*, progress_cb=None) -> Dict[str, Any]:
     if src is None:
         return {
             "success": False,
-            "error": "未找到助手 APK。请从插件包目录放置 testory-assistant.apk，或编译 mobile_assistant_apk 工程。",
+            "error": "未找到助手 APK。请从插件包目录放置 testory-assistant.apk，或编译 mobile_assistant_apk_v2 工程。",
             "plugin_id": _PLUGIN_ID,
         }
     dest_dir = assistant_staging_dir()
@@ -332,7 +338,7 @@ def push_testory_assistant_to_device(
         try:
             _step(85, "打开助手引导页…")
             subprocess.run(
-                _adb_cmd(udid) + ["shell", "am", "start", "-n", f"{_PACKAGE}/.MainActivity"],
+                _adb_cmd(udid) + ["shell", "am", "start", "-n", f"{_PACKAGE}/com.testory.assistant.v2.MainActivity"],
                 capture_output=True,
                 text=True,
                 timeout=15,

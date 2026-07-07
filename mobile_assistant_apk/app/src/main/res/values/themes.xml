@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="Theme.TestoryAssistant" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">#4F46E5</item>
-        <item name="colorPrimaryVariant">#4338CA</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorAccent">#7C3AED</item>
-    </style>
-</resources>

@@ -1,0 +1,212 @@
+package com.testory.assistant.v2.feature.replay
+
+import android.app.Application
+import android.content.Intent
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.testory.assistant.v2.core.model.*
+import com.testory.assistant.v2.core.repository.CaseRepository
+import com.testory.assistant.v2.service.accessibility.AccessibilityServiceHolder
+import com.testory.assistant.v2.service.foreground.FloatingControlService
+import com.testory.assistant.v2.service.foreground.RecorderForegroundService
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.util.UUID
+import javax.inject.Inject
+
+/**
+ * 回放引擎 ViewModel — 按步骤顺序执行测试用例。
+ * 接入真实的 AssistantAccessibilityService 执行操作。
+ */
+@HiltViewModel
+class ReplayViewModel @Inject constructor(
+    private val application: Application,
+    private val caseRepository: CaseRepository
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow(ReplayUiState())
+    val uiState: StateFlow<ReplayUiState> = _uiState.asStateFlow()
+
+    private var replayJob: Job? = null
+    private var steps: List<Step> = emptyList()
+
+    suspend fun loadCase(caseId: String) {
+        val testCase = withContext(Dispatchers.IO) {
+            caseRepository.getCase(caseId)
+        }
+        steps = testCase?.steps?.mapIndexed { idx, step ->
+            // Ensure step has index set for tracking
+            if (step.index <= 0) step.copy(index = idx + 1) else step
+        } ?: emptyList()
+        _uiState.update {
+            it.copy(
+                testCase = testCase,
+                totalSteps = steps.size,
+                replayState = ReplayState.IDLE,
+                stepResults = emptyList(),
+                currentStep = 0,
+                passedCount = 0,
+                failedCount = 0,
+                elapsedMs = 0
+            )
+        }
+    }
+
+    fun startReplay() {
+        if (steps.isEmpty()) return
+        if (replayJob?.isActive == true) return
+
+        replayJob = viewModelScope.launch(Dispatchers.Default) {
+            _uiState.update {
+                it.copy(
+                    replayState = ReplayState.RUNNING,
+                    currentStep = 0,
+                    passedCount = 0,
+                    failedCount = 0,
+                    elapsedMs = 0,
+                    stepResults = emptyList()
+                )
+            }
+
+            // Start foreground notification
+            try {
+                val notiIntent = Intent(application, RecorderForegroundService::class.java).apply {
+                    putExtra(RecorderForegroundService.EXTRA_MODE, "replaying")
+                }
+                application.startForegroundService(notiIntent)
+            } catch (_: Exception) { }
+
+            // Get accessibility service
+            val service = AccessibilityServiceHolder.instance
+            if (service == null) {
+                _uiState.update {
+                    it.copy(
+                        replayState = ReplayState.FAILED,
+                        errorMessage = "无障碍服务未开启，请在设置中开启后重试"
+                    )
+                }
+                return@launch
+            }
+
+            val startTime = System.currentTimeMillis()
+            val results = mutableListOf<StepResult>()
+            var passed = 0
+            var failed = 0
+
+            for ((index, step) in steps.withIndex()) {
+                // Check if cancelled
+                if (_uiState.value.replayState == ReplayState.CANCELLED) break
+
+                // Wait before step
+                if (step.preWaitMs > 0) {
+                    delay(step.preWaitMs)
+                }
+
+                // Enrich step with coordinate fallback if needed
+                val enrichedStep = enrichStep(step)
+
+                // Execute step via accessibility service
+                val result = service.executeStep(enrichedStep)
+                results.add(result)
+
+                if (result.success) {
+                    passed++
+                } else {
+                    failed++
+                    // Stop on failure unless step is optional
+                    if (!step.optional) {
+                        _uiState.update {
+                            it.copy(
+                                replayState = ReplayState.FAILED,
+                                currentStep = index + 1,
+                                passedCount = passed,
+                                failedCount = failed,
+                                elapsedMs = System.currentTimeMillis() - startTime,
+                                stepResults = results.toList(),
+                                errorMessage = result.errorMessage
+                            )
+                        }
+                        // Stop foreground
+                        stopForegroundServices()
+                        return@launch
+                    }
+                }
+
+                _uiState.update {
+                    it.copy(
+                        currentStep = index + 1,
+                        passedCount = passed,
+                        failedCount = failed,
+                        elapsedMs = System.currentTimeMillis() - startTime,
+                        stepResults = results.toList()
+                    )
+                }
+            }
+
+            val elapsed = System.currentTimeMillis() - startTime
+            val allPassed = failed == 0
+            _uiState.update {
+                it.copy(
+                    replayState = if (allPassed) ReplayState.COMPLETED else ReplayState.FAILED,
+                    elapsedMs = elapsed,
+                    stepResults = results.toList()
+                )
+            }
+
+            // Save run result
+            caseRepository.saveRunResult(
+                RunResultSummary(
+                    runId = UUID.randomUUID().toString(),
+                    success = allPassed,
+                    totalSteps = steps.size,
+                    passedSteps = passed,
+                    failedStepIndex = if (allPassed) -1 else results.indexOfFirst { !it.success } + 1,
+                    durationMs = elapsed,
+                    runAt = startTime
+                )
+            )
+
+            stopForegroundServices()
+        }
+    }
+
+    fun resumeReplay() {
+        _uiState.update { it.copy(replayState = ReplayState.RUNNING) }
+    }
+
+    fun cancelReplay() {
+        replayJob?.cancel()
+        _uiState.update { it.copy(replayState = ReplayState.CANCELLED) }
+        stopForegroundServices()
+    }
+
+    /**
+     * 补充步骤的坐标信息。
+     * 当 selector 和 coordinate 都为空时，尝试从 targetNode bounds 推导坐标。
+     */
+    private fun enrichStep(step: Step): Step {
+        val hasLocator = !step.locator.isEmpty
+        val hasCoordinate = step.screenCoordinate?.isValid == true
+
+        if (hasLocator || hasCoordinate) return step
+
+        // Fallback: try to derive coordinate from targetNode bounds
+        val node = step.targetNode
+        if (node != null && node.bounds.isValid) {
+            val coord = node.bounds.toScreenCoordinate()
+            return step.copy(
+                screenCoordinate = coord,
+                locationSource = LocationSource.COORDINATE
+            )
+        }
+
+        return step
+    }
+
+    private fun stopForegroundServices() {
+        try {
+            application.stopService(Intent(application, RecorderForegroundService::class.java))
+        } catch (_: Exception) { }
+    }
+}

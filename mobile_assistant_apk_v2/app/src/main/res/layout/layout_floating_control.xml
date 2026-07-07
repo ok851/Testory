@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/layout_floating_root"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:background="@drawable/bg_floating_control"
+    android:padding="8dp"
+    android:gravity="center_vertical"
+    android:elevation="8dp">
+
+    <TextView
+        android:id="@+id/tv_floating_step_count"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0 步"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:paddingHorizontal="8dp" />
+
+    <View
+        android:layout_width="1dp"
+        android:layout_height="24dp"
+        android:background="#33FFFFFF"
+        android:layout_marginHorizontal="4dp" />
+
+    <ImageButton
+        android:id="@+id/btn_floating_pause"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:src="@android:drawable/ic_media_pause"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:scaleType="fitCenter"
+        android:padding="4dp"
+        android:tint="#FFFFFF"
+        android:contentDescription="暂停" />
+
+    <ImageButton
+        android:id="@+id/btn_floating_stop"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:src="@android:drawable/ic_media_play"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:scaleType="fitCenter"
+        android:padding="4dp"
+        android:tint="#FF5252"
+        android:contentDescription="停止" />
+
+</LinearLayout>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Testory 智测工坊</string>
+    <string name="accessibility_service_description">Testory 需要无障碍服务权限来录制和回放测试操作。\n\n录制时：自动捕获你的触摸、输入、滑动操作。\n回放时：模拟执行录制的操作序列。\n\n所有数据仅保存在本地，不会上传到任何服务器。</string>
+</resources>

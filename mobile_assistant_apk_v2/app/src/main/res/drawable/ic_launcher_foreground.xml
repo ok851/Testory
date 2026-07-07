@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Shield / Robot icon representing test automation -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,28L54,28C44.1,28 36,36.1 36,46v4c-3.3,0 -6,2.7 -6,6v14c0,3.3 2.7,6 6,6h3l2,10h26l2,-10h3c3.3,0 6,-2.7 6,-6V56c0,-3.3 -2.7,-6 -6,-6v-4C72,36.1 63.9,28 54,28zM54,34c6.6,0 12,5.4 12,12v4H42v-4C42,39.4 47.4,34 54,34zM36,56h36v14H36V56z"/>
+    <!-- Checkmark in center -->
+    <path
+        android:fillColor="#FF1565C0"
+        android:pathData="M48,64l-4,-4 -3,3 7,7 12,-12 -3,-3z"/>
+</vector>

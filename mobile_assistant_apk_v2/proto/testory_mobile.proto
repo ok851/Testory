@@ -1,0 +1,381 @@
+syntax = "proto3";
+
+package testory.mobile.v2;
+
+option java_package = "com.testory.assistant.v2.proto";
+option java_multiple_files = true;
+
+// ============================================================================
+// Testory 移动端助手 gRPC 协议 (Phase 2 开始启用)
+// 单端口 :8777 统一通信，替代 v1 的三端口 HTTP/WS 方案
+// ============================================================================
+
+// ── 录制服务 ──
+service RecordingService {
+  // 开始录制
+  rpc StartRecording(StartRecordingRequest) returns (RecordingResponse);
+  // 停止录制
+  rpc StopRecording(StopRecordingRequest) returns (RecordingResponse);
+  // 暂停/恢复录制
+  rpc PauseRecording(PauseRecordingRequest) returns (RecordingResponse);
+  // 实时推送录制步骤 (server-side streaming)
+  rpc PollSteps(PollStepsRequest) returns (stream StepMessage);
+  // 推送当前屏幕截图 (client-side streaming)
+  rpc StreamScreenshots(stream ScreenshotFrame) returns (StreamResponse);
+}
+
+// ── 回放服务 ──
+service ReplayService {
+  // 开始回放
+  rpc StartReplay(StartReplayRequest) returns (ReplayResponse);
+  // 获取回放状态 (server-side streaming)
+  rpc WatchReplay(WatchReplayRequest) returns (stream ReplayStatusUpdate);
+  // 取消回放
+  rpc CancelReplay(CancelReplayRequest) returns (ReplayResponse);
+}
+
+// ── AI 桥接服务 ──
+service AIBridgeService {
+  // 移动端发送意图 → PC AI 推理 → 返回步骤流
+  rpc GenerateSteps(GenerateStepsRequest) returns (stream StepMessage);
+  // 视觉分析（需要 PC Ollama 视觉模型）
+  rpc AnalyzeScreen(AnalyzeScreenRequest) returns (AnalyzeScreenResponse);
+  // 元素识别辅助
+  rpc IdentifyElement(IdentifyElementRequest) returns (IdentifyElementResponse);
+}
+
+// ── 设备服务 ──
+service DeviceService {
+  // 获取设备信息
+  rpc GetDeviceInfo(GetDeviceInfoRequest) returns (DeviceInfoMessage);
+  // 获取当前 UI 树
+  rpc GetUiTree(GetUiTreeRequest) returns (UiTreeMessage);
+  // 执行 adb 命令（远程调试）
+  rpc ExecuteCommand(ExecuteCommandRequest) returns (ExecuteCommandResponse);
+}
+
+// ── 同步服务 ──
+service SyncService {
+  // 同步用例列表
+  rpc SyncCases(SyncCasesRequest) returns (SyncCasesResponse);
+  // 推送用例
+  rpc PushCase(PushCaseRequest) returns (SyncResponse);
+  // 拉取用例
+  rpc PullCases(PullCasesRequest) returns (stream CaseMessage);
+  // 上报回放结果
+  rpc ReportReplayResult(ReportRequest) returns (SyncResponse);
+}
+
+// ── 投屏服务 ──
+service MirrorService {
+  // 推送视频流 (server-side streaming)
+  rpc StreamVideo(VideoStreamRequest) returns (stream VideoFrame);
+  // 接收 PC 端触摸指令 (bidirectional streaming)
+  rpc TouchChannel(stream TouchEvent) returns (stream TouchEvent);
+}
+
+// ============================================================================
+// 通用消息类型
+// ============================================================================
+
+message StepMessage {
+  string id = 1;
+  string case_id = 2;
+  int32 index = 3;
+  string action = 4;  // TAP, LONG_PRESS, SWIPE, INPUT, ASSERT, WAIT, OPEN_APP, BACK, HOME
+  string description = 5;
+  LocatorMessage locator = 6;
+  CoordinateMessage screen_coordinate = 7;
+  string location_source = 8;  // UNKNOWN, SELECTOR, COORDINATE, VISUAL
+  string input_text = 9;
+  string swipe_direction = 10;
+  int64 wait_duration_ms = 11;
+  string assert_text = 12;
+  int64 pre_wait_ms = 13;
+  int32 max_retries = 14;
+  bool optional = 15;
+}
+
+message LocatorMessage {
+  string text = 1;
+  string text_regex = 2;
+  string content_desc = 3;
+  string resource_id = 4;
+  string class_name = 5;
+  int32 class_index = 6;
+  string xpath = 7;
+  string package_name = 8;
+  bool is_web_view = 9;
+}
+
+message CoordinateMessage {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message RectMessage {
+  int32 left = 1;
+  int32 top = 2;
+  int32 right = 3;
+  int32 bottom = 4;
+}
+
+message CaseMessage {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string target_package = 4;
+  string target_app_name = 5;
+  string source = 6;  // MANUAL, RECORDED, AI_GENERATED, TEMPLATE
+  repeated StepMessage steps = 7;
+  repeated string tags = 8;
+  int64 created_at = 9;
+  int64 updated_at = 10;
+  string sync_status = 11;
+  RunResultMessage last_run_result = 12;
+}
+
+message RunResultMessage {
+  string run_id = 1;
+  bool success = 2;
+  int32 total_steps = 3;
+  int32 passed_steps = 4;
+  int32 failed_step_index = 5;
+  int64 duration_ms = 6;
+  int64 run_at = 7;
+}
+
+message DeviceInfoMessage {
+  string device_id = 1;
+  string device_name = 2;
+  string model = 3;
+  string manufacturer = 4;
+  string android_version = 5;
+  int32 sdk_int = 6;
+  int32 screen_width = 7;
+  int32 screen_height = 8;
+  int32 density_dpi = 9;
+  int32 orientation = 10;
+  int32 battery_level = 11;
+  bool is_charging = 12;
+  string wifi_ssid = 13;
+  string ip_address = 14;
+  string current_package = 15;
+  string current_activity = 16;
+}
+
+message UiTreeMessage {
+  repeated UiNodeMessage nodes = 1;
+  int64 timestamp = 2;
+}
+
+message UiNodeMessage {
+  string class_name = 1;
+  string text = 2;
+  string content_description = 3;
+  string resource_id = 4;
+  RectMessage bounds = 5;
+  bool is_clickable = 6;
+  bool is_editable = 7;
+  repeated UiNodeMessage children = 8;
+}
+
+message TouchEvent {
+  string action = 1;  // DOWN, MOVE, UP
+  int32 x = 2;
+  int32 y = 3;
+  int64 timestamp = 4;
+}
+
+message VideoFrame {
+  bytes data = 1;
+  int64 timestamp = 2;
+  int32 width = 3;
+  int32 height = 4;
+  bool is_key_frame = 5;
+}
+
+message ScreenshotFrame {
+  bytes data = 1;
+  int64 timestamp = 2;
+  int32 quality = 3;  // 0-100
+}
+
+// ============================================================================
+// 请求/响应消息
+// ============================================================================
+
+// Recording
+message StartRecordingRequest {
+  string device_id = 1;
+  string target_package = 2;
+  bool enable_screenshots = 3;
+}
+
+message StopRecordingRequest {
+  string device_id = 1;
+  string case_name = 2;
+  string case_description = 3;
+}
+
+message PauseRecordingRequest {
+  string device_id = 1;
+  bool pause = 2;
+}
+
+message RecordingResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PollStepsRequest {
+  string device_id = 1;
+  int64 since_timestamp = 2;
+}
+
+// Replay
+message StartReplayRequest {
+  string device_id = 1;
+  string case_id = 2;
+}
+
+message WatchReplayRequest {
+  string device_id = 1;
+  string run_id = 2;
+}
+
+message CancelReplayRequest {
+  string device_id = 1;
+  string run_id = 2;
+}
+
+message ReplayResponse {
+  bool success = 1;
+  string message = 2;
+  string run_id = 3;
+}
+
+message ReplayStatusUpdate {
+  string run_id = 1;
+  int32 current_step = 2;
+  int32 total_steps = 3;
+  bool step_success = 4;
+  string step_error = 5;
+  string replay_state = 6;  // RUNNING, COMPLETED, FAILED, CANCELLED
+  int64 elapsed_ms = 7;
+}
+
+// AI Bridge
+message GenerateStepsRequest {
+  string device_id = 1;
+  string user_intent = 2;
+  string current_package = 3;
+  bytes screenshot = 4;
+  string case_id = 5;  // optional: continue editing existing case
+}
+
+message AnalyzeScreenRequest {
+  string device_id = 1;
+  string question = 2;
+  bytes screenshot = 3;
+  string current_package = 4;
+}
+
+message AnalyzeScreenResponse {
+  string answer = 1;
+  repeated string detected_elements = 2;
+}
+
+message IdentifyElementRequest {
+  string device_id = 1;
+  string element_name = 2;
+  bytes screenshot = 3;
+}
+
+message IdentifyElementResponse {
+  bool found = 1;
+  string resource_id = 2;
+  string text = 3;
+  CoordinateMessage coordinate = 4;
+}
+
+// Device
+message GetDeviceInfoRequest {
+  string device_id = 1;
+}
+
+message GetUiTreeRequest {
+  string device_id = 1;
+  bool include_invisible = 2;
+}
+
+message ExecuteCommandRequest {
+  string device_id = 1;
+  string command = 2;
+  repeated string args = 3;
+}
+
+message ExecuteCommandResponse {
+  bool success = 1;
+  string output = 2;
+  string error = 3;
+}
+
+// Sync
+message SyncCasesRequest {
+  string device_id = 1;
+  repeated string local_case_ids = 2;
+  int64 since_timestamp = 3;
+}
+
+message SyncCasesResponse {
+  bool success = 1;
+  repeated string updated_case_ids = 2;
+  repeated string deleted_case_ids = 3;
+}
+
+message PushCaseRequest {
+  string device_id = 1;
+  CaseMessage case = 2;
+}
+
+message PullCasesRequest {
+  string device_id = 1;
+  repeated string case_ids = 2;
+  int64 since_timestamp = 3;
+}
+
+message ReportRequest {
+  string device_id = 1;
+  string run_id = 2;
+  string case_id = 3;
+  bool success = 4;
+  repeated StepResultMessage step_results = 5;
+}
+
+message StepResultMessage {
+  int32 step_index = 1;
+  string step_id = 2;
+  bool success = 3;
+  string error_message = 4;
+  int64 duration_ms = 5;
+  string actual_strategy = 6;
+  CoordinateMessage actual_coordinate = 7;
+}
+
+message SyncResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Mirror
+message VideoStreamRequest {
+  string device_id = 1;
+  int32 quality = 2;  // 0=HIGH, 1=STANDARD, 2=LOW
+  int32 max_fps = 3;
+}
+
+message StreamResponse {
+  bool success = 1;
+  string message = 2;
+}

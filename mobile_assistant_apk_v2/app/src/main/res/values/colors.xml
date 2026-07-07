@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand -->
+    <color name="brand_blue">#FF1565C0</color>
+    <color name="brand_blue_light">#FF42A5F5</color>
+    <color name="brand_blue_dark">#FF0D47A1</color>
+    <color name="brand_accent">#FFFF6F00</color>
+
+    <!-- Status -->
+    <color name="status_success">#FF2E7D32</color>
+    <color name="status_warning">#FFF57F17</color>
+    <color name="status_error">#FFDC3545</color>
+    <color name="status_recording">#FFE53935</color>
+    <color name="status_replaying">#FF1565C0</color>
+    <color name="status_idle">#FF757575</color>
+
+    <!-- Launcher icon -->
+    <color name="ic_launcher_background">#1565C0</color>
+    <color name="ic_launcher_foreground">#FFFFFF</color>
+</resources>

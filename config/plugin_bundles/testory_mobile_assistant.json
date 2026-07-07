@@ -1,13 +1,13 @@
 {
   "id": "mobile-testory-assistant",
   "name": "Testory 移动端助手",
-  "version": "1.2.6",
-  "apk_version_code": 17,
-  "apk_version_name": "1.2.6",
-  "package": "com.testory.assistant",
+  "version": "2.0.0",
+  "apk_version_code": 200,
+  "apk_version_name": "2.0.0",
+  "package": "com.testory.assistant.v2",
   "apk_filename": "testory-assistant.apk",
-  "description": "Android 录制回放插件：手机端操作录制、步骤回放、PC 同步。",
-  "features": ["操作录制", "步骤回放", "PC 同步", "弹窗自动处理", "跨分辨率适配"],
+  "description": "Android 录制回放插件 v2：Kotlin + Compose 重构，零代码录制/AI 对话、内置投屏。",
+  "features": ["零代码录制", "智能回放", "AI 桥接对话", "弹窗自动处理", "内置投屏", "跨分辨率适配"],
   "local_bundle_search": [
     "config/plugin_bundles/testory-assistant.apk"
   ]

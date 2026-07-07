@@ -1,0 +1,33 @@
+# Testory Assistant v2 .gitignore
+# ============================================================
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+local.properties
+
+# Android
+*.apk
+*.aab
+*.dex
+*.class
+*.log
+gen/
+out/
+
+# Testing
+*.html
+/bin/
+/gen/
+
+# Misc
+*.swp
+*.lock
+*~
