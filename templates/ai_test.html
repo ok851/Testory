@@ -646,7 +646,8 @@
         min-width: min(100%, 220px); padding: 8px 10px; border-radius: 10px; border: 1px solid #cbd5e1;
         font-size: 14px; background: #fff; box-sizing: border-box;
     }
-    .ai-studio-context-row .ai-pw-browser-select { min-height: 40px; width: 100%; }
+    .ai-studio-context-row .ai-pw-browser-select,
+    .ai-studio-context-row .ai-platform-type-select { min-height: 40px; width: 100%; }
     .ai-studio-context-row .ctx-grow { flex: 1 1 280px; }
     .ai-studio-context-row .ctx-project {
         flex: 0 1 200px; max-width: 220px; min-width: 140px;
@@ -938,7 +939,7 @@
 
         <div class="ai-studio-context-row" aria-label="context">
             <label class="ctx-project"><span data-i18n="aitest_label_project">保存到项目</span>
-                <select id="aiProjectSelect"></select>
+                <select id="aiProjectSelect"><option value="">加载中…</option></select>
             </label>
             <label class="ctx-case"><span data-i18n="aitest_label_save_case">保存到用例</span>
                 <select id="aiTargetCaseSelect" class="ai-gen-select">
@@ -946,14 +947,14 @@
                 </select>
             </label>
             <label class="ctx-grow" style="flex:1 1 160px;"><span>平台类型</span>
-                <select id="aiPlatformTypeSelect" class="ai-pw-browser-select" onchange="aiOnPlatformTypeChange()" title="Web 需 URL；Windows 桌面测本机应用无需 URL">
+                <select id="aiPlatformTypeSelect" class="ai-platform-type-select" onchange="aiOnPlatformTypeChange()" title="Web 需 URL；Windows 桌面测本机应用无需 URL">
                     <option value="web">Web 浏览器</option>
                     <option value="desktop">Windows 桌面</option>
                     <option value="android">Android 真机</option>
                 </select>
             </label>
             <label class="ctx-grow ai-web-only-browser-label" style="flex:1 1 320px;"><span data-i18n="aitest_label_browser">自动化浏览器</span>
-                <select id="aiPlaywrightBrowserSelect" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 自动化浏览器；Chrome/Edge 需本机已安装（playwright install chrome / msedge）"></select>
+                <select id="aiPlaywrightBrowserSelect" class="ai-pw-browser-select ai-agent-engine-select" data-i18n-title="aitest_browser_select_title" title="主 Playwright 自动化浏览器；Chrome/Edge 需本机已安装（playwright install chrome / msedge）"><option value="chromium">Chromium</option></select>
             </label>
         </div>
 
@@ -968,7 +969,7 @@
         <div id="aiMobileDevicePanel" class="ai-studio-context-row" style="display:none;" aria-label="mobile devices">
             <div style="flex:1 1 100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
                 <button type="button" class="btn btn-secondary btn-sm" onclick="aiRefreshMobileDevices()">刷新 USB 设备</button>
-                <select id="aiMobileDeviceSelect" style="min-width:220px;min-height:36px;"></select>
+                <select id="aiMobileDeviceSelect" style="min-width:220px;min-height:36px;"><option value="">未检测到设备</option></select>
                 <button type="button" class="btn btn-primary btn-sm" onclick="aiConnectMobileDevice()">连接设备</button>
                 <button type="button" class="btn btn-secondary btn-sm" onclick="aiDisconnectMobileDevice()">断开</button>
                 <span id="aiMobileConnectStatus" style="font-size:12px;color:#64748b;"></span>
@@ -983,7 +984,7 @@
                         <input type="text" class="ai-task-version" id="aiTaskVersion" placeholder="任务版本 / 标签（如 v7）" maxlength="80" autocomplete="off">
                     </div>
                     <label class="ai-gen-label" for="aiAgentEngineSelect">推理引擎</label>
-                    <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"></select>
+                    <select id="aiAgentEngineSelect" class="ai-agent-engine-select" title="与设置中「当前推理模型」同步"><option value="">加载中…</option></select>
                     {% if ai_chat_tools_env_enabled %}
                     {% if hermes_gateway_configured %}
                     <div class="ai-cap-banner" id="aiHermesCapBanner" role="status">
@@ -1137,7 +1138,7 @@
             <div id="aiOllamaStatus" class="text-muted" style="margin-bottom:12px;"></div>
             <label class="ai-gen-label" data-i18n="aitest_model_current">当前推理模型</label>
             <div class="ai-register-row" style="align-items:stretch;">
-                <select id="aiModelSelect" class="ai-gen-select" style="flex:2;"></select>
+                <select id="aiModelSelect" class="ai-gen-select" style="flex:2;"><option value="">加载中…</option></select>
                 <button type="button" class="btn btn-secondary btn-sm" style="padding:10px 12px;" onclick="window.saveActiveAiModel()" data-i18n="aitest_model_default">默认</button>
             </div>
             <button type="button" class="btn btn-primary btn-sm" style="margin-top:10px;width:100%;" onclick="window.openAiAddModelModal(true)" data-i18n="aitest_add_model">添加模型</button>
@@ -1146,7 +1147,7 @@
             <h5 data-i18n="aitest_registry">已注册模型</h5>
             <p class="ai-settings-tip">每条配置右侧可「编辑」或「删除」；关闭请点右上角 ×，避免误触背景关闭。</p>
             <div class="ai-register-row" style="margin-bottom:8px;">
-                <select id="aiOllamaNewSelect" class="ai-gen-select" style="flex:1;"></select>
+                <select id="aiOllamaNewSelect" class="ai-gen-select" style="flex:1;"><option value="">— 从 Ollama 列表选择 —</option></select>
                 <button type="button" class="btn btn-secondary btn-sm" style="padding:10px 12px;" onclick="window.refreshOllamaModels()" title="" data-i18n-title="aitest_ollama_refresh" data-i18n="aitest_ollama_refresh">刷新</button>
             </div>
             <label class="ai-chk-label" style="margin-top:4px;">
@@ -1489,7 +1490,13 @@
         syncEmbeddedGatewayToolbarButtons();
     }
 
-    function syncEmbeddedGatewayToolbarButtons() {}
+    function syncEmbeddedGatewayToolbarButtons() {
+        var usable = aiEmbeddedGatewayUsable();
+        var openBtn = document.getElementById('aiBrowserOpenBtn');
+        var reloadBtn = document.getElementById('aiBrowserReloadBtn');
+        if (openBtn) openBtn.disabled = !usable;
+        if (reloadBtn) reloadBtn.disabled = !usable;
+    }
 
     function remoteCanvasCoordsFromEvent(e, canvas) {
         var rect = canvas.getBoundingClientRect();
@@ -2080,7 +2087,8 @@
     }
 
     function pwBrowserSelectEls() {
-        return Array.prototype.slice.call(document.querySelectorAll('select.ai-pw-browser-select'));
+        return Array.prototype.slice.call(document.querySelectorAll('select.ai-pw-browser-select'))
+            .filter(function(s) { return s.id !== 'aiPlatformTypeSelect'; });
     }
 
     (function wirePwBrowserSelectSync() {
@@ -2125,7 +2133,9 @@
                 options = d.options;
                 current = d.current || 'chromium';
             }
-        } catch (e) { console.warn(e); }
+        } catch (e) {
+            console.warn('加载浏览器列表失败:', e);
+        }
         if (!options.length) {
             options = [
                 { id: 'chromium', label_zh: 'Chromium（Playwright 内置）', label_en: 'Chromium (bundled)' },
@@ -2381,25 +2391,31 @@
     };
 
     async function loadProjectList() {
-        const resp = await fetch('/api/projects');
-        const data = await resp.json();
-        const projects = data.projects || [];
-        const sel = document.getElementById('aiProjectSelect');
+        try {
+            const resp = await fetch('/api/projects');
+            const data = await resp.json();
+            const projects = data.projects || [];
+            const sel = document.getElementById('aiProjectSelect');
             if (!projects.length) {
-            sel.innerHTML = '<option value="">— 暂无项目，请先创建 —</option>';
-            currentProjectId = null;
-            currentProjectName = '';
+                sel.innerHTML = '<option value="">— 暂无项目，请先创建 —</option>';
+                currentProjectId = null;
+                currentProjectName = '';
+                updateAiOpenCaseListLink();
+                return;
+            }
+            sel.innerHTML = projects.map(p => '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>').join('');
+            const qp = new URLSearchParams(location.search).get('project_id');
+            if (qp && projects.some(p => String(p.id) === String(qp))) sel.value = qp;
+            currentProjectId = parseInt(sel.value, 10);
+            const pr = projects.find(p => p.id === currentProjectId);
+            currentProjectName = pr ? pr.name : '';
             updateAiOpenCaseListLink();
-            return;
+            await loadAiTargetCases();
+        } catch (e) {
+            console.warn('加载项目列表失败:', e);
+            var sel = document.getElementById('aiProjectSelect');
+            if (sel) sel.innerHTML = '<option value="">— 加载项目列表失败 —</option>';
         }
-        sel.innerHTML = projects.map(p => '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>').join('');
-        const qp = new URLSearchParams(location.search).get('project_id');
-        if (qp && projects.some(p => String(p.id) === String(qp))) sel.value = qp;
-        currentProjectId = parseInt(sel.value, 10);
-        const pr = projects.find(p => p.id === currentProjectId);
-        currentProjectName = pr ? pr.name : '';
-        updateAiOpenCaseListLink();
-        await loadAiTargetCases();
     }
 
     async function loadAiTargetCases() {
@@ -2814,7 +2830,17 @@
             const verifyChk = document.getElementById('aiVerifyOllamaChk');
             if (verifyChk) { verifyChk.disabled = !!ollamaError; verifyChk.checked = !ollamaError; }
             updateActiveModelChip();
-        } catch (e) { console.warn(e); }
+        } catch (e) {
+            console.warn('加载模型列表失败:', e);
+            var modelSelect = document.getElementById('aiModelSelect');
+            if (modelSelect && !modelSelect.options.length) {
+                modelSelect.innerHTML = '<option value="">— 无法加载模型列表 —</option>';
+            }
+            var engSel = document.getElementById('aiAgentEngineSelect');
+            if (engSel && !engSel.options.length) {
+                engSel.innerHTML = '<option value="">— 无法加载模型列表 —</option>';
+            }
+        }
     }
 
     window.__aiDeleteProfile = async function(profileId) {
@@ -3742,6 +3768,9 @@
     window.refreshOllamaModels = refreshOllamaModels;
     window.quickAddOllamaFromList = quickAddOllamaFromList;
     window.saveActiveAiModel = saveActiveAiModel;
+    window.aiExportPlanToSkill = aiExportPlanToSkill;
+    window.aiGatewayStreamExecute = aiGatewayStreamExecute;
+    window.aiApplySkillToPlan = aiApplySkillToPlan;
 
     async function applyInitialAiStudioFromStorage() {
         var welcomeExtra = '';
@@ -3861,11 +3890,18 @@
             addBd.addEventListener('mousedown', function(ev) {
                 if (ev.target === addBd) ev.preventDefault();
             });
+            addBd.addEventListener('click', function(ev) {
+                if (ev.target === addBd && typeof window.openAiAddModelModal === 'function') {
+                    window.openAiAddModelModal(false);
+                }
+            });
         }
         var setBd = document.getElementById('aiSettingsBackdrop');
         if (setBd) {
-            setBd.addEventListener('mousedown', function(ev) {
-                if (ev.target === setBd) ev.preventDefault();
+            setBd.addEventListener('click', function(ev) {
+                if (ev.target === setBd && typeof window.toggleAiSettings === 'function') {
+                    window.toggleAiSettings(false);
+                }
             });
         }
         document.addEventListener('keydown', function(e) {
@@ -3971,19 +4007,24 @@
     }
 
     document.addEventListener('DOMContentLoaded', async function() {
-        await loadProjectList();
-        await loadPlaywrightBrowserSelect();
-        await loadAiModels();
-        await applyInitialAiStudioFromStorage();
+        try { await loadProjectList(); } catch (e) { console.warn('初始化项目列表失败:', e); }
+        try { await loadPlaywrightBrowserSelect(); } catch (e) { console.warn('初始化浏览器选择失败:', e); }
+        try { await loadAiModels(); } catch (e) { console.warn('初始化模型列表失败:', e); }
+        try { await applyInitialAiStudioFromStorage(); } catch (e) { console.warn('恢复会话状态失败:', e); }
         syncUndoRedoButtons();
         wireAiBrowserUrlSync();
-        await refreshEmbeddedGatewayStatus();
-        await refreshAiVisionReadiness();
+        try { await refreshEmbeddedGatewayStatus(); } catch (e) { console.warn('检查网关状态失败:', e); }
+        try { await refreshAiVisionReadiness(); } catch (e) { console.warn('检查视觉就绪状态失败:', e); }
         if (aiGetPlatformType() === 'web' && aiEmbeddedGatewayUsable() && aiResolveTargetUrl()) {
             void startRemoteCanvasSession({ auto: true });
         }
-        await aiRefreshSkillsList();
+        try { await aiRefreshSkillsList(); } catch (e) { console.warn('刷新Skills列表失败:', e); }
         wireRemoteCanvasInputOnce();
+        window.aiOnPlatformTypeChange = aiOnPlatformTypeChange;
+        window.aiRefreshDesktopSnapshot = aiRefreshDesktopSnapshot;
+        window.aiRefreshMobileDevices = aiRefreshMobileDevices;
+        window.aiConnectMobileDevice = aiConnectMobileDevice;
+        window.aiDisconnectMobileDevice = aiDisconnectMobileDevice;
         document.getElementById('aiEmbeddedCdpCopyBtn') && document.getElementById('aiEmbeddedCdpCopyBtn').addEventListener('click', function(e) {
             e.preventDefault();
             var inp = document.getElementById('aiEmbeddedCdpWsInput');
@@ -3998,7 +4039,7 @@
                 try { inp.select(); document.execCommand('copy'); setAgentStatusLine('已尝试复制 CDP URL'); } catch (err) {}
             }
         });
-        wireEmbedFrame();
+        try { wireEmbedFrame(); } catch(e) { console.warn('绑定嵌入式浏览器失败:', e); }
         document.getElementById('aiBrowserOpenBtn') && document.getElementById('aiBrowserOpenBtn').addEventListener('click', function(e) { e.preventDefault(); openInternalBrowserPage(); });
         document.getElementById('aiBrowserBannerDismiss') && document.getElementById('aiBrowserBannerDismiss').addEventListener('click', function(e) {
             e.preventDefault();
@@ -4026,7 +4067,7 @@
         const msg = document.getElementById('aiMessageInput');
         if (msg) msg.addEventListener('input', syncAiSendButtons);
         syncAiSendButtons();
-        drainUatAiBackgroundInbox();
+        try { drainUatAiBackgroundInbox(); } catch(e) { console.warn('检查后台任务收件箱失败:', e); }
         window.addEventListener('uat-ai-bg-job-finished', function(ev) {
             try {
                 var d = ev.detail;
@@ -4321,14 +4362,13 @@
             _aiMobileScrcpyAltTried = false;
             _aiMobileScrcpyGotFrame = false;
 
-                if (_aiMobileSession.mirrorStreamUrl) {
-                    aiStartScrcpyHttpMirror(false);
-                    return;
-                }
-                if (_aiMobileSession.mirrorWsUrl) {
-                    aiStartScrcpyWsMirror(false);
-                    return;
-                }
+            if (_aiMobileSession.mirrorStreamUrl) {
+                aiStartScrcpyHttpMirror(false);
+                return;
+            }
+            if (_aiMobileSession.mirrorWsUrl) {
+                aiStartScrcpyWsMirror(false);
+                return;
             }
             if (_aiMobileSession.mirrorBackend === 'screencap' || aiScrcpyAutoFallbackEnabled()) {
                 aiStartMobileScreencapPoll();
@@ -4440,7 +4480,11 @@
                 _aiMobileSession.mirrorBackend = data.mirror_backend || 'screencap';
                 _aiMobileSession.connected = true;
 
-                if (st) st.textContent = '已连接' + mirrorHint + (data.mirror_fallback_reason ? '（' + data.mirror_fallback_reason + '）' : '');
+                var mirrorHint = '';
+                if (_aiMobileSession.mirrorBackend === 'scrcpy_http') mirrorHint = '· 视频流（HTTP）';
+                else if (_aiMobileSession.mirrorBackend === 'scrcpy_ws') mirrorHint = '· 视频流（WS）';
+                else if (_aiMobileSession.mirrorBackend === 'screencap') mirrorHint = '· 截图轮询';
+                if (st) st.textContent = '已连接 ' + mirrorHint + (data.mirror_fallback_reason ? '（' + data.mirror_fallback_reason + '）' : '');
                 aiStartMobileMirrorPoll();
             } catch (e) {
                 if (st) st.textContent = '连接失败：' + (e.message || e);
@@ -4472,14 +4516,28 @@
         }
         window.aiOnPlatformTypeChange = aiOnPlatformTypeChange;
         window.aiRefreshDesktopSnapshot = aiRefreshDesktopSnapshot;
-        aiOnPlatformTypeChange();
         window.aiRefreshMobileDevices = aiRefreshMobileDevices;
         window.aiConnectMobileDevice = aiConnectMobileDevice;
         window.aiDisconnectMobileDevice = aiDisconnectMobileDevice;
+        aiOnPlatformTypeChange();
         document.addEventListener('visibilitychange', function() {
             if (document.hidden) flushPersistAiStudioToSession();
         });
     });
 })();
+    (function() {
+        var required = [
+            'toggleAiSettings', 'openAiAddModelModal', 'toggleAiAddApiKeyVis',
+            'saveActiveAiModel', 'refreshOllamaModels', 'quickAddOllamaFromList',
+            'aiGeneratePreview', 'aiContinueRefine', 'aiStopAgentWork',
+            'aiGenerateAndSaveCase', 'aiExportPlanToSkill', 'aiGatewayStreamExecute',
+            'aiApplySkillToPlan', 'aiRunAgentWorkflow', 'aiUndo', 'aiClearChatHistory'
+        ];
+        var missing = [];
+        for (var i = 0; i < required.length; i++) {
+            if (typeof window[required[i]] !== 'function') missing.push(required[i]);
+        }
+        if (missing.length) console.error('[ai_test] 以下函数未导出到window:', missing.join(', '));
+    })();
 </script>
 {% endblock %}

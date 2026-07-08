@@ -1086,6 +1086,23 @@ class Database:
             )
         ''')
 
+        # 用户邮箱 SMTP 配置（注册时填写，找回密码时复用）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_smtp_configs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL UNIQUE,
+                email       TEXT NOT NULL,
+                host        TEXT NOT NULL,
+                port        INTEGER NOT NULL DEFAULT 587,
+                username    TEXT NOT NULL,
+                password    TEXT NOT NULL,
+                use_tls     INTEGER NOT NULL DEFAULT 1,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+        ''')
+
         # test_cases 新增 mobile_engine 字段
         try:
             cursor.execute(
@@ -3186,6 +3203,71 @@ class Database:
         count = cursor.fetchone()[0]
         conn.close()
         return count
+
+    def get_user_by_email(self, email: str):
+        """按邮箱查询用户"""
+        email = _normalize_user_email(email)
+        if not email:
+            return None
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def save_user_smtp_config(self, user_id: int, email: str, host: str,
+                               port: int, username: str, password: str,
+                               use_tls: int = 1):
+        """插入或更新用户 SMTP 配置"""
+        email = _normalize_user_email(email)
+        if not email:
+            return
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO user_smtp_configs (user_id, email, host, port, username, password, use_tls)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    email = excluded.email,
+                    host = excluded.host,
+                    port = excluded.port,
+                    username = excluded.username,
+                    password = excluded.password,
+                    use_tls = excluded.use_tls,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (user_id, email, host, port, username, password, use_tls))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_user_smtp_config_by_email(self, email: str):
+        """按邮箱查找 SMTP 配置（找回密码用）"""
+        email = _normalize_user_email(email)
+        if not email:
+            return None
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM user_smtp_configs WHERE email = ?", (email,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_user_smtp_config_by_user_id(self, user_id: int):
+        """按用户 ID 查找 SMTP 配置"""
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM user_smtp_configs WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     # ==================== 步骤执行结果方法 ====================
 

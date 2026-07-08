@@ -691,7 +691,8 @@ def clamp_plan_steps_to_probe_registry(
     """
     当存在页面探测注册表时，将步骤中的 selector 约束在「真实 DOM 探测」结果内：
     - 若填了 probe_index，则强制使用该行的 recommended_selector（覆盖模型乱写的值）；
-    - 若未填 probe_index 但 selector 与任一行均不一致，则尝试按步骤描述从注册表重选，否则仅记录告警。
+    - 若未填 probe_index 但 selector 与任一行均不一致，则尝试按步骤描述从注册表重选；
+    - 若仍无法匹配，清空错误 selector 并添加 vlm_ground 视觉兜底候选，执行时由 VLM 基于截图定位。
     可通过 LOCAL_AI_SELECTOR_CLAMP=0 关闭。
     """
     warnings: List[str] = []
@@ -712,7 +713,7 @@ def clamp_plan_steps_to_probe_registry(
 
     def _step_skip_clamp(step: Dict[str, Any]) -> bool:
         st = _norm_str(step.get("selector_type")).lower()
-        if st in ("viewport_coord", "visual_template"):
+        if st in ("viewport_coord", "visual_template", "vlm_ground"):
             return True
         sv = _norm_str(step.get("selector_value"))
         if sv.startswith("{") and ("fx" in sv or "fy" in sv or "png_b64" in sv):
@@ -750,6 +751,18 @@ def clamp_plan_steps_to_probe_registry(
                 if v and sv == v:
                     return True
         return False
+
+    def _add_vlm_ground_fallback(step: Dict[str, Any], desc: str, action: str) -> None:
+        """为步骤添加 vlm_ground 视觉兜底候选。"""
+        try:
+            from locator_tier_utils import build_vlm_ground_candidate, merge_candidates_json
+            vlm_prompt = f"{action}: {desc}"
+            vlm_candidate = build_vlm_ground_candidate(vlm_prompt, score=35)
+            existing_lc = _norm_str(step.get("locator_candidates"))
+            new_lc = merge_candidates_json(existing_lc, [vlm_candidate])
+            step["locator_candidates"] = new_lc
+        except Exception:
+            pass
 
     for idx, step in enumerate(steps):
         if not isinstance(step, dict) or _step_skip_clamp(step):
@@ -801,6 +814,11 @@ def clamp_plan_steps_to_probe_registry(
                 step["selector_type"] = st2 or "css"
                 step["selector_value"] = sv2
                 warnings.append(f"第{idx + 1}步缺少选择器，已按描述从 LIVE 注册表补全：{sv2}")
+            else:
+                _add_vlm_ground_fallback(step, desc, action)
+                warnings.append(
+                    f"第{idx + 1}步缺少选择器，已添加视觉兜底（VLM），执行时将基于截图定位元素"
+                )
             continue
 
         ok = False
@@ -836,9 +854,12 @@ def clamp_plan_steps_to_probe_registry(
             step["selector_type"] = st2 or "css"
             step["selector_value"] = sv2
         else:
+            _add_vlm_ground_fallback(step, desc, action)
+            step["selector_type"] = ""
+            step["selector_value"] = ""
             warnings.append(
-                f"第{idx + 1}步 selector {sv!r} 与 LIVE 列表均不匹配且无法自动重选，"
-                f"请使用 probe_index 绑定 [n] 或人工修改（描述：{desc[:60]!r}…）。"
+                f"第{idx + 1}步 selector {sv!r} 与 LIVE 列表均不匹配，已清空错误定位并添加视觉兜底（VLM），"
+                f"执行时将基于截图定位元素（描述：{desc[:60]!r}…）。"
             )
     return warnings
 
@@ -1379,6 +1400,10 @@ class LocalAIService:
             "You are the reasoning brain; when a LIVE page snapshot is included below, the server already used "
             "Playwright headless to list real interactive elements—your locators MUST prefer those lines "
             "(id/css/placeholder/aria-label) and MUST NOT invent class names absent from the snapshot.\n"
+            "CRITICAL: DO NOT INVENT SELECTORS. If no matching element appears in the LIVE snapshot, LEAVE selector_type "
+            "and selector_value EMPTY strings. The server will automatically use visual grounding (VLM) based on the "
+            "step description to locate the element at runtime. NEVER guess or fabricate CSS class names, name attributes, "
+            "or XPath expressions that do not appear in the snapshot.\n"
             "When a LIVE snapshot exists: STRONGLY prefer setting probe_index to the line number [n] for each step, "
             "and set selector_value to the EXACT substring shown as recommended=(type)… on that SAME line "
             "(copy-paste; do not paraphrase or guess CSS classes).\n"
@@ -1388,6 +1413,10 @@ class LocalAIService:
             "NEVER put the line number in selector_value (e.g. selector_value must NOT be \"1\" or \"12\" alone). "
             "Copy the real locator from that line into selector_type/selector_value (e.g. css #kw, [name=\\\"wd\\\"], xpath …). "
             "If you use probe_index=n, still prefer selectors shown on that same line; the server maps probe_index to stable locators.\n"
+            "Fallback strategy: If you cannot find an element in the LIVE snapshot that matches the step goal, set "
+            "probe_index to empty string \"\", selector_type to empty string \"\", and selector_value to empty string \"\". "
+            "The server will then use visual grounding (VLM) to locate the element from a screenshot at runtime. "
+            "This is FAR BETTER than inventing incorrect selectors that will fail during execution.\n"
             "Generate one executable AI-assisted web test case with steps from this natural language goal.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"Goal: {goal}\n"
@@ -1437,8 +1466,11 @@ class LocalAIService:
             "- click: input_value usually empty; selector_value MUST be a real css/xpath/text from the snapshot (never a lone digit). "
             "Never use a bare tag-only selector like \"button\" or \"input\" — use id/css from the snapshot or probe_index.\n"
             "Use probe_index for [n], not selector_value.\n"
+            "  If no matching element exists in the LIVE snapshot, leave selector_type=\"\" and selector_value=\"\" — the server will "
+            "use visual grounding at runtime to locate the element.\n"
             "- navigate: input_value MUST be the full http(s) URL (never empty when a URL is known from the goal). For search goals (Baidu/Google/etc.), ALWAYS start with navigate to the HOME page (e.g. https://www.baidu.com/), then use input on common selectors (#kw, [name=wd], input[title*='搜索'], etc.) + click on search button (#su, [value*='百度一下'], button[type=submit], etc.). ONLY fall back to direct /s?wd=... URL param as LAST RESORT when input+click has failed twice in previous attempts.\n"
-            "- input/assert/extract_text: selector_value must be concrete when probe_index is empty (assert url_* types may omit selector).\n"
+            "- input/assert/extract_text: selector_value must be concrete when probe_index is empty (assert url_* types may omit selector). "
+            "If no matching element in LIVE snapshot, leave selector_type=\"\" and selector_value=\"\" — server will use visual grounding at runtime."
             "- Usually 3–8 steps; start with navigate to base URL if known. Prefer realistic user flow (navigate → input → click → wait → assert) over clever URL shortcuts. Do not pad with redundant wait/assert steps.\n"
             "- Never omit JSON keys; use \"\" only where the rules above allow empty.\n"
             "- Never invent placeholder hosts like example.com / example.org unless the goal explicitly names them; "

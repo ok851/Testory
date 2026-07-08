@@ -7,7 +7,6 @@ import androidx.lifecycle.viewModelScope
 import com.testory.assistant.v2.core.model.*
 import com.testory.assistant.v2.core.repository.CaseRepository
 import com.testory.assistant.v2.service.accessibility.AccessibilityServiceHolder
-import com.testory.assistant.v2.service.foreground.FloatingControlService
 import com.testory.assistant.v2.service.foreground.RecorderForegroundService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
@@ -93,6 +92,10 @@ class ReplayViewModel @Inject constructor(
             val results = mutableListOf<StepResult>()
             var passed = 0
             var failed = 0
+
+            // Go to home screen first so replay context matches recording context
+            service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+            kotlinx.coroutines.delay(500)
 
             for ((index, step) in steps.withIndex()) {
                 // Check if cancelled

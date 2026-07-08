@@ -4,10 +4,17 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
+import android.view.Gravity
+import android.view.LayoutInflater
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.ImageButton
+import android.widget.TextView
 import com.testory.assistant.v2.core.model.*
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -42,6 +49,32 @@ class AssistantAccessibilityService : AccessibilityService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    // ── Floating control bar (TYPE_ACCESSIBILITY_OVERLAY persists across apps) ──
+    private var floatingView: View? = null
+    private var floatingBtnPause: ImageButton? = null
+    private var floatingBtnStop: ImageButton? = null
+    private var floatingTvCount: TextView? = null
+
+    // ── App launch detection ──
+    private var lastRecordedPackage: String = ""
+    private var lastAppSwitchMs: Long = 0
+    private var lastDirectClickMs: Long = 0
+
+    // ── Known launcher packages (multi-vendor) ──
+    private val launcherPackages = setOf(
+        "com.android.launcher", "com.android.launcher3",
+        "com.google.android.apps.nexuslauncher", "com.android.systemui",
+        "com.miui.home", "com.miui.systemui",
+        "com.huawei.android.launcher", "com.coloros.launcher",
+        "com.oppo.launcher", "com.vivo.launcher",
+        "com.bbk.launcher2", "com.samsung.android.app.spage"
+    )
+
+    private val launcherIntermediate = setOf(
+        "com.android.systemui", "com.miui.systemui",
+        "com.huawei.systemui", "com.coloros.systemui"
+    )
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         AccessibilityServiceHolder.attach(this)
@@ -62,12 +95,28 @@ class AssistantAccessibilityService : AccessibilityService() {
             null
         }
 
+        var sourceBounds: ScreenRect? = null
+        if (sourceNode != null && sourceNode.bounds.isValid) {
+            sourceBounds = sourceNode.bounds
+        } else {
+            try {
+                event.source?.let { node ->
+                    val r = Rect()
+                    node.getBoundsInScreen(r)
+                    if (r.width() > 0 || r.height() > 0) {
+                        sourceBounds = ScreenRect(r.left, r.top, r.right, r.bottom)
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+
         val recordedEvent = RecordedEvent(
             eventType = event.eventType,
             packageName = event.packageName?.toString() ?: "",
             className = event.className?.toString() ?: "",
             text = event.text?.joinToString(" ") ?: "",
             sourceNode = sourceNode,
+            sourceBounds = sourceBounds,
             eventTime = event.eventTime,
             scrollX = event.scrollX,
             scrollY = event.scrollY
@@ -75,6 +124,12 @@ class AssistantAccessibilityService : AccessibilityService() {
 
         // Feed event into pipeline (non-blocking)
         rawEventFlow.tryEmit(recordedEvent)
+
+        // Track click timestamp for app-launch detection
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED
+            || event.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) {
+            lastDirectClickMs = System.currentTimeMillis()
+        }
 
         // Handle special events
         when (event.eventType) {
@@ -121,6 +176,7 @@ class AssistantAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        hideFloatingControl()
         AccessibilityServiceHolder.detach(this)
         scope.cancel()
         super.onDestroy()
@@ -137,6 +193,7 @@ class AssistantAccessibilityService : AccessibilityService() {
                 recordStartTime = System.currentTimeMillis()
             )
         }
+        showFloatingControl()
         return true
     }
 
@@ -148,14 +205,19 @@ class AssistantAccessibilityService : AccessibilityService() {
                 isPaused = false
             )
         }
+        hideFloatingControl()
     }
 
     fun pauseRecording() {
         _sessionState.update { it.copy(isPaused = true) }
+        floatingBtnPause?.tag = "paused"
+        floatingBtnPause?.setImageResource(android.R.drawable.ic_media_play)
     }
 
     fun resumeRecording() {
         _sessionState.update { it.copy(isPaused = false) }
+        floatingBtnPause?.tag = null
+        floatingBtnPause?.setImageResource(android.R.drawable.ic_media_pause)
     }
 
     /**
@@ -189,7 +251,8 @@ class AssistantAccessibilityService : AccessibilityService() {
                     stepId = step.id,
                     success = false,
                     errorMessage = "Element not found: '${step.description}'",
-                    actualStrategy = "NODE_LOOKUP_FAILED"
+                    actualStrategy = "NODE_LOOKUP_FAILED",
+                    stepDescription = step.description
                 )
             }
 
@@ -199,7 +262,8 @@ class AssistantAccessibilityService : AccessibilityService() {
             result.copy(
                 stepIndex = step.index,
                 stepId = step.id,
-                durationMs = durationMs
+                durationMs = durationMs,
+                stepDescription = step.description
             )
         } catch (e: Exception) {
             StepResult(
@@ -207,7 +271,8 @@ class AssistantAccessibilityService : AccessibilityService() {
                 stepId = step.id,
                 success = false,
                 errorMessage = e.message ?: "Unknown error",
-                durationMs = System.currentTimeMillis() - startTime
+                durationMs = System.currentTimeMillis() - startTime,
+                stepDescription = step.description
             )
         } finally {
             rootNode.recycle()
@@ -273,6 +338,82 @@ class AssistantAccessibilityService : AccessibilityService() {
         }, null)
     }
 
+    fun updateFloatingStepCount(count: Int) {
+        floatingTvCount?.post { floatingTvCount?.text = "$count 步" }
+    }
+
+    // ── Floating control bar (TYPE_ACCESSIBILITY_OVERLAY) ──
+    // 使用无障碍覆盖层类型，确保进入其他应用后悬浮窗仍然可见。
+    // 原缺陷：RecorderForegroundService 使用 TYPE_APPLICATION_OVERLAY，
+    // 在 Android 10+ 切换应用后悬浮窗被系统隐藏。
+
+    private fun showFloatingControl() {
+        if (floatingView != null) return
+
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
+            val layoutId = resources.getIdentifier("layout_floating_control", "layout", packageName)
+
+            floatingView = inflater.inflate(layoutId, null)
+            floatingBtnPause = floatingView?.findViewById(
+                resources.getIdentifier("btn_floating_pause", "id", packageName))
+            floatingBtnStop = floatingView?.findViewById(
+                resources.getIdentifier("btn_floating_stop", "id", packageName))
+            floatingTvCount = floatingView?.findViewById(
+                resources.getIdentifier("tv_floating_step_count", "id", packageName))
+
+            floatingBtnPause?.setOnClickListener {
+                if (floatingBtnPause?.tag == "paused") resumeRecording() else pauseRecording()
+            }
+            floatingBtnStop?.setOnClickListener {
+                stopRecording()
+                val app = applicationContext
+                app.stopService(Intent(app, com.testory.assistant.v2.service.foreground.RecorderForegroundService::class.java))
+            }
+
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.END
+                x = (16 * resources.displayMetrics.density).toInt()
+                y = (48 * resources.displayMetrics.density).toInt()
+            }
+
+            wm.addView(floatingView, params)
+        } catch (e: Exception) {
+            android.util.Log.e("AssistantA11y", "Failed to show floating control: ${e.message}")
+        }
+    }
+
+    private fun hideFloatingControl() {
+        try {
+            floatingView?.let {
+                val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                wm.removeView(it)
+            }
+        } catch (_: Exception) {}
+        floatingView = null
+        floatingBtnPause = null
+        floatingBtnStop = null
+        floatingTvCount = null
+    }
+
     // ── Private ──
 
     private fun handleWindowEvent(event: AccessibilityEvent) {
@@ -284,16 +425,75 @@ class AssistantAccessibilityService : AccessibilityService() {
                 currentActivity = className
             )
         }
+
+        // App launch detection: detect launcher → app switch
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            && _sessionState.value.isRecording
+            && !_sessionState.value.isPaused) {
+            detectAppLaunch(pkg)
+        }
+    }
+
+    private fun detectAppLaunch(pkg: String) {
+        if (pkg.isEmpty() || pkg == packageName) return
+        if (pkg == lastRecordedPackage) return
+        val now = System.currentTimeMillis()
+        if (now - lastAppSwitchMs < 500) return
+
+        val prevPkg = lastRecordedPackage
+        lastAppSwitchMs = now
+        lastRecordedPackage = pkg
+        _sessionState.update { it.copy(currentPackage = pkg) }
+
+        if (!isLauncherPackage(prevPkg)) return
+        if (isLauncherPackage(pkg) || isLauncherIntermediate(pkg)) return
+
+        if (now - lastDirectClickMs > 2000) return
+
+        val appLabel = resolveAppLabel(pkg)
+
+        val launchStep = Step(
+            id = java.util.UUID.randomUUID().toString(),
+            index = (eventPipeline.currentStepCount()) + 1,
+            action = ActionType.OPEN_APP,
+            description = if (appLabel.isNotBlank()) "打开「${appLabel}」应用"
+                else "打开应用 ($pkg)",
+            locator = Locator(
+                packageName = pkg,
+                text = appLabel
+            ),
+            targetNode = NodeInfo(
+                packageName = pkg,
+                text = appLabel
+            )
+        )
+        eventPipeline.emitDirect(launchStep)
+    }
+
+    private fun resolveAppLabel(pkg: String): String {
+        return try {
+            val pm = packageManager
+            val ai = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(ai).toString()
+        } catch (_: Exception) { "" }
+    }
+
+    private fun isLauncherPackage(pkg: String): Boolean {
+        return launcherPackages.any { pkg == it || pkg.startsWith(it) }
+    }
+
+    private fun isLauncherIntermediate(pkg: String): Boolean {
+        return launcherIntermediate.any { pkg == it || pkg.startsWith(it) }
     }
 
     /**
-     * 多级定位策略 — 修复 node/operation_node 混用问题。
-     * 策略: text → content-desc → resource-id → class+index → 坐标
+     * 多级定位 — text 优先 + 坐标兜底。
+     * text 是最高级标识（如桌面图标名称），坐标仅在没有可匹配节点时使用。
      */
     private fun locateTarget(root: AccessibilityNodeInfo, step: Step): AccessibilityNodeInfo? {
         val locator = step.locator
 
-        // Strategy 1: text match
+        // Strategy 1: text — highest priority (works even for off-screen nodes)
         if (locator.text.isNotBlank()) {
             val results = root.findAccessibilityNodeInfosByText(locator.text)
             if (results.isNotEmpty()) return results[0]
@@ -311,13 +511,34 @@ class AssistantAccessibilityService : AccessibilityService() {
             if (results.isNotEmpty()) return results[0]
         }
 
-        // Strategy 4: coordinate fallback (only when coordinate is valid)
+        // Strategy 4: coordinate — only as fallback
         val coord = step.screenCoordinate
         if (coord != null && coord.isValid) {
-            return findNodeAtCoordinate(root, coord)
+            return findNodeAtOrNearCoordinate(root, coord)
         }
 
         return null
+    }
+
+    private fun findNodeAtOrNearCoordinate(root: AccessibilityNodeInfo, coord: ScreenCoordinate, tolerance: Int = 30): AccessibilityNodeInfo? {
+        val rect = Rect()
+        var best: AccessibilityNodeInfo? = null
+        var bestDist = Int.MAX_VALUE
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i) ?: continue
+            child.getBoundsInScreen(rect)
+            val cx = rect.centerX()
+            val cy = rect.centerY()
+            val dx = Math.abs(cx - coord.x)
+            val dy = Math.abs(cy - coord.y)
+            if (dx <= tolerance && dy <= tolerance && dx + dy < bestDist) {
+                val node = AccessibilityNodeInfo.obtain(child)
+                best?.recycle()
+                best = node
+                bestDist = dx + dy
+            }
+        }
+        return best
     }
 
     private fun findNodeAtCoordinate(root: AccessibilityNodeInfo, coord: ScreenCoordinate): AccessibilityNodeInfo? {
@@ -375,32 +596,34 @@ class AssistantAccessibilityService : AccessibilityService() {
     }
 
     private fun performTapAction(node: AccessibilityNodeInfo?, step: Step): StepResult {
-        if (node != null && node.isClickable) {
-            val success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            return StepResult(success = success, actualStrategy = "NODE_CLICK")
-        }
-        // Fallback: coordinate click
+        // 坐标派发优先：录制时的真实坐标始终比语义点击更精准。
+        // 原缺陷：先 node.performAction(ACTION_CLICK)，该操作返回 true
+        // 但容器节点（RecyclerView 行等）不产生可见效果，用户以为点击了但实际无效。
         val coord = getActionCoordinate(node, step)
         if (coord != null && coord.isValid) {
             performClick(coord.x.toFloat(), coord.y.toFloat())
             return StepResult(success = true, actualStrategy = "COORDINATE_CLICK",
                 actualCoordinate = coord)
         }
+        // 语义点击作为兜底：坐标无效时才尝试节点点击
+        if (node != null && node.isClickable) {
+            val success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            return StepResult(success = success, actualStrategy = "NODE_CLICK")
+        }
         return StepResult(success = false, errorMessage = "No valid click target")
     }
 
     private fun performLongPressAction(node: AccessibilityNodeInfo?, step: Step): StepResult {
-        if (node != null && node.isLongClickable) {
-            val success = node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            return StepResult(success = success, actualStrategy = "NODE_LONG_CLICK")
-        }
-        // Fallback: gesture long press at coordinate
         val coord = getActionCoordinate(node, step)
         if (coord != null && coord.isValid) {
             val path = Path().apply { moveTo(coord.x.toFloat(), coord.y.toFloat()) }
             performGesture(path, durationMs = 800)
             return StepResult(success = true, actualStrategy = "COORDINATE_LONG_PRESS",
                 actualCoordinate = coord)
+        }
+        if (node != null && node.isLongClickable) {
+            val success = node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            return StepResult(success = success, actualStrategy = "NODE_LONG_CLICK")
         }
         return StepResult(success = false, errorMessage = "No valid long-press target")
     }
@@ -430,26 +653,30 @@ class AssistantAccessibilityService : AccessibilityService() {
         val w = displayMetrics.widthPixels
         val h = displayMetrics.heightPixels
 
+        // 优先使用录制时的坐标；无效时回退到屏幕中心。
+        val coord = step.screenCoordinate
+        val cx: Float = if (coord != null && coord.isValid) coord.x.toFloat() else (w / 2).toFloat()
+        val cy: Float = if (coord != null && coord.isValid) coord.y.toFloat() else (h / 2).toFloat()
+
         val path = Path()
-        val margin = 100
+        val swipeDistance = (h * 0.6).toFloat()
 
         when (step.swipeDirection) {
             SwipeDirection.UP -> {
-                // Swipe from bottom to top
-                path.moveTo((w / 2).toFloat(), (h * 0.8).toFloat())
-                path.lineTo((w / 2).toFloat(), (h * 0.2).toFloat())
+                path.moveTo(cx, Math.min(cy + swipeDistance / 2, h.toFloat() - 50f))
+                path.lineTo(cx, Math.max(cy - swipeDistance / 2, 50f))
             }
             SwipeDirection.DOWN -> {
-                path.moveTo((w / 2).toFloat(), (h * 0.2).toFloat())
-                path.lineTo((w / 2).toFloat(), (h * 0.8).toFloat())
+                path.moveTo(cx, Math.max(cy - swipeDistance / 2, 50f))
+                path.lineTo(cx, Math.min(cy + swipeDistance / 2, h.toFloat() - 50f))
             }
             SwipeDirection.LEFT -> {
-                path.moveTo((w - margin).toFloat(), (h / 2).toFloat())
-                path.lineTo(margin.toFloat(), (h / 2).toFloat())
+                path.moveTo(Math.min(cx + swipeDistance / 2, w.toFloat() - 50f), cy)
+                path.lineTo(Math.max(cx - swipeDistance / 2, 50f), cy)
             }
             SwipeDirection.RIGHT -> {
-                path.moveTo(margin.toFloat(), (h / 2).toFloat())
-                path.lineTo((w - margin).toFloat(), (h / 2).toFloat())
+                path.moveTo(Math.max(cx - swipeDistance / 2, 50f), cy)
+                path.lineTo(Math.min(cx + swipeDistance / 2, w.toFloat() - 50f), cy)
             }
             null -> {
                 return StepResult(success = false, errorMessage = "No swipe direction specified")
@@ -475,19 +702,72 @@ class AssistantAccessibilityService : AccessibilityService() {
         return StepResult(success = success, actualStrategy = "GLOBAL_HOME")
     }
 
+    /**
+     * 打开应用 — text 优先 + 坐标兜底 + intent 终极回退。
+     * 录制时 text = resolveAppLabel(pkg)（应用名如「设置」「微信」），
+     * 回放时先按 text 从桌面找到图标 → 点击 → 生效，无论图标是否在屏幕可见范围。
+     */
     private fun performOpenAppAction(step: Step): StepResult {
         val packageName = step.locator.packageName
-        if (packageName.isBlank()) {
-            return StepResult(success = false, errorMessage = "No package name for OPEN_APP")
+        val appText = step.locator.text
+
+        // Strategy 1: text lookup on launcher (works even for off-screen icons)
+        if (appText.isNotBlank()) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                val results = root.findAccessibilityNodeInfosByText(appText)
+                for (node in results) {
+                    if (node.isClickable) {
+                        val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        node.recycle()
+                        if (clicked) {
+                            results.filter { it != node }.forEach { it.recycle() }
+                            return StepResult(success = true, actualStrategy = "TEXT_ICON_CLICK")
+                        }
+                        break
+                    }
+                    // Try parent for non-clickable text labels
+                    var parent = node.parent
+                    node.recycle()
+                    while (parent != null && !parent.isClickable) {
+                        val p = parent.parent
+                        if (p == null) parent.recycle()
+                        parent = p
+                    }
+                    if (parent != null && parent.isClickable) {
+                        val clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        parent.recycle()
+                        if (clicked) {
+                            results.filter { it != node }.forEach { it.recycle() }
+                            return StepResult(success = true, actualStrategy = "TEXT_ICON_PARENT_CLICK")
+                        }
+                        break
+                    }
+                    parent?.recycle()
+                }
+                results.forEach { it.recycle() }
+            }
         }
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
-        return if (intent != null) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            startActivity(intent)
-            StepResult(success = true, actualStrategy = "OPEN_APP")
-        } else {
-            StepResult(success = false, errorMessage = "Cannot launch app: $packageName")
+
+        // Strategy 2: coordinate click (if text didn't match)
+        val coord = getActionCoordinate(null, step)
+        if (coord != null && coord.isValid) {
+            performClick(coord.x.toFloat(), coord.y.toFloat())
+            return StepResult(success = true, actualStrategy = "COORDINATE_CLICK",
+                actualCoordinate = coord)
         }
+
+        // Strategy 3: intent-based launch (last resort)
+        if (packageName.isNotBlank()) {
+            val intent = packageManager.getLaunchIntentForPackage(packageName)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                startActivity(intent)
+                return StepResult(success = true, actualStrategy = "INTENT")
+            }
+        }
+
+        return StepResult(success = false, errorMessage = "Cannot launch: text=$appText pkg=$packageName")
     }
 
     private fun performAssertAction(node: AccessibilityNodeInfo?, step: Step): StepResult {
@@ -541,9 +821,10 @@ class AssistantAccessibilityService : AccessibilityService() {
     }
 
     private fun getActionCoordinate(node: AccessibilityNodeInfo?, step: Step): ScreenCoordinate? {
-        // Priority: stored coordinate > node bounds center
+        // Priority 1: stored coordinate
         step.screenCoordinate?.let { if (it.isValid) return it }
 
+        // Priority 2: live node bounds center (if node is available)
         if (node != null) {
             val rect = Rect()
             node.getBoundsInScreen(rect)
@@ -551,13 +832,27 @@ class AssistantAccessibilityService : AccessibilityService() {
                 return ScreenCoordinate(rect.centerX(), rect.centerY())
             }
         }
-        return null
+
+        // Priority 3: derive from targetNode bounds (from recording data)
+        val targetNode = step.targetNode
+        if (targetNode != null && targetNode.bounds.isValid) {
+            return targetNode.bounds.toScreenCoordinate()
+        }
+
+        // Priority 4: fallback to screen center (never return 0,0 → causes "invalid coordinate")
+        val dm = resources.displayMetrics
+        return ScreenCoordinate(dm.widthPixels / 2, dm.heightPixels / 2)
     }
 
     private fun needsNodeForAction(action: ActionType, step: Step): Boolean {
-        // TAP / LONG_PRESS can fall back to coordinate if a valid coordinate is recorded
+        // TAP / LONG_PRESS never require a node — coordinate dispatch always works as fallback.
+        // Even if coordinate is (0,0), performTapAction will derive from targetNode bounds.
         if (action == ActionType.TAP || action == ActionType.LONG_PRESS) {
-            return step.screenCoordinate?.isValid != true
+            return false
+        }
+        // INPUT: only needs node for set-text; clipboard-based input is fallback
+        if (action == ActionType.INPUT) {
+            return step.screenCoordinate?.isValid != true && step.inputText.isNotBlank()
         }
         return action != ActionType.WAIT && action != ActionType.BACK
                 && action != ActionType.HOME && action != ActionType.SWIPE

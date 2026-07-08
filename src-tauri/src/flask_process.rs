@@ -97,7 +97,11 @@ pub fn spawn_flask(app_root: &Path, user_data: &Path, port_file: &Path) -> Resul
         .env("DESKTOP_EXECUTION_MODE", "inprocess")
         .env("PLAYWRIGHT_HEADLESS", "0")
         .env("DESKTOP_AUTO_START_GATEWAY", "0")
-        .env("FLASK_RUN_HOST", "127.0.0.1")
+        // 修复：Tauri 模式下 Flask 改为监听 0.0.0.0，端口固定为 5000，
+        // 这样手机端可通过 PC 局域网 IP 访问 PC 端进行移动端同步。
+        // 不再使用 127.0.0.1 + 随机端口（之前会导致手机无法连接）。
+        .env("FLASK_RUN_HOST", "0.0.0.0")
+        .env("FLASK_RUN_PORT", "5000")
         .env("UAT_DESKTOP_MODE", "1")
         .env("DEPLOYMENT_MODE", "client")
         .env("DESKTOP_LAZY_GATEWAY_BOOT", "1")

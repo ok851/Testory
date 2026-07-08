@@ -287,7 +287,9 @@
     async function init() {
         if (document.getElementById('__mobileStudioDisabledJson')) return;
         wireUi();
-        var urlHint = $('msSyncUrlHint'); if (urlHint) urlHint.textContent = window.location.origin;
+        // 修复：Tauri / pywebview 桌面模式下 window.location.origin 是 127.0.0.1，
+        // 手机端无法通过 loopback 访问 PC。改为请求后端获取 PC 的局域网 IP。
+        await renderPcAddressHint();
         await loadProjects();
         refreshDeviceList().catch(function () {});
         refreshPairCode().catch(function () {});
@@ -298,6 +300,23 @@
             state.caseId = urlCaseId;
             var cs = $('msCaseSelect'); if (cs) cs.value = String(urlCaseId);
             await loadStepCount();
+        }
+    }
+
+    async function renderPcAddressHint() {
+        var urlHint = $('msSyncUrlHint');
+        if (!urlHint) return;
+        // 默认值：保留浏览器行为（window.location.origin）
+        urlHint.textContent = window.location.origin;
+        try {
+            var data = await apiJson('/api/mobile/lan-address', {
+                method: 'GET'
+            });
+            if (data && data.success && data.url) {
+                urlHint.textContent = data.url;
+            }
+        } catch (e) {
+            // 后端未实现时回退到默认 origin
         }
     }
 

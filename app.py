@@ -185,6 +185,7 @@ from client_run_helpers import load_case_and_steps, sync_run_to_team_server
 from cloud_llm_gateway import CloudLLMGateway
 from ai_config_paths import ai_model_registry_path, ai_provider_catalog_path, load_ai_provider_catalog_dict
 from ai_local_inference import local_ai_service
+from mail_service import send_verify_code, verify_code
 from ai_step_normalization import (
     ai_plan_steps_to_playwright_script_steps,
     apply_step_normalization_to_plan,
@@ -1275,38 +1276,6 @@ def check_limit(limit_type: str, get_current_value_func=None):
 # 初始化数据库
 db = Database()
 
-# 首次启动自动创建管理员账号
-def _ensure_admin():
-    if db.count_users() != 0:
-        return
-    pw_env = (os.environ.get("ADMIN_INITIAL_PASSWORD") or "").strip()
-    if pw_env:
-        if len(pw_env) < 8:
-            uat_logger.warning(
-                "ADMIN_INITIAL_PASSWORD 长度不足 8 位，已忽略；将改为随机密码（请查看下一条日志）。"
-            )
-            pw_plain = secrets.token_urlsafe(14)
-            uat_logger.warning(
-                f"首次启动：已创建管理员 admin，随机初始密码（仅此一次输出，请保存并尽快修改）: {pw_plain}"
-            )
-        else:
-            pw_plain = pw_env
-            uat_logger.info("首次启动：已创建管理员 admin（密码来自环境变量 ADMIN_INITIAL_PASSWORD）。")
-    elif os.environ.get("ALLOW_INSECURE_DEFAULT_ADMIN", "").strip().lower() in ("1", "true", "yes"):
-        pw_plain = "admin123"
-        uat_logger.warning(
-            "首次启动：已创建管理员 admin/admin123（ALLOW_INSECURE_DEFAULT_ADMIN 已开启，切勿用于公网或生产）。"
-        )
-    else:
-        pw_plain = secrets.token_urlsafe(14)
-        uat_logger.warning(
-            f"首次启动：已创建管理员 admin，随机初始密码（仅此一次输出，请保存并尽快修改）: {pw_plain}"
-        )
-    db.create_user("admin", generate_password_hash(pw_plain), role="admin")
-
-
-_ensure_admin()
-
 register_deployment_hooks(app, Database, UserModel)
 init_server_instance(Database)
 
@@ -1340,6 +1309,14 @@ def create_project_landing():
 @app.route('/login')
 def login_page():
     return render_template('login.html')
+
+@app.route('/register')
+def register_page():
+    return render_template('register.html')
+
+@app.route('/forgot-password')
+def forgot_password_page():
+    return render_template('forgot_password.html')
 
 @app.route('/profile')
 @login_required
@@ -1448,6 +1425,183 @@ def schedules_page():
 def notifications_page():
     return render_template('notifications.html')
 
+def _basic_email_format(email: str) -> bool:
+    if not email or '@' not in email:
+        return False
+    local, domain = email.rsplit('@', 1)
+    if not local or not domain or '.' not in domain:
+        return False
+    return True
+
+
+@app.route('/api/auth/register/send-code', methods=['POST'])
+def api_register_send_code():
+    body = request.get_json(silent=True) or {}
+    username = (body.get('username') or '').strip()
+    email = (body.get('email') or '').strip()
+    password = (body.get('password') or '').strip()
+    confirm_password = (body.get('confirm_password') or '').strip()
+    smtp_host = (body.get('smtp_host') or '').strip()
+    smtp_port = body.get('smtp_port', 587)
+    smtp_username = (body.get('smtp_username') or '').strip()
+    smtp_password = (body.get('smtp_password') or '').strip()
+    smtp_use_tls = int(body.get('smtp_use_tls', 1))
+
+    if not username or not password or not email:
+        return jsonify({'success': False, 'error': '用户名、邮箱和密码不能为空'}), 400
+    if len(username) < 2 or len(username) > 64:
+        return jsonify({'success': False, 'error': '用户名长度须为 2-64 个字符'}), 400
+    if len(password) < 6:
+        return jsonify({'success': False, 'error': '密码长度不能少于 6 位'}), 400
+    if password != confirm_password:
+        return jsonify({'success': False, 'error': '两次输入的密码不一致'}), 400
+    if not _basic_email_format(email):
+        return jsonify({'success': False, 'error': '邮箱格式不正确'}), 400
+    if not smtp_host or not smtp_username or not smtp_password:
+        return jsonify({'success': False, 'error': '请填写完整的 SMTP 配置'}), 400
+
+    _db = Database()
+    if _db.get_user_by_username(username):
+        return jsonify({'success': False, 'error': '用户名已被注册'}), 409
+    if _db.get_user_by_email(email):
+        return jsonify({'success': False, 'error': '邮箱已被注册'}), 409
+
+    smtp_config = {
+        'host': smtp_host,
+        'port': int(smtp_port),
+        'username': smtp_username,
+        'password': smtp_password,
+        'use_tls': smtp_use_tls,
+        'sender_email': smtp_username,
+    }
+    result = send_verify_code(email, smtp_config, 'register')
+    return jsonify(result), 200 if result['success'] else 400
+
+
+@app.route('/api/auth/register/confirm', methods=['POST'])
+def api_register_confirm():
+    body = request.get_json(silent=True) or {}
+    username = (body.get('username') or '').strip()
+    email = (body.get('email') or '').strip()
+    password = (body.get('password') or '').strip()
+    code = (body.get('code') or '').strip()
+    smtp_host = (body.get('smtp_host') or '').strip()
+    smtp_port = body.get('smtp_port', 587)
+    smtp_username = (body.get('smtp_username') or '').strip()
+    smtp_password = (body.get('smtp_password') or '').strip()
+    smtp_use_tls = int(body.get('smtp_use_tls', 1))
+
+    if not username or not password or not email or not code:
+        return jsonify({'success': False, 'error': '缺少必要参数'}), 400
+
+    verify_result = verify_code(email, code, 'register')
+    if not verify_result['success']:
+        return jsonify(verify_result), 400
+
+    _db = Database()
+    if _db.get_user_by_username(username):
+        return jsonify({'success': False, 'error': '用户名已被注册'}), 409
+    if _db.get_user_by_email(email):
+        return jsonify({'success': False, 'error': '邮箱已被注册'}), 409
+
+    role = 'admin' if _db.count_users() == 0 else 'tester'
+    user_id = _db.create_user(username, generate_password_hash(password), email=email, role=role)
+    if user_id is None:
+        return jsonify({'success': False, 'error': '注册失败，请稍后重试'}), 500
+
+    _db.save_user_smtp_config(user_id, email, smtp_host, int(smtp_port),
+                               smtp_username, smtp_password, smtp_use_tls)
+
+    user_data = _db.get_user_by_id(user_id)
+    login_user(UserModel(user_data))
+    _db.update_user_last_login(user_id)
+
+    uat_logger.info(f"新用户注册: {username} (role={role}, email={email})")
+    return jsonify({
+        'success': True,
+        'message': '注册成功',
+        'user': {'id': user_id, 'username': username, 'role': role},
+        'role': role,
+    })
+
+
+@app.route('/api/auth/forgot-password/send-code', methods=['POST'])
+def api_forgot_password_send_code():
+    body = request.get_json(silent=True) or {}
+    email = (body.get('email') or '').strip().lower()
+
+    if not email or not _basic_email_format(email):
+        return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
+
+    _db = Database()
+    user_data = _db.get_user_by_email(email)
+    if not user_data:
+        return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
+
+    smtp_data = _db.get_user_smtp_config_by_email(email)
+    if not smtp_data:
+        return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
+
+    smtp_config = {
+        'host': smtp_data['host'],
+        'port': smtp_data['port'],
+        'username': smtp_data['username'],
+        'password': smtp_data['password'],
+        'use_tls': smtp_data['use_tls'],
+        'sender_email': smtp_data['username'],
+    }
+    send_verify_code(email, smtp_config, 'reset_password')
+    return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
+
+
+@app.route('/api/auth/forgot-password/reset', methods=['POST'])
+def api_forgot_password_reset():
+    body = request.get_json(silent=True) or {}
+    email = (body.get('email') or '').strip().lower()
+    code = (body.get('code') or '').strip()
+    new_password = (body.get('new_password') or '').strip()
+    confirm_password = (body.get('confirm_password') or '').strip()
+
+    if not email or not code or not new_password:
+        return jsonify({'success': False, 'error': '缺少必要参数'}), 400
+    if len(new_password) < 6:
+        return jsonify({'success': False, 'error': '密码长度不能少于 6 位'}), 400
+    if new_password != confirm_password:
+        return jsonify({'success': False, 'error': '两次输入的密码不一致'}), 400
+
+    verify_result = verify_code(email, code, 'reset_password')
+    if not verify_result['success']:
+        return jsonify(verify_result), 400
+
+    _db = Database()
+    user_data = _db.get_user_by_email(email)
+    if not user_data:
+        return jsonify({'success': False, 'error': '用户不存在'}), 404
+
+    _db.update_user(user_data['id'], password_hash=generate_password_hash(new_password))
+    uat_logger.info(f"用户 {user_data['username']} 已通过邮箱找回密码")
+    return jsonify({'success': True, 'message': '密码已重置，请使用新密码登录'})
+
+
+@app.route('/api/auth/smtp-test', methods=['POST'])
+def api_smtp_test():
+    body = request.get_json(silent=True) or {}
+    host = (body.get('host') or '').strip()
+    port = body.get('port', 587)
+    username = (body.get('username') or '').strip()
+    password = (body.get('password') or '').strip()
+    use_tls = int(body.get('use_tls', 1))
+    to_email = (body.get('to_email') or '').strip()
+
+    if not host or not username or not password or not to_email:
+        return jsonify({'success': False, 'message': '请填写完整的 SMTP 配置和测试邮箱'}), 400
+
+    smtp_config = {'host': host, 'port': int(port), 'username': username,
+                   'password': password, 'use_tls': use_tls, 'sender_email': username}
+    result = send_verify_code(to_email, smtp_config, 'register')
+    return jsonify(result), 200 if result['success'] else 400
+
+
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
     ip = _login_client_ip()
@@ -1471,7 +1625,12 @@ def api_login():
         return jsonify({'success': False, 'error': '账号已被禁用'}), 403
     _login_clear_failures(ip)
     user = UserModel(user_data)
-    login_user(user, remember=True)
+    remember = data.get('remember_me', False)
+    duration_days = int(data.get('remember_duration', 7) or 7)
+    if remember and duration_days > 0:
+        session.permanent = True
+        app.permanent_session_lifetime = datetime.timedelta(days=duration_days)
+    login_user(user, remember=remember)
     _db.update_user_last_login(user_data['id'])
     uat_logger.info(f"用户 {username} 登录成功")
     try:
@@ -13644,22 +13803,23 @@ if __name__ == '__main__':
     _is_tauri = os.environ.get('TESTORY_TAURI_MODE', '0').strip() == '1'
 
     if _is_tauri:
-        import socket
-        from pathlib import Path
-
-        _bind_host = os.environ.get('FLASK_RUN_HOST', '127.0.0.1')
-        if _bind_host in ('0.0.0.0', '::', ''):
-            _bind_host = '127.0.0.1'
-        _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _sock.bind((_bind_host, 0))
-        _port = _sock.getsockname()[1]
-        _sock.close()
+        # 修复：Tauri 模式下 Flask 监听 0.0.0.0 + 固定端口（默认 5000），
+        # 这样手机端可通过 PC 局域网 IP 访问 PC 端进行移动端同步。
+        # 之前强制绑定 127.0.0.1 + 随机端口会导致手机无法连接。
+        _bind_host = os.environ.get('FLASK_RUN_HOST', '0.0.0.0')
+        if _bind_host in ('::', ''):
+            _bind_host = '0.0.0.0'
+        _host = _bind_host
+        # 固定端口（与 src-tauri/src/flask_process.rs 的 FLASK_RUN_PORT=5000 保持一致）
+        _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
+        # 仍然写入端口文件，供 Rust 端 health-check 与 future-proof 使用
         _port_file = os.environ.get('TESTORY_FLASK_PORT_FILE', '').strip()
         if _port_file:
+            from pathlib import Path
+
             _pf = Path(_port_file)
             _pf.parent.mkdir(parents=True, exist_ok=True)
             _pf.write_text(str(_port), encoding='utf-8')
-        _host = _bind_host
     else:
         _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
 

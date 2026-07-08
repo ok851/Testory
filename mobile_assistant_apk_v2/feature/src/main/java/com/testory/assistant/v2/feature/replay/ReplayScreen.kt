@@ -280,19 +280,19 @@ private fun StepResultCard(result: StepResult) {
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold
                 )
+                if (result.stepDescription.isNotBlank()) {
+                    Text(
+                        text = result.stepDescription,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
                 if (result.errorMessage.isNotEmpty()) {
                     Text(
                         text = result.errorMessage,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         maxLines = 2
-                    )
-                }
-                if (result.actualStrategy.isNotEmpty()) {
-                    Text(
-                        text = "策略: ${result.actualStrategy}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                 }
             }

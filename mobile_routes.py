@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -74,6 +75,27 @@ def _require_mobile_enabled():
     return None
 
 
+def _current_flask_port() -> int:
+    """读取 Flask 当前监听的端口。优先从 Tauri 写入的端口文件读取，回退到 5000。"""
+    # 1. 优先从端口文件读取（Tauri 模式下存在）
+    port_file = os.environ.get("TESTORY_FLASK_PORT_FILE", "").strip()
+    if port_file:
+        try:
+            from pathlib import Path
+
+            text = Path(port_file).read_text(encoding="utf-8").strip()
+            if text.isdigit():
+                return int(text)
+        except Exception:
+            pass
+    # 2. 回退：环境变量 / 默认 5000
+    raw = os.environ.get("FLASK_RUN_PORT", "5000")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 5000
+
+
 def _mobile_phone_only_response():
     """PC 端不再驱动录制/回放/运行，仅保留同步管理。"""
     return jsonify({
@@ -139,6 +161,48 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if role_required is None:
             return lambda f: f
         return role_required(*args)
+
+    @app.route("/api/mobile/lan-address", methods=["GET"])
+    @api_error_handler
+    def api_mobile_lan_address():
+        """返回 PC 端可被手机访问的 URL（用于移动端同步页面显示）。
+
+        Tauri / pywebview 桌面模式下 window.location.origin 指向 127.0.0.1，
+        手机无法通过 loopback 访问 PC。该接口返回 PC 的局域网 IP + Flask 端口，
+        供前端展示给用户。
+        """
+        import socket
+
+        host = ""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                sock.connect(("223.5.5.5", 80))
+                host = sock.getsockname()[0]
+            finally:
+                sock.close()
+        except Exception:
+            try:
+                host = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                host = "127.0.0.1"
+        # 回环地址对手机无意义，强制返回空以便前端回退到 window.location.origin
+        if host.startswith("127.") or host == "0.0.0.0":
+            return jsonify({
+                "success": True,
+                "url": "",
+                "host": host,
+                "port": _current_flask_port(),
+                "lan_ready": False,
+            })
+        port = _current_flask_port()
+        return jsonify({
+            "success": True,
+            "url": f"http://{host}:{port}",
+            "host": host,
+            "port": port,
+            "lan_ready": True,
+        })
 
     @app.route("/api/mobile/config", methods=["GET"])
     @login_required

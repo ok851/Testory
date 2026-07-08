@@ -87,6 +87,8 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
         allowed = (
             "/client-setup",
             "/login",
+            "/register",
+            "/forgot-password",
             "/api/client/",
             "/api/health",
             "/api/startup/status",

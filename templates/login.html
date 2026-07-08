@@ -21,17 +21,25 @@
                 <label for="password">密码</label>
                 <input type="password" id="password" name="password" required placeholder="请输入密码" autocomplete="current-password">
             </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem;font-size:0.8rem;color:#94a3b8;">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+                    <input type="checkbox" id="rememberMe" style="accent-color:#a5b4fc;">
+                    记住登录状态
+                </label>
+                <select id="rememberDuration" style="padding:2px 6px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#94a3b8;font-size:0.78rem;display:none;">
+                    <option value="7">7 天</option>
+                    <option value="30">30 天</option>
+                    <option value="365">永久</option>
+                </select>
+            </div>
             <button type="submit" id="submitBtn" class="testory-btn-primary">
                 <span id="btnText">登 录</span>
             </button>
         </form>
         <p style="margin-top:1.25rem;text-align:center;font-size:0.8rem;color:#64748b">
-            {% if is_local_standalone %}
-            本机模式默认管理员 <code style="color:#a5b4fc">admin</code>，初始密码见
-            <code style="color:#a5b4fc">%LOCALAPPDATA%\Testory\logs\backend_startup.log</code>
-            {% else %}
-            请使用团队服务器账号登录（账号由管理员创建）
-            {% endif %}
+            没有账号？<a href="/register" style="color:#a5b4fc;text-decoration:none;font-weight:500;">立即注册</a>
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <a href="/forgot-password" style="color:#a5b4fc;text-decoration:none;font-weight:500;">忘记密码？</a>
         </p>
     </div>
 </div>
@@ -53,10 +61,15 @@
         }
     }
 })();
+document.getElementById('rememberMe').addEventListener('change', function() {
+    document.getElementById('rememberDuration').style.display = this.checked ? 'inline' : 'none';
+});
 document.getElementById('loginForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     const username = document.getElementById('username').value.trim();
     const password = document.getElementById('password').value;
+    const rememberMe = document.getElementById('rememberMe').checked;
+    const rememberDuration = document.getElementById('rememberDuration').value;
     const btn = document.getElementById('submitBtn');
     const btnText = document.getElementById('btnText');
     const errorMsg = document.getElementById('errorMsg');
@@ -70,7 +83,11 @@ document.getElementById('loginForm').addEventListener('submit', async function(e
         const res = await fetch('/api/auth/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({username, password})
+            body: JSON.stringify({
+                username, password,
+                remember_me: rememberMe,
+                remember_duration: rememberMe ? parseInt(rememberDuration) : 0
+            })
         });
         const data = await res.json();
         if (data.success) {

@@ -74,6 +74,8 @@ data class StepResult(
     val success: Boolean = false,
     val errorMessage: String = "",
     val durationMs: Long = 0,
+    /** 步骤描述 */
+    val stepDescription: String = "",
     /** 实际使用的定位策略 */
     val actualStrategy: String = "",
     /** 实际点击的坐标 */

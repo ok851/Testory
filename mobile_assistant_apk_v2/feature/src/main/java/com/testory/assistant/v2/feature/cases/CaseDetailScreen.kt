@@ -163,11 +163,53 @@ fun CaseDetailScreen(
                             }
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
+                                val actionLabel = when (step.action) {
+                                    ActionType.TAP -> "点击"
+                                    ActionType.LONG_PRESS -> "长按"
+                                    ActionType.SWIPE -> "滑动"
+                                    ActionType.INPUT -> "输入"
+                                    ActionType.OPEN_APP -> "打开"
+                                    ActionType.BACK -> "返回"
+                                    ActionType.HOME -> "桌面"
+                                    ActionType.WAIT -> "等待"
+                                    ActionType.ASSERT -> "断言"
+                                    ActionType.SCREENSHOT -> "截图"
+                                }
                                 Text(
-                                    text = step.description.ifEmpty { step.action.name },
+                                    text = "$actionLabel — ${step.description.ifEmpty { step.action.name }}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Medium
                                 )
+                                if (step.action == ActionType.SWIPE && step.swipeDirection != null) {
+                                    val dir = step.swipeDirection
+                                    step.screenCoordinate?.let { coord ->
+                                        if (coord.isValid && dir != null) {
+                                            Text(
+                                                text = "方向: ${dir.name}  坐标: (${coord.x}, ${coord.y})",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                    }
+                                }
+                                if (step.action == ActionType.TAP || step.action == ActionType.LONG_PRESS) {
+                                    val details = mutableListOf<String>()
+                                    if (step.locator.text.isNotBlank()) {
+                                        details.add("text=\"${step.locator.text}\"")
+                                    }
+                                    step.screenCoordinate?.let { coord ->
+                                        if (coord.isValid) {
+                                            details.add("坐标: (${coord.x}, ${coord.y})")
+                                        }
+                                    }
+                                    if (details.isNotEmpty()) {
+                                        Text(
+                                            text = details.joinToString(" · "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                }
                                 if (step.action == ActionType.INPUT && step.inputText.isNotBlank()) {
                                     Text(
                                         text = "输入: ${step.inputText}",

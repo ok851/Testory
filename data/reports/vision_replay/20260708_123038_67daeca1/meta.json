@@ -1,0 +1,81 @@
+{
+  "run_id": "20260708_123038_67daeca1",
+  "started_at": 1783485038.1050713,
+  "finished_at": 1783485076.2953877,
+  "step_count": 8,
+  "steps": [
+    {
+      "index": 1,
+      "label": "Navigate to the login page",
+      "action": "navigate",
+      "status": "success",
+      "message": "",
+      "duration_ms": 575,
+      "screenshot": "step_001.png"
+    },
+    {
+      "index": 2,
+      "label": "Enter username in the username field",
+      "action": "input",
+      "status": "success",
+      "message": "",
+      "duration_ms": 554,
+      "screenshot": "step_002.png"
+    },
+    {
+      "index": 3,
+      "label": "Enter password in the password field",
+      "action": "input",
+      "status": "success",
+      "message": "",
+      "duration_ms": 495,
+      "screenshot": "step_003.png"
+    },
+    {
+      "index": 4,
+      "label": "Click the login button",
+      "action": "click",
+      "status": "success",
+      "message": "",
+      "duration_ms": 402,
+      "screenshot": "step_004.png"
+    },
+    {
+      "index": 5,
+      "label": "Wait for login to complete and page redirect",
+      "action": "wait",
+      "status": "success",
+      "message": "",
+      "duration_ms": 3289,
+      "screenshot": "step_005.png"
+    },
+    {
+      "index": 6,
+      "label": "Navigate to the change password page",
+      "action": "navigate",
+      "status": "success",
+      "message": "",
+      "duration_ms": 497,
+      "screenshot": "step_006.png"
+    },
+    {
+      "index": 7,
+      "label": "Wait for the change password page to load",
+      "action": "wait",
+      "status": "success",
+      "message": "",
+      "duration_ms": 2266,
+      "screenshot": "step_007.png"
+    },
+    {
+      "index": 8,
+      "label": "Enter a weak new password '123' in the new password field (assuming placeholder contains '新密码')",
+      "action": "input",
+      "status": "error",
+      "message": "Timeout 30000ms exceeded.",
+      "duration_ms": 30100,
+      "screenshot": "step_008.png"
+    }
+  ],
+  "platform": "web"
+}

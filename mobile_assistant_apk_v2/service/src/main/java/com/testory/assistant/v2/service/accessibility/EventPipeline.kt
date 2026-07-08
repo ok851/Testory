@@ -36,8 +36,23 @@ class EventPipeline @Inject constructor(
     private val eventBuffer = mutableListOf<RecordedEvent>()
     private var lastEventTime: Long = 0
     private var lastEventHash: Int = 0
+    private var lastScrollX: Int = 0
+    private var lastScrollY: Int = 0
     private var currentGestureId: String = ""
     private var pendingSteps = mutableListOf<Step>()
+
+    // Swipe debounce: merge consecutive scroll events into one step
+    private var pendingSwipe: GestureInfo.Swipe? = null
+    private var pendingSwipeJob: Job? = null
+
+    private val launcherPkgs = setOf(
+        "com.android.launcher", "com.android.launcher3",
+        "com.google.android.apps.nexuslauncher",
+        "com.miui.home", "com.huawei.android.launcher",
+        "com.coloros.launcher", "com.oppo.launcher",
+        "com.vivo.launcher", "com.bbk.launcher2",
+        "com.samsung.android.app.spage", "com.sec.android.app.launcher"
+    )
 
     private var scope: CoroutineScope? = null
 
@@ -77,6 +92,7 @@ class EventPipeline @Inject constructor(
      * 停止管线，返回未保存的步骤。
      */
     suspend fun stop(): List<Step> {
+        flushPendingSwipe()
         scope?.cancel()
         scope = null
         val remaining = pendingSteps.toList()
@@ -84,6 +100,13 @@ class EventPipeline @Inject constructor(
         eventBuffer.clear()
         _recordingState.value = RecordingState.IDLE
         return remaining
+    }
+
+    fun currentStepCount(): Int = pendingSteps.size
+
+    fun emitDirect(step: Step) {
+        pendingSteps.add(step)
+        _stepFlow.tryEmit(step)
     }
 
     // ── Pipeline stages ──
@@ -96,11 +119,52 @@ class EventPipeline @Inject constructor(
         eventBuffer.add(event)
         val gesture = classifyGesture()
 
-        // Stage 3: Element analysis & step generation
-        gesture?.let { g ->
-            val step = generateStep(g)
+        // Stage 3: handle swipe with debounce or emit directly
+        if (gesture is GestureInfo.Swipe) {
+            handleSwipeGesture(gesture)
+        } else {
+            flushPendingSwipe()
+            gesture?.let { g ->
+                val step = generateStep(g)
+                if (step != null) {
+                    pendingSteps.add(step)
+                    _stepFlow.tryEmit(step)
+                }
+            }
+        }
+    }
+
+    /**
+     * 滑动去重合并：连续 TYPE_VIEW_SCROLLED 事件在 350ms 内只产出一个 step。
+     * 原缺陷：每个 scroll 事件都通过 classifyGesture 产出一个 Swipe step，
+     * 导致一次滑动被录制为多次。
+     */
+    private fun handleSwipeGesture(swipe: GestureInfo.Swipe) {
+        pendingSwipeJob?.cancel()
+        pendingSwipe = swipe
+
+        pendingSwipeJob = scope?.launch {
+            delay(350)
+            val s = pendingSwipe ?: return@launch
+            pendingSwipe = null
+            pendingSwipeJob = null
+
+            val step = generateStep(s)
             if (step != null) {
-                // Stage 4: Emit + buffer
+                pendingSteps.add(step)
+                _stepFlow.tryEmit(step)
+            }
+        }
+    }
+
+    private fun flushPendingSwipe() {
+        pendingSwipeJob?.cancel()
+        val s = pendingSwipe
+        pendingSwipe = null
+        pendingSwipeJob = null
+        if (s != null) {
+            val step = generateStep(s)
+            if (step != null) {
                 pendingSteps.add(step)
                 _stepFlow.tryEmit(step)
             }
@@ -125,6 +189,10 @@ class EventPipeline @Inject constructor(
         // Filter system UI
         if (pkg == "com.android.systemui") return false
 
+        // Filter launcher clicks (handled by open_app detection in service)
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED
+            && launcherPkgs.any { pkg == it || pkg.startsWith(it) }) return false
+
         // Filter non-interactive event types
         when (event.eventType) {
             AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED,
@@ -144,8 +212,10 @@ class EventPipeline @Inject constructor(
     }
 
     /**
-     * 手势分类 — 移植自 TouchGestureClassifier。
-     * 将事件序列分类为 click / long-press / swipe / text-input。
+     * 手势分类 — 将事件序列分类为 click / long-press / swipe / text-input。
+     * 原缺陷：TYPE_VIEW_SCROLLED 与 TYPE_VIEW_CLICKED 同时到达时各自独立分类，
+     * 导致一次点击被重复录制为 tap + swipe 两条步骤。
+     * 修复：同时存在时只保留 click (scroll 作为点击副作用被过滤)。
      */
     private fun classifyGesture(): GestureInfo? {
         if (eventBuffer.isEmpty()) return null
@@ -153,8 +223,10 @@ class EventPipeline @Inject constructor(
         val events = eventBuffer.toList()
         eventBuffer.clear()
 
-        // Detect gesture type from event sequence
         val eventTypes = events.map { it.eventType }
+        val hasClick = AccessibilityEvent.TYPE_VIEW_CLICKED in eventTypes
+                || AccessibilityEvent.TYPE_VIEW_LONG_CLICKED in eventTypes
+        val hasScroll = AccessibilityEvent.TYPE_VIEW_SCROLLED in eventTypes
 
         if (AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED in eventTypes ||
             AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED in eventTypes) {
@@ -169,7 +241,7 @@ class EventPipeline @Inject constructor(
             return buildClickInfo(events, isLongPress = true)
         }
 
-        if (AccessibilityEvent.TYPE_VIEW_SCROLLED in eventTypes) {
+        if (hasScroll && !hasClick) {
             return buildSwipeInfo(events)
         }
 
@@ -196,11 +268,9 @@ class EventPipeline @Inject constructor(
 
         return when (gesture) {
             is GestureInfo.Click -> {
-                // Extract node info for selector-based locator
                 val nodeInfo = gesture.sourceNode
                 val locator = buildLocator(nodeInfo)
 
-                // Always record the actual click coordinate (FIX: was sometimes 0,0)
                 val screenCoord = ScreenCoordinate(
                     x = gesture.screenX,
                     y = gesture.screenY
@@ -210,7 +280,7 @@ class EventPipeline @Inject constructor(
                     id = stepId,
                     index = stepIndex,
                     action = if (gesture.isLongPress) ActionType.LONG_PRESS else ActionType.TAP,
-                    description = generateDescription(nodeInfo, "点击"),
+                    description = generateDescription(nodeInfo, "点击", gesture.screenX, gesture.screenY),
                     locator = locator,
                     targetNode = nodeInfo,
                     screenCoordinate = screenCoord,
@@ -238,16 +308,18 @@ class EventPipeline @Inject constructor(
             }
 
             is GestureInfo.Swipe -> {
+                val screenCoord = ScreenCoordinate(
+                    x = gesture.toX,
+                    y = gesture.toY
+                )
                 Step(
                     id = stepId,
                     index = stepIndex,
                     action = ActionType.SWIPE,
-                    description = "滑动: ${gesture.direction}",
+                    description = generateSwipeDescription(
+                        gesture.direction, gesture.fromX, gesture.fromY, gesture.toX, gesture.toY),
                     swipeDirection = gesture.direction,
-                    screenCoordinate = ScreenCoordinate(
-                        x = gesture.toX,
-                        y = gesture.toY
-                    ),
+                    screenCoordinate = screenCoord,
                     locationSource = LocationSource.COORDINATE
                 )
             }
@@ -257,9 +329,16 @@ class EventPipeline @Inject constructor(
                     id = stepId,
                     index = stepIndex,
                     action = ActionType.OPEN_APP,
-                    description = "打开应用: ${gesture.appName}",
-                    locator = Locator(packageName = gesture.packageName),
-                    targetNode = NodeInfo(packageName = gesture.packageName)
+                    description = if (gesture.appName.isNotBlank()) "打开「${gesture.appName}」应用"
+                        else "打开应用: ${gesture.packageName}",
+                    locator = Locator(
+                        packageName = gesture.packageName,
+                        text = gesture.appName
+                    ),
+                    targetNode = NodeInfo(
+                        packageName = gesture.packageName,
+                        text = gesture.appName
+                    )
                 )
             }
 
@@ -281,19 +360,41 @@ class EventPipeline @Inject constructor(
         )
     }
 
-    private fun generateDescription(node: NodeInfo?, actionPrefix: String): String {
-        if (node == null) return "$actionPrefix (坐标定位)"
-
-        val label = when {
-            node.text.isNotBlank() -> "\"${node.text.take(30)}\""
-            node.contentDescription.isNotBlank() -> "\"${node.contentDescription.take(30)}\""
-            node.resourceId.isNotBlank() -> {
-                val id = node.resourceId.substringAfterLast("/")
-                if (id.isNotBlank()) "[$id]" else "[${node.resourceId}]"
+    private fun generateDescription(node: NodeInfo?, actionPrefix: String, screenX: Int = 0, screenY: Int = 0): String {
+        if (node != null) {
+            // 优先使用节点文本
+            val label = when {
+                node.text.isNotBlank() -> "\"${node.text.take(30)}\""
+                node.contentDescription.isNotBlank() -> "\"${node.contentDescription.take(30)}\""
+                node.resourceId.isNotBlank() -> {
+                    val id = node.resourceId.substringAfterLast("/")
+                    if (id.isNotBlank() && id.length > 4 && !id.matches(Regex("[a-z0-9]{1,4}"))) "[$id]"
+                    else ""
+                }
+                else -> ""
             }
-            else -> node.className.substringAfterLast(".").takeIf { it.isNotBlank() } ?: "未知元素"
+            if (label.isNotBlank()) return "$actionPrefix $label"
         }
-        return "$actionPrefix $label"
+        // 无文本时显示坐标
+        return if (screenX > 0 || screenY > 0) {
+            "$actionPrefix ($screenX, $screenY)"
+        } else {
+            "$actionPrefix (坐标定位)"
+        }
+    }
+
+    private fun generateSwipeDescription(direction: SwipeDirection, fromX: Int, fromY: Int, toX: Int, toY: Int): String {
+        val dirLabel = when (direction) {
+            SwipeDirection.UP -> "上滑"
+            SwipeDirection.DOWN -> "下滑"
+            SwipeDirection.LEFT -> "左滑"
+            SwipeDirection.RIGHT -> "右滑"
+        }
+        return if (fromX > 0 || fromY > 0) {
+            "$dirLabel ($fromX, $fromY) → ($toX, $toY)"
+        } else {
+            "滑动: $dirLabel"
+        }
     }
 
     // ── Helpers ──
@@ -311,9 +412,12 @@ class EventPipeline @Inject constructor(
         val event = events.firstOrNull { it.sourceNode != null } ?: events.first()
         val node = event.sourceNode
 
+        val sx = node?.bounds?.centerX ?: event.sourceBounds?.centerX ?: 0
+        val sy = node?.bounds?.centerY ?: event.sourceBounds?.centerY ?: 0
+
         return GestureInfo.Click(
-            screenX = node?.bounds?.centerX ?: 0,
-            screenY = node?.bounds?.centerY ?: 0,
+            screenX = sx,
+            screenY = sy,
             isLongPress = isLongPress,
             sourceNode = node
         )
@@ -330,25 +434,42 @@ class EventPipeline @Inject constructor(
         )
     }
 
-    private fun buildSwipeInfo(events: List<RecordedEvent>): GestureInfo.Swipe {
-        // Determine direction from scroll deltas
+    private fun buildSwipeInfo(events: List<RecordedEvent>): GestureInfo? {
         val scrollEvent = events.firstOrNull {
             it.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
         } ?: events.first()
 
-        val scrollY = scrollEvent.scrollY
-        val scrollX = scrollEvent.scrollX
+        val curX = scrollEvent.scrollX
+        val curY = scrollEvent.scrollY
+        val dx = curX - lastScrollX
+        val dy = curY - lastScrollY
+        lastScrollX = curX
+        lastScrollY = curY
+
+        // Ignore stationary scroll events (delta == 0, view initialization noise).
+        if (dx == 0 && dy == 0) return null
+
         val direction = when {
-            scrollY > 0 -> SwipeDirection.DOWN
-            scrollY < 0 -> SwipeDirection.UP
-            scrollX > 0 -> SwipeDirection.RIGHT
-            else -> SwipeDirection.LEFT
+            dy > 10 -> SwipeDirection.UP
+            dy < -10 -> SwipeDirection.DOWN
+            dx > 10 -> SwipeDirection.RIGHT
+            dx < -10 -> SwipeDirection.LEFT
+            else -> null
         }
+        // Direction unresolved, not a meaningful swipe gesture.
+        if (direction == null) return null
+
+        val node = scrollEvent.sourceNode
+        val sourceBounds = scrollEvent.sourceBounds
+        val sx = node?.bounds?.centerX ?: sourceBounds?.centerX ?: 0
+        val sy = node?.bounds?.centerY ?: sourceBounds?.centerY ?: 0
 
         return GestureInfo.Swipe(
             direction = direction,
-            fromX = 0, fromY = 0,
-            toX = scrollX, toY = scrollY
+            fromX = sx,
+            fromY = sy,
+            toX = sx,
+            toY = sy
         )
     }
 }
@@ -363,6 +484,7 @@ data class RecordedEvent(
     val className: String = "",
     val text: String = "",
     val sourceNode: NodeInfo? = null,
+    val sourceBounds: ScreenRect? = null,
     val eventTime: Long = 0,
     val scrollX: Int = 0,
     val scrollY: Int = 0
