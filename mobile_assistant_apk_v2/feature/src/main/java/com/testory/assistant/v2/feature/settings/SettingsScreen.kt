@@ -25,11 +25,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onNavigateToSync: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     var showPcDialog by remember { mutableStateOf(false) }
+    var showClearDialog by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -92,8 +95,8 @@ fun SettingsScreen(
                 SettingsItem(
                     icon = Icons.Filled.Sync,
                     title = "手动同步",
-                    subtitle = "立即同步用例到 PC 端",
-                    onClick = { /* TODO: trigger sync */ }
+                    subtitle = "选择用例同步到 PC 端或从 PC 端拉取",
+                    onClick = { onNavigateToSync() }
                 )
             }
 
@@ -104,19 +107,21 @@ fun SettingsScreen(
                 SettingsItem(
                     icon = Icons.Filled.Storage,
                     title = "清理数据",
-                    subtitle = "清除录制的用例和运行记录",
-                    onClick = { /* TODO: clear data with confirmation */ }
+                    subtitle = if (uiState.isClearing) "正在清理…" else "清除录制的用例和运行记录",
+                    onClick = { showClearDialog = true }
                 )
                 SettingsItem(
                     icon = Icons.Filled.Info,
                     title = "关于 Testory",
-                    subtitle = "版本 2.0.0 · 智测工坊",
-                    onClick = { }
+                    subtitle = "版本 ${uiState.appVersion} · 智测工坊",
+                    onClick = { showAboutDialog = true }
                 )
             }
 
             Spacer(modifier = Modifier.height(32.dp))
         }
+
+        // ── Dialogs ──
 
         // PC connection dialog
         if (showPcDialog) {
@@ -194,6 +199,73 @@ fun SettingsScreen(
                 dismissButton = {
                     TextButton(onClick = { showPcDialog = false }) {
                         Text("取消")
+                    }
+                }
+            )
+        }
+
+        // Clear data confirmation dialog
+        if (showClearDialog) {
+            AlertDialog(
+                onDismissRequest = { showClearDialog = false },
+                title = { Text("确认清理数据") },
+                text = { Text("将清除所有录制的用例和运行记录，此操作不可撤销。建议先同步到 PC 端。") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showClearDialog = false
+                            viewModel.clearAllData { ok, msg ->
+                                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("确认清除")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
+
+        // About dialog
+        if (showAboutDialog) {
+            AlertDialog(
+                onDismissRequest = { showAboutDialog = false },
+                title = { Text("关于 Testory") },
+                text = {
+                    Column {
+                        Text(
+                            text = "Testory 智测工坊",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "版本 ${uiState.appVersion}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "移动端智能测试助手，支持录制回放、AI 生成用例、PC 端协同管理。\n\n" +
+                                   "📱 无障碍服务录制回放\n" +
+                                   "🤖 AI 对话创建测试用例\n" +
+                                   "🔗 PC 端协同管理与执行\n" +
+                                   "📊 测试报告自动生成",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = MaterialTheme.typography.bodySmall.lineHeight
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showAboutDialog = false }) {
+                        Text("关闭")
                     }
                 }
             )

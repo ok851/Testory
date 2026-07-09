@@ -219,7 +219,7 @@ fun AIBridgeScreen(
                             is ChatMessage.Ai -> AiBubble(
                                 message = message,
                                 onRunStep = { viewModel.runGeneratedSteps(message.steps) },
-                                onSaveSteps = { viewModel.saveGeneratedSteps(message.steps) }
+                                onSaveSteps = { viewModel.saveGeneratedSteps(message.steps, message.caseName) }
                             )
                             is ChatMessage.System -> SystemBubble(message.text)
                         }
@@ -376,7 +376,8 @@ sealed class ChatMessage {
     data class User(val text: String) : ChatMessage()
     data class Ai(
         val text: String,
-        val steps: List<Step> = emptyList()
+        val steps: List<Step> = emptyList(),
+        val caseName: String = ""
     ) : ChatMessage()
     data class System(val text: String) : ChatMessage()
 }

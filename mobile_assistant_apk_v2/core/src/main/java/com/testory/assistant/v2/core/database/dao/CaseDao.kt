@@ -41,4 +41,16 @@ interface CaseDao {
 
     @Query("SELECT COUNT(*) FROM test_cases")
     suspend fun count(): Int
+
+    @Query("DELETE FROM test_cases")
+    suspend fun deleteAll()
+
+    @Query("SELECT DISTINCT project_name FROM test_cases WHERE project_name != '' ORDER BY project_name")
+    fun observeAllProjectNames(): Flow<List<String>>
+
+    @Query("SELECT * FROM test_cases WHERE project_name = :projectName ORDER BY updated_at DESC")
+    fun observeByProject(projectName: String): Flow<List<CaseEntity>>
+
+    @Query("SELECT * FROM test_cases WHERE project_name = '' OR project_name IS NULL ORDER BY updated_at DESC")
+    fun observeUngrouped(): Flow<List<CaseEntity>>
 }

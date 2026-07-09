@@ -6,7 +6,6 @@ import com.testory.assistant.v2.core.communication.PcSyncClient
 import com.testory.assistant.v2.core.model.*
 import com.testory.assistant.v2.core.repository.CaseRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -58,24 +57,44 @@ class AIBridgeViewModel @Inject constructor(
             }
 
             try {
-                // TODO: In Phase 3, implement gRPC AIBridgeService protocol
-                // For now, use HTTP fallback to PC agent endpoint
-                val deviceInfo = pcSyncClient.getDeviceInfo()
+                val result = pcSyncClient.aiGenerateSteps(text)
 
-                // Simulate AI response with template steps
-                // In production, this makes gRPC call to PC Ollama
-                delay(1500) // Simulate processing time
-
-                val steps = generateDemoSteps(text)
-
-                _uiState.update {
-                    it.copy(
-                        messages = it.messages + ChatMessage.Ai(
-                            text = "好的！我建议以下测试步骤：",
-                            steps = steps
-                        ),
-                        isGenerating = false
-                    )
+                if (result.success && result.steps.isNotEmpty()) {
+                    val aiText = buildString {
+                        appendLine("**${result.caseName}**")
+                        if (result.description.isNotEmpty()) {
+                            appendLine()
+                            appendLine(result.description)
+                        }
+                        if (result.expectedResult.isNotEmpty()) {
+                            appendLine()
+                            appendLine("预期结果: ${result.expectedResult}")
+                        }
+                    }
+                    _uiState.update {
+                        it.copy(
+                            messages = it.messages + ChatMessage.Ai(
+                                text = aiText.trim(),
+                                steps = result.steps,
+                                caseName = result.caseName
+                            ),
+                            isGenerating = false
+                        )
+                    }
+                } else {
+                    val errMsg = result.error ?: "PC 端 AI 服务返回了空步骤，请检查 Ollama 是否已启动并安装模型"
+                    _uiState.update {
+                        it.copy(
+                            messages = it.messages + ChatMessage.System(
+                                "AI 生成失败: $errMsg\n\n" +
+                                "请确认:\n" +
+                                "1. PC 端 Ollama 已启动\n" +
+                                "2. 已安装并运行模型\n" +
+                                "3. 在 PC 端 AI 配置中启用了移动端推理"
+                            ),
+                            isGenerating = false
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -90,11 +109,12 @@ class AIBridgeViewModel @Inject constructor(
         }
     }
 
-    fun saveGeneratedSteps(steps: List<Step>) {
+    fun saveGeneratedSteps(steps: List<Step>, caseName: String = "") {
         viewModelScope.launch {
+            val name = caseName.ifBlank { "AI生成_${System.currentTimeMillis()}" }
             val testCase = TestCase(
                 id = UUID.randomUUID().toString(),
-                name = "AI生成_${System.currentTimeMillis()}",
+                name = name,
                 description = "由 AI 对话生成",
                 steps = steps.mapIndexed { index, step ->
                     step.copy(index = index + 1)
@@ -104,60 +124,16 @@ class AIBridgeViewModel @Inject constructor(
             caseRepository.saveCase(testCase)
             _uiState.update {
                 it.copy(
-                    messages = it.messages + ChatMessage.System("✅ 用例已保存")
+                    messages = it.messages + ChatMessage.System("✅ 用例「${name}」已保存")
                 )
             }
         }
     }
 
     fun runGeneratedSteps(steps: List<Step>) {
-        // Navigate to replay screen (handled by navigation)
-        // For now, show message
         _uiState.update {
             it.copy(
-                messages = it.messages + ChatMessage.System("▶️ 运行功能将在回放模块中实现")
-            )
-        }
-    }
-
-    /**
-     * 生成演示步骤 — Phase 1 占位符，Phase 3 替换为真实 gRPC AI 调用。
-     */
-    private fun generateDemoSteps(userIntent: String): List<Step> {
-        val normalized = userIntent.lowercase()
-
-        return when {
-            normalized.contains("登录") || normalized.contains("login") -> listOf(
-                Step(action = ActionType.TAP, description = "打开应用"),
-                Step(action = ActionType.TAP, description = "点击\"登录\"按钮"),
-                Step(action = ActionType.INPUT, description = "输入用户名", inputText = "test_user"),
-                Step(action = ActionType.INPUT, description = "输入密码", inputText = "******"),
-                Step(action = ActionType.TAP, description = "点击\"确认登录\""),
-                Step(action = ActionType.ASSERT, description = "验证显示\"欢迎\"", assertText = "欢迎")
-            )
-            normalized.contains("注册") || normalized.contains("register") -> listOf(
-                Step(action = ActionType.TAP, description = "打开应用"),
-                Step(action = ActionType.TAP, description = "点击\"注册\""),
-                Step(action = ActionType.INPUT, description = "输入手机号", inputText = "13800138000"),
-                Step(action = ActionType.INPUT, description = "输入验证码", inputText = "123456"),
-                Step(action = ActionType.TAP, description = "点击\"下一步\""),
-                Step(action = ActionType.INPUT, description = "设置密码", inputText = "******"),
-                Step(action = ActionType.TAP, description = "点击\"完成注册\""),
-                Step(action = ActionType.ASSERT, description = "验证注册成功")
-            )
-            normalized.contains("滚动") || normalized.contains("列表") || normalized.contains("scroll") -> listOf(
-                Step(action = ActionType.OPEN_APP, description = "打开目标应用"),
-                Step(action = ActionType.WAIT, description = "等待页面加载", waitDurationMs = 2000),
-                Step(action = ActionType.SWIPE, description = "向下滑动列表", swipeDirection = SwipeDirection.UP),
-                Step(action = ActionType.WAIT, description = "等待内容加载", waitDurationMs = 1000),
-                Step(action = ActionType.SWIPE, description = "继续滑动", swipeDirection = SwipeDirection.UP),
-                Step(action = ActionType.ASSERT, description = "验证新内容已加载")
-            )
-            else -> listOf(
-                Step(action = ActionType.OPEN_APP, description = "打开目标应用"),
-                Step(action = ActionType.WAIT, description = "等待页面加载", waitDurationMs = 2000),
-                Step(action = ActionType.TAP, description = "点击主要按钮"),
-                Step(action = ActionType.ASSERT, description = "验证页面内容正确")
+                messages = it.messages + ChatMessage.System("▶️ 请先保存用例，再到用例列表中选择回放")
             )
         }
     }

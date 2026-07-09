@@ -1,6 +1,7 @@
 package com.testory.assistant.v2.core.repository
 
 import com.testory.assistant.v2.core.communication.PcSyncClient
+import com.testory.assistant.v2.core.communication.SyncCaseSummary
 import com.testory.assistant.v2.core.database.dao.CaseDao
 import com.testory.assistant.v2.core.database.dao.RunHistoryDao
 import com.testory.assistant.v2.core.database.dao.StepDao
@@ -8,12 +9,11 @@ import com.testory.assistant.v2.core.database.entity.CaseEntity
 import com.testory.assistant.v2.core.database.entity.StepEntity
 import com.testory.assistant.v2.core.database.entity.toDomain
 import com.testory.assistant.v2.core.database.entity.toEntity
-import com.testory.assistant.v2.core.model.RunResultSummary
-import com.testory.assistant.v2.core.model.SyncStatus
-import com.testory.assistant.v2.core.model.TestCase
+import com.testory.assistant.v2.core.model.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -119,40 +119,50 @@ class CaseRepository @Inject constructor(
         // Steps are cascade-deleted by Room
     }
 
-    suspend fun saveRunResult(run: RunResultSummary) {
+    suspend fun saveRunResult(caseId: String, caseName: String, run: RunResultSummary) {
         runHistoryDao.insert(
             com.testory.assistant.v2.core.database.entity.RunHistoryEntity(
                 id = run.runId.ifEmpty { UUID.randomUUID().toString() },
-                caseId = "",
-                caseName = "",
+                caseId = caseId,
+                caseName = caseName,
                 success = run.success,
                 totalSteps = run.totalSteps,
                 passedSteps = run.passedSteps,
                 failedStepIndex = run.failedStepIndex,
+                failedStepError = run.failedStepIndex.let { if (it > 0) "第 $it 步失败" else "" },
                 durationMs = run.durationMs,
-                runAt = run.runAt
+                runAt = run.runAt,
+                stepResultsJson = run.stepResultsJson
             )
         )
 
-        // Update last run result on case
-        val runId = run.runId.ifEmpty { UUID.randomUUID().toString() }
-        // Broadcast result to PC
-        try {
-            pcSyncClient.reportReplayResult(runId, emptyList())
-        } catch (_: Exception) { }
+        val entity = caseDao.getById(caseId)
+        if (entity != null) {
+            caseDao.upsert(
+                entity.copy(
+                    lastRunSuccess = run.success,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     // ── Sync ──
 
     suspend fun syncWithPc() {
         val unsynced = caseDao.getUnsyncedCases()
-        for (entity in unsynced) {
-            val steps = stepDao.getByCaseId(entity.id).map { it.toDomain() }
+        pushCasesByIds(unsynced.map { it.id }.toSet())
+    }
+
+    suspend fun pushCasesByIds(caseIds: Set<String>) {
+        for (caseId in caseIds) {
+            val entity = caseDao.getById(caseId) ?: continue
+            val steps = stepDao.getByCaseId(caseId).map { it.toDomain() }
             val testCase = entity.toDomain(steps)
             try {
                 val result = pcSyncClient.pushCase(testCase)
                 if (result is com.testory.assistant.v2.core.communication.SyncResult.Success) {
-                    caseDao.updateSyncStatus(entity.id, SyncStatus.SYNCED.name)
+                    caseDao.updateSyncStatus(caseId, SyncStatus.SYNCED.name)
                 }
             } catch (_: Exception) { }
         }
@@ -160,19 +170,75 @@ class CaseRepository @Inject constructor(
 
     suspend fun pullFromPc(): List<String> {
         try {
-            val remoteCases = pcSyncClient.pullAllCases()
+            val summaries = pullCaseSummaries()
+            val idsToPull = summaries.filter { summary ->
+                val existing = caseDao.getById(summary.id)
+                existing == null || existing.syncStatus == SyncStatus.REMOTE_UPDATED.name
+            }.map { it.id }
+            if (idsToPull.isEmpty()) return emptyList()
+            val fullCases = pcSyncClient.pullCasesByIds(idsToPull)
             val ids = mutableListOf<String>()
-            for (testCase in remoteCases) {
-                val existing = caseDao.getById(testCase.id)
-                if (existing == null || existing.syncStatus == SyncStatus.REMOTE_UPDATED.name) {
-                    saveCase(testCase)
-                    ids.add(testCase.id)
-                }
+            for (testCase in fullCases) {
+                saveCase(testCase)
+                ids.add(testCase.id)
             }
             return ids
         } catch (_: Exception) {
             return emptyList()
         }
+    }
+
+    suspend fun pullCaseSummaries(): List<SyncCaseSummary> {
+        return try {
+            pcSyncClient.pullCaseSummaries()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun pullCasesByIds(ids: List<String>): List<String> {
+        try {
+            if (ids.isEmpty()) return emptyList()
+            val fullCases = pcSyncClient.pullCasesByIds(ids)
+            val savedIds = mutableListOf<String>()
+            for (testCase in fullCases) {
+                saveCase(testCase)
+                savedIds.add(testCase.id)
+            }
+            return savedIds
+        } catch (_: Exception) {
+            return emptyList()
+        }
+    }
+
+    fun isPcConnected(): Boolean {
+        return pcSyncClient.state.value == com.testory.assistant.v2.core.model.PcConnectionState.CONNECTED
+    }
+
+    suspend fun getDeviceInfo(): DeviceInfo {
+        return pcSyncClient.getDeviceInfo()
+    }
+
+    suspend fun reportReplayResult(
+        caseId: String, runId: String,
+        stepResults: List<StepResult>,
+        deviceInfo: DeviceInfo
+    ) {
+        try {
+            val allPassed = stepResults.all { it.success }
+            pcSyncClient.reportReplayResult(
+                caseId = caseId,
+                runId = runId,
+                deviceModel = deviceInfo.model,
+                androidVersion = deviceInfo.androidVersion,
+                deviceName = deviceInfo.deviceName,
+                success = allPassed,
+                totalSteps = stepResults.size,
+                passedSteps = stepResults.count { it.success },
+                durationMs = stepResults.sumOf { it.durationMs },
+                results = stepResults
+            )
+        } catch (_: Exception) { }
     }
 
     fun searchCases(query: String): Flow<List<TestCase>> =
@@ -186,4 +252,10 @@ class CaseRepository @Inject constructor(
         }
 
     suspend fun getCaseCount(): Int = caseDao.count()
+
+    suspend fun clearAll() {
+        runHistoryDao.deleteAll()
+        stepDao.deleteAll()
+        caseDao.deleteAll()
+    }
 }

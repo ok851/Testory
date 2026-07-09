@@ -29,7 +29,11 @@ data class TestCase(
     /** 同步状态 */
     val syncStatus: SyncStatus = SyncStatus.LOCAL_ONLY,
     /** 上次运行结果摘要 */
-    val lastRunResult: RunResultSummary? = null
+    val lastRunResult: RunResultSummary? = null,
+    /** 项目 ID (与 PC 端对齐) */
+    val projectId: String = "",
+    /** 项目名称 (与 PC 端对齐) */
+    val projectName: String = ""
 )
 
 @Serializable
@@ -66,5 +70,6 @@ data class RunResultSummary(
     val passedSteps: Int = 0,
     val failedStepIndex: Int = -1,
     val durationMs: Long = 0,
-    val runAt: Long = System.currentTimeMillis()
+    val runAt: Long = System.currentTimeMillis(),
+    val stepResultsJson: String = "[]"
 )

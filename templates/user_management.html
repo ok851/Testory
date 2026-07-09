@@ -109,10 +109,6 @@
                         <option value="viewer" data-i18n-opt="um_role_viewer">只读用户</option>
                     </select>
                 </div>
-                <div>
-                    <label class="form-label" data-i18n="um_lbl_newpass">新密码（留空则不修改）</label>
-                    <input type="password" id="editPassword" class="form-input" data-i18n-placeholder="um_ph_pass_keep" placeholder="">
-                </div>
             </div>
             <div class="flex justify-end gap-2 mt-6">
                 <button type="button" class="btn btn-ghost" onclick="closeModal('editModal')"><span data-i18n="index_btn_cancel">取消</span></button>
@@ -208,7 +204,6 @@
             document.getElementById('editUsername').value = username || '';
             document.getElementById('editEmail').value = email || '';
             document.getElementById('editRole').value = role;
-            document.getElementById('editPassword').value = '';
             document.getElementById('editModal').classList.add('flex');
         }
 
@@ -306,7 +301,6 @@
             const username = document.getElementById('editUsername').value.trim();
             const email = document.getElementById('editEmail').value.trim();
             const role = document.getElementById('editRole').value;
-            const password = document.getElementById('editPassword').value;
 
             if (!username) {
                 alert(typeof t === 'function' ? t('um_need_username') : '');
@@ -314,7 +308,6 @@
             }
 
             const body = { username, email, role };
-            if (password) body.password = password;
 
             try {
                 const { res, data } = await umUserUpdate(id, body);

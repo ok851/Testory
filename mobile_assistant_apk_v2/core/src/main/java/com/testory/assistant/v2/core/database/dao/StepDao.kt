@@ -38,4 +38,7 @@ interface StepDao {
         deleteByCaseId(caseId)
         upsertAll(steps)
     }
+
+    @Query("DELETE FROM steps")
+    suspend fun deleteAll()
 }

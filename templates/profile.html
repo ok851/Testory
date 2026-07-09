@@ -76,6 +76,50 @@
             </form>
         </div>
 
+        <div class="card mb-6">
+            <h3 class="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-6 flex items-center">
+                <i class="fas fa-envelope text-primary mr-3"></i>
+                <span>邮件配置（用于找回密码发送验证码）</span>
+            </h3>
+            <form id="smtpForm" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">SMTP 服务器</label>
+                        <input type="text" id="smtpHost" class="prof-input" placeholder="如 smtp.qq.com">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">端口</label>
+                        <select id="smtpPort" class="prof-input">
+                            <option value="587">587 (STARTTLS)</option>
+                            <option value="465">465 (SSL)</option>
+                            <option value="25">25</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">发件邮箱地址</label>
+                    <input type="text" id="smtpUsername" class="prof-input" placeholder="如 your@qq.com">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">授权码 / 密码</label>
+                    <input type="password" id="smtpPassword" class="prof-input" placeholder="QQ/163 邮箱请使用授权码，非邮箱密码">
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="smtpUseTls" checked style="accent-color:var(--primary,#3b82f6);">
+                    <label for="smtpUseTls" class="text-sm text-gray-700 dark:text-gray-300">使用 TLS 加密</label>
+                </div>
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" id="smtpTestBtn" class="btn" style="color:#fff;background:#3b82f6;border:1px solid #3b82f6;">
+                        <i class="fas fa-paper-plane mr-2"></i>测试发送
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save mr-2"></i>保存配置
+                    </button>
+                </div>
+            </form>
+            <p id="smtpStatus" class="text-sm mt-3 hidden"></p>
+        </div>
+
         <div class="card">
             <h3 class="text-xl font-semibold text-gray-700 dark:text-gray-200 mb-6 flex items-center">
                 <i class="fas fa-lock text-primary mr-3"></i>
@@ -154,10 +198,33 @@
             }
         }
 
+        async function loadSmtpForm() {
+            try {
+                const res = await fetch('/api/auth/me/smtp');
+                const data = await res.json();
+                if (data.success && data.smtp) {
+                    document.getElementById('smtpHost').value = data.smtp.host || '';
+                    document.getElementById('smtpPort').value = data.smtp.port || 587;
+                    document.getElementById('smtpUsername').value = data.smtp.username || '';
+                    document.getElementById('smtpUseTls').checked = data.smtp.use_tls !== 0;
+                }
+            } catch (e) {
+                console.error('加载SMTP配置失败:', e);
+            }
+        }
+
+        function showSmtpStatus(msg, ok) {
+            const el = document.getElementById('smtpStatus');
+            el.textContent = msg;
+            el.className = 'text-sm mt-3 ' + (ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400');
+            el.classList.remove('hidden');
+        }
+
         function initProfilePage() {
             try { document.title = typeof t === 'function' ? t('prof_doc_title') : ''; } catch (e) {}
             if (typeof applyUiLang === 'function') applyUiLang();
             loadProfileForm();
+            loadSmtpForm();
         }
 
         document.addEventListener('DOMContentLoaded', initProfilePage);
@@ -233,6 +300,75 @@
             } catch (error) {
                 console.error('修改密码失败:', error);
                 alert(typeof t === 'function' ? t('prof_pwd_net') : '');
+            }
+        });
+
+        document.getElementById('smtpForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const host = document.getElementById('smtpHost').value.trim();
+            const port = parseInt(document.getElementById('smtpPort').value);
+            const username = document.getElementById('smtpUsername').value.trim();
+            const password = document.getElementById('smtpPassword').value;
+            const use_tls = document.getElementById('smtpUseTls').checked ? 1 : 0;
+
+            if (!host || !username || !password) {
+                showSmtpStatus('请填写完整的 SMTP 服务器、邮箱地址和授权码', false);
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/auth/me/smtp', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ host, port, username, password, use_tls })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showSmtpStatus('SMTP 配置已保存', true);
+                } else {
+                    showSmtpStatus(data.error || '保存失败', false);
+                }
+            } catch (err) {
+                console.error('保存SMTP配置失败:', err);
+                showSmtpStatus('网络错误，保存失败', false);
+            }
+        });
+
+        document.getElementById('smtpTestBtn').addEventListener('click', async () => {
+            const host = document.getElementById('smtpHost').value.trim();
+            const port = parseInt(document.getElementById('smtpPort').value);
+            const username = document.getElementById('smtpUsername').value.trim();
+            const password = document.getElementById('smtpPassword').value;
+            const use_tls = document.getElementById('smtpUseTls').checked ? 1 : 0;
+
+            if (!host || !username || !password) {
+                showSmtpStatus('请先填写完整的 SMTP 配置', false);
+                return;
+            }
+
+            const btn = document.getElementById('smtpTestBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>测试中...';
+            showSmtpStatus('正在发送测试邮件...', true);
+
+            try {
+                const res = await fetch('/api/auth/smtp-test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ host, port, username, password, use_tls, to_email: username })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showSmtpStatus('测试邮件发送成功，请检查收件箱', true);
+                } else {
+                    showSmtpStatus(data.error || data.message || '测试邮件发送失败', false);
+                }
+            } catch (err) {
+                console.error('测试SMTP失败:', err);
+                showSmtpStatus('网络错误，测试失败', false);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>测试发送';
             }
         });
     </script>

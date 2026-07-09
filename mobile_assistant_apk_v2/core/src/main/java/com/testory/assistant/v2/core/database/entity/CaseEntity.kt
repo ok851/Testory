@@ -53,7 +53,13 @@ data class CaseEntity(
     val totalSteps: Int = 0,
 
     @ColumnInfo(name = "step_count")
-    val stepCount: Int = 0
+    val stepCount: Int = 0,
+
+    @ColumnInfo(name = "project_id")
+    val projectId: String = "",
+
+    @ColumnInfo(name = "project_name")
+    val projectName: String = ""
 )
 
 fun CaseEntity.toDomain(steps: List<com.testory.assistant.v2.core.model.Step> = emptyList()): TestCase = TestCase(
@@ -75,7 +81,9 @@ fun CaseEntity.toDomain(steps: List<com.testory.assistant.v2.core.model.Step> = 
             totalSteps = totalSteps,
             runAt = lastRunAt
         )
-    } else null
+    } else null,
+    projectId = projectId,
+    projectName = projectName
 )
 
 fun TestCase.toEntity(): CaseEntity = CaseEntity(
@@ -93,7 +101,9 @@ fun TestCase.toEntity(): CaseEntity = CaseEntity(
     lastRunSuccess = lastRunResult?.success ?: false,
     lastRunAt = lastRunResult?.runAt ?: 0,
     totalSteps = lastRunResult?.totalSteps ?: 0,
-    stepCount = steps.size
+    stepCount = steps.size,
+    projectId = projectId,
+    projectName = projectName
 )
 
 private fun parseTagsList(json: String): List<String> {

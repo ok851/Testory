@@ -33,4 +33,7 @@ interface RunHistoryDao {
         WHERE case_id = :caseId AND run_at > :since
     """)
     suspend fun getSuccessRate(caseId: String, since: Long = 0): Double
+
+    @Query("DELETE FROM run_history")
+    suspend fun deleteAll()
 }

@@ -18,7 +18,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.testory.assistant.v2.core.model.DeviceInfo
 import com.testory.assistant.v2.core.model.PcConnectionState
-import com.testory.assistant.v2.core.model.TestCase
 
 /**
  * 首页 — 用户进入后看到的主界面。
@@ -122,22 +121,6 @@ fun HomeScreen(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     onClick = onNavigateToCases
                 )
-            }
-
-            // Recent cases
-            if (uiState.recentCases.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "最近用例",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                uiState.recentCases.take(3).forEach { testCase ->
-                    RecentCaseCard(
-                        testCase = testCase,
-                        onClick = onNavigateToCases
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(32.dp))
@@ -283,48 +266,6 @@ private fun ActionCard(
     }
 }
 
-@Composable
-private fun RecentCaseCard(
-    testCase: TestCase,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        )
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = testCase.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = "${testCase.steps.size} 步 · ${
-                        java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.getDefault())
-                            .format(java.util.Date(testCase.updatedAt))
-                    }",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-            }
-            Icon(
-                Icons.Filled.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.outline
-            )
-        }
-    }
-}
-
 /**
  * Home screen UI state
  */
@@ -332,6 +273,5 @@ data class HomeUiState(
     val deviceInfo: DeviceInfo = DeviceInfo(),
     val isAccessibilityEnabled: Boolean = false,
     val pcConnectionState: PcConnectionState = PcConnectionState.DISCONNECTED,
-    val caseCount: Int = 0,
-    val recentCases: List<TestCase> = emptyList()
+    val caseCount: Int = 0
 )

@@ -7,10 +7,12 @@ import androidx.lifecycle.viewModelScope
 import com.testory.assistant.v2.core.model.*
 import com.testory.assistant.v2.core.repository.CaseRepository
 import com.testory.assistant.v2.service.accessibility.AccessibilityServiceHolder
+import com.testory.assistant.v2.service.foreground.FloatingControlService
 import com.testory.assistant.v2.service.foreground.RecorderForegroundService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import javax.inject.Inject
 
@@ -29,11 +31,13 @@ class ReplayViewModel @Inject constructor(
 
     private var replayJob: Job? = null
     private var steps: List<Step> = emptyList()
+    private var caseName: String = ""
 
     suspend fun loadCase(caseId: String) {
         val testCase = withContext(Dispatchers.IO) {
             caseRepository.getCase(caseId)
         }
+        caseName = testCase?.name ?: ""
         steps = testCase?.steps?.mapIndexed { idx, step ->
             // Ensure step has index set for tracking
             if (step.index <= 0) step.copy(index = idx + 1) else step
@@ -74,6 +78,10 @@ class ReplayViewModel @Inject constructor(
                     putExtra(RecorderForegroundService.EXTRA_MODE, "replaying")
                 }
                 application.startForegroundService(notiIntent)
+                val floatIntent = Intent(application, FloatingControlService::class.java).apply {
+                    putExtra(FloatingControlService.EXTRA_MODE, "replaying")
+                }
+                application.startForegroundService(floatIntent)
             } catch (_: Exception) { }
 
             // Get accessibility service
@@ -145,6 +153,7 @@ class ReplayViewModel @Inject constructor(
                         stepResults = results.toList()
                     )
                 }
+                sendReplayProgress(index + 1, steps.size)
             }
 
             val elapsed = System.currentTimeMillis() - startTime
@@ -158,19 +167,38 @@ class ReplayViewModel @Inject constructor(
             }
 
             // Save run result
+            val runId = UUID.randomUUID().toString()
+            val stepResultsJson = Json.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(StepResult.serializer()),
+                results
+            )
+            val testCase = _uiState.value.testCase
+            val caseId = testCase?.id ?: ""
             caseRepository.saveRunResult(
-                RunResultSummary(
-                    runId = UUID.randomUUID().toString(),
+                caseId = caseId,
+                caseName = caseName,
+                run = RunResultSummary(
+                    runId = runId,
                     success = allPassed,
                     totalSteps = steps.size,
                     passedSteps = passed,
                     failedStepIndex = if (allPassed) -1 else results.indexOfFirst { !it.success } + 1,
                     durationMs = elapsed,
-                    runAt = startTime
+                    runAt = startTime,
+                    stepResultsJson = stepResultsJson
                 )
             )
 
+            // Auto-sync run result to PC if connected
+            if (caseRepository.isPcConnected()) {
+                try {
+                    val deviceInfo = caseRepository.getDeviceInfo()
+                    caseRepository.reportReplayResult(caseId, runId, results, deviceInfo)
+                } catch (_: Exception) { }
+            }
+
             stopForegroundServices()
+            sendReplayComplete(allPassed)
         }
     }
 
@@ -210,6 +238,29 @@ class ReplayViewModel @Inject constructor(
     private fun stopForegroundServices() {
         try {
             application.stopService(Intent(application, RecorderForegroundService::class.java))
+            application.stopService(Intent(application, FloatingControlService::class.java))
+        } catch (_: Exception) { }
+    }
+
+    private fun sendReplayProgress(current: Int, total: Int) {
+        try {
+            val intent = Intent(application, FloatingControlService::class.java).apply {
+                action = FloatingControlService.ACTION_UPDATE_REPLAY_PROGRESS
+                putExtra(FloatingControlService.EXTRA_CURRENT_STEP, current)
+                putExtra(FloatingControlService.EXTRA_TOTAL_STEPS, total)
+            }
+            application.startService(intent)
+        } catch (_: Exception) { }
+    }
+
+    private fun sendReplayComplete(allPassed: Boolean) {
+        try {
+            val result = if (allPassed) "回放完成 ✅" else "回放失败 ❌"
+            val intent = Intent(application, FloatingControlService::class.java).apply {
+                action = FloatingControlService.ACTION_REPLAY_COMPLETE
+                putExtra(FloatingControlService.EXTRA_COMPLETE_RESULT, result)
+            }
+            application.startService(intent)
         } catch (_: Exception) { }
     }
 }

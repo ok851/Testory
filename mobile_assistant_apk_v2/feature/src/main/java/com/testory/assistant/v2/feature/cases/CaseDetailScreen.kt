@@ -1,9 +1,11 @@
 package com.testory.assistant.v2.feature.cases
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,6 +25,7 @@ fun CaseDetailScreen(
     caseId: String,
     onBack: () -> Unit,
     onStartReplay: (String) -> Unit,
+    onNavigateToHistory: (String) -> Unit,
     viewModel: CaseDetailViewModel = hiltViewModel()
 ) {
     val testCase by viewModel.case.collectAsState()
@@ -229,20 +232,36 @@ fun CaseDetailScreen(
                     }
                 }
 
-                // Run history
-                if (runHistory.isNotEmpty()) {
-                    item {
-                        Spacer(modifier = Modifier.height(16.dp))
+                // Run history - always show entry
+                item {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = "运行历史",
+                            text = "运行记录",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
                         )
+                        TextButton(onClick = { onNavigateToHistory(caseId) }) {
+                            Text("查看全部")
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
-                    items(runHistory.size) { idx ->
+                }
+                if (runHistory.isNotEmpty()) {
+                    items(runHistory.take(3).size) { idx ->
                         val run = runHistory[idx]
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onNavigateToHistory(caseId) },
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surface
                             )

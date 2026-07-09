@@ -50,5 +50,6 @@ fun RunHistoryEntity.toDomain(): RunResultSummary = RunResultSummary(
     passedSteps = passedSteps,
     failedStepIndex = failedStepIndex,
     durationMs = durationMs,
-    runAt = runAt
+    runAt = runAt,
+    stepResultsJson = stepResultsJson
 )

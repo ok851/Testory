@@ -54,42 +54,49 @@ def _port_listening(host: str, port: int, timeout: float = 0.4) -> bool:
         return False
 
 
-def _kill_listeners_on_port(port: int) -> None:
-    """终止占用 Gateway 端口的旧进程，防止陈旧 Gateway 在连接时自动安装助手。"""
+def _kill_listeners_on_port(port: int) -> bool:
+    """终止占用 Gateway 端口的旧进程；返回端口是否已空闲。"""
     if sys.platform != "win32":
-        return
-    try:
-        proc = subprocess.run(
-            ["netstat", "-ano"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        pids = set()
-        needle = f":{port}"
-        for line in (proc.stdout or "").splitlines():
-            if "LISTENING" not in line.upper() or needle not in line:
-                continue
-            parts = line.split()
-            if not parts:
-                continue
-            try:
-                pids.add(int(parts[-1]))
-            except ValueError:
-                continue
-        my_pid = os.getpid()
-        for pid in pids:
-            if pid <= 0 or pid == my_pid:
-                continue
-            subprocess.run(
-                ["taskkill", "/F", "/PID", str(pid)],
+        return True
+    freed = False
+    for attempt in range(3):
+        try:
+            proc = subprocess.run(
+                ["netstat", "-ano"],
                 capture_output=True,
+                text=True,
                 timeout=10,
                 check=False,
             )
-    except Exception:
-        pass
+            pids = set()
+            needle = f":{port}"
+            for line in (proc.stdout or "").splitlines():
+                if "LISTENING" not in line.upper() or needle not in line:
+                    continue
+                parts = line.split()
+                if not parts:
+                    continue
+                try:
+                    pids.add(int(parts[-1]))
+                except ValueError:
+                    continue
+            if not pids:
+                return True
+            my_pid = os.getpid()
+            for pid in pids:
+                if pid <= 0 or pid == my_pid:
+                    continue
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                )
+                time.sleep(0.3)
+            time.sleep(0.5)
+        except Exception:
+            pass
+    return False
 
 
 def _ensure_mobile_env_defaults() -> None:
@@ -110,12 +117,17 @@ def _start_gateway_process() -> None:
     env = os.environ.copy()
     env["MOBILE_GATEWAY_INPROCESS"] = "1"
     env["MOBILE_GATEWAY_BUILD"] = _EXPECTED_GATEWAY_BUILD
+    env["MOBILE_AGENT_GATE_PORT"] = os.environ.get("MOBILE_AGENT_GATE_PORT", "8777")
+    env["MOBILE_AGENT_GATEWAY_SECRET"] = os.environ.get(
+        "MOBILE_AGENT_GATEWAY_SECRET",
+        os.environ.get("EMBEDDED_BROWSER_GATEWAY_SECRET", "hufirst-mobile-local"),
+    )
     _GATEWAY_PROC = subprocess.Popen(
         _mobile_gateway_cmd(),
         cwd=str(_ROOT),
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         creationflags=subprocess_creationflags_no_window(),
     )
 
@@ -160,17 +172,108 @@ def bootstrap_mobile_services(*, force: bool = False) -> dict:
     port = parsed.port or 8777
 
     stop_mobile_gateway()
-    _kill_listeners_on_port(port)
+    port_freed = _kill_listeners_on_port(port)
+    if not port_freed:
+        out["gateway_error"] = f"端口 {port} 被占用，无法释放。请手动执行: netstat -ano | findstr :{port}"
+        out["port_blocked"] = True
+        return out
 
     try:
         _start_gateway_process()
         for _ in range(40):
             if _port_listening(host, port):
-                out["gateway_started"] = True
-                break
+                time.sleep(0.3)
+                if _verify_gateway_health(out["gateway_url"]):
+                    out["gateway_started"] = True
+                    break
+                else:
+                    out["error"] = "Gateway 端口已监听但 /health 校验失败，可能非 Testory 服务"
+                    _gateway_stderr_snippet(out)
+                    break
             time.sleep(0.2)
+        if not out["gateway_started"] and "error" not in out:
+            out["error"] = "Gateway 进程未能在 8 秒内启动"
+            _gateway_stderr_snippet(out)
+        if out["gateway_started"]:
+            _verify_gateway_auth(out)
     except Exception as e:
         out["error"] = str(e)
-    # scrcpy bridge removed — mobile mirror feature retired
+        _gateway_stderr_snippet(out)
     return out
+
+
+def _verify_gateway_auth(out: dict) -> None:
+    secret = os.environ.get("MOBILE_AGENT_GATEWAY_SECRET", "").strip()
+    url = out["gateway_url"].rstrip("/") + "/internal/devices/scan"
+    import json as _json
+    import urllib.request as _ur
+
+    try:
+        data = _json.dumps({}).encode("utf-8")
+        req = _ur.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "X-Mobile-Agent-Secret": secret,
+            },
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=5.0) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+            if body.get("success"):
+                return
+            out["auth_warning"] = "Gateway 鉴权响应异常"
+    except _ur.HTTPError as e:
+        if e.code == 401:
+            out["auth_warning"] = (
+                f"Gateway 鉴权失败 (secret={secret[:6]}...), "
+                "请检查 MOBILE_AGENT_GATEWAY_SECRET 环境变量"
+            )
+        else:
+            out["auth_warning"] = f"Gateway 返回 HTTP {e.code}"
+    except Exception as e:
+        out["auth_warning"] = f"Gateway 鉴权测试失败: {e}"
+
+
+def _verify_gateway_health(gateway_url: str) -> bool:
+    """通过 /health 端点验证 Gateway 是真正的 Testory M.A.G. 而非其他占用端口的服务。"""
+    import json as _json
+    import urllib.request as _ur
+
+    try:
+        req = _ur.Request(
+            gateway_url.rstrip("/") + "/health",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with _ur.urlopen(req, timeout=3.0) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+            return body.get("service") == "mobile-agent-gateway"
+    except Exception:
+        return False
+
+
+def _gateway_stderr_snippet(out: dict) -> None:
+    global _GATEWAY_PROC
+    if _GATEWAY_PROC is None or _GATEWAY_PROC.stderr is None:
+        return
+    try:
+        import select
+        if sys.platform == "win32":
+            ready, _, _ = select.select([_GATEWAY_PROC.stderr], [], [], 0.1)
+            if ready:
+                line = _GATEWAY_PROC.stderr.readline()
+                if line:
+                    out["gateway_stderr"] = line.decode("utf-8", errors="replace").strip()[:400]
+        else:
+            import fcntl
+            fd = _GATEWAY_PROC.stderr.fileno()
+            fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+            line = _GATEWAY_PROC.stderr.readline()
+            if line:
+                out["gateway_stderr"] = line.decode("utf-8", errors="replace").strip()[:400]
+    except Exception:
+        pass
 

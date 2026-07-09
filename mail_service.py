@@ -2,9 +2,12 @@ import random
 import smtplib
 import threading
 import time
+import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Dict
+
+_mail_log = logging.getLogger(__name__)
 
 _VERIFY_CODES: Dict[str, dict] = {}
 _VERIFY_CODE_TTL = 300
@@ -35,9 +38,18 @@ def send_verify_code(to_email: str, smtp_config: dict, purpose: str = "register"
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain", "utf-8"))
 
-        server = smtplib.SMTP(smtp_config["host"], int(smtp_config.get("port", 587)), timeout=15)
-        if smtp_config.get("use_tls", True):
-            server.starttls()
+        port = int(smtp_config.get("port", 587))
+        host = smtp_config["host"]
+        use_tls = smtp_config.get("use_tls", True)
+
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=30)
+        else:
+            server = smtplib.SMTP(host, port, timeout=30)
+            server.ehlo()
+            if use_tls:
+                server.starttls()
+                server.ehlo()
         server.login(smtp_config["username"], smtp_config["password"])
         server.sendmail(sender, [to_email], msg.as_string())
         server.quit()
@@ -45,8 +57,16 @@ def send_verify_code(to_email: str, smtp_config: dict, purpose: str = "register"
         with _CLEANUP_LOCK:
             _VERIFY_CODES[to_email] = {"code": code, "expires_at": expires_at, "purpose": purpose}
 
+        _mail_log.info(
+            "验证码已发送: to=%s from=%s host=%s port=%s purpose=%s",
+            to_email, sender, host, port, purpose,
+        )
         return {"success": True, "message": "验证码已发送"}
     except Exception as e:
+        _mail_log.warning(
+            "邮件发送失败: to=%s host=%s port=%s error=%s",
+            to_email, smtp_config.get("host", ""), smtp_config.get("port", 0), e,
+        )
         return {"success": False, "message": f"邮件发送失败: {str(e)}"}
 
 

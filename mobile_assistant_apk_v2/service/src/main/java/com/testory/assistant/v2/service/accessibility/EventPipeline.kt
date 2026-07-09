@@ -41,9 +41,7 @@ class EventPipeline @Inject constructor(
     private var currentGestureId: String = ""
     private var pendingSteps = mutableListOf<Step>()
 
-    // Swipe debounce: merge consecutive scroll events into one step
     private var pendingSwipe: GestureInfo.Swipe? = null
-    private var pendingSwipeJob: Job? = null
 
     private val launcherPkgs = setOf(
         "com.android.launcher", "com.android.launcher3",
@@ -64,6 +62,11 @@ class EventPipeline @Inject constructor(
         sessionState: StateFlow<SessionState>
     ) {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+        lastScrollX = 0
+        lastScrollY = 0
+        pendingSwipe = null
+        eventBuffer.clear()
 
         scope?.launch {
             // Mirror session recording state to pipeline recording state
@@ -98,6 +101,8 @@ class EventPipeline @Inject constructor(
         val remaining = pendingSteps.toList()
         pendingSteps.clear()
         eventBuffer.clear()
+        lastScrollX = 0
+        lastScrollY = 0
         _recordingState.value = RecordingState.IDLE
         return remaining
     }
@@ -112,44 +117,16 @@ class EventPipeline @Inject constructor(
     // ── Pipeline stages ──
 
     private fun processEvent(event: RecordedEvent) {
-        // Stage 1: Deduplication & filtering
         if (!filterEvent(event)) return
 
-        // Stage 2: Gesture classification
         eventBuffer.add(event)
         val gesture = classifyGesture()
 
-        // Stage 3: handle swipe with debounce or emit directly
         if (gesture is GestureInfo.Swipe) {
             handleSwipeGesture(gesture)
-        } else {
+        } else if (gesture != null) {
             flushPendingSwipe()
-            gesture?.let { g ->
-                val step = generateStep(g)
-                if (step != null) {
-                    pendingSteps.add(step)
-                    _stepFlow.tryEmit(step)
-                }
-            }
-        }
-    }
-
-    /**
-     * 滑动去重合并：连续 TYPE_VIEW_SCROLLED 事件在 350ms 内只产出一个 step。
-     * 原缺陷：每个 scroll 事件都通过 classifyGesture 产出一个 Swipe step，
-     * 导致一次滑动被录制为多次。
-     */
-    private fun handleSwipeGesture(swipe: GestureInfo.Swipe) {
-        pendingSwipeJob?.cancel()
-        pendingSwipe = swipe
-
-        pendingSwipeJob = scope?.launch {
-            delay(350)
-            val s = pendingSwipe ?: return@launch
-            pendingSwipe = null
-            pendingSwipeJob = null
-
-            val step = generateStep(s)
+            val step = generateStep(gesture)
             if (step != null) {
                 pendingSteps.add(step)
                 _stepFlow.tryEmit(step)
@@ -157,11 +134,25 @@ class EventPipeline @Inject constructor(
         }
     }
 
+    private fun handleSwipeGesture(swipe: GestureInfo.Swipe) {
+        val existing = pendingSwipe
+
+        if (existing == null) {
+            pendingSwipe = swipe
+            return
+        }
+
+        if (existing.direction != swipe.direction) {
+            flushPendingSwipe()
+            pendingSwipe = swipe
+        } else {
+            pendingSwipe = swipe
+        }
+    }
+
     private fun flushPendingSwipe() {
-        pendingSwipeJob?.cancel()
         val s = pendingSwipe
         pendingSwipe = null
-        pendingSwipeJob = null
         if (s != null) {
             val step = generateStep(s)
             if (step != null) {
@@ -341,8 +332,6 @@ class EventPipeline @Inject constructor(
                     )
                 )
             }
-
-            else -> null
         }
     }
 
@@ -456,20 +445,37 @@ class EventPipeline @Inject constructor(
             dx < -10 -> SwipeDirection.LEFT
             else -> null
         }
-        // Direction unresolved, not a meaningful swipe gesture.
         if (direction == null) return null
 
-        val node = scrollEvent.sourceNode
-        val sourceBounds = scrollEvent.sourceBounds
-        val sx = node?.bounds?.centerX ?: sourceBounds?.centerX ?: 0
-        val sy = node?.bounds?.centerY ?: sourceBounds?.centerY ?: 0
+        val bounds = (scrollEvent.sourceNode?.bounds ?: scrollEvent.sourceBounds)
+        val sx = bounds?.centerX ?: 0
+        val sy = bounds?.centerY ?: 0
+
+        if (bounds == null) return null
+
+        val rectH = bounds.bottom - bounds.top
+        val rectW = bounds.right - bounds.left
+        val swipeDistY = if (rectH > 0) (rectH * 0.5).toInt().coerceIn(100, 500) else 200
+        val swipeDistX = if (rectW > 0) (rectW * 0.5).toInt().coerceIn(100, 400) else 150
+
+        val (toX, toY) = when (direction) {
+            SwipeDirection.UP -> sx to (sy - swipeDistY)
+            SwipeDirection.DOWN -> sx to (sy + swipeDistY)
+            SwipeDirection.LEFT -> (sx - swipeDistX) to sy
+            SwipeDirection.RIGHT -> (sx + swipeDistX) to sy
+        }
+
+        val totalDist = kotlin.math.sqrt(
+            ((toX - sx).toDouble() * (toX - sx) + (toY - sy).toDouble() * (toY - sy))
+        )
+        if (totalDist < 30.0) return null
 
         return GestureInfo.Swipe(
             direction = direction,
             fromX = sx,
             fromY = sy,
-            toX = sx,
-            toY = sy
+            toX = toX,
+            toY = toY
         )
     }
 }

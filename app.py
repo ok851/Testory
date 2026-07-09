@@ -603,6 +603,10 @@ app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", ""
     "true",
     "yes",
 )
+app.config["PERMANENT_SESSION_LIFETIME"] = datetime.timedelta(days=365)
+app.config["REMEMBER_COOKIE_DURATION"] = datetime.timedelta(days=365)
+app.config["REMEMBER_COOKIE_HTTPONLY"] = True
+app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
 
 _max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", "50") or "50")
 app.config["MAX_CONTENT_LENGTH"] = max(1, _max_upload_mb) * 1024 * 1024
@@ -1435,6 +1439,7 @@ def _basic_email_format(email: str) -> bool:
 
 
 @app.route('/api/auth/register/send-code', methods=['POST'])
+@api_error_handler
 def api_register_send_code():
     body = request.get_json(silent=True) or {}
     username = (body.get('username') or '').strip()
@@ -1447,12 +1452,16 @@ def api_register_send_code():
     smtp_password = (body.get('smtp_password') or '').strip()
     smtp_use_tls = int(body.get('smtp_use_tls', 1))
 
-    if not username or not password or not email:
-        return jsonify({'success': False, 'error': '用户名、邮箱和密码不能为空'}), 400
+    if not username:
+        return jsonify({'success': False, 'error': '用户名不能为空'}), 400
+    if not email:
+        return jsonify({'success': False, 'error': '邮箱不能为空'}), 400
+    if not password:
+        return jsonify({'success': False, 'error': '密码不能为空'}), 400
     if len(username) < 2 or len(username) > 64:
         return jsonify({'success': False, 'error': '用户名长度须为 2-64 个字符'}), 400
     if len(password) < 6:
-        return jsonify({'success': False, 'error': '密码长度不能少于 6 位'}), 400
+        return jsonify({'success': False, 'error': f'密码长度不能少于 6 位（当前长度：{len(password)}）'}), 400
     if password != confirm_password:
         return jsonify({'success': False, 'error': '两次输入的密码不一致'}), 400
     if not _basic_email_format(email):
@@ -1479,6 +1488,7 @@ def api_register_send_code():
 
 
 @app.route('/api/auth/register/confirm', methods=['POST'])
+@api_error_handler
 def api_register_confirm():
     body = request.get_json(silent=True) or {}
     username = (body.get('username') or '').strip()
@@ -1526,21 +1536,34 @@ def api_register_confirm():
 
 
 @app.route('/api/auth/forgot-password/send-code', methods=['POST'])
+@api_error_handler
+@log_api_request
 def api_forgot_password_send_code():
     body = request.get_json(silent=True) or {}
     email = (body.get('email') or '').strip().lower()
 
     if not email or not _basic_email_format(email):
+        uat_logger.info("找回密码: 邮箱格式无效=%s", email)
         return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
 
     _db = Database()
     user_data = _db.get_user_by_email(email)
     if not user_data:
+        uat_logger.info("找回密码: 邮箱未注册=%s", email)
         return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
 
     smtp_data = _db.get_user_smtp_config_by_email(email)
     if not smtp_data:
-        return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
+        smtp_data = _db.get_user_smtp_config_by_user_id(user_data['id'])
+    if not smtp_data:
+        uat_logger.warning(
+            "找回密码: 用户 %s (id=%s) 缺少 SMTP 配置，无法发送验证码",
+            user_data.get('username', ''), user_data.get('id'),
+        )
+        return jsonify({
+            'success': False,
+            'error': '该账号未保存 SMTP 邮件配置，无法发送验证码。请联系管理员。',
+        }), 400
 
     smtp_config = {
         'host': smtp_data['host'],
@@ -1550,11 +1573,34 @@ def api_forgot_password_send_code():
         'use_tls': smtp_data['use_tls'],
         'sender_email': smtp_data['username'],
     }
-    send_verify_code(email, smtp_config, 'reset_password')
-    return jsonify({'success': True, 'message': '若邮箱已注册，验证码已发送'})
+    uat_logger.info(
+        "找回密码发送验证码: to=%s host=%s port=%s sender=%s use_tls=%s user=%s",
+        email, smtp_config['host'], smtp_config['port'],
+        smtp_config['sender_email'], smtp_config['use_tls'],
+        user_data.get('username', ''),
+    )
+    is_self_send = (smtp_config['sender_email'].lower() == email.lower())
+    if is_self_send:
+        uat_logger.warning(
+            "找回密码：发件人和收件人相同 (%s)，部分邮箱（163/126/QQ）可能静默丢弃此类邮件",
+            email,
+        )
+    result = send_verify_code(email, smtp_config, 'reset_password')
+    if not result.get('success'):
+        uat_logger.warning(f"找回密码邮件发送失败: {email} - {result.get('message')}")
+        return jsonify({
+            'success': False,
+            'error': result.get('message', '邮件发送失败，请稍后重试'),
+        }), 500
+    hint = ""
+    if is_self_send:
+        hint = "（注意：163/126等邮箱可能不收自己发给自己的邮件，如未收到请检查垃圾箱或使用其他邮箱）"
+    return jsonify({'success': True, 'message': '验证码已发送，请查收邮箱' + hint})
 
 
 @app.route('/api/auth/forgot-password/reset', methods=['POST'])
+@api_error_handler
+@log_api_request
 def api_forgot_password_reset():
     body = request.get_json(silent=True) or {}
     email = (body.get('email') or '').strip().lower()
@@ -1562,10 +1608,14 @@ def api_forgot_password_reset():
     new_password = (body.get('new_password') or '').strip()
     confirm_password = (body.get('confirm_password') or '').strip()
 
-    if not email or not code or not new_password:
-        return jsonify({'success': False, 'error': '缺少必要参数'}), 400
+    if not email:
+        return jsonify({'success': False, 'error': '邮箱不能为空'}), 400
+    if not code:
+        return jsonify({'success': False, 'error': '验证码不能为空'}), 400
+    if not new_password:
+        return jsonify({'success': False, 'error': '新密码不能为空'}), 400
     if len(new_password) < 6:
-        return jsonify({'success': False, 'error': '密码长度不能少于 6 位'}), 400
+        return jsonify({'success': False, 'error': f'密码长度不能少于 6 位（当前长度：{len(new_password)}）'}), 400
     if new_password != confirm_password:
         return jsonify({'success': False, 'error': '两次输入的密码不一致'}), 400
 
@@ -1584,6 +1634,7 @@ def api_forgot_password_reset():
 
 
 @app.route('/api/auth/smtp-test', methods=['POST'])
+@api_error_handler
 def api_smtp_test():
     body = request.get_json(silent=True) or {}
     host = (body.get('host') or '').strip()
@@ -1593,8 +1644,14 @@ def api_smtp_test():
     use_tls = int(body.get('use_tls', 1))
     to_email = (body.get('to_email') or '').strip()
 
-    if not host or not username or not password or not to_email:
-        return jsonify({'success': False, 'message': '请填写完整的 SMTP 配置和测试邮箱'}), 400
+    if not host:
+        return jsonify({'success': False, 'message': '请填写 SMTP 服务器地址'}), 400
+    if not username:
+        return jsonify({'success': False, 'message': '请填写邮箱地址'}), 400
+    if not password:
+        return jsonify({'success': False, 'message': '请填写 SMTP 授权码'}), 400
+    if not to_email:
+        return jsonify({'success': False, 'message': '请填写测试收件邮箱'}), 400
 
     smtp_config = {'host': host, 'port': int(port), 'username': username,
                    'password': password, 'use_tls': use_tls, 'sender_email': username}
@@ -1603,6 +1660,7 @@ def api_smtp_test():
 
 
 @app.route('/api/auth/login', methods=['POST'])
+@api_error_handler
 def api_login():
     ip = _login_client_ip()
     blocked, retry_after = _login_is_rate_limited(ip)
@@ -1626,10 +1684,8 @@ def api_login():
     _login_clear_failures(ip)
     user = UserModel(user_data)
     remember = data.get('remember_me', False)
-    duration_days = int(data.get('remember_duration', 7) or 7)
-    if remember and duration_days > 0:
+    if remember:
         session.permanent = True
-        app.permanent_session_lifetime = datetime.timedelta(days=duration_days)
     login_user(user, remember=remember)
     _db.update_user_last_login(user_data['id'])
     uat_logger.info(f"用户 {username} 登录成功")
@@ -1711,16 +1767,56 @@ def api_update_me():
     uat_logger.info(f"用户 {current_user.username} 更新了个人信息")
     return jsonify({'success': True})
 
+@app.route('/api/auth/me/smtp', methods=['GET'])
+@login_required
+def api_get_my_smtp():
+    _db = Database()
+    smtp = _db.get_user_smtp_config_by_user_id(current_user.id)
+    if not smtp:
+        return jsonify({'success': True, 'smtp': None})
+    return jsonify({'success': True, 'smtp': {
+        'host': smtp['host'],
+        'port': smtp['port'],
+        'username': smtp['username'],
+        'use_tls': smtp['use_tls'],
+    }})
+
+@app.route('/api/auth/me/smtp', methods=['PUT'])
+@login_required
+@api_error_handler
+def api_update_my_smtp():
+    data = request.get_json(silent=True) or {}
+    host = (data.get('host') or '').strip()
+    port = int(data.get('port', 587))
+    username = (data.get('username') or '').strip()
+    password = (data.get('password') or '').strip()
+    use_tls = int(data.get('use_tls', 1))
+
+    if not host or not username or not password:
+        return jsonify({'success': False, 'error': '请填写完整的 SMTP 配置'}), 400
+    if port <= 0 or port > 65535:
+        return jsonify({'success': False, 'error': '无效的端口号'}), 400
+
+    _db = Database()
+    user_data = _db.get_user_by_id(current_user.id)
+    email = (user_data.get('email') if user_data else None) or username
+    _db.save_user_smtp_config(current_user.id, email, host, port, username, password, use_tls)
+    uat_logger.info(f"用户 {current_user.username} 更新了 SMTP 配置: host={host} port={port}")
+    return jsonify({'success': True, 'message': 'SMTP 配置已保存'})
+
 @app.route('/api/auth/change_password', methods=['POST'])
 @login_required
+@api_error_handler
 def api_change_password():
     data = request.get_json(silent=True) or {}
-    old_password = data.get('old_password', '')
-    new_password = data.get('new_password', '')
-    if not old_password or not new_password:
-        return jsonify({'success': False, 'error': '密码不能为空'}), 400
+    old_password = (data.get('old_password') or '').strip()
+    new_password = (data.get('new_password') or '').strip()
+    if not old_password:
+        return jsonify({'success': False, 'error': '原密码不能为空'}), 400
+    if not new_password:
+        return jsonify({'success': False, 'error': '新密码不能为空'}), 400
     if len(new_password) < 6:
-        return jsonify({'success': False, 'error': '新密码长度不能小于6位'}), 400
+        return jsonify({'success': False, 'error': f'新密码长度不能少于 6 位（当前长度：{len(new_password)}）'}), 400
     _db = Database()
     user_data = _db.get_user_by_id(current_user.id)
     if not check_password_hash(user_data['password_hash'], old_password):
@@ -1778,8 +1874,6 @@ def api_update_user(user_id):
             update_kwargs['email'] = email_raw.strip() or None
         else:
             update_kwargs['email'] = email_raw
-    if data.get('password'):
-        update_kwargs['password_hash'] = generate_password_hash(data['password'])
     if 'is_active' in data:
         update_kwargs['is_active'] = data.get('is_active')
     _db = Database()

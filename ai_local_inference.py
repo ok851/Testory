@@ -1536,8 +1536,8 @@ class LocalAIService:
             "Output strict JSON only (no markdown). All steps must be desktop-automation compatible."
         )
 
-    @staticmethod
     def _build_android_prompt(
+        self,
         goal: str,
         project_name: str,
         memory_context: Optional[str] = None,

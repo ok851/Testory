@@ -27,14 +27,17 @@
                 <button type="button" class="smtp-preset-btn" data-preset="custom" style="padding:4px 12px;border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;background:transparent;color:#94a3b8;cursor:pointer;font-size:0.78rem;">自定义</button>
             </div>
             <div style="display:flex;gap:8px;margin-bottom:8px;">
-                <input type="text" id="smtpHost" placeholder="SMTP服务器" readonly style="flex:1;padding:8px 10px;background:rgba(255,255,255,0.04);border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;color:var(--text,rgba(255,255,255,0.8));font-size:0.82rem;flex:3;">
-                <input type="number" id="smtpPort" placeholder="端口" value="587" readonly style="width:80px;padding:8px 10px;background:rgba(255,255,255,0.04);border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;color:var(--text,rgba(255,255,255,0.8));font-size:0.82rem;">
+                <input type="text" id="smtpHost" placeholder="SMTP服务器" style="flex:1;padding:8px 10px;background:rgba(255,255,255,0.04);border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;color:var(--text,rgba(255,255,255,0.8));font-size:0.82rem;flex:3;">
+                <input type="number" id="smtpPort" placeholder="端口" value="587" style="width:80px;padding:8px 10px;background:rgba(255,255,255,0.04);border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;color:var(--text,rgba(255,255,255,0.8));font-size:0.82rem;">
             </div>
             <input type="email" id="smtpEmail" placeholder="邮箱地址" style="width:100%;padding:8px 10px;margin-bottom:8px;background:rgba(255,255,255,0.04);border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;color:var(--text,rgba(255,255,255,0.8));font-size:0.82rem;box-sizing:border-box;">
-            <div style="display:flex;gap:8px;">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
                 <input type="password" id="smtpPassword" placeholder="SMTP授权码（非登录密码）" style="flex:1;padding:8px 10px;background:rgba(255,255,255,0.04);border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;color:var(--text,rgba(255,255,255,0.8));font-size:0.82rem;">
-                <button type="button" id="smtpTestBtn" style="padding:8px 14px;background:rgba(165,180,252,0.15);border:1px solid rgba(165,180,252,0.3);border-radius:6px;color:#a5b4fc;cursor:pointer;font-size:0.78rem;white-space:nowrap;">测试发送</button>
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.75rem;color:#94a3b8;cursor:pointer;">
+                    <input type="checkbox" id="smtpUseTls" checked style="width:14px;height:14px;"> 使用TLS
+                </label>
             </div>
+            <button type="button" id="smtpTestBtn" style="width:100%;padding:8px 14px;background:rgba(165,180,252,0.15);border:1px solid rgba(165,180,252,0.3);border-radius:6px;color:#a5b4fc;cursor:pointer;font-size:0.78rem;white-space:nowrap;">测试发送</button>
             <p id="smtpTestResult" style="margin:6px 0 0;font-size:0.75rem;display:none;"></p>
             <p style="margin:8px 0 0;font-size:0.7rem;color:#64748b;">
                 <a href="https://service.mail.qq.com/detail/0/75" target="_blank" style="color:#a5b4fc;">QQ邮箱如何获取授权码？</a>
@@ -58,12 +61,12 @@
                 <input type="password" id="confirmPassword" name="confirm_password" required placeholder="再次输入密码" autocomplete="new-password">
             </div>
             <div style="display:flex;gap:8px;margin-bottom:1rem;">
-                <button type="button" id="sendCodeBtn" class="testory-btn-primary" style="flex:2;background:rgba(165,180,252,0.15);color:#a5b4fc;border-color:rgba(165,180,252,0.3);">
-                    发送验证码
-                </button>
-                <div style="flex:1;display:flex;align-items:center;">
+                <div style="flex:2;display:flex;align-items:center;">
                     <input type="text" id="verifyCode" placeholder="6位验证码" maxlength="6" style="width:100%;padding:10px;background:rgba(255,255,255,0.04);border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:8px;color:var(--text,rgba(255,255,255,0.8));font-size:0.9rem;text-align:center;box-sizing:border-box;">
                 </div>
+                <button type="button" id="sendCodeBtn" class="testory-btn-primary" style="flex:1;background:rgba(165,180,252,0.15);color:#a5b4fc;border-color:rgba(165,180,252,0.3);">
+                    发送验证码
+                </button>
             </div>
             <button type="submit" id="submitBtn" class="testory-btn-primary">
                 <span id="btnText">注 册</span>
@@ -92,10 +95,10 @@
     function applyPreset(name) {
         var p = SMTP_PRESETS[name] || SMTP_PRESETS['custom'];
         activePreset = name;
-        document.getElementById('smtpHost').value = p.host;
-        document.getElementById('smtpHost').readOnly = (name !== 'custom');
-        document.getElementById('smtpPort').value = p.port;
-        document.getElementById('smtpPort').readOnly = (name !== 'custom');
+        var hostEl = document.getElementById('smtpHost');
+        var portEl = document.getElementById('smtpPort');
+        if (hostEl) { hostEl.value = p.host; hostEl.readOnly = false; }
+        if (portEl) { portEl.value = p.port; portEl.readOnly = false; }
 
         var btns = document.querySelectorAll('.smtp-preset-btn');
         btns.forEach(function(b) {
@@ -127,20 +130,30 @@
     }
 
     function getSmtpConfig() {
+        var hostEl = document.getElementById('smtpHost');
+        var portEl = document.getElementById('smtpPort');
+        var emailEl = document.getElementById('smtpEmail');
+        var passwordEl = document.getElementById('smtpPassword');
+        var tlsEl = document.getElementById('smtpUseTls');
         return {
-            host: document.getElementById('smtpHost').value.trim(),
-            port: parseInt(document.getElementById('smtpPort').value) || 587,
-            username: document.getElementById('smtpEmail').value.trim(),
-            password: document.getElementById('smtpPassword').value.trim(),
-            use_tls: activePreset === 'custom' ? 1 : SMTP_PRESETS[activePreset].use_tls,
-            to_email: document.getElementById('smtpEmail').value.trim()
+            host: hostEl ? hostEl.value.trim() : '',
+            port: portEl ? (parseInt(portEl.value) || 587) : 587,
+            username: emailEl ? emailEl.value.trim() : '',
+            password: passwordEl ? passwordEl.value.trim() : '',
+            use_tls: tlsEl ? (tlsEl.checked ? 1 : 0) : 1,
+            to_email: emailEl ? emailEl.value.trim() : ''
         };
     }
 
     document.getElementById('smtpTestBtn').addEventListener('click', async function() {
         var cfg = getSmtpConfig();
-        if (!cfg.host || !cfg.username || !cfg.password || !cfg.to_email) {
-            showError('请填写完整的 SMTP 配置和邮箱地址');
+        var missing = [];
+        if (!cfg.host) missing.push('SMTP服务器');
+        if (!cfg.username) missing.push('邮箱地址');
+        if (!cfg.password) missing.push('SMTP授权码');
+        if (!cfg.to_email) missing.push('收件邮箱');
+        if (missing.length > 0) {
+            showError('请填写：' + missing.join('、'));
             return;
         }
         var btn = document.getElementById('smtpTestBtn');
@@ -180,8 +193,23 @@
         var password = document.getElementById('password').value;
         var confirmPassword = document.getElementById('confirmPassword').value;
 
-        if (!cfg.host || !cfg.username || !cfg.password || !email) {
-            showError('请先填写 SMTP 配置');
+        var missing = [];
+        if (!cfg.host) missing.push('SMTP服务器');
+        if (!cfg.username) missing.push('邮箱地址');
+        if (!cfg.password) missing.push('SMTP授权码');
+        if (!email) missing.push('收件邮箱');
+        if (!username) missing.push('用户名');
+        if (!password) missing.push('密码');
+        if (password && password.length < 6) {
+            showError('密码长度不能少于6位');
+            return;
+        }
+        if (password !== confirmPassword) {
+            showError('两次输入的密码不一致');
+            return;
+        }
+        if (missing.length > 0) {
+            showError('请先填写：' + missing.join('、'));
             return;
         }
 

@@ -1,9 +1,11 @@
 package com.testory.assistant.v2.feature.settings
 
 import android.content.Context
+import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.testory.assistant.v2.core.communication.PcSyncClient
+import com.testory.assistant.v2.core.repository.CaseRepository
 import com.testory.assistant.v2.core.util.AndroidUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -24,7 +26,8 @@ data class SettingsUiState(
     val recordingQuality: RecordingQuality = RecordingQuality.HIGH,
     val enableSound: Boolean = true,
     val enableVibration: Boolean = true,
-    val enableOfflineMode: Boolean = false
+    val enableOfflineMode: Boolean = false,
+    val isClearing: Boolean = false
 )
 
 enum class ConnectionStatus { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
@@ -38,7 +41,8 @@ enum class RecordingQuality(val label: String, val fps: Int) {
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
-    private val pcSyncClient: PcSyncClient
+    private val pcSyncClient: PcSyncClient,
+    private val caseRepository: CaseRepository
 ) : ViewModel() {
 
     private val prefs by lazy {
@@ -146,6 +150,21 @@ class SettingsViewModel @Inject constructor(
     fun disconnectFromPc() {
         viewModelScope.launch {
             pcSyncClient.disconnect()
+        }
+    }
+
+    fun clearAllData(onResult: (Boolean, String) -> Unit) {
+        if (_uiState.value.isClearing) return
+        _uiState.value = _uiState.value.copy(isClearing = true)
+        viewModelScope.launch {
+            try {
+                caseRepository.clearAll()
+                _uiState.value = _uiState.value.copy(isClearing = false)
+                onResult(true, "数据已清理完毕")
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(isClearing = false)
+                onResult(false, "清理失败: ${e.message}")
+            }
         }
     }
 }

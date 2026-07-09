@@ -18,7 +18,7 @@ def _normalize_user_email(email: Any) -> Optional[str]:
     if email is None:
         return None
     if isinstance(email, str):
-        s = email.strip()
+        s = email.strip().lower()
         return s or None
     return email
 
@@ -151,6 +151,7 @@ class Database:
             conn = sqlite3.connect(self.db_path, timeout=timeout)
         else:
             conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
         try:
             conn.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:
@@ -1126,6 +1127,10 @@ class Database:
             pass
         try:
             cursor.execute("ALTER TABLE run_history ADD COLUMN self_healed_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN test_type TEXT DEFAULT 'web'")
         except sqlite3.OperationalError:
             pass
 
@@ -2431,7 +2436,7 @@ class Database:
     
     # ==================== 运行历史记录管理方法 ====================
     
-    def create_run_history(self, case_id: int, status: str, duration: float, error: str = "", extracted_text: str = "", expected_text: str = "") -> int:
+    def create_run_history(self, case_id: int, status: str, duration: float, error: str = "", extracted_text: str = "", expected_text: str = "", test_type: str = "web") -> int:
         """创建运行历史记录"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
@@ -2440,8 +2445,8 @@ class Database:
         local_time = _utc_now_sql()
         
         cursor.execute(
-            "INSERT INTO run_history (case_id, status, duration, error, extracted_text, expected_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (case_id, status, duration, error, extracted_text, expected_text, local_time)
+            "INSERT INTO run_history (case_id, status, duration, error, extracted_text, expected_text, test_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (case_id, status, duration, error, extracted_text, expected_text, test_type, local_time)
         )
         history_id = cursor.lastrowid
         

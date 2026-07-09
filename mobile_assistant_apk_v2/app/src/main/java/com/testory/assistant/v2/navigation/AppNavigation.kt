@@ -8,11 +8,13 @@ import androidx.navigation.compose.rememberNavController
 import com.testory.assistant.v2.feature.ai_bridge.AIBridgeScreen
 import com.testory.assistant.v2.feature.cases.CaseDetailScreen
 import com.testory.assistant.v2.feature.cases.CaseListScreen
+import com.testory.assistant.v2.feature.history.RunHistoryScreen
 import com.testory.assistant.v2.feature.home.HomeScreen
 import com.testory.assistant.v2.feature.onboarding.OnboardingScreen
 import com.testory.assistant.v2.feature.recorder.RecorderScreen
 import com.testory.assistant.v2.feature.replay.ReplayScreen
 import com.testory.assistant.v2.feature.settings.SettingsScreen
+import com.testory.assistant.v2.feature.sync.SyncScreen
 
 /**
  * 导航路由定义。
@@ -24,11 +26,14 @@ object NavRoutes {
     const val CASES = "cases"
     const val CASE_DETAIL = "case_detail/{caseId}"
     const val REPLAY = "replay/{caseId}"
+    const val RUN_HISTORY = "run_history/{caseId}"
     const val SETTINGS = "settings"
+    const val SYNC = "sync"
     const val ONBOARDING = "onboarding"
 
     fun caseDetail(caseId: String) = "case_detail/$caseId"
     fun replay(caseId: String) = "replay/$caseId"
+    fun runHistory(caseId: String) = "run_history/$caseId"
 }
 
 @Composable
@@ -99,6 +104,9 @@ fun AppNavigation(
                 onBack = { navController.popBackStack() },
                 onStartReplay = { id ->
                     navController.navigate(NavRoutes.replay(id))
+                },
+                onNavigateToHistory = { id ->
+                    navController.navigate(NavRoutes.runHistory(id))
                 }
             )
         }
@@ -112,9 +120,26 @@ fun AppNavigation(
             )
         }
 
+        // 运行记录
+        composable(NavRoutes.RUN_HISTORY) { backStackEntry ->
+            val caseId = backStackEntry.arguments?.getString("caseId") ?: return@composable
+            RunHistoryScreen(
+                caseId = caseId,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
         // 设置
         composable(NavRoutes.SETTINGS) {
             SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToSync = { navController.navigate(NavRoutes.SYNC) }
+            )
+        }
+
+        // 同步管理
+        composable(NavRoutes.SYNC) {
+            SyncScreen(
                 onBack = { navController.popBackStack() }
             )
         }

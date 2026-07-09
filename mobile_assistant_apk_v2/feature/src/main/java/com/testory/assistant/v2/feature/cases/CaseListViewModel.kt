@@ -26,6 +26,7 @@ class CaseListViewModel @Inject constructor(
                 allCases = cases
                 val recordedCases = cases.filter { it.source == CaseSource.RECORDED }
                 val aiCases = cases.filter { it.source == CaseSource.AI_GENERATED }
+                val projects = cases.map { it.projectName }.filter { it.isNotBlank() }.distinct().sorted()
 
                 val filter = _uiState.value.selectedFilter
                 val filtered = if (filter != null) {
@@ -37,11 +38,33 @@ class CaseListViewModel @Inject constructor(
                         cases = filtered,
                         allCount = cases.size,
                         recordedCount = recordedCases.size,
-                        aiCount = aiCases.size
+                        aiCount = aiCases.size,
+                        projects = projects,
+                        groupedCases = buildGroupedCases(filtered)
                     )
                 }
             }
         }
+    }
+
+    private fun buildGroupedCases(cases: List<TestCase>): Map<String, List<TestCase>> {
+        val map = linkedMapOf<String, MutableList<TestCase>>()
+        val ungrouped = mutableListOf<TestCase>()
+        val projectOrder = cases.map { it.projectName }.filter { it.isNotBlank() }.distinct()
+        for (p in projectOrder) {
+            map[p] = mutableListOf()
+        }
+        for (c in cases) {
+            if (c.projectName.isNotBlank()) {
+                map.getOrPut(c.projectName) { mutableListOf() }.add(c)
+            } else {
+                ungrouped.add(c)
+            }
+        }
+        if (ungrouped.isNotEmpty()) {
+            map["未分类"] = ungrouped
+        }
+        return map
     }
 
     fun search(query: String) {

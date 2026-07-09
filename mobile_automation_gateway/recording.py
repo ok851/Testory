@@ -198,7 +198,8 @@ def stop_recording_session(udid: str) -> Dict[str, Any]:
 
 
 def _append_device_steps(udid: str, device_steps: List[Dict[str, Any]]) -> None:
-    """将设备端步骤归一化后写入 live steps 并广播 step 事件。"""
+    """将设备端步骤归一化后写入 live steps 并广播 step 事件。
+    对连续同方向同位置的 swipe 做去重合并（仅保留最后一次）。"""
     with _recording_lock:
         sess = _recording_sessions.get(udid)
         if not sess:
@@ -211,8 +212,22 @@ def _append_device_steps(udid: str, device_steps: List[Dict[str, Any]]) -> None:
             s = _recording_sessions.get(udid)
             if not s:
                 return
-            s["step_count"] = int(s.get("step_count") or 0) + 1
             buf = _live_steps.setdefault(udid, [])
+
+            if step.get("action") == "swipe" and buf:
+                prev = buf[-1]
+                if prev.get("action") == "swipe":
+                    ms_cur = step.get("mobile_spec") or {}
+                    ms_prev = prev.get("mobile_spec") or {}
+                    same_start = (ms_cur.get("x1") == ms_prev.get("x1") and
+                                  ms_cur.get("y1") == ms_prev.get("y1"))
+                    same_end = (ms_cur.get("x2") == ms_prev.get("x2") and
+                                ms_cur.get("y2") == ms_prev.get("y2"))
+                    if same_start or same_end:
+                        buf[-1] = step
+                        continue
+
+            s["step_count"] = int(s.get("step_count") or 0) + 1
             buf.append(step)
             _schedule_broadcast({"type": "step", "payload": {"udid": udid, "step": step, "raw": raw}})
 

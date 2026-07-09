@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -104,7 +105,7 @@ fun CaseListScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            // Case list
+            // Case list - project grouped
             if (uiState.cases.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
@@ -133,17 +134,63 @@ fun CaseListScreen(
             } else {
                 LazyColumn(
                     contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(
-                        items = uiState.cases,
-                        key = { it.id }
-                    ) { testCase ->
-                        CaseCard(
-                            testCase = testCase,
-                            onClick = { onCaseClick(testCase.id) },
-                            onDelete = { showDeleteDialog = testCase.id }
-                        )
+                    uiState.groupedCases.forEach { (projectName, cases) ->
+                        item(key = "group_$projectName") {
+                            var isExpanded by rememberSaveable(key = projectName) { mutableStateOf(true) }
+                            Column {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { isExpanded = !isExpanded }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        if (isExpanded) Icons.Filled.KeyboardArrowDown
+                                        else Icons.Filled.KeyboardArrowRight,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        Icons.Filled.Folder,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = projectName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = "${cases.size}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                    )
+                                }
+                                AnimatedVisibility(visible = isExpanded) {
+                                    Column(
+                                        modifier = Modifier.padding(start = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        cases.forEach { testCase ->
+                                            CaseCard(
+                                                testCase = testCase,
+                                                onClick = { onCaseClick(testCase.id) },
+                                                onDelete = { showDeleteDialog = testCase.id }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     item { Spacer(modifier = Modifier.height(16.dp)) }
                 }
@@ -302,5 +349,7 @@ data class CaseListUiState(
     val selectedFilter: CaseSource? = null,
     val allCount: Int = 0,
     val recordedCount: Int = 0,
-    val aiCount: Int = 0
+    val aiCount: Int = 0,
+    val projects: List<String> = emptyList(),
+    val groupedCases: Map<String, List<TestCase>> = emptyMap()
 )

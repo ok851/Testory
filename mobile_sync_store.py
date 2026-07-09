@@ -496,6 +496,88 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
             "steps": job.get("steps") or [],
         })
 
+    @app.route("/api/mobile/sync/cases/pull-batch", methods=["POST"])
+    @api_error_handler
+    def api_mobile_sync_cases_pull_batch():
+        from database import Database
+
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        case_ids = body.get("case_ids") or []
+        if not case_ids:
+            return jsonify({"success": False, "error": "请选择要拉取的用例"}), 400
+
+        db = Database()
+        bundles = []
+        for cid in case_ids:
+            try:
+                bid = int(cid) if str(cid).isdigit() else None
+                if bid is None:
+                    continue
+                cdata, _ = case_bundle(db, bid, int(meta["user_id"]))
+                if cdata:
+                    bundles.append(cdata)
+            except Exception:
+                continue
+        return jsonify({"success": True, "bundles": bundles})
+
+    @app.route("/api/mobile/sync/run/events", methods=["POST"])
+    @api_error_handler
+    def api_mobile_sync_run_events_post():
+        from database import Database
+
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        case_id = body.get("case_id", 0)
+        case_name = body.get("case_name", "")
+        status = body.get("status", "success")
+        error = body.get("error", "")
+        device_model = body.get("device_model", "")
+        android_version = body.get("android_version", "")
+        device_name = body.get("device_name", "")
+        results = body.get("results") or []
+        total_steps = body.get("total_steps", 0)
+        passed_steps = body.get("passed_steps", 0)
+        duration_ms = body.get("duration_ms", 0)
+
+        try:
+            db = Database()
+            run_id = db.create_run_history(
+                case_id, status, 0, error,
+                extracted_text=device_model,
+                expected_text=android_version,
+                test_type="android"
+            )
+            if isinstance(results, list):
+                for i, r in enumerate(results):
+                    if not isinstance(r, dict):
+                        continue
+                    s_status = "success" if r.get("success", True) else "error"
+                    s_desc = r.get("stepDescription") or r.get("description") or ""
+                    s_err = r.get("errorMessage") or r.get("error") or ""
+                    db.create_step_result(
+                        run_id, None,
+                        r.get("stepIndex") or (i + 1),
+                        r.get("action") or "",
+                        s_desc,
+                        android_version,
+                        device_model,
+                        s_status,
+                        s_err,
+                        device_name,
+                        int(r.get("durationMs") or 0),
+                    )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("移动端运行记录保存失败")
+            return jsonify({"success": False, "error": str(e)}), 500
+
+        return jsonify({"success": True, "run_id": run_id})
+
     @app.route("/api/mobile/sync/run/<job_id>/events", methods=["POST"])
     @api_error_handler
     def api_mobile_sync_run_events(job_id: str):
@@ -507,6 +589,55 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
             return jsonify({"success": False, "error": "job 不存在"}), 404
         _persist_run_history(job_id, body, int(meta["user_id"]))
         return jsonify({"success": True})
+
+    @app.route("/api/mobile/sync/ai/generate", methods=["POST"])
+    @api_error_handler
+    def api_mobile_sync_ai_generate():
+        from database import Database
+
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        user_message = (body.get("message") or "").strip()
+        if not user_message:
+            return jsonify({"success": False, "error": "请输入测试需求描述"}), 400
+
+        user_id = int(meta["user_id"])
+        user_data = Database().get_user_by_id(user_id)
+        project_name = (user_data.get("project_name") or user_data.get("username") or "") if user_data else ""
+
+        try:
+            from ai_local_inference import local_ai_service
+            result = local_ai_service.generate_case_and_steps(
+                goal=user_message,
+                project_name=project_name,
+                platform_type="android",
+            )
+            steps = result.get("steps") or []
+            android_steps = []
+            for s in steps:
+                android_steps.append({
+                    "action": s.get("action", "tap"),
+                    "selector_type": s.get("selector_type", ""),
+                    "selector_value": s.get("selector_value", ""),
+                    "input_value": s.get("input_value", ""),
+                    "description": s.get("description", ""),
+                    "automation_layer": s.get("automation_layer", "android"),
+                })
+            return jsonify({
+                "success": True,
+                "case_name": result.get("case_name", "AI生成用例"),
+                "description": result.get("description", ""),
+                "expected_result": result.get("expected_result", ""),
+                "steps": android_steps,
+            })
+        except ValueError as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("移动端AI生成失败")
+            return jsonify({"success": False, "error": f"AI生成失败: {str(e)}"}), 500
 
     # Vision probe route removed ? mobile mirror/vision feature retired
 
@@ -524,7 +655,7 @@ def _persist_run_history(job_id: str, payload: Dict[str, Any], user_id: int) -> 
         db = Database()
         status = "success" if (payload.get("status") or "") == "success" else "error"
         err = payload.get("error") or ""
-        run_id = db.create_run_history(case_id, status, 0, err, "", "")
+        run_id = db.create_run_history(case_id, status, 0, err, "", "", test_type="android")
         results = payload.get("results") or []
         if isinstance(results, list):
             for i, r in enumerate(results):

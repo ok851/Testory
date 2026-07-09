@@ -18,6 +18,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -47,6 +48,11 @@ class FloatingControlService : Service() {
 
         const val EXTRA_MODE = "extra_mode" // "recording" or "replaying"
         const val EXTRA_STEP_COUNT = "extra_step_count"
+        const val EXTRA_CURRENT_STEP = "extra_current_step"
+        const val EXTRA_TOTAL_STEPS = "extra_total_steps"
+        const val EXTRA_COMPLETE_RESULT = "extra_complete_result"
+        const val ACTION_UPDATE_REPLAY_PROGRESS = "com.testory.assistant.v2.FLOATING_UPDATE_REPLAY_PROGRESS"
+        const val ACTION_REPLAY_COMPLETE = "com.testory.assistant.v2.FLOATING_REPLAY_COMPLETE"
 
         /** 对外广播：通知 RecorderViewModel 暂停/停止 */
         const val BROADCAST_PAUSE = "com.testory.assistant.v2.FLOATING_BROADCAST_PAUSE"
@@ -56,6 +62,7 @@ class FloatingControlService : Service() {
 
     private var windowManager: WindowManager? = null
     private var floatingView: View? = null
+    private var progressView: View? = null
     private var btnPause: ImageButton? = null
     private var btnStop: ImageButton? = null
     private var tvStepCount: TextView? = null
@@ -99,6 +106,15 @@ class FloatingControlService : Service() {
             ACTION_UPDATE_STEP_COUNT -> {
                 updateStepCount(stepCount)
                 updateNotificationStepCount(stepCount)
+            }
+            ACTION_UPDATE_REPLAY_PROGRESS -> {
+                val current = intent?.getIntExtra(EXTRA_CURRENT_STEP, 0) ?: 0
+                val total = intent?.getIntExtra(EXTRA_TOTAL_STEPS, 0) ?: 0
+                updateReplayProgress(current, total)
+            }
+            ACTION_REPLAY_COMPLETE -> {
+                val result = intent?.getStringExtra(EXTRA_COMPLETE_RESULT) ?: "完成"
+                updateReplayComplete(result)
             }
             else -> {
                 showFloatingView()
@@ -200,6 +216,79 @@ class FloatingControlService : Service() {
         btnPause = null
         btnStop = null
         tvStepCount = null
+        removeProgressView()
+    }
+
+    private fun showProgressView() {
+        if (progressView != null || windowManager == null) return
+
+        val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
+        progressView = inflater.inflate(
+            resources.getIdentifier("layout_replay_progress", "layout", packageName),
+            null
+        )
+
+        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            layoutType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                    or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            y = 0
+        }
+
+        try {
+            windowManager?.addView(progressView, params)
+        } catch (_: Exception) { }
+    }
+
+    private fun removeProgressView() {
+        try {
+            progressView?.let { windowManager?.removeView(it) }
+        } catch (_: Exception) { }
+        progressView = null
+    }
+
+    private fun updateReplayProgress(current: Int, total: Int) {
+        if (progressView == null) {
+            showProgressView()
+        }
+        val tv = progressView?.findViewById<TextView>(
+            resources.getIdentifier("tv_progress_text", "id", packageName)
+        )
+        val pb = progressView?.findViewById<ProgressBar>(
+            resources.getIdentifier("pb_replay_progress", "id", packageName)
+        )
+        tv?.text = "${current}/${total}"
+        pb?.max = if (total > 0) total else 1
+        pb?.progress = current
+    }
+
+    private fun updateReplayComplete(result: String) {
+        val tvLabel = progressView?.findViewById<TextView>(
+            resources.getIdentifier("tv_progress_label", "id", packageName)
+        )
+        val tvText = progressView?.findViewById<TextView>(
+            resources.getIdentifier("tv_progress_text", "id", packageName)
+        )
+        tvLabel?.text = result
+        tvText?.text = ""
+
+        android.os.Handler(mainLooper).postDelayed({
+            removeProgressView()
+        }, 3000)
     }
 
     private fun updatePauseButton(isRecording: Boolean) {

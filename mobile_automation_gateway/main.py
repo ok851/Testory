@@ -78,6 +78,9 @@ def _require_auth(request: Request) -> None:
 @app.on_event("startup")
 async def _on_startup() -> None:
     rec_mod.set_ws_loop(asyncio.get_event_loop())
+    secret_val = os.environ.get("MOBILE_AGENT_GATEWAY_SECRET", "").strip()
+    print(f"[MobileGateway] startup port={os.environ.get('MOBILE_AGENT_GATE_PORT','8777')} "
+          f"secret_ok={'yes' if secret_val else 'MISSING'}"[:200], flush=True)
 
 
 _GATEWAY_BUILD = os.environ.get("MOBILE_GATEWAY_BUILD") or "20260616-no-auto-install"

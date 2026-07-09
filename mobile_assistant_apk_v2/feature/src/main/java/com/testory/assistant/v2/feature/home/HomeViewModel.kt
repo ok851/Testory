@@ -34,10 +34,7 @@ class HomeViewModel @Inject constructor(
             // Observe cases
             caseRepository.observeAllCases().collect { cases ->
                 _uiState.update {
-                    it.copy(
-                        caseCount = cases.size,
-                        recentCases = cases.sortedByDescending { c -> c.updatedAt }.take(5)
-                    )
+                    it.copy(caseCount = cases.size)
                 }
             }
         }

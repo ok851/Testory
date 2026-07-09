@@ -54,6 +54,7 @@ from mobile_agent_client import (
     agent_pause_recording,
     agent_resume_recording,
     agent_live_recording_steps,
+    mobile_agent_config,
     mobile_agent_enabled,
     mobile_agent_ws_url,
 )
@@ -154,6 +155,85 @@ def _connect_response(udid, agent_result):
     }
 
 
+def _gateway_diagnostics() -> dict:
+    import json as _json
+    import urllib.request as _ur
+
+    base, secret = mobile_agent_config()
+    out = {
+        "gateway_url": base,
+        "gateway_ok": False,
+        "gateway_reachable": False,
+        "gateway_auth_ok": False,
+        "gateway_service": "",
+        "gateway_error": "",
+        "gateway_secret_configured": bool(secret),
+        "gateway_process_alive": False,
+    }
+
+    if not base:
+        out["gateway_error"] = "MOBILE_AGENT_GATEWAY_URL 未配置"
+        return out
+
+    try:
+        from mobile_service_bootstrap import _GATEWAY_PROC
+        proc = _GATEWAY_PROC
+        out["gateway_process_alive"] = proc is not None and proc.poll() is None
+    except Exception:
+        out["gateway_process_alive"] = None
+
+    try:
+        req = _ur.Request(
+            base.rstrip("/") + "/health",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with _ur.urlopen(req, timeout=3.0) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+            out["gateway_reachable"] = True
+            out["gateway_service"] = body.get("service", "")
+            if body.get("service") != "mobile-agent-gateway":
+                out["gateway_error"] = "端口上的服务不是 Testory Mobile Agent Gateway"
+                return out
+    except Exception as e:
+        out["gateway_error"] = f"Gateway 不可达: {e}"
+        return out
+
+    data = _json.dumps({}).encode("utf-8")
+    req2 = _ur.Request(
+        base.rstrip("/") + "/internal/devices/scan",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Mobile-Agent-Secret": secret,
+        },
+        method="POST",
+    )
+    try:
+        with _ur.urlopen(req2, timeout=5.0) as resp:
+            auth_body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+            out["gateway_auth_ok"] = auth_body.get("success", False)
+            if not out["gateway_auth_ok"]:
+                out["gateway_error"] = (
+                    "Gateway 鉴权成功但返回异常响应，请检查 Gateway 版本"
+                )
+    except _ur.HTTPError as e:
+        if e.code == 401:
+            out["gateway_error"] = (
+                f"Gateway 鉴权失败 — Flask 用的 secret={secret[:6]}… 与 Gateway 不匹配。"
+                " 请重启后端服务 (python app.py) 以同步环境变量"
+            )
+        else:
+            out["gateway_error"] = f"Gateway 返回 HTTP {e.code}: {e}"
+        return out
+    except Exception as e:
+        out["gateway_error"] = f"Gateway 鉴权请求失败: {e}"
+        return out
+
+    out["gateway_ok"] = True
+    return out
+
+
 def register_mobile_routes(app, *, api_error_handler, log_api_request, role_required=None):
     """注册移动端 API 到 Flask app。"""
 
@@ -238,7 +318,18 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
-        return jsonify({"success": True, **check_mobile_health()})
+        gw_diag = _gateway_diagnostics()
+        base_health = check_mobile_health()
+        return jsonify({"success": True, **base_health, "gateway_diagnostics": gw_diag})
+
+    @app.route("/api/mobile/gateway-diagnostics", methods=["GET"])
+    @login_required
+    @api_error_handler
+    def api_mobile_gateway_diagnostics():
+        blocked = _require_mobile_enabled()
+        if blocked:
+            return blocked
+        return jsonify({"success": True, **_gateway_diagnostics()})
 
     @app.route("/api/mobile/devices", methods=["GET"])
     @login_required
@@ -299,8 +390,17 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if not udid:
             dev = pick_default_device()
             udid = (dev or {}).get("udid") or ""
+        diag = _gateway_diagnostics()
+        if not diag.get("gateway_ok"):
+            return jsonify({
+                "success": False,
+                "error": diag.get("gateway_error") or "Mobile Agent Gateway 未就绪",
+                "detail": diag,
+            }), 503
         result = agent_connect_device(udid=udid)
         if not result.get("success"):
+            diag2 = _gateway_diagnostics()
+            result["_gateway_diagnostic"] = diag2
             return jsonify(result), 503
         set_connected_udid(result.get("udid") or udid)
         return jsonify(_connect_response(udid, result))
