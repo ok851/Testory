@@ -17,7 +17,6 @@ ProgressCallback = Callable[[int, str], None]
 
 # 耗时较长的运行时包默认后台安装
 BACKGROUND_PLUGIN_IDS = frozenset(
-    # [???] mobile-scrcpy - ???????
 
 )
 

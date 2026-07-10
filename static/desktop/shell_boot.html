@@ -24,9 +24,89 @@
                   var(--bg);
       color: var(--text);
       user-select: none;
+      display: flex;
+      flex-direction: column;
     }
-    .wrap {
+    /* 窗口标题栏 */
+    .titlebar {
+      flex: 0 0 36px;
+      height: 36px;
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 0 0 0.7rem;
+      border-bottom: 1px solid rgba(99, 102, 241, 0.25);
+      color: #e2e8f0;
+      user-select: none;
+      z-index: 10000;
+    }
+    .titlebar__drag {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex: 1;
+      min-width: 0;
+      -webkit-app-region: drag;
+      app-region: drag;
       height: 100%;
+    }
+    .titlebar__mark {
+      flex-shrink: 0;
+      border-radius: 4px;
+      width: 18px;
+      height: 18px;
+    }
+    .titlebar__title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .titlebar__controls {
+      display: flex;
+      align-items: stretch;
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }
+    .titlebar__btn {
+      width: 46px;
+      height: 36px;
+      border: 0;
+      background: transparent;
+      color: #94a3b8;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease, color 0.15s ease;
+      border-radius: 0;
+      outline: none;
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }
+    .titlebar__btn svg {
+      flex-shrink: 0;
+      pointer-events: none;
+    }
+    .titlebar__btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #e2e8f0;
+    }
+    .titlebar__btn--close:hover {
+      background: #e81123;
+      color: #fff;
+    }
+    .titlebar__btn:active {
+      opacity: 0.8;
+    }
+    /* 主内容区 */
+    .wrap {
+      flex: 1;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -76,6 +156,23 @@
   </style>
 </head>
 <body>
+  <header class="titlebar" aria-label="窗口标题栏">
+    <div class="titlebar__drag">
+      <img class="titlebar__mark" src="../brand/testory-mark.svg" alt="">
+      <span class="titlebar__title">Testory</span>
+    </div>
+    <div class="titlebar__controls">
+      <button type="button" class="titlebar__btn" data-win="minimize" title="最小化" aria-label="最小化">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect y="4.5" width="10" height="1" rx="0.5" fill="currentColor"/></svg>
+      </button>
+      <button type="button" class="titlebar__btn" data-win="maximize" title="最大化" aria-label="最大化">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="0.5" y="0.5" width="9" height="9" rx="1" stroke="currentColor"/></svg>
+      </button>
+      <button type="button" class="titlebar__btn titlebar__btn--close" data-win="close" title="关闭" aria-label="关闭">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </header>
   <div class="wrap">
     <img class="logo" src="../brand/testory-mark.svg" alt="Testory" width="72" height="72">
     <h1>Testory</h1>
@@ -83,6 +180,35 @@
     <div class="progress" aria-hidden="true"><span></span></div>
   </div>
   <script>
+    /* 窗口控制按钮 */
+    (function () {
+      function api() {
+        return window.pywebview && window.pywebview.api;
+      }
+      document.querySelectorAll('[data-win]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var action = btn.getAttribute('data-win');
+          var a = api();
+          if (!a) return;
+          if (action === 'minimize' && a.minimize) a.minimize();
+          else if (action === 'maximize' && a.toggle_maximize) a.toggle_maximize();
+          else if (action === 'close' && a.close) a.close();
+        });
+      });
+      /* 标题栏双击最大化 */
+      var drag = document.querySelector('.titlebar__drag');
+      if (drag) {
+        drag.addEventListener('dblclick', function (e) {
+          if (e.target !== drag && e.target.tagName !== 'IMG' && e.target.tagName !== 'SPAN') return;
+          var a = api();
+          if (a && a.toggle_maximize) a.toggle_maximize();
+        });
+      }
+    })();
+
+    /* 启动状态轮询 */
     (function () {
       var el = document.getElementById('status');
       var port = 5000;

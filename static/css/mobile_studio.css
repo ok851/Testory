@@ -462,10 +462,6 @@ html.dark .ms-panel--left .ms-status {
     background: #e2e8f0;
     color: #64748b;
 }
-.ms-mirror-mode--scrcpy {
-    background: #dbeafe;
-    color: #1d4ed8;
-}
 .ms-mirror-mode--connecting {
     background: #fef3c7;
     color: #b45309;
@@ -475,7 +471,6 @@ html.dark .ms-panel--left .ms-status {
     color: #b45309;
 }
 html.dark .ms-mirror-mode--idle { background: #374151; color: #94a3b8; }
-html.dark .ms-mirror-mode--scrcpy { background: #1e3a5f; color: #93c5fd; }
 html.dark .ms-mirror-mode--screencap { background: #422006; color: #fcd34d; }
 .ms-env-status {
     font-size: 0.85rem;

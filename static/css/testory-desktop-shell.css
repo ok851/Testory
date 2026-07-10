@@ -1,8 +1,13 @@
 /**
  * 已废弃：桌面侧栏壳不再使用。保留本文件仅为覆盖浏览器/旧安装包缓存中的旧规则，
  * 强制全站使用 Web 顶栏布局。
+ *
+ * 注意：当 frameless shell 模式激活时（body.testory-frameless-shell），
+ * 不覆盖 flex 布局，以允许自定义标题栏正常工作。
  */
-body.testory-desktop-client {
+
+/* 仅在非 frameless 模式下覆盖旧侧栏 flex 布局 */
+body.testory-desktop-client:not(.testory-frameless-shell) {
   display: block !important;
   flex-direction: unset !important;
   height: auto !important;

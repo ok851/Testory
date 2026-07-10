@@ -81,6 +81,17 @@ from captcha_recovery import CaptchaManualRequiredError, run_captcha_with_recove
 _execution_lock = threading.Lock()
 _currently_executing = False
 
+# 跨线程强制释放信号：守护线程设置 → 执行线程检测 → 主动退出
+_execution_force_release_requested = threading.Event()
+
+def _execution_lock_signal_force_release():
+    """守护线程调用：通知执行线程主动释放锁并停止。"""
+    _execution_force_release_requested.set()
+
+def _execution_lock_check_force_release():
+    """执行线程调用：检查是否收到了强制释放信号。"""
+    return _execution_force_release_requested.is_set()
+
 def click_force_default() -> bool:
     """默认不用 force 点击（元素须可见）；PLAYWRIGHT_CLICK_FORCE_DEFAULT=1 时允许强制点击。"""
     raw = (os.environ.get("PLAYWRIGHT_CLICK_FORCE_DEFAULT") or "0").strip().lower()
@@ -194,6 +205,7 @@ def force_reset_execution_state():
         pass
     
     uat_logger.info("✅ [FORCE_RESET] 执行状态已全面重置完成")
+    _execution_force_release_requested.set()
 
 
 _INVALID_URL_SKIP = frozenset([

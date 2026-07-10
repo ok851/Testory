@@ -1,31 +1,817 @@
-/* 桌面客户端窗口尺寸适配（1024–1280 宽度） */
+/* ================================================================
+ * Testory 桌面客户端 UI 尺寸适配
+ *
+ * 设计原则：
+ *  - 仅调整尺寸（字号、间距、组件大小），不改变布局结构与颜色
+ *  - 桌面应用标准：正文字号 >= 14px，可交互元素纵向 padding >= 6px
+ *  - 使用 body.testory-desktop-client 前缀确保仅在桌面模式生效
+ *  - 必要时使用 !important 覆盖页面内嵌样式
+ * ================================================================ */
+
+/* ========== 1. 基础排版 ========== */
+
+body.testory-desktop-client {
+  font-size: 14px;
+}
+
+/* 桌面端滚动条 */
+body.testory-desktop-client::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+body.testory-desktop-client::-webkit-scrollbar-track {
+  background: transparent;
+}
+body.testory-desktop-client::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+body.testory-desktop-client::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+  background-clip: content-box;
+}
+
+/* ========== 2. 导航栏 ========== */
 
 body.testory-desktop-client .testory-nav-inner {
-  padding-top: 0.5rem;
-  padding-bottom: 0.5rem;
-  min-height: 2.75rem;
+  padding-top: 0.625rem !important;
+  padding-bottom: 0.625rem !important;
+  min-height: 3.5rem !important;
 }
 
 body.testory-desktop-client .testory-main-nav a.nav-btn {
-  padding-left: 0.55rem;
-  padding-right: 0.55rem;
-  font-size: 0.78rem;
+  padding-left: 0.7rem !important;
+  padding-right: 0.7rem !important;
+  padding-top: 0.4rem !important;
+  padding-bottom: 0.4rem !important;
+  font-size: 0.875rem !important;
 }
 
 body.testory-desktop-client .testory-main-nav a.nav-btn .mr-1 {
-  margin-right: 0.15rem;
+  margin-right: 0.25rem !important;
 }
 
-body.testory-desktop-client .testory-page-main .container {
-  padding-left: 0.75rem;
-  padding-right: 0.75rem;
+body.testory-desktop-client .testory-logo img,
+body.testory-desktop-client .testory-logo svg {
+  width: 32px !important;
+  height: 32px !important;
 }
+
+body.testory-desktop-client .testory-logo-word {
+  font-size: 1.05rem !important;
+}
+
+body.testory-desktop-client .testory-logo-word small {
+  font-size: 0.7rem !important;
+}
+
+/* ========== 3. 页面容器与间距 ========== */
+
+body.testory-desktop-client .testory-page-main .container {
+  max-width: 100% !important;
+  padding-left: 1.25rem !important;
+  padding-right: 1.25rem !important;
+}
+
+body.testory-desktop-client .testory-page-main {
+  padding: 0;
+}
+
+/* ========== 4. 首页 Hero 区域 ========== */
+
+body.testory-desktop-client .hero-section {
+  padding: 2.5rem 1.5rem !important;
+}
+
+body.testory-desktop-client .hero-content h2 {
+  font-size: 2rem !important;
+  margin-bottom: 0.6rem !important;
+}
+
+body.testory-desktop-client .hero-content p {
+  font-size: 1.05rem !important;
+  margin-bottom: 1.25rem !important;
+}
+
+body.testory-desktop-client section.py-16 {
+  padding-top: 2rem !important;
+  padding-bottom: 2rem !important;
+}
+
+body.testory-desktop-client .feature-card {
+  padding: 1.25rem !important;
+}
+
+body.testory-desktop-client .feature-card .text-4xl {
+  font-size: 2rem !important;
+  margin-bottom: 0.6rem !important;
+}
+
+body.testory-desktop-client .grid.gap-8 {
+  gap: 1.25rem !important;
+}
+
+body.testory-desktop-client .card {
+  padding: 1.25rem !important;
+}
+
+/* ========== 5. 通用按钮（嵌入式样式页面） ========== */
+
+body.testory-desktop-client .btn {
+  font-size: 14px !important;
+  padding: 8px 18px !important;
+}
+
+body.testory-desktop-client .btn-sm {
+  font-size: 13px !important;
+  padding: 6px 14px !important;
+}
+
+body.testory-desktop-client .btn:hover {
+  transform: translateY(-1px);
+}
+
+/* ========== 6. AI 中心按钮 ========== */
+
+body.testory-desktop-client .ai-btn {
+  font-size: 14px !important;
+  padding: 9px 18px !important;
+}
+
+body.testory-desktop-client .ai-btn--sm {
+  font-size: 13px !important;
+  padding: 6px 14px !important;
+}
+
+body.testory-desktop-client .ai-hub-card {
+  padding: 24px !important;
+}
+
+body.testory-desktop-client .ai-hub-card p,
+body.testory-desktop-client .ai-hub-card__cta {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .ai-hub-card h2 {
+  font-size: 1.25rem !important;
+}
+
+body.testory-desktop-client .ai-module-tabs button {
+  padding: 9px 16px !important;
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .ai-module-top p {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .ai-design-pre,
+body.testory-desktop-client .ai-design-hint,
+body.testory-desktop-client .ai-diff-box {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .ai-design-draft-url,
+body.testory-desktop-client .ai-heal-usage__tip code {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-heal-desc {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .ai-hub-cross__hint {
+  font-size: 14px !important;
+}
+
+/* ========== 7. AI 测试工作台 (ai_test.html) ========== */
+
+body.testory-desktop-client .ai-test-topbar p {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .ai-model-chip {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .ai-model-chip code {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-workflow-bar {
+  padding: 14px 28px !important;
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .ai-workflow-step span.num {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-test-context {
+  padding: 20px 28px !important;
+}
+
+body.testory-desktop-client .ai-test-context__title {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-inspect-pre {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-browser-panel__head {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .ai-chat-msg__role {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-registry-badge {
+  font-size: 12px !important;
+  padding: 3px 8px !important;
+}
+
+body.testory-desktop-client .ai-registry-name code {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-settings-tip,
+body.testory-desktop-client .ai-settings-hint {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .ai-test-page label {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .ai-test-page select,
+body.testory-desktop-client .ai-test-page input[type="text"],
+body.testory-desktop-client .ai-test-page input[type="url"],
+body.testory-desktop-client .ai-test-page textarea {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .ai-test-page .btn-sm {
+  font-size: 13px !important;
+  padding: 6px 14px !important;
+}
+
+body.testory-desktop-client .ai-test-page .ai-btn {
+  font-size: 14px !important;
+  padding: 9px 18px !important;
+}
+
+body.testory-desktop-client .ai-test-page .ai-btn--sm {
+  font-size: 13px !important;
+  padding: 6px 14px !important;
+}
+
+/* ========== 8. 接口测试 (api_testing.css) ========== */
+
+body.testory-desktop-client .api-list-card-header h1 {
+  font-size: 22px !important;
+}
+
+body.testory-desktop-client .api-list-card-header p {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .api-wb-header {
+  padding: 14px 20px !important;
+}
+
+body.testory-desktop-client .api-wb-sidebar-head {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .api-wb-step-url {
+  font-size: 12px !important;
+}
+
+body.testory-desktop-client .api-wb-method-select,
+body.testory-desktop-client .api-wb-url-input {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .api-wb-btn {
+  font-size: 14px !important;
+  padding: 8px 16px !important;
+}
+
+body.testory-desktop-client .api-wb-tab {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .api-wb-step-item {
+  padding: 10px 12px !important;
+}
+
+body.testory-desktop-client .api-kv-table {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .api-kv-table th,
+body.testory-desktop-client .api-kv-table td {
+  padding: 6px 10px !important;
+}
+
+body.testory-desktop-client .api-kv-table input {
+  padding: 5px 8px !important;
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .api-form-group label {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .api-form-group input {
+  font-size: 14px !important;
+  padding: 9px 12px !important;
+}
+
+body.testory-desktop-client .api-btn-add {
+  font-size: 13px !important;
+  padding: 6px 14px !important;
+}
+
+body.testory-desktop-client .method-badge {
+  font-size: 12px !important;
+  padding: 3px 8px !important;
+}
+
+body.testory-desktop-client .api-chip {
+  font-size: 12px !important;
+  padding: 5px 12px !important;
+}
+
+body.testory-desktop-client .api-wb-response-meta-item {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .api-wb-response-textarea {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .api-tc-modal-scope .form-group label {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .api-tc-modal-scope .form-group input {
+  font-size: 14px !important;
+  padding: 10px 12px !important;
+}
+
+/* ========== 9. 移动端测试 (mobile_studio.css) ========== */
+
+body.testory-desktop-client .ms-title {
+  font-size: 1.35rem !important;
+}
+
+body.testory-desktop-client .ms-subtitle {
+  font-size: 0.9rem !important;
+}
+
+body.testory-desktop-client .ms-section {
+  padding: 1.1rem 1.25rem !important;
+}
+
+body.testory-desktop-client .ms-section-title {
+  font-size: 0.9rem !important;
+}
+
+body.testory-desktop-client .ms-label {
+  font-size: 0.85rem !important;
+}
+
+body.testory-desktop-client .ms-input {
+  font-size: 0.9rem !important;
+}
+
+body.testory-desktop-client .ms-btn {
+  font-size: 0.875rem !important;
+  padding: 0.5rem 0.9rem !important;
+}
+
+body.testory-desktop-client .ms-btn--sm {
+  font-size: 0.8rem !important;
+  padding: 0.35rem 0.65rem !important;
+}
+
+body.testory-desktop-client .ms-steps-list {
+  font-size: 0.875rem !important;
+}
+
+body.testory-desktop-client .ms-step-badge {
+  font-size: 0.75rem !important;
+  padding: 2px 8px !important;
+}
+
+body.testory-desktop-client .ms-step-del {
+  font-size: 0.75rem !important;
+}
+
+body.testory-desktop-client .ms-chat-log {
+  font-size: 0.875rem !important;
+}
+
+body.testory-desktop-client .ms-chat-msg {
+  padding: 0.5rem 0.6rem !important;
+}
+
+body.testory-desktop-client .ms-device-tab {
+  font-size: 0.8rem !important;
+}
+
+body.testory-desktop-client .ms-connect-badge {
+  font-size: 0.8rem !important;
+}
+
+body.testory-desktop-client .ms-assistant-badge {
+  font-size: 0.75rem !important;
+}
+
+body.testory-desktop-client .ms-recording-banner {
+  font-size: 0.875rem !important;
+}
+
+body.testory-desktop-client .ms-mirror-mode {
+  font-size: 0.75rem !important;
+}
+
+body.testory-desktop-client .ms-env-item {
+  padding: 0.4rem 0.5rem !important;
+  font-size: 0.8rem !important;
+}
+
+body.testory-desktop-client .ms-env-detail {
+  font-size: 0.75rem !important;
+}
+
+body.testory-desktop-client .ms-phone-toolbar-model {
+  font-size: 0.85rem !important;
+}
+
+body.testory-desktop-client .ms-emulator-help {
+  font-size: 0.75rem !important;
+}
+
+/* ========== 10. 步骤编辑器 (list_steps.html) ========== */
+
+body.testory-desktop-client .steps-page-root .header {
+  padding: 24px 28px !important;
+}
+
+body.testory-desktop-client .steps-page-root .header h1 {
+  font-size: 24px !important;
+}
+
+body.testory-desktop-client .steps-page-root .toolbar {
+  padding: 16px 28px !important;
+}
+
+body.testory-desktop-client .steps-page-root .content {
+  padding: 24px 28px !important;
+}
+
+body.testory-desktop-client .step-item {
+  padding: 16px 20px !important;
+}
+
+body.testory-desktop-client .step-number {
+  font-size: 13px !important;
+  width: 26px !important;
+  height: 26px !important;
+}
+
+body.testory-desktop-client .step-content h4 {
+  font-size: 15px !important;
+}
+
+body.testory-desktop-client .step-details {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .desktop-pick-item {
+  font-size: 13px !important;
+  padding: 8px 12px !important;
+}
+
+/* ========== 11. 用例列表 (list_cases_v2.html) ========== */
+
+body.testory-desktop-client .cases-mgmt-page .container {
+  max-width: 100% !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .header {
+  padding: 24px 28px !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .header h1 {
+  font-size: 24px !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .toolbar {
+  padding: 14px 28px !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .btn {
+  font-size: 14px !important;
+  padding: 8px 16px !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .btn-sm {
+  font-size: 13px !important;
+  padding: 6px 12px !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .units-sidebar h4 {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .case-card,
+body.testory-desktop-client .cases-mgmt-page .unit-item {
+  padding: 10px 14px !important;
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .cases-mgmt-page .batch-session-options {
+  font-size: 14px !important;
+}
+
+/* ========== 12. 项目列表 (list_projects.html) ========== */
+
+body.testory-desktop-client .project-mgmt-page {
+  padding: 20px !important;
+}
+
+body.testory-desktop-client .project-mgmt-page .container {
+  max-width: 100% !important;
+}
+
+body.testory-desktop-client .project-mgmt-page .header {
+  padding: 24px 28px !important;
+}
+
+body.testory-desktop-client .project-mgmt-page .header h1 {
+  font-size: 24px !important;
+}
+
+body.testory-desktop-client .project-mgmt-page .header-actions {
+  padding: 16px 28px !important;
+}
+
+body.testory-desktop-client .project-mgmt-page .content {
+  padding: 24px 28px !important;
+}
+
+body.testory-desktop-client .project-mgmt-page .btn {
+  font-size: 14px !important;
+  padding: 8px 16px !important;
+}
+
+body.testory-desktop-client .project-mgmt-page .project-card {
+  padding: 16px 20px !important;
+}
+
+/* ========== 13. 运行历史 (run_history.html) ========== */
+
+body.testory-desktop-client .run-history-page {
+  padding: 16px !important;
+}
+
+body.testory-desktop-client .run-history-page .card {
+  padding: 20px !important;
+}
+
+body.testory-desktop-client .run-history-page .card h2 {
+  font-size: 18px !important;
+}
+
+body.testory-desktop-client .run-history-page .btn {
+  font-size: 14px !important;
+  padding: 8px 14px !important;
+}
+
+body.testory-desktop-client .run-history-page table th,
+body.testory-desktop-client .run-history-page table td {
+  padding: 10px 14px !important;
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .run-history-page .badge,
+body.testory-desktop-client .run-history-page .status-badge {
+  font-size: 12px !important;
+  padding: 3px 10px !important;
+}
+
+body.testory-desktop-client .run-history-page .stat-value {
+  font-size: 28px !important;
+}
+
+body.testory-desktop-client .run-history-page .stat-label {
+  font-size: 14px !important;
+}
+
+/* ========== 14. 定时任务 / 报告 / 审计 (Tailwind @apply 页面) ========== */
+
+body.testory-desktop-client .data-table th {
+  font-size: 13px !important;
+  padding: 12px 16px !important;
+}
+
+body.testory-desktop-client .data-table td {
+  font-size: 14px !important;
+  padding: 12px 16px !important;
+}
+
+body.testory-desktop-client .badge {
+  font-size: 12px !important;
+  padding: 3px 10px !important;
+}
+
+body.testory-desktop-client .form-input {
+  font-size: 14px !important;
+  padding: 9px 14px !important;
+}
+
+body.testory-desktop-client .form-label {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .card-header {
+  padding: 16px 20px !important;
+  font-size: 15px !important;
+}
+
+/* ========== 15. 数据驱动 (data_driven.html) ========== */
+
+body.testory-desktop-client .data-driven-page label,
+body.testory-desktop-client [data-driven-page] label {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client .data-driven-page input,
+body.testory-desktop-client .data-driven-page select,
+body.testory-desktop-client [data-driven-page] input,
+body.testory-desktop-client [data-driven-page] select {
+  font-size: 14px !important;
+  padding: 8px 12px !important;
+}
+
+body.testory-desktop-client .data-driven-page .pagination button,
+body.testory-desktop-client [data-driven-page] .pagination button {
+  padding: 5px 12px !important;
+  font-size: 13px !important;
+}
+
+/* ========== 16. 缺陷管理 (defects.html) ========== */
+
+body.testory-desktop-client .defects-page table th,
+body.testory-desktop-client [data-defects] table th {
+  padding: 12px 16px !important;
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .defects-page table td,
+body.testory-desktop-client [data-defects] table td {
+  padding: 12px 16px !important;
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .severity-critical,
+body.testory-desktop-client .severity-high,
+body.testory-desktop-client .severity-medium,
+body.testory-desktop-client .severity-low,
+body.testory-desktop-client .status-open,
+body.testory-desktop-client .status-in_progress,
+body.testory-desktop-client .status-resolved,
+body.testory-desktop-client .status-closed,
+body.testory-desktop-client .status-reopened {
+  font-size: 12px !important;
+  padding: 3px 10px !important;
+}
+
+/* ========== 17. 设置页面 ========== */
+
+body.testory-desktop-client .settings-page input,
+body.testory-desktop-client [data-settings] input {
+  font-size: 14px !important;
+  padding: 9px 14px !important;
+}
+
+body.testory-desktop-client .settings-page button,
+body.testory-desktop-client [data-settings] button {
+  font-size: 14px !important;
+  padding: 9px 16px !important;
+}
+
+/* ========== 18. 通用表格增强 ========== */
+
+body.testory-desktop-client table th {
+  font-size: 13px !important;
+}
+
+body.testory-desktop-client table td {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client table.data-table th,
+body.testory-desktop-client table.data-table td {
+  padding: 10px 16px !important;
+}
+
+/* ========== 19. 模态框 ========== */
+
+body.testory-desktop-client .modal-content,
+body.testory-desktop-client .modal-body {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client .modal-header {
+  font-size: 16px !important;
+}
+
+body.testory-desktop-client .modal-header h2,
+body.testory-desktop-client .modal-header h3 {
+  font-size: 17px !important;
+}
+
+body.testory-desktop-client .modal-body {
+  padding: 20px 24px !important;
+}
+
+body.testory-desktop-client .modal-footer {
+  padding: 14px 24px !important;
+}
+
+/* ========== 20. Tailwind text-xs 覆盖（桌面端最小 12px） ========== */
+
+body.testory-desktop-client .text-xs {
+  font-size: 0.75rem !important;
+}
+
+body.testory-desktop-client .text-sm {
+  font-size: 0.875rem !important;
+}
+
+/* ========== 21. 认证页面 ========== */
+
+body.testory-desktop-client.testory-auth-page .testory-auth-card {
+  width: min(440px, 100%);
+}
+
+body.testory-desktop-client.testory-auth-page .testory-auth-card-header {
+  padding: 2rem 2rem 1.25rem;
+}
+
+body.testory-desktop-client.testory-auth-page .testory-auth-card-body {
+  padding: 0 2rem 2rem;
+}
+
+body.testory-desktop-client.testory-auth-page .testory-auth-card h1 {
+  font-size: 1.5rem;
+}
+
+body.testory-desktop-client.testory-auth-page .testory-field label {
+  font-size: 0.85rem;
+}
+
+body.testory-desktop-client.testory-auth-page .testory-field input,
+body.testory-desktop-client.testory-auth-page .testory-field textarea {
+  font-size: 0.95rem;
+  padding: 0.72rem 0.85rem;
+}
+
+body.testory-desktop-client.testory-auth-page .testory-btn-primary {
+  font-size: 0.95rem;
+  padding: 0.8rem 1rem;
+}
+
+/* ========== 22. 全局运行横幅 ========== */
+
+body.testory-desktop-client #globalRunBanner {
+  padding: 12px 16px !important;
+}
+
+body.testory-desktop-client #globalRunBanner p {
+  font-size: 14px !important;
+}
+
+body.testory-desktop-client #globalRunBannerStopBtn {
+  padding: 5px 12px !important;
+  font-size: 13px !important;
+}
+
+/* ========== 23. 响应式（桌面窗口缩小场景） ========== */
 
 @media (max-width: 1280px) {
   body.testory-desktop-client #testoryMainNav .testory-nav-inner {
     max-width: 100%;
-    padding-left: 0.65rem;
-    padding-right: 0.65rem;
+    padding-left: 0.8rem;
+    padding-right: 0.8rem;
   }
 
   body.testory-desktop-client .testory-main-nav a.nav-btn span {
@@ -43,8 +829,8 @@ body.testory-desktop-client .testory-page-main .container {
   }
 
   body.testory-desktop-client .hero-section {
-    padding-top: 1.5rem !important;
-    padding-bottom: 1.5rem !important;
+    padding-top: 1.75rem !important;
+    padding-bottom: 1.75rem !important;
   }
 
   body.testory-desktop-client .grid.gap-8 {

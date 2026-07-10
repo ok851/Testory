@@ -22,8 +22,20 @@ function initDesktopGuards() {
   });
 }
 
+async function updateMaxIcon(win) {
+  const btn = bar && bar.querySelector('[data-win="maximize"]');
+  if (!btn) return;
+  const maximized = await win.isMaximized();
+  btn.innerHTML = maximized
+    ? '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="0.5" y="2.5" width="7" height="7" rx="1" stroke="currentColor"/><path d="M2.5 2.5V1H9.5V7.5H8" stroke="currentColor" fill="none"/></svg>'
+    : '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="0.5" y="0.5" width="9" height="9" rx="1" stroke="currentColor"/></svg>';
+  btn.title = maximized ? '向下还原' : '最大化';
+}
+
+let bar;
+
 function bindDesktopChrome() {
-  const bar = document.getElementById('testoryDesktopTitlebar');
+  bar = document.getElementById('testoryDesktopTitlebar');
   if (!bar) return;
   const win = getCurrentWindow();
   bar.querySelectorAll('[data-win]').forEach((btn) => {
@@ -36,12 +48,30 @@ function bindDesktopChrome() {
           const maximized = await win.isMaximized();
           if (maximized) await win.unmaximize();
           else await win.maximize();
+          updateMaxIcon(win);
         } else if (action === 'close') await win.close();
       } catch (err) {
         console.warn('window action failed', err);
       }
     });
   });
+  /* 双击标题栏拖拽区域切换最大化 */
+  const drag = bar.querySelector('.testory-desktop-chrome__drag');
+  if (drag) {
+    drag.addEventListener('dblclick', async () => {
+      try {
+        const maximized = await win.isMaximized();
+        if (maximized) await win.unmaximize();
+        else await win.maximize();
+        updateMaxIcon(win);
+      } catch (err) {
+        console.warn('toggle maximize failed', err);
+      }
+    });
+  }
+  /* 监听窗口大小变化更新图标 */
+  win.onResized(() => updateMaxIcon(win));
+  updateMaxIcon(win);
 }
 
 export async function testoryInvoke(cmd, args) {

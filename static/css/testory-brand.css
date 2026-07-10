@@ -67,8 +67,17 @@ body.testory-desktop-client {
   min-height: 100vh;
 }
 
+/* auth 页面背景优先于 desktop-client 浅色背景 */
+body.testory-desktop-client.testory-auth-page {
+  background: var(--testory-bg-deep);
+}
+
 html.dark body.testory-desktop-client {
   background: rgb(15 23 42);
+}
+
+html.dark body.testory-desktop-client.testory-auth-page {
+  background: var(--testory-bg-deep);
 }
 
 /* 全站顶栏（Web / 桌面共用） */
@@ -137,9 +146,9 @@ body.testory-desktop-client .testory-page-main .container {
 }
 
 body.testory-desktop-client .testory-main-nav a.nav-btn {
-  padding-left: 0.45rem !important;
-  padding-right: 0.45rem !important;
-  font-size: 0.75rem !important;
+  padding-left: 0.7rem !important;
+  padding-right: 0.7rem !important;
+  font-size: 0.875rem !important;
 }
 
 body.testory-desktop-client .testory-main-nav a.nav-btn .mr-1 {
@@ -147,20 +156,20 @@ body.testory-desktop-client .testory-main-nav a.nav-btn .mr-1 {
 }
 
 body.testory-desktop-client .feature-card {
-  padding: 0.875rem !important;
+  padding: 1.25rem !important;
 }
 
 body.testory-desktop-client .feature-card .text-4xl {
-  font-size: 1.75rem !important;
-  margin-bottom: 0.5rem !important;
+  font-size: 2rem !important;
+  margin-bottom: 0.6rem !important;
 }
 
 body.testory-desktop-client .grid.gap-8 {
-  gap: 1rem !important;
+  gap: 1.25rem !important;
 }
 
 body.testory-desktop-client .card {
-  padding: 1rem !important;
+  padding: 1.25rem !important;
 }
 
 /* 桌面客户端：顶栏作为应用标题栏区域（WebView2 无系统菜单栏时的常见做法） */
@@ -217,29 +226,54 @@ html.dark body.testory-desktop-client .testory-desktop-badge {
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(ellipse 50% 40% at 20% 15%, rgba(99, 102, 241, 0.25), transparent 55%),
-    radial-gradient(ellipse 45% 35% at 85% 10%, rgba(139, 92, 246, 0.18), transparent 50%),
-    radial-gradient(ellipse 40% 30% at 60% 85%, rgba(6, 182, 212, 0.12), transparent 55%);
+    radial-gradient(circle at 20% 20%, rgba(99, 102, 241, 0.25), transparent 45%),
+    radial-gradient(circle at 80% 0%, rgba(6, 182, 212, 0.18), transparent 40%),
+    var(--testory-bg-deep);
   pointer-events: none;
-}
-
-.testory-auth-top {
-  position: relative;
-  z-index: 1;
-  padding: 1.25rem 1.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 
 .testory-auth-main {
   position: relative;
   z-index: 1;
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  /* 自定义细滚动条（WebView2 / Edge Chromium） */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(129, 140, 248, 0.35) transparent;
+}
+
+.testory-auth-main::-webkit-scrollbar {
+  width: 8px;
+}
+.testory-auth-main::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 4px 0;
+}
+.testory-auth-main::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.45), rgba(6, 182, 212, 0.35));
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.testory-auth-main::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.7), rgba(6, 182, 212, 0.55));
+  background-clip: padding-box;
+  border: 1px solid transparent;
+}
+.testory-auth-main::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@supports (align-items: safe center) {
+  .testory-auth-main {
+    align-items: safe center;
+  }
 }
 
 .testory-auth-card {

@@ -412,7 +412,6 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         body = request.get_json(silent=True) or {}
         udid = _resolve_request_udid(body)
         session_id = (body.get("session_id") or "").strip()
-        # scrcpy/mirror removed ? mobile mirror feature retired
         agent_disconnect_device(udid)
         set_connected_udid(None)
         return jsonify({"success": True})

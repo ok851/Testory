@@ -20,9 +20,9 @@
 }
 
 body.testory-desktop-client #testoryMainNav .testory-nav-inner {
-  max-width: 1120px;
-  padding-left: 0.75rem;
-  padding-right: 0.75rem;
+  max-width: 100%;
+  padding-left: 1rem;
+  padding-right: 1rem;
 }
 
 .testory-page-main {

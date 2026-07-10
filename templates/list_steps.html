@@ -10,37 +10,38 @@
         
         .steps-page-root {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f1f5f9;
             min-height: calc(100vh - 72px);
-            padding: 20px;
         }
-        
+
         .steps-page-root .container {
-            max-width: 1000px;
+            max-width: 100% !important;
             margin: 0 auto;
             background: white;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            overflow: hidden;
         }
-        
+        body.testory-desktop-client .steps-page-root .container {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
+
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 30px;
+            padding: 36px 40px 32px;
             text-align: center;
+            border-radius: 0 0 16px 16px;
         }
         
         .header h1 {
-            font-size: 24px;
+            font-size: 28px;
+            font-weight: 600;
             margin-bottom: 10px;
         }
         
-        .header .case-info {
-            font-size: 14px;
-            opacity: 0.9;
+        .header .hierarchy-hint {
+            color: rgba(255, 255, 255, 0.8) !important;
         }
-        
+
         .toolbar {
             padding: 20px 30px;
             background: #f8f9fa;
@@ -66,7 +67,7 @@
         .btn {
             padding: 10px 20px;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 14px;
             font-weight: 500;
@@ -440,7 +441,7 @@
         .modal-content {
             background: white;
             padding: 30px;
-            border-radius: 12px;
+            border-radius: 16px;
             width: 500px;
             max-width: 90%;
             max-height: 90vh;
@@ -895,7 +896,7 @@
             width: 100%;
             padding: 10px;
             border: 1px solid #ddd;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 14px;
             font-family: inherit;
         }
@@ -1016,8 +1017,8 @@
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
         }
 
-        html.dark .steps-page-root { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
-        html.dark .steps-page-root .container { background: #111827; color: #e5e7eb; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        html.dark .steps-page-root { background: #0f172a; }
+        html.dark .steps-page-root .container { background: #111827; color: #e5e7eb; }
         html.dark .steps-page-root .header { background: linear-gradient(135deg, #3730a3 0%, #5b21b6 100%); }
         html.dark .steps-page-root .toolbar { background: #1f2937; border-bottom-color: #374151; }
         html.dark .steps-page-root .step-item { background: #111827; border-color: #4b5563; }
@@ -1053,7 +1054,7 @@
     <div class="container">
         <div class="header">
             <h1 data-i18n="steps_title">测试用例步骤管理</h1>
-            <div class="case-info" id="caseInfo" data-i18n="steps_case_loading">正在加载用例信息...</div>
+            <p class="hierarchy-hint" style="margin-top:8px;color:rgba(255,255,255,0.8);font-size:13px;" id="caseInfo" data-i18n="steps_case_loading">正在加载用例信息...</p>
         </div>
         
         <div class="toolbar">
@@ -5721,6 +5722,7 @@ function changePage(page) {
                     runCaseStatusTimer = null;
                 }
                 if (window.uatReleaseCaseRunSlot) window.uatReleaseCaseRunSlot();
+                window.__uatCaseRunStopping = false;
                 resetRunCaseToolbarIdle();
             }
         }
@@ -5728,6 +5730,7 @@ function changePage(page) {
         async function stopRunCase() {
             const stopBtn = document.getElementById('stopRunCaseBtn');
             if (stopBtn) stopBtn.disabled = true;
+            window.__uatCaseRunStopping = true;
             try {
                 const resp = await fetch('/api/cases/current-run/stop', { method: 'POST' });
                 const data = await resp.json();

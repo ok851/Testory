@@ -10,29 +10,35 @@
         
         .project-mgmt-page {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f1f5f9;
             min-height: calc(100vh - 72px);
-            padding: 20px;
         }
-        
+
         .project-mgmt-page .container {
-            max-width: 1200px;
+            max-width: 100% !important;
             margin: 0 auto;
             background: white;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            overflow: hidden;
         }
-        
+        body.testory-desktop-client .project-mgmt-page .container {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
+
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 30px;
+            padding: 36px 40px 32px;
             text-align: center;
+            border-radius: 0 0 16px 16px;
+        }
+
+        .header .hierarchy-hint {
+            color: rgba(255, 255, 255, 0.8) !important;
         }
         
         .header h1 {
             font-size: 28px;
+            font-weight: 600;
             margin-bottom: 10px;
         }
         
@@ -52,7 +58,7 @@
         .btn {
             padding: 10px 20px;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 14px;
             font-weight: 500;
@@ -127,7 +133,7 @@
         .project-card {
             background: white;
             border: 1px solid #e9ecef;
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 20px;
             transition: all 0.3s ease;
             box-shadow: 0 2px 8px rgba(0,0,0,0.05);
@@ -211,7 +217,7 @@
         .modal-content {
             background: white;
             padding: 30px;
-            border-radius: 12px;
+            border-radius: 16px;
             width: 500px;
             max-width: 90%;
             max-height: 90vh;
@@ -260,7 +266,7 @@
             width: 100%;
             padding: 10px;
             border: 1px solid #ddd;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 14px;
             font-family: inherit;
             box-sizing: border-box;
@@ -329,8 +335,8 @@
             background: #f8f9fa;
             border-top: 1px solid #e9ecef;
         }
-        html.dark .project-mgmt-page { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
-        html.dark .project-mgmt-page .container { background: #111827; color: #e5e7eb; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        html.dark .project-mgmt-page { background: #0f172a; }
+        html.dark .project-mgmt-page .container { background: #111827; color: #e5e7eb; }
         html.dark .project-mgmt-page .header-actions,
         html.dark .project-mgmt-page .navigation { background: #1f2937; border-color: #374151; }
         html.dark .project-mgmt-page .project-card { background: #1f2937; border-color: #4b5563; }
@@ -353,7 +359,7 @@
     <div class="container">
         <div class="header">
             <h1 data-i18n="proj_title">项目管理</h1>
-            <p class="hierarchy-hint" style="margin-top:8px;color:#64748b;font-size:13px;">组织层级：项目 → 单元 → 用例 → 步骤</p>
+            <p class="hierarchy-hint" style="margin-top:8px;color:rgba(255,255,255,0.8);font-size:13px;">组织层级：项目 → 单元 → 用例 → 步骤</p>
         </div>
         
         <div class="header-actions">

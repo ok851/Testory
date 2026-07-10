@@ -36,12 +36,13 @@ def _env_from_dotenv(key: str) -> str:
 
 
 def mobile_agent_config() -> Tuple[str, str]:
-    # 先尝试 reload .env（覆盖当前进程可能过时的环境变量）
+    # 尝试从 .env 补充缺失的环境变量（不覆盖 Tauri/父进程已设置的值，
+    # 否则会导致 Flask 路由与 Gateway 子进程的 secret 不一致）
     try:
         from dotenv import load_dotenv, find_dotenv
         env_path = find_dotenv()
         if env_path:
-            load_dotenv(env_path, override=True, encoding="utf-8-sig")
+            load_dotenv(env_path, override=False, encoding="utf-8-sig")
     except Exception:
         pass
 

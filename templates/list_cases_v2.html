@@ -10,37 +10,38 @@
         
         .cases-mgmt-page {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f1f5f9;
             min-height: calc(100vh - 72px);
-            padding: 20px;
         }
-        
+
         .cases-mgmt-page .container {
-            max-width: 1200px;
+            max-width: 100% !important;
             margin: 0 auto;
             background: white;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            overflow: hidden;
         }
-        
+        body.testory-desktop-client .cases-mgmt-page .container {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
+
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 30px;
+            padding: 36px 40px 32px;
             text-align: center;
+            border-radius: 0 0 16px 16px;
         }
         
         .header h1 {
             font-size: 28px;
+            font-weight: 600;
             margin-bottom: 10px;
         }
         
-        .header .project-info {
-            font-size: 16px;
-            opacity: 0.9;
+        .header .hierarchy-hint {
+            color: rgba(255, 255, 255, 0.8) !important;
         }
-        
+
         .toolbar {
             padding: 20px 30px;
             background: #f8f9fa;
@@ -66,7 +67,7 @@
         .btn {
             padding: 10px 20px;
             border: none;
-            border-radius: 6px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 14px;
             font-weight: 500;
@@ -276,11 +277,6 @@
             font-size: 13px;
             color: #475569;
         }
-        .hierarchy-hint {
-            font-size: 12px;
-            opacity: 0.85;
-            margin-top: 6px;
-        }
         
         .case-list {
             margin-top: 20px;
@@ -291,7 +287,7 @@
             align-items: center;
             padding: 15px 20px;
             border: 1px solid #e9ecef;
-            border-radius: 8px;
+            border-radius: 12px;
             margin-bottom: 10px;
             background: white;
             transition: all 0.3s ease;
@@ -364,7 +360,7 @@
         .modal-content {
             background: white;
             padding: 30px;
-            border-radius: 12px;
+            border-radius: 16px;
             width: 500px;
             max-width: 90%;
             max-height: 90vh;
@@ -399,7 +395,7 @@
             width: 100%;
             padding: 10px;
             border: 1px solid #ddd;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 14px;
             font-family: inherit;
         }
@@ -544,8 +540,8 @@
             border-bottom: 3px solid #667eea;
             margin-bottom: 10px;
         }
-        html.dark .cases-mgmt-page { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
-        html.dark .cases-mgmt-page .container { background: #111827; color: #e5e7eb; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        html.dark .cases-mgmt-page { background: #0f172a; }
+        html.dark .cases-mgmt-page .container { background: #111827; color: #e5e7eb; }
         html.dark .cases-mgmt-page .toolbar,
         html.dark .cases-mgmt-page .selected-order-panel { background: #1f2937; border-color: #374151; }
         html.dark .cases-mgmt-page .case-item,
@@ -569,8 +565,7 @@
     <div class="container">
         <div class="header">
             <h1 data-i18n="tc_title">测试用例管理</h1>
-            <div class="project-info" id="projectInfo" data-i18n="tc_project_loading">正在加载项目信息...</div>
-            <div class="hierarchy-hint">项目 → 单元 → 用例 → 步骤</div>
+            <p class="hierarchy-hint" style="margin-top:8px;color:rgba(255,255,255,0.8);font-size:13px;"><span id="projectInfo" data-i18n="tc_project_loading">正在加载项目信息...</span> · <span data-i18n="tc_hierarchy_path">项目 → 单元 → 用例 → 步骤</span></p>
         </div>
         
         <div class="toolbar">
@@ -592,16 +587,16 @@
         <div id="selectedOrderPanel" class="selected-order-panel">
             <h4 data-i18n="tc_exec_order_hint">执行顺序（拖拽可调整，从上到下依次执行）</h4>
             <div class="batch-session-options" style="margin:8px 0;font-size:13px;color:#475569;">
-                <label style="margin-right:16px;"><input type="checkbox" id="batchReuseSession" checked> 共享登录态（同批复用 Cookie / Token）</label>
-                <label><input type="checkbox" id="batchSkipDupLogin" checked> 业务用例跳过重复登录步骤</label>
+                <label style="margin-right:16px;"><input type="checkbox" id="batchReuseSession" checked> <span data-i18n="tc_batch_reuse_session">共享登录态（同批复用 Cookie / Token）</span></label>
+                <label><input type="checkbox" id="batchSkipDupLogin" checked> <span data-i18n="tc_batch_skip_dup_login">业务用例跳过重复登录步骤</span></label>
             </div>
             <div id="selectedOrderList" class="selected-order-list"></div>
         </div>
         
         <div class="content cases-layout">
             <aside class="units-sidebar" id="unitsSidebar">
-                <h4>测试单元 <button type="button" class="btn btn-secondary btn-sm" onclick="showCreateUnitPrompt()" title="新建单元">+</button></h4>
-                <div id="unitsList"><div class="loading" style="padding:8px;">加载中…</div></div>
+                <h4><span data-i18n="tc_units_title">测试单元</span> <button type="button" class="btn btn-secondary btn-sm" onclick="showCreateUnitPrompt()" title="新建单元" data-i18n-title="tc_btn_new_unit_title">+</button></h4>
+                <div id="unitsList"><div class="loading" style="padding:8px;" data-i18n="tc_units_loading">加载中…</div></div>
             </aside>
             <div class="cases-main" id="casesList">
                 <div class="loading">
@@ -622,15 +617,15 @@
                 <input type="text" id="caseName" data-i18n-placeholder="proj_case_ph_name" placeholder="请输入测试用例名称">
             </div>
             <div class="form-group">
-                <label for="caseUnitSelect">所属单元</label>
+                <label for="caseUnitSelect" data-i18n="tc_lbl_unit">所属单元</label>
                 <select id="caseUnitSelect" class="form-control"></select>
             </div>
             <div class="form-group">
-                <label for="casePlatform">测试类型</label>
+                <label for="casePlatform" data-i18n="tc_lbl_platform">测试类型</label>
                 <select id="casePlatform" class="form-control" onchange="onCasePlatformChange()">
-                    <option value="web">Web 应用</option>
-                    <option value="android">移动应用 (Android)</option>
-                    <option value="desktop">桌面应用</option>
+                    <option value="web" data-i18n="tc_platform_web">Web 应用</option>
+                    <option value="android" data-i18n="tc_platform_android">移动应用 (Android)</option>
+                    <option value="desktop" data-i18n="tc_platform_desktop">桌面应用</option>
                 </select>
             </div>
             <div class="form-group" id="caseUrlGroup">
@@ -684,7 +679,7 @@
                 <textarea id="editCaseExpectedResult"></textarea>
             </div>
             <div class="form-group">
-                <label for="editCaseUnitSelect">所属单元</label>
+                <label for="editCaseUnitSelect" data-i18n="tc_lbl_unit">所属单元</label>
                 <select id="editCaseUnitSelect" class="form-control"></select>
             </div>
             <div class="modal-footer">
@@ -697,19 +692,19 @@
     <div id="editUnitModal" class="modal">
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
-                <h3>编辑测试单元</h3>
+                <h3 data-i18n="tc_modal_edit_unit">编辑测试单元</h3>
             </div>
             <div class="form-group">
-                <label for="editUnitName">单元名称 *</label>
-                <input type="text" id="editUnitName" placeholder="如：登录模块、订单流程">
+                <label for="editUnitName" data-i18n="tc_lbl_unit_name">单元名称 *</label>
+                <input type="text" id="editUnitName" data-i18n-placeholder="tc_ph_unit_name" placeholder="如：登录模块、订单流程">
             </div>
             <div class="form-group">
-                <label for="editUnitDescription">单元描述</label>
-                <textarea id="editUnitDescription" rows="3" placeholder="可选，说明该单元包含的测试范围"></textarea>
+                <label for="editUnitDescription" data-i18n="tc_lbl_unit_desc">单元描述</label>
+                <textarea id="editUnitDescription" rows="3" data-i18n-placeholder="tc_ph_unit_desc" placeholder="可选，说明该单元包含的测试范围"></textarea>
             </div>
             <div class="modal-footer">
-                <button type="button" onclick="closeEditUnitModal()" class="btn btn-secondary">取消</button>
-                <button type="button" onclick="saveTestUnit()" class="btn btn-primary">保存</button>
+                <button type="button" onclick="closeEditUnitModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
+                <button type="button" onclick="saveTestUnit()" class="btn btn-primary" data-i18n="proj_btn_save">保存</button>
             </div>
         </div>
     </div>
@@ -724,6 +719,21 @@
             </div>
             <div class="modal-footer">
                 <button type="button" onclick="closeRunResultModal()" class="btn btn-primary" data-i18n="tc_btn_close">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="yamlPreviewModal" class="modal">
+        <div class="modal-content" style="max-width:800px;">
+            <div class="modal-header">
+                <h3 data-i18n="tc_yaml_preview_title">YAML 预览</h3>
+            </div>
+            <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+                <pre id="yamlPreviewContent" style="padding:16px;font-family:monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;background:#f8f9fa;border-radius:8px;border:1px solid #e2e8f0;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" onclick="copyYamlPreviewContent()" class="btn btn-secondary" data-i18n="tc_copy_content">复制内容</button>
+                <button type="button" onclick="closeYamlPreviewModal()" class="btn btn-primary" data-i18n="tc_btn_close">关闭</button>
             </div>
         </div>
     </div>
@@ -743,13 +753,13 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <button type="button" onclick="downloadTemplate('excel')" class="btn btn-secondary btn-sm">下载Excel模板</button>
+                    <button type="button" onclick="downloadTemplate('excel')" class="btn btn-secondary btn-sm" data-i18n="tc_dl_template">下载Excel模板</button>
                 </div>
                 <div id="importResult"></div>
             </div>
             <div class="modal-footer">
-                <button type="button" onclick="closeImportModal()" class="btn btn-secondary">取消</button>
-                <button type="button" onclick="importCases()" class="btn btn-primary">导入</button>
+                <button type="button" onclick="closeImportModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
+                <button type="button" onclick="importCases()" class="btn btn-primary" data-i18n="tc_import_btn">导入</button>
             </div>
         </div>
     </div>
@@ -760,15 +770,15 @@
                 <h3 data-i18n="tc_export_title">导出用例</h3>
             </div>
             <div class="modal-body">
-                <p style="margin-bottom: 15px; color: #666;"><i class="fas fa-info-circle"></i> 提示: 如果选择了用例，则只导出选中的用例；否则导出整个项目的用例。</p>
+                <p style="margin-bottom: 15px; color: #666;"><i class="fas fa-info-circle"></i> <span data-i18n="tc_export_hint">提示: 如果选择了用例，则只导出选中的用例；否则导出整个项目的用例。</span></p>
                 <div class="form-group">
-                    <button type="button" onclick="exportCases('excel')" class="btn btn-primary">导出为Excel</button>
-                    <button type="button" onclick="exportCases('json')" class="btn btn-info">导出为JSON</button>
-                    <button type="button" onclick="previewProjectYaml()" class="btn btn-secondary">YAML 预览（当前筛选）</button>
+                    <button type="button" onclick="exportCases('excel')" class="btn btn-primary" data-i18n="tc_export_excel">导出为Excel</button>
+                    <button type="button" onclick="exportCases('json')" class="btn btn-info" data-i18n="tc_export_json">导出为JSON</button>
+                    <button type="button" onclick="previewProjectYaml()" class="btn btn-secondary" data-i18n="tc_export_yaml_preview">YAML 预览（当前筛选）</button>
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" onclick="closeExportModal()" class="btn btn-secondary">关闭</button>
+                <button type="button" onclick="closeExportModal()" class="btn btn-secondary" data-i18n="tc_btn_close">关闭</button>
             </div>
         </div>
     </div>
@@ -776,53 +786,53 @@
     <div id="markDefectModal" class="modal">
         <div class="modal-content" style="width: 620px; max-width: 95%;">
             <div class="modal-header">
-                <h3>⚠ 批量标记缺陷</h3>
+                <h3 data-i18n="tc_defect_modal_title">⚠ 批量标记缺陷</h3>
             </div>
             <div class="modal-body">
                 <div id="defectCaseList" style="margin-bottom: 18px; padding: 12px; background: #fef9e7; border: 1px solid #f39c12; border-radius: 6px;">
-                    <div style="font-weight:600; color:#e67e22; margin-bottom:8px;">⚠ 将对以下用例创建缺陷记录：</div>
+                    <div style="font-weight:600; color:#e67e22; margin-bottom:8px;" data-i18n="tc_defect_will_create">⚠ 将对以下用例创建缺陷记录：</div>
                     <div id="defectCaseNames" style="font-size:13px; color:#555;"></div>
                 </div>
                 <div class="form-group">
-                    <label>缺陷标题模板 <span style="color:#888;font-size:12px;">（可用 {case_name} 代表用例名称）</span></label>
-                    <input type="text" id="defectTitleTemplate" placeholder="例：{case_name} 执行失败 - 有缺陷">
+                    <label><span data-i18n="tc_defect_title_tpl">缺陷标题模板</span> <span style="color:#888;font-size:12px;" data-i18n="tc_defect_title_tpl_hint">（可用 {case_name} 代表用例名称）</span></label>
+                    <input type="text" id="defectTitleTemplate" data-i18n-placeholder="tc_defect_title_ph" placeholder="例：{case_name} 执行失败 - 有缺陷">
                 </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px;">
                     <div class="form-group">
-                        <label>严重程度</label>
+                        <label data-i18n="tc_defect_severity">严重程度</label>
                         <select id="defectSeverity">
-                            <option value="critical">严重 (Critical)</option>
-                            <option value="high">高 (High)</option>
-                            <option value="medium" selected>中 (Medium)</option>
-                            <option value="low">低 (Low)</option>
+                            <option value="critical" data-i18n="tc_sev_critical">严重 (Critical)</option>
+                            <option value="high" data-i18n="tc_sev_high">高 (High)</option>
+                            <option value="medium" selected data-i18n="tc_sev_medium">中 (Medium)</option>
+                            <option value="low" data-i18n="tc_sev_low">低 (Low)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>优先级</label>
+                        <label data-i18n="tc_defect_priority">优先级</label>
                         <select id="defectPriority">
-                            <option value="urgent">紧急 (Urgent)</option>
-                            <option value="high">高 (High)</option>
-                            <option value="medium" selected>中 (Medium)</option>
-                            <option value="low">低 (Low)</option>
+                            <option value="urgent" data-i18n="tc_pri_urgent">紧急 (Urgent)</option>
+                            <option value="high" data-i18n="tc_pri_high">高 (High)</option>
+                            <option value="medium" selected data-i18n="tc_pri_medium">中 (Medium)</option>
+                            <option value="low" data-i18n="tc_pri_low">低 (Low)</option>
                         </select>
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>错误描述</label>
-                    <textarea id="defectDescription" rows="2" placeholder="请描述缺陷表现..."></textarea>
+                    <label data-i18n="tc_defect_err_desc">错误描述</label>
+                    <textarea id="defectDescription" rows="2" data-i18n-placeholder="tc_defect_err_ph" placeholder="请描述缺陷表现..."></textarea>
                 </div>
                 <div class="form-group">
-                    <label>实际结果</label>
-                    <textarea id="defectActualResult" rows="2" placeholder="实际观察到的错误现象"></textarea>
+                    <label data-i18n="tc_defect_actual">实际结果</label>
+                    <textarea id="defectActualResult" rows="2" data-i18n-placeholder="tc_defect_actual_ph" placeholder="实际观察到的错误现象"></textarea>
                 </div>
                 <div class="form-group">
-                    <label>测试环境（可选）</label>
-                    <input type="text" id="defectEnvironment" placeholder="例：Chrome / Windows 11">
+                    <label><span data-i18n="tc_defect_env">测试环境</span><span data-i18n="tc_defect_env_hint" style="color:#888;font-size:12px;">（可选）</span></label>
+                    <input type="text" id="defectEnvironment" data-i18n-placeholder="tc_defect_env_ph" placeholder="例：Chrome / Windows 11">
                 </div>
             </div>
             <div class="modal-footer">
-                <button onclick="closeMarkDefectModal()" class="btn btn-secondary">取消</button>
-                <button onclick="submitMarkDefects()" class="btn btn-defect">确认创建缺陷</button>
+                <button onclick="closeMarkDefectModal()" class="btn btn-secondary" data-i18n="index_btn_cancel">取消</button>
+                <button onclick="submitMarkDefects()" class="btn btn-defect" data-i18n="tc_defect_confirm_create">确认创建缺陷</button>
             </div>
         </div>
     </div>
@@ -838,7 +848,6 @@
         let allCasesList = [];
         let draggedOrderIndex = null;
         let caseRunStatusTimer = null;
-        let localCaseExecutionRunning = false;
 
         let currentUnitId = null;
         let allUnitsList = [];
@@ -848,6 +857,22 @@
         const casesPageSize = 10;
         let casesTotal = 0;
         let casesTotalPages = 1;
+
+        function _t(key) {
+            var lang = localStorage.getItem('ui_lang') || 'zh';
+            var dict = window.UITranslations && window.UITranslations[lang];
+            if (dict && dict[key]) return dict[key];
+            var fb = window.UITranslations && window.UITranslations['zh'];
+            return (fb && fb[key]) || key;
+        }
+        /** 统一的前端运行状态检查 — 只依赖 __uatCaseRunInFlight */
+        function _isRunBusy() { return !!(window.__uatCaseRunInFlight); }
+        function _kickRunBanner() {
+            if (typeof _setGlobalRunBanner === 'function') {
+                _setGlobalRunBanner(true, _t('tc_banner_starting'), 'case');
+            }
+            if (typeof _globalRunPollKick === 'function') _globalRunPollKick();
+        }
 
         function casesListUrl() {
             var url = `/api/projects/${currentProjectId}/cases?page=${casesPage}&page_size=${casesPageSize}`;
@@ -865,14 +890,14 @@
                 populateCaseUnitSelect();
             } catch (e) {
                 console.error(e);
-                document.getElementById('unitsList').innerHTML = '<div style="color:#94a3b8;font-size:12px;">单元加载失败</div>';
+                document.getElementById('unitsList').innerHTML = '<div style="color:#94a3b8;font-size:12px;">' + _t('tc_unit_load_fail') + '</div>';
             }
         }
         function renderUnitsSidebar() {
             const el = document.getElementById('unitsList');
             if (!el) return;
-            var html = '<div class="unit-item' + (currentUnitId === null ? ' active' : '') + '" onclick="selectUnit(null)">全部用例</div>';
-            html += '<div class="unit-item' + (currentUnitId === 'ungrouped' ? ' active' : '') + '" onclick="selectUnit(\'ungrouped\')">未分组 <span class="unit-count">' + ungroupedCaseCount + '</span></div>';
+            var html = '<div class="unit-item' + (currentUnitId === null ? ' active' : '') + '" onclick="selectUnit(null)">' + _t('tc_unit_all') + '</div>';
+            html += '<div class="unit-item' + (currentUnitId === 'ungrouped' ? ' active' : '') + '" onclick="selectUnit(\'ungrouped\')">' + _t('tc_unit_ungrouped') + ' <span class="unit-count">' + ungroupedCaseCount + '</span></div>';
             allUnitsList.forEach(function (u) {
                 var active = String(currentUnitId) === String(u.id) ? ' active' : '';
                 html += '<div class="unit-item unit-item-managed' + active + '">'
@@ -880,8 +905,8 @@
                     + '<span class="unit-name">' + escapeHtml(u.name) + ' <span class="unit-count">' + (u.case_count || 0) + '</span></span>'
                     + '</div>'
                     + '<div class="unit-item-actions">'
-                    + '<button type="button" title="编辑单元" onclick="event.stopPropagation(); showEditUnitModal(' + u.id + ')">✎</button>'
-                    + '<button type="button" title="删除单元" onclick="event.stopPropagation(); confirmDeleteUnit(' + u.id + ')">🗑</button>'
+                    + '<button type="button" title="' + _t('tc_ttl_edit_unit') + '" onclick="event.stopPropagation(); showEditUnitModal(' + u.id + ')">✎</button>'
+                    + '<button type="button" title="' + _t('tc_ttl_del_unit') + '" onclick="event.stopPropagation(); confirmDeleteUnit(' + u.id + ')">🗑</button>'
                     + '</div></div>';
             });
             el.innerHTML = html;
@@ -889,7 +914,7 @@
         function populateCaseUnitSelect() {
             const sel = document.getElementById('caseUnitSelect');
             if (!sel) return;
-            var html = '<option value="">未分组</option>';
+            var html = '<option value="">' + _t('tc_unit_ungrouped') + '</option>';
             allUnitsList.forEach(function (u) {
                 html += '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>';
             });
@@ -900,7 +925,7 @@
         function populateEditCaseUnitSelect(selectedId) {
             const sel = document.getElementById('editCaseUnitSelect');
             if (!sel) return;
-            var html = '<option value="">未分组</option>';
+            var html = '<option value="">' + _t('tc_unit_ungrouped') + '</option>';
             allUnitsList.forEach(function (u) {
                 html += '<option value="' + u.id + '">' + escapeHtml(u.name) + '</option>';
             });
@@ -914,7 +939,7 @@
             loadTestCases();
         }
         async function showCreateUnitPrompt() {
-            var name = prompt('请输入单元名称（如：登录模块、订单流程）');
+            var name = prompt(_t('tc_prompt_unit_name'));
             if (!name || !name.trim()) return;
             const resp = await fetch(`/api/projects/${currentProjectId}/units`, {
                 method: 'POST',
@@ -925,11 +950,11 @@
             if (data.success) {
                 await loadUnits();
                 selectUnit(data.unit_id);
-            } else alert(data.error || '创建单元失败');
+            } else alert(data.error || _t('tc_unit_create_fail'));
         }
         function showEditUnitModal(unitId) {
             var unit = allUnitsList.find(function (u) { return String(u.id) === String(unitId); });
-            if (!unit) { alert('单元不存在或已删除'); return; }
+            if (!unit) { alert(_t('tc_unit_not_found')); return; }
             currentEditingUnitId = unit.id;
             document.getElementById('editUnitName').value = unit.name || '';
             document.getElementById('editUnitDescription').value = unit.description || '';
@@ -942,7 +967,7 @@
         async function saveTestUnit() {
             if (!currentEditingUnitId) return;
             var name = (document.getElementById('editUnitName').value || '').trim();
-            if (!name) { alert('单元名称不能为空'); return; }
+            if (!name) { alert(_t('tc_unit_name_req')); return; }
             var description = (document.getElementById('editUnitDescription').value || '').trim();
             try {
                 const resp = await fetch(`/api/projects/${currentProjectId}/units/${currentEditingUnitId}`, {
@@ -956,19 +981,19 @@
                     await loadUnits();
                     await loadTestCases();
                 } else {
-                    alert(data.error || '更新单元失败');
+                    alert(data.error || _t('tc_unit_update_fail'));
                 }
             } catch (e) {
-                alert('更新单元失败：' + e.message);
+                alert(_t('tc_unit_update_fail') + ': ' + e.message);
             }
         }
         async function confirmDeleteUnit(unitId) {
             var unit = allUnitsList.find(function (u) { return String(u.id) === String(unitId); });
-            if (!unit) { alert('单元不存在或已删除'); return; }
+            if (!unit) { alert(_t('tc_unit_not_found')); return; }
             var caseCount = unit.case_count || 0;
             var msg = caseCount > 0
-                ? `确定删除单元「${unit.name}」吗？\n\n该单元下有 ${caseCount} 个用例，删除后这些用例将变为「未分组」。`
-                : `确定删除单元「${unit.name}」吗？`;
+                ? _t('tc_unit_del_confirm_full').replace('{name}', unit.name).replace('{count}', caseCount)
+                : _t('tc_unit_del_confirm_simple').replace('{name}', unit.name);
             if (!confirm(msg)) return;
             try {
                 const resp = await fetch(`/api/projects/${currentProjectId}/units/${unitId}`, { method: 'DELETE' });
@@ -980,28 +1005,34 @@
                     await loadUnits();
                     await loadTestCases();
                 } else {
-                    alert(data.error || '删除单元失败');
+                    alert(data.error || _t('tc_unit_del_fail'));
                 }
             } catch (e) {
-                alert('删除单元失败：' + e.message);
+                alert(_t('tc_unit_del_fail') + ': ' + e.message);
             }
         }
         async function previewCaseYaml(caseId) {
-            const resp = await fetch('/api/cases/' + caseId + '/export/yaml-preview');
-            const data = await resp.json();
-            if (!data.success) { alert(data.error || '预览失败'); return; }
-            var w = window.open('', '_blank');
-            if (w) { w.document.write('<pre style="padding:16px;font-family:monospace;white-space:pre-wrap;">' + escapeHtml(data.yaml) + '</pre>'); }
+            try {
+                const resp = await fetch('/api/cases/' + caseId + '/export/yaml-preview');
+                const data = await resp.json();
+                if (!data.success) { alert((data.error||_t('tc_yaml_preview_fail'))); return; }
+                openYamlPreviewModal(data.yaml || '');
+            } catch(e) {
+                alert(_t('tc_yaml_preview_fail') + ': ' + (e.message||''));
+            }
         }
         async function previewProjectYaml() {
-            var url = '/api/projects/' + currentProjectId + '/export/yaml-preview';
-            if (currentUnitId === 'ungrouped') url += '?unit_id=ungrouped';
-            else if (currentUnitId) url += '?unit_id=' + encodeURIComponent(currentUnitId);
-            const resp = await fetch(url);
-            const data = await resp.json();
-            if (!data.success) { alert(data.error || '预览失败'); return; }
-            var w = window.open('', '_blank');
-            if (w) { w.document.write('<pre style="padding:16px;font-family:monospace;white-space:pre-wrap;">' + escapeHtml(data.yaml) + '</pre>'); }
+            try {
+                var url = '/api/projects/' + currentProjectId + '/export/yaml-preview';
+                if (currentUnitId === 'ungrouped') url += '?unit_id=ungrouped';
+                else if (currentUnitId) url += '?unit_id=' + encodeURIComponent(currentUnitId);
+                const resp = await fetch(url);
+                const data = await resp.json();
+                if (!data.success) { alert((data.error||_t('tc_yaml_preview_fail'))); return; }
+                openYamlPreviewModal(data.yaml || '');
+            } catch(e) {
+                alert(_t('tc_yaml_preview_fail') + ': ' + (e.message||''));
+            }
         }
 
         function escapeHtml(text) { if (!text) return ''; const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
@@ -1011,6 +1042,24 @@
             if (!isError) setTimeout(() => closeRunResultModal(), 3000);
         }
         function closeRunResultModal() { document.getElementById('runResultModal').classList.remove('active'); }
+        function openYamlPreviewModal(yamlContent) {
+            document.getElementById('yamlPreviewContent').textContent = yamlContent || '';
+            document.getElementById('yamlPreviewModal').classList.add('active');
+        }
+        function closeYamlPreviewModal() { document.getElementById('yamlPreviewModal').classList.remove('active'); }
+        function copyYamlPreviewContent() {
+            var text = document.getElementById('yamlPreviewContent').textContent;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function(){}).catch(function(){ _fallbackCopyYaml(text); });
+            } else { _fallbackCopyYaml(text); }
+        }
+        function _fallbackCopyYaml(text) {
+            var ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+            document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); } catch(e) {}
+            document.body.removeChild(ta);
+        }
         function getProjectIdFromUrl() {
             const path = window.location.pathname, parts = path.split('/');
             for (let i = 0; i < parts.length; i++) if (parts[i] === 'list_cases_v2' && parts[i+1] && !isNaN(parseInt(parts[i+1]))) return parts[i+1];
@@ -1018,28 +1067,28 @@
         }
         async function loadProjectInfo() {
             currentProjectId = getProjectIdFromUrl();
-            if (!currentProjectId) { alert('未找到项目ID'); window.location.href = '/list_projects'; return; }
+            if (!currentProjectId) { alert(_t('tc_alert_no_project')); window.location.href = '/list_projects'; return; }
             try {
                 const resp = await fetch(`/api/projects/${currentProjectId}`);
                 const data = await resp.json();
-                if (data.project) { currentProjectName = data.project.name; document.getElementById('projectInfo').textContent = `当前项目：${currentProjectName}`; }
-                else document.getElementById('projectInfo').textContent = '当前项目：未知';
+                if (data.project) { currentProjectName = data.project.name; document.getElementById('projectInfo').textContent = _t('tc_project_info_tpl').replace('{name}', currentProjectName); }
+                else document.getElementById('projectInfo').textContent = _t('tc_project_unknown');
                 var adb = document.getElementById('aiDesignFromCasesBtn');
                 if (adb && currentProjectId) adb.href = '/ai-design?project_id=' + encodeURIComponent(currentProjectId);
-            } catch(e) { console.error(e); document.getElementById('projectInfo').textContent = '加载失败'; }
+            } catch(e) { console.error(e); document.getElementById('projectInfo').textContent = _t('tc_load_fail'); }
         }
         function renderCasesPagination() {
             if (casesTotal <= casesPageSize) return '';
             var start = (casesPage - 1) * casesPageSize + 1;
             var end = Math.min(casesPage * casesPageSize, casesTotal);
             return '<div class="cases-pagination">'
-                + '<div class="page-info">共 ' + casesTotal + ' 条，当前 ' + start + '–' + end + ' 条（' + casesPageSize + ' 条/页）</div>'
+                + '<div class="page-info">' + _t('tc_page_info').replace('{total}', casesTotal).replace('{start}', start).replace('{end}', end).replace('{size}', casesPageSize) + '</div>'
                 + '<div class="page-btns">'
-                + '<button type="button" onclick="goToCasesPage(1)" ' + (casesPage <= 1 ? 'disabled' : '') + '>首页</button>'
-                + '<button type="button" onclick="goToCasesPage(' + (casesPage - 1) + ')" ' + (casesPage <= 1 ? 'disabled' : '') + '>上一页</button>'
+                + '<button type="button" onclick="goToCasesPage(1)" ' + (casesPage <= 1 ? 'disabled' : '') + '>' + _t('tc_pg_first') + '</button>'
+                + '<button type="button" onclick="goToCasesPage(' + (casesPage - 1) + ')" ' + (casesPage <= 1 ? 'disabled' : '') + '>' + _t('tc_pg_prev') + '</button>'
                 + '<span class="page-num">' + casesPage + ' / ' + casesTotalPages + '</span>'
-                + '<button type="button" onclick="goToCasesPage(' + (casesPage + 1) + ')" ' + (casesPage >= casesTotalPages ? 'disabled' : '') + '>下一页</button>'
-                + '<button type="button" onclick="goToCasesPage(' + casesTotalPages + ')" ' + (casesPage >= casesTotalPages ? 'disabled' : '') + '>末页</button>'
+                + '<button type="button" onclick="goToCasesPage(' + (casesPage + 1) + ')" ' + (casesPage >= casesTotalPages ? 'disabled' : '') + '>' + _t('tc_pg_next') + '</button>'
+                + '<button type="button" onclick="goToCasesPage(' + casesTotalPages + ')" ' + (casesPage >= casesTotalPages ? 'disabled' : '') + '>' + _t('tc_pg_last') + '</button>'
                 + '</div></div>';
         }
         function goToCasesPage(page) {
@@ -1070,14 +1119,14 @@
                         const isSelected = selectedCaseIdsOrdered.includes(tc.id);
                         const div = document.createElement('div'); div.className = 'case-item'; div.id = `case-${tc.id}`;
                         div.innerHTML = `<div class="case-checkbox"><input type="checkbox" id="select-${tc.id}" onchange="toggleCaseSelection(${tc.id})" ${isSelected ? 'checked' : ''}></div>
-                            <div class="case-content"><h3>${escapeHtml(tc.name)}</h3>${tc.unit_name ? '<div style="font-size:12px;color:#64748b;margin-top:4px;">单元：' + escapeHtml(tc.unit_name) + '</div>' : ''}</div>
+                            <div class="case-content"><h3>${escapeHtml(tc.name)}</h3>${tc.unit_name ? '<div style="font-size:12px;color:#64748b;margin-top:4px;">' + _t('tc_case_unit_label') + escapeHtml(tc.unit_name) + '</div>' : ''}</div>
                             <div class="case-actions">
-                                <button class="btn btn-info btn-sm" onclick="viewCaseSteps(${tc.id})">步骤</button>
-                                <button class="btn btn-secondary btn-sm" onclick="previewCaseYaml(${tc.id})">YAML预览</button>
-                                <button class="btn btn-secondary btn-sm" onclick="viewRunHistory(${tc.id})">历史</button>
-                                <button class="btn btn-sm" onclick="editTestCase(${tc.id})">编辑</button>
-                                <button class="btn btn-success btn-sm" onclick="runTestCase(${tc.id})">运行</button>
-                                <button class="btn btn-danger btn-sm" onclick="deleteTestCase(${tc.id})">删除</button>
+                                <button class="btn btn-info btn-sm" onclick="viewCaseSteps(${tc.id})">${_t('tc_view_steps')}</button>
+                                <button class="btn btn-secondary btn-sm" onclick="previewCaseYaml(${tc.id})">${_t('tc_yaml_preview')}</button>
+                                <button class="btn btn-secondary btn-sm" onclick="viewRunHistory(${tc.id})">${_t('tc_history')}</button>
+                                <button class="btn btn-sm" onclick="editTestCase(${tc.id})">${_t('tc_btn_edit')}</button>
+                                <button class="btn btn-success btn-sm" onclick="runTestCase(${tc.id})">${_t('tc_run')}</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteTestCase(${tc.id})">${_t('tc_btn_delete')}</button>
                             </div>`;
                         container.appendChild(div);
                     });
@@ -1087,9 +1136,11 @@
                     casesPage = 1;
                     return loadTestCases();
                 } else {
-                    casesList.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><div>暂无测试用例</div><button onclick="showCreateCaseModal()" class="btn btn-primary">创建第一个用例</button></div>`;
+                    casesList.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><div>${_t('tc_empty_cases')}</div><button onclick="showCreateCaseModal()" class="btn btn-primary">${_t('tc_create_first_case')}</button></div>`;
                 }
-            } catch(e) { console.error(e); document.getElementById('casesList').innerHTML = '<div class="empty-state">加载失败，请刷新</div>'; }
+            } catch(e) { console.error(e); document.getElementById('casesList').innerHTML = '<div class="empty-state">' + _t('tc_load_fail_retry') + '</div>'; }
+            // 列表刷新后同步运行按钮状态（运行中的按钮应保持禁用）
+            syncCaseRunButtonState();
         }
         function onCasePlatformChange() {
             const plat = (document.getElementById('casePlatform') || {}).value || 'web';
@@ -1111,8 +1162,8 @@
         function closeCreateCaseModal() { document.getElementById('createCaseModal').classList.remove('active'); }
         async function createTestCase() {
             const name = document.getElementById('caseName').value.trim();
-            if (!name) { alert(typeof t === 'function' ? t('proj_case_need_name') : '请填写用例名称'); return; }
-            if (!currentProjectId) { alert(typeof t === 'function' ? t('proj_case_bad_proj') : '无效的项目'); return; }
+            if (!name) { alert(typeof t === 'function' ? t('proj_case_need_name') : _t('tc_case_need_name')); return; }
+            if (!currentProjectId) { alert(typeof t === 'function' ? t('proj_case_bad_proj') : _t('tc_alert_bad_project')); return; }
             const platform = (document.getElementById('casePlatform') || {}).value || 'web';
             const url = platform === 'android' ? '' : document.getElementById('caseUrl').value.trim();
             const description = document.getElementById('caseDescription').value.trim();
@@ -1137,14 +1188,14 @@
                 });
                 const data = await response.json();
                 if (data.success) {
-                    alert(typeof t === 'function' ? t('tc_case_created_ok') : '用例已创建');
+                    alert(typeof t === 'function' ? t('tc_case_created_ok') : _t('tc_case_created_ok'));
                     closeCreateCaseModal();
                     loadTestCases();
                 } else {
-                    alert((typeof t === 'function' ? t('proj_case_fail') : '创建失败：') + (data.error || (typeof t === 'function' ? t('index_err_unknown') : '未知错误')));
+                    alert((typeof t === 'function' ? t('proj_case_fail') : _t('tc_create_fail')) + (data.error || (typeof t === 'function' ? t('index_err_unknown') : _t('tc_unknown_err'))));
                 }
             } catch (error) {
-                alert((typeof t === 'function' ? t('proj_case_fail') : '创建失败：') + error.message);
+                alert((typeof t === 'function' ? t('proj_case_fail') : _t('tc_create_fail')) + error.message);
             }
         }
 
@@ -1162,19 +1213,98 @@
         function handleOrderDragOver(e){ e.preventDefault(); const container=document.getElementById('selectedOrderList'); const items=container.querySelectorAll('.selected-order-item'); const dragged=document.querySelector('.selected-order-item.dragging'); if(!dragged) return; const rect=container.getBoundingClientRect(); const y=e.clientY-rect.top; let target=null; for(let item of items){ if(item===dragged) continue; const r=item.getBoundingClientRect(); const top=r.top-rect.top; if(y>=top && y<=top+r.height){ target=item; break; } } items.forEach(i=>i.classList.remove('drag-before','drag-after')); if(target){ const mid=target.getBoundingClientRect().height/2; const pos=y-(target.getBoundingClientRect().top-rect.top); target.classList.add(pos<mid?'drag-before':'drag-after'); } }
         function handleOrderDrop(e){ e.preventDefault(); const container=document.getElementById('selectedOrderList'); const dragged=document.querySelector('.selected-order-item.dragging'); if(!dragged) return; const rect=container.getBoundingClientRect(); const y=e.clientY-rect.top; let target=null, before=false; const items=container.querySelectorAll('.selected-order-item'); for(let item of items){ if(item===dragged) continue; const r=item.getBoundingClientRect(); const top=r.top-rect.top; if(y>=top && y<=top+r.height){ target=item; before = y < (top + r.height/2); break; } } if(target && draggedOrderIndex!==null){ const targetIdx=parseInt(target.dataset.orderIndex); const id=selectedCaseIdsOrdered[draggedOrderIndex]; selectedCaseIdsOrdered.splice(draggedOrderIndex,1); let newIdx = before ? (targetIdx > draggedOrderIndex ? targetIdx-1 : targetIdx) : (targetIdx > draggedOrderIndex ? targetIdx : targetIdx+1); newIdx=Math.max(0,Math.min(newIdx,selectedCaseIdsOrdered.length)); selectedCaseIdsOrdered.splice(newIdx,0,id); updateSelectedOrderList(); } dragged.classList.remove('dragging'); items.forEach(i=>i.classList.remove('drag-before','drag-after')); draggedOrderIndex=null; }
         function handleOrderDragEnd(e){ e.currentTarget.classList.remove('dragging'); document.querySelectorAll('.selected-order-item').forEach(i=>i.classList.remove('drag-before','drag-after')); draggedOrderIndex=null; }
-        async function executeSelectedCases(){ if(localCaseExecutionRunning){ alert('有用例正在执行，请等待完成后再批量运行'); return; } if(selectedCaseIdsOrdered.length===0){ alert('请先勾选用例'); return; } if(selectedCaseIdsOrdered.length===1){ return runTestCase(selectedCaseIdsOrdered[0]); } if(window.uatTryAcquireCaseRunSlot&&!window.uatTryAcquireCaseRunSlot()){ alert('有用例正在执行，请等待完成后再批量运行'); return; } localCaseExecutionRunning=true; try{ const reuseEl=document.getElementById('batchReuseSession'); const skipEl=document.getElementById('batchSkipDupLogin'); const payload={case_ids:selectedCaseIdsOrdered,reuse_session:!(reuseEl&&!reuseEl.checked),skip_duplicate_login_for_business:!(skipEl&&!skipEl.checked)}; const resp=await fetch('/api/execute_multiple_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); const rs=data.results||{}; const rows=rs.case_results||[]; if(data.success&&rows.length){ let html=`<div><strong>执行摘要</strong><br>总:${rs.total_cases||rows.length} 成功:${rs.successful_cases||0} 失败:${rs.failed_cases||0}</div><hr>`; rows.forEach(r=>{html+=`<div><b>${r.case_name||r.case_id}</b> 状态:${r.status==='success'?'成功':(r.status==='stopped'?'已停止':'失败')}${r.error?`<br>错误:${r.error}`:''}</div>`;}); showRunResultModal(html, !!(rs.failed_cases)); } else if(rows.length){ let html=`<div><strong>批量执行未完成</strong>${data.error?`<br>${data.error}`:''}</div><hr>`; rows.forEach(r=>{html+=`<div><b>${r.case_name||r.case_id}</b> 状态:${r.status||'error'}${r.error?`<br>错误:${r.error}`:''}</div>`;}); showRunResultModal(html,true); } else showRunResultModal(`执行失败:${data.error||'未知错误'}`,true); }catch(e){ showRunResultModal(`错误:${e.message}`,true); } finally{ localCaseExecutionRunning=false; if(window.uatReleaseCaseRunSlot)window.uatReleaseCaseRunSlot(); syncCaseRunButtonState(); } }
-        async function runTestCase(caseId){ if((window.uatTryAcquireCaseRunSlot&&!window.uatTryAcquireCaseRunSlot())||localCaseExecutionRunning){ alert('有用例正在执行，请等待完成'); return; } localCaseExecutionRunning=true; try{ const resp=await fetch(`/api/cases/${caseId}/run`,{method:'POST'}); const data=await resp.json(); if(data.success) showRunResultModal(`<div>执行成功<br>耗时:${data.duration||0}秒</div>`); else { let err=(data.error||data.error_detail||''); if(data.python_executable&&/缺少依赖|opencv|mss|numpy|不支持/i.test(err)) err+=`<br><small>Python: ${data.python_executable}</small>`; const stopped=data.stopped||data.status==='stopped'||err.includes('用户已停止执行')||/stopped|cancel/i.test(err); if(stopped) showRunResultModal(`<div>已停止执行</div>`); else showRunResultModal(`失败:${err}`,true); } }catch(e){ showRunResultModal(`错误:${e.message}`,true); } finally{ localCaseExecutionRunning=false; if(window.uatReleaseCaseRunSlot)window.uatReleaseCaseRunSlot(); syncCaseRunButtonState(); } }
-        function stopCaseRun(){ fetch('/api/cases/current-run/stop',{method:'POST'}); localCaseExecutionRunning=false; document.getElementById('stopCaseRunBtn').disabled=true; }
+        async function executeSelectedCases(){
+            if(_isRunBusy()){ alert(_t('tc_run_busy')); return; }
+            if(selectedCaseIdsOrdered.length===0){ alert(_t('tc_select_run_first')); return; }
+            if(selectedCaseIdsOrdered.length===1){ return runTestCase(selectedCaseIdsOrdered[0]); }
+            if(window.uatTryAcquireCaseRunSlot) window.uatTryAcquireCaseRunSlot();
+            _kickRunBanner();
+            try{
+                const reuseEl=document.getElementById('batchReuseSession');
+                const skipEl=document.getElementById('batchSkipDupLogin');
+                const payload={case_ids:selectedCaseIdsOrdered,reuse_session:!(reuseEl&&!reuseEl.checked),skip_duplicate_login_for_business:!(skipEl&&!skipEl.checked)};
+                const resp=await fetch('/api/execute_multiple_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+                const data=await resp.json();
+                if(data.lock==='busy'){ showRunResultModal(_t('tc_lock_busy'),true); }
+                else {
+                    const rs=data.results||{}; const rows=rs.case_results||[];
+                    if(data.success&&rows.length){
+                        let html=`<div><strong>${_t('tc_batch_summary')}</strong><br>${_t('tc_batch_total')}:${rs.total_cases||rows.length} ${_t('tc_batch_success')}:${rs.successful_cases||0} ${_t('tc_batch_failed')}:${rs.failed_cases||0}</div><hr>`;
+                        rows.forEach(r=>{
+                            const st=r.status==='success'?_t('tc_status_success'):(r.status==='stopped'?_t('tc_status_stopped'):_t('tc_status_failed'));
+                            html+=`<div><b>${r.case_name||r.case_id}</b> ${_t('tc_status_label')}:${st}${r.error?`<br>${_t('tc_error_label')}:${r.error}`:''}</div>`;
+                        });
+                        showRunResultModal(html, !!(rs.failed_cases));
+                    } else if(rows.length){
+                        let html=`<div><strong>${_t('tc_batch_incomplete')}</strong>${data.error?`<br>${data.error}`:''}</div><hr>`;
+                        rows.forEach(r=>{
+                            html+=`<div><b>${r.case_name||r.case_id}</b> ${_t('tc_status_label')}:${r.status||'error'}${r.error?`<br>${_t('tc_error_label')}:${r.error}`:''}</div>`;
+                        });
+                        showRunResultModal(html,true);
+                    } else showRunResultModal(`${_t('tc_run_failed')}:${data.error||_t('tc_unknown_err')}`,true);
+                }
+            }catch(e){ showRunResultModal(`${_t('tc_error_label')}:${e.message}`,true); }
+            finally{
+                if(window.uatReleaseCaseRunSlot) window.uatReleaseCaseRunSlot();
+                window.__uatCaseRunStopping=false;
+                syncCaseRunButtonState();
+                if(typeof _globalRunPollKick==='function') _globalRunPollKick();
+            }
+        }
+        async function runTestCase(caseId){
+            if(_isRunBusy()){ alert(_t('tc_run_busy_single')); return; }
+            if(window.uatTryAcquireCaseRunSlot) window.uatTryAcquireCaseRunSlot();
+            _kickRunBanner();
+            try{
+                const resp=await fetch(`/api/cases/${caseId}/run`,{method:'POST'});
+                const data=await resp.json();
+                if(data.success) showRunResultModal(`<div>${_t('tc_run_success')}<br>${_t('tc_duration')}:${data.duration||0}s</div>`);
+                else if(data.lock==='busy'){ showRunResultModal(_t('tc_lock_busy'),true); }
+                else {
+                    let err=(data.error||data.error_detail||'');
+                    const stopped=data.stopped||data.status==='stopped'||err.includes('用户已停止执行')||/stopped|cancel/i.test(err);
+                    if(stopped) showRunResultModal(`<div>${_t('tc_run_stopped')}</div>`);
+                    else showRunResultModal(`${_t('tc_run_failed')}:${err}`,true);
+                }
+            }catch(e){ showRunResultModal(`${_t('tc_error_label')}:${e.message}`,true); }
+            finally{
+                if(window.uatReleaseCaseRunSlot) window.uatReleaseCaseRunSlot();
+                window.__uatCaseRunStopping=false;
+                syncCaseRunButtonState();
+                if(typeof _globalRunPollKick==='function') _globalRunPollKick();
+            }
+        }
+        async function stopCaseRun(){
+            // 只发送停止信号，不释放槽位 — 槽位由 runTestCase/executeSelectedCases 的 finally 块释放
+            window.__uatCaseRunStopping = true;
+            if(typeof _setGlobalRunBanner === 'function')
+                _setGlobalRunBanner(true, _t('tc_banner_stopping'), 'case');
+            try{ await fetch('/api/cases/current-run/stop',{method:'POST'}); }
+            catch(e){}
+            if(typeof _globalRunPollKick === 'function') _globalRunPollKick();
+            // 安全超时：如果 15 秒后 fetch 仍未返回，强制释放槽位
+            if(window.__uatStopSafetyTimer) clearTimeout(window.__uatStopSafetyTimer);
+            window.__uatStopSafetyTimer = setTimeout(function(){
+                if(window.__uatCaseRunInFlight){
+                    console.warn('停止安全超时 — 强制释放运行槽位');
+                    if(window.uatReleaseCaseRunSlot) window.uatReleaseCaseRunSlot();
+                    window.__uatCaseRunStopping = false;
+                    syncCaseRunButtonState();
+                    if(typeof _globalRunPollKick === 'function') _globalRunPollKick();
+                }
+            }, 15000);
+            syncCaseRunButtonState();
+        }
         function backToProjects(){ window.location.href='/list_projects'; }
         function viewCaseSteps(caseId){ sessionStorage.setItem('currentCaseId',caseId); sessionStorage.setItem('currentProjectId',currentProjectId); window.location.href='/list_steps'; }
         function viewRunHistory(caseId){ window.location.href=`/run-history?case_id=${caseId}`; }
-        async function editTestCase(caseId){ const resp=await fetch(`/api/cases/${caseId}`); const data=await resp.json(); if(data.test_case) showEditCaseModal(caseId,data.test_case); else alert('获取用例失败'); }
+        async function editTestCase(caseId){ const resp=await fetch(`/api/cases/${caseId}`); const data=await resp.json(); if(data.test_case) showEditCaseModal(caseId,data.test_case); else alert(_t('tc_fail_get_case')); }
         function showEditCaseModal(caseId,caseData){ currentEditingCaseId=caseId; document.getElementById('editCaseModal').classList.add('active'); document.getElementById('editCaseName').value=caseData.name||''; document.getElementById('editCaseUrl').value=caseData.url||''; document.getElementById('editCaseDescription').value=caseData.description||''; document.getElementById('editCasePrecondition').value=caseData.precondition||''; document.getElementById('editCaseExpectedResult').value=caseData.expected_result||''; populateEditCaseUnitSelect(caseData.unit_id||''); if(typeof applyUiLang==='function')applyUiLang(); }
         function closeEditCaseModal(){ document.getElementById('editCaseModal').classList.remove('active'); currentEditingCaseId=null; }
-        async function updateTestCase(){ const name=document.getElementById('editCaseName').value.trim(); if(!name){ alert('用例名称不能为空'); return; } const unitSel=document.getElementById('editCaseUnitSelect'); const unitRaw=unitSel&&unitSel.value?unitSel.value:null; const payload={name, url:document.getElementById('editCaseUrl').value.trim(), description:document.getElementById('editCaseDescription').value.trim(), precondition:document.getElementById('editCasePrecondition').value.trim(), expected_result:document.getElementById('editCaseExpectedResult').value.trim(), unit_id:unitRaw?parseInt(unitRaw,10):null}; const resp=await fetch(`/api/cases/${currentEditingCaseId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert('更新成功'); closeEditCaseModal(); loadTestCases(); loadUnits(); } else alert('更新失败'); }
-        async function deleteTestCase(caseId){ if(confirm('确认删除？')){ const resp=await fetch(`/api/cases/${caseId}`,{method:'DELETE'}); const data=await resp.json(); if(data.success){ selectedCaseIdsOrdered=selectedCaseIdsOrdered.filter(id=>id!==caseId); loadTestCases(); } else alert('删除失败'); } }
+        async function updateTestCase(){ const name=document.getElementById('editCaseName').value.trim(); if(!name){ alert(_t('tc_case_need_name')); return; } const unitSel=document.getElementById('editCaseUnitSelect'); const unitRaw=unitSel&&unitSel.value?unitSel.value:null; const payload={name, url:document.getElementById('editCaseUrl').value.trim(), description:document.getElementById('editCaseDescription').value.trim(), precondition:document.getElementById('editCasePrecondition').value.trim(), expected_result:document.getElementById('editCaseExpectedResult').value.trim(), unit_id:unitRaw?parseInt(unitRaw,10):null}; const resp=await fetch(`/api/cases/${currentEditingCaseId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert(_t('tc_case_updated_ok')); closeEditCaseModal(); loadTestCases(); loadUnits(); } else alert(_t('tc_update_fail')); }
+        async function deleteTestCase(caseId){ if(confirm(_t('tc_del_confirm'))){ const resp=await fetch(`/api/cases/${caseId}`,{method:'DELETE'}); const data=await resp.json(); if(data.success){ selectedCaseIdsOrdered=selectedCaseIdsOrdered.filter(id=>id!==caseId); loadTestCases(); } else alert(_t('tc_del_fail')); } }
         function showImportModal(){ document.getElementById('importModal').classList.add('active'); }
-        function closeImportModal(){ document.getElementById('importModal').classList.remove('active'); document.getElementById('importFile').value=''; document.getElementById('importFileName').innerText='未选择文件'; }
+        function closeImportModal(){ document.getElementById('importModal').classList.remove('active'); document.getElementById('importFile').value=''; document.getElementById('importFileName').innerText=_t('tc_no_file'); }
         function showExportModal(){ document.getElementById('exportModal').classList.add('active'); }
         function closeExportModal(){ document.getElementById('exportModal').classList.remove('active'); }
         async function downloadTemplate(fmt){
@@ -1198,25 +1328,50 @@
                     URL.revokeObjectURL(url);
                     return;
                 }
-                alert('下载失败' + (data.error ? (': ' + data.error) : ''));
+                alert(_t('tc_dl_tpl_fail') + (data.error ? (': ' + data.error) : ''));
             } catch (e) {
-                alert('下载失败');
+                alert(_t('tc_dl_tpl_fail'));
             }
         }
         function updateFileName(input){
             var el = document.getElementById('importFileName');
-            var name = input.files[0]?.name || (typeof t === 'function' ? t('tc_no_file') : '未选择文件');
+            var name = input.files[0]?.name || _t('tc_no_file');
             el.innerText = name;
             el.classList.toggle('is-selected', !!input.files[0]);
         }
-        async function importCases(){ const file=document.getElementById('importFile').files[0]; if(!file){ alert('请选择文件'); return; } const fd=new FormData(); fd.append('file',file); fd.append('project_id',currentProjectId); const resp=await fetch('/api/cases/import/excel',{method:'POST',body:fd}); const data=await resp.json(); if(data.success){ alert(`导入成功，创建用例${data.cases_created}个`); loadTestCases(); closeImportModal(); } else alert('导入失败' + (data.error ? (': ' + data.error) : '')); }
-        async function exportCases(format){ const selected=Array.from(document.querySelectorAll('.case-checkbox input:checked')).map(cb=>parseInt(cb.id.replace('select-',''))); const payload={project_id:selected.length===0?currentProjectId:undefined,case_ids:selected.length?selected:undefined}; const resp=await fetch(`/api/cases/export/${format}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success) window.open(data.download_url,'_blank'); else alert('导出失败'); }
-        function showMarkDefectModal(){ if(selectedCaseIdsOrdered.length===0){ alert('请先勾选用例'); return; } const names=selectedCaseIdsOrdered.map(id=>caseNamesById[id]).join(', '); document.getElementById('defectCaseNames').innerHTML=names; document.getElementById('markDefectModal').classList.add('active'); }
+        async function importCases(){ const file=document.getElementById('importFile').files[0]; if(!file){ alert(_t('tc_pick_file_first')); return; } const fd=new FormData(); fd.append('file',file); fd.append('project_id',currentProjectId); const resp=await fetch('/api/cases/import/excel',{method:'POST',body:fd}); const data=await resp.json(); if(data.success){ alert(_t('tc_import_ok_detail').replace('{n}', data.cases_created||0)); loadTestCases(); closeImportModal(); } else alert(_t('tc_import_fail') + (data.error ? (': ' + data.error) : '')); }
+        async function exportCases(format){ const selected=Array.from(document.querySelectorAll('.case-checkbox input:checked')).map(cb=>parseInt(cb.id.replace('select-',''))); const payload={project_id:selected.length===0?currentProjectId:undefined,case_ids:selected.length?selected:undefined}; const resp=await fetch(`/api/cases/export/${format}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success) window.open(data.download_url,'_blank'); else alert(_t('tc_export_fail')); }
+        function showMarkDefectModal(){ if(selectedCaseIdsOrdered.length===0){ alert(_t('tc_defect_select_first')); return; } const names=selectedCaseIdsOrdered.map(id=>caseNamesById[id]).join(', '); document.getElementById('defectCaseNames').innerHTML=names; document.getElementById('markDefectModal').classList.add('active'); }
         function closeMarkDefectModal(){ document.getElementById('markDefectModal').classList.remove('active'); }
-        async function submitMarkDefects(){ const payload={case_ids:selectedCaseIdsOrdered, project_id:parseInt(currentProjectId), title_template:document.getElementById('defectTitleTemplate').value, description:document.getElementById('defectDescription').value, severity:document.getElementById('defectSeverity').value, priority:document.getElementById('defectPriority').value, actual_result:document.getElementById('defectActualResult').value, environment:document.getElementById('defectEnvironment').value}; const resp=await fetch('/api/defects/batch_from_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert(`创建缺陷${data.created_count}个`); closeMarkDefectModal(); } else alert('标记缺陷失败'); }
-        async function syncCaseRunButtonState(){ const { ok, pack } = await window.uatFetchCurrentRunsPack(); const c=(pack||{}).case||{}; const active=!!(ok&&c.success&&c.active)||localCaseExecutionRunning; document.getElementById('stopCaseRunBtn').disabled=!active; }
+        async function submitMarkDefects(){ const payload={case_ids:selectedCaseIdsOrdered, project_id:parseInt(currentProjectId), title_template:document.getElementById('defectTitleTemplate').value, description:document.getElementById('defectDescription').value, severity:document.getElementById('defectSeverity').value, priority:document.getElementById('defectPriority').value, actual_result:document.getElementById('defectActualResult').value, environment:document.getElementById('defectEnvironment').value}; const resp=await fetch('/api/defects/batch_from_cases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); const data=await resp.json(); if(data.success){ alert(_t('tc_defect_created_count').replace('{n}', data.created_count||0)); closeMarkDefectModal(); } else alert(_t('tc_defect_create_fail')); }
+        async function syncCaseRunButtonState(){
+            var busy = _isRunBusy();
+            var stopping = !!(window.__uatCaseRunStopping);
+            // 停止按钮：运行中可点击，停止中禁用
+            var stopBtn = document.getElementById('stopCaseRunBtn');
+            if(stopBtn){
+                stopBtn.disabled = !busy || stopping;
+                stopBtn.textContent = stopping ? ('⏹ ' + _t('tc_stopping')) : ('⏹ ' + _t('tc_stop_run'));
+            }
+            // 执行选中按钮：运行中禁用
+            var execBtn = document.querySelector('button[onclick="executeSelectedCases()"]');
+            if(execBtn) execBtn.disabled = busy;
+            // 单独运行按钮：运行中禁用
+            document.querySelectorAll('button[onclick^="runTestCase("]').forEach(function(btn){
+                btn.disabled = busy;
+            });
+            // 非忙碌时轮询后端状态（跨标签页同步）
+            if(!busy){
+                try{
+                    const { ok, pack } = await window.uatFetchCurrentRunsPack();
+                    const c = (pack||{}).case||{};
+                    var active = !!(ok && c.success && c.active);
+                    if(stopBtn) stopBtn.disabled = !active;
+                }catch(e){}
+            }
+        }
         document.addEventListener('visibilitychange',function(){ if(!document.hidden) syncCaseRunButtonState(); });
-        document.addEventListener('DOMContentLoaded',async()=>{ currentProjectId=getProjectIdFromUrl(); if(!currentProjectId){ alert('无效项目'); window.location.href='/list_projects'; return; } await loadProjectInfo(); await loadUnits(); await loadTestCases(); void syncCaseRunButtonState(); setInterval(syncCaseRunButtonState,3500); });
+        document.addEventListener('DOMContentLoaded',async()=>{ currentProjectId=getProjectIdFromUrl(); if(!currentProjectId){ alert(_t('tc_alert_bad_project')); window.location.href='/list_projects'; return; } await loadProjectInfo(); await loadUnits(); await loadTestCases(); void syncCaseRunButtonState(); setInterval(syncCaseRunButtonState,3500); });
         window.addEventListener('ui-preferences-updated',()=>{ loadProjectInfo(); loadUnits(); loadTestCases(); });
     </script>
 {% endblock %}

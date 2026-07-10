@@ -119,6 +119,7 @@ pub fn spawn_flask(app_root: &Path, user_data: &Path, port_file: &Path) -> Resul
             "http://127.0.0.1:8765",
         )
         .env("EMBEDDED_BROWSER_GATEWAY_SECRET", "hufirst-desktop-local")
+        .env("MOBILE_AGENT_GATEWAY_SECRET", "hufirst-desktop-local")
         .env("EMBEDDED_BROWSER_PUBLIC_WS_BASE", "ws://127.0.0.1:8765")
         .env("EMBEDDED_BROWSER_AUTO_START_GATEWAY", "1")
         .env("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434")

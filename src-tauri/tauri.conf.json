@@ -22,6 +22,7 @@
         "minHeight": 640,
         "decorations": false,
         "transparent": true,
+        "center": true,
         "url": "tauri_splash.html"
       }
     ]

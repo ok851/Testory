@@ -13,6 +13,6 @@
   </defs>
   <rect x="0" y="4" width="40" height="40" rx="11" fill="url(#testory-grad)"/>
   <path fill="#fff" d="M11 14h18v6H21v14h-4V20H11z"/>
-  <circle cx="33" cy="33" r="5" fill="#34d399" stroke="#050816" stroke-width="1.5"/>
+  <circle cx="33" cy="33" r="5" fill="#34d399"/>
   <text x="52" y="33" font-family="Outfit, Segoe UI, PingFang SC, sans-serif" font-size="26" font-weight="700" fill="url(#testory-text)">Testory</text>
 </svg>

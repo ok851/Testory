@@ -11,6 +11,5 @@
   </defs>
   <rect width="64" height="64" rx="16" fill="url(#testory-grad)" filter="url(#testory-shadow)"/>
   <path fill="#fff" d="M18 18h28v9H35v19h-6V27H18z"/>
-  <circle cx="47" cy="47" r="7" fill="#34d399" stroke="#050816" stroke-width="2"/>
-  <path fill="#050816" d="M44 47l2.2 2.2L50 45.4" stroke="#050816" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="47" cy="47" r="7" fill="#34d399"/>
 </svg>

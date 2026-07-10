@@ -449,12 +449,15 @@ def _make_batch_execution_context(trigger: str, data: dict | None = None) -> Exe
 
 def _force_stop_browser_async():
     """异步强制停止浏览器，避免阻塞停止接口响应。"""
-    try:
-        sync_close_browser()
-    except Exception:
-        pass
+    # 先重置状态（清空 browser/page 引用，设置 Event 信号）
+    # 这样执行线程的下一步浏览器断连检测能立即生效
     try:
         force_reset_execution_state()
+    except Exception:
+        pass
+    # 再尝试关闭浏览器进程（可能被 worker 阻塞，但不影响断连检测）
+    try:
+        sync_close_browser()
     except Exception:
         pass
 
@@ -9304,7 +9307,19 @@ def api_run_case(case_id):
         except ImportError:
             pass
 
-        if not _execution_lock.acquire(blocking=True, timeout=120):
+        # 预检：如果上一个任务已被取消但锁仍被持有，短暂等待释放
+        if _execution_lock.locked():
+            with _case_run_lock:
+                prev_job = _case_run_jobs.get(user_id)
+                prev_cancelled = prev_job and prev_job.get('cancel_requested')
+            if prev_cancelled:
+                uat_logger.info("检测到之前被取消的任务锁仍然持有，等待清理...")
+                for _ in range(30):  # 最多等待 3 秒
+                    if not _execution_lock.locked():
+                        break
+                    time.sleep(0.1)
+
+        if not _execution_lock.acquire(blocking=True, timeout=10):
             if machine_lock_acquired:
                 try:
                     from execution_lock import release as release_machine_lock
@@ -9322,6 +9337,12 @@ def api_run_case(case_id):
                 'lock': 'busy',
             }), 409
         playwright_lock_acquired = True
+        # 清除上一次的强制释放信号
+        try:
+            from playwright_automation import _execution_force_release_requested as _force_rel_event
+            _force_rel_event.clear()
+        except Exception:
+            pass
         set_execution_in_progress(True)
 
         uat_logger.info(f"开始运行测试用例 #{case_id}: {case['name']}")
@@ -9455,6 +9476,16 @@ def api_run_case(case_id):
             def _ensure_browser_for_web_step() -> None:
                 nonlocal browser_started
                 if browser_started:
+                    # 检测浏览器是否在步骤执行过程中被手动关闭
+                    if automation.browser is None:
+                        raise Exception("浏览器已关闭，无法继续执行")
+                    try:
+                        if not automation.browser.is_connected():
+                            raise Exception("浏览器连接已断开，无法继续执行")
+                    except Exception:
+                        if automation.browser is None:
+                            raise
+                        raise Exception("浏览器已关闭，无法继续执行")
                     return
                 sync_start_browser()
                 browser_started = True
@@ -9497,6 +9528,13 @@ def api_run_case(case_id):
                 for step_index, step in enumerate(steps, start=1):
                     if _case_run_cancelled(user_id):
                         raise Exception("用户已停止执行")
+                    # 检查跨线程强制释放信号（用户手动关闭浏览器时触发）
+                    try:
+                        from playwright_automation import _execution_lock_check_force_release as _check_force_rel
+                        if _check_force_rel():
+                            raise Exception("用户已停止执行")
+                    except ImportError:
+                        pass
     
                     action = step.get('action', '')
                     selector_type = step.get('selector_type', 'css')
@@ -10038,10 +10076,11 @@ def api_run_case(case_id):
                 # 执行失败时的处理
                 duration = round(time.time() - start_time, 2)
     
-                # 用户已点「停止执行」：不因关应用/断连等中间错误弹失败（桌面步骤常见）
-                if _case_run_cancelled(user_id) or '用户已停止执行' in str(e):
-                    stop_msg = '用户已停止执行'
-                    uat_logger.info(f"测试用例 #{case_id} 已由用户停止（忽略步骤异常: {str(e)[:300]}）")
+                # 用户已点「停止执行」/ 浏览器被手动关闭：不因关应用/断连等中间错误弹失败
+                _inner_err = str(e)
+                if _case_run_cancelled(user_id) or '用户已停止执行' in _inner_err or '浏览器已关闭' in _inner_err or '浏览器连接已断开' in _inner_err:
+                    stop_msg = '浏览器已关闭' if '浏览器' in _inner_err else '用户已停止执行'
+                    uat_logger.info(f"测试用例 #{case_id} 执行结束: {stop_msg}（忽略步骤异常: {_inner_err[:300]}）")
                     try:
                         run_id = db.create_run_history(
                             case_id, 'stopped', duration, stop_msg, extracted_text, expected_text
@@ -10238,9 +10277,11 @@ def api_run_case(case_id):
         except Exception as e:
             # 最外层异常处理 - 确保历史记录被保存
             duration = round(time.time() - start_time, 2)
-            if _case_run_cancelled(user_id) or '用户已停止执行' in str(e):
-                stop_msg = '用户已停止执行'
-                uat_logger.info(f"测试用例 #{case_id} 已由用户停止（外层）")
+            _err_str = str(e)
+            # 用户主动停止 / 浏览器被手动关闭 → 归类为"已停止"
+            if _case_run_cancelled(user_id) or '用户已停止执行' in _err_str or '浏览器已关闭' in _err_str or '浏览器连接已断开' in _err_str:
+                stop_msg = '浏览器已关闭' if '浏览器' in _err_str else '用户已停止执行'
+                uat_logger.info(f"测试用例 #{case_id} 执行结束: {stop_msg}")
                 try:
                     db.create_run_history(case_id, 'stopped', duration, stop_msg, extracted_text, expected_text)
                 except Exception:

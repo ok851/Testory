@@ -4,12 +4,13 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Shield / Robot icon representing test automation -->
+    <!-- 白色 T 字母（与系统内 testory-mark.svg 一致） -->
+    <!-- 水平横杠 -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M54,28L54,28C44.1,28 36,36.1 36,46v4c-3.3,0 -6,2.7 -6,6v14c0,3.3 2.7,6 6,6h3l2,10h26l2,-10h3c3.3,0 6,-2.7 6,-6V56c0,-3.3 -2.7,-6 -6,-6v-4C72,36.1 63.9,28 54,28zM54,34c6.6,0 12,5.4 12,12v4H42v-4C42,39.4 47.4,34 54,34zM36,56h36v14H36V56z"/>
-    <!-- Checkmark in center -->
+        android:pathData="M30,30 L78,30 L78,45 L62,45 L62,78 L46,78 L46,45 L30,45 Z"/>
+    <!-- 绿色圆点（右下角，无对号、无黑边） -->
     <path
-        android:fillColor="#FF1565C0"
-        android:pathData="M48,64l-4,-4 -3,3 7,7 12,-12 -3,-3z"/>
+        android:fillColor="#34D399"
+        android:pathData="M80,80 m-12,0 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0"/>
 </vector>

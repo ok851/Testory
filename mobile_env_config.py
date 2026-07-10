@@ -116,25 +116,6 @@ def adb_path_source() -> str:
     return "default"
 
 
-def scrcpy_path() -> str:
-    try:
-        from mobile_scrcpy_bundles import get_installed_scrcpy_exe
-
-        bundled = get_installed_scrcpy_exe()
-        if bundled:
-            return bundled
-    except Exception:
-        pass
-    cfg = _load_mobile_defaults()
-    env_path = (os.environ.get("SCRCPY_PATH") or "").strip()
-    if env_path and Path(env_path).is_file():
-        return env_path
-    cfg_path = (cfg.get("scrcpy_path") or "").strip()
-    if cfg_path and Path(cfg_path).is_file():
-        return cfg_path
-    return env_path or cfg_path or "scrcpy"
-
-
 def mobile_screenshot_shrink_factor() -> float:
     """VLM 截图缩小倍数（Midscene screenshotShrinkFactor 对标，默认 2）。"""
     raw = (
@@ -169,52 +150,6 @@ def mirror_fps() -> int:
         return 8
 
 
-def scrcpy_mirror_fps() -> int:
-    raw = (os.environ.get("MOBILE_SCRCPY_FPS") or os.environ.get("MOBILE_MIRROR_FPS") or "24").strip()
-    try:
-        return max(15, min(60, int(raw)))
-    except ValueError:
-        return 24
-
-
-def device_scrcpy_ws_enabled() -> bool:
-    raw = (
-        os.environ.get("MOBILE_DEVICE_SCRCPY")
-        or os.environ.get("MOBILE_EMULATOR_SCRCPY")
-        or "1"
-    ).strip().lower()
-    return raw not in ("0", "false", "no", "off")
-
-
-def scrcpy_available() -> bool:
-    """scrcpy.exe 或内置/插件 scrcpy-server 任一可用即视为可投屏。"""
-    path = scrcpy_path()
-    if path and path not in ("scrcpy", "scrcpy.exe") and Path(path).is_file():
-        return True
-    import shutil
-
-    if shutil.which("scrcpy"):
-        return True
-    try:
-        from mobile_scrcpy_bridge import find_scrcpy_server_jar
-
-        return bool(find_scrcpy_server_jar())
-    except Exception:
-        return False
-
-
-def scrcpy_max_size() -> int:
-    """scrcpy 视频长边上限；0=原生分辨率（不缩放）。"""
-    raw = (os.environ.get("MOBILE_SCRCPY_MAX_SIZE") or "0").strip()
-    try:
-        val = int(raw)
-    except ValueError:
-        return 0
-    if val <= 0:
-        return 0
-    return max(480, min(3840, val))
-
-
 def mirror_max_width() -> int:
     try:
         return max(0, min(3840, int(os.environ.get("MOBILE_MIRROR_MAX_WIDTH", "0"))))
@@ -235,43 +170,16 @@ def mirror_format() -> str:
 
 
 def mirror_backend() -> str:
-    raw = (os.environ.get("MOBILE_MIRROR_BACKEND") or "auto").strip().lower()
-    if raw not in ("auto", "scrcpy_ws", "screencap"):
-        return "auto"
-    return raw
-
-
-def scrcpy_auto_fallback_screencap() -> bool:
-    """scrcpy 客户端长时间无画面时是否自动降级为 adb screencap（默认否）。"""
-    raw = (os.environ.get("MOBILE_SCRCPY_AUTO_FALLBACK") or "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
-
-
-def scrcpy_bridge_port() -> int:
-    try:
-        return max(1024, min(65535, int(os.environ.get("MOBILE_SCRCPY_BRIDGE_PORT", "8767"))))
-    except ValueError:
-        return 8767
-
-
-def scrcpy_bridge_url(client_host: str = "") -> str:
-    port = scrcpy_bridge_port()
-    host = (
-        (client_host or "").strip()
-        or (os.environ.get("MOBILE_SCRCPY_BRIDGE_PUBLIC_HOST") or "").strip()
-        or (os.environ.get("MOBILE_SCRCPY_BRIDGE_HOST") or "").strip()
-        or "127.0.0.1"
-    )
-    return f"ws://{host}:{port}"
+    """投屏后端（scrcpy 已下线，仅保留 screencap）。"""
+    return "screencap"
 
 
 def resolve_mirror_backend(udid: str = "") -> str:
     """[投屏已下线] 统一使用截图模式。"""
     del udid
-    backend = mirror_backend()
-    if backend != "auto":
-        return backend
     return "screencap"
+
+
 def default_device_name() -> str:
     cfg = _load_mobile_defaults()
     return (
@@ -419,16 +327,9 @@ def public_config() -> Dict[str, Any]:
         "agent_ws_url": _mobile_agent_ws_public(),
         "mirror_backend": mirror_backend(),
         "mirror_fps": mirror_fps(),
-        "scrcpy_mirror_fps": scrcpy_mirror_fps(),
-        "scrcpy_max_size": scrcpy_max_size(),
-        "scrcpy_available": scrcpy_available(),
-        "scrcpy_path": scrcpy_path(),
-        "scrcpy_bridge_port": scrcpy_bridge_port(),
-        "device_scrcpy_ws": device_scrcpy_ws_enabled(),
-        "scrcpy_auto_fallback": scrcpy_auto_fallback_screencap(),
         "hint": (
             "连接真机 USB、无线调试或模拟器后点击「连接设备」。"
-            "推荐在插件市场安装 scrcpy 获得高帧率画布投屏；录制仍走手机端助手。"
+            "录制请使用手机端助手 APK。"
         ),
         "auto_start_appium": False,
     }

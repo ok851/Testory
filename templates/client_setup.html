@@ -1,13 +1,12 @@
 {% extends "auth_shell.html" %}
 {% block title %}首次配置 · {{ product_name }}{% endblock %}
 
-{% block auth_top_right %}
-{% if setup_complete %}
-<a href="/" style="color:#a5b4fc;font-size:0.9rem">进入工作台 →</a>
-{% endif %}
-{% endblock %}
-
 {% block auth_content %}
+{% if setup_complete %}
+<div style="width:min(520px,100%);text-align:right;margin-bottom:0.5rem">
+    <a href="/" style="color:#a5b4fc;font-size:0.9rem">进入工作台 →</a>
+</div>
+{% endif %}
 <div class="testory-auth-card" style="width:min(520px,100%)">
     <div class="testory-auth-card-header">
         <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" width="56" height="56" style="margin:0 auto">

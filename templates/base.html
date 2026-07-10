@@ -6,13 +6,15 @@
     <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui4">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui5">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-upload.css') }}?v=1">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui4">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui4">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui5">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui5">
+    {% if is_client or is_tauri %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=5">
+    {% endif %}
     {% if is_client %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=1">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-layout.css') }}?v=1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-layout.css') }}?v=2">
     {% endif %}
     <script>
         (function () {
@@ -619,6 +621,75 @@
                 tc_import_steps_line: '创建步骤: {n} 个',
                 tc_import_warn_line: '警告: {n} 条',
                 tc_import_fail: '导入失败: ',
+                tc_hierarchy_path: '项目 → 单元 → 用例 → 步骤',
+                tc_batch_reuse_session: '共享登录态（同批复用 Cookie / Token）',
+                tc_batch_skip_dup_login: '业务用例跳过重复登录步骤',
+                tc_units_title: '测试单元',
+                tc_btn_new_unit_title: '新建单元',
+                tc_units_loading: '加载中…',
+                tc_lbl_unit: '所属单元',
+                tc_lbl_platform: '测试类型',
+                tc_platform_web: 'Web 应用',
+                tc_platform_android: '移动应用 (Android)',
+                tc_platform_desktop: '桌面应用',
+                tc_modal_edit_unit: '编辑测试单元',
+                tc_lbl_unit_name: '单元名称 *',
+                tc_ph_unit_name: '如：登录模块、订单流程',
+                tc_lbl_unit_desc: '单元描述',
+                tc_ph_unit_desc: '可选，说明该单元包含的测试范围',
+                tc_export_yaml_preview: 'YAML 预览（当前筛选）',
+                tc_yaml_preview: 'YAML预览',
+                tc_yaml_preview_title: 'YAML 预览',
+                tc_yaml_preview_fail: '预览失败',
+                tc_copy_content: '复制内容',
+                tc_unit_all: '全部用例',
+                tc_unit_ungrouped: '未分组',
+                tc_ttl_edit_unit: '编辑单元',
+                tc_ttl_del_unit: '删除单元',
+                tc_prompt_unit_name: '请输入单元名称（如：登录模块、订单流程）',
+                tc_unit_create_fail: '创建单元失败',
+                tc_unit_not_found: '单元不存在或已删除',
+                tc_unit_name_req: '请输入单元名称',
+                tc_unit_update_fail: '更新单元失败',
+                tc_unit_del_confirm_full: '确定删除单元「{name}」吗？\n\n该单元下有 {count} 个用例，删除后这些用例将变为「未分组」。',
+                tc_unit_del_confirm_simple: '确定删除单元「{name}」吗？',
+                tc_unit_del_fail: '删除单元失败',
+                tc_unit_load_fail: '单元加载失败',
+                tc_project_info_tpl: '当前项目：{name}',
+                tc_load_fail_retry: '加载失败，请刷新',
+                tc_page_info: '共 {total} 条，当前 {start}–{end} 条（{size} 条/页）',
+                tc_pg_first: '首页',
+                tc_pg_prev: '上一页',
+                tc_pg_next: '下一页',
+                tc_pg_last: '末页',
+                tc_case_unit_label: '单元：',
+                tc_alert_bad_project: '无效的项目',
+                tc_create_fail: '创建失败：',
+                tc_unknown_err: '未知错误',
+                tc_update_fail: '更新失败',
+                tc_del_fail: '删除失败',
+                tc_import_ok_detail: '导入成功，创建用例 {n} 个',
+                tc_defect_created_count: '创建缺陷 {n} 个',
+                tc_run_busy: '有用例正在执行，请等待完成后再批量运行',
+                tc_run_busy_single: '有用例正在执行，请等待完成',
+                tc_run_success: '执行成功',
+                tc_duration: '耗时',
+                tc_run_stopped: '已停止执行',
+                tc_run_failed: '执行失败',
+                tc_error_label: '错误',
+                tc_lock_busy: '上一个任务正在清理中，请稍候再试',
+                tc_banner_starting: '正在启动用例执行...',
+                tc_banner_stopping: '正在停止...',
+                tc_stopping: '停止中...',
+                tc_batch_summary: '执行摘要',
+                tc_batch_total: '总',
+                tc_batch_success: '成功',
+                tc_batch_failed: '失败',
+                tc_batch_incomplete: '批量执行未完成',
+                tc_status_label: '状态',
+                tc_status_success: '成功',
+                tc_status_stopped: '已停止',
+                tc_status_failed: '失败',
                 steps_dyn_url: 'URL',
                 steps_dyn_input_val: '输入值',
                 steps_dyn_expected_opt: '预期文本 (可选)',
@@ -1405,6 +1476,75 @@
                 tc_import_steps_line: 'Steps created: {n}',
                 tc_import_warn_line: 'Warnings: {n}',
                 tc_import_fail: 'Import failed: ',
+                tc_hierarchy_path: 'Project → Unit → Case → Step',
+                tc_batch_reuse_session: 'Share session (reuse Cookie / Token)',
+                tc_batch_skip_dup_login: 'Skip duplicate login for business cases',
+                tc_units_title: 'Test units',
+                tc_btn_new_unit_title: 'New unit',
+                tc_units_loading: 'Loading…',
+                tc_lbl_unit: 'Unit',
+                tc_lbl_platform: 'Platform',
+                tc_platform_web: 'Web',
+                tc_platform_android: 'Mobile (Android)',
+                tc_platform_desktop: 'Desktop',
+                tc_modal_edit_unit: 'Edit unit',
+                tc_lbl_unit_name: 'Unit name *',
+                tc_ph_unit_name: 'e.g. Login, Checkout',
+                tc_lbl_unit_desc: 'Description',
+                tc_ph_unit_desc: 'Optional — what this unit covers',
+                tc_export_yaml_preview: 'YAML preview (filtered)',
+                tc_yaml_preview: 'YAML',
+                tc_yaml_preview_title: 'YAML preview',
+                tc_yaml_preview_fail: 'Preview failed',
+                tc_copy_content: 'Copy',
+                tc_unit_all: 'All cases',
+                tc_unit_ungrouped: 'Ungrouped',
+                tc_ttl_edit_unit: 'Edit unit',
+                tc_ttl_del_unit: 'Delete unit',
+                tc_prompt_unit_name: 'Enter a unit name (e.g. Login, Checkout)',
+                tc_unit_create_fail: 'Failed to create unit',
+                tc_unit_not_found: 'Unit not found or deleted',
+                tc_unit_name_req: 'Unit name is required',
+                tc_unit_update_fail: 'Failed to update unit',
+                tc_unit_del_confirm_full: 'Delete unit "{name}"?\n\n{count} case(s) will become "Ungrouped".',
+                tc_unit_del_confirm_simple: 'Delete unit "{name}"?',
+                tc_unit_del_fail: 'Failed to delete unit',
+                tc_unit_load_fail: 'Failed to load units',
+                tc_project_info_tpl: 'Project: {name}',
+                tc_load_fail_retry: 'Failed to load — please refresh',
+                tc_page_info: '{total} total, showing {start}–{end} ({size}/page)',
+                tc_pg_first: 'First',
+                tc_pg_prev: 'Prev',
+                tc_pg_next: 'Next',
+                tc_pg_last: 'Last',
+                tc_case_unit_label: 'Unit: ',
+                tc_alert_bad_project: 'Invalid project',
+                tc_create_fail: 'Create failed: ',
+                tc_unknown_err: 'Unknown error',
+                tc_update_fail: 'Update failed',
+                tc_del_fail: 'Delete failed',
+                tc_import_ok_detail: 'Imported — {n} case(s) created',
+                tc_defect_created_count: '{n} defect(s) created',
+                tc_run_busy: 'A case is running — please wait for it to finish',
+                tc_run_busy_single: 'A case is running — please wait',
+                tc_run_success: 'Run succeeded',
+                tc_duration: 'Duration',
+                tc_run_stopped: 'Run stopped',
+                tc_run_failed: 'Run failed',
+                tc_error_label: 'Error',
+                tc_lock_busy: 'Previous task is still cleaning up — please try again shortly',
+                tc_banner_starting: 'Starting case execution…',
+                tc_banner_stopping: 'Stopping…',
+                tc_stopping: 'Stopping…',
+                tc_batch_summary: 'Summary',
+                tc_batch_total: 'Total',
+                tc_batch_success: 'Passed',
+                tc_batch_failed: 'Failed',
+                tc_batch_incomplete: 'Batch run incomplete',
+                tc_status_label: 'Status',
+                tc_status_success: 'Passed',
+                tc_status_stopped: 'Stopped',
+                tc_status_failed: 'Failed',
                 steps_dyn_url: 'URL',
                 steps_dyn_input_val: 'Input value',
                 steps_dyn_expected_opt: 'Expected text (optional)',
@@ -1987,7 +2127,10 @@
                 const caseData = pack.case || {};
                 const dsData = pack.dataset || {};
 
-                if (!ok) {
+                // 前端本地有运行中的任务（fetch 仍未返回），即使后端尚未设 active 也保持 banner
+                var localInFlight = !!(window.__uatCaseRunInFlight);
+
+                if (!ok && !localInFlight) {
                     _setGlobalRunBanner(false);
                     return false;
                 }
@@ -1995,7 +2138,7 @@
                 if (caseData.success && caseData.active) {
                     const total = caseData.total_steps || 0;
                     const done = caseData.completed_steps || 0;
-                    const msg = caseData.message || `单用例执行中：${done}/${total}`;
+                    const msg = caseData.message || (window.__uatCaseRunStopping ? '正在停止...' : `单用例执行中：${done}/${total}`);
                     _setGlobalRunBanner(true, msg, 'case');
                     return true;
                 }
@@ -2009,10 +2152,18 @@
                     return true;
                 }
 
+                // 后端报告无活跃任务，但前端 fetch 仍未返回（启动阶段 / 停止中）
+                if (localInFlight) {
+                    var pendingMsg = window.__uatCaseRunStopping ? '正在停止...' : '执行中...';
+                    _setGlobalRunBanner(true, pendingMsg, 'case');
+                    return true;
+                }
+
                 _setGlobalRunBanner(false);
                 return false;
             } catch (e) {
-                // 静默失败，避免影响页面主功能
+                // 运行中出错时保持 banner，避免闪烁
+                if (window.__uatCaseRunInFlight) return true;
                 _setGlobalRunBanner(false);
                 return false;
             }
@@ -2032,7 +2183,7 @@
                 delay = 45000;
             } else {
                 const active = await _pollGlobalRunBanner();
-                delay = active ? 2000 : 15000;
+                delay = active ? 1500 : 12000;
             }
             _globalRunBannerTimer = setTimeout(_globalRunPollTick, delay);
         }
@@ -2043,8 +2194,12 @@
                 if (_globalRunBannerTaskType === 'case') endpoint = '/api/cases/current-run/stop';
                 if (_globalRunBannerTaskType === 'dataset') endpoint = '/api/datasets/current-run/stop';
                 if (!endpoint) return;
+                // 标记正在停止，banner 保持显示"正在停止..."
+                window.__uatCaseRunStopping = true;
+                _setGlobalRunBanner(true, '正在停止...', _globalRunBannerTaskType);
                 await fetch(endpoint, { method: 'POST' });
-                _setGlobalRunBanner(false);
+                // 不立即隐藏 banner，由轮询在任务真正结束后自动隐藏
+                _globalRunPollKick();
             } catch (e) {
                 console.error('停止全局任务失败', e);
             }
@@ -2150,9 +2305,9 @@
     </script>
     <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui4" defer></script>
     {% if is_tauri %}
-    <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=2"></script>
+    <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=3"></script>
     {% elif is_client %}
-    <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=1" defer></script>
+    <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=2" defer></script>
     {% endif %}
     {% block scripts %}{% endblock %}
 </body>
