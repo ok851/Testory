@@ -1,0 +1,901 @@
+{% extends "base.html" %}
+{% block title %}跨端联动编排 - {{ product_name }}{% endblock %}
+{% block head %}
+<style>
+    .ce-page {
+        background: linear-gradient(160deg, #0f172a 0%, #1e1b4b 45%, #312e81 100%);
+        min-height: calc(100vh - 72px);
+        padding: 20px 16px 28px;
+        box-sizing: border-box;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    .ce-shell {
+        max-width: 1600px;
+        margin: 0 auto;
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45);
+        background: #fff;
+        display: flex;
+        flex-direction: column;
+        min-height: calc(100vh - 64px);
+    }
+    .ce-topbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 22px 26px;
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+        color: #fff;
+        flex-shrink: 0;
+    }
+    .ce-topbar__left { display: flex; gap: 14px; align-items: flex-start; flex: 1; min-width: 0; }
+    .ce-back {
+        flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px;
+        background: rgba(255,255,255,0.15); color: #fff; font-size: 18px;
+        display: flex; align-items: center; justify-content: center; text-decoration: none;
+        transition: background 0.2s, transform 0.15s;
+    }
+    .ce-back:hover { background: rgba(255,255,255,0.25); color: #fff; transform: scale(1.02); }
+    .ce-topbar__titles h3 { margin: 0 0 6px; font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
+    .ce-topbar__titles p { margin: 0; font-size: 13px; opacity: 0.85; line-height: 1.5; }
+    .ce-topbar__right {
+        display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    }
+    .ce-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 5px 12px; border-radius: 999px;
+        background: rgba(255,255,255,0.18); font-size: 12px; font-weight: 500;
+    }
+    .ce-project-btn {
+        cursor: pointer; border: 1px solid rgba(255,255,255,0.3); color: #fff;
+        transition: background 0.2s;
+    }
+    .ce-project-btn:hover { background: rgba(255,255,255,0.28); }
+
+    .ce-project-dropdown {
+        position: absolute; top: 58px; right: 26px; z-index: 100;
+        width: 340px; background: #fff; border-radius: 14px;
+        box-shadow: 0 16px 48px rgba(0,0,0,0.2);
+        overflow: hidden; border: 1px solid #e2e8f0;
+    }
+    .ce-project-dropdown__search {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px; border-bottom: 1px solid #f1f5f9;
+        background: #f8fafc;
+    }
+    .ce-project-search-input {
+        flex: 1; border: none; outline: none; background: transparent;
+        font-size: 13px; color: #1e293b; padding: 4px 0;
+    }
+    .ce-project-search-input::placeholder { color: #94a3b8; }
+    .ce-project-search-count {
+        font-size: 10px; color: #94a3b8; white-space: nowrap; flex-shrink: 0;
+    }
+    .ce-project-dropdown__list {
+        max-height: 280px; overflow-y: auto; padding: 4px 0;
+    }
+    .ce-project-dropdown__loading {
+        padding: 20px; text-align: center; color: #94a3b8; font-size: 12px;
+    }
+    .ce-project-item {
+        padding: 10px 16px; cursor: pointer; font-size: 13px; color: #1e293b;
+        transition: background 0.12s; display: flex; align-items: center; gap: 10px;
+        border-left: 3px solid transparent;
+    }
+    .ce-project-item:hover { background: #eef2ff; border-left-color: #818cf8; }
+    .ce-project-item.active { background: #eef2ff; border-left-color: #6366f1; font-weight: 600; }
+    .ce-project-item__icon {
+        width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 13px; color: #fff;
+    }
+    .ce-project-item__info { flex: 1; min-width: 0; }
+    .ce-project-item__name {
+        font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ce-project-item__desc {
+        font-size: 11px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        margin-top: 1px;
+    }
+    .ce-project-item__id {
+        font-size: 10px; color: #cbd5e1; flex-shrink: 0;
+    }
+    .ce-project-empty {
+        padding: 24px 16px; text-align: center; color: #94a3b8; font-size: 13px;
+    }
+    .ce-project-empty i { font-size: 22px; display: block; margin-bottom: 8px; opacity: 0.4; }
+
+    /* 输入区域 */
+    .ce-input-area {
+        padding: 20px 26px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e2e8f0;
+        flex-shrink: 0;
+    }
+    .ce-input-row {
+        display: flex; gap: 12px; align-items: flex-end;
+    }
+    .ce-input-row textarea {
+        flex: 1; min-height: 68px; max-height: 120px;
+        border: 1.5px solid #cbd5e1; border-radius: 14px;
+        padding: 14px 16px; font-size: 14px; line-height: 1.6;
+        resize: vertical; font-family: inherit;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .ce-input-row textarea:focus {
+        outline: none; border-color: #6366f1;
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+    }
+    .ce-input-row textarea::placeholder { color: #94a3b8; }
+    .ce-btn {
+        padding: 10px 22px; border-radius: 12px; border: none; cursor: pointer;
+        font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 7px;
+        transition: all 0.2s; white-space: nowrap;
+    }
+    .ce-btn--primary {
+        background: linear-gradient(135deg, #4f46e5, #6366f1);
+        color: #fff; box-shadow: 0 4px 14px rgba(99,102,241,0.3);
+    }
+    .ce-btn--primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(99,102,241,0.4); }
+    .ce-btn--primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+    .ce-btn--ghost {
+        background: #fff; color: #4f46e5; border: 1.5px solid #c7d2fe;
+    }
+    .ce-btn--ghost:hover { background: #eef2ff; }
+    .ce-quick-cmds {
+        display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;
+    }
+    .ce-quick-cmd {
+        padding: 6px 14px; border-radius: 999px; font-size: 12px;
+        background: #fff; border: 1px solid #e2e8f0; color: #475569;
+        cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    }
+    .ce-quick-cmd:hover { border-color: #6366f1; color: #4f46e5; background: #eef2ff; }
+
+    /* 阶段面板 */
+    .ce-stage-panels {
+        flex: 1; display: flex; gap: 12px; padding: 16px 20px;
+        overflow-x: auto; overflow-y: hidden; min-height: 0;
+    }
+    .ce-stage-card {
+        flex: 0 0 280px; border-radius: 16px; border: 1.5px solid #e2e8f0;
+        background: #fff; display: flex; flex-direction: column;
+        transition: border-color 0.3s, box-shadow 0.3s; min-height: 200px;
+    }
+    .ce-stage-card--running { border-color: #6366f1; box-shadow: 0 4px 16px rgba(99,102,241,0.2); }
+    .ce-stage-card--passed { border-color: #10b981; background: #f0fdf4; }
+    .ce-stage-card--failed { border-color: #ef4444; background: #fef2f2; }
+    .ce-stage-card--cleanup { border-color: #f59e0b; background: #fffbeb; }
+    .ce-stage-card--api { border-left: 4px solid #8b5cf6; }
+    .ce-stage-card--web { border-left: 4px solid #3b82f6; }
+    .ce-stage-card--mobile { border-left: 4px solid #10b981; }
+    .ce-stage-card--desktop { border-left: 4px solid #f59e0b; }
+    .ce-stage-header {
+        padding: 14px 16px 10px; border-bottom: 1px solid #f1f5f9;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-shrink: 0;
+    }
+    .ce-stage-header__title {
+        font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 6px;
+    }
+    .ce-stage-badge {
+        font-size: 10px; padding: 2px 8px; border-radius: 999px;
+        font-weight: 600; text-transform: uppercase;
+    }
+    .ce-stage-badge--api { background: #ede9fe; color: #7c3aed; }
+    .ce-stage-badge--web { background: #dbeafe; color: #2563eb; }
+    .ce-stage-badge--mobile { background: #d1fae5; color: #059669; }
+    .ce-stage-badge--desktop { background: #fef3c7; color: #d97706; }
+    .ce-stage-body {
+        padding: 12px 16px; flex: 1; overflow-y: auto;
+        font-size: 12px; color: #475569; line-height: 1.6; min-height: 80px;
+    }
+    .ce-stage-body .step-desc { margin-bottom: 8px; }
+    .ce-stage-body .step-var {
+        font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 11px;
+        background: #f1f5f9; padding: 2px 6px; border-radius: 4px;
+        color: #6366f1; margin: 2px 0; display: inline-block;
+    }
+    .ce-stage-footer {
+        padding: 12px 16px; border-top: 1px solid #f1f5f9;
+        display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+    }
+    .ce-status-dot {
+        width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+    }
+    .ce-status-dot--idle { background: #cbd5e1; }
+    .ce-status-dot--running { background: #6366f1; animation: ce-pulse 1s infinite; }
+    .ce-status-dot--passed { background: #10b981; }
+    .ce-status-dot--failed { background: #ef4444; }
+    .ce-status-dot--skipped { background: #f59e0b; }
+    @keyframes ce-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .ce-status-text { font-size: 11px; font-weight: 600; }
+    .ce-step-time { font-size: 10px; color: #94a3b8; margin-left: auto; }
+
+    /* 日志面板 */
+    .ce-log-panel {
+        border-top: 1px solid #e2e8f0; max-height: 260px;
+        overflow-y: auto; background: #0f172a; color: #e2e8f0;
+        font-family: 'Cascadia Code', 'Fira Code', monospace;
+        font-size: 12px; padding: 14px 20px; flex-shrink: 0;
+    }
+    .ce-log-line { padding: 3px 0; display: flex; gap: 10px; line-height: 1.5; }
+    .ce-log-line__ts { color: #64748b; flex-shrink: 0; font-size: 10px; min-width: 68px; }
+    .ce-log-line__lvl { flex-shrink: 0; font-size: 10px; min-width: 44px; }
+    .ce-log-line__lvl--info { color: #38bdf8; }
+    .ce-log-line__lvl--ok { color: #4ade80; }
+    .ce-log-line__lvl--err { color: #f87171; }
+    .ce-log-line__lvl--warn { color: #fbbf24; }
+    .ce-log-line__msg { word-break: break-all; }
+
+    /* 结果摘要 */
+    .ce-summary-bar {
+        padding: 14px 26px; background: #f8fafc; border-top: 1px solid #e2e8f0;
+        display: flex; align-items: center; gap: 20px; flex-shrink: 0; flex-wrap: wrap;
+    }
+    .ce-summary-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .ce-summary-item .num { font-weight: 700; font-size: 18px; }
+    .ce-summary-item .num--ok { color: #10b981; }
+    .ce-summary-item .num--fail { color: #ef4444; }
+    .ce-summary-item .num--skip { color: #f59e0b; }
+
+    /* 空状态 */
+    .ce-empty {
+        flex: 1; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; color: #94a3b8; padding: 40px;
+    }
+    .ce-empty i { font-size: 48px; margin-bottom: 16px; opacity: 0.4; }
+    .ce-empty p { font-size: 14px; margin: 4px 0; }
+
+    /* 使用指南 */
+    .ce-guide-toggle {
+        display: flex; align-items: center; gap: 8px;
+        margin-top: 10px; padding: 8px 12px; border-radius: 10px;
+        background: #fffbeb; border: 1px solid #fde68a;
+        font-size: 12px; color: #92400e; cursor: pointer;
+        transition: background 0.15s;
+    }
+    .ce-guide-toggle:hover { background: #fef3c7; }
+    .ce-guide-panel {
+        margin-top: 8px; padding: 16px; border-radius: 12px;
+        background: #f8fafc; border: 1px solid #e2e8f0;
+    }
+    .ce-guide-grid {
+        display: grid; grid-template-columns: 1fr 1fr;
+        gap: 10px; margin-bottom: 12px;
+    }
+    @media (max-width: 900px) {
+        .ce-guide-grid { grid-template-columns: 1fr; }
+    }
+    .ce-guide-card {
+        display: flex; gap: 10px; padding: 10px 12px;
+        background: #fff; border-radius: 10px; border: 1px solid #f1f5f9;
+    }
+    .ce-guide-card__icon {
+        width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 13px; font-weight: 700;
+    }
+    .ce-guide-card__body strong { display: block; font-size: 12px; color: #1e293b; margin-bottom: 2px; }
+    .ce-guide-card__body p { margin: 0; font-size: 11px; color: #64748b; line-height: 1.5; }
+    .ce-guide-example {
+        padding: 10px 14px; background: #fff; border-radius: 10px;
+        border: 1px solid #e2e8f0; font-size: 12px;
+    }
+    .ce-guide-example strong { display: block; color: #1e293b; margin-bottom: 6px; }
+    .ce-guide-example code {
+        display: block; font-family: 'Cascadia Code', 'Fira Code', monospace;
+        font-size: 11px; color: #475569; line-height: 1.7;
+        white-space: pre-wrap; word-break: break-word;
+    }
+
+    /* 场景管理 */
+    .ce-saved-scenarios {
+        padding: 16px 26px; background: #fff; border-top: 1px solid #e2e8f0;
+        flex-shrink: 0; max-height: 200px; overflow-y: auto;
+    }
+    .ce-saved-scenarios h4 {
+        font-size: 12px; font-weight: 700; color: #64748b;
+        text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 10px;
+    }
+    .ce-scenario-row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 10px 14px; border-radius: 10px; border: 1px solid #e2e8f0;
+        margin-bottom: 8px; cursor: pointer; transition: all 0.15s;
+        font-size: 13px;
+    }
+    .ce-scenario-row:hover { border-color: #6366f1; background: #eef2ff; }
+    .ce-scenario-row__name { font-weight: 600; color: #1e293b; flex: 1; }
+    .ce-scenario-row__meta { font-size: 11px; color: #94a3b8; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="ce-page">
+    <div class="ce-shell">
+        <div class="ce-topbar">
+            <div class="ce-topbar__left">
+                <a href="/ai-hub" class="ce-back" title="返回AI中心"><i class="fas fa-arrow-left"></i></a>
+                <div class="ce-topbar__titles">
+                    <h3>跨端联动编排</h3>
+                    <p>自然语言描述跨端场景，AI 自动分解为 API → Web → Mobile → Desktop 多阶段任务，端到端变量透传与断言。</p>
+                </div>
+            </div>
+            <div class="ce-topbar__right">
+                <button class="ce-badge ce-project-btn" id="ceProjectBadge" onclick="CE.selectProject()">
+                    <i class="fas fa-folder"></i> 未选择项目 <i class="fas fa-chevron-down" style="font-size:9px;margin-left:4px;"></i>
+                </button>
+                <div class="ce-project-dropdown" id="ceProjectDropdown" style="display:none;">
+                    <div class="ce-project-dropdown__search">
+                        <i class="fas fa-search" style="color:#94a3b8;font-size:12px;flex-shrink:0;"></i>
+                        <input type="text" id="ceProjectSearchInput" placeholder="搜索项目名称..." class="ce-project-search-input" autocomplete="off" />
+                        <span class="ce-project-search-count" id="ceProjectSearchCount"></span>
+                    </div>
+                    <div class="ce-project-dropdown__list" id="ceProjectList">
+                        <div class="ce-project-dropdown__loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="ce-input-area">
+            <div class="ce-input-row">
+                <textarea id="ceScenarioInput" placeholder="用自然语言描述跨端测试流程，例如：&#10;&#10;1. 通过 API 创建用户并获取 token&#10;2. 用 token 在浏览器中登录&#10;3. 验证浏览器端用户名显示正确&#10;4. 清理阶段：通过 API 删除测试用户"></textarea>
+                <button class="ce-btn ce-btn--primary" id="ceDecomposeBtn" onclick="CE.decompose()">
+                    <i class="fas fa-brain"></i> AI 分解
+                </button>
+            </div>
+            <div class="ce-guide-toggle" onclick="CE.toggleGuide()">
+                <i class="fas fa-lightbulb" style="color:#f59e0b;"></i>
+                <span>不知道怎么描述？点击查看编写指南</span>
+                <i class="fas fa-chevron-down" id="ceGuideArrow" style="margin-left:auto;font-size:10px;transition:transform 0.2s;"></i>
+            </div>
+            <div class="ce-guide-panel" id="ceGuidePanel" style="display:none;">
+                <div class="ce-guide-grid">
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#ede9fe;color:#7c3aed;">1</div>
+                        <div class="ce-guide-card__body">
+                            <strong>按顺序列出步骤</strong>
+                            <p>用 "1. ... 2. ... 3. ..." 编号描述业务流程，AI 会按顺序分解为执行阶段。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#dbeafe;color:#2563eb;">2</div>
+                        <div class="ce-guide-card__body">
+                            <strong>指定操作平台</strong>
+                            <p>明确每个步骤在哪个平台执行：API 接口、浏览器页面、移动端 App、桌面应用。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#d1fae5;color:#059669;">3</div>
+                        <div class="ce-guide-card__body">
+                            <strong>说明数据流转</strong>
+                            <p>如 "API 返回的 token 用于浏览器登录"——AI 会自动处理变量透传。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#fef3c7;color:#d97706;">4</div>
+                        <div class="ce-guide-card__body">
+                            <strong>添加清理步骤</strong>
+                            <p>如 "通过 API 删除测试数据"，AI 会自动标记为清理阶段，执行后自动运行。</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="ce-guide-example">
+                    <strong>示例 — 完整描述：</strong>
+                    <code>1. 通过 API 注册新用户，记录返回的 userId 和 token<br>2. 在浏览器中打开登录页，用 token 注入浏览器登录<br>3. 验证首页显示的用户名与注册时一致<br>4. 在移动端用同一账号登录，检查订单列表一致<br>5. 清理：通过 API 删除测试用户</code>
+                </div>
+            </div>
+            <div class="ce-quick-cmds">
+                <button class="ce-quick-cmd" onclick="CE.loadTemplate('signup_flow')" title="API注册 → 浏览器登录 → 状态验证">📝 注册登录全链路</button>
+                <button class="ce-quick-cmd" onclick="CE.loadTemplate('order_sync')" title="API下单 → 浏览器验证 → 移动端核验 → 清理">🛒 订单同步验证</button>
+                <button class="ce-quick-cmd" onclick="CE.loadTemplate('data_consistency')" title="API查余额 → 桌面端OCR提取 → 断言一致性">📊 数据一致性检查</button>
+                <button class="ce-quick-cmd" onclick="CE.loadTemplate('mobile_desktop')" title="移动端截图 → 桌面端截图 → 断言两端数据一致">📱💻 移动端与桌面端对比</button>
+            </div>
+        </div>
+
+        <div class="ce-stage-panels" id="ceStagePanels">
+            <div class="ce-empty" id="ceEmptyState">
+                <i class="fas fa-cubes"></i>
+                <p>在上方输入跨端场景描述</p>
+                <p style="font-size:12px;opacity:0.7;">AI 将自动分解为多阶段执行计划</p>
+            </div>
+        </div>
+
+        <div class="ce-log-panel" id="ceLogPanel" style="display:none;">
+            <div class="ce-log-line">
+                <span class="ce-log-line__ts">--:--:--</span>
+                <span class="ce-log-line__lvl ce-log-line__lvl--info">INFO</span>
+                <span class="ce-log-line__msg">等待场景输入...</span>
+            </div>
+        </div>
+
+        <div class="ce-summary-bar" id="ceSummaryBar" style="display:none;">
+            <div class="ce-summary-item">
+                <span class="num num--ok" id="ceSummaryPassed">0</span>
+                <span>通过</span>
+            </div>
+            <div class="ce-summary-item">
+                <span class="num num--fail" id="ceSummaryFailed">0</span>
+                <span>失败</span>
+            </div>
+            <div class="ce-summary-item">
+                <span class="num num--skip" id="ceSummarySkipped">0</span>
+                <span>跳过</span>
+            </div>
+            <button class="ce-btn ce-btn--primary" id="ceExecuteBtn" onclick="CE.execute()" disabled>
+                <i class="fas fa-play"></i> 执行全部阶段
+            </button>
+            <button class="ce-btn ce-btn--ghost" id="ceSaveBtn" onclick="CE.saveScenario()" disabled>
+                <i class="fas fa-save"></i> 保存场景
+            </button>
+        </div>
+
+        <div class="ce-saved-scenarios" id="ceSavedScenarios" style="display:none;">
+            <h4>已保存的场景</h4>
+            <div id="ceSavedList"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function() {
+    var CE = window.CE = {};
+
+    CE.plan = null;
+    CE.projectId = null;
+    CE.projectName = null;
+    CE._allProjects = [];
+
+    CE.PROJECT_COLORS = [
+        '#6366f1', '#8b5cf6', '#3b82f6', '#06b6d4',
+        '#10b981', '#f59e0b', '#ef4444', '#ec4899',
+    ];
+
+    CE.init = function() {
+        var urlParams = new URLSearchParams(window.location.search);
+        CE.projectId = urlParams.get('project_id') || localStorage.getItem('last_project_id');
+        if (CE.projectId) {
+            CE.projectName = localStorage.getItem('last_project_name') || null;
+            CE.updateProjectBadge(CE.projectId, CE.projectName);
+        }
+        CE.loadSavedScenarios();
+    };
+
+    CE.toggleGuide = function() {
+        var panel = document.getElementById('ceGuidePanel');
+        var arrow = document.getElementById('ceGuideArrow');
+        if (!panel) return;
+        if (panel.style.display === 'none' || !panel.style.display) {
+            panel.style.display = 'block';
+            if (arrow) arrow.style.transform = 'rotate(180deg)';
+        } else {
+            panel.style.display = 'none';
+            if (arrow) arrow.style.transform = 'rotate(0deg)';
+        }
+    };
+
+    CE.updateProjectBadge = function(pid, pname) {
+        var badge = document.getElementById('ceProjectBadge');
+        var label = pname || ('项目 #' + pid);
+        if (label.length > 12) label = label.slice(0, 12) + '...';
+        badge.innerHTML = '<i class="fas fa-folder"></i> ' + CE.escapeHtml(label) + ' <i class="fas fa-chevron-down" style="font-size:9px;margin-left:4px;"></i>';
+        localStorage.setItem('last_project_id', pid);
+        if (pname) localStorage.setItem('last_project_name', pname);
+        CE.projectId = pid;
+        CE.projectName = pname;
+    };
+
+    CE.selectProject = function() {
+        var dd = document.getElementById('ceProjectDropdown');
+        if (dd.style.display === 'block') {
+            dd.style.display = 'none';
+            return;
+        }
+        dd.style.display = 'block';
+        CE.loadProjects();
+    };
+
+    CE.loadProjects = function() {
+        var list = document.getElementById('ceProjectList');
+        var countEl = document.getElementById('ceProjectSearchCount');
+        var input = document.getElementById('ceProjectSearchInput');
+        list.innerHTML = '<div class="ce-project-dropdown__loading"><i class="fas fa-spinner fa-spin"></i> 加载项目列表...</div>';
+        if (countEl) countEl.textContent = '';
+
+        fetch('/api/projects')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var projects = (data && data.projects) ? data.projects : [];
+                CE._allProjects = projects;
+                input.value = '';
+                CE.filterProjects('');
+                input.focus();
+                input.addEventListener('input', function() {
+                    CE.filterProjects(this.value);
+                });
+            })
+            .catch(function() {
+                list.innerHTML = '<div class="ce-project-empty"><i class="fas fa-exclamation-circle"></i>无法加载项目列表<br><small>请检查网络连接后重试</small></div>';
+                if (countEl) countEl.textContent = '';
+            });
+    };
+
+    CE.filterProjects = function(query) {
+        var list = document.getElementById('ceProjectList');
+        var countEl = document.getElementById('ceProjectSearchCount');
+        var q = (query || '').toLowerCase().trim();
+        var filtered = CE._allProjects;
+        if (q) {
+            filtered = CE._allProjects.filter(function(p) {
+                var name = (p.name || '').toLowerCase();
+                var desc = (p.description || '').toLowerCase();
+                var pid = String(p.id);
+                return name.indexOf(q) !== -1 || desc.indexOf(q) !== -1 || pid === q;
+            });
+        }
+        if (countEl) {
+            countEl.textContent = filtered.length + '/' + CE._allProjects.length;
+        }
+        if (!filtered.length) {
+            list.innerHTML = '<div class="ce-project-empty"><i class="fas fa-search"></i>没有匹配的项目<br><small>尝试其他关键词</small></div>';
+            return;
+        }
+        list.innerHTML = filtered.map(function(p, idx) {
+            var active = (String(p.id) === String(CE.projectId)) ? ' active' : '';
+            var color = CE.PROJECT_COLORS[idx % CE.PROJECT_COLORS.length];
+            var init = (p.name || 'P')[0].toUpperCase();
+            var desc = p.description || '';
+            if (desc.length > 40) desc = desc.slice(0, 40) + '...';
+            return '<div class="ce-project-item' + active + '" onclick="CE.pickProject(\'' + p.id + '\',\'' + CE.jsEscape(p.name || '') + '\')">' +
+                '<div class="ce-project-item__icon" style="background:' + color + ';">' + CE.escapeHtml(init) + '</div>' +
+                '<div class="ce-project-item__info">' +
+                    '<div class="ce-project-item__name">' + CE.highlightMatch(p.name || '项目 #' + p.id, q) + '</div>' +
+                    (desc ? '<div class="ce-project-item__desc">' + CE.escapeHtml(desc) + '</div>' : '') +
+                '</div>' +
+                '<span class="ce-project-item__id">#' + p.id + '</span>' +
+            '</div>';
+        }).join('');
+    };
+
+    CE.jsEscape = function(s) {
+        return (s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    };
+
+    CE.highlightMatch = function(text, query) {
+        if (!query) return CE.escapeHtml(text);
+        var escaped = CE.escapeHtml(text);
+        var qe = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        var re = new RegExp('(' + qe + ')', 'gi');
+        return escaped.replace(re, '<mark style="background:#fef08a;color:#1e293b;border-radius:2px;padding:0 1px;">$1</mark>');
+    };
+
+    CE.pickProject = function(pid, name) {
+        CE.updateProjectBadge(pid, name);
+        document.getElementById('ceProjectDropdown').style.display = 'none';
+        CE.addLog('info', '已选择: ' + (name || ('项目 #' + pid)));
+        CE.loadSavedScenarios();
+    };
+
+    document.addEventListener('click', function(e) {
+        var dd = document.getElementById('ceProjectDropdown');
+        if (!dd || dd.style.display !== 'block') return;
+        var btn = document.getElementById('ceProjectBadge');
+        if (!btn.contains(e.target) && !dd.contains(e.target)) {
+            dd.style.display = 'none';
+        }
+    });
+
+    CE.addLog = function(level, msg) {
+        var panel = document.getElementById('ceLogPanel');
+        panel.style.display = 'block';
+        var now = new Date();
+        var ts = now.toTimeString().slice(0, 8);
+        var lvlClass = {info:'info',ok:'ok',err:'err',warn:'warn'}[level] || 'info';
+        var line = document.createElement('div');
+        line.className = 'ce-log-line';
+        line.innerHTML = '<span class="ce-log-line__ts">' + ts + '</span>' +
+            '<span class="ce-log-line__lvl ce-log-line__lvl--' + lvlClass + '">' + level.toUpperCase() + '</span>' +
+            '<span class="ce-log-line__msg">' + CE.escapeHtml(msg) + '</span>';
+        panel.appendChild(line);
+        panel.scrollTop = panel.scrollHeight;
+    };
+
+    CE.escapeHtml = function(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    };
+
+    CE.loadTemplate = function(name) {
+        var templates = {
+            signup_flow: '1. 通过 API 接口注册新用户，用户名使用 {{run_id}}_{{timestamp}} 格式\n2. API 返回的 token 注入到浏览器 localStorage\n3. 在浏览器端验证登录状态，首页显示用户名\n4. 同时在移动端用 API 返回的凭证登录，验证首页一致',
+            order_sync: '1. 通过 API 创建一笔测试订单，商品为 SKU-TEST-001\n2. 在浏览器端打开订单列表页，检查新订单出现在列表中\n3. 在移动端刷新订单页，检查订单金额与 API 返回一致\n4. 清理阶段：通过 API 取消该测试订单',
+            data_consistency: '1. 通过 API 查询用户余额，记录为 {{api_balance}}\n2. 在桌面应用端打开钱包页面，截图并 OCR 提取余额数字\n3. 断言桌面端余额与 API 余额一致，误差 < 0.01',
+            mobile_desktop: '1. 在移动端打开商品详情页，截取价格和库存信息\n2. 在桌面端打开同一商品页面，截图 OCR 提取价格\n3. 断言两个端的价格和库存数据完全一致'
+        };
+        if (templates[name]) {
+            document.getElementById('ceScenarioInput').value = templates[name];
+            CE.addLog('info', '已加载模板: ' + name);
+        }
+    };
+
+    CE.decompose = function() {
+        var input = document.getElementById('ceScenarioInput').value.trim();
+        if (!input) { CE.addLog('warn', '请输入场景描述'); return; }
+
+        var btn = document.getElementById('ceDecomposeBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 分解中...';
+        CE.addLog('info', '正在调用 AI 分解场景...');
+
+        fetch('/api/ai/cross-end/decompose', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({project_id: CE.projectId, description: input})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-brain"></i> AI 分解';
+            if (data.ok) {
+                CE.plan = data.plan;
+                CE.renderPlan(data.plan);
+                CE.addLog('ok', '场景分解成功，共 ' + (data.plan.stages ? data.plan.stages.length : 0) + ' 个阶段');
+                if (data.warnings && data.warnings.length) {
+                    data.warnings.forEach(function(w) { CE.addLog('warn', w); });
+                }
+                document.getElementById('ceExecuteBtn').disabled = false;
+                document.getElementById('ceSaveBtn').disabled = false;
+                document.getElementById('ceSummaryBar').style.display = 'flex';
+            } else {
+                var errMsg = data.error || '未知错误';
+                CE.addLog('err', '分解失败: ' + errMsg);
+                if (data.warnings && data.warnings.length) {
+                    data.warnings.forEach(function(w) { CE.addLog('warn', w); });
+                }
+                if (errMsg.indexOf('LLM call failed') !== -1 || errMsg.indexOf('connection') !== -1) {
+                    CE.addLog('warn', '请确认本地 LLM 服务 (Ollama) 已启动，模型: llama3:8b-instruct');
+                }
+            }
+        })
+        .catch(function(err) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-brain"></i> AI 分解';
+            CE.addLog('err', '请求失败: ' + err.message);
+        });
+    };
+
+    CE.renderPlan = function(plan) {
+        var container = document.getElementById('ceStagePanels');
+        var emptyState = document.getElementById('ceEmptyState');
+        if (emptyState) emptyState.style.display = 'none';
+        container.innerHTML = '';
+
+        var stages = plan.stages || [];
+        if (!stages.length) {
+            container.innerHTML = '<div class="ce-empty"><i class="fas fa-cubes"></i><p>没有可执行的阶段</p></div>';
+            return;
+        }
+
+        stages.forEach(function(stage, idx) {
+            var card = CE.buildStageCard(stage, idx);
+            container.appendChild(card);
+        });
+    };
+
+    CE.buildStageCard = function(stage, idx) {
+        var card = document.createElement('div');
+        card.className = 'ce-stage-card ce-stage-card--' + (stage.layer || 'api');
+        card.id = 'ce-stage-' + (stage.stage_id || idx);
+
+        var layerBadge = (stage.layer || 'api').toUpperCase();
+        var badgeClass = 'ce-stage-badge--' + (stage.layer || 'api');
+        var cleanupLabel = stage.cleanup ? ' 🧹清理' : '';
+
+        var varsHtml = '';
+        if (stage.vars_to_store) {
+            Object.keys(stage.vars_to_store).forEach(function(k) {
+                varsHtml += '<div class="step-var">' + CE.escapeHtml(k) + ' = ' + CE.escapeHtml(stage.vars_to_store[k]) + '</div>';
+            });
+        }
+        if (stage.vars_to_read) {
+            (Array.isArray(stage.vars_to_read) ? stage.vars_to_read : []).forEach(function(v) {
+                varsHtml += '<div class="step-var">读取: ' + CE.escapeHtml(v) + '</div>';
+            });
+        }
+
+        var desc = stage.description || stage.step || JSON.stringify(stage.action || {}).slice(0, 80);
+
+        card.innerHTML =
+            '<div class="ce-stage-header">' +
+                '<span class="ce-stage-header__title">' +
+                    (idx + 1) + '. ' + CE.escapeHtml(stage.title || ('Stage ' + (stage.stage_id || idx + 1))) + cleanupLabel +
+                '</span>' +
+                '<span class="ce-stage-badge ' + badgeClass + '">' + layerBadge + '</span>' +
+            '</div>' +
+            '<div class="ce-stage-body">' +
+                '<div class="step-desc">' + CE.escapeHtml(desc) + '</div>' +
+                varsHtml +
+            '</div>' +
+            '<div class="ce-stage-footer">' +
+                '<span class="ce-status-dot ce-status-dot--idle"></span>' +
+                '<span class="ce-status-text">等待执行</span>' +
+                '<span class="ce-step-time"></span>' +
+            '</div>';
+
+        return card;
+    };
+
+    CE.updateStageStatus = function(stageId, status, detail) {
+        var card = document.getElementById('ce-stage-' + stageId);
+        if (!card) return;
+
+        var clsMap = {
+            running: 'ce-stage-card--running',
+            passed: 'ce-stage-card--passed',
+            failed: 'ce-stage-card--failed',
+            skipped: 'ce-stage-card--cleanup'
+        };
+        Object.values(clsMap).forEach(function(c) { card.classList.remove(c); });
+        if (clsMap[status]) card.classList.add(clsMap[status]);
+
+        var dot = card.querySelector('.ce-status-dot');
+        var text = card.querySelector('.ce-status-text');
+        var time = card.querySelector('.ce-step-time');
+
+        dot.className = 'ce-status-dot ce-status-dot--' + status;
+        text.textContent = {running:'执行中...', passed:'通过', failed:'失败', skipped:'跳过'}[status] || status;
+
+        if (detail && detail.elapsed_ms) {
+            time.textContent = Math.round(detail.elapsed_ms / 100) / 10 + 's';
+        }
+    };
+
+    CE.execute = function() {
+        if (!CE.plan || !CE.projectId) return;
+
+        var btn = document.getElementById('ceExecuteBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 执行中...';
+        document.getElementById('ceSummaryBar').style.display = 'flex';
+
+        if (CE.plan.stages) {
+            CE.plan.stages.forEach(function(stage) {
+                CE.updateStageStatus(stage.stage_id, 'running');
+            });
+        }
+
+        CE.addLog('info', '开始执行跨端计划: ' + (CE.plan.name || '未命名'));
+
+        fetch('/api/ai/cross-end/execute', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({project_id: CE.projectId, plan: CE.plan})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play"></i> 执行全部阶段';
+
+            if (data.ok && data.result) {
+                CE.renderExecutionResult(data.result);
+                var passed = 0, failed = 0, skipped = 0;
+                if (data.result.stage_results) {
+                    data.result.stage_results.forEach(function(sr) {
+                        if (sr.ok_assert === false) failed++;
+                        else if (sr.cleanup) skipped++;
+                        else passed++;
+                    });
+                }
+                document.getElementById('ceSummaryPassed').textContent = passed;
+                document.getElementById('ceSummaryFailed').textContent = failed;
+                document.getElementById('ceSummarySkipped').textContent = skipped;
+                CE.addLog(failed === 0 ? 'ok' : 'err',
+                    '执行完成: ' + passed + ' 通过, ' + failed + ' 失败, ' + skipped + ' 跳过');
+            } else {
+                CE.addLog('err', '执行失败: ' + (data.error || '未知错误'));
+                if (CE.plan.stages) {
+                    CE.plan.stages.forEach(function(stage) {
+                        CE.updateStageStatus(stage.stage_id, 'failed');
+                    });
+                }
+            }
+        })
+        .catch(function(err) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-play"></i> 执行全部阶段';
+            CE.addLog('err', '执行请求失败: ' + err.message);
+            if (CE.plan.stages) {
+                CE.plan.stages.forEach(function(stage) {
+                    CE.updateStageStatus(stage.stage_id, 'failed');
+                });
+            }
+        });
+    };
+
+    CE.renderExecutionResult = function(result) {
+        var stageResults = result.stage_results || result.stages || {};
+        if (Array.isArray(stageResults)) {
+            stageResults.forEach(function(sr) {
+                var sid = sr.stage_id || sr.id;
+                var status = sr.status || 'passed';
+                CE.updateStageStatus(sid, status, sr);
+            });
+        } else {
+            Object.keys(stageResults).forEach(function(sid) {
+                var sr = stageResults[sid];
+                CE.updateStageStatus(sid, sr.status || 'passed', sr);
+            });
+        }
+    };
+
+    CE.saveScenario = function() {
+        if (!CE.plan || !CE.projectId) return;
+        var name = prompt('场景名称:', CE.plan.scenario || CE.plan.name || '');
+        if (!name) return;
+
+        var payload = {
+            name: name,
+            project_id: CE.projectId,
+            plan: CE.plan
+        };
+
+        fetch('/api/ai/cross-end/scenario', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) {
+                CE.addLog('ok', '场景已保存: ' + name);
+                CE.loadSavedScenarios();
+            } else {
+                CE.addLog('err', '保存失败: ' + (data.error || '未知错误'));
+            }
+        });
+    };
+
+    CE.loadSavedScenarios = function() {
+        if (!CE.projectId) return;
+        fetch('/api/ai/cross-end/scenario?project_id=' + CE.projectId)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok && data.scenarios && data.scenarios.length) {
+                    var container = document.getElementById('ceSavedScenarios');
+                    container.style.display = 'block';
+                    var list = document.getElementById('ceSavedList');
+                    list.innerHTML = data.scenarios.map(function(s) {
+                        var name = s.name || '场景 ' + s.id;
+                        var meta = (s.stages ? s.stages.length : 0) + ' 阶段 | ' + (s.created_at || '');
+                        return '<div class="ce-scenario-row" onclick="CE.loadSavedPlan(' + s.id + ')">' +
+                            '<span class="ce-scenario-row__name">' + CE.escapeHtml(name) + '</span>' +
+                            '<span class="ce-scenario-row__meta">' + CE.escapeHtml(meta) + '</span>' +
+                            '<i class="fas fa-chevron-right" style="color:#94a3b8;"></i>' +
+                        '</div>';
+                    }).join('');
+                }
+            });
+    };
+
+    CE.loadSavedPlan = function(scenarioId) {
+        fetch('/api/ai/cross-end/scenario/' + scenarioId)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok && data.scenario) {
+                    CE.plan = data.scenario.plan_json ? JSON.parse(data.scenario.plan_json) : data.scenario;
+                    CE.renderPlan(CE.plan);
+                    CE.addLog('info', '加载场景: ' + (CE.plan.name || '场景 ' + scenarioId));
+                    document.getElementById('ceExecuteBtn').disabled = false;
+                    document.getElementById('ceSummaryBar').style.display = 'flex';
+                }
+            });
+    };
+
+    document.addEventListener('DOMContentLoaded', CE.init);
+})();
+</script>
+{% endblock %}

@@ -2774,6 +2774,13 @@
     };
 
     async function loadAiModels() {
+        if (window.__aiLoadingModels) return;
+        window.__aiLoadingModels = true;
+        var regBox = document.getElementById('aiRegistryList');
+        if (regBox && !regBox._refreshing) {
+            regBox._refreshing = true;
+            regBox.style.opacity = '0.5';
+        }
         try {
             const resp = await fetch('/api/ai/models');
             const data = await resp.json();
@@ -2839,6 +2846,12 @@
             var engSel = document.getElementById('aiAgentEngineSelect');
             if (engSel && !engSel.options.length) {
                 engSel.innerHTML = '<option value="">— 无法加载模型列表 —</option>';
+            }
+        } finally {
+            window.__aiLoadingModels = false;
+            if (regBox && regBox._refreshing) {
+                regBox.style.opacity = '1';
+                regBox._refreshing = false;
             }
         }
     }

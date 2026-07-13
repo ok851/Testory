@@ -1298,6 +1298,13 @@ try:
 except ImportError:
     pass
 
+try:
+    from ai_modules.explore.hub_routes import explore_bp
+
+    app.register_blueprint(explore_bp)
+except ImportError:
+    pass
+
 # 主页路由
 @app.route('/')
 @login_required
@@ -1923,6 +1930,13 @@ def ai_design_page():
 def ai_heal_page():
     """AI 自愈优化：定位修复、失败诊断、步骤助手入口。"""
     return render_template('ai_heal.html')
+
+
+@app.route('/cross-end')
+@login_required
+def cross_end_page():
+    """跨端联动编排：API + Web + Mobile + Desktop 端到端测试。"""
+    return render_template('cross_end.html')
 
 
 @app.route('/api/ai/hub/heal/analyze-steps', methods=['POST'])
@@ -4927,6 +4941,214 @@ def api_ai_skills_update():
         failure_context=data.get('failure_context') if isinstance(data.get('failure_context'), dict) else None,
     )
     return jsonify({'success': True, 'hermes_response': result})
+
+
+# ----------------------------------------------------------------------
+# 跨端联动编排 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/cross-end/decompose', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_cross_end_decompose():
+    """将自然语言场景描述分解为 CrossEndPlan。"""
+    from ai_modules.plan.plan_decomposer import CrossEndPlanDecomposer
+
+    data = request.get_json(silent=True) or {}
+    desc = _ai_str(data.get('description') or data.get('desc') or '')
+    if not desc:
+        return jsonify({'ok': False, 'error': 'description 不能为空'}), 400
+    project_id = data.get('project_id')
+
+    decomposer = CrossEndPlanDecomposer()
+    try:
+        result = decomposer.decompose_sync(desc)
+        response = {
+            'ok': result.get('ok', False),
+            'plan': result.get('plan'),
+            'warnings': result.get('warnings', []),
+        }
+        if not result.get('ok'):
+            warnings = result.get('warnings', [])
+            response['error'] = warnings[0] if warnings else '场景分解失败，请检查LLM服务是否运行'
+        return jsonify(response)
+    except Exception as exc:
+        uat_logger.exception('cross-end decompose failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ai/cross-end/execute', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_cross_end_execute():
+    """执行跨端计划。"""
+    from ai_modules.execute.orchestrator import execute_cross_end_plan
+
+    data = request.get_json(silent=True) or {}
+    plan = data.get('plan')
+    if not isinstance(plan, dict):
+        return jsonify({'ok': False, 'error': 'plan 不能为空'}), 400
+    if not plan.get('stages'):
+        return jsonify({'ok': False, 'error': 'plan.stages 不能为空'}), 400
+    project_id = data.get('project_id')
+
+    try:
+        result = execute_cross_end_plan(plan)
+        return jsonify({'ok': True, 'result': result})
+    except Exception as exc:
+        uat_logger.exception('cross-end execute failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ai/cross-end/scenario', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_cross_end_scenarios():
+    """列出或保存跨端场景。"""
+    from ai_modules.execute.orchestrator import list_cross_platform_scenarios, save_cross_platform_scenario
+
+    if request.method == 'GET':
+        project_id = request.args.get('project_id', type=int)
+        all_scenarios = list_cross_platform_scenarios()
+        if project_id:
+            all_scenarios = [s for s in all_scenarios if s.get('project_id') == project_id]
+        return jsonify({'ok': True, 'scenarios': all_scenarios})
+
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    if not project_id:
+        return jsonify({'ok': False, 'error': 'project_id 不能为空'}), 400
+    payload = dict(data)
+    payload.setdefault('project_id', project_id)
+    name_val = payload.pop('name', None)
+    if name_val and 'plan' in payload and isinstance(payload['plan'], dict):
+        payload['plan']['name'] = name_val
+    result = save_cross_platform_scenario(payload)
+    return jsonify({'ok': result.get('success', False), 'id': result.get('scenario', {}).get('scenario_id')})
+
+
+@app.route('/api/ai/cross-end/scenario/<int:scenario_id>', methods=['GET', 'DELETE'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_cross_end_scenario(scenario_id):
+    """获取或删除单个跨端场景。"""
+    from ai_modules.execute.orchestrator import get_cross_platform_scenario, delete_cross_platform_scenario
+
+    if request.method == 'GET':
+        scenario = get_cross_platform_scenario(str(scenario_id))
+        if not scenario:
+            return jsonify({'ok': False, 'error': '场景不存在'}), 404
+        return jsonify({'ok': True, 'scenario': scenario})
+
+    result = delete_cross_platform_scenario(str(scenario_id))
+    return jsonify({'ok': result.get('success', False)})
+
+
+# ----------------------------------------------------------------------
+# 对话测试 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/dialog/test', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_dialog_test():
+    """执行移动端对话测试。"""
+    from ai_modules.execute.dialog_tester import DialogTester, DialogPersona
+
+    data = request.get_json(silent=True) or {}
+    persona_type = _ai_str(data.get('persona') or 'professional')
+    messages = data.get('messages') if isinstance(data.get('messages'), list) else []
+    platform = _ai_str(data.get('platform') or 'mobile')
+
+    if not messages:
+        return jsonify({'ok': False, 'error': 'messages 不能为空'}), 400
+
+    tester = DialogTester(persona=DialogPersona(persona_type), platform=platform)
+    try:
+        result = tester.run(messages)
+        return jsonify({'ok': True, 'result': result})
+    except Exception as exc:
+        uat_logger.exception('dialog test failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+# ----------------------------------------------------------------------
+# 自愈批量扫描与验证 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/heal/batch-scan', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_heal_batch_scan():
+    """批量扫描项目用例，检测需要自愈的步骤。"""
+    from ai_modules.optimize.self_heal import batch_scan_project
+
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    if not project_id:
+        return jsonify({'ok': False, 'error': 'project_id 不能为空'}), 400
+
+    try:
+        result = batch_scan_project(project_id)
+        return jsonify({'ok': True, 'result': result})
+    except Exception as exc:
+        uat_logger.exception('batch scan failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ai/heal/verify', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_heal_verify():
+    """验证并应用自愈后的步骤。"""
+    from ai_modules.optimize.heal_verifier import batch_verify_and_apply
+
+    data = request.get_json(silent=True) or {}
+    healed_steps = data.get('healed_steps') if isinstance(data.get('healed_steps'), list) else []
+    if not healed_steps:
+        return jsonify({'ok': False, 'error': 'healed_steps 不能为空'}), 400
+
+    try:
+        result = batch_verify_and_apply(healed_steps)
+        return jsonify({'ok': True, 'result': result})
+    except Exception as exc:
+        uat_logger.exception('heal verify failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ai/heal/history', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_heal_history():
+    """获取自愈审计历史。"""
+    from mobile_engine.element_repo.element_repository import ElementRepository
+
+    project_id = request.args.get('project_id', type=int)
+    alias = request.args.get('alias')
+    limit = request.args.get('limit', 50, type=int)
+
+    if not project_id:
+        return jsonify({'ok': False, 'error': 'project_id 不能为空'}), 400
+
+    repo = ElementRepository()
+    history = repo.get_heal_history(project_id, alias=alias, limit=limit)
+    stats = repo.get_heal_stats(project_id)
+    return jsonify({'ok': True, 'history': history, 'stats': stats})
 
 
 @app.route('/api/ai/llm/readiness', methods=['GET'])

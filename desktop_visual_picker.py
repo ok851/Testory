@@ -106,7 +106,6 @@ def build_pick_from_smart_click(
     action: str = "click",
     match_threshold: float = 0.72,
 ) -> Dict[str, Any]:
-    """智能点选：UIA 边界生成视觉模板，并内联结构快照（若可用）。"""
     from desktop_uia_snapshot import (
         capture_element_snapshot_at_point,
         rect_with_padding,
@@ -131,13 +130,99 @@ def build_pick_from_smart_click(
     if snap.element_snapshot:
         payload = payload.merge_element_snapshot(snap.element_snapshot)
 
+    element_label = snap.element_label or ""
+    if not element_label and not snap.ok:
+        try:
+            from desktop_ocr import extract_primary_text
+            from desktop_precise_locator import capture_rect_preview_b64
+
+            preview = capture_rect_preview_b64(l, t, r, b, padding=4)
+            if preview:
+                ocr_text = extract_primary_text(preview)
+                if ocr_text:
+                    element_label = ocr_text
+                    ocr_snapshot = {
+                        "selector": {
+                            "anchor_props": "Button",
+                            "key_candidates": [
+                                {"property": "ocr-text", "value": ocr_text, "match": "equals"}
+                            ],
+                            "parent_chain": [],
+                            "resolved_via": "ocr",
+                        }
+                    }
+                    payload = payload.merge_element_snapshot(ocr_snapshot)
+        except ImportError:
+            pass
+
+    window_rect = None
+    try:
+        from desktop_win32_snapshot import get_parent_window_rect
+
+        window_rect = get_parent_window_rect(click_x, click_y)
+        if window_rect and element_label and not snap.ok:
+            l2, t2, r2, b2 = window_rect
+            if snap.element_snapshot:
+                sel = snap.element_snapshot.get("selector") or {}
+                sel["window_bounds"] = window_rect
+                snap.element_snapshot["selector"] = sel
+    except ImportError:
+        pass
+
+    app_window_title = snap.window_title or ""
+    app_process_name = snap.process_name or ""
+    if not app_window_title:
+        try:
+            from desktop_win32_snapshot import (
+                get_parent_window_rect,
+                get_top_level_window,
+                get_window_text,
+                get_process_name_from_hwnd,
+                window_from_point,
+            )
+            hwnd = window_from_point(click_x, click_y)
+            if hwnd:
+                top = get_top_level_window(hwnd)
+                app_window_title = get_window_text(top) or ""
+                app_process_name = get_process_name_from_hwnd(hwnd) or ""
+        except ImportError:
+            pass
+
+    resolved_method = "uia" if snap.ok else (
+        "win32" if snap.element_label and not snap.ok else "visual"
+    )
+    ct = (snap.control_type or "").lower()
+    if "list" in ct and element_label:
+        resolved_method = snap.error_code or resolved_method
+    elif snap.ok and snap.element_snapshot:
+        resolved_method = (
+            snap.element_snapshot.get("selector") or {}
+        ).get("resolved_via") or "uia"
+
+    control_type_label = snap.control_type or "Control"
+    if not snap.ok:
+        control_type_label = "Control"
+
     label = ""
-    if snap.element_label:
-        label = f"ListItem_{snap.element_label}" if "list" in (
-            snap.control_type or ""
-        ).lower() else snap.element_label
+    if element_label:
+        if "list" in ct:
+            label = f"ListItem_{element_label}"
+        elif control_type_label and control_type_label != "Control":
+            label = f"{control_type_label}_{element_label}"
+        else:
+            label = element_label
     if not label:
         label = f"桌面_{act}@{cx},{cy}"
+
+    replacement_label = element_label or label
+
+    structure_info = {
+        "app_window_title": app_window_title,
+        "app_process_name": app_process_name,
+        "element_text": element_label,
+        "element_type": control_type_label,
+        "resolved_method": resolved_method,
+    }
 
     preview_b64 = ""
     try:
@@ -152,15 +237,26 @@ def build_pick_from_smart_click(
         "selector_value": payload.to_json(),
         "pick_point": {"x": cx, "y": cy},
         "preview_image_b64": preview_b64,
-        "label": label,
-        "name": snap.element_label or label,
+        "label": replacement_label,
+        "name": replacement_label,
         "capture_mode": CAPTURE_MODE_SMART,
         "rectangle": {"left": l, "top": t, "right": r, "bottom": b},
+        "structure_info": structure_info,
     }
     if snap.element_snapshot:
         pick["element_snapshot"] = snap.element_snapshot
     if not snap.ok:
-        pick["uia_hint"] = snap.message or snap.error_code or "结构信息不可用，已使用视觉"
+        hint = snap.message or snap.error_code or "结构信息不可用"
+        if element_label:
+            hint = f"已用OCR提取文本「{element_label}」，{hint}"
+        pick["uia_hint"] = hint
+    if window_rect:
+        pick["window_rect"] = {
+            "left": window_rect[0],
+            "top": window_rect[1],
+            "right": window_rect[2],
+            "bottom": window_rect[3],
+        }
     return pick
 
 
@@ -896,9 +992,30 @@ def build_visual_recorded_step(
     cy = int(pt.get("y", 0))
     label = (pick.get("label") or pick.get("name") or "").strip()
     mode = pick.get("capture_mode") or CAPTURE_MODE_SMART
+    structure_info = pick.get("structure_info") or {}
+
     desc = label if label else f"桌面：{act} @ ({cx},{cy})"
     if mode == CAPTURE_MODE_REGION and "视觉" not in desc:
         desc = f"视觉：{desc}"
+
+    if structure_info.get("app_process_name") and structure_info.get("element_text"):
+        proc = structure_info["app_process_name"]
+        text = structure_info["element_text"]
+        method = structure_info.get("resolved_method", "")
+        method_tag = f" ({method.upper()})" if method and method not in ("uia",) else ""
+        desc = f"{proc} → {text}{method_tag}"
+
+    locator_candidates = pick.get("locator_candidates") or []
+    if not locator_candidates and structure_info.get("element_text"):
+        ocr_text = structure_info["element_text"]
+        resolved_method = structure_info.get("resolved_method", "")
+        if resolved_method in ("ocr", "win32", "visual"):
+            locator_candidates = [{
+                "selector_type": "ocr_text",
+                "selector_value": ocr_text,
+                "score": 85,
+            }]
+
     return {
         "action": act,
         "automation_layer": "desktop",
@@ -908,6 +1025,6 @@ def build_visual_recorded_step(
         "compare_type": "",
         "description": desc,
         "desktop_spec": pick.get("desktop_spec") or {},
-        "locator_candidates": pick.get("locator_candidates") or [],
+        "locator_candidates": locator_candidates,
         "record_meta": {"pick": pick, "visual": True, "capture_mode": mode},
     }

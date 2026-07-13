@@ -35,6 +35,8 @@ class SnapshotCaptureResult:
     bounding_rect: Optional[Tuple[int, int, int, int]] = None
     element_label: str = ""
     control_type: str = ""
+    window_title: str = ""
+    process_name: str = ""
 
 
 @dataclass
@@ -289,33 +291,41 @@ def _capture_impl(x: int, y: int) -> SnapshotCaptureResult:
         raw = desktop.from_point(int(x), int(y))
         el = _normalize_desktop_hit(raw)
         if el is None:
-            return SnapshotCaptureResult(
+            uia_result = SnapshotCaptureResult(
                 ok=False, error_code="no_element", message="未命中控件"
             )
-        center = _element_rect_center(el)
-        bounds = _element_rect(el)
-        chain = _build_parent_chain(el)
-        selector = sanitize_selector(el, chain)
-        label = _extract_filename_label(_element_name(el))
-        ct = _element_control_type(el)
-        if not selector.get("key_candidates"):
-            return SnapshotCaptureResult(
-                ok=False,
-                error_code="no_stable_key",
-                message="未提取到稳定定位属性",
-                screen_center=center,
-                bounding_rect=bounds,
-                element_label=label,
-                control_type=ct,
-            )
-        return SnapshotCaptureResult(
-            ok=True,
-            element_snapshot={"selector": selector},
-            screen_center=center,
-            bounding_rect=bounds,
-            element_label=label,
-            control_type=ct,
-        )
+        else:
+            center = _element_rect_center(el)
+            bounds = _element_rect(el)
+            chain = _build_parent_chain(el)
+            selector = sanitize_selector(el, chain)
+            label = _extract_filename_label(_element_name(el))
+            ct = _element_control_type(el)
+            if not selector.get("key_candidates"):
+                label = label or ct or ""
+                if label and not _is_volatile_name(label):
+                    selector["key_candidates"] = [
+                        {"property": "uia-name", "value": label, "match": "equals"}
+                    ]
+            if not selector.get("key_candidates"):
+                uia_result = SnapshotCaptureResult(
+                    ok=False,
+                    error_code="no_stable_key",
+                    message="未提取到稳定定位属性",
+                    screen_center=center,
+                    bounding_rect=bounds,
+                    element_label=label,
+                    control_type=ct,
+                )
+            else:
+                return SnapshotCaptureResult(
+                    ok=True,
+                    element_snapshot={"selector": selector},
+                    screen_center=center,
+                    bounding_rect=bounds,
+                    element_label=label,
+                    control_type=ct,
+                )
     except Exception as exc:
         err_name = type(exc).__name__
         msg = str(exc) or err_name
@@ -324,12 +334,61 @@ def _capture_impl(x: int, y: int) -> SnapshotCaptureResult:
             code = "access_denied"
         if "timeout" in msg.lower():
             code = "timeout"
-        return SnapshotCaptureResult(ok=False, error_code=code, message=msg)
+        uia_result = SnapshotCaptureResult(ok=False, error_code=code, message=msg)
     finally:
         try:
             pythoncom.CoUninitialize()
         except Exception:
             pass
+
+    try:
+        from desktop_dialog_handler import capture_dialog_element_at_point
+
+        dialog = capture_dialog_element_at_point(int(x), int(y))
+        if dialog and dialog.ok and dialog.element_snapshot:
+            return SnapshotCaptureResult(
+                ok=True,
+                element_snapshot=dialog.element_snapshot,
+                screen_center=dialog.screen_center or (int(x), int(y)),
+                bounding_rect=dialog.bounding_rect,
+                element_label=dialog.element_label,
+                control_type=dialog.control_type,
+                window_title=dialog.dialog_title,
+            )
+    except ImportError:
+        pass
+
+    try:
+        from desktop_win32_snapshot import capture_win32_element_at_point
+
+        win32 = capture_win32_element_at_point(int(x), int(y))
+        if win32.ok and win32.element_snapshot:
+            return SnapshotCaptureResult(
+                ok=True,
+                element_snapshot=win32.element_snapshot,
+                screen_center=win32.screen_center or (int(x), int(y)),
+                bounding_rect=win32.bounding_rect,
+                element_label=win32.element_label,
+                control_type=win32.control_type,
+                window_title=win32.window_title,
+                process_name=win32.process_name,
+            )
+        if win32.element_label:
+            return SnapshotCaptureResult(
+                ok=False,
+                error_code=win32.error_code or "win32_fallback",
+                message=win32.message or "Win32 兜底未提取到结构化信息",
+                screen_center=win32.screen_center,
+                bounding_rect=win32.bounding_rect,
+                element_label=win32.element_label,
+                control_type=win32.control_type,
+                window_title=win32.window_title,
+                process_name=win32.process_name,
+            )
+    except ImportError:
+        pass
+
+    return uia_result
 
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="uia-snap")
@@ -624,3 +683,70 @@ def resolve_uia_click_point(
         return UiaResolveResult(ok=False, error_code="timeout")
     except Exception as exc:
         return UiaResolveResult(ok=False, error_code="uia_error", message=str(exc))
+
+
+def _resolve_win32_impl(selector: Dict[str, Any]) -> UiaResolveResult:
+    candidates = selector.get("key_candidates") or []
+    if not candidates:
+        return UiaResolveResult(ok=False, error_code="no_candidates")
+
+    parent_chain = selector.get("parent_chain") or []
+    window_name = ""
+    for node in parent_chain:
+        ct = (node.get("control_type") or "").strip().lower()
+        if ct == "window":
+            window_name = (node.get("name") or "").strip()
+            break
+
+    try:
+        from desktop_win32_snapshot import (
+            enumerate_child_windows,
+            get_top_level_window,
+            get_window_rect,
+            get_window_text,
+            window_from_point,
+        )
+        from desktop_input import _enum_visible_windows
+
+        target_name = (candidates[0].get("value") or "").strip()
+        if not target_name:
+            return UiaResolveResult(ok=False, error_code="no_target_name")
+
+        for hwnd, title, cls_name in _enum_visible_windows():
+            if window_name and window_name not in title:
+                continue
+            if not window_name and not title:
+                continue
+
+            children = enumerate_child_windows(hwnd, max_depth=3)
+            for child in children:
+                child_name = child.get("name") or ""
+                if target_name.lower() in child_name.lower():
+                    center = child.get("center")
+                    if center:
+                        return UiaResolveResult(
+                            ok=True,
+                            x=center[0],
+                            y=center[1],
+                            score=0.85,
+                            anchor=center,
+                        )
+    except ImportError:
+        pass
+
+    return UiaResolveResult(ok=False, error_code="win32_miss")
+
+
+def resolve_win32_click_point(
+    element_snapshot: Dict[str, Any], *, timeout_sec: float = 3.0
+) -> UiaResolveResult:
+    sel = (element_snapshot or {}).get("selector") or element_snapshot
+    if not isinstance(sel, dict):
+        return UiaResolveResult(ok=False, error_code="invalid_selector")
+    try:
+        fut = _executor.submit(_resolve_win32_impl, sel)
+        return fut.result(timeout=float(timeout_sec))
+    except FuturesTimeout:
+        return UiaResolveResult(ok=False, error_code="timeout")
+    except Exception as exc:
+        return UiaResolveResult(ok=False, error_code="win32_error", message=str(exc))

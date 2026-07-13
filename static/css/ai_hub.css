@@ -85,6 +85,20 @@
 }
 .ai-hub-cross h3 { margin: 0 0 8px; font-size: 1rem; }
 .ai-hub-cross__hint { margin: 0 0 12px; font-size: 13px; opacity: 0.9; }
+.ai-hub-cross__btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 9px 20px; border-radius: 10px;
+    background: linear-gradient(135deg, #818cf8, #6366f1);
+    color: #fff; font-size: 13px; font-weight: 600;
+    text-decoration: none; border: none; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(99,102,241,0.35);
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.ai-hub-cross__btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(99,102,241,0.5);
+    color: #fff; text-decoration: none;
+}
 html.dark .ai-hub-card { background: #1e1b4b; }
 html.dark .ai-hub-card h2 { color: #e0e7ff; }
 html.dark .ai-hub-card p { color: #94a3b8; }

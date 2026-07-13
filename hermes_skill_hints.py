@@ -9,12 +9,16 @@ BUNDLED_SKILL_BY_PLATFORM: Dict[str, str] = {
     "mobile": "testory-android-mobile",
     "desktop": "testory-windows-desktop",
     "ui": "testory-ui-design",
+    "cross": "testory-cross-end",
+    "explore": "testory-ai-explore",
+    "dialog": "testory-ai-dialog",
 }
 
-DEFAULT_WEB_SKILLS = ["testory-web-browser"]
-DEFAULT_MOBILE_SKILLS = ["testory-android-mobile"]
-DEFAULT_DESKTOP_SKILLS = ["testory-windows-desktop"]
+DEFAULT_WEB_SKILLS = ["testory-web-browser", "testory-ai-explore"]
+DEFAULT_MOBILE_SKILLS = ["testory-android-mobile", "testory-ai-dialog"]
+DEFAULT_DESKTOP_SKILLS = ["testory-windows-desktop", "testory-ai-explore"]
 DEFAULT_UI_SKILLS = ["testory-ui-design", "testory-web-browser"]
+DEFAULT_CROSS_SKILLS = ["testory-cross-end"]
 
 
 def skills_for_platform(platform: str) -> List[str]:
@@ -25,6 +29,12 @@ def skills_for_platform(platform: str) -> List[str]:
         return list(DEFAULT_DESKTOP_SKILLS)
     if p == "ui":
         return list(DEFAULT_UI_SKILLS)
+    if p == "cross":
+        return list(DEFAULT_CROSS_SKILLS)
+    if p == "explore":
+        return list(DEFAULT_WEB_SKILLS)
+    if p == "dialog":
+        return list(DEFAULT_MOBILE_SKILLS)
     return list(DEFAULT_WEB_SKILLS)
 
 

@@ -45,3 +45,44 @@ def analyze_steps_for_self_heal(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
         "healthy": len(issues) == 0,
         "suggestions": suggestions,
     }
+
+
+def batch_scan_project(
+    project_id: str,
+    max_cases: int = 50,
+) -> Dict[str, Any]:
+    results: Dict[str, Any] = {
+        "project_id": project_id,
+        "total_cases": 0,
+        "healthy_cases": 0,
+        "issues": [],
+    }
+    try:
+        from db_helper import query_fetchall
+        rows = query_fetchall(
+            "SELECT id, steps_json FROM test_cases WHERE project_id = %s ORDER BY id LIMIT %s",
+            (project_id, max_cases),
+        )
+    except Exception:
+        rows = []
+    if not rows:
+        return results
+    for row in rows:
+        case_id = row[0]
+        steps_raw = row[1] if len(row) > 1 else None
+        try:
+            import json
+            steps = json.loads(steps_raw) if isinstance(steps_raw, str) else (steps_raw or [])
+        except Exception:
+            steps = []
+        case_health = analyze_steps_for_self_heal(steps)
+        results["total_cases"] += 1
+        if case_health["healthy"]:
+            results["healthy_cases"] += 1
+        else:
+            for issue in case_health["issues"]:
+                results["issues"].append({"case_id": case_id, "issue": issue})
+
+    total = results["total_cases"]
+    results["health_ratio"] = round(results["healthy_cases"] / max(1, total), 2)
+    return results

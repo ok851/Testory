@@ -206,6 +206,7 @@ class DesktopAutomation:
         )
 
         action = (step.get("action") or "click").strip().lower()
+        self._ensure_dwm_stable()
         result = resolve_desktop_click_point(step)
         x, y, score = result.x, result.y, result.score
         self._last_match_score = score
@@ -292,6 +293,7 @@ class DesktopAutomation:
                 )
             out["effect_verified"] = True
             out["effect_keyword"] = keyword
+        self._recover_desktop_if_needed()
         return out
 
     def _launch_application(self, step: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -525,7 +527,17 @@ class DesktopAutomation:
                     }
                     shot = sct.grab(mon)
                 else:
-                    shot = sct.grab(sct.monitors[1])
+                    window_rect = self._try_get_window_rect_from_step(step)
+                    if window_rect:
+                        mon = {
+                            "left": int(window_rect[0]),
+                            "top": int(window_rect[1]),
+                            "width": int(window_rect[2]),
+                            "height": int(window_rect[3]),
+                        }
+                        shot = sct.grab(mon)
+                    else:
+                        shot = sct.grab(sct.monitors[1])
                 mss.tools.to_png(shot.rgb, shot.size, output=out_path)
             rel = f"/static/desktop_screenshots/{fname}"
             return {"status": "success", "action": action, "screenshot": rel}
@@ -593,6 +605,8 @@ class DesktopAutomation:
         from desktop_input import get_foreground_hwnd, resolve_hwnd_from_spec, _hwnd_title_class
         from desktop_run_context import get_desktop_run_context, spec_has_window_target
 
+        self._ensure_dwm_stable()
+
         ctx = get_desktop_run_context()
         hwnd = resolve_hwnd_from_spec(spec)
         if not hwnd and ctx.attached_hwnd:
@@ -623,9 +637,18 @@ class DesktopAutomation:
         import ctypes
 
         user32 = ctypes.windll.user32
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-        user32.SetForegroundWindow(hwnd)
+        no_focus_steal = os.environ.get("DESKTOP_NO_FOCUS_STEAL", "").strip().lower() in (
+            "1", "true", "yes", "on"
+        )
+        if not no_focus_steal:
+            user32.ShowWindow(hwnd, 9)
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.1)
+        else:
+            user32.ShowWindow(hwnd, 9)
+            time.sleep(0.1)
         title, _ = _hwnd_title_class(hwnd)
+        self._ensure_dwm_stable()
         return {
             "status": "success",
             "action": "attach_window",
@@ -692,6 +715,77 @@ class DesktopAutomation:
 
         user32.EnumWindows(_cb, 0)
         return found
+
+    @staticmethod
+    def _ensure_dwm_stable() -> None:
+        import ctypes
+
+        try:
+            ctypes.windll.dwmapi.DwmFlush()
+        except Exception:
+            pass
+        time.sleep(0.05)
+
+    @staticmethod
+    def _recover_desktop_if_needed() -> None:
+        import ctypes
+
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW("Progman", None)
+            if not hwnd:
+                hwnd = ctypes.windll.user32.FindWindowW("WorkerW", None)
+            if hwnd:
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0111, 0x7402, 0)
+                time.sleep(0.15)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _try_get_window_rect_from_step(step: Dict[str, Any]) -> Optional[Tuple[int, int, int, int]]:
+        try:
+            payload = assert_visual_desktop_step(step)
+            snap = payload.element_snapshot or {}
+            sel = snap.get("selector") or {}
+            window_bounds = sel.get("window_bounds")
+            if window_bounds and len(window_bounds) == 4:
+                l, t, r, b = window_bounds
+                if r > l and b > t:
+                    return (int(l), int(t), int(r) - int(l), int(b) - int(t))
+        except Exception:
+            pass
+        try:
+            selector_value = (step.get("selector_value") or "").strip()
+            if selector_value:
+                import json
+                data = json.loads(selector_value)
+                snap = data.get("element_snapshot") or {}
+                sel = snap.get("selector") or {}
+                window_bounds = sel.get("window_bounds")
+                if window_bounds and len(window_bounds) == 4:
+                    l, t, r, b = window_bounds
+                    if r > l and b > t:
+                        return (int(l), int(t), int(r) - int(l), int(b) - int(t))
+        except Exception:
+            pass
+        try:
+            from desktop_input import hwnd_at_screen_point
+            from desktop_win32_snapshot import get_window_rect, get_top_level_window
+
+            payload = assert_visual_desktop_step(step)
+            use_x = payload.search_anchor_x or 0
+            use_y = payload.search_anchor_y or 0
+            if use_x or use_y:
+                hwnd = hwnd_at_screen_point(int(use_x), int(use_y))
+                if hwnd:
+                    top = get_top_level_window(hwnd)
+                    rect = get_window_rect(top)
+                    if rect:
+                        l, t, r, b = rect
+                        if r > l and b > t:
+                            return (int(l), int(t), int(r) - int(l), int(b) - int(t))
+        except ImportError:
+            pass
+        return None
 
     def inspect_uia_tree(self, max_depth: int = 4, max_nodes: int = 120) -> List[Dict[str, Any]]:
         raise RuntimeError("UIA 探测已移除，请使用 visual 框选录制")

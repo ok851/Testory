@@ -446,11 +446,20 @@ def run_ai_chat_with_tools(
                 temperature=0.2,
             )
         else:
-            assistant_msg = local_ai_service.chat_ollama_messages(
+            default_model = os.environ.get("LOCAL_LLM_MODEL_MID", "llama3:8b-instruct")
+            default_profile = {
+                "provider": "ollama",
+                "api_style": "ollama",
+                "model_id": params.legacy_model or default_model,
+                "api_key": "",
+                "base_url": "",
+            }
+            assistant_msg = dispatch_chat_completion_messages(
                 messages,
-                params.legacy_model or local_ai_service.model_mid,
                 tools,
-                None,
+                default_profile,
+                local_ai_service,
+                temperature=0.2,
             )
 
         tool_calls = assistant_msg.get("tool_calls")

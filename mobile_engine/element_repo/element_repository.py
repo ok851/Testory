@@ -195,6 +195,147 @@ class ElementRepository:
             fallback_values=fallback_values,
         )
 
+    # ------------------------------------------------------------------
+    # 自愈审计日志
+    # ------------------------------------------------------------------
+
+    def _ensure_heal_history_table(self) -> None:
+        conn = self._db._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """CREATE TABLE IF NOT EXISTS heal_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                element_alias TEXT NOT NULL,
+                platform TEXT NOT NULL DEFAULT 'android',
+                case_id INTEGER,
+                step_index INTEGER,
+                original_selector TEXT,
+                original_strategy TEXT,
+                healed_selector TEXT,
+                healed_strategy TEXT,
+                confidence REAL DEFAULT 0.0,
+                verified INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'healed',
+                error_message TEXT,
+                healed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.commit()
+        conn.close()
+
+    def record_heal_history(
+        self,
+        project_id: int,
+        alias: str,
+        original_strategy: str,
+        original_value: str,
+        healed_strategy: str,
+        healed_value: str,
+        confidence: float = 0.0,
+        case_id: Optional[int] = None,
+        step_index: Optional[int] = None,
+        platform: str = "android",
+    ) -> int:
+        self._ensure_heal_history_table()
+        conn = self._db._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO heal_history
+               (project_id, element_alias, platform, case_id, step_index,
+                original_selector, original_strategy, healed_selector,
+                healed_strategy, confidence)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (project_id, alias, platform, case_id, step_index,
+             original_value, original_strategy, healed_value,
+             healed_strategy, confidence),
+        )
+        history_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return history_id
+
+    def mark_heal_verified(self, history_id: int, success: bool, error_message: str = "") -> None:
+        self._ensure_heal_history_table()
+        conn = self._db._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE heal_history
+               SET verified = ?, status = ?, error_message = ?
+               WHERE id = ?""",
+            (1 if success else 0, "verified" if success else "failed", error_message, history_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_heal_history(
+        self,
+        project_id: int,
+        alias: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        self._ensure_heal_history_table()
+        conn = self._db._sqlite_connect()
+        cursor = conn.cursor()
+        if alias:
+            cursor.execute(
+                """SELECT * FROM heal_history
+                   WHERE project_id = ? AND element_alias = ?
+                   ORDER BY healed_at DESC LIMIT ?""",
+                (project_id, alias, limit),
+            )
+        else:
+            cursor.execute(
+                """SELECT * FROM heal_history
+                   WHERE project_id = ?
+                   ORDER BY healed_at DESC LIMIT ?""",
+                (project_id, limit),
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        columns = [
+            "id", "project_id", "element_alias", "platform", "case_id",
+            "step_index", "original_selector", "original_strategy",
+            "healed_selector", "healed_strategy", "confidence",
+            "verified", "status", "error_message", "healed_at",
+        ]
+        return [dict(zip(columns, r)) for r in rows]
+
+    def get_heal_stats(self, project_id: int) -> Dict[str, Any]:
+        self._ensure_heal_history_table()
+        conn = self._db._sqlite_connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM heal_history WHERE project_id = ?",
+            (project_id,),
+        )
+        total = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT COUNT(*) FROM heal_history WHERE project_id = ? AND status = 'verified'",
+            (project_id,),
+        )
+        verified = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT COUNT(*) FROM heal_history WHERE project_id = ? AND status = 'failed'",
+            (project_id,),
+        )
+        failed = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT AVG(confidence) FROM heal_history WHERE project_id = ?",
+            (project_id,),
+        )
+        avg_row = cursor.fetchone()
+        avg_confidence = round(avg_row[0], 4) if avg_row and avg_row[0] else 0.0
+        conn.close()
+        return {
+            "total": total,
+            "verified": verified,
+            "failed": failed,
+            "pending": total - verified - failed,
+            "avg_confidence": avg_confidence,
+            "success_rate": round(verified / total, 4) if total > 0 else 0.0,
+        }
+
     def record_healed_locator(
         self,
         project_id: int,
@@ -246,6 +387,21 @@ class ElementRepository:
         conn.commit()
         affected = cursor.rowcount
         conn.close()
+
+        # 记录审计日志
+        original_strategy = elem.get("selector_type", "")
+        original_value = elem.get("selector_value", "")
+        self.record_heal_history(
+            project_id=project_id,
+            alias=alias,
+            original_strategy=original_strategy,
+            original_value=original_value,
+            healed_strategy=healed_strategy,
+            healed_value=healed_value,
+            confidence=confidence,
+            platform=platform,
+        )
+
         return affected > 0
 
     # ------------------------------------------------------------------

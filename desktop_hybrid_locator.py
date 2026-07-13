@@ -247,6 +247,29 @@ def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
         except ImportError:
             pass
 
+    if snap:
+        sel = snap.get("selector") or {}
+        if sel.get("resolved_via") == "win32":
+            try:
+                from desktop_uia_snapshot import resolve_win32_click_point
+
+                win32 = resolve_win32_click_point(snap, timeout_sec=3.0)
+                if win32.ok:
+                    cx, cy = win32.x, win32.y
+                    if win32.anchor:
+                        cx, cy = win32.anchor
+                        use_ax, use_ay = cx, cy
+                    click_x, click_y = _uia_click_from_center(cx, cy, off_x, off_y, tw, th)
+                    return DesktopResolveResult(
+                        x=click_x,
+                        y=click_y,
+                        score=float(win32.score),
+                        resolved_via="win32",
+                        updated_anchor=(cx, cy),
+                    )
+            except ImportError:
+                pass
+
     if use_ax or use_ay:
         shell = _try_shell_at_screen_for_listitem(step, int(use_ax), int(use_ay))
         if shell:

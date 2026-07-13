@@ -638,7 +638,14 @@ def focus_hwnd(hwnd: int) -> None:
     if not hwnd or not steal_focus_enabled():
         return
     try:
+        import ctypes
+
         u = _user32()
+        try:
+            ctypes.windll.dwmapi.DwmFlush()
+        except Exception:
+            pass
+        u.AllowSetForegroundWindow(-1)
         u.SetForegroundWindow(int(hwnd))
         time.sleep(0.12)
     except Exception:
