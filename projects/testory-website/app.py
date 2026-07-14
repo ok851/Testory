@@ -189,8 +189,10 @@ def download_latest():
     target = (release.get("direct_download_url") or "").strip()
     website_base = (os.environ.get("WEBSITE_URL") or request.host_url or "").strip().rstrip("/")
     self_url = f"{website_base}/download/latest" if website_base else url_for("download_latest", _external=True)
+    real_self_url = request.host_url.rstrip("/") + "/download/latest"
     if target.startswith("http://") or target.startswith("https://"):
-        if target.rstrip("/") != self_url.rstrip("/") and not target.startswith(PLATFORM_ADMIN_URL):
+        target_norm = target.rstrip("/")
+        if target_norm != self_url.rstrip("/") and target_norm != real_self_url.rstrip("/") and not target.startswith(PLATFORM_ADMIN_URL):
             return redirect(target)
     return _proxy_admin_installer_download()
 
