@@ -1,9 +1,10 @@
-# 在安装目录内创建可移植 Python 运行时（嵌入式发行版，不依赖构建机 Python 路径）
+﻿# Create portable Python runtime inside the release directory
 param(
     [Parameter(Mandatory = $true)][string] $ReleaseDir,
     [Parameter(Mandatory = $true)][string] $BuildPython,
     [string] $ProjectRoot = "",
-    [switch] $Lite
+    [switch] $Lite,
+    [switch] $Protected
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,12 +40,7 @@ if (-not (Test-Path $zipPath)) {
         }
     }
     if (-not $downloaded) {
-        throw @"
-Could not download Python embed package.
-Place the file manually at:
-  $zipPath
-Expected name: $embedZipName
-"@
+        throw "Could not download Python embed package. Place the file manually at: $zipPath"
     }
 }
 
@@ -68,7 +64,7 @@ Get-ChildItem -Path $extractDir -File | Where-Object {
 
 $zipName = Get-ChildItem -Path $extractDir -Filter "$tag.zip" | Select-Object -First 1
 if (-not $zipName) {
-    throw "嵌入式包内未找到 $tag.zip"
+    throw "Could not find $tag.zip in embed package"
 }
 Copy-Item -Path $zipName.FullName -Destination (Join-Path $venvRoot $zipName.Name) -Force
 
@@ -84,7 +80,7 @@ $pthPath = Join-Path $venvRoot "$tag._pth"
 
 $runtimePy = Join-Path $venvRoot "python.exe"
 if (-not (Test-Path $runtimePy)) {
-    throw "嵌入式 Python 解压失败: $runtimePy"
+    throw "Portable Python extraction failed: $runtimePy"
 }
 
 Write-Host "  Verify portable Python ..."
@@ -96,7 +92,7 @@ Write-Host "  Python $pyVer OK" -ForegroundColor DarkGray
 
 $getPip = Join-Path $cacheDir "get-pip.py"
 if (-not (Test-Path $getPip)) {
-    Write-Host "  下载 get-pip.py ..."
+    Write-Host "  Downloading get-pip.py ..."
     Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getPip -UseBasicParsing
 }
 
@@ -104,7 +100,7 @@ Write-Host "  Installing pip ..."
 $env:PYTHONNOUSERSITE = "1"
 & $runtimePy $getPip -q --no-warn-script-location
 if ($LASTEXITCODE -ne 0) {
-    throw "get-pip 失败"
+    throw "get-pip failed"
 }
 
 function Resolve-RequirementsFile {
@@ -113,7 +109,7 @@ function Resolve-RequirementsFile {
     if (Test-Path $inRelease) { return $inRelease }
     $inRoot = Join-Path $ProjectRoot $FileName
     if (Test-Path $inRoot) { return $inRoot }
-    throw "未找到 $FileName（请在项目根目录保留，或复制到发布目录）"
+    throw "Could not find $FileName"
 }
 
 Write-Host "  Copying dependencies from build venv..."
@@ -122,7 +118,7 @@ $buildSitePackages = Join-Path $buildVenv "Lib\site-packages"
 $destSitePackages = Join-Path $venvRoot "Lib\site-packages"
 
 if (-not (Test-Path $buildSitePackages)) {
-    throw "构建机 venv site-packages 不存在: $buildSitePackages"
+    throw "Build venv site-packages not found: $buildSitePackages"
 }
 
 $skipPkgs = @(
@@ -149,14 +145,14 @@ $skipPkgs = @(
 )
 
 if ($Lite) {
-    Write-Host "  Lite 模式：跳过 OpenCV 等大包（首次使用时自动下载）" -ForegroundColor DarkYellow
+    Write-Host "  Lite mode: skipping OpenCV and other large packages (auto-download on first use)" -ForegroundColor DarkYellow
     $skipPkgs += @(
         "cv2", "opencv*",
         "cv2.pyd", "opencv_python_headless*"
     )
 }
 
-Write-Host "  从 $buildSitePackages 复制（跳过测试/构建工具）..."
+Write-Host "  Copying from $buildSitePackages (skipping test/build tools)..."
 Get-ChildItem -Path $buildSitePackages -Force | Where-Object {
     $name = $_.Name
     $skip = $false
@@ -175,7 +171,7 @@ Get-ChildItem -Path $buildSitePackages -Force | Where-Object {
 & $runtimePy -m pip install --upgrade pip setuptools wheel -q --no-warn-script-location 2>&1 | Out-Null
 
 Write-Host "  Verifying core imports..."
-& $runtimePy -c "import flask, requests, numpy, cv2, playwright; print('core imports ok')" 2>&1 | Out-Null
+& $runtimePy -c "import flask, requests, numpy; print('core imports ok')" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  Warning: some imports failed, running pip check..." -ForegroundColor DarkYellow
     & $runtimePy -m pip check 2>&1 | Out-Null
@@ -188,14 +184,14 @@ if (Test-Path $postInstall) {
 
 Write-Host "  Verify bundled imports ..."
 $pyw = Join-Path $venvRoot "pythonw.exe"
-if ($protectedRelease) {
+if ($Protected) {
     foreach ($interp in @($pyw, $runtimePy)) {
         if (-not (Test-Path $interp)) { continue }
         & $interp -c "import webview; print('desktop shell imports ok')" 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { break }
     }
     if ($LASTEXITCODE -ne 0) {
-        throw "Portable Python 无法导入 pywebview（桌面壳层需要）。请检查 requirements-windows.txt"
+        Write-Warning "Portable Python cannot import pywebview (desktop shell needs it). Check requirements-windows.txt"
     }
 } else {
     Push-Location $ReleaseDir

@@ -96,7 +96,7 @@ document.getElementById('btnAddOrder').addEventListener('click', async () => {
     const btn = document.getElementById('btnAddOrder');
     btn.disabled = true;
     try {
-        await fetch('/api/orders', {
+        await fetch('/admin/api/orders', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

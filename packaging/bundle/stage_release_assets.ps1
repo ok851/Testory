@@ -72,7 +72,7 @@ $deskUser = Join-Path $Root "desktop_user_data.py"
 if (Test-Path $deskUser) {
     Copy-Item $deskUser (Join-Path $Out "desktop_user_data.py") -Force
 }
-foreach ($rootPy in @("install_paths.py", "desktop_startup.py")) {
+foreach ($rootPy in @("install_paths.py", "desktop_startup.py", "components_manager.py")) {
     $src = Join-Path $Root $rootPy
     if (Test-Path $src) {
         Copy-Item $src (Join-Path $Out $rootPy) -Force

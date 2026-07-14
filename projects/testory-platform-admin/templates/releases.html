@@ -107,20 +107,32 @@ document.getElementById('btnUploadRelease').addEventListener('click', async () =
         return;
     }
     const btn = document.getElementById('btnUploadRelease');
+    const originalText = btn.textContent;
     btn.disabled = true;
+    btn.textContent = '上传中...';
     try {
         const fd = new FormData();
         fd.append('version', version);
         fd.append('file', fileInput.files[0]);
-        const resp = await fetch('/api/releases/upload', { method: 'POST', body: fd });
-        const data = await resp.json();
+        const resp = await fetch('/admin/api/releases/upload', { method: 'POST', body: fd });
+        let data;
+        try {
+            data = await resp.json();
+        } catch (e) {
+            alert('上传失败：服务器返回异常，请检查服务日志');
+            return;
+        }
         if (!data.success) {
             alert(data.error || '上传失败');
             return;
         }
+        alert('上传成功！');
         location.reload();
+    } catch (e) {
+        alert('上传失败：' + (e.message || e));
     } finally {
         btn.disabled = false;
+        btn.textContent = originalText;
     }
 });
 
@@ -132,16 +144,33 @@ document.getElementById('btnAddRelease').addEventListener('click', async () => {
         return;
     }
     const btn = document.getElementById('btnAddRelease');
+    const originalText = btn.textContent;
     btn.disabled = true;
+    btn.textContent = '提交中...';
     try {
-        await fetch('/api/releases', {
+        const resp = await fetch('/admin/api/releases', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ version, download_url }),
         });
+        let data;
+        try {
+            data = await resp.json();
+        } catch (e) {
+            alert('提交失败：服务器返回异常，请检查服务日志');
+            return;
+        }
+        if (!data.success) {
+            alert(data.error || '提交失败');
+            return;
+        }
+        alert('发布成功！');
         location.reload();
+    } catch (e) {
+        alert('提交失败：' + (e.message || e));
     } finally {
         btn.disabled = false;
+        btn.textContent = originalText;
     }
 });
 </script>

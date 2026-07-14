@@ -1,4 +1,4 @@
-# 将运行所需文件复制到发布目录，供 Inno Setup 打包
+﻿# Copy runtime files to release directory for Inno Setup packaging (Legacy mode)
 param(
     [string] $OutDir = 'dist\uat_release',
     [string] $Root = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -71,5 +71,5 @@ Get-ChildItem -Path $Root -Force | Where-Object {
     New-Item -ItemType Directory -Force -Path (Join-Path $Out $_) | Out-Null
 }
 
-Write-Host "已暂存到: $Out" -ForegroundColor Green
-Write-Host "下一步: 在发布机上创建 .venv、playwright install，再运行 Inno Setup。"
+Write-Host "Staged to: $Out" -ForegroundColor Green
+Write-Host "Next: create .venv, playwright install, then run Inno Setup."

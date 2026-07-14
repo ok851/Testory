@@ -1,4 +1,4 @@
-# Build full offline desktop installer (portable Python + Chromium + WebView2 + Inno Setup)
+﻿# Build full offline desktop installer (portable Python + Chromium + WebView2 + Inno Setup)
 # Run from project root:
 #   .\packaging\build_desktop_installer.ps1
 #

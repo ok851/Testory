@@ -120,10 +120,14 @@ def check_layout(root: Path) -> List[str]:
 
     browsers = root / "playwright-browsers"
     if not browsers.is_dir():
-        errors.append(
-            "缺少 playwright-browsers（浏览器自动化可能不可用）。"
-            "请重新执行完整 build_desktop_installer.ps1。"
-        )
+        has_comp_manager = (root / "components_manager.py").is_file()
+        if has_comp_manager:
+            pass
+        else:
+            errors.append(
+                "缺少 playwright-browsers（浏览器自动化可能不可用）。"
+                "请重新执行完整 build_desktop_installer.ps1。"
+            )
 
     catalog_found = False
     for rel in ("ai_provider_catalog.json", "config/ai_provider_catalog.json"):

@@ -144,6 +144,7 @@ Get-ChildItem -Path $release -Filter "*.py" -File -Recurse -ErrorAction Silently
     if ($rel -match '^packaging\\') { return }
     if ($rel -eq "desktop_user_data.py") { return }
     if ($rel -eq "install_paths.py") { return }
+    if ($rel -eq "components_manager.py") { return }
     Remove-Item -LiteralPath $_.FullName -Force
     $stripCount++
 }
