@@ -257,17 +257,39 @@ class DesktopAutomation:
                 y,
             )
         else:
-            sendinput_pointer_at_screen(x, y, action, step=step)
+            try:
+                sendinput_pointer_at_screen(x, y, action, step=step)
+                pointer_executed = True
+            except Exception as exc:
+                uat_logger.warning("桌面点击执行失败: %s", exc)
+                pointer_executed = False
+
+        min_score_for_verified = 0.5
+        verified = score >= min_score_for_verified
+
+        if not verified and result.resolved_via not in ("shell_com", "shell_listview"):
+            uat_logger.warning(
+                "桌面步骤低置信度: score=%.3f via=%s, 可能未命中目标",
+                score,
+                result.resolved_via,
+            )
+
         out: Dict[str, Any] = {
-            "status": "success",
+            "status": "success" if (verified and pointer_executed) else "warning",
             "action": action,
-            "verified": True,
-            "pointer_executed": True,
+            "verified": verified,
+            "pointer_executed": pointer_executed,
             "match_score": score,
             "coords": f"{x},{y}",
             "selector_type": "visual",
             "resolved_via": result.resolved_via,
         }
+
+        if not verified:
+            out["warning"] = f"匹配分数过低 ({score:.3f})，可能未准确命中目标元素"
+        if not pointer_executed:
+            out["error"] = "点击操作未成功执行"
+
         if verify_effect:
             keyword = _effect_keyword_from_step(step) or infer_effect_keyword(
                 spec, (step.get("description") or "")
@@ -286,11 +308,20 @@ class DesktopAutomation:
                 titles_before=titles_before,
                 hwnds_before=hwnds_before,
             ):
-                raise RuntimeError(
-                    f"桌面操作后未检测到预期界面变化（关键词={keyword or '无'}，"
-                    f"点击 ({x},{y})，定位={result.resolved_via} score={score:.3f}）。"
-                    "可能点错位置或目标应用未响应，请重新捕获或开启 DESKTOP_PHYSICAL_MOUSE=1 试物理点击"
+                diag = f"操作后未检测到预期界面变化"
+                if keyword:
+                    diag += f"（期望关键词={keyword}）"
+                else:
+                    diag += "（无关键词可匹配）"
+                diag += (
+                    f"，点击 ({x},{y})，定位方式={result.resolved_via}"
+                    f" score={score:.3f}"
                 )
+                if result.resolved_via != "uia":
+                    diag += "。请重新捕获目标元素确保定位准确"
+                else:
+                    diag += "。请检查目标应用是否正常响应点击"
+                raise RuntimeError(diag)
             out["effect_verified"] = True
             out["effect_keyword"] = keyword
         self._recover_desktop_if_needed()

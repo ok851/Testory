@@ -1,4 +1,4 @@
-﻿# 准备「用户零配置」离线发布目录 dist\uat_release（Python + 依赖 + Chromium + 配置模板）
+# 准备「用户零配置」离线发布目录 dist\uat_release（Python + 依赖 + Chromium + 配置模板）
 param(
     [string] $Root = "",
     [string] $OutDir = 'dist\uat_release',
@@ -122,8 +122,15 @@ $srcBrowsers = Join-Path $env:LOCALAPPDATA "ms-playwright"
 $destBrowsers = Join-Path $release "playwright-browsers"
 if (Test-Path $destBrowsers) { Remove-Item -Recurse -Force $destBrowsers }
 if (Test-Path $srcBrowsers) {
-    Copy-Item -Path $srcBrowsers -Destination $destBrowsers -Recurse -Force
-    Write-Host "  已复制浏览器到 playwright-browsers/"
+    New-Item -ItemType Directory -Force -Path $destBrowsers | Out-Null
+    Get-ChildItem -Path $srcBrowsers -Directory | Where-Object { $_.Name -like "chromium-*" } | ForEach-Object {
+        Copy-Item -Path $_.FullName -Destination (Join-Path $destBrowsers $_.Name) -Recurse -Force
+        Write-Host "  已复制浏览器: $($_.Name)"
+    }
+    $ffDir = Join-Path $srcBrowsers "firefox-*"
+    if (Test-Path $ffDir) {
+        Write-Host "  跳过 Firefox（仅保留 Chromium 即可）" -ForegroundColor DarkGray
+    }
 } else {
     Write-Warning "未找到 ms-playwright，请检查 playwright install 是否成功"
 }

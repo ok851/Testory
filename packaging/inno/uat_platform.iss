@@ -24,13 +24,13 @@ UninstallDisplayName={#MyAppName}
 OutputDir=..\..\dist
 OutputBaseFilename=testory_setup
 SetupIconFile=testory.ico
-Compression=lzma2
-SolidCompression=yes
+Compression=lzma2/fast
+SolidCompression=no
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
-; 允许超大安装包
-DiskSpanning=yes
+; 禁用分卷，生成单个 exe 方便上传和下载
+; DiskSpanning=yes
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"

@@ -229,12 +229,13 @@ def validate_desktop_step_result(result: Any, action: str) -> Dict[str, Any]:
             f"桌面步骤返回无效结果（期望 dict，得到 {type(result).__name__}）"
         )
     status = str(result.get("status") or "success").strip().lower()
-    if status not in ("success", "ok", "passed"):
+    if status not in ("success", "ok", "passed", "warning"):
         raise RuntimeError(result.get("error") or "桌面步骤执行失败")
     if act in DESKTOP_POINTER_ACTIONS:
         if not result.get("verified"):
             raise RuntimeError(
                 result.get("error")
+                or result.get("warning")
                 or "桌面指针步骤未通过执行校验（可能未命中目标控件）"
             )
         if not result.get("pointer_executed"):
@@ -242,6 +243,11 @@ def validate_desktop_step_result(result: Any, action: str) -> Dict[str, Any]:
                 result.get("error")
                 or "桌面指针步骤未真正执行（pointer_executed=false）"
             )
+    if status == "warning":
+        if result.get("warning"):
+            uat_logger.warning("桌面步骤警告: %s", result.get("warning"))
+        if result.get("error"):
+            uat_logger.error("桌面步骤错误: %s", result.get("error"))
     return result
 
 

@@ -349,15 +349,19 @@ def _picker_child_main(cfg_path: str) -> None:
         pick = data.get("pick") or {}
         click_x = int(data.get("click_x") or (pick.get("pick_point") or {}).get("x") or 0)
         click_y = int(data.get("click_y") or (pick.get("pick_point") or {}).get("y") or 0)
+        action = str(data.get("action") or pick.get("record_action") or "click")
+        input_val = str(data.get("input_value") or pick.get("input_value") or "")
         step = build_visual_recorded_step(
             pick,
-            action=str(data.get("action") or cfg.get("record_action") or "click"),
+            action=action,
+            input_value=input_val,
         )
 
         def _merge_uia(enriched_pick: Dict[str, Any]) -> None:
             new_step = build_visual_recorded_step(
                 enriched_pick,
-                action=str(data.get("action") or cfg.get("record_action") or "click"),
+                action=action,
+                input_value=input_val,
             )
             with _session_lock:
                 recorded = list(_session.get("recorded_steps") or [])

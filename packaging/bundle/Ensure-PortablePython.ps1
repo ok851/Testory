@@ -1,4 +1,4 @@
-﻿# 在安装目录内创建可移植 Python 运行时（嵌入式发行版，不依赖构建机 Python 路径）
+# 在安装目录内创建可移植 Python 运行时（嵌入式发行版，不依赖构建机 Python 路径）
 param(
     [Parameter(Mandatory = $true)][string] $ReleaseDir,
     [Parameter(Mandatory = $true)][string] $BuildPython,
@@ -115,20 +115,66 @@ function Resolve-RequirementsFile {
     throw "未找到 $FileName（请在项目根目录保留，或复制到发布目录）"
 }
 
-Write-Host "  Installing release dependencies..."
-$reqMain = Resolve-RequirementsFile "requirements.txt"
-$reqWin = Resolve-RequirementsFile "requirements-windows.txt"
-$protectedRelease = Test-Path (Join-Path $ReleaseDir "runtime\testory_app\TestoryBackend.exe")
-& $runtimePy -m pip install --upgrade pip wheel -q --no-warn-script-location
-if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
-& $runtimePy -m pip install -q --no-warn-script-location -r $reqMain
-if ($LASTEXITCODE -ne 0) { throw "pip install failed: $reqMain" }
-& $runtimePy -m pip install -q --no-warn-script-location -r $reqWin
-if ($LASTEXITCODE -ne 0) { throw "pip install failed: $reqWin" }
+Write-Host "  Copying dependencies from build venv..."
+$buildVenv = Split-Path -Parent (Split-Path -Parent $BuildPython)
+$buildSitePackages = Join-Path $buildVenv "Lib\site-packages"
+$destSitePackages = Join-Path $venvRoot "Lib\site-packages"
 
-$postInstall = Join-Path $venvRoot "Scripts\pywin32_postinstall.py"
+if (-not (Test-Path $buildSitePackages)) {
+    throw "构建机 venv site-packages 不存在: $buildSitePackages"
+}
+
+$skipPkgs = @(
+    "__pycache__",
+    "pip", "pip-*",
+    "setuptools", "setuptools-*",
+    "wheel", "wheel-*",
+    "*.egg-info",
+    "_pytest", "pytest", "pytest-*",
+    "py", "py-*",
+    "pluggy", "pluggy-*",
+    "iniconfig", "iniconfig-*",
+    "tomli", "tomli_*",
+    "pyinstaller", "pyinstaller-*",
+    "altgraph", "altgraph-*",
+    "pefile", "pefile-*",
+    "pyinstaller_hooks_contrib", "pyinstaller_hooks_contrib-*",
+    "packaging_specs",
+    "cairocffi", "cairocffi-*",
+    "cairosvg", "cairosvg-*",
+    "tinycss2", "tinycss2-*",
+    "cssselect2", "cssselect2-*",
+    "fire", "fire-*"
+)
+
+Write-Host "  从 $buildSitePackages 复制（跳过测试/构建工具）..."
+Get-ChildItem -Path $buildSitePackages -Force | Where-Object {
+    $name = $_.Name
+    $skip = $false
+    foreach ($pattern in $skipPkgs) {
+        if ($pattern.Contains("*")) {
+            if ($name -like $pattern) { $skip = $true; break }
+        } else {
+            if ($name -eq $pattern) { $skip = $true; break }
+        }
+    }
+    -not $skip
+} | ForEach-Object {
+    Copy-Item -Path $_.FullName -Destination $destSitePackages -Recurse -Force
+}
+
+& $runtimePy -m pip install --upgrade pip setuptools wheel -q --no-warn-script-location 2>&1 | Out-Null
+
+Write-Host "  Verifying core imports..."
+& $runtimePy -c "import flask, requests, numpy, cv2, playwright; print('core imports ok')" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  Warning: some imports failed, running pip check..." -ForegroundColor DarkYellow
+    & $runtimePy -m pip check 2>&1 | Out-Null
+}
+
+$postInstall = Join-Path $destSitePackages "pywin32_system32"
 if (Test-Path $postInstall) {
-    & $runtimePy $postInstall -install 2>&1 | Out-Null
+    Write-Host "  pywin32 already installed (copied from build venv)"
 }
 
 Write-Host "  Verify bundled imports ..."

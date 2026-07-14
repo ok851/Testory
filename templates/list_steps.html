@@ -3260,6 +3260,11 @@ function changePage(page) {
             const merged = Object.assign({}, basePick, patch);
             if (patch.preview_image_b64) {
                 merged.preview_image_b64 = patch.preview_image_b64;
+            } else if (basePick.preview_image_b64) {
+                merged.preview_image_b64 = basePick.preview_image_b64;
+            }
+            if (patch.structure_info && (!basePick.structure_info || patch.structure_info.element_text)) {
+                merged.structure_info = patch.structure_info;
             }
             if (patch.element_snapshot) {
                 merged.element_snapshot = patch.element_snapshot;

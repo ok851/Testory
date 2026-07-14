@@ -188,6 +188,77 @@ def _uia_click_from_center(
     return int(cx - half_w + off_x), int(cy - half_h + off_y)
 
 
+def _try_uia_core_locate(step: Dict[str, Any], off_x: int, off_y: int, tw: int, th: int) -> Optional[DesktopResolveResult]:
+    """使用UIAutomationCore原生接口通过acc-name定位。"""
+    try:
+        from desktop_uia_core import find_element_by_acc_name
+
+        kw = _effect_keyword_from_step(step)
+        if not kw:
+            return None
+
+        result = find_element_by_acc_name(kw)
+        if result.get("ok") and result.get("bounding_rect"):
+            rect = result["bounding_rect"]
+            cx = (rect[0] + rect[2]) // 2
+            cy = (rect[1] + rect[3]) // 2
+            click_x, click_y = _uia_click_from_center(cx, cy, off_x, off_y, tw, th)
+            click_x, click_y = _try_dpi_calibration(click_x, click_y)
+            return DesktopResolveResult(
+                x=click_x,
+                y=click_y,
+                score=0.9,
+                resolved_via="uia_core",
+                updated_anchor=(cx, cy),
+            )
+    except Exception:
+        pass
+    return None
+
+
+def _try_ocr_locate(step: Dict[str, Any], off_x: int, off_y: int, tw: int, th: int) -> Optional[DesktopResolveResult]:
+    """使用OCR文本定位作为回退方案。"""
+    try:
+        from desktop_ocr_locate import locate_element_via_ocr
+
+        kw = _effect_keyword_from_step(step)
+        if not kw:
+            return None
+
+        from desktop_input import get_cursor_pos
+
+        cursor_x, cursor_y = get_cursor_pos()
+        ocr_result = locate_element_via_ocr(cursor_x, cursor_y, search_radius=150)
+        if ocr_result and ocr_result.get('rect'):
+            rect = ocr_result['rect']
+            cx = (rect[0] + rect[2]) // 2
+            cy = (rect[1] + rect[3]) // 2
+            click_x, click_y = _uia_click_from_center(cx, cy, off_x, off_y, tw, th)
+            return DesktopResolveResult(
+                x=click_x,
+                y=click_y,
+                score=0.75,
+                resolved_via="ocr",
+                updated_anchor=(cx, cy),
+            )
+    except Exception:
+        pass
+    return None
+
+
+def _try_dpi_calibration(x: int, y: int) -> Tuple[int, int]:
+    """DPI坐标校准。"""
+    try:
+        from desktop_precise_locator import get_dpi_scale_factor
+
+        scale = get_dpi_scale_factor()
+        if scale != 1.0:
+            return int(x * scale), int(y * scale)
+    except Exception:
+        pass
+    return x, y
+
+
 def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
     # 桌面图标：Shell.Application COM（零 UI、不截图，最高优先级）
     try:
@@ -231,6 +302,7 @@ def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
                     cx, cy = uia.anchor
                     use_ax, use_ay = cx, cy
                 click_x, click_y = _uia_click_from_center(cx, cy, off_x, off_y, tw, th)
+                click_x, click_y = _try_dpi_calibration(click_x, click_y)
                 shell = _try_shell_at_screen_for_listitem(step, cx, cy)
                 if shell:
                     res = _shell_result_from_target(shell, off_x, off_y, tw, th)
@@ -260,6 +332,7 @@ def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
                         cx, cy = win32.anchor
                         use_ax, use_ay = cx, cy
                     click_x, click_y = _uia_click_from_center(cx, cy, off_x, off_y, tw, th)
+                    click_x, click_y = _try_dpi_calibration(click_x, click_y)
                     return DesktopResolveResult(
                         x=click_x,
                         y=click_y,
@@ -274,6 +347,16 @@ def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
         shell = _try_shell_at_screen_for_listitem(step, int(use_ax), int(use_ay))
         if shell:
             return _shell_result_from_target(shell, off_x, off_y, tw, th)
+
+    # UIAutomationCore acc-name定位作为回退方案
+    uia_core_result = _try_uia_core_locate(step, off_x, off_y, tw, th)
+    if uia_core_result:
+        return uia_core_result
+
+    # OCR文本定位作为回退方案
+    ocr_result = _try_ocr_locate(step, off_x, off_y, tw, th)
+    if ocr_result:
+        return ocr_result
 
     # 有录制锚点时优先 ROI，减少全屏截图导致的黑屏/卡顿
     visual_attempts: List[Tuple[Optional[int], Optional[int], str]] = [
@@ -290,6 +373,7 @@ def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
                 anchor_x=ax_try,
                 anchor_y=ay_try,
             )
+            x, y = _try_dpi_calibration(x, y)
             if via in ("visual", "visual_roi"):
                 shell = _try_shell_at_screen_for_listitem(step, x, y)
                 if shell:

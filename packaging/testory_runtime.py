@@ -70,11 +70,11 @@ def verify_bundled_python(root: Path, *, timeout_sec: float = 30.0) -> Tuple[Opt
 
     protected = (root / "runtime" / "testory_app" / "TestoryBackend.exe").is_file()
     if protected:
-        probe = "import webview; import sys; print(sys.executable)"
+        probe = "import sys; import webview; print(sys.executable)"
     elif (root / "app.py").is_file():
-        probe = "import webview; import database; import requests; print(sys.executable)"
+        probe = "import sys; import webview; import database; import requests; print(sys.executable)"
     else:
-        probe = "import webview; print(sys.executable)"
+        probe = "import sys; import webview; print(sys.executable)"
 
     try:
         proc = subprocess.run(

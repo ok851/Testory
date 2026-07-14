@@ -1,4 +1,4 @@
-﻿# 将运行所需文件复制到发布目录，供 Inno Setup 打包
+# 将运行所需文件复制到发布目录，供 Inno Setup 打包
 param(
     [string] $OutDir = 'dist\uat_release',
     [string] $Root = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -54,7 +54,11 @@ New-Item -ItemType Directory -Path $Out -Force | Out-Null
 
 $exclude = @(
     ".git", ".venv", "__pycache__", ".pytest_cache",
-    "dist", "node_modules", "screenshots", "videos", "logs"
+    "dist", "node_modules", "screenshots", "videos", "logs",
+    "mobile_assistant_apk_v2", "docs", "jenkins",
+    "data", "mobile_sync", "%UAT_DATA_DIR%",
+    "examples", "browser_extension",
+    "build", "enterprise.key", "license.key"
 )
 
 Get-ChildItem -Path $Root -Force | Where-Object {

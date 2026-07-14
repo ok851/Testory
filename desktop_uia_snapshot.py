@@ -20,9 +20,56 @@ _VOLATILE_NAME_PATTERNS = (
     re.compile(r"\d+\s*(KB|MB|GB|字节)", re.I),
 )
 
+_DESKTOP_ROOT_NAME_PATTERN = re.compile(r"^(桌面|Desktop|desktop)\s*\d*$", re.I)
+
+
+def _is_desktop_root_name(name: str) -> bool:
+    n = (name or "").strip()
+    if not n:
+        return False
+    return bool(_DESKTOP_ROOT_NAME_PATTERN.match(n))
+
 _TEXT_LIKE = frozenset({"text", "static", "document"})
 _LIST_ITEM = "listitem"
 _SYS_LISTVIEW = "syslistview32"
+
+_PSEUDO_CONTAINER_PATTERNS = (
+    "chrome",
+    "renderwidget",
+    "legacy window",
+    "widgetwin",
+    "corewindow",
+    "webview",
+    "directui",
+    "cef",
+    "electron",
+    "chromium",
+    "tabwindowclass",
+)
+
+_INTERACTIVE_TYPES = frozenset({
+    "button",
+    "edit",
+    "listitem",
+    "hyperlink",
+    "combobox",
+    "checkbox",
+    "radiobutton",
+    "menuitem",
+    "toolbar",
+    "tab",
+})
+
+_CONTAINER_TYPES = frozenset({
+    "pane",
+    "window",
+    "group",
+    "frame",
+    "scrollbar",
+    "dialog",
+    "client",
+    "desktop",
+})
 
 
 @dataclass
@@ -142,6 +189,104 @@ def _element_rect_center(el: Any) -> Optional[Tuple[int, int]]:
     return (int((l + r) // 2), int((t + b) // 2))
 
 
+def _is_pseudo_container(el: Any) -> bool:
+    name = (_element_name(el) or "").lower()
+    cls = (_element_class_name(el) or "").lower()
+    ct = (_element_control_type(el) or "").lower()
+    combined = f"{name} {cls} {ct}"
+    return any(p in combined for p in _PSEUDO_CONTAINER_PATTERNS)
+
+
+def _is_interactive_type(ct: str) -> bool:
+    return ct.lower() in _INTERACTIVE_TYPES or any(t in ct.lower() for t in _INTERACTIVE_TYPES)
+
+
+def _is_container_type(ct: str) -> bool:
+    return ct.lower() in _CONTAINER_TYPES or any(t in ct.lower() for t in _CONTAINER_TYPES)
+
+
+def _find_deepest_interactive_element(
+    el: Any,
+    max_depth: int = 8,
+    depth: int = 0,
+    visited: Optional[set] = None,
+) -> Any:
+    if el is None or depth >= max_depth:
+        return el
+
+    if visited is None:
+        visited = set()
+
+    try:
+        el_id = id(el)
+        if el_id in visited:
+            return el
+        visited.add(el_id)
+    except Exception:
+        pass
+
+    ct = _element_control_type(el).lower()
+
+    if _is_interactive_type(ct):
+        return el
+
+    children = []
+    try:
+        children = list(el.children())
+    except Exception:
+        pass
+
+    if not children:
+        try:
+            children = list(el.descendants(depth=1))[:20]
+        except Exception:
+            return el
+
+    best_child = None
+    best_score = -1
+
+    for child in children:
+        try:
+            child_ct = _element_control_type(child).lower()
+            if _is_container_type(child_ct) and not _is_pseudo_container(child):
+                continue
+
+            child_rect = _element_rect(child)
+            if not child_rect:
+                continue
+
+            child_w = child_rect[2] - child_rect[0]
+            child_h = child_rect[3] - child_rect[1]
+            if child_w < 8 or child_h < 8:
+                continue
+
+            result = _find_deepest_interactive_element(child, max_depth, depth + 1, visited)
+
+            if result is None:
+                continue
+
+            result_ct = _element_control_type(result).lower()
+            score = 0
+
+            if _is_interactive_type(result_ct):
+                score += 10
+            if result_ct in ("button", "edit", "listitem"):
+                score += 5
+            if _element_name(result):
+                score += 3
+
+            if score > best_score:
+                best_score = score
+                best_child = result
+        except Exception:
+            continue
+
+    if best_child is not None:
+        return best_child
+
+    return el
+
+
 def rect_with_padding(
     rect: Tuple[int, int, int, int], *, pad: int = 4, min_side: int = 24
 ) -> Tuple[int, int, int, int]:
@@ -224,6 +369,12 @@ def _build_parent_chain(el: Any, *, max_depth: int = 5) -> List[Dict[str, Any]]:
             low_cls = (_element_class_name(cur) or "").lower()
             if low_cls in ("workerw", "progman"):
                 node["app"] = "explorer"
+        if _is_desktop_root_name(str(node.get("name", ""))) or (
+            ct.lower() in ("window", "pane") and (node.get("class_name") or "").lower() in (
+                "regex:(workerw|progman)", "workerw", "progman"
+            )
+        ):
+            break
         chain.insert(0, {k: v for k, v in node.items() if v})
         try:
             cur = cur.parent()
@@ -277,6 +428,31 @@ def sanitize_selector(el: Any, parent_chain: List[Dict[str, Any]]) -> Dict[str, 
 
 def _capture_impl(x: int, y: int) -> SnapshotCaptureResult:
     try:
+        from desktop_uia_core import capture_element_at_point
+
+        core_result = capture_element_at_point(int(x), int(y))
+        if core_result.get("ok"):
+            rect = core_result.get("bounding_rect")
+            label = core_result.get("element_label", "")
+            ct = core_result.get("control_type", "")
+            selector = core_result.get("selector", {})
+
+            # 检查 rect 是否有效
+            if rect and len(rect) == 4 and (rect[2] - rect[0]) >= 1 and (rect[3] - rect[1]) >= 1:
+                center = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+                return SnapshotCaptureResult(
+                    ok=True,
+                    element_snapshot={"selector": selector},
+                    screen_center=center,
+                    bounding_rect=rect,
+                    element_label=label,
+                    control_type=ct,
+                )
+            # rect 无效，回退到 pywinauto
+    except Exception:
+        pass
+
+    try:
         import pythoncom  # type: ignore
     except ImportError:
         return SnapshotCaptureResult(
@@ -290,23 +466,40 @@ def _capture_impl(x: int, y: int) -> SnapshotCaptureResult:
         desktop = Desktop(backend="uia")
         raw = desktop.from_point(int(x), int(y))
         el = _normalize_desktop_hit(raw)
+
         if el is None:
             uia_result = SnapshotCaptureResult(
                 ok=False, error_code="no_element", message="未命中控件"
             )
         else:
+            if _is_pseudo_container(el):
+                el = _find_deepest_interactive_element(el)
+
             center = _element_rect_center(el)
             bounds = _element_rect(el)
             chain = _build_parent_chain(el)
             selector = sanitize_selector(el, chain)
             label = _extract_filename_label(_element_name(el))
             ct = _element_control_type(el)
-            if not selector.get("key_candidates"):
+            clean_label = (label or "").strip()
+            is_desktop_root = _is_desktop_root_name(clean_label)
+            if is_desktop_root:
+                uia_result = SnapshotCaptureResult(
+                    ok=False,
+                    error_code="desktop_root",
+                    message=f"命中桌面根节点「{clean_label}」，非应用元素",
+                    screen_center=center,
+                    bounding_rect=bounds,
+                    element_label="",
+                    control_type=ct,
+                )
+            elif not selector.get("key_candidates"):
                 label = label or ct or ""
                 if label and not _is_volatile_name(label):
                     selector["key_candidates"] = [
                         {"property": "uia-name", "value": label, "match": "equals"}
                     ]
+                    selector["resolved_via"] = "uia_window"
             if not selector.get("key_candidates"):
                 uia_result = SnapshotCaptureResult(
                     ok=False,
@@ -396,6 +589,30 @@ _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="uia-snap")
 
 def _peek_impl(x: int, y: int) -> ElementPeekResult:
     try:
+        from desktop_uia_core import capture_element_at_point
+
+        core_result = capture_element_at_point(int(x), int(y))
+        if core_result.get("ok"):
+            rect = core_result.get("bounding_rect")
+            label = core_result.get("element_label", "")
+            ct = core_result.get("control_type", "")
+
+            # 检查 rect 是否有效（非空且宽高大于0）
+            if not rect or len(rect) != 4 or (rect[2] - rect[0]) < 1 or (rect[3] - rect[1]) < 1:
+                pass  # 回退到 pywinauto
+            elif _is_desktop_root_name(label):
+                return ElementPeekResult(ok=False, error_code="desktop_root")
+            else:
+                return ElementPeekResult(
+                    ok=True,
+                    bounding_rect=rect,
+                    element_label=label,
+                    control_type=ct,
+                )
+    except Exception:
+        pass
+
+    try:
         import pythoncom  # type: ignore
     except ImportError:
         return ElementPeekResult(ok=False, error_code="no_pythoncom")
@@ -408,14 +625,22 @@ def _peek_impl(x: int, y: int) -> ElementPeekResult:
         el = _normalize_desktop_hit(raw)
         if el is None:
             return ElementPeekResult(ok=False, error_code="no_element")
+
+        if _is_pseudo_container(el):
+            el = _find_deepest_interactive_element(el)
+
         bounds = _element_rect(el)
         if not bounds:
             return ElementPeekResult(ok=False, error_code="no_rect")
+        label = _extract_filename_label(_element_name(el))
+        ct = _element_control_type(el)
+        if _is_desktop_root_name(label):
+            return ElementPeekResult(ok=False, error_code="desktop_root")
         return ElementPeekResult(
             ok=True,
             bounding_rect=bounds,
-            element_label=_extract_filename_label(_element_name(el)),
-            control_type=_element_control_type(el),
+            element_label=label,
+            control_type=ct,
         )
     except Exception as exc:
         code = "access_denied" if "com" in type(exc).__name__.lower() else "peek_error"

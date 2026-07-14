@@ -8,12 +8,22 @@ Win32 API 控件枚举与元素捕获：当 UIA 无法识别元素时的兜底�
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 if sys.platform != "win32":
     raise RuntimeError("desktop_win32_snapshot 仅支持 Windows")
+
+_DESKTOP_ROOT_NAME_PATTERN = re.compile(r"^(桌面|Desktop|desktop)\s*\d*$", re.I)
+
+
+def _is_desktop_root_name(name: str) -> bool:
+    n = (name or "").strip()
+    if not n:
+        return False
+    return bool(_DESKTOP_ROOT_NAME_PATTERN.match(n))
 
 _VOLATILE_CLASS_NAMES = frozenset({
     "tooltips_class32", "msctls_statusbar32", "scrollbar",
@@ -63,6 +73,43 @@ def window_from_point(x: int, y: int) -> Optional[int]:
     pt = POINT(int(x), int(y))
     hwnd = int(_ctypes_user32().WindowFromPoint(pt) or 0)
     return hwnd if hwnd else None
+
+
+_CWP_SKIPINVISIBLE = 0x0001
+_CWP_SKIPTRANSPARENT = 0x0002
+_CWP_ALL = 0x0000
+
+
+def child_window_from_point(parent_hwnd: int, x: int, y: int) -> Optional[int]:
+    import ctypes
+    from ctypes import wintypes
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    pt = POINT(int(x), int(y))
+    hwnd = int(
+        _ctypes_user32().ChildWindowFromPointEx(
+            int(parent_hwnd),
+            pt,
+            _CWP_SKIPINVISIBLE | _CWP_SKIPTRANSPARENT,
+        )
+        or 0
+    )
+    return hwnd if hwnd else None
+
+
+def deepest_child_at_point(x: int, y: int) -> Optional[int]:
+    top = window_from_point(int(x), int(y))
+    if not top:
+        return None
+    current = top
+    for _ in range(8):
+        child = child_window_from_point(current, int(x), int(y))
+        if not child or child == current:
+            break
+        current = child
+    return current
 
 
 def get_window_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
@@ -250,15 +297,102 @@ def get_parent_window_rect(x: int, y: int) -> Optional[Tuple[int, int, int, int]
 def capture_win32_element_at_point(
     x: int, y: int, *, max_depth: int = 3
 ) -> Win32CaptureResult:
-    hwnd = window_from_point(int(x), int(y))
-    if not hwnd:
+    top_hwnd = window_from_point(int(x), int(y))
+    if not top_hwnd:
         return Win32CaptureResult(
             ok=False,
             error_code="no_window",
             message="Win32 WindowFromPoint 未命中任何窗口",
         )
 
-    tree = build_win32_element_tree(hwnd, max_depth=max_depth)
+    top_cls = get_window_class_name(top_hwnd)
+    top_title = get_window_text(top_hwnd)
+    top_rect = get_window_rect(top_hwnd)
+    top_proc = get_process_name_from_hwnd(top_hwnd)
+
+    if _is_desktop_root_name(top_title) or _is_desktop_root_name(top_cls):
+        return Win32CaptureResult(
+            ok=False,
+            error_code="desktop_root",
+            message="Win32 WindowFromPoint 命中桌面根节点",
+            screen_center=(int(x), int(y)),
+            bounding_rect=top_rect,
+            element_label="",
+            control_type="Window",
+            window_title=top_title or "",
+            process_name=top_proc,
+        )
+
+    deep = deepest_child_at_point(int(x), int(y))
+    if deep and deep != top_hwnd:
+        child_cls = get_window_class_name(deep)
+        child_text = get_window_text(deep)
+        child_rect = get_window_rect(deep)
+        if child_rect:
+            crw = child_rect[2] - child_rect[0]
+            crh = child_rect[3] - child_rect[1]
+            if crw < 1920 and crh < 1080 and 4 <= crw <= 1200 and 4 <= crh <= 600:
+                cct = _control_type_from_class(child_cls)
+                cx_ctr = (child_rect[0] + child_rect[2]) // 2
+                cy_ctr = (child_rect[1] + child_rect[3]) // 2
+
+                key_candidates: List[Dict[str, str]] = []
+                if child_text and not _is_desktop_root_name(child_text):
+                    key_candidates.append({
+                        "property": "name",
+                        "value": child_text,
+                        "match": "equals",
+                    })
+                if not key_candidates and child_cls:
+                    key_candidates.append({
+                        "property": "class_name",
+                        "value": child_cls,
+                        "match": "equals",
+                    })
+
+                parent_chain: List[Dict[str, Any]] = []
+                top_hw = get_top_level_window(deep)
+                top_c = get_window_class_name(top_hw)
+                top_t = get_window_text(top_hw)
+                top_r = get_window_rect(top_hw)
+                if top_t or top_c:
+                    parent_chain.append({
+                        "control_type": "Window",
+                        "class_name": top_c,
+                        "name": top_t,
+                        "automation_id": "",
+                        "bounding_rect": top_r,
+                        "process_name": get_process_name_from_hwnd(top_hw),
+                    })
+                parent_chain.append({
+                    "control_type": cct,
+                    "class_name": child_cls,
+                    "name": child_text,
+                    "automation_id": "",
+                    "bounding_rect": child_rect,
+                })
+
+                selector = {
+                    "anchor_props": cct,
+                    "key_candidates": key_candidates,
+                    "parent_chain": parent_chain,
+                    "resolved_via": "win32",
+                }
+                if top_r:
+                    selector["window_bounds"] = top_r
+
+                return Win32CaptureResult(
+                    ok=bool(key_candidates) or bool(child_text),
+                    element_snapshot={"selector": selector},
+                    screen_center=(cx_ctr, cy_ctr),
+                    bounding_rect=child_rect,
+                    element_label=child_text,
+                    control_type=cct,
+                    window_title=top_t or "",
+                    process_name=get_process_name_from_hwnd(top_hw) or "",
+                )
+
+    tree = build_win32_element_tree(top_hwnd, max_depth=max_depth)
     if not tree:
         return Win32CaptureResult(
             ok=False,
@@ -274,12 +408,25 @@ def capture_win32_element_at_point(
     window_title = root.get("window_title") or ""
     process_name = root.get("process_name") or ""
 
+    if _is_desktop_root_name(element_label) or _is_desktop_root_name(window_title):
+        return Win32CaptureResult(
+            ok=False,
+            error_code="desktop_root",
+            message="Win32 WindowFromPoint 命中桌面根节点",
+            screen_center=(int(x), int(y)),
+            bounding_rect=root.get("bounding_rect"),
+            element_label="",
+            control_type=control_type,
+            window_title=window_title,
+            process_name=process_name,
+        )
+
     if center:
         cx, cy = center
     else:
         cx, cy = int(x), int(y)
 
-    key_candidates: List[Dict[str, str]] = []
+    key_candidates = []
     if element_label:
         key_candidates.append({
             "property": "name",
@@ -294,24 +441,24 @@ def capture_win32_element_at_point(
             "match": "equals",
         })
 
-    parent_chain: List[Dict[str, Any]] = []
-    top_hwnd = get_top_level_window(hwnd)
-    top_cls = get_window_class_name(top_hwnd)
-    top_title = get_window_text(top_hwnd)
-    top_rect = get_window_rect(top_hwnd)
+    parent_chain = []
+    top_hw = get_top_level_window(top_hwnd)
+    top_c = get_window_class_name(top_hw)
+    top_t = get_window_text(top_hw)
+    top_r = get_window_rect(top_hw)
 
-    if top_title or top_cls:
+    if top_t or top_c:
         parent_chain.append({
             "control_type": "Window",
-            "class_name": top_cls,
-            "name": top_title,
+            "class_name": top_c,
+            "name": top_t,
             "automation_id": "",
-            "bounding_rect": top_rect,
-            "process_name": get_process_name_from_hwnd(top_hwnd),
+            "bounding_rect": top_r,
+            "process_name": get_process_name_from_hwnd(top_hw),
         })
 
-    if hwnd != top_hwnd and (element_label or cls):
-        rect = get_window_rect(hwnd)
+    if top_hwnd != top_hw and (element_label or cls):
+        rect = get_window_rect(top_hwnd)
         parent_chain.append({
             "control_type": control_type,
             "class_name": cls,
@@ -335,8 +482,8 @@ def capture_win32_element_at_point(
         "resolved_via": "win32",
     }
 
-    if top_rect:
-        selector["window_bounds"] = top_rect
+    if top_r:
+        selector["window_bounds"] = top_r
 
     element_snapshot = {"selector": selector}
 

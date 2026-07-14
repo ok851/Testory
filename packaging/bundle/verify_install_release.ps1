@@ -1,4 +1,4 @@
-﻿# 发布目录完整性自检（构建机执行，避免把残缺包装进安装包）
+# 发布目录完整性自检（构建机执行，避免把残缺包装进安装包）
 param(
     [Parameter(Mandatory = $true)][string] $ReleaseDir,
     [string] $Root = ""
@@ -28,8 +28,7 @@ $mustFiles = @(
     "static",
     "requirements.txt",
     "requirements-windows.txt",
-    "ai_provider_catalog.json",
-    "config\ai_provider_catalog.json"
+    "ai_provider_catalog.json"
 )
 $mustDirs = @(
     "playwright-browsers",

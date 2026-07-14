@@ -839,6 +839,9 @@ def wait_for_desktop_effect(
     if not require_verify:
         return True
     if not (keyword or "").strip() and not desktop_shell:
+        fg = get_foreground_hwnd()
+        if fg and fg != fg_before:
+            return True
         return False
     baseline_titles = titles_before if titles_before is not None else set(_enum_visible_window_titles())
     baseline_hwnds = hwnds_before if hwnds_before is not None else {h for h, _t, _c in _enum_visible_windows()}
