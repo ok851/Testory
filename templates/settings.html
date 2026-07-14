@@ -75,6 +75,18 @@
                 </div>
             </div>
 
+            <!-- 组件管理 -->
+            <div class="bg-white dark:bg-gray-900 rounded-xl shadow border border-gray-200 dark:border-gray-700 p-6" id="componentsSection">
+                <h3 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1 flex items-center gap-2">
+                    <i class="fas fa-puzzle-piece text-purple-500"></i>
+                    <span>组件管理</span>
+                </h3>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">按需安装可选组件，减少安装包体积。</p>
+                <div id="componentsList" class="space-y-3">
+                    <div class="text-sm text-gray-400">加载中...</div>
+                </div>
+            </div>
+
             <p id="settingsSaved" class="hidden text-sm text-green-600 dark:text-green-400" data-i18n="settings_saved">已应用</p>
         </div>
     </div>
@@ -225,10 +237,230 @@
                 }
             });
 
+            // ---------- 组件管理 ----------
+            var _compPollTimers = {};
+
+            function renderComponent(comp) {
+                var installed = comp.installed;
+                var status = comp._status || (installed ? 'done' : 'idle');
+                var percent = comp._percent !== undefined ? comp._percent : (installed ? 100 : 0);
+                var message = comp._message || '';
+                var badgeClass = installed
+                    ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+                    : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
+                var badgeText = installed ? '已安装' : '未安装';
+                if (status === 'installing') {
+                    badgeClass = 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
+                    badgeText = '安装中';
+                } else if (status === 'error') {
+                    badgeClass = 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300';
+                    badgeText = '安装失败';
+                }
+
+                var html =
+                    '<div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4 hover:border-purple-300 dark:hover:border-purple-600 transition-colors" data-comp-id="' + comp.id + '">' +
+                        '<div class="flex items-start justify-between gap-3">' +
+                            '<div class="flex items-start gap-3">' +
+                                '<div class="text-2xl">' + (comp.icon || '📦') + '</div>' +
+                                '<div class="flex-1 min-w-0">' +
+                                    '<div class="flex items-center gap-2 flex-wrap">' +
+                                        '<h4 class="font-semibold text-gray-900 dark:text-gray-100 text-sm">' + comp.name + '</h4>' +
+                                        '<span class="text-xs px-2 py-0.5 rounded-full ' + badgeClass + '">' + badgeText + '</span>' +
+                                    '</div>' +
+                                    '<p class="text-xs text-gray-500 dark:text-gray-400 mt-1">' + comp.description + '</p>' +
+                                    '<p class="text-xs text-gray-400 dark:text-gray-500 mt-1">约 ' + comp.estimated_size_mb + ' MB</p>' +
+                                '</div>' +
+                            '</div>' +
+                            '<div class="flex-shrink-0">' +
+                                (installed
+                                    ? '<button type="button" class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed" disabled>已安装</button>'
+                                    : '<button type="button" class="comp-install-btn text-xs px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition-colors" data-id="' + comp.id + '">安装</button>') +
+                            '</div>' +
+                        '</div>' +
+                        (status === 'installing'
+                            ? '<div class="mt-3">' +
+                                '<div class="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5">' +
+                                    '<div class="bg-purple-500 h-1.5 rounded-full transition-all" style="width:' + percent + '%"></div>' +
+                                '</div>' +
+                                '<p class="text-xs text-gray-500 dark:text-gray-400 mt-1">' + (message || '正在安装...') + '</p>' +
+                              '</div>'
+                            : '') +
+                        (status === 'error'
+                            ? '<p class="text-xs text-red-500 dark:text-red-400 mt-2">' + (message || '安装失败，请检查网络后重试') + '</p>'
+                            : '') +
+                    '</div>';
+                return html;
+            }
+
+            async function loadComponents() {
+                var listEl = document.getElementById('componentsList');
+                if (!listEl) return;
+                try {
+                    var r = await fetch('/api/components', { credentials: 'same-origin' });
+                    var data = await r.json();
+                    if (!data.success || !data.components) {
+                        listEl.innerHTML = '<div class="text-sm text-red-500">加载失败</div>';
+                        return;
+                    }
+                    var comps = data.components;
+                    if (comps.length === 0) {
+                        listEl.innerHTML = '<div class="text-sm text-gray-400">暂无可选组件</div>';
+                        return;
+                    }
+                    var html = '';
+                    comps.forEach(function (c) { html += renderComponent(c); });
+                    listEl.innerHTML = html;
+                    bindInstallButtons();
+                } catch (e) {
+                    listEl.innerHTML = '<div class="text-sm text-red-500">加载失败: ' + String(e.message || e) + '</div>';
+                }
+            }
+
+            function bindInstallButtons() {
+                var btns = document.querySelectorAll('.comp-install-btn');
+                btns.forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var id = btn.getAttribute('data-id');
+                        startInstall(id);
+                    });
+                });
+            }
+
+            async function startInstall(componentId) {
+                var btn = document.querySelector('.comp-install-btn[data-id="' + componentId + '"]');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.textContent = '准备中...';
+                }
+
+                try {
+                    var r = await fetch('/api/components/' + componentId + '/install', {
+                        method: 'POST',
+                        credentials: 'same-origin'
+                    });
+                    var data = await r.json();
+                    if (data.success) {
+                        pollInstallStatus(componentId);
+                    } else {
+                        alert('启动安装失败: ' + (data.error || '未知错误'));
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.textContent = '安装';
+                        }
+                    }
+                } catch (e) {
+                    alert('安装失败: ' + String(e.message || e));
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = '安装';
+                    }
+                }
+            }
+
+            function pollInstallStatus(componentId) {
+                if (_compPollTimers[componentId]) return;
+
+                function check() {
+                    fetch('/api/components/' + componentId + '/status', { credentials: 'same-origin' })
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            updateComponentUI(componentId, data);
+                            if (data.status === 'done' || data.installed) {
+                                clearInterval(_compPollTimers[componentId]);
+                                delete _compPollTimers[componentId];
+                                setTimeout(loadComponents, 500);
+                            } else if (data.status === 'error') {
+                                clearInterval(_compPollTimers[componentId]);
+                                delete _compPollTimers[componentId];
+                            }
+                        })
+                        .catch(function () {
+                            // 网络错误，继续轮询
+                        });
+                }
+
+                check();
+                _compPollTimers[componentId] = setInterval(check, 1500);
+            }
+
+            function updateComponentUI(componentId, data) {
+                var item = document.querySelector('[data-comp-id="' + componentId + '"]');
+                if (!item) return;
+
+                var installed = data.installed;
+                var status = data.status || (installed ? 'done' : 'idle');
+                var percent = data.percent !== undefined ? data.percent : (installed ? 100 : 0);
+                var message = data.message || '';
+
+                var badge = item.querySelector('.rounded-full');
+                if (badge) {
+                    if (status === 'installing') {
+                        badge.className = 'text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
+                        badge.textContent = '安装中';
+                    } else if (status === 'error') {
+                        badge.className = 'text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300';
+                        badge.textContent = '安装失败';
+                    } else if (installed) {
+                        badge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300';
+                        badge.textContent = '已安装';
+                    }
+                }
+
+                var existingProgress = item.querySelector('.bg-gray-100.dark\\:bg-gray-800.rounded-full.h-1\\.5');
+                if (status === 'installing') {
+                    if (!existingProgress) {
+                        var progressDiv = document.createElement('div');
+                        progressDiv.className = 'mt-3';
+                        progressDiv.innerHTML =
+                            '<div class="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5">' +
+                                '<div class="bg-purple-500 h-1.5 rounded-full transition-all" style="width:0%"></div>' +
+                            '</div>' +
+                            '<p class="text-xs text-gray-500 dark:text-gray-400 mt-1"></p>';
+                        item.appendChild(progressDiv);
+                    }
+                    var bar = item.querySelector('.bg-purple-500.h-1\\.5');
+                    var msg = item.querySelector('.text-gray-500.dark\\:text-gray-400.mt-1');
+                    if (bar) bar.style.width = percent + '%';
+                    if (msg) msg.textContent = message || '正在安装...';
+                } else if (existingProgress && status !== 'installing') {
+                    existingProgress.parentElement.remove();
+                }
+
+                var installBtn = item.querySelector('.comp-install-btn');
+                if (installBtn) {
+                    if (installed) {
+                        installBtn.disabled = true;
+                        installBtn.textContent = '已安装';
+                        installBtn.className = 'text-xs px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed';
+                    } else if (status === 'installing') {
+                        installBtn.disabled = true;
+                        installBtn.textContent = '安装中...';
+                    } else if (status === 'error') {
+                        installBtn.disabled = false;
+                        installBtn.textContent = '重试';
+                    }
+                }
+
+                var existingError = item.querySelector('.text-red-500.dark\\:text-red-400.mt-2');
+                if (status === 'error' && message) {
+                    if (!existingError) {
+                        var errP = document.createElement('p');
+                        errP.className = 'text-xs text-red-500 dark:text-red-400 mt-2';
+                        errP.textContent = message;
+                        item.appendChild(errP);
+                    } else {
+                        existingError.textContent = message;
+                    }
+                } else if (existingError && status !== 'error') {
+                    existingError.remove();
+                }
+            }
+
             document.addEventListener('DOMContentLoaded', function () {
                 syncLangButtons();
                 syncThemeButtons();
                 loadMobileSettings();
+                loadComponents();
             });
         })();
     </script>

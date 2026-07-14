@@ -14138,6 +14138,106 @@ def _run_case_worker_sync(case_id: int, user_id: int) -> dict:
             g.force_local_run = False
 
 
+# ---------- 组件管理 API ----------
+import threading
+
+_comp_install_lock = threading.Lock()
+_comp_install_status = {}
+
+
+@app.route("/api/components", methods=["GET"])
+def api_components_list():
+    """列出所有可选组件及其安装状态。"""
+    try:
+        from components_manager import list_components
+        components = list_components()
+        return jsonify({"success": True, "components": components})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/components/<component_id>/install", methods=["POST"])
+def api_component_install(component_id: str):
+    """安装指定组件（异步，后台执行）。"""
+    try:
+        from components_manager import is_installed, COMPONENT_DEFS, install
+
+        if component_id not in COMPONENT_DEFS:
+            return jsonify({"success": False, "error": f"未知组件: {component_id}"}), 400
+
+        if is_installed(component_id):
+            return jsonify({"success": True, "installed": True, "message": "组件已安装"})
+
+        with _comp_install_lock:
+            if _comp_install_status.get(component_id, {}).get("status") == "installing":
+                return jsonify({"success": True, "status": "installing", "message": "正在安装中..."})
+
+            _comp_install_status[component_id] = {
+                "status": "installing",
+                "percent": 0,
+                "message": "准备安装...",
+            }
+
+        def _do_install():
+            def _progress(status, percent, message):
+                _comp_install_status[component_id] = {
+                    "status": status,
+                    "percent": percent,
+                    "message": message,
+                }
+
+            try:
+                ok = install(component_id, progress=_progress)
+                if ok:
+                    _comp_install_status[component_id] = {
+                        "status": "done",
+                        "percent": 100,
+                        "message": "安装成功",
+                    }
+                else:
+                    last_msg = _comp_install_status.get(component_id, {}).get("message", "安装失败")
+                    _comp_install_status[component_id] = {
+                        "status": "error",
+                        "percent": 0,
+                        "message": last_msg,
+                    }
+            except Exception as e:
+                _comp_install_status[component_id] = {
+                    "status": "error",
+                    "percent": 0,
+                    "message": f"安装异常: {e}",
+                }
+
+        t = threading.Thread(target=_do_install, daemon=True)
+        t.start()
+
+        return jsonify({"success": True, "status": "installing", "message": "开始安装"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/components/<component_id>/status", methods=["GET"])
+def api_component_status(component_id: str):
+    """查询组件安装进度状态。"""
+    try:
+        from components_manager import is_installed, COMPONENT_DEFS
+
+        if component_id not in COMPONENT_DEFS:
+            return jsonify({"success": False, "error": f"未知组件: {component_id}"}), 400
+
+        status = _comp_install_status.get(component_id, {})
+        installed = is_installed(component_id)
+        return jsonify({
+            "success": True,
+            "installed": installed,
+            "status": status.get("status", "idle" if not installed else "done"),
+            "percent": status.get("percent", 100 if installed else 0),
+            "message": status.get("message", ""),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 from deployment_hooks import start_background_workers, wire_internal_runner  # noqa: E402
 
 wire_internal_runner(app, _run_case_worker_sync)

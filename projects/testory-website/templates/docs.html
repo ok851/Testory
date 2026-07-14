@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Testory 使用说明 — 安装指南、快速上手、功能介绍与常见问题解答。">
+    <title>使用说明 — {{ product_name }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+</head>
+<body class="docs-page">
+<div class="bg-canvas"></div>
+<div class="grid-overlay"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<header class="site-nav" id="top">
+    <div class="nav-inner">
+        <a href="{{ url_for('index') }}" class="nav-brand">
+            <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" class="nav-logo-mark" width="36" height="36">
+            <span>{{ product_name }}</span>
+        </a>
+        <nav class="nav-links">
+            <a href="{{ url_for('index') }}#features">产品能力</a>
+            <a href="{{ url_for('index') }}#pricing">定价</a>
+            <a href="{{ url_for('docs_page') }}" class="active">使用说明</a>
+            <a href="{{ url_for('index') }}#faq">FAQ</a>
+            <a href="{{ url_for('index') }}#contact">联系我们</a>
+        </nav>
+        <div class="nav-actions">
+            <a href="{{ url_for('download_latest') }}" class="btn btn-ghost">免费下载</a>
+            <a href="{{ url_for('pricing_page') }}" class="btn btn-primary">升级订阅</a>
+        </div>
+        <button type="button" class="nav-toggle" aria-label="菜单">☰</button>
+    </div>
+</header>
+
+<div class="docs-layout">
+    <aside class="docs-sidebar">
+        <div class="docs-sidebar-inner">
+            <h3 class="docs-sidebar-title">文档导航</h3>
+            <nav class="docs-nav">
+                <a href="#install" class="docs-nav-link">📦 安装指南</a>
+                <a href="#quickstart" class="docs-nav-link">🚀 快速上手</a>
+                <a href="#features" class="docs-nav-link">✨ 功能介绍</a>
+                <a href="#web-testing" class="docs-nav-link">— Web 自动化</a>
+                <a href="#api-testing" class="docs-nav-link">— 接口测试</a>
+                <a href="#ai-testing" class="docs-nav-link">— AI 测试</a>
+                <a href="#mobile-testing" class="docs-nav-link">— 移动端测试</a>
+                <a href="#desktop-testing" class="docs-nav-link">— 桌面混排</a>
+                <a href="#settings" class="docs-nav-link">⚙️ 系统设置</a>
+                <a href="#components" class="docs-nav-link">📦 组件管理</a>
+                <a href="#faq" class="docs-nav-link">❓ 常见问题</a>
+                <a href="#contact" class="docs-nav-link">📮 联系我们</a>
+            </nav>
+        </div>
+    </aside>
+
+    <main class="docs-content">
+        <div class="container">
+            <section class="docs-hero reveal">
+                <span class="section-tag">使用说明</span>
+                <h1>Testory 使用手册</h1>
+                <p class="docs-lead">从安装到精通，一步一步带您掌握 AI 驱动的全链路自动化测试平台</p>
+                <div class="docs-quick-links">
+                    <a href="#install" class="btn btn-primary">开始安装 →</a>
+                    <a href="#quickstart" class="btn btn-ghost">快速上手</a>
+                </div>
+            </section>
+
+            <section id="install" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">入门</span>
+                    <h2>📦 安装指南</h2>
+                </div>
+
+                <div class="docs-card">
+                    <h3>系统要求</h3>
+                    <ul>
+                        <li><strong>操作系统</strong>：Windows 10 / Windows 11（64 位）</li>
+                        <li><strong>内存</strong>：建议 8GB 及以上</li>
+                        <li><strong>磁盘空间</strong>：基础安装约 500MB，完整组件约 2GB</li>
+                        <li><strong>网络</strong>：首次使用部分功能需联网下载组件</li>
+                    </ul>
+                </div>
+
+                <div class="docs-card">
+                    <h3>安装步骤</h3>
+                    <ol class="steps-list">
+                        <li>
+                            <h4>下载安装包</h4>
+                            <p>从官网下载 <code>Testory_Setup.exe</code> 安装程序。</p>
+                        </li>
+                        <li>
+                            <h4>运行安装向导</h4>
+                            <p>双击安装包，按照提示完成安装。安装过程约 1-3 分钟。</p>
+                            <div class="notice info">
+                                <strong>💡 提示：</strong>若系统缺少 WebView2 运行时，安装程序会自动静默安装，请耐心等待。
+                            </div>
+                        </li>
+                        <li>
+                            <h4>启动软件</h4>
+                            <p>从开始菜单或桌面快捷方式启动 Testory。首次启动可能需要 15-60 秒初始化。</p>
+                        </li>
+                        <li>
+                            <h4>按需安装组件</h4>
+                            <p>首次使用 Web 测试、视觉定位等功能时，软件会自动下载所需组件。您也可以提前在「设置 → 组件管理」中安装。</p>
+                        </li>
+                    </ol>
+                </div>
+
+                <div class="docs-card">
+                    <h3>卸载方法</h3>
+                    <p>通过「控制面板 → 程序和功能」找到 Testory，选择卸载即可。用户数据默认保留，如需完全清除，请手动删除 <code>%LOCALAPPDATA%\Testory</code> 文件夹。</p>
+                </div>
+            </section>
+
+            <section id="quickstart" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">入门</span>
+                    <h2>🚀 快速上手</h2>
+                </div>
+
+                <div class="docs-card">
+                    <h3>创建您的第一个项目</h3>
+                    <ol class="steps-list">
+                        <li>
+                            <h4>新建项目</h4>
+                            <p>启动软件后，点击「新建项目」，输入项目名称和描述，选择项目类型。</p>
+                        </li>
+                        <li>
+                            <h4>选择测试类型</h4>
+                            <p>根据您的需求选择：Web 自动化、接口测试、AI 测试、移动端测试或桌面混排。</p>
+                        </li>
+                        <li>
+                            <h4>录制或编写用例</h4>
+                            <p>使用浏览器录制功能自动生成步骤，或手动编排测试步骤。</p>
+                        </li>
+                        <li>
+                            <h4>运行测试</h4>
+                            <p>点击「运行」按钮，查看实时执行过程和结果报告。</p>
+                        </li>
+                    </ol>
+                </div>
+
+                <div class="docs-card">
+                    <h3>界面概览</h3>
+                    <ul>
+                        <li><strong>左侧导航</strong>：项目列表、用例管理、执行记录、缺陷管理等</li>
+                        <li><strong>顶部工具栏</strong>：运行、停止、调试、设置等快捷操作</li>
+                        <li><strong>主工作区</strong>：用例编辑、步骤编排、结果查看</li>
+                        <li><strong>底部面板</strong>：执行日志、控制台输出、进度显示</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section id="features" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">功能</span>
+                    <h2>✨ 功能介绍</h2>
+                </div>
+            </section>
+
+            <section id="web-testing" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">功能</span>
+                    <h3>🌐 Web 自动化测试</h3>
+                </div>
+
+                <div class="docs-card">
+                    <h4>主要功能</h4>
+                    <ul>
+                        <li>基于 Playwright 的多浏览器驱动（Chromium / Chrome / Edge / Firefox）</li>
+                        <li>浏览器扩展拾取元素，步骤可视化编辑</li>
+                        <li>智能元素采集与定位器自愈</li>
+                        <li>支持 iframe、弹窗、文件上传等复杂场景</li>
+                        <li>断言与数据提取</li>
+                        <li>可与桌面 ERP 步骤混排，覆盖跨系统业务流</li>
+                    </ul>
+                </div>
+
+                <div class="docs-card">
+                    <h4>快速开始 Web 测试</h4>
+                    <ol class="steps-list">
+                        <li>在项目中选择「Web 测试」</li>
+                        <li>点击「录制」按钮，选择浏览器</li>
+                        <li>在浏览器中操作，步骤会自动记录</li>
+                        <li>停止录制，自动生成测试用例</li>
+                        <li>编辑步骤、添加断言</li>
+                        <li>运行测试，查看结果</li>
+                    </ol>
+                    <div class="notice warning">
+                        <strong>📌 注意：</strong>首次使用 Web 测试时，需要下载 Playwright Chromium 浏览器（约 150MB），请耐心等待。
+                    </div>
+                </div>
+            </section>
+
+            <section id="api-testing" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">功能</span>
+                    <h3>🔌 接口自动化测试</h3>
+                </div>
+
+                <div class="docs-card">
+                    <h4>主要功能</h4>
+                    <ul>
+                        <li>REST API 用例独立管理</li>
+                        <li>支持 GET / POST / PUT / DELETE 等常用方法</li>
+                        <li>断言与变量提取（JSONPath / 正则表达式）</li>
+                        <li>环境参数化与全局变量</li>
+                        <li>与 Web 用例同项目编排</li>
+                        <li>支持前置/后置脚本（JavaScript）</li>
+                        <li>接口文档导入（Postman / OpenAPI）</li>
+                    </ul>
+                </div>
+
+                <div class="docs-card">
+                    <h4>编写接口用例</h4>
+                    <ol class="steps-list">
+                        <li>选择「接口测试」模块</li>
+                        <li>点击「新建用例」，输入接口名称和 URL</li>
+                        <li>配置请求方法、Headers、Body</li>
+                        <li>添加断言（响应状态码、响应内容等）</li>
+                        <li>运行并查看结果</li>
+                    </ol>
+                </div>
+            </section>
+
+            <section id="ai-testing" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">功能</span>
+                    <h3>🤖 AI 自动化测试</h3>
+                </div>
+
+                <div class="docs-card">
+                    <h4>主要功能</h4>
+                    <ul>
+                        <li><strong>自然语言生成用例</strong>：用中文描述测试场景，AI 自动生成可执行步骤</li>
+                        <li><strong>智能元素定位</strong>：视觉 + 语义双重定位，元素变化自动自愈</li>
+                        <li><strong>失败诊断与修复</strong>：测试失败时 AI 分析原因并给出修复建议</li>
+                        <li><strong>自主探索</strong>：Hermes Agent 自主探索应用，发现潜在问题</li>
+                        <li><strong>对话式改步骤</strong>：用自然语言修改测试步骤</li>
+                    </ul>
+                </div>
+
+                <div class="docs-card">
+                    <h4>配置 AI 模型</h4>
+                    <p>Testory 支持两种 AI 使用方式：</p>
+                    <div class="feature-grid">
+                        <div class="feature-mini-card">
+                            <h5>💻 本地 Ollama（推荐）</h5>
+                            <ol>
+                                <li>安装 <a href="https://ollama.com/download" target="_blank" rel="noopener">Ollama</a></li>
+                                <li>拉取模型：<code>ollama pull llama3:8b-instruct</code></li>
+                                <li>在 Testory AI 设置中选择「本地 Ollama」</li>
+                            </ol>
+                        </div>
+                        <div class="feature-mini-card">
+                            <h5>☁️ 云端 API</h5>
+                            <ol>
+                                <li>获取 OpenAI 兼容的 API Key</li>
+                                <li>在 AI 设置中填入 API 地址和密钥</li>
+                                <li>选择对应模型即可使用</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="mobile-testing" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">功能</span>
+                    <h3>📱 移动端测试</h3>
+                </div>
+
+                <div class="docs-card">
+                    <h4>主要功能</h4>
+                    <ul>
+                        <li>Android 真机与模拟器支持</li>
+                        <li>USB 连接与无线调试（Android 11+）</li>
+                        <li>投屏录制与点屏录制</li>
+                        <li>Appium 关键字编排</li>
+                        <li>与 Web / 接口用例同平台管理</li>
+                        <li>一键生成移动端用例</li>
+                    </ul>
+                </div>
+
+                <div class="docs-card">
+                    <h4>连接 Android 设备</h4>
+                    <ol class="steps-list">
+                        <li>手机开启「开发者选项」和「USB 调试」</li>
+                        <li>用 USB 线连接电脑</li>
+                        <li>手机上允许 USB 调试授权</li>
+                        <li>在 Testory 中点击「连接设备」</li>
+                        <li>连接成功后即可开始录制测试</li>
+                    </ol>
+                </div>
+            </section>
+
+            <section id="desktop-testing" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">功能</span>
+                    <h3>🖥️ 桌面混排测试</h3>
+                </div>
+
+                <div class="docs-card">
+                    <h4>主要功能</h4>
+                    <ul>
+                        <li>Windows UIA + 视觉定位双引擎</li>
+                        <li>Web、ERP 与桌面客户端步骤可在同一用例中混排执行</li>
+                        <li>桌面应用元素拾取</li>
+                        <li>图片识别与文字识别（OCR）</li>
+                        <li>键盘鼠标操作模拟</li>
+                    </ul>
+                </div>
+
+                <div class="notice info">
+                    <strong>💡 提示：</strong>桌面自动化测试需要保持电脑已登录状态，远程桌面断开连接可能导致测试失败。
+                </div>
+            </section>
+
+            <section id="settings" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">配置</span>
+                    <h2>⚙️ 系统设置</h2>
+                </div>
+
+                <div class="docs-card">
+                    <h3>常用设置项</h3>
+                    <ul>
+                        <li><strong>常规设置</strong>：语言、主题、启动行为</li>
+                        <li><strong>浏览器设置</strong>：默认浏览器、无头模式、视口大小</li>
+                        <li><strong>AI 设置</strong>：模型选择、API 配置、提示词模板</li>
+                        <li><strong>组件管理</strong>：查看和安装可选组件</li>
+                        <li><strong>代理设置</strong>：网络代理配置</li>
+                        <li><strong>关于</strong>：版本信息、许可证管理</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section id="components" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">配置</span>
+                    <h2>📦 组件管理</h2>
+                </div>
+
+                <div class="docs-card">
+                    <h3>可选组件列表</h3>
+                    <div class="component-grid">
+                        <div class="component-card">
+                            <div class="component-icon">🌐</div>
+                            <div class="component-info">
+                                <h4>Playwright Chromium</h4>
+                                <p>内置 Chromium 浏览器，用于 Web 自动化测试</p>
+                                <p class="component-size">约 150-200 MB</p>
+                            </div>
+                        </div>
+                        <div class="component-card">
+                            <div class="component-icon">👁️</div>
+                            <div class="component-info">
+                                <h4>OpenCV 视觉库</h4>
+                                <p>计算机视觉库，用于视觉定位和图像识别</p>
+                                <p class="component-size">约 60-80 MB</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="docs-card">
+                    <h3>安装方式</h3>
+                    <ol class="steps-list">
+                        <li>打开「设置 → 组件管理」</li>
+                        <li>查看组件列表和状态</li>
+                        <li>点击「安装」按钮开始下载</li>
+                        <li>等待下载和安装完成</li>
+                        <li>安装成功后即可使用对应功能</li>
+                    </ol>
+                    <div class="notice info">
+                        <strong>💡 小贴士：</strong>您也可以在使用对应功能时，由软件自动提示安装，无需提前手动安装。
+                    </div>
+                </div>
+            </section>
+
+            <section id="faq" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">FAQ</span>
+                    <h2>❓ 常见问题</h2>
+                </div>
+
+                <div class="faq-list">
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">首次启动为什么很慢？</button>
+                        <div class="faq-a">首次启动需要初始化运行环境和缓存，大约需要 15-60 秒，属正常现象。后续启动会快很多。</div>
+                    </div>
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">窗口一直空白怎么办？</button>
+                        <div class="faq-a">请等待 1 分钟；若仍空白，请检查是否安装了 WebView2 运行时，或联系技术支持查看日志（安装目录 logs 文件夹）。</div>
+                    </div>
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">提示端口被占用？</button>
+                        <div class="faq-a">关闭其他正在运行的 Testory 实例，或重启电脑后再试。</div>
+                    </div>
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">Web 测试浏览器下载失败？</button>
+                        <div class="faq-a">请检查网络连接，或配置国内镜像源后重试。也可以手动安装 Chrome/Edge 浏览器，使用外接浏览器模式。</div>
+                    </div>
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">如何升级到团队版？</button>
+                        <div class="faq-a">在软件中登录账号后，从用户菜单选择「升级订阅」，跳转官网完成支付。支付后输入 License Key 即可激活。</div>
+                    </div>
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">数据保存在哪里？</button>
+                        <div class="faq-a">个人版数据保存在 <code>%LOCALAPPDATA%\Testory</code> 目录下。团队版数据集中存储在团队服务器上。</div>
+                    </div>
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">和「浏览器打开 localhost」有什么区别？</button>
+                        <div class="faq-a">桌面版不会自动打开系统浏览器；界面在软件窗口内显示，操作体验更像原生应用。</div>
+                    </div>
+                    <div class="faq-item">
+                        <button type="button" class="faq-q">支持 Linux 或 macOS 吗？</button>
+                        <div class="faq-a">Web 和接口用例可通过团队服务器模式在 Linux 上运行调度；含桌面步骤的混排用例需在 Windows 客户端执行。macOS 客户端在规划中。</div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="contact" class="docs-section reveal">
+                <div class="section-header">
+                    <span class="section-tag">支持</span>
+                    <h2>📮 联系我们</h2>
+                </div>
+
+                <div class="docs-card">
+                    <p>如果您在使用过程中遇到问题，或有任何建议，欢迎通过以下方式联系我们：</p>
+                    <div class="contact-detail">
+                        <span>✉️</span>
+                        <span>{{ contact_email }}</span>
+                    </div>
+                    {% if contact_phone %}
+                    <div class="contact-detail">
+                        <span>📞</span>
+                        <span>{{ contact_phone }}</span>
+                    </div>
+                    {% endif %}
+                    <div class="contact-detail">
+                        <span>🕐</span>
+                        <span>工作日 9:00 – 18:00（北京时间）</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+</div>
+
+<footer class="site-footer">
+    <div class="container">
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <a href="#top" class="nav-brand">
+                    <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}" class="nav-logo-mark" width="32" height="32">
+                    <span>{{ product_name }}</span>
+                </a>
+                <p>AI 驱动的 Web · 接口 · 移动端全链路自动化测试平台，让质量保障更高效、更智能。</p>
+            </div>
+            <div class="footer-col">
+                <h4>产品</h4>
+                <a href="{{ url_for('index') }}#features">产品能力</a>
+                <a href="{{ url_for('index') }}#pricing">定价方案</a>
+                <a href="{{ url_for('download_latest') }}">下载客户端</a>
+            </div>
+            <div class="footer-col">
+                <h4>资源</h4>
+                <a href="{{ url_for('docs_page') }}">使用说明</a>
+                <a href="{{ url_for('docs_page') }}#faq">常见问题</a>
+                <a href="{{ url_for('index') }}#contact">联系我们</a>
+            </div>
+            <div class="footer-col">
+                <h4>部署</h4>
+                <a href="{{ url_for('download_latest') }}">Windows 客户端</a>
+                <a href="{{ url_for('index') }}#contact">团队服务器</a>
+                <a href="{{ url_for('index') }}#contact">企业私有化</a>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <span>© {{ year }} Testory. All rights reserved.</span>
+            <span>AI 自动化测试平台 · 赋能每一次发布</span>
+        </div>
+    </div>
+</footer>
+
+<script src="{{ url_for('static', filename='js/site.js') }}"></script>
+</body>
+</html>

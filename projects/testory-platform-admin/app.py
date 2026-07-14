@@ -198,7 +198,7 @@ def _serve_release_download(release: dict):
             dl_name = (release.get("original_filename") or f"Testory_Setup_{release.get('version', 'latest')}.exe").strip()
             return send_file(path, as_attachment=True, download_name=dl_name)
     url = (release.get("download_url") or "").strip()
-    if url:
+    if url and (url.startswith("http://") or url.startswith("https://")):
         return redirect(url)
     return jsonify({"success": False, "error": "未配置安装包文件或下载地址"}), 404
 
@@ -221,7 +221,7 @@ def api_public_latest_release():
         "id": release.get("id"),
         "version": release.get("version"),
         "download_count": release.get("download_count"),
-        "has_file": bool(release.get("local_filename") or release.get("download_url")),
+        "has_file": bool(release.get("local_filename") or (release.get("download_url") and (release.get("download_url", "").startswith("http://") or release.get("download_url", "").startswith("https://")))),
         "file_size_bytes": release.get("file_size_bytes") or 0,
         "original_filename": release.get("original_filename") or "",
         "website_download_url": f"{WEBSITE_URL}/download/latest",
@@ -381,7 +381,7 @@ def api_upload_release():
     if not release_id and not version:
         return jsonify({"success": False, "error": "请填写版本号或选择已有版本"}), 400
     if not release_id:
-        release_id = _db.insert_release(version, download_url=f"/api/public/download/latest")
+        release_id = _db.insert_release(version, download_url="")
     safe_ext = Path(f.filename).suffix.lower() or ".exe"
     stored = f"release_{release_id}_{uuid.uuid4().hex[:10]}{safe_ext}"
     dest = RELEASE_FILES_DIR / stored

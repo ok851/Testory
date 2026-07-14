@@ -29,6 +29,7 @@
             <a href="#features">产品能力</a>
             <a href="#showcase">解决方案</a>
             <a href="#pricing">定价</a>
+            <a href="{{ url_for('docs_page') }}">使用说明</a>
             <a href="#download">下载</a>
             <a href="#faq">FAQ</a>
             <a href="#contact">联系我们</a>
@@ -314,7 +315,10 @@
                 {% if latest_release.file_size_label %}{{ latest_release.file_size_label }} · {% endif %}
                 已有 {{ latest_release.download_count }} 次下载
             </p>
-            <p class="download-hint">点击后将保存到本机「下载」文件夹，安装后连接团队服务器即可协作</p>
+            <p class="download-hint">安装约 1-3 分钟 · 首次使用 Web/视觉功能会自动下载组件</p>
+            <p class="download-meta" style="margin-top:0.5rem">
+                👉 <a href="{{ url_for('docs_page') }}" style="color:var(--primary-bright)">查看使用说明</a> · <a href="{{ url_for('docs_page') }}#install" style="color:var(--primary-bright)">安装指南</a>
+            </p>
             {% else %}
             <a href="#contact" class="btn btn-primary btn-lg">安装包准备中 · 联系获取</a>
             <p class="download-meta">管理员在后台上传安装包后，此按钮将直接触发本地下载</p>
@@ -430,9 +434,10 @@
             </div>
             <div class="footer-col">
                 <h4>资源</h4>
-                <a href="#faq">常见问题</a>
+                <a href="{{ url_for('docs_page') }}">使用说明</a>
+                <a href="{{ url_for('docs_page') }}#install">安装指南</a>
+                <a href="{{ url_for('docs_page') }}#faq">常见问题</a>
                 <a href="#contact">联系我们</a>
-                <a href="#contact">预约演示</a>
             </div>
             <div class="footer-col">
                 <h4>部署</h4>

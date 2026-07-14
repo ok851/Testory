@@ -1,4 +1,4 @@
-﻿# Build full offline desktop installer (portable Python + Chromium + WebView2 + Inno Setup)
+# Build full offline desktop installer (portable Python + Chromium + WebView2 + Inno Setup)
 # Run from project root:
 #   .\packaging\build_desktop_installer.ps1
 #
@@ -7,12 +7,14 @@
 #   -InnoOnly                              skip prepare; compile existing dist\uat_release only
 #   -PrepareOnly                           prepare dist\uat_release only; open .iss in Inno GUI yourself
 #   -Legacy                                ship plaintext .py (dev only); default is Protected onedir
+#   -Lite                                  ship lightweight installer (no Chromium / OpenCV; auto-download on first use)
 
 param(
     [string] $IsccPath = "",
     [switch] $InnoOnly,
     [switch] $PrepareOnly,
-    [switch] $Legacy
+    [switch] $Legacy,
+    [switch] $Lite
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +46,9 @@ $iss = Join-Path $Root "packaging\inno\uat_platform.iss"
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host " Testory offline installer build" -ForegroundColor Cyan
+if ($Lite) {
+    Write-Host " Mode: LITE (no Chromium / OpenCV; auto-download on first use)" -ForegroundColor Yellow
+}
 Write-Host " Project root: $Root" -ForegroundColor DarkGray
 if ($PrepareOnly) {
     Write-Host " Mode: prepare release only (manual Inno compile)" -ForegroundColor Yellow
@@ -61,9 +66,9 @@ Write-Host "========================================" -ForegroundColor Cyan
 
 if (-not $InnoOnly) {
     if ($Legacy) {
-        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root -Legacy
+        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root -Legacy -Lite:$Lite
     } else {
-        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root
+        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root -Lite:$Lite
     }
 } else {
     Write-Host " Skip prepare (-InnoOnly); using existing dist\uat_release" -ForegroundColor Yellow

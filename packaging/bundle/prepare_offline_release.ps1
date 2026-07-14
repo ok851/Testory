@@ -1,8 +1,10 @@
-# 准备「用户零配置」离线发布目录 dist\uat_release（Python + 依赖 + Chromium + 配置模板）
+# 准备「用户零配置」离线发布目录 dist\uat_release（Python + 依赖 + 配置模板）
+# -Lite 模式：不内置 Chromium / OpenCV，首次使用时自动下载（安装包更小）
 param(
     [string] $Root = "",
     [string] $OutDir = 'dist\uat_release',
-    [switch] $Legacy
+    [switch] $Legacy,
+    [switch] $Lite
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,36 +105,48 @@ if (-not $Legacy) {
 }
 
 Write-Host "[3/8] Create portable Python in release dir..."
-& "$Root\packaging\bundle\Ensure-PortablePython.ps1" `
-    -ReleaseDir $release `
-    -BuildPython $BuildPython `
-    -ProjectRoot $Root | Out-Null
+if ($Lite) {
+    & "$Root\packaging\bundle\Ensure-PortablePython.ps1" `
+        -ReleaseDir $release `
+        -BuildPython $BuildPython `
+        -ProjectRoot $Root `
+        -Lite | Out-Null
+} else {
+    & "$Root\packaging\bundle\Ensure-PortablePython.ps1" `
+        -ReleaseDir $release `
+        -BuildPython $BuildPython `
+        -ProjectRoot $Root | Out-Null
+}
 $rpy = Join-Path $release ".venv\python.exe"
 if (-not (Test-Path $rpy)) {
     throw "Portable Python missing: $rpy"
 }
 
 Write-Host "[4/8] 内置 Playwright Chromium（用户无需 playwright install）..."
-& $rpy -m playwright install chromium
-if ($LASTEXITCODE -ne 0) {
-    throw "playwright install chromium 失败"
-}
-
-$srcBrowsers = Join-Path $env:LOCALAPPDATA "ms-playwright"
-$destBrowsers = Join-Path $release "playwright-browsers"
-if (Test-Path $destBrowsers) { Remove-Item -Recurse -Force $destBrowsers }
-if (Test-Path $srcBrowsers) {
-    New-Item -ItemType Directory -Force -Path $destBrowsers | Out-Null
-    Get-ChildItem -Path $srcBrowsers -Directory | Where-Object { $_.Name -like "chromium-*" } | ForEach-Object {
-        Copy-Item -Path $_.FullName -Destination (Join-Path $destBrowsers $_.Name) -Recurse -Force
-        Write-Host "  已复制浏览器: $($_.Name)"
-    }
-    $ffDir = Join-Path $srcBrowsers "firefox-*"
-    if (Test-Path $ffDir) {
-        Write-Host "  跳过 Firefox（仅保留 Chromium 即可）" -ForegroundColor DarkGray
-    }
+if ($Lite) {
+    Write-Host "  Lite 模式：跳过 Chromium 内置，首次使用 Web 测试时自动下载" -ForegroundColor DarkYellow
 } else {
-    Write-Warning "未找到 ms-playwright，请检查 playwright install 是否成功"
+    & $rpy -m playwright install chromium
+    if ($LASTEXITCODE -ne 0) {
+        throw "playwright install chromium 失败"
+    }
+
+    $srcBrowsers = Join-Path $env:LOCALAPPDATA "ms-playwright"
+    $destBrowsers = Join-Path $release "playwright-browsers"
+    if (Test-Path $destBrowsers) { Remove-Item -Recurse -Force $destBrowsers }
+    if (Test-Path $srcBrowsers) {
+        New-Item -ItemType Directory -Force -Path $destBrowsers | Out-Null
+        Get-ChildItem -Path $srcBrowsers -Directory | Where-Object { $_.Name -like "chromium-*" } | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination (Join-Path $destBrowsers $_.Name) -Recurse -Force
+            Write-Host "  已复制浏览器: $($_.Name)"
+        }
+        $ffDir = Join-Path $srcBrowsers "firefox-*"
+        if (Test-Path $ffDir) {
+            Write-Host "  跳过 Firefox（仅保留 Chromium 即可）" -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Warning "未找到 ms-playwright，请检查 playwright install 是否成功"
+    }
 }
 
 Write-Host "[5/8] 生成默认配置..."

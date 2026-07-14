@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string] $ReleaseDir,
     [Parameter(Mandatory = $true)][string] $BuildPython,
-    [string] $ProjectRoot = ""
+    [string] $ProjectRoot = "",
+    [switch] $Lite
 )
 
 $ErrorActionPreference = "Stop"
@@ -146,6 +147,14 @@ $skipPkgs = @(
     "cssselect2", "cssselect2-*",
     "fire", "fire-*"
 )
+
+if ($Lite) {
+    Write-Host "  Lite 模式：跳过 OpenCV 等大包（首次使用时自动下载）" -ForegroundColor DarkYellow
+    $skipPkgs += @(
+        "cv2", "opencv*",
+        "cv2.pyd", "opencv_python_headless*"
+    )
+}
 
 Write-Host "  从 $buildSitePackages 复制（跳过测试/构建工具）..."
 Get-ChildItem -Path $buildSitePackages -Force | Where-Object {
