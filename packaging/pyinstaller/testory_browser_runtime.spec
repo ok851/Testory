@@ -25,7 +25,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tests", "pytest"],
+    excludes=["tests", "pytest", "numpy", "cv2", "PIL", "mss", "pandas", "scipy", "openpyxl", "reportlab", "docx"],
     cipher=block_cipher,
     noarchive=False,
 )

@@ -146,6 +146,26 @@
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   }
 
+  /* ── Typing animation for status messages ── */
+  function typeText(el, text, speed) {
+    speed = speed || 18;
+    el.textContent = '';
+    var i = 0;
+    var cursor = document.createElement('span');
+    cursor.className = 'ai-type-cursor';
+    el.appendChild(cursor);
+    function tick() {
+      if (i < text.length) {
+        el.insertBefore(document.createTextNode(text.charAt(i)), cursor);
+        i++;
+        setTimeout(tick, speed);
+      } else {
+        setTimeout(function () { if (cursor.parentNode) cursor.remove(); }, 800);
+      }
+    }
+    tick();
+  }
+
   function renderDraftList() {
     var wrap = document.getElementById('aiDesignDraftList');
     var saveBtn = document.getElementById('aiDesignSaveBtn');
@@ -165,7 +185,7 @@
     state.drafts.forEach(function (d, i) {
       var steps = (d.steps && d.steps.length) || 0;
       var role = ROLE_LABELS[d.case_role] || d.case_role || '业务';
-      html += '<label class="ai-design-draft-card">'
+      html += '<label class="ai-design-draft-card" style="animation-delay:' + (i * 60) + 'ms">'
         + '<input type="checkbox" class="ai-design-draft-cb" data-idx="' + i + '" checked>'
         + '<div class="ai-design-draft-card__body">'
         + '<strong>' + escapeHtml(d.case_name || ('用例 ' + (i + 1))) + '</strong>'
@@ -298,7 +318,7 @@
         msg += '\n\n提示：\n' + data.warnings.join('\n');
       }
       setStatus('草案生成完成。', 'ok');
-      if (out) out.textContent = msg;
+      if (out) typeText(out, msg);
     } catch (e) {
       setStatus('生成失败', 'err');
       if (out) out.textContent = String(e && e.message ? e.message : e);

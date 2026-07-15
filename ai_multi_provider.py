@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+import threading
+import time
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import quote
 
 import requests
@@ -13,6 +15,102 @@ from requests.exceptions import RequestException
 
 if TYPE_CHECKING:
     from ai_local_inference import LocalAIService
+
+
+# ---------------------------------------------------------------------------
+# 熔断器 + 指数退避重试
+# ---------------------------------------------------------------------------
+
+class CircuitBreaker:
+    """简易熔断器：连续失败达到阈值后熔断指定时长。"""
+
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: float = 60):
+        self._failure_count = 0
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout
+        self._open_until = 0.0
+        self._lock = threading.Lock()
+
+    def allow(self) -> bool:
+        with self._lock:
+            if time.time() < self._open_until:
+                return False
+            return True
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._failure_count = 0
+
+    def record_failure(self) -> None:
+        with self._lock:
+            self._failure_count += 1
+            if self._failure_count >= self._failure_threshold:
+                self._open_until = time.time() + self._recovery_timeout
+
+
+_cloud_breaker = CircuitBreaker()
+
+
+def _is_retryable_error(e: RequestException) -> bool:
+    """判断 HTTP 异常是否值得重试（429 / 5xx / 连接错误）。"""
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        sc = resp.status_code
+        if sc == 429:
+            return True
+        if 400 <= sc < 500:
+            return False
+    return True
+
+
+def retry_with_backoff(
+    func: Callable,
+    max_retries: int = 3,
+    breaker: Optional[CircuitBreaker] = None,
+    abort_event: Optional[threading.Event] = None,
+) -> Callable:
+    """返回可调用对象：失败时指数退避重试（2s/4s/8s），支持熔断器与取消中断。"""
+
+    def wrapper(*args, **kwargs):
+        last_exc: Optional[RequestException] = None
+        for attempt in range(max_retries + 1):
+            if abort_event is not None and abort_event.is_set():
+                raise InterruptedError("操作已被用户取消")
+            if breaker is not None and not breaker.allow():
+                raise ValueError("云端服务暂时不可用（熔断中），请稍后重试")
+            try:
+                result = func(*args, **kwargs)
+                if breaker is not None:
+                    breaker.record_success()
+                return result
+            except RequestException as e:
+                last_exc = e
+                if not _is_retryable_error(e):
+                    break
+                # 计算等待时间
+                resp = getattr(e, "response", None)
+                wait_s = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                if resp is not None and resp.status_code == 429:
+                    ra = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+                    if ra:
+                        try:
+                            wait_s = max(1.0, float(ra))
+                        except (ValueError, TypeError):
+                            pass
+                if attempt < max_retries:
+                    if abort_event is not None:
+                        if abort_event.wait(timeout=wait_s):
+                            raise InterruptedError("操作已被用户取消")
+                    else:
+                        time.sleep(wait_s)
+        # 所有重试耗尽
+        if breaker is not None:
+            breaker.record_failure()
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("重试耗尽")
+
+    return wrapper
 
 
 def _norm(s: Any) -> str:
@@ -75,6 +173,7 @@ def openai_compatible_chat(
     *,
     provider: str = "",
     group_id: str = "",
+    abort_event: Optional[threading.Event] = None,
 ) -> str:
     """OpenAI /v1/chat/completions compatible endpoints."""
     url = _openai_compat_endpoint_url(base_url, provider=provider, group_id=group_id)
@@ -97,11 +196,17 @@ def openai_compatible_chat(
         ],
         "temperature": 0.2,
     }
-    try:
+
+    def _do_request():
         resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
+        return resp
+
+    try:
+        resp = retry_with_backoff(_do_request, max_retries=3, breaker=_cloud_breaker, abort_event=abort_event)()
     except RequestException as e:
         _raise_http("OpenAI 兼容接口", e)
+
     data = resp.json() if resp.content else {}
     choices = data.get("choices")
     if isinstance(choices, list) and choices:
@@ -126,6 +231,7 @@ def openai_compatible_chat_completion(
     timeout: int = 240,
     provider: str = "",
     group_id: str = "",
+    abort_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     """POST /v1/chat/completions; returns assistant message dict (content, tool_calls optional)."""
     url = _openai_compat_endpoint_url(base_url, provider=provider, group_id=group_id)
@@ -137,11 +243,17 @@ def openai_compatible_chat_completion(
     }
     if tools:
         payload["tools"] = tools
-    try:
+
+    def _do_request():
         resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
+        return resp
+
+    try:
+        resp = retry_with_backoff(_do_request, max_retries=3, breaker=_cloud_breaker, abort_event=abort_event)()
     except RequestException as e:
         _raise_http("OpenAI 兼容接口", e)
+
     data = resp.json() if resp.content else {}
     choices = data.get("choices")
     if isinstance(choices, list) and choices:
@@ -167,9 +279,10 @@ def dispatch_chat_completion_messages(
     *,
     temperature: float = 0.2,
     timeout: Optional[int] = None,
+    abort_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     """
-    Multi-turn chat completion with optional tools (Ollama or OpenAI-compatible profiles).
+    Multi-turn chat completion with optional tools (Ollama, OpenAI-compatible, Anthropic).
     """
     style = _norm(profile.get("api_style"))
     provider = _norm(profile.get("provider"))
@@ -186,7 +299,23 @@ def dispatch_chat_completion_messages(
         return local_service.chat_ollama_messages(messages, model_id, tools, obase)
 
     if style == "anthropic_messages" or provider == "anthropic":
-        raise ValueError("Anthropic 当前不支持 AI 对话工具循环，请改用 Ollama 或 OpenAI 兼容模型")
+        if not _norm(api_key):
+            raise ValueError("Anthropic 需要 API 密钥")
+        system_text = ""
+        api_messages = messages
+        if messages and messages[0].get("role") == "system":
+            system_text = messages[0].get("content") or ""
+            api_messages = messages[1:]
+        return anthropic_messages_chat(
+            base_url or "https://api.anthropic.com",
+            str(api_key),
+            model_id,
+            timeout=to,
+            messages=api_messages,
+            tools=tools,
+            system=system_text,
+            abort_event=abort_event,
+        )
 
     if style == "google_gemini" or provider == "google_gemini":
         raise ValueError("Gemini 当前不支持 AI 对话工具循环，请改用 Ollama 或 OpenAI 兼容模型")
@@ -202,6 +331,7 @@ def dispatch_chat_completion_messages(
         timeout=to,
         provider=provider,
         group_id=gid,
+        abort_event=abort_event,
     )
 
 
@@ -209,9 +339,19 @@ def anthropic_messages_chat(
     base_url: str,
     api_key: str,
     model_id: str,
-    prompt: str,
+    prompt: str = "",
     timeout: int = 240,
-) -> str:
+    *,
+    messages: Optional[List[Dict[str, Any]]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    system: str = "",
+    abort_event: Optional[threading.Event] = None,
+) -> Any:
+    """Anthropic Messages API（支持 tool_use）。
+
+    当 *tools* 为空且未传 *messages* 时返回 ``str``（向后兼容旧调用）；
+    当 *tools* 非空时返回 ``dict``（OpenAI 兼容格式，含 ``tool_calls``）。
+    """
     b = _norm(base_url) or "https://api.anthropic.com"
     url = b.rstrip("/") + "/v1/messages"
     headers = {
@@ -219,26 +359,98 @@ def anthropic_messages_chat(
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     }
-    payload = {
+
+    # 构建 messages：优先使用显式 messages 参数
+    if messages is not None:
+        api_messages: List[Dict[str, Any]] = []
+        system_parts: List[str] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                system_parts.append(content if isinstance(content, str) else json.dumps(content, ensure_ascii=False))
+            else:
+                api_messages.append({"role": role, "content": content})
+        system_text = system or ("\n\n".join(system_parts) if system_parts else "")
+    else:
+        api_messages = [{"role": "user", "content": prompt}]
+        system_text = system
+
+    payload: Dict[str, Any] = {
         "model": _norm(model_id),
         "max_tokens": 8192,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": api_messages,
     }
-    try:
+    if system_text:
+        payload["system"] = system_text
+
+    # 工具 schema 转换：OpenAI → Anthropic
+    if tools:
+        anth_tools: List[Dict[str, Any]] = []
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            if t.get("type") == "function":
+                fn = t.get("function") or {}
+                anth_tool: Dict[str, Any] = {
+                    "name": fn.get("name", ""),
+                    "input_schema": fn.get("parameters") or {"type": "object"},
+                }
+                if fn.get("description"):
+                    anth_tool["description"] = fn["description"]
+                anth_tools.append(anth_tool)
+        if anth_tools:
+            payload["tools"] = anth_tools
+
+    def _do_request():
         resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
+        return resp
+
+    try:
+        resp = retry_with_backoff(_do_request, max_retries=3, breaker=_cloud_breaker, abort_event=abort_event)()
     except RequestException as e:
         _raise_http("Anthropic", e)
+
     data = resp.json() if resp.content else {}
     blocks = data.get("content")
-    if isinstance(blocks, list):
-        parts = []
-        for block in blocks:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(_norm(block.get("text")))
-        text = "".join(parts).strip()
-        if text:
-            return text
+    if not isinstance(blocks, list):
+        raise ValueError("Anthropic 返回为空或无法解析")
+
+    # 解析 content blocks：text + tool_use
+    text_parts: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            text_parts.append(_norm(block.get("text")))
+        elif btype == "tool_use":
+            tool_calls.append({
+                "id": block.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": block.get("name", ""),
+                    "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                },
+            })
+
+    text_content = "".join(text_parts).strip()
+
+    # 有 tools 时返回 dict（OpenAI 兼容）
+    if tools:
+        out: Dict[str, Any] = {
+            "role": "assistant",
+            "content": text_content if text_content else None,
+        }
+        if tool_calls:
+            out["tool_calls"] = tool_calls
+        return out
+
+    # 无 tools 时返回 str（向后兼容）
+    if text_content:
+        return text_content
     raise ValueError("Anthropic 返回为空或无法解析")
 
 
@@ -247,6 +459,8 @@ def google_gemini_chat(
     model_id: str,
     prompt: str,
     timeout: int = 240,
+    *,
+    abort_event: Optional[threading.Event] = None,
 ) -> str:
     mid = _norm(model_id)
     if not mid.startswith("models/"):
@@ -268,11 +482,17 @@ def google_gemini_chat(
             ]
         },
     }
-    try:
+
+    def _do_request():
         resp = requests.post(url, json=payload, timeout=timeout)
         resp.raise_for_status()
+        return resp
+
+    try:
+        resp = retry_with_backoff(_do_request, max_retries=3, breaker=_cloud_breaker, abort_event=abort_event)()
     except RequestException as e:
         _raise_http("Google Gemini", e)
+
     data = resp.json() if resp.content else {}
     cands = data.get("candidates")
     if isinstance(cands, list) and cands:
@@ -374,4 +594,297 @@ def dispatch_chat(
         timeout,
         provider=provider,
         group_id=_norm(profile.get("group_id")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 流式 API（Streaming）— 用于 SSE 推送 LLM 推理进度
+# ---------------------------------------------------------------------------
+
+def openai_compatible_chat_stream(
+    base_url: str,
+    api_key: str,
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    *,
+    temperature: float = 0.2,
+    timeout: int = 240,
+    provider: str = "",
+    group_id: str = "",
+    abort_event: Optional[threading.Event] = None,
+):
+    """OpenAI 兼容流式 chat completion。yield (event_type, data) 元组。
+
+    event_type: "content_delta" | "tool_call_delta" | "done" | "error"
+    """
+    url = _openai_compat_endpoint_url(base_url, provider=provider, group_id=group_id)
+    headers = _openai_compat_headers(api_key, provider=provider, base_url=base_url)
+    payload: Dict[str, Any] = {
+        "model": _norm(model_id),
+        "messages": messages,
+        "temperature": temperature,
+        "stream": True,
+    }
+    if tools:
+        payload["tools"] = tools
+
+    if not _cloud_breaker.allow():
+        yield ("error", "云端服务暂时不可用（熔断中），请稍后重试")
+        return
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout, stream=True)
+        resp.raise_for_status()
+    except RequestException as e:
+        _cloud_breaker.record_failure()
+        yield ("error", f"云端请求失败: {e}")
+        return
+
+    # 解析 SSE 流
+    tool_buffers: Dict[int, Dict[str, str]] = {}  # index -> {id, name, arguments}
+    content_buf = ""
+    try:
+        for line in resp.iter_lines(decode_unicode=True):
+            if abort_event is not None and abort_event.is_set():
+                resp.close()
+                yield ("error", "操作已被用户取消")
+                return
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[6:].strip()
+            if data_str == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+            delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+            # 内容增量
+            content_delta = delta.get("content")
+            if content_delta:
+                content_buf += content_delta
+                yield ("content_delta", content_delta)
+            # 工具调用增量
+            tc_list = delta.get("tool_calls")
+            if isinstance(tc_list, list):
+                for tc in tc_list:
+                    idx = tc.get("index", 0)
+                    if idx not in tool_buffers:
+                        tool_buffers[idx] = {"id": "", "name": "", "arguments": ""}
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        tool_buffers[idx]["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        tool_buffers[idx]["arguments"] += fn["arguments"]
+                    if tc.get("id"):
+                        tool_buffers[idx]["id"] = tc["id"]
+    except Exception as e:
+        yield ("error", f"流式读取中断: {e}")
+        return
+    finally:
+        resp.close()
+
+    _cloud_breaker.record_success()
+
+    # 组装最终 assistant message
+    out: Dict[str, Any] = {"role": "assistant", "content": content_buf or None}
+    if tool_buffers:
+        calls = []
+        for idx in sorted(tool_buffers.keys()):
+            tb = tool_buffers[idx]
+            calls.append({
+                "id": tb["id"] or f"call_{idx}",
+                "type": "function",
+                "function": {"name": tb["name"], "arguments": tb["arguments"]},
+            })
+        out["tool_calls"] = calls
+    yield ("done", out)
+
+
+def anthropic_messages_stream(
+    base_url: str,
+    api_key: str,
+    model_id: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    *,
+    system: str = "",
+    timeout: int = 240,
+    abort_event: Optional[threading.Event] = None,
+):
+    """Anthropic Messages API 流式。yield (event_type, data) 元组。"""
+    b = _norm(base_url) or "https://api.anthropic.com"
+    url = b.rstrip("/") + "/v1/messages"
+    headers = {
+        "x-api-key": _norm(api_key),
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    payload: Dict[str, Any] = {
+        "model": _norm(model_id),
+        "max_tokens": 8192,
+        "messages": messages,
+        "stream": True,
+    }
+    if system:
+        payload["system"] = system
+    if tools:
+        anth_tools: List[Dict[str, Any]] = []
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            if t.get("type") == "function":
+                fn = t.get("function") or {}
+                anth_tool: Dict[str, Any] = {
+                    "name": fn.get("name", ""),
+                    "input_schema": fn.get("parameters") or {"type": "object"},
+                }
+                if fn.get("description"):
+                    anth_tool["description"] = fn["description"]
+                anth_tools.append(anth_tool)
+        if anth_tools:
+            payload["tools"] = anth_tools
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout, stream=True)
+        resp.raise_for_status()
+    except RequestException as e:
+        yield ("error", f"Anthropic 请求失败: {e}")
+        return
+
+    content_buf = ""
+    tool_calls: List[Dict[str, Any]] = []
+    current_tool_idx = -1
+    current_tool_input_buf = ""
+    try:
+        for line in resp.iter_lines(decode_unicode=True):
+            if abort_event is not None and abort_event.is_set():
+                resp.close()
+                yield ("error", "操作已被用户取消")
+                return
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[6:].strip()
+            try:
+                event = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "content_block_start":
+                cb = event.get("content_block") or {}
+                if cb.get("type") == "tool_use":
+                    current_tool_idx = len(tool_calls)
+                    tool_calls.append({
+                        "id": cb.get("id", ""),
+                        "type": "function",
+                        "function": {"name": cb.get("name", ""), "arguments": ""},
+                    })
+                    current_tool_input_buf = ""
+            elif etype == "content_block_delta":
+                delta = event.get("delta") or {}
+                if delta.get("type") == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        content_buf += text
+                        yield ("content_delta", text)
+                elif delta.get("type") == "input_json_delta":
+                    partial = delta.get("partial_json", "")
+                    if partial and current_tool_idx >= 0:
+                        current_tool_input_buf += partial
+            elif etype == "content_block_stop":
+                if current_tool_idx >= 0 and current_tool_idx < len(tool_calls):
+                    tool_calls[current_tool_idx]["function"]["arguments"] = current_tool_input_buf
+                    current_tool_idx = -1
+                    current_tool_input_buf = ""
+            elif etype == "message_stop":
+                break
+    except Exception as e:
+        yield ("error", f"Anthropic 流式读取中断: {e}")
+        return
+    finally:
+        resp.close()
+
+    out: Dict[str, Any] = {"role": "assistant", "content": content_buf or None}
+    if tool_calls:
+        out["tool_calls"] = tool_calls
+    yield ("done", out)
+
+
+def dispatch_chat_stream(
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+    profile: Optional[Dict[str, Any]],
+    local_service: "LocalAIService",
+    *,
+    temperature: float = 0.2,
+    timeout: Optional[int] = None,
+    abort_event: Optional[threading.Event] = None,
+):
+    """流式多轮 chat completion。yield (event_type, data)。
+
+    支持 Ollama（降级为非流式）、OpenAI 兼容、Anthropic。
+    """
+    if not profile:
+        yield ("error", "未配置推理模型")
+        return
+    style = _norm(profile.get("api_style"))
+    provider = _norm(profile.get("provider"))
+    model_id = _norm(profile.get("model_id"))
+    api_key = profile.get("api_key")
+    base_url = _norm(profile.get("base_url"))
+    to = timeout if timeout is not None else int(os.environ.get("LOCAL_LLM_TIMEOUT", "240"))
+
+    if not model_id:
+        yield ("error", "模型配置缺少 model_id")
+        return
+
+    # Ollama 降级为非流式（Ollama 的 streaming tool calling 支持不完善）
+    if style == "ollama" or provider == "ollama":
+        try:
+            obase = base_url or local_service.base_url
+            result = local_service.chat_ollama_messages(messages, model_id, tools, obase)
+            yield ("done", result)
+        except Exception as e:
+            yield ("error", str(e))
+        return
+
+    if style == "anthropic_messages" or provider == "anthropic":
+        if not _norm(api_key):
+            yield ("error", "Anthropic 需要 API 密钥")
+            return
+        system_text = ""
+        api_messages = messages
+        if messages and messages[0].get("role") == "system":
+            system_text = messages[0].get("content") or ""
+            api_messages = messages[1:]
+        yield from anthropic_messages_stream(
+            base_url or "https://api.anthropic.com",
+            str(api_key),
+            model_id,
+            api_messages,
+            tools=tools,
+            system=system_text,
+            timeout=to,
+            abort_event=abort_event,
+        )
+        return
+
+    if style == "google_gemini" or provider == "google_gemini":
+        yield ("error", "Gemini 当前不支持流式工具循环，请改用 Ollama 或 OpenAI 兼容模型")
+        return
+
+    # Default: OpenAI 兼容
+    gid = _norm(profile.get("group_id"))
+    yield from openai_compatible_chat_stream(
+        base_url,
+        str(api_key),
+        model_id,
+        messages,
+        tools,
+        temperature=temperature,
+        timeout=to,
+        provider=provider,
+        group_id=gid,
+        abort_event=abort_event,
     )

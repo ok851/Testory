@@ -66,7 +66,7 @@ def project_analysis_bundle(root: Path) -> tuple[list, list, list]:
 
 
 def gateway_analysis_bundle(root: Path) -> tuple[list, list, list]:
-    """嵌入式 / 桌面网关 onedir 依赖（含 Playwright 驱动二进制）。"""
+    """含 Playwright 驱动的完整网关依赖（仅 TestoryBrowserRuntime 需要）。"""
     datas: list = []
     binaries: list = []
     hidden = gateway_hiddenimports(root)
@@ -78,6 +78,18 @@ def gateway_analysis_bundle(root: Path) -> tuple[list, list, list]:
         datas += copy_metadata("playwright")
     except Exception:
         pass
+    return datas, binaries, list(dict.fromkeys(_only_module_names(hidden)))
+
+
+def lite_gateway_analysis_bundle(root: Path) -> tuple[list, list, list]:
+    """精简网关依赖（不含 Playwright 76MB，用于桌面/嵌入式/移动端网关）。"""
+    datas: list = []
+    binaries: list = []
+    hidden = gateway_hiddenimports(root)
+    for pkg in ("greenlet", "uvicorn", "fastapi", "starlette", "anyio"):
+        datas.extend(_collect_all_datas(pkg))
+        binaries.extend(_collect_all_binaries(pkg))
+        hidden.extend(_collect_all_hidden(pkg))
     return datas, binaries, list(dict.fromkeys(_only_module_names(hidden)))
 
 

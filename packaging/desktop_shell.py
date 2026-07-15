@@ -161,7 +161,7 @@ def run_native_shell(
         confirm_close=False,
         js_api=api,
         frameless=frameless,
-        easy_drag=False,
+        easy_drag=frameless,
     )
 
     window = webview.create_window(**create_kwargs)

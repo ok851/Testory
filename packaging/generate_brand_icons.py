@@ -44,20 +44,23 @@ def _render_testory_icon_program(size: int = 512):
     margin = max(6, size // 18)
     radius = size // 4
 
-    # 深色科技底 + 霓虹描边
+    # 紫青色渐变背景（与 testory-mark.svg 一致）
+    gradient = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    grad_draw = ImageDraw.Draw(gradient)
     for y in range(size):
         t = y / max(1, size - 1)
-        c1 = (_lerp(12, 4, t), _lerp(18, 8, t), _lerp(42, 28, t), 255)
-        for x in range(size):
-            tx = x / max(1, size - 1)
-            blend = (t * 0.55 + tx * 0.45)
-            col = (
-                _lerp(15, 8, blend),
-                _lerp(23, 12, blend),
-                _lerp(56, 36, blend),
-                255,
-            )
-            img.putpixel((x, y), col)
+        # 从 #6366f1 (紫) 到 #06b6d4 (青)，中间经 #8b5cf6 (紫)
+        if t < 0.48:
+            tt = t / 0.48
+            r = _lerp(99, 139, tt)
+            g = _lerp(102, 92, tt)
+            b = _lerp(241, 246, tt)
+        else:
+            tt = (t - 0.48) / 0.52
+            r = _lerp(139, 6, tt)
+            g = _lerp(92, 182, tt)
+            b = _lerp(246, 212, tt)
+        grad_draw.line([(0, y), (size, y)], fill=(r, g, b, 255))
 
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
@@ -65,58 +68,27 @@ def _render_testory_icon_program(size: int = 512):
         radius=radius,
         fill=255,
     )
-    bg = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    bg.paste(img, mask=mask)
-    img = bg
+    img.paste(gradient, mask=mask)
     draw = ImageDraw.Draw(img)
 
-    box = (margin, margin, size - margin, size - margin)
-    draw.rounded_rectangle(box, radius=radius, outline=(56, 189, 248, 180), width=max(2, size // 128))
+    # 白色 T 字母
+    t_w = size * 0.44
+    t_h = size * 0.44
+    t_x = cx - t_w // 2
+    t_y = cy - t_h // 2
+    draw.rectangle((t_x, t_y, t_x + t_w, t_y + t_h * 0.16), fill=(255, 255, 255, 255))
+    draw.rectangle((cx - t_w * 0.11, t_y, cx + t_w * 0.11, t_y + t_h), fill=(255, 255, 255, 255))
 
-    # 六边形智能网络
-    hex_r = size * 0.22
-    hex_pts = []
-    for i in range(6):
-        ang = math.radians(60 * i - 30)
-        hex_pts.append((cx + hex_r * math.cos(ang), cy + hex_r * math.sin(ang)))
-    draw.polygon(hex_pts, outline=(99, 102, 241, 120), width=max(2, size // 160))
-    for i, (x, y) in enumerate(hex_pts):
-        draw.ellipse(
-            (x - size * 0.018, y - size * 0.018, x + size * 0.018, y + size * 0.018),
-            fill=(34, 211, 238, 220),
-        )
-        nxt = hex_pts[(i + 1) % 6]
-        draw.line([(x, y), nxt], fill=(129, 140, 248, 90), width=max(1, size // 200))
-
-    # 中心 T
-    font_size = int(size * 0.34)
-    try:
-        font = ImageFont.truetype("segoeuib.ttf", font_size)
-    except OSError:
-        try:
-            font = ImageFont.truetype("segoeui.ttf", font_size)
-        except OSError:
-            font = ImageFont.load_default()
-    letter = "T"
-    bbox = draw.textbbox((0, 0), letter, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    tx = cx - tw // 2 - bbox[0]
-    ty = cy - th // 2 - bbox[1]
-    draw.text((tx + 1, ty + 2), letter, fill=(0, 0, 0, 120), font=font)
-    draw.text((tx, ty), letter, fill=(240, 249, 255, 255), font=font)
-
-    # 右下角 AI 节点
+    # 右下角 AI 绿点
     badge_r = size // 9
     bx = size - margin - badge_r - size // 24
     by = size - margin - badge_r - size // 24
     draw.ellipse(
         (bx - badge_r, by - badge_r, bx + badge_r, by + badge_r),
-        fill=(16, 185, 129, 255),
-        outline=(110, 231, 183, 200),
+        fill=(52, 211, 153, 255),
+        outline=(110, 231, 183, 180),
         width=max(1, size // 180),
     )
-    dot = badge_r * 0.35
-    draw.ellipse((bx - dot, by - dot, bx + dot, by + dot), fill=(255, 255, 255, 240))
     return img
 
 

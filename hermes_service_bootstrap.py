@@ -191,3 +191,40 @@ def bootstrap_hermes_services(*, force: bool = False) -> dict:
     except Exception as e:
         out["error"] = str(e)
     return out
+
+
+def sync_platform_llm_to_hermes() -> dict:
+    """同步平台 LLM 配置到 Hermes，如果配置了独立 provider 则使用独立配置。"""
+    from hermes_config import ensure_hermes_home
+
+    hermes_provider = (os.environ.get("HERMES_LLM_PROVIDER") or "").strip()
+    result: dict = {"independent_provider": bool(hermes_provider)}
+    if hermes_provider:
+        result["provider"] = hermes_provider
+        result["model"] = (os.environ.get("HERMES_LLM_MODEL") or "").strip()
+    ensure_hermes_home(force_env=True)
+    result["synced"] = True
+    return result
+
+
+def health_check_cdp() -> dict:
+    """验证 Hermes 是否能到达当前 CDP 端点。"""
+    from hermes_config import hermes_cdp_endpoint_active
+
+    cdp_ws = hermes_cdp_endpoint_active()
+    if not cdp_ws:
+        return {"ok": False, "reason": "no_cdp_endpoint"}
+    client = HermesGatewayClient()
+    if not client.is_configured():
+        return {"ok": False, "reason": "hermes_not_configured"}
+    try:
+        import requests
+
+        base = (client.base_url or "").rstrip("/")
+        resp = requests.get(f"{base}/v1/health/cdp", timeout=5)
+        if resp.ok:
+            data = resp.json() if resp.content else {}
+            return {"ok": True, "cdp_endpoint": cdp_ws, "detail": data}
+        return {"ok": False, "reason": "health_endpoint_error", "status": resp.status_code}
+    except Exception as e:
+        return {"ok": False, "reason": "request_failed", "error": str(e)}

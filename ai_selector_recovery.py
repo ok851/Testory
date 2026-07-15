@@ -58,48 +58,81 @@ def load_active_profile_for_inference() -> Dict[str, Any]:
     }
 
 
-async def _collect_registry_main_frame(page: Any, cap: int) -> List[Dict[str, Any]]:
+async def _collect_registry_with_frames(page: Any, cap: int) -> List[Dict[str, Any]]:
+    """采集主文档 + 同源 iframe + Shadow DOM 中的可交互控件。"""
     from ai_page_probe import (
         _COLLECT_INTERACTIVE_JS,
         _COLLECT_INTERACTIVE_JS_FLAT,
         _recommended_selector,
     )
 
-    rows: Any = []
-    try:
-        rows = await page.evaluate(_COLLECT_INTERACTIVE_JS, cap)
-    except Exception:
-        try:
-            rows = await page.evaluate(_COLLECT_INTERACTIVE_JS_FLAT, cap)
-        except Exception:
-            rows = []
-    if not isinstance(rows, list):
-        return []
     registry: List[Dict[str, Any]] = []
-    for i, raw in enumerate(rows):
-        if not isinstance(raw, dict):
+    global_i = 0
+    frame_cap = max(10, cap // max(1, len(getattr(page, "frames", [])) or 1))
+
+    for fi, frame in enumerate(getattr(page, "frames", []) or [page]):
+        try:
+            if hasattr(frame, "is_detached") and frame.is_detached():
+                continue
+        except Exception:
+            pass
+
+        # 标识 frame 来源
+        if fi == 0:
+            frame_label = "main"
+            frame_info = {"source": "main", "frame_index": 0}
+        else:
+            try:
+                fu = (getattr(frame, "url", None) or "")[:120]
+            except Exception:
+                fu = ""
+            frame_label = f"iframe[{fi}]"
+            frame_info = {"source": "iframe", "frame_index": fi, "url": fu}
+
+        rows: Any = []
+        try:
+            rows = await frame.evaluate(_COLLECT_INTERACTIVE_JS, frame_cap)
+        except Exception:
+            try:
+                rows = await frame.evaluate(_COLLECT_INTERACTIVE_JS_FLAT, frame_cap)
+            except Exception:
+                continue
+        if not isinstance(rows, list):
             continue
-        rec, rty = _recommended_selector(raw)
-        registry.append(
-            {
-                "i": i,
-                "frame": "main",
-                "tag": raw.get("tag") or "",
-                "id": raw.get("id") or "",
-                "name": raw.get("name") or "",
-                "typ": raw.get("typ") or "",
-                "ph": raw.get("ph") or "",
-                "al": raw.get("al") or "",
-                "rid": raw.get("rid") or "",
-                "txt": raw.get("txt") or "",
-                "href": (raw.get("href") or "")[:80],
-                "css": raw.get("css") or "",
-                "testid": raw.get("testid") or "",
-                "recommended_selector": rec,
-                "recommended_selector_type": rty,
-            }
-        )
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            if global_i >= cap:
+                break
+            rec, rty = _recommended_selector(raw)
+            registry.append(
+                {
+                    "i": global_i,
+                    "frame": frame_label,
+                    "frame_info": frame_info,
+                    "tag": raw.get("tag") or "",
+                    "id": raw.get("id") or "",
+                    "name": raw.get("name") or "",
+                    "typ": raw.get("typ") or "",
+                    "ph": raw.get("ph") or "",
+                    "al": raw.get("al") or "",
+                    "rid": raw.get("rid") or "",
+                    "txt": raw.get("txt") or "",
+                    "href": (raw.get("href") or "")[:80],
+                    "css": raw.get("css") or "",
+                    "testid": raw.get("testid") or "",
+                    "recommended_selector": rec,
+                    "recommended_selector_type": rty,
+                }
+            )
+            global_i += 1
+        if global_i >= cap:
+            break
     return registry
+
+
+# 向后兼容别名
+_collect_registry_main_frame = _collect_registry_with_frames
 
 
 def _registry_lines(registry: List[Dict[str, Any]], max_lines: int) -> str:
@@ -173,6 +206,28 @@ def _apply_llm_choice(
     return None
 
 
+def _persist_to_locator_candidates(
+    step: Optional[Dict[str, Any]],
+    selector_value: str,
+    selector_type: str,
+    source: str,
+) -> None:
+    """将自愈成功的选择器持久化到步骤的 locator_candidates 字段。"""
+    if not isinstance(step, dict):
+        return
+    candidate = {
+        "selector_type": selector_type,
+        "selector_value": selector_value,
+        "score": 100,
+        "source": source,
+    }
+    existing = step.get("locator_candidates")
+    if isinstance(existing, list):
+        existing.insert(0, candidate)
+    else:
+        step["locator_candidates"] = [candidate]
+
+
 async def try_recover_selector_with_vision(
     page: Any,
     description: str,
@@ -180,6 +235,7 @@ async def try_recover_selector_with_vision(
     failed_selector: str,
     registry: List[Dict[str, Any]],
     lines: str,
+    step: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[str, str]]:
     if os.environ.get("LOCAL_VISION_RECOVERY", "0").strip().lower() not in (
         "1",
@@ -229,6 +285,7 @@ async def try_recover_selector_with_vision(
     uat_logger.info(
         f"[AI_RECOVERY_VISION] type={resolved[1]} selector={resolved[0][:160]!r}"
     )
+    _persist_to_locator_candidates(step, resolved[0], resolved[1], "vision_recovery")
     return resolved
 
 
@@ -242,7 +299,8 @@ def _legacy_selector_llm_enabled() -> bool:
 
 
 async def try_recover_selector_with_llm(
-    page: Any, description: str, action: str, failed_selector: str
+    page: Any, description: str, action: str, failed_selector: str,
+    step: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[str, str]]:
     if os.environ.get("AI_SELECTOR_FALLBACK", "1").strip().lower() in (
         "0",
@@ -255,32 +313,43 @@ async def try_recover_selector_with_llm(
     if not desc:
         return None
 
-    if not _legacy_selector_llm_enabled():
-        try:
-            from hermes_heal_bridge import hermes_heal_enabled, try_recover_selector_with_hermes
+    # ── 1) 预判缓存候选 ──
+    if isinstance(step, dict):
+        for cand in (step.get("locator_candidates") or []):
+            if isinstance(cand, dict):
+                sv = (cand.get("selector_value") or "").strip()
+                st = (cand.get("selector_type") or "css").strip().lower()
+                if sv:
+                    uat_logger.info(
+                        f"[AI_RECOVERY] 使用缓存候选: type={st} selector={sv[:160]!r}"
+                    )
+                    return sv, st
 
-            if hermes_heal_enabled():
-                resolved = await try_recover_selector_with_hermes(page, desc, action, failed_selector)
-                if resolved:
-                    return resolved
-        except ImportError:
-            pass
-
+    # ── 采集 DOM 注册表（VLM / LLM 共用）──
     cap = int(os.environ.get("AI_SELECTOR_RECOVERY_MAX_NODES", "100") or "100")
     cap = min(200, max(20, cap))
-    registry = await _collect_registry_main_frame(page, cap)
+    registry = await _collect_registry_with_frames(page, cap)
     if not registry:
-        uat_logger.warning("[AI_RECOVERY] 当前页主文档未采集到可交互控件，跳过 LLM 兜底")
+        uat_logger.warning("[AI_RECOVERY] 当前页主文档未采集到可交互控件，跳过兜底")
         return None
 
     max_lines = int(os.environ.get("AI_SELECTOR_RECOVERY_MAX_LINES", "80") or "80")
     lines = _registry_lines(registry, max(10, min(120, max_lines)))
+
+    # ── 2) VLM 快速定位 ──
+    resolved = await try_recover_selector_with_vision(
+        page, desc, action, failed_selector, registry, lines, step=step
+    )
+    if resolved:
+        return resolved
+
+    # ── 3) LLM 精确匹配 ──
     prompt = (
         "You are a test automation assistant. Pick the best matching control for the step.\n"
         f"Action type: {action}\n"
         f"Step description (may be Chinese): {desc}\n"
         f"Failed selector (avoid reusing unless no alternative): {failed_selector}\n\n"
-        "Interactive controls (main frame only):\n"
+        "Interactive controls (all frames incl. iframes & Shadow DOM):\n"
         f"{lines}\n\n"
         "Reply with ONLY one JSON object, no markdown code fences:\n"
         'Prefer {"probe_index": <integer matching [n] above>}.\n'
@@ -296,23 +365,29 @@ async def try_recover_selector_with_llm(
         raw = await asyncio.to_thread(dispatch_chat, prompt, profile, local_ai_service)
     except Exception as e:
         uat_logger.warning(f"[AI_RECOVERY] LLM 调用失败: {e}")
-        return await try_recover_selector_with_vision(
-            page, desc, action, failed_selector, registry, lines
-        )
+    else:
+        data = _extract_json_obj(raw)
+        if data:
+            resolved = _apply_llm_choice(registry, data)
+            if resolved:
+                uat_logger.info(
+                    f"[AI_RECOVERY] LLM 兜底定位: type={resolved[1]} selector={resolved[0][:160]!r}"
+                )
+                _persist_to_locator_candidates(step, resolved[0], resolved[1], "llm_recovery")
+                return resolved
+        else:
+            uat_logger.warning("[AI_RECOVERY] 无法解析 LLM 返回 JSON")
 
-    data = _extract_json_obj(raw)
-    if not data:
-        uat_logger.warning("[AI_RECOVERY] 无法解析 LLM 返回 JSON")
-        return await try_recover_selector_with_vision(
-            page, desc, action, failed_selector, registry, lines
-        )
-    resolved = _apply_llm_choice(registry, data)
-    if not resolved:
-        uat_logger.warning("[AI_RECOVERY] LLM 返回未映射到有效选择器")
-        return await try_recover_selector_with_vision(
-            page, desc, action, failed_selector, registry, lines
-        )
-    uat_logger.info(
-        f"[AI_RECOVERY] LLM 兜底定位: type={resolved[1]} selector={resolved[0][:160]!r}"
-    )
-    return resolved
+    # ── 4) Hermes 探索（最后手段）──
+    if not _legacy_selector_llm_enabled():
+        try:
+            from hermes_heal_bridge import hermes_heal_enabled, try_recover_selector_with_hermes
+
+            if hermes_heal_enabled():
+                resolved = await try_recover_selector_with_hermes(page, desc, action, failed_selector, step=step)
+                if resolved:
+                    return resolved
+        except ImportError:
+            pass
+
+    return None

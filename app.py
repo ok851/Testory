@@ -3368,23 +3368,12 @@ def api_update_ai_profile():
     })
 
 
-# --- AI 后台任务：用户离开 AI 测试页后推理在服务端继续（适用于单进程/单 Gunicorn worker；多 worker 需外存队列） ---
-_AI_BG_JOBS: dict = {}
-_AI_BG_LOCK = threading.Lock()
+# --- AI 后台任务：SQLite 持久化存储（支持进程重启恢复） ---
+from ai_job_store import get_job_store
 
 
-def _ai_bg_prune_locked():
-    now = time.time()
-    dead = []
-    for jid, rec in list(_AI_BG_JOBS.items()):
-        st = rec.get('status')
-        t_done = rec.get('t_done')
-        if st in ('done', 'error', 'cancelled') and t_done and (now - t_done) > 3600:
-            dead.append(jid)
-        if len(dead) > 500:
-            break
-    for jid in dead:
-        _AI_BG_JOBS.pop(jid, None)
+def _ai_bg_prune():
+    get_job_store().prune()
 
 
 def _ai_url_probe_disabled() -> bool:
@@ -3900,7 +3889,7 @@ def _execute_ai_task_plan(data: dict, user_id: int, username: str, remote_addr):
     return out
 
 
-def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
+def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr, *, abort_event=None):
     """多轮优化逻辑（供同步 API 与后台线程共用）。"""
     from ai_page_probe import probe_registry_from_interactive_snapshot
 
@@ -4040,6 +4029,7 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
                 generated, _, tool_meta_extra = run_ai_chat_with_tools(
                     local_ai_service=local_ai_service,
                     params=_ctp,
+                    abort_event=abort_event,
                 )
             except (ValueError, TypeError, RuntimeError) as loop_err:
                 uat_logger.warning('AI chat tool loop failed, fallback to refine: %s', loop_err)
@@ -4073,6 +4063,8 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
                 dom_context_pack=dpack or None,
                 interaction_context=interaction_context,
             )
+    except InterruptedError:
+        raise
     except ValueError as e:
         msg = str(e)
         low = msg.lower()
@@ -4120,8 +4112,14 @@ def _execute_ai_task_chat(data: dict, user_id: int, username: str, remote_addr):
     return out
 
 
+_AI_JOB_ABORT_EVENTS: Dict[str, threading.Event] = {}
+
+
 def _start_ai_bg_job_thread(job_id: str, kind: str, data: dict, user_id: int, username: str, remote_addr):
     data_copy = dict(data)
+    store = get_job_store()
+    abort_event = threading.Event()
+    _AI_JOB_ABORT_EVENTS[job_id] = abort_event
 
     def _runner():
         out = {'success': False, 'error': 'unknown', '_http': 500}
@@ -4129,27 +4127,22 @@ def _start_ai_bg_job_thread(job_id: str, kind: str, data: dict, user_id: int, us
             if kind == 'plan':
                 out = _execute_ai_task_plan(data_copy, user_id, username, remote_addr)
             elif kind == 'chat':
-                out = _execute_ai_task_chat(data_copy, user_id, username, remote_addr)
+                out = _execute_ai_task_chat(data_copy, user_id, username, remote_addr, abort_event=abort_event)
             else:
                 out = {'success': False, 'error': 'unknown job kind', '_http': 400}
+        except InterruptedError:
+            out = {'success': False, 'error': '任务已被用户取消', '_http': 499}
         except Exception as ex:
             uat_logger.exception('ai bg job %s', job_id)
             out = {'success': False, 'error': str(ex), '_http': 500}
-        with _AI_BG_LOCK:
-            rec = _AI_BG_JOBS.get(job_id)
-            if not rec:
-                return
-            if rec.get('cancelled'):
-                rec['status'] = 'cancelled'
-                rec['t_done'] = time.time()
-                return
-            body = {k: v for k, v in out.items() if k != '_http'}
-            rec['http_status'] = int(out.get('_http', 200))
-            rec['result'] = body
-            rec['status'] = 'done' if body.get('success') else 'error'
-            if not body.get('success'):
-                rec['error'] = body.get('error') or 'error'
-            rec['t_done'] = time.time()
+        finally:
+            _AI_JOB_ABORT_EVENTS.pop(job_id, None)
+        if store.is_cancelled(job_id):
+            store.set_cancelled(job_id)
+            return
+        body = {k: v for k, v in out.items() if k != '_http'}
+        http_status = int(out.get('_http', 200))
+        store.set_result(job_id, body, http_status)
 
     threading.Thread(target=_runner, daemon=True, name='ai-bg-' + job_id[:8]).start()
 
@@ -5759,16 +5752,9 @@ def api_ai_task_plan_async():
             'success': False,
             'error': '该任务需走云端分析接口，请调用 /api/ai/task/cloud-analyze',
         }), 400
-    job_id = str(uuid.uuid4())
-    with _AI_BG_LOCK:
-        _ai_bg_prune_locked()
-        _AI_BG_JOBS[job_id] = {
-            'user_id': current_user.id,
-            'kind': 'plan',
-            'status': 'running',
-            't0': time.time(),
-            'cancelled': False,
-        }
+    store = get_job_store()
+    store.prune()
+    job_id = store.create(current_user.id, 'plan')
     _start_ai_bg_job_thread(
         job_id,
         'plan',
@@ -5793,16 +5779,9 @@ def api_ai_task_chat_async():
     route = _route_ai_model('test_case_generation')
     if route['provider'] != 'local':
         return jsonify({'success': False, 'error': '当前仅支持本地模型对话'}), 400
-    job_id = str(uuid.uuid4())
-    with _AI_BG_LOCK:
-        _ai_bg_prune_locked()
-        _AI_BG_JOBS[job_id] = {
-            'user_id': current_user.id,
-            'kind': 'chat',
-            'status': 'running',
-            't0': time.time(),
-            'cancelled': False,
-        }
+    store = get_job_store()
+    store.prune()
+    job_id = store.create(current_user.id, 'chat')
     _start_ai_bg_job_thread(
         job_id,
         'chat',
@@ -5814,13 +5793,96 @@ def api_ai_task_chat_async():
     return jsonify({'success': True, 'job_id': job_id}), 202
 
 
+@app.route('/api/ai/task/chat-stream', methods=['POST'])
+@login_required
+def api_ai_task_chat_stream():
+    """SSE 流式 AI 对话：实时推送 LLM 推理过程和 tool calling 进度。"""
+    import json as _json
+    from flask import Response, stream_with_context
+
+    data = request.get_json(silent=True) or {}
+    message = (data.get('message') or '').strip()
+    if not message:
+        return jsonify({'success': False, 'error': 'message不能为空'}), 400
+
+    # 解析参数（复用 chat-async 的参数结构）
+    project_name = (data.get('project_name') or '').strip()
+    current_plan = data.get('current_plan') or {}
+    history = data.get('history') or []
+    selected_model = (data.get('model') or '').strip()
+    embedded_sid = (data.get('embedded_session_id') or '').strip()
+    platform_type = (data.get('platform_type') or 'web').strip()
+    interaction_context = data.get('interaction_context')
+
+    abort_event = threading.Event()
+
+    def generate():
+        try:
+            from ai_local_inference import local_ai_service
+            from ai_chat_tool_loop import ChatToolLoopParams, run_ai_chat_with_tools_stream, ai_chat_tools_enabled, profile_supports_ai_chat_tools
+            from ai_page_probe import probe_registry_from_interactive_snapshot
+
+            profile, legacy_model = _resolve_inference_profile(selected_model)
+
+            # 构建 probe registry
+            probe_reg = None
+            probe_url = (data.get('target_page_url') or '').strip()
+            if probe_url:
+                try:
+                    probe_reg = probe_registry_from_interactive_snapshot(probe_url)
+                except Exception:
+                    pass
+
+            _ctp = ChatToolLoopParams(
+                message=message,
+                project_name=project_name,
+                current_plan=current_plan if isinstance(current_plan, dict) else {},
+                history=history if isinstance(history, list) else [],
+                legacy_model=legacy_model,
+                profile=profile,
+                page_snapshot=data.get('page_snapshot') or '',
+                probe_registry=probe_reg,
+                probe_url=probe_url or None,
+                memory_context=data.get('memory_context') or '',
+                dom_context_pack=data.get('dom_context_pack') or '',
+                interaction_context=interaction_context,
+                test_scope=data.get('test_scope') or '',
+                embedded_session_id=embedded_sid or None,
+                platform_type=platform_type,
+            )
+
+            for evt_type, evt_data in run_ai_chat_with_tools_stream(
+                local_ai_service=local_ai_service,
+                params=_ctp,
+                abort_event=abort_event,
+            ):
+                sse_data = _json.dumps({"type": evt_type, "data": evt_data}, ensure_ascii=False, default=str)
+                yield f"data: {sse_data}\n\n"
+
+        except Exception as e:
+            sse_data = _json.dumps({"type": "error", "data": str(e)}, ensure_ascii=False)
+            yield f"data: {sse_data}\n\n"
+
+        yield "data: {\"type\": \"end\", \"data\": null}\n\n"
+
+    headers = {
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+    }
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers=headers,
+    )
+
+
 @app.route('/api/ai/task/job/<job_id>', methods=['GET'])
 @login_required
 @api_error_handler
 def api_ai_task_job_status(job_id):
     """查询后台 AI 任务状态；完成后 result 与同步接口 JSON 一致。"""
-    with _AI_BG_LOCK:
-        rec = _AI_BG_JOBS.get(job_id)
+    rec = get_job_store().get(job_id)
     if not rec or rec.get('user_id') != current_user.id:
         return jsonify({'success': False, 'error': '任务不存在'}), 404
     st = rec.get('status', 'running')
@@ -5842,12 +5904,15 @@ def api_ai_task_job_status(job_id):
 @login_required
 @api_error_handler
 def api_ai_task_job_cancel(job_id):
-    """标记取消：后台线程结束后不写入结果（无法中断已在进行的模型推理）。"""
-    with _AI_BG_LOCK:
-        rec = _AI_BG_JOBS.get(job_id)
-        if not rec or rec.get('user_id') != current_user.id:
-            return jsonify({'success': False, 'error': '任务不存在'}), 404
-        rec['cancelled'] = True
+    """标记取消：中断后台线程的重试循环并设置取消标志。"""
+    store = get_job_store()
+    rec = store.get(job_id)
+    if not rec or rec.get('user_id') != current_user.id:
+        return jsonify({'success': False, 'error': '任务不存在'}), 404
+    abort_evt = _AI_JOB_ABORT_EVENTS.get(job_id)
+    if abort_evt:
+        abort_evt.set()
+    store.set_cancelled(job_id)
     return jsonify({'success': True})
 
 

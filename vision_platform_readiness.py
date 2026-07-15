@@ -16,6 +16,12 @@ from ai_vision_local import vision_enabled
 from embedded_browser_client import embedded_gateway_config, embedded_gateway_enabled, embedded_gateway_json
 from logger import uat_logger
 
+import time
+
+_readiness_cache: dict = {}
+_readiness_cache_ttl = 30  # 秒
+_readiness_cache_lock = __import__('threading').Lock()
+
 
 def _ollama_base() -> str:
     return (os.environ.get("LOCAL_LLM_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
@@ -155,6 +161,12 @@ def check_vision_automation_readiness(
     embedded_session_id: str = "",
 ) -> Dict[str, Any]:
     """汇总就绪状态，供 API 与前端展示。"""
+    cache_key = "vision_readiness"
+    with _readiness_cache_lock:
+        cached = _readiness_cache.get(cache_key)
+        if cached and time.time() - cached[1] < _readiness_cache_ttl:
+            return cached[0]
+
     items: List[Dict[str, Any]] = [
         _check_ollama_vision(),
         _check_embedded_gateway(),
@@ -169,9 +181,12 @@ def check_vision_automation_readiness(
         "wait_vision": wait_vision_enabled(),
     }
     hints = [it.get("hint") for it in items if it.get("hint") and not it.get("ok")]
-    return {
+    result = {
         "ready": core_ok,
         "items": items,
         "vision_features": vision_features,
         "summary": "一切就绪，可以开始智能测试" if core_ok else (hints[0] if hints else "部分功能暂不可用，将自动使用常规方式"),
     }
+    with _readiness_cache_lock:
+        _readiness_cache[cache_key] = (result, time.time())
+    return result

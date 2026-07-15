@@ -1,4 +1,4 @@
-﻿# Build full offline desktop installer (portable Python + Chromium + WebView2 + Inno Setup)
+# Build full offline desktop installer (portable Python + Chromium + WebView2 + Inno Setup)
 # Run from project root:
 #   .\packaging\build_desktop_installer.ps1
 #
@@ -14,7 +14,11 @@ param(
     [switch] $InnoOnly,
     [switch] $PrepareOnly,
     [switch] $Legacy,
-    [switch] $Lite
+    [switch] $Lite,
+    [switch] $Full,
+    [switch] $WithChromium,
+    [switch] $WithOpenCV,
+    [switch] $WithMobile
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,10 +69,27 @@ if ($Legacy) {
 Write-Host "========================================" -ForegroundColor Cyan
 
 if (-not $InnoOnly) {
+    $bundleChromium = $Full -or $WithChromium
+    $bundleOpenCV   = $Full -or $WithOpenCV
+    $bundleMobile   = $Full -or $WithMobile
+
+    Write-Host ""
+    Write-Host "Build configuration:"
+    Write-Host "  Lite:       $Lite"
+    Write-Host "  Full:       $Full"
+    Write-Host "  Chromium:   $bundleChromium"
+    Write-Host "  OpenCV:     $bundleOpenCV"
+    Write-Host "  Mobile:     $bundleMobile"
+    Write-Host ""
+
     if ($Legacy) {
-        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root -Legacy -Lite:$Lite
+        & "$Root\packaging\bundle\prepare_offline_release.ps1" `
+            -Root $Root -Legacy -Lite:$Lite `
+            -WithChromium:$bundleChromium -WithOpenCV:$bundleOpenCV -WithMobile:$bundleMobile
     } else {
-        & "$Root\packaging\bundle\prepare_offline_release.ps1" -Root $Root -Lite:$Lite
+        & "$Root\packaging\bundle\prepare_offline_release.ps1" `
+            -Root $Root -Lite:$Lite `
+            -WithChromium:$bundleChromium -WithOpenCV:$bundleOpenCV -WithMobile:$bundleMobile
     }
 } else {
     Write-Host " Skip prepare (-InnoOnly); using existing dist\uat_release" -ForegroundColor Yellow

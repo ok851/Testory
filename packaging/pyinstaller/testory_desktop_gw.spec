@@ -10,10 +10,10 @@ block_cipher = None
 spec_dir = Path(SPECPATH).resolve()
 root = spec_dir.parent.parent
 sys.path.insert(0, str(spec_dir))
-from _spec_common import gateway_analysis_bundle  # noqa: E402
+from _spec_common import lite_gateway_analysis_bundle  # noqa: E402
 
 entry = spec_dir / "testory_desktop_gw_entry.py"
-_gw_datas, _gw_binaries, _gw_hidden = gateway_analysis_bundle(root)
+_gw_datas, _gw_binaries, _gw_hidden = lite_gateway_analysis_bundle(root)
 _gw_hidden += list(collect_submodules("desktop_automation_gateway"))
 
 a = Analysis(
@@ -25,7 +25,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tests", "pytest"],
+    excludes=["tests", "pytest", "numpy", "cv2", "PIL", "mss", "pandas", "scipy", "openpyxl", "reportlab", "docx"],
     cipher=block_cipher,
     noarchive=False,
 )

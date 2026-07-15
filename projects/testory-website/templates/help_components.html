@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}组件安装说明 - {{ brand_name }}{% endblock %}
+
+{% block content %}
+<section class="section" style="padding-top:120px;">
+    <div class="container">
+        <div class="section-header">
+            <span class="section-tag">帮助</span>
+            <h1>组件安装说明</h1>
+            <p class="section-desc">
+                Testory 采用「核心壳 + 按需组件」模式，首次安装体积极小，使用时按需下载所需组件。
+            </p>
+        </div>
+
+        <div style="max-width:800px;margin:0 auto;">
+            <!-- 核心壳说明 -->
+            <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;">
+                <h2 style="margin-top:0;color:#fff;">📦 核心壳（默认安装包）</h2>
+                <p style="color:var(--text-secondary);line-height:1.6;">
+                    包含 Testory 的核心功能：接口测试、移动端测试、团队协同、AI 用例生成等。<br>
+                    体积约 <strong>200 MB</strong>，下载时间约 5 分钟（5 Mbps 带宽）。
+                </p>
+                <p style="color:var(--text-secondary);line-height:1.6;">
+                    核心壳安装后，以下功能<strong>立即可用</strong>：
+                </p>
+                <ul style="color:var(--text-secondary);line-height:1.8;">
+                    <li>接口测试（HTTP/HTTPS）</li>
+                    <li>移动端测试（连接真机/模拟器）</li>
+                    <li>AI 用例生成与优化</li>
+                    <li>团队协同与报告</li>
+                    <li>定时任务与 CI/CD 集成</li>
+                </ul>
+            </div>
+
+            <!-- Chromium -->
+            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;">
+                <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+                    <span style="font-size:1.5rem;">🌐</span>
+                    <h2 style="margin:0;color:#fff;">Playwright Chromium 浏览器</h2>
+                </div>
+                <table style="width:100%;color:var(--text-secondary);margin-bottom:1rem;">
+                    <tr><td style="padding:0.25rem 0;width:80px;"><strong>用途</strong></td><td>Web 自动化测试、网页录制回放、元素采集</td></tr>
+                    <tr><td style="padding:0.25rem 0;"><strong>体积</strong></td><td>~180 MB</td></tr>
+                    <tr><td style="padding:0.25rem 0;"><strong>何时需要</strong></td><td>使用「Web 自动化 → 录制用例」或「网页元素采集」功能时</td></tr>
+                </table>
+                <h3 style="color:#fff;font-size:1rem;margin-bottom:0.5rem;">安装方式</h3>
+                <ol style="color:var(--text-secondary);line-height:1.8;margin-bottom:1rem;">
+                    <li>打开 Testory 桌面客户端</li>
+                    <li>点击顶部菜单「设置」→「可选组件」</li>
+                    <li>找到「Playwright Chromium」→ 点击「安装」</li>
+                    <li>等待进度条完成（约 3-5 分钟，取决于网速）</li>
+                    <li>安装完成后重启 Testory</li>
+                </ol>
+                <div style="background:rgba(255,193,7,0.1);border-left:3px solid #ffc107;padding:0.75rem 1rem;border-radius:4px;">
+                    <p style="margin:0;color:#ffc107;font-size:0.9rem;">
+                        <strong>提示：</strong>如果您在纯内网环境使用，无法联网下载组件，请直接下载
+                        <a href="{{ url_for('download_latest') }}?type=full" style="color:#ffc107;text-decoration:underline;">完整离线包</a>。
+                    </p>
+                </div>
+            </div>
+
+            <!-- OpenCV -->
+            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;">
+                <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+                    <span style="font-size:1.5rem;">👁️</span>
+                    <h2 style="margin:0;color:#fff;">OpenCV 视觉库</h2>
+                </div>
+                <table style="width:100%;color:var(--text-secondary);margin-bottom:1rem;">
+                    <tr><td style="padding:0.25rem 0;width:80px;"><strong>用途</strong></td><td>视觉定位、AI 视觉识别、桌面混排测试</td></tr>
+                    <tr><td style="padding:0.25rem 0;"><strong>体积</strong></td><td>~70 MB</td></tr>
+                    <tr><td style="padding:0.25rem 0;"><strong>何时需要</strong></td><td>使用「AI 视觉测试」或「视觉定位」功能时</td></tr>
+                </table>
+                <h3 style="color:#fff;font-size:1rem;margin-bottom:0.5rem;">安装方式</h3>
+                <p style="color:var(--text-secondary);line-height:1.6;">
+                    与 Chromium 相同：打开 Testory →「设置」→「可选组件」→ 找到「OpenCV 视觉库」→ 点击「安装」。
+                </p>
+            </div>
+
+            <!-- Android SDK -->
+            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;">
+                <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+                    <span style="font-size:1.5rem;">📱</span>
+                    <h2 style="margin:0;color:#fff;">Android SDK（移动端测试）</h2>
+                </div>
+                <table style="width:100%;color:var(--text-secondary);margin-bottom:1rem;">
+                    <tr><td style="padding:0.25rem 0;width:80px;"><strong>用途</strong></td><td>连接 Android 真机或模拟器进行移动端测试</td></tr>
+                    <tr><td style="padding:0.25rem 0;"><strong>体积</strong></td><td>~50 MB</td></tr>
+                    <tr><td style="padding:0.25rem 0;"><strong>何时需要</strong></td><td>使用「移动端测试」功能且需要 adb 调试时</td></tr>
+                </table>
+                <h3 style="color:#fff;font-size:1rem;margin-bottom:0.5rem;">安装方式</h3>
+                <p style="color:var(--text-secondary);line-height:1.6;">
+                    与 Chromium 相同：打开 Testory →「设置」→「可选组件」→ 找到「Android SDK」→ 点击「安装」。
+                </p>
+            </div>
+
+            <!-- 常见问题 -->
+            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:1.5rem;">
+                <h2 style="margin-top:0;color:#fff;">❓ 常见问题</h2>
+
+                <div style="margin-bottom:1.5rem;">
+                    <h3 style="color:#fff;font-size:1rem;margin-bottom:0.5rem;">Q: 为什么安装了软件，但 Web 自动化功能无法使用？</h3>
+                    <p style="color:var(--text-secondary);line-height:1.6;margin:0;">
+                        您下载的是「核心壳」版本，体积更小、下载更快。Web 自动化需要 Chromium 浏览器组件，
+                        请在软件内「设置 → 可选组件」中安装，或下载
+                        <a href="{{ url_for('download_latest') }}?type=full" style="color:var(--primary-bright)">完整离线包</a>。
+                    </p>
+                </div>
+
+                <div style="margin-bottom:1.5rem;">
+                    <h3 style="color:#fff;font-size:1rem;margin-bottom:0.5rem;">Q: 我的电脑在内网，无法联网下载组件怎么办？</h3>
+                    <p style="color:var(--text-secondary);line-height:1.6;margin:0;">
+                        请下载「完整离线包」（~591 MB），安装后所有功能无需联网即可使用。
+                    </p>
+                </div>
+
+                <div style="margin-bottom:1.5rem;">
+                    <h3 style="color:#fff;font-size:1rem;margin-bottom:0.5rem;">Q: 组件下载太慢或失败怎么办？</h3>
+                    <p style="color:var(--text-secondary);line-height:1.6;margin:0;">
+                        1) 检查网络连接；2) 尝试切换网络环境；3) 若仍失败，请下载完整离线包重新安装。
+                    </p>
+                </div>
+
+                <div>
+                    <h3 style="color:#fff;font-size:1rem;margin-bottom:0.5rem;">Q: 安装组件后需要重启软件吗？</h3>
+                    <p style="color:var(--text-secondary);line-height:1.6;margin:0;">
+                        是的，安装完成后请完全关闭 Testory（包括任务栏图标），然后重新启动。
+                    </p>
+                </div>
+            </div>
+
+            <div style="text-align:center;margin-top:2rem;">
+                <a href="{{ url_for('index') }}#download" class="btn btn-primary">返回下载页</a>
+                <a href="{{ url_for('docs_page') }}" class="btn btn-ghost" style="margin-left:0.5rem;">查看使用说明</a>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

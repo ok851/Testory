@@ -138,6 +138,12 @@ def pricing_page():
     return render_template("pricing.html", **ctx)
 
 
+@app.route("/help/components")
+def help_components():
+    """组件安装说明帮助页。"""
+    return render_template("help_components.html", **_site_context())
+
+
 def _proxy_admin_installer_download() -> Response:
     """内网拉取控制面安装包并透传给浏览器（同域下载，不暴露后台端口）。"""
     admin_url = f"{PLATFORM_ADMIN_URL}/api/public/download/latest"

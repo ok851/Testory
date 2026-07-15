@@ -307,22 +307,54 @@
             {% if download_error %}
             <p class="download-alert">{{ download_error }}</p>
             {% endif %}
-            {% if latest_release and latest_release.has_file %}
-            <a href="{{ download_url }}" class="btn btn-primary btn-lg download-btn" download>
-                下载 v{{ latest_release.version }}（Windows）
-            </a>
-            <p class="download-meta">
-                {% if latest_release.file_size_label %}{{ latest_release.file_size_label }} · {% endif %}
-                已有 {{ latest_release.download_count }} 次下载
-            </p>
-            <p class="download-hint">安装约 1-3 分钟 · 首次使用 Web/视觉功能会自动下载组件</p>
+
+            <div class="download-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1.5rem;margin:2rem 0;max-width:800px;margin-left:auto;margin-right:auto;">
+                <!-- 核心壳 -->
+                <div class="download-card" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:1.5rem;text-align:left;">
+                    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
+                        <span style="font-size:1.5rem;">🌟</span>
+                        <h3 style="margin:0;font-size:1.1rem;color:#fff;">推荐 - 核心壳</h3>
+                    </div>
+                    <p style="margin:0 0 0.5rem;color:var(--text-secondary);font-size:0.9rem;">~200 MB · 约 5 分钟下载</p>
+                    <p style="margin:0 0 1rem;color:var(--text-secondary);font-size:0.85rem;line-height:1.5;">
+                        包含核心功能（接口测试、移动端、团队协同）。<br>
+                        Web/视觉功能首次使用时自动下载组件。
+                    </p>
+                    {% if latest_release and latest_release.has_file %}
+                    <a href="{{ download_url }}" class="btn btn-primary" style="width:100%;" download>
+                        立即下载
+                    </a>
+                    {% else %}
+                    <a href="#contact" class="btn btn-primary" style="width:100%;">准备中</a>
+                    {% endif %}
+                </div>
+
+                <!-- 完整离线包 -->
+                <div class="download-card" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:1.5rem;text-align:left;">
+                    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;">
+                        <span style="font-size:1.5rem;">📦</span>
+                        <h3 style="margin:0;font-size:1.1rem;color:#fff;">完整离线包</h3>
+                    </div>
+                    <p style="margin:0 0 0.5rem;color:var(--text-secondary);font-size:0.9rem;">~591 MB · 约 16 分钟下载</p>
+                    <p style="margin:0 0 1rem;color:var(--text-secondary);font-size:0.85rem;line-height:1.5;">
+                        包含所有组件（Chromium、OpenCV、Android SDK）。<br>
+                        适合纯内网环境，安装后所有功能立即可用。
+                    </p>
+                    <a href="{{ url_for('download_latest') }}?type=full" class="btn btn-ghost" style="width:100%;">
+                        下载完整包
+                    </a>
+                </div>
+            </div>
+
             <p class="download-meta" style="margin-top:0.5rem">
-                👉 <a href="{{ url_for('docs_page') }}" style="color:var(--primary-bright)">查看使用说明</a> · <a href="{{ url_for('docs_page') }}#install" style="color:var(--primary-bright)">安装指南</a>
+                💡 安装后某些功能提示「组件未安装」？
+                <a href="{{ url_for('help_components') }}" style="color:var(--primary-bright)">查看组件安装说明</a>
             </p>
-            {% else %}
-            <a href="#contact" class="btn btn-primary btn-lg">安装包准备中 · 联系获取</a>
-            <p class="download-meta">管理员在后台上传安装包后，此按钮将直接触发本地下载</p>
-            {% endif %}
+            <p class="download-meta" style="margin-top:0.5rem">
+                👉 <a href="{{ url_for('docs_page') }}" style="color:var(--primary-bright)">查看使用说明</a> ·
+                <a href="{{ url_for('docs_page') }}#install" style="color:var(--primary-bright)">安装指南</a> ·
+                <a href="{{ url_for('help_components') }}" style="color:var(--primary-bright)">组件说明</a>
+            </p>
             <p class="download-meta" style="margin-top:0.75rem">
                 订阅与支付：请先在软件中登录，再通过「升级订阅」跳转官网完成付款
             </p>

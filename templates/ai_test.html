@@ -354,6 +354,35 @@
     .ai-chat-msg--assistant .ai-chat-msg__bubble {
         background: #fff; border: 1px solid #e2e8f0; border-bottom-left-radius: 4px;
     }
+    /* ── AI Thinking Bubble ── */
+    .ai-thinking-bubble {
+        align-self: flex-start; max-width: 85%;
+        animation: aiThinkIn 0.3s ease;
+    }
+    @keyframes aiThinkIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .ai-thinking-bubble__inner {
+        background: rgba(99, 102, 241, 0.06);
+        border: 1px solid rgba(99, 102, 241, 0.2);
+        border-radius: 12px; border-bottom-left-radius: 4px;
+        padding: 10px 14px;
+    }
+    .ai-thinking-step {
+        display: flex; align-items: center; gap: 8px;
+        padding: 3px 0; font-size: 12px; color: #6366f1;
+        animation: aiThinkStepIn 0.25s ease both;
+    }
+    @keyframes aiThinkStepIn { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+    .ai-thinking-step__dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: #818cf8; flex-shrink: 0;
+        animation: aiThinkPulse 1.2s ease infinite;
+    }
+    @keyframes aiThinkPulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+    .ai-thinking-step--done .ai-thinking-step__dot { background: #34d399; animation: none; opacity: 1; }
+    .ai-thinking-step--done { color: #64748b; }
+    html.dark .ai-thinking-bubble__inner { background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.25); }
+    html.dark .ai-thinking-step { color: #a5b4fc; }
+    html.dark .ai-thinking-step--done { color: #64748b; }
     .ai-gen-label { display: block; font-size: 12px; font-weight: 600; color: #64748b; margin-bottom: 8px; }
     .ai-input-row { display: flex; gap: 12px; align-items: stretch; }
     .ai-input-row textarea {

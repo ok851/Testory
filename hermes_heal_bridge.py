@@ -46,21 +46,44 @@ def _legacy_selector_llm_enabled() -> bool:
     )
 
 
+def _persist_to_locator_candidates(
+    step: Optional[Dict[str, Any]],
+    selector_value: str,
+    selector_type: str,
+    source: str,
+) -> None:
+    """将自愈成功的选择器持久化到步骤的 locator_candidates 字段。"""
+    if not isinstance(step, dict):
+        return
+    candidate = {
+        "selector_type": selector_type,
+        "selector_value": selector_value,
+        "score": 100,
+        "source": source,
+    }
+    existing = step.get("locator_candidates")
+    if isinstance(existing, list):
+        existing.insert(0, candidate)
+    else:
+        step["locator_candidates"] = [candidate]
+
+
 async def try_recover_selector_with_hermes(
     page: Any,
     description: str,
     action: str,
     failed_selector: str,
     registry_lines: str = "",
+    step: Optional[Dict[str, Any]] = None,
 ) -> Optional[Tuple[str, str]]:
     """通过 Hermes Agent 推断新选择器（JSON 回复）。"""
     if not hermes_heal_enabled():
         return None
     from agent_gateway_client import get_agent_gateway_client
-    from ai_selector_recovery import _apply_llm_choice, _extract_json_obj, _collect_registry_main_frame
+    from ai_selector_recovery import _apply_llm_choice, _extract_json_obj, _collect_registry_with_frames
 
     cap = int(os.environ.get("AI_SELECTOR_RECOVERY_MAX_NODES", "100") or "100")
-    registry = await _collect_registry_main_frame(page, min(200, max(20, cap)))
+    registry = await _collect_registry_with_frames(page, min(200, max(20, cap)))
     if not registry:
         uat_logger.warning("[AI_HERMES_HEAL] 当前页主文档未采集到可交互控件，将尝试视觉定位兜底")
         return None
@@ -93,6 +116,7 @@ async def try_recover_selector_with_hermes(
     if resolved:
         uat_logger.info("[AI_HERMES_HEAL] recovered selector via Hermes")
         sync_repair_to_memory(description, action, failed_selector, resolved[0], resolved[1])
+        _persist_to_locator_candidates(step, resolved[0], resolved[1], "hermes_heal")
     return resolved
 
 

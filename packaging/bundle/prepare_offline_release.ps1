@@ -1,9 +1,12 @@
-﻿# Prepare offline release directory for Testory installer
+# Prepare offline release directory for Testory installer
 param(
     [string] $Root = "",
     [string] $OutDir = 'dist\uat_release',
     [switch] $Legacy,
-    [switch] $Lite
+    [switch] $Lite,
+    [switch] $WithChromium,
+    [switch] $WithOpenCV,
+    [switch] $WithMobile
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,8 +50,12 @@ Write-Host "[1/8] Install build dependencies..."
 if ($LASTEXITCODE -ne 0) { throw "pip install failed: requirements.txt" }
 & $py -m pip install -q -r (Join-Path $Root "requirements-windows.txt")
 if ($LASTEXITCODE -ne 0) { throw "pip install failed: requirements-windows.txt" }
-& $py -m playwright install chromium
-if ($LASTEXITCODE -ne 0) { throw "playwright install chromium failed" }
+
+# 只有需要打包 Chromium 时才在构建环境安装
+if ($WithChromium -or $Lite) {
+    & $py -m playwright install chromium
+    if ($LASTEXITCODE -ne 0) { throw "playwright install chromium failed" }
+}
 
 Write-Host "[2/8] Copy program files..."
 $release = Join-Path $Root $OutDir
@@ -71,6 +78,7 @@ $ensureArgs = @{
     ProjectRoot = $Root
 }
 if ($Lite) { $ensureArgs["Lite"] = $true }
+if ($WithOpenCV) { $ensureArgs["WithOpenCV"] = $true }
 if (-not $Legacy) { $ensureArgs["Protected"] = $true }
 & "$Root\packaging\bundle\Ensure-PortablePython.ps1" @ensureArgs | Out-Null
 $rpy = Join-Path $release ".venv\python.exe"
@@ -81,7 +89,8 @@ if (-not (Test-Path $rpy)) {
 Write-Host "[4/8] Bundle Playwright Chromium..."
 if ($Lite) {
     Write-Host "  Lite mode: skip Chromium bundling, auto-download on first use" -ForegroundColor DarkYellow
-} else {
+} elseif ($WithChromium) {
+    Write-Host "  WithChromium: including Chromium browser" -ForegroundColor Green
     & $rpy -m playwright install chromium
     if ($LASTEXITCODE -ne 0) {
         throw "playwright install chromium failed"
@@ -99,6 +108,8 @@ if ($Lite) {
     } else {
         Write-Warning "ms-playwright not found, check playwright install"
     }
+} else {
+    Write-Host "  Default: skip Chromium (use -WithChromium to bundle; or install via Settings > Components)" -ForegroundColor DarkYellow
 }
 
 Write-Host "[5/8] Generate default config..."
@@ -133,6 +144,55 @@ Write-Host "[7/8] Build Testory.exe launcher..."
 Write-Host "[7b/8] Verify release layout..."
 & "$Root\packaging\bundle\verify_install_release.ps1" -ReleaseDir $OutDir -Root $Root
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# 最终清理：确保可选组件不在核心包中（Inno Setup 会把 dist\uat_release 下所有文件打包）
+Write-Host "[7c/8] Slimming core package..." -ForegroundColor Cyan
+
+# Chromium 浏览器（180 MB）
+if (-not $WithChromium) {
+    foreach ($dir in @("playwright-browsers", "ms-playwright")) {
+        $d = Join-Path $release $dir
+        if (Test-Path $d) {
+            Write-Host "  Removing Chromium: $d" -ForegroundColor DarkYellow
+            Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# OpenCV 视觉库（70 MB），从 .venv 和 runtime/_internal 两处移除
+if (-not $WithOpenCV) {
+    $cvDirs = @(
+        (Join-Path $release ".venv\Lib\site-packages\cv2"),
+        (Join-Path $release ".venv\Lib\site-packages\opencv_python_headless"),
+        (Join-Path $release ".venv\Lib\site-packages\opencv_python"),
+        (Join-Path $release "runtime\testory_app\_internal\cv2")
+    )
+    foreach ($d in $cvDirs) {
+        if (Test-Path $d) {
+            Write-Host "  Removing OpenCV: $d" -ForegroundColor DarkYellow
+            Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+        }
+    }
+    Get-ChildItem (Join-Path $release ".venv\Lib\site-packages") -Filter "cv2*" -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "  Removing leftover: $($_.FullName)" -ForegroundColor DarkYellow
+        Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue
+    }
+    Get-ChildItem (Join-Path $release ".venv\Lib\site-packages") -Filter "opencv*" -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "  Removing leftover: $($_.FullName)" -ForegroundColor DarkYellow
+        Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue
+    }
+}
+
+# Android SDK（50 MB）
+if (-not $WithMobile) {
+    foreach ($rel in @("plugin_bundles\android-sdk", "runtime\testory_app\_internal\plugin_bundles\android-sdk")) {
+        $d = Join-Path $release $rel
+        if (Test-Path $d) {
+            Write-Host "  Removing Android SDK: $d" -ForegroundColor DarkYellow
+            Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
+        }
+    }
+}
 
 $must = @(
     (Join-Path $release "Testory.exe"),

@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from ai_multi_provider import dispatch_chat_completion_messages
+from ai_multi_provider import dispatch_chat_completion_messages, dispatch_chat_stream
 from logger import uat_logger
 from embedded_browser_client import embedded_gateway_enabled
 from agent_gateway_client import agent_tool_result_max_chars, get_agent_gateway_client
@@ -23,7 +24,7 @@ def ai_chat_tools_enabled() -> bool:
 
 
 def profile_supports_ai_chat_tools(profile: Optional[Dict[str, Any]], legacy_model: str) -> bool:
-    """Whether we attempt tool-loop (Ollama or OpenAI-compatible)."""
+    """Whether we attempt tool-loop (Ollama, OpenAI-compatible, or Anthropic)."""
     if profile and isinstance(profile, dict):
         style = (profile.get("api_style") or "").strip()
         prov = (profile.get("provider") or "").strip()
@@ -35,7 +36,7 @@ def profile_supports_ai_chat_tools(profile: Optional[Dict[str, Any]], legacy_mod
                 "off",
             )
         if style == "anthropic_messages" or prov == "anthropic":
-            return False
+            return bool(str(profile.get("api_key") or "").strip())
         if style == "google_gemini" or prov == "google_gemini":
             return False
         return bool(str(profile.get("api_key") or "").strip())
@@ -353,6 +354,7 @@ class ChatToolLoopParams:
     test_scope: Optional[str] = None
     embedded_session_id: Optional[str] = None
     platform_type: str = "web"
+    abort_event: Optional[threading.Event] = None
 
 
 def _handle_agent_execute(
@@ -394,6 +396,7 @@ def run_ai_chat_with_tools(
     *,
     local_ai_service: Any,
     params: ChatToolLoopParams,
+    abort_event: Optional[threading.Event] = None,
 ) -> Tuple[Dict[str, Any], List[str], Dict[str, Any]]:
     """
     Returns (generated_plan_dict, norm_warnings from caller side still empty here, meta).
@@ -435,8 +438,11 @@ def run_ai_chat_with_tools(
     meta: Dict[str, Any] = {"tool_rounds": 0, "tools_used": []}
     prof: Optional[Dict[str, Any]] = params.profile if isinstance(params.profile, dict) else None
     max_result = agent_tool_result_max_chars()
+    _abort = abort_event or params.abort_event
 
     for round_idx in range(_max_tool_rounds()):
+        if _abort is not None and _abort.is_set():
+            raise InterruptedError("操作已被用户取消")
         if prof:
             assistant_msg = dispatch_chat_completion_messages(
                 messages,
@@ -444,6 +450,7 @@ def run_ai_chat_with_tools(
                 prof,
                 local_ai_service,
                 temperature=0.2,
+                abort_event=_abort,
             )
         else:
             default_model = os.environ.get("LOCAL_LLM_MODEL_MID", "llama3:8b-instruct")
@@ -460,6 +467,7 @@ def run_ai_chat_with_tools(
                 default_profile,
                 local_ai_service,
                 temperature=0.2,
+                abort_event=_abort,
             )
 
         tool_calls = assistant_msg.get("tool_calls")
@@ -573,3 +581,198 @@ def run_ai_chat_with_tools(
             )
 
     raise ValueError(f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务或提高 AI_CHAT_TOOLS_MAX_ROUNDS")
+
+
+def run_ai_chat_with_tools_stream(
+    *,
+    local_ai_service: Any,
+    params: ChatToolLoopParams,
+    abort_event: Optional[threading.Event] = None,
+):
+    """流式版 tool calling 循环。yield (event_type, data) 元组。
+
+    event_type:
+      - "thinking": {"round": N, "content": "..."}  LLM 正在思考
+      - "tool_call_start": {"round": N, "tool": "...", "args_summary": "..."}
+      - "tool_call_result": {"round": N, "tool": "...", "result_preview": "..."}
+      - "plan_update": {"plan": {...}, "step_count": N}
+      - "done": {"total_rounds": N, "plan": {...}, "meta": {...}}
+      - "error": "错误信息"
+    """
+    embed_sid = (params.embedded_session_id or "").strip()
+    plat = (params.platform_type or "web").strip().lower()
+    allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid, platform_type=plat)
+    tools = chat_tool_schemas(allow_hermes=allow_agent)
+    agent_client = get_agent_gateway_client()
+
+    ic_note = ""
+    if params.interaction_context:
+        try:
+            ic_note = json.dumps(params.interaction_context, ensure_ascii=False)[:2000]
+        except Exception:
+            ic_note = str(params.interaction_context)[:2000]
+
+    system_prompt = _build_system_prompt(
+        project_name=params.project_name,
+        current_plan=params.current_plan if isinstance(params.current_plan, dict) else {},
+        page_snapshot=params.page_snapshot or "",
+        dom_pack=params.dom_context_pack or "",
+        memory_context=params.memory_context or "",
+        interaction_note=ic_note,
+        test_scope=(params.test_scope or "").strip() if params.test_scope else "",
+        embedded_session_id=embed_sid,
+        platform_type=plat,
+    )
+
+    messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    messages.extend(
+        _history_to_messages(params.history, local_ai_service._sanitize_chat_history_for_prompt)
+    )
+    messages.append({"role": "user", "content": params.message})
+
+    last_plan: Dict[str, Any] = dict(params.current_plan) if isinstance(params.current_plan, dict) else {}
+    meta: Dict[str, Any] = {"tool_rounds": 0, "tools_used": []}
+    prof: Optional[Dict[str, Any]] = params.profile if isinstance(params.profile, dict) else None
+    max_result = agent_tool_result_max_chars()
+    _abort = abort_event or params.abort_event
+
+    for round_idx in range(_max_tool_rounds()):
+        if _abort is not None and _abort.is_set():
+            yield ("error", "操作已被用户取消")
+            return
+
+        yield ("thinking", {"round": round_idx, "content": "AI 正在推理..."})
+
+        # 流式调用 LLM
+        content_buf = ""
+        assistant_msg: Optional[Dict[str, Any]] = None
+        try:
+            for evt_type, evt_data in dispatch_chat_stream(
+                messages, tools, prof, local_ai_service,
+                temperature=0.2, abort_event=_abort,
+            ):
+                if evt_type == "content_delta":
+                    content_buf += evt_data
+                elif evt_type == "done":
+                    assistant_msg = evt_data
+                elif evt_type == "error":
+                    yield ("error", evt_data)
+                    return
+        except Exception as e:
+            yield ("error", f"LLM 调用失败: {e}")
+            return
+
+        if assistant_msg is None:
+            yield ("error", "LLM 返回为空")
+            return
+
+        tool_calls = assistant_msg.get("tool_calls")
+        content = assistant_msg.get("content") or content_buf
+
+        if not tool_calls:
+            # 无 tool call，尝试解析为最终 plan
+            text = (content or "").strip()
+            if not text:
+                yield ("error", "模型返回空内容")
+                return
+            try:
+                parsed = local_ai_service._parse_json_response(text)
+                using_model = (params.legacy_model or local_ai_service.model_mid).strip()
+                if prof:
+                    using_model = ((prof.get("label") or prof.get("model_id") or using_model) or using_model).strip()
+                normalized = local_ai_service._normalize_output(
+                    parsed, params.message, params.project_name, using_model,
+                    probe_registry=params.probe_registry,
+                )
+                meta["final_round"] = round_idx
+                n = len(normalized.get("steps") or [])
+                yield ("plan_update", {"plan": normalized, "step_count": n})
+                yield ("done", {"total_rounds": round_idx + 1, "plan": normalized, "meta": meta})
+                return
+            except ValueError:
+                # 非 JSON，回退到 refine
+                try:
+                    refined = local_ai_service.refine_case_and_steps(
+                        user_message=params.message, project_name=params.project_name,
+                        current_plan=last_plan,
+                        history=params.history if isinstance(params.history, list) else [],
+                        model=params.legacy_model, profile=prof,
+                        page_snapshot=params.page_snapshot, probe_registry=params.probe_registry,
+                        probe_url=params.probe_url, memory_context=params.memory_context,
+                        dom_context_pack=params.dom_context_pack,
+                        interaction_context=params.interaction_context,
+                    )
+                    meta["fallback"] = "refine_after_non_json"
+                    n = len(refined.get("steps") or [])
+                    yield ("plan_update", {"plan": refined, "step_count": n})
+                    yield ("done", {"total_rounds": round_idx + 1, "plan": refined, "meta": meta})
+                except Exception as e2:
+                    yield ("error", f"回退 refine 也失败: {e2}")
+                return
+
+        # 有 tool calls
+        meta["tool_rounds"] = int(meta["tool_rounds"]) + 1
+        messages.append({"role": "assistant", "content": content if content else None, "tool_calls": tool_calls})
+
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            name = (fn.get("name") or "").strip()
+            tid = tc.get("id") or f"call_{uuid.uuid4().hex[:12]}"
+            raw_args = fn.get("arguments") if isinstance(fn, dict) else ""
+            if not isinstance(raw_args, str):
+                raw_args = json.dumps(raw_args, ensure_ascii=False) if raw_args is not None else ""
+            args = _parse_tool_arguments(raw_args)
+            result_text = ""
+
+            # 通知前端 tool call 开始
+            args_summary = args.get("instruction") or args.get("adjustment") or str(list(args.keys()))
+            yield ("tool_call_start", {"round": round_idx, "tool": name, "args_summary": args_summary[:200]})
+
+            if name in ("hermes_execute", "openclaw_execute"):
+                result_text = _handle_agent_execute(
+                    name=name, args=args, allow_agent=allow_agent,
+                    agent_client=agent_client, meta=meta,
+                )
+            elif name == "refine_test_plan":
+                adj = (args.get("adjustment") or "").strip()
+                if not adj:
+                    result_text = json.dumps({"ok": False, "error": "adjustment 为空"}, ensure_ascii=False)
+                else:
+                    try:
+                        refined = local_ai_service.refine_case_and_steps(
+                            user_message=adj, project_name=params.project_name,
+                            current_plan=last_plan,
+                            history=params.history if isinstance(params.history, list) else [],
+                            model=params.legacy_model, profile=prof,
+                            page_snapshot=params.page_snapshot, probe_registry=params.probe_registry,
+                            probe_url=params.probe_url, memory_context=params.memory_context,
+                            dom_context_pack=params.dom_context_pack,
+                            interaction_context=params.interaction_context,
+                        )
+                        last_plan = refined
+                        result_text = json.dumps(
+                            {"ok": True, "plan": refined, "hint": "已更新 current_plan"},
+                            ensure_ascii=False,
+                        )[: min(96000, max_result)]
+                        n = len(refined.get("steps") or [])
+                        yield ("plan_update", {"plan": refined, "step_count": n})
+                    except Exception as e:
+                        result_text = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+                meta["tools_used"].append("refine_test_plan")
+            else:
+                result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
+
+            # 通知前端 tool call 结果
+            yield ("tool_call_result", {
+                "round": round_idx, "tool": name,
+                "result_preview": result_text[:500],
+            })
+
+            messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+
+    yield ("error", f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务")

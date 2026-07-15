@@ -3,6 +3,92 @@
 
   var lastPreview = null;
 
+  /* ── Code diff renderer ── */
+  function renderDiffView(data, container) {
+    container.innerHTML = '';
+    var steps = (data && data.resolved_steps) || (data && data.steps) || [];
+    if (!steps.length) {
+      container.innerHTML = '<div style="color:#94a3b8;font-size:13px;">无步骤数据</div>';
+      return;
+    }
+    var stats = { changed: 0, unchanged: 0, new_sel: 0 };
+    steps.forEach(function (step, i) {
+      var oldSel = step.original_selector_value || step.original_selector || '';
+      var newSel = step.resolved_selector_value || step.selector_value || '';
+      var changed = oldSel && newSel && oldSel !== newSel;
+      if (changed) stats.changed++;
+      else if (newSel) stats.new_sel++;
+      else stats.unchanged++;
+
+      var row = document.createElement('div');
+      row.className = 'heal-diff-row';
+      row.style.animationDelay = (i * 40) + 'ms';
+
+      var num = document.createElement('span');
+      num.className = 'heal-diff-num';
+      num.textContent = (i + 1);
+
+      var desc = document.createElement('span');
+      desc.className = 'heal-diff-desc';
+      desc.textContent = step.description || step.action || ('步骤 ' + (i + 1));
+
+      var code = document.createElement('div');
+      code.className = 'heal-diff-code';
+
+      if (changed) {
+        var oldLine = document.createElement('div');
+        oldLine.className = 'heal-diff-line heal-diff-line--old';
+        oldLine.innerHTML = '<span class="heal-diff-marker">-</span><code>' + escapeHtml(oldSel) + '</code>';
+        var newLine = document.createElement('div');
+        newLine.className = 'heal-diff-line heal-diff-line--new';
+        newLine.innerHTML = '<span class="heal-diff-marker">+</span><code>' + escapeHtml(newSel) + '</code>';
+        code.appendChild(oldLine);
+        code.appendChild(newLine);
+      } else if (newSel) {
+        var keepLine = document.createElement('div');
+        keepLine.className = 'heal-diff-line heal-diff-line--keep';
+        keepLine.innerHTML = '<span class="heal-diff-marker">&nbsp;</span><code>' + escapeHtml(newSel) + '</code>';
+        code.appendChild(keepLine);
+      }
+
+      row.appendChild(num);
+      var body = document.createElement('div');
+      body.className = 'heal-diff-body';
+      body.appendChild(desc);
+      body.appendChild(code);
+      row.appendChild(body);
+      container.appendChild(row);
+    });
+
+    var summary = document.createElement('div');
+    summary.className = 'heal-diff-summary';
+    summary.innerHTML = '<span class="heal-diff-summary__changed">' + stats.changed + ' 项变更</span>' +
+      '<span class="heal-diff-summary__keep">' + stats.unchanged + ' 项保持</span>';
+    container.insertBefore(summary, container.firstChild);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /* ── Animated log renderer ── */
+  function renderAnimatedLog(text, container) {
+    container.innerHTML = '';
+    var lines = String(text).split('\n');
+    lines.forEach(function (line, i) {
+      var el = document.createElement('div');
+      el.className = 'heal-log-line';
+      if (/\b(error|fail|失败)\b/i.test(line)) el.classList.add('heal-log-line--error');
+      else if (/\b(warn|警告)\b/i.test(line)) el.classList.add('heal-log-line--warn');
+      else if (/\b(success|pass|通过)\b/i.test(line)) el.classList.add('heal-log-line--success');
+      else if (/^\s*(\[AI\]|🤖)/.test(line)) el.classList.add('heal-log-line--ai');
+      else if (/\[INFO\]/.test(line)) el.classList.add('heal-log-line--info');
+      el.textContent = line;
+      el.style.animationDelay = (i * 60) + 'ms';
+      container.appendChild(el);
+    });
+  }
+
   function loadProjects() {
     var sel = document.getElementById('aiHealProject');
     if (!sel) return;
@@ -97,11 +183,16 @@
       var data = await resp.json();
       if (!resp.ok || !data.success) throw new Error(data.error || '失败');
       lastPreview = data;
-      if (out) out.textContent = JSON.stringify(data, null, 2).slice(0, 12000);
+      if (out) {
+        renderDiffView(data, out);
+      }
       if (saveBtn) saveBtn.disabled = false;
     } catch (e) {
       lastPreview = null;
-      if (out) out.textContent = String(e && e.message ? e.message : e);
+      if (out) {
+        out.innerHTML = '<div class="heal-log-line heal-log-line--error" style="animation-delay:0ms;">' +
+          escapeHtml(String(e && e.message ? e.message : e)) + '</div>';
+      }
       if (saveBtn) saveBtn.disabled = true;
     }
   }

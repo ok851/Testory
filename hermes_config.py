@@ -67,7 +67,20 @@ def build_hermes_env_lines(*, api_key: Optional[str] = None) -> str:
     cdp = (os.environ.get("HERMES_CDP_ENDPOINT") or "").strip()
     if cdp:
         lines.append(f"HERMES_CDP_ENDPOINT={cdp}")
-    if prof.get("api_style") == "ollama" or prof.get("provider") == "ollama":
+    # 独立 LLM 配置优先：如果设置了 HERMES_LLM_PROVIDER，使用独立配置而非平台配置
+    hermes_provider = (os.environ.get("HERMES_LLM_PROVIDER") or "").strip()
+    hermes_model = (os.environ.get("HERMES_LLM_MODEL") or "").strip()
+    if hermes_provider:
+        hermes_base = (os.environ.get("HERMES_LLM_BASE_URL") or "").strip()
+        hermes_key = (os.environ.get("HERMES_LLM_API_KEY") or "").strip()
+        lines.append(f"PROVIDER={hermes_provider}")
+        if hermes_model:
+            lines.append(f"OPENAI_MODEL={hermes_model}")
+        if hermes_base:
+            lines.append(f"OPENAI_API_BASE={hermes_base.rstrip('/')}")
+        if hermes_key:
+            lines.append(f"OPENAI_API_KEY={hermes_key}")
+    elif prof.get("api_style") == "ollama" or prof.get("provider") == "ollama":
         lines.extend(
             [
                 "PROVIDER=openai_compatible",
@@ -86,6 +99,11 @@ def build_hermes_env_lines(*, api_key: Optional[str] = None) -> str:
         )
         if api_key_llm:
             lines.append(f"OPENAI_API_KEY={api_key_llm}")
+    # 将独立 LLM 配置变量写入 .env，供 Hermes 读取
+    if hermes_provider:
+        lines.append(f"HERMES_LLM_PROVIDER={hermes_provider}")
+    if hermes_model:
+        lines.append(f"HERMES_LLM_MODEL={hermes_model}")
     return "\n".join(lines) + "\n"
 
 
@@ -168,6 +186,22 @@ def _write_hermes_env_lines(lines: list[str]) -> None:
     _sync_hermes_env_to_process(env_path)
 
 
+def _try_hot_update_cdp(ws: str) -> bool:
+    """尝试通过 Hermes HTTP API 热更新 CDP 端点，不支持则返回 False。"""
+    try:
+        import requests
+
+        base = (os.environ.get("HERMES_GATEWAY_URL") or "http://127.0.0.1:8642").rstrip("/")
+        resp = requests.post(
+            f"{base}/v1/config/cdp",
+            json={"cdp_endpoint": ws},
+            timeout=5,
+        )
+        return resp.ok
+    except Exception:
+        return False
+
+
 def sync_hermes_cdp_endpoint(cdp_ws_url: str, *, restart_gateway: bool = True) -> bool:
     """
     将 Browser Runtime 返回的 cdp_browser_ws 写入 HERMES_HOME/.env 与进程环境，
@@ -191,12 +225,14 @@ def sync_hermes_cdp_endpoint(cdp_ws_url: str, *, restart_gateway: bool = True) -
     os.environ["HERMES_BROWSER_MODE"] = "cdp_attach"
     _ACTIVE_CDP_ENDPOINT = ws
     if restart_gateway:
-        try:
-            from hermes_service_bootstrap import restart_hermes_gateway
+        # 优先尝试热更新 CDP 端点，避免重启 Hermes 进程
+        if not _try_hot_update_cdp(ws):
+            try:
+                from hermes_service_bootstrap import restart_hermes_gateway
 
-            restart_hermes_gateway()
-        except Exception:
-            pass
+                restart_hermes_gateway()
+            except Exception:
+                pass
     return True
 
 

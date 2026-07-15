@@ -236,6 +236,33 @@ def start_backend(root: Path, python: Path, port: int, user_data: Path) -> subpr
     )
 
 
+def _check_components_hint(root: Path, user_data: Path) -> None:
+    """异步检查可选组件安装状态，写入标记文件供前端展示提示。"""
+    try:
+        import threading
+
+        def _do_check():
+            try:
+                sys.path.insert(0, str(root))
+                from components_manager import _check_chromium_installed
+
+                if not _check_chromium_installed():
+                    hint_file = user_data / "hints" / "missing_chromium.txt"
+                    hint_file.parent.mkdir(parents=True, exist_ok=True)
+                    hint_file.write_text(
+                        "Web 自动化功能需要 Chromium 浏览器组件。\n"
+                        "请前往「设置 → 可选组件」中安装。\n"
+                        "或访问帮助页面了解详情：http://62.234.135.115/help/components",
+                        encoding="utf-8",
+                    )
+            except Exception:
+                pass
+
+        threading.Thread(target=_do_check, daemon=True).start()
+    except Exception:
+        pass
+
+
 def _port_in_use(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=0.35):
@@ -385,7 +412,11 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{port}/api/health", timeout=2
                 ) as resp:
-                    return resp.status == 200
+                    if resp.status == 200:
+                        # 后端就绪后，异步检查可选组件安装状态并写入标记
+                        _check_components_hint(root, user_data)
+                        return True
+                    return False
             except (urllib.error.URLError, OSError, TimeoutError):
                 return False
 

@@ -1,9 +1,10 @@
-﻿# Create portable Python runtime inside the release directory
+# Create portable Python runtime inside the release directory
 param(
     [Parameter(Mandatory = $true)][string] $ReleaseDir,
     [Parameter(Mandatory = $true)][string] $BuildPython,
     [string] $ProjectRoot = "",
     [switch] $Lite,
+    [switch] $WithOpenCV,
     [switch] $Protected
 )
 
@@ -144,13 +145,34 @@ $skipPkgs = @(
     "fire", "fire-*"
 )
 
-if ($Lite) {
-    Write-Host "  Lite mode: skipping OpenCV and other large packages (auto-download on first use)" -ForegroundColor DarkYellow
+if ($Lite -or -not $WithOpenCV) {
+    if ($Lite) {
+        Write-Host "  Lite mode: skipping OpenCV and other large packages (auto-download on first use)" -ForegroundColor DarkYellow
+    } else {
+        Write-Host "  Default: skipping OpenCV (use -WithOpenCV to bundle; or install via Settings > Components)" -ForegroundColor DarkYellow
+    }
     $skipPkgs += @(
         "cv2", "opencv*",
         "cv2.pyd", "opencv_python_headless*"
     )
 }
+
+# 大体积包：.venv 只用于桌面壳（desktop_shell.py），不需要这些包
+# 后端通过 onedir 运行，有自己的 _internal
+$skipPkgs += @(
+    "pandas", "pandas-*",
+    "scipy", "scipy-*",
+    "playwright", "playwright-*",
+    "numpy", "numpy-*",
+    "torch", "torch-*",
+    "torchvision", "torchvision-*",
+    "ultralytics", "ultralytics-*",
+    "paddle*", "paddlex*",
+    "reportlab", "reportlab-*",
+    "openpyxl", "openpyxl-*",
+    "docx", "docx-*",
+    "pypdf", "pypdf-*"
+)
 
 Write-Host "  Copying from $buildSitePackages (skipping test/build tools)..."
 Get-ChildItem -Path $buildSitePackages -Force | Where-Object {
@@ -171,7 +193,7 @@ Get-ChildItem -Path $buildSitePackages -Force | Where-Object {
 & $runtimePy -m pip install --upgrade pip setuptools wheel -q --no-warn-script-location 2>&1 | Out-Null
 
 Write-Host "  Verifying core imports..."
-& $runtimePy -c "import flask, requests, numpy; print('core imports ok')" 2>&1 | Out-Null
+& $runtimePy -c "import flask, requests; print('core imports ok')" 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  Warning: some imports failed, running pip check..." -ForegroundColor DarkYellow
     & $runtimePy -m pip check 2>&1 | Out-Null
