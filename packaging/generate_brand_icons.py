@@ -127,9 +127,23 @@ def save_icons() -> None:
     OUT_PNG.parent.mkdir(parents=True, exist_ok=True)
     base.save(OUT_PNG, format="PNG")
 
-    ico_base = base.resize((256, 256), Image.Resampling.LANCZOS)
+    # 为每个尺寸生成独立图像，确保 ICO 包含所有尺寸
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    ico_base.save(OUT, format="ICO", sizes=[(s, s) for s in ICO_SIZES])
+    images = []
+    for size in ICO_SIZES:
+        img = base.resize((size, size), Image.Resampling.LANCZOS)
+        # 确保是 RGBA 模式（支持透明度）
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        images.append(img)
+
+    # 保存为多尺寸 ICO，第一个图像作为默认
+    images[0].save(
+        OUT,
+        format="ICO",
+        append_images=images[1:],
+        sizes=[(s, s) for s in ICO_SIZES],
+    )
 
     import shutil
 

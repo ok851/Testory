@@ -11,6 +11,8 @@ packaging = spec_dir.parent
 root = packaging.parent
 launcher = packaging / "testory_exe_launcher.py"
 icon = packaging / "inno" / "testory.ico"
+if not icon.is_file():
+    raise FileNotFoundError(f"图标文件不存在: {icon}. 请先运行: python packaging/generate_brand_icons.py")
 
 a = Analysis(
     [str(launcher)],
@@ -50,5 +52,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(icon) if icon.is_file() else None,
+    icon=str(icon),
 )

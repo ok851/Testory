@@ -150,7 +150,6 @@ def run_native_shell(
     set_process_app_user_model_id()
     apply_window_icon_async(root, APP_TITLE)
 
-    ico = resolve_icon_path(root)
     api = DesktopWindowApi(root)
     create_kwargs = dict(
         title=APP_TITLE,
@@ -164,11 +163,6 @@ def run_native_shell(
         frameless=frameless,
         easy_drag=False,
     )
-    if ico is not None:
-        try:
-            create_kwargs["icon"] = str(ico.resolve())
-        except TypeError:
-            pass
 
     window = webview.create_window(**create_kwargs)
 
