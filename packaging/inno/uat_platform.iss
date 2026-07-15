@@ -40,7 +40,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 ; 主程序 + 内置 .venv + playwright-browsers + 默认 data
-Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; 排除 Android SDK（路径过长且移动端测试通常不需要离线安装）
+Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "plugin_bundles\android-sdk\*,plugin_bundles\android-sdk"
 ; WebView2 引导包（界面窗口所需，安装时按需静默安装）
 Source: "{#RedistDir}\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{app}\redist\webview2"; Flags: ignoreversion; Check: WebView2BootstrapperBundled
 
