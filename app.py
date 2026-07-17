@@ -207,6 +207,8 @@ _dataset_run_lock = threading.Lock()
 _case_run_jobs: dict = {}
 _case_run_lock = threading.Lock()
 _user_ui_run_locks: dict = {}
+_ai_task_abort_events: Dict[str, threading.Event] = {}
+_ai_task_abort_lock = threading.Lock()
 _user_ui_run_locks_mu = threading.Lock()
 _ai_model_cfg_lock = threading.Lock()
 _login_fail_lock = threading.Lock()
@@ -1916,6 +1918,21 @@ def create_case_v2():
 def ai_hub_page():
     """AI 中心：用例设计 / 自主测试 / 自愈优化入口。"""
     return render_template('ai_hub.html')
+
+
+@app.route('/api/ai/stats', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_stats():
+    """AI 中心首页统计数据（真实数据）。"""
+    _db = Database()
+    stats = _db.get_ai_stats()
+    return jsonify({
+        "success": True,
+        "ai_generated_cases": stats["ai_generated_cases"],
+        "efficiency_boost": stats["efficiency_boost"],
+        "coverage_boost": stats["coverage_boost"],
+    })
 
 
 @app.route('/ai-design')
@@ -5916,6 +5933,606 @@ def api_ai_task_job_cancel(job_id):
     return jsonify({'success': True})
 
 
+@app.route('/api/ai/task/execute', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_task_execute():
+    """AI 任务执行（SSE 流式输出，复用 ai_chat_tool_loop 多轮工具循环）"""
+    data = request.get_json(silent=True) or {}
+    task = data.get('task', '')
+    project_id = data.get('project_id')
+    platform = data.get('platform', 'web')
+    engine = data.get('engine')
+    url = data.get('url', '')
+    enable_vision = data.get('enable_vision', False)
+    timeout = data.get('timeout', 120)
+
+    if not task:
+        return jsonify({'success': False, 'error': '请输入任务描述'}), 400
+
+    # 设置超时
+    old_timeout = os.environ.get("HERMES_GATEWAY_TIMEOUT", "")
+    os.environ["HERMES_GATEWAY_TIMEOUT"] = str(max(30, int(timeout or 120)))
+
+    import uuid as _uuid
+    job_id = _uuid.uuid4().hex
+
+    def _gen():
+        import json as _json
+        import threading
+        import time as _time
+
+        def send(event_type, **kwargs):
+            kwargs['type'] = event_type
+            return 'data: ' + _json.dumps(kwargs, ensure_ascii=False) + '\n\n'
+
+        abort_event = threading.Event()
+
+        with _ai_task_abort_lock:
+            _ai_task_abort_events[job_id] = abort_event
+
+        yield send('job_started', job_id=job_id)
+
+        try:
+            # Step 1: 确保 Hermes Gateway 已启动
+            yield send('think', text='正在检查 Hermes 智能体状态', status='running')
+
+            try:
+                from hermes_service_bootstrap import bootstrap_hermes_services
+                boot_result = bootstrap_hermes_services()
+            except Exception:
+                boot_result = {"hermes_started": False}
+
+            from hermes_gateway_client import HermesGatewayClient
+            hermes_client = HermesGatewayClient()
+            hermes_available = hermes_client.is_configured() and hermes_client.health_check(timeout_sec=3.0)
+
+            if abort_event.is_set():
+                yield send('error', error='任务已取消')
+                return
+
+            browser_ready = False
+            if hermes_available:
+                yield send('think', text='Hermes 智能体已就绪', status='done')
+                # 使用 ExternalBrowserBridge 启动有头浏览器（替代 [INIT] 伪启动）
+                try:
+                    from ai_external_browser_bridge import ensure_browser, is_browser_alive, force_cleanup_browser
+                    from hermes_config import hermes_cdp_attached
+                    if not hermes_cdp_attached() or not is_browser_alive():
+                        # 兜底：如果 CDP 状态残留但浏览器已死，强制清理后再启动
+                        if hermes_cdp_attached() and not is_browser_alive():
+                            force_cleanup_browser()
+                            yield send('think', text='检测到浏览器已关闭，正在清理残留状态并重新启动...', status='running')
+                        else:
+                            yield send('think', text='正在启动有头浏览器...', status='running')
+                        browser_ready = ensure_browser(headless=False, url=url or "")
+                        if browser_ready:
+                            yield send('think', text='浏览器已启动，CDP 已同步到 Hermes', status='done')
+                        else:
+                            yield send('error', error='浏览器启动失败，无法在前台浏览器中执行。请检查 Playwright 安装或端口占用情况。')
+                            return
+                    else:
+                        browser_ready = True
+                        if url:
+                            from ai_external_browser_bridge import get_page
+                            _pg = get_page()
+                            if _pg and not _pg.is_closed():
+                                try:
+                                    _pg.goto(url, wait_until="domcontentloaded", timeout=15000)
+                                except Exception:
+                                    pass
+                        yield send('think', text='CDP 已连接，复用现有浏览器', status='done')
+                except ImportError:
+                    yield send('error', error='Playwright 未安装，无法启动前台浏览器。请先安装 Playwright。')
+                    return
+                except Exception as e:
+                    uat_logger.warning("ExternalBrowserBridge 启动失败: %s", e)
+                    yield send('error', error='浏览器桥接失败: ' + str(e)[:200] + '，任务终止。')
+                    return
+
+                # 强制验证：必须 CDP attach 到前台浏览器，否则终止任务
+                if not hermes_cdp_attached():
+                    yield send('error', error='浏览器 CDP 未连接，Hermes 无法在前台浏览器中执行。请等待浏览器启动完成后再重试。')
+                    return
+            else:
+                yield send('think', text='Hermes 智能体不可用且内置浏览器模式未集成。请先启动 Hermes Gateway 或连接浏览器后重试。', status='warning')
+                return
+
+            _time.sleep(0.3)
+
+            if abort_event.is_set():
+                yield send('error', error='任务已取消')
+                return
+
+            if hermes_available:
+                # Step 2: 使用 ai_chat_tool_loop 的流式工具循环
+                yield send('think', text='正在通过 Hermes 工具链执行任务', status='running')
+
+                try:
+                    from ai_chat_tool_loop import (
+                        run_ai_chat_with_tools_stream,
+                        ChatToolLoopParams,
+                    )
+                    from ai_multi_provider import get_active_llm_profile
+                    from ai_local_inference import local_ai_service
+
+                    profile = get_active_llm_profile()
+
+                    # 获取项目名称
+                    project_name = "default"
+                    if project_id:
+                        try:
+                            projects = get_user_projects(current_user.id)
+                            for p in projects:
+                                if str(p.get("id")) == str(project_id):
+                                    project_name = p.get("name", "default")
+                                    break
+                        except Exception:
+                            pass
+
+                    current_plan = {
+                        "case_name": task[:60],
+                        "case_url": url or "",
+                        "steps": [],
+                    }
+
+                    _page_snapshot = ""
+                    _probe_registry = None
+                    _dom_context_pack = ""
+                    if browser_ready:
+                        try:
+                            from ai_external_browser_bridge import get_page_snapshot, get_probe_registry, get_dom_context_pack
+                            _page_snapshot = get_page_snapshot()
+                            _probe_registry = get_probe_registry() or None
+                            _dom_context_pack = get_dom_context_pack()
+                        except Exception:
+                            pass
+
+                    # 创建动作记录器（按需触发视觉分析）
+                    from ai_action_recorder import ActionRecorder
+                    recorder = ActionRecorder(vision_enabled=bool(enable_vision), platform=platform)
+
+                    # 创建屏幕观察者（如果用户开启了共享屏幕）
+                    screen_observer = None
+                    if enable_vision:
+                        from ai_screen_observer import ScreenObserver
+                        screen_observer = ScreenObserver(
+                            platform_type=platform,
+                            interval_sec=3,
+                        )
+
+                    params = ChatToolLoopParams(
+                        message=task,
+                        project_name=project_name,
+                        current_plan=current_plan,
+                        history=[],
+                        profile=profile,
+                        legacy_model="",
+                        page_snapshot=_page_snapshot,
+                        probe_registry=_probe_registry,
+                        probe_url=url or "",
+                        memory_context="",
+                        dom_context_pack=_dom_context_pack,
+                        interaction_context={"url": url, "platform": platform, "enable_vision": enable_vision} if url else None,
+                        test_scope=task,
+                        embedded_session_id="",
+                        platform_type=platform,
+                        abort_event=abort_event,
+                        recorder=recorder,
+                        screen_observer=screen_observer,
+                    )
+
+                    final_plan = None
+                    for evt_type, evt_data in run_ai_chat_with_tools_stream(
+                        local_ai_service=local_ai_service,
+                        params=params,
+                        abort_event=abort_event,
+                    ):
+                        if evt_type == "thinking":
+                            yield send('think', text=evt_data.get('content', 'AI 正在推理...'), status='running')
+
+                        elif evt_type == "tool_call_start":
+                            tool_name = evt_data.get('tool', '')
+                            args_summary = evt_data.get('args_summary', '')
+                            if tool_name == "hermes_execute":
+                                yield send('action', action_type='hermes_execute', target=args_summary[:80], status='running')
+                                yield send('think', text='Hermes 正在浏览器中执行操作', status='running')
+                            elif tool_name == "refine_test_plan":
+                                yield send('think', text='正在优化测试用例', status='running')
+
+                        elif evt_type == "tool_call_result":
+                            tool_name = evt_data.get('tool', '')
+                            result_preview = evt_data.get('result_preview', '')
+                            if tool_name == "hermes_execute":
+                                yield send('action', action_type='hermes_execute', target='Hermes 执行完成', status='success', result=result_preview[:200])
+                            elif tool_name == "refine_test_plan":
+                                yield send('think', text='测试用例已更新', status='done')
+
+                        elif evt_type == "action_records":
+                            # 动作记录器提取的结构化动作（来自 ActionRecorder）
+                            for rec in (evt_data if isinstance(evt_data, list) else []):
+                                yield send('action_record', **rec)
+                                # 将真实执行的动作同步到实时用例卡片
+                                yield send('case_step',
+                                    action=rec.get('action_type', '操作'),
+                                    target=rec.get('target', '目标'),
+                                    verified=True)
+
+                        elif evt_type == "vision_start":
+                            yield send('vision_start', message=evt_data.get('message', 'AI 正在观察屏幕...'))
+
+                        elif evt_type == "vision_result":
+                            yield send('vision_result', text=evt_data.get('text', '')[:300])
+
+                        elif evt_type == "plan_update":
+                            # 计划更新：只更新内部 final_plan，不发送到实时用例卡片
+                            # 实时用例只展示真实执行过的动作（来自 action_records）
+                            plan = evt_data.get('plan', {})
+                            step_count = evt_data.get('step_count', 0)
+                            final_plan = plan
+
+                        elif evt_type == "done":
+                            plan = evt_data.get('plan', {})
+                            if plan:
+                                final_plan = plan
+                            meta = evt_data.get('meta', {})
+                            tools_used = meta.get('tools_used', [])
+                            total_rounds = evt_data.get('total_rounds', 0)
+
+                            # 沉淀 Skill
+                            if final_plan and isinstance(final_plan, dict) and final_plan.get('steps'):
+                                try:
+                                    from hermes_skill_loop import record_execution_success
+                                    record_execution_success(
+                                        final_plan,
+                                        case_url=url or final_plan.get('case_url', ''),
+                                        instruction=task,
+                                        outcome='ok',
+                                    )
+                                except Exception:
+                                    pass
+
+                            yield send('done', message='任务执行完成，已生成可维护测试用例')
+
+                        elif evt_type == "error":
+                            yield send('error', error=str(evt_data))
+
+                except ImportError as e:
+                    yield send('think', text='工具循环模块不可用: ' + str(e) + '，使用降级模式', status='warning')
+                    # 降级：直接调用 Hermes Gateway
+                    yield send('think', text='正在直接调用 Hermes Gateway', status='running')
+                    instruction = task
+                    if url:
+                        instruction = f"目标URL: {url}\n\n任务: {task}"
+                    try:
+                        raw = hermes_client.execute_user_instruction(instruction)
+                        yield send('action', action_type='execute', target='Hermes 执行完成', status='success', result=raw[:200])
+                    except Exception as ex:
+                        yield send('action', action_type='execute', target='Hermes 执行', status='failed', error=str(ex))
+                    yield send('done', message='任务执行完成（降级模式）')
+
+                except Exception as e:
+                    yield send('error', error='执行失败: ' + str(e))
+
+            else:
+                # Step 3: 降级模式 - Hermes 不可用
+                yield send('error', error='Hermes 智能体不可用且内置浏览器模式未集成。请先启动 Hermes Gateway 或连接浏览器后重试。')
+
+        except Exception as e:
+            yield send('error', error=str(e))
+        finally:
+            with _ai_task_abort_lock:
+                _ai_task_abort_events.pop(job_id, None)
+            # 恢复超时设置
+            if old_timeout:
+                os.environ["HERMES_GATEWAY_TIMEOUT"] = old_timeout
+            elif "HERMES_GATEWAY_TIMEOUT" in os.environ:
+                del os.environ["HERMES_GATEWAY_TIMEOUT"]
+
+    return Response(_gen(), mimetype='text/event-stream; charset=utf-8', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+        'Content-Type': 'text/event-stream; charset=utf-8',
+    })
+
+
+@app.route('/api/ai/task/execute/logs', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_task_execute_logs():
+    return jsonify({'success': True, 'logs': []})
+
+
+@app.route('/api/ai/task/execute/stop', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_task_execute_stop():
+    data = request.get_json(silent=True) or {}
+    job_id = data.get('job_id')
+    
+    with _ai_task_abort_lock:
+        if job_id and job_id in _ai_task_abort_events:
+            _ai_task_abort_events[job_id].set()
+            return jsonify({'success': True, 'message': '已发送停止信号'})
+        for evt in _ai_task_abort_events.values():
+            evt.set()
+        _ai_task_abort_events.clear()
+    
+    return jsonify({'success': True, 'message': '已发送停止信号'})
+
+
+# ── Hermes Gateway 管理 API ──────────────────────────────
+
+@app.route('/api/ai/hermes/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_hermes_status():
+    """获取 Hermes Gateway 运行状态"""
+    status = {"running": False, "configured": False, "cdp_connected": False, "version": "", "port": 0}
+    try:
+        from hermes_gateway_client import HermesGatewayClient
+        client = HermesGatewayClient()
+        status["configured"] = client.is_configured()
+        if status["configured"]:
+            status["running"] = client.health_check(timeout_sec=2.0)
+            if status["running"]:
+                try:
+                    from hermes_config import get_hermes_env
+                    env = get_hermes_env()
+                    status["port"] = env.get("HERMES_GATEWAY_PORT", 0)
+                    cdp_url = env.get("HERMES_CDP_ENDPOINT", "")
+                    status["cdp_connected"] = bool(cdp_url)
+                except Exception:
+                    pass
+    except Exception as e:
+        status["error"] = str(e)
+    return jsonify({"success": True, "status": status})
+
+
+@app.route('/api/ai/hermes/start', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_hermes_start():
+    """一键启动 Hermes Gateway（用户显式触发，强制重试）"""
+    try:
+        from hermes_service_bootstrap import bootstrap_hermes_services
+        result = bootstrap_hermes_services(force=True)
+        started = result.get("hermes_started", False)
+        already_running = result.get("already_running", False)
+        if started and already_running:
+            message = "Hermes Gateway 已经在运行"
+        elif started:
+            message = "Hermes Gateway 已启动"
+        else:
+            reason = result.get("reason", "")
+            if reason == "not_configured":
+                message = "Hermes Gateway 未配置"
+            elif reason == "auto_start_disabled":
+                message = "Hermes 自动启动已禁用"
+            else:
+                message = "Hermes Gateway 启动失败"
+        return jsonify({
+            "success": True,
+            "started": started,
+            "message": message,
+            "detail": result,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "started": False}), 500
+
+
+@app.route('/api/ai/hermes/stop', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_hermes_stop():
+    """一键停止 Hermes Gateway"""
+    try:
+        from hermes_service_bootstrap import stop_hermes_gateway
+        stop_hermes_gateway()
+        return jsonify({"success": True, "message": "Hermes Gateway 已停止"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/ai/hermes/cdp-sync', methods=['POST'])
+def api_ai_hermes_cdp_sync():
+    """接收 Chrome 扩展发送的 CDP WebSocket URL，同步给 Hermes（无需登录，扩展无法携带 cookie）"""
+    data = request.get_json(silent=True) or {}
+    cdp_ws_url = data.get('cdp_ws_url', '').strip()
+    if not cdp_ws_url:
+        return jsonify({"success": False, "error": "缺少 CDP WebSocket URL"}), 400
+
+    try:
+        from hermes_config import sync_hermes_cdp_endpoint
+        sync_hermes_cdp_endpoint(cdp_ws_url)
+        return jsonify({"success": True, "message": "CDP 端点已同步给 Hermes"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/ai/actions/to-case', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_actions_to_case():
+    """将执行动作转换为测试用例，走 ai_step_normalization 全管线，并沉淀为 Hermes Skill"""
+    from ai_step_normalization import (
+        normalize_ai_step,
+        repair_raw_ai_steps_for_platform,
+        dedupe_and_validate_ai_steps,
+        apply_step_normalization_to_plan,
+    )
+
+    data = request.get_json(silent=True) or {}
+    actions = data.get('actions', [])
+    project_id = data.get('project_id')
+    case_name = data.get('case_name', 'AI 生成用例')
+    instruction = data.get('instruction', '')
+    case_url = data.get('url', '')
+    platform = data.get('platform', 'web')
+
+    # Step 1: 原始动作 → 步骤格式，写入 automation_layer 供 normalize_ai_step 读取平台
+    raw_steps = []
+    for action in actions:
+        raw_steps.append({
+            'action': action.get('action_type', action.get('type', '操作')),
+            'target': action.get('target', action.get('content', '')),
+            'input_value': action.get('input_data', action.get('input_value', '')),
+            'description': action.get('result', ''),
+            'automation_layer': platform,  # normalize_ai_step 从此字段读平台
+        })
+
+    # Step 2: 逐条规范化（复用 837 行管线）
+    normalized_steps = [normalize_ai_step(s) for s in raw_steps]
+
+    # Step 3: 平台修复（实测：无 platform 参数，就地修改，返回告警列表）
+    warnings1 = repair_raw_ai_steps_for_platform(normalized_steps) or []
+
+    # Step 4: 去重 + 验证（实测：platform 为关键字参数）
+    clean_steps, warnings2 = dedupe_and_validate_ai_steps(normalized_steps, platform=platform)
+
+    # Step 5: 构造 plan 并应用规范化（实测：无 platform 参数）
+    plan = {'case_name': case_name, 'case_url': case_url or '', 'steps': clean_steps}
+    plan, warnings3 = apply_step_normalization_to_plan(plan)
+    warnings3 = warnings3 or []
+
+    all_warnings = warnings1 + (warnings2 or []) + warnings3
+
+    # Step 6: 选择器恢复（复用 4 层降级，如有 probe_registry）
+    try:
+        from ai_external_browser_bridge import get_probe_registry
+        registry = get_probe_registry()
+        if registry and clean_steps:
+            from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+            plan = resolve_plan_steps_locators_with_snapshot(plan, registry)
+    except Exception:
+        pass
+
+    # Step 7: 保存到数据库
+    saved_to_db = False
+    case_id = None
+    if project_id:
+        try:
+            from database import get_db_connection
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            import json as _json
+            cursor.execute(
+                "INSERT INTO test_cases (project_id, name, steps, created_by, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+                (int(project_id), case_name, _json.dumps(clean_steps, ensure_ascii=False), current_user.id)
+            )
+            conn.commit()
+            case_id = cursor.lastrowid
+            conn.close()
+            saved_to_db = True
+        except Exception:
+            pass
+
+    # Step 8: 沉淀为 Hermes Skill
+    skill_exported = False
+    try:
+        from hermes_skill_loop import record_execution_success
+        record_execution_success(
+            plan,
+            case_url=case_url,
+            instruction=instruction or case_name,
+            outcome='ok',
+        )
+        skill_exported = True
+    except Exception:
+        pass
+
+    return jsonify({
+        'success': True,
+        'message': f'动作转用例成功（规范化 {len(clean_steps)} 步）' + ('，已沉淀为 Skill' if skill_exported else ''),
+        'case': {
+            'name': case_name,
+            'project_id': project_id,
+            'steps': clean_steps,
+        },
+        'case_id': case_id,
+        'saved_to_db': saved_to_db,
+        'skill_exported': skill_exported,
+        'warnings': all_warnings,
+    })
+
+
+@app.route('/api/ai/vision/capture', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_vision_capture():
+    """捕获当前浏览器/屏幕截图。"""
+    data = request.get_json(silent=True) or {}
+    source = data.get('source', 'browser')  # browser / screen
+    try:
+        if source == 'browser':
+            from ai_external_browser_bridge import capture_screenshot
+            png = capture_screenshot()
+        else:
+            import mss
+            from mss.tools import to_png
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                shot = sct.grab(monitor)
+                png = to_png(shot.rgb, shot.size)
+        if not png:
+            return jsonify({'success': False, 'error': '截图失败（无可用画面）'}), 500
+        import tempfile, os, uuid
+        filename = f"vision_{uuid.uuid4().hex[:8]}.png"
+        filepath = os.path.join(tempfile.gettempdir(), filename)
+        with open(filepath, 'wb') as f:
+            f.write(png)
+        return jsonify({'success': True, 'screenshot_path': filepath, 'size': len(png)})
+    except ImportError:
+        return jsonify({'success': False, 'error': '截图依赖未安装（mss 或 Playwright）'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)[:200]}), 500
+
+
+@app.route('/api/ai/vision/snapshot', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_vision_snapshot():
+    """获取最新浏览器截图 + OCR 文本。"""
+    try:
+        from ai_external_browser_bridge import capture_screenshot
+        png = capture_screenshot()
+        if not png:
+            return jsonify({'success': False, 'error': '无可用截图'}), 404
+        ocr_text = ""
+        try:
+            from ai_vision_local import ocr_region_png
+            ocr_text = ocr_region_png(png)  # 实测接受 bytes
+        except Exception:
+            pass
+        return jsonify({'success': True, 'ocr_text': ocr_text[:2000], 'screenshot_size': len(png)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)[:200]}), 500
+
+
+# 模块级屏幕共享状态（按用户ID隔离）
+_screen_share_states: Dict[str, Dict[str, Any]] = {}
+
+
+@app.route('/api/ai/screen-share/toggle', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_screen_share_toggle():
+    """开启/关闭共享屏幕。开启后定期截图供 AI 视觉分析。"""
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', False))
+    user_id = str(current_user.id)
+    _screen_share_states[user_id] = {
+        'enabled': enabled,
+        'interval': int(data.get('interval', 3)),
+    }
+    return jsonify({
+        'success': True,
+        'enabled': enabled,
+        'message': '共享屏幕已开启' if enabled else '共享屏幕已关闭',
+    })
+
+
 @app.route('/api/ai/cases/append-steps', methods=['POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
@@ -5982,6 +6599,69 @@ def api_ai_append_steps_to_case():
         'success': True,
         'case_id': case_id,
         'case_name': final_name,
+        'steps_created': created_steps,
+        'warnings': warnings,
+    })
+
+
+@app.route('/api/ai/cases/create-from-plan', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_create_case_from_plan():
+    """根据 AI 生成的完整 plan 创建新用例并写入步骤。"""
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    plan = data.get('plan') or {}
+
+    if not project_id:
+        return jsonify({'success': False, 'error': 'project_id 不能为空'}), 400
+    if not isinstance(plan, dict):
+        return jsonify({'success': False, 'error': 'plan 格式错误'}), 400
+
+    # 权限检查
+    _db = Database()
+    if not _db.check_project_access(current_user.id, project_id, 'editor'):
+        return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
+
+    # 创建用例
+    case_name = _ai_str(plan.get('case_name')) or 'AI 生成用例'
+    case_url = _ai_str(plan.get('case_url')) or ''
+    description = _ai_str(plan.get('description')) or ''
+
+    case_id = db.create_test_case_v2(
+        project_id=project_id,
+        name=case_name,
+        url=case_url,
+        description=description,
+        created_by=current_user.id,
+    )
+
+    # 写入步骤
+    steps = plan.get('steps') or []
+    created_steps = 0
+    warnings = []
+    if steps:
+        goal_hint = case_name
+        local_ai_service._fill_missing_step_payloads(
+            steps,
+            goal_hint,
+            case_url,
+            None,
+        )
+        clean_steps, warnings = dedupe_and_validate_ai_steps(steps)
+        ct_ai = _app_case_type({'url': case_url})
+        if ct_ai == "ui":
+            clean_steps = [s for s in clean_steps if (s.get("action") or "").strip().lower() != "api_request"]
+        for idx, step in enumerate(clean_steps, start=1):
+            db.create_test_step(**_ai_step_to_db_kwargs(step, case_id, idx))
+            created_steps += 1
+
+    return jsonify({
+        'success': True,
+        'case_id': case_id,
+        'case_name': case_name,
         'steps_created': created_steps,
         'warnings': warnings,
     })

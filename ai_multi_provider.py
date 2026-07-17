@@ -207,7 +207,8 @@ def openai_compatible_chat(
     except RequestException as e:
         _raise_http("OpenAI 兼容接口", e)
 
-    data = resp.json() if resp.content else {}
+    raw_text = resp.content.decode('utf-8', errors='replace') if resp.content else ""
+    data = json.loads(raw_text) if raw_text.strip() else {}
     choices = data.get("choices")
     if isinstance(choices, list) and choices:
         msg = choices[0].get("message") or {}
@@ -254,7 +255,8 @@ def openai_compatible_chat_completion(
     except RequestException as e:
         _raise_http("OpenAI 兼容接口", e)
 
-    data = resp.json() if resp.content else {}
+    raw_text = resp.content.decode('utf-8', errors='replace') if resp.content else ""
+    data = json.loads(raw_text) if raw_text.strip() else {}
     choices = data.get("choices")
     if isinstance(choices, list) and choices:
         msg = choices[0].get("message") or {}
@@ -412,7 +414,8 @@ def anthropic_messages_chat(
     except RequestException as e:
         _raise_http("Anthropic", e)
 
-    data = resp.json() if resp.content else {}
+    raw_text = resp.content.decode('utf-8', errors='replace') if resp.content else ""
+    data = json.loads(raw_text) if raw_text.strip() else {}
     blocks = data.get("content")
     if not isinstance(blocks, list):
         raise ValueError("Anthropic 返回为空或无法解析")
@@ -493,7 +496,8 @@ def google_gemini_chat(
     except RequestException as e:
         _raise_http("Google Gemini", e)
 
-    data = resp.json() if resp.content else {}
+    raw_text = resp.content.decode('utf-8', errors='replace') if resp.content else ""
+    data = json.loads(raw_text) if raw_text.strip() else {}
     cands = data.get("candidates")
     if isinstance(cands, list) and cands:
         content = cands[0].get("content") or {}
@@ -645,14 +649,20 @@ def openai_compatible_chat_stream(
     tool_buffers: Dict[int, Dict[str, str]] = {}  # index -> {id, name, arguments}
     content_buf = ""
     try:
-        for line in resp.iter_lines(decode_unicode=True):
+        for line in resp.iter_lines():
             if abort_event is not None and abort_event.is_set():
                 resp.close()
                 yield ("error", "操作已被用户取消")
                 return
-            if not line or not line.startswith("data: "):
+            if not line:
                 continue
-            data_str = line[6:].strip()
+            try:
+                line_text = line.decode('utf-8', errors='replace')
+            except Exception:
+                continue
+            if not line_text.startswith("data: "):
+                continue
+            data_str = line_text[6:].strip()
             if data_str == "[DONE]":
                 break
             try:
@@ -758,14 +768,20 @@ def anthropic_messages_stream(
     current_tool_idx = -1
     current_tool_input_buf = ""
     try:
-        for line in resp.iter_lines(decode_unicode=True):
+        for line in resp.iter_lines():
             if abort_event is not None and abort_event.is_set():
                 resp.close()
                 yield ("error", "操作已被用户取消")
                 return
-            if not line or not line.startswith("data: "):
+            if not line:
                 continue
-            data_str = line[6:].strip()
+            try:
+                line_text = line.decode('utf-8', errors='replace')
+            except Exception:
+                continue
+            if not line_text.startswith("data: "):
+                continue
+            data_str = line_text[6:].strip()
             try:
                 event = json.loads(data_str)
             except json.JSONDecodeError:
@@ -809,6 +825,24 @@ def anthropic_messages_stream(
     if tool_calls:
         out["tool_calls"] = tool_calls
     yield ("done", out)
+
+
+def get_active_llm_profile() -> Optional[Dict[str, Any]]:
+    """获取当前激活的 LLM 配置。"""
+    try:
+        from ai_config_paths import ai_model_registry_path
+        reg_path = ai_model_registry_path()
+        if reg_path.is_file():
+            reg = json.loads(reg_path.read_text(encoding="utf-8"))
+            aid = (reg.get("active_profile_id") or "").strip()
+            for p in (reg.get("profiles") or []):
+                if isinstance(p, dict) and p.get("id") == aid:
+                    return p
+            if reg.get("profiles"):
+                return reg["profiles"][0]
+    except Exception:
+        pass
+    return None
 
 
 def dispatch_chat_stream(

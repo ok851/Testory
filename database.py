@@ -1112,6 +1112,14 @@ class Database:
         except sqlite3.OperationalError:
             pass
 
+        # test_cases 新增 generated_by_ai 字段（标记 AI 生成的用例）
+        try:
+            cursor.execute(
+                "ALTER TABLE test_cases ADD COLUMN generated_by_ai INTEGER DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass
+
         # run_history 新增引擎信息字段
         try:
             cursor.execute("ALTER TABLE run_history ADD COLUMN engine_type TEXT")
@@ -1520,6 +1528,48 @@ class Database:
         conn.close()
         return n
 
+    def get_ai_stats(self) -> Dict[str, Any]:
+        """返回 AI 中心首页需要的真实统计数据。"""
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+
+        # 1. AI 生成用例数
+        cursor.execute(
+            "SELECT COUNT(*) FROM test_cases WHERE COALESCE(generated_by_ai, 0) = 1"
+        )
+        ai_generated_cases = int(cursor.fetchone()[0])
+
+        # 2. 效率提升：基于 run_history 中 self_healed_count > 0 的执行比例
+        cursor.execute("SELECT COUNT(*) FROM run_history")
+        total_runs = int(cursor.fetchone()[0] or 0)
+        if total_runs > 0:
+            cursor.execute(
+                "SELECT COUNT(*) FROM run_history WHERE COALESCE(self_healed_count, 0) > 0"
+            )
+            healed_runs = int(cursor.fetchone()[0] or 0)
+            efficiency_boost = round(healed_runs * 100.0 / total_runs)
+        else:
+            efficiency_boost = 0
+
+        # 3. 覆盖率提升：有步骤的用例 / 总用例 的比例
+        cursor.execute("SELECT COUNT(*) FROM test_cases")
+        total_cases = int(cursor.fetchone()[0] or 0)
+        if total_cases > 0:
+            cursor.execute(
+                "SELECT COUNT(DISTINCT case_id) FROM test_steps"
+            )
+            cases_with_steps = int(cursor.fetchone()[0] or 0)
+            coverage_boost = round(cases_with_steps * 100.0 / total_cases)
+        else:
+            coverage_boost = 0
+
+        conn.close()
+        return {
+            "ai_generated_cases": ai_generated_cases,
+            "efficiency_boost": efficiency_boost,
+            "coverage_boost": coverage_boost,
+        }
+
     # ==================== 测试单元（项目 → 单元 → 用例 → 步骤） ====================
 
     def create_test_unit(
@@ -1781,6 +1831,7 @@ class Database:
         case_role: str = "business",
         platform: str = "web",
         unit_id: Optional[int] = None,
+        generated_by_ai: bool = False,
     ) -> int:
         """创建测试用例（新版本，关联到项目）"""
         conn = self._sqlite_connect()
@@ -1792,14 +1843,14 @@ class Database:
         plat = _normalize_platform(platform)
         uid = int(unit_id) if unit_id else None
         cursor.execute(
-            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role, platform, unit_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (project_id, name, url, description, precondition, expected_result, ct, role, plat, uid),
+            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role, platform, unit_id, generated_by_ai) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, name, url, description, precondition, expected_result, ct, role, plat, uid, 1 if generated_by_ai else 0),
         )
         case_id = cursor.lastrowid
-        
+
         conn.commit()
         conn.close()
-        
+
         return case_id
     
     def get_test_case_v2(self, case_id: int) -> Dict[str, Any]:

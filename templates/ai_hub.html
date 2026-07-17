@@ -11,26 +11,29 @@
             <h1 data-i18n="aihub_title">AI 中心</h1>
             <p data-i18n="aihub_subtitle">用例设计、自主测试与自愈优化分模块协作，覆盖 Web、接口与移动端。</p>
         </div>
+        <button type="button" class="ai-hub-settings" id="aiHubSettingsBtn" title="模型配置设置">
+            <i class="fas fa-cog"></i>
+        </button>
     </header>
-    <div class="ai-hub-stats">
+    <div class="ai-hub-stats" id="aiHubStats">
         <div class="ai-hub-stat">
             <div class="ai-hub-stat__icon">📊</div>
             <div class="ai-hub-stat__body">
-                <div class="ai-hub-stat__num" data-target="10000" data-suffix="+">0</div>
+                <div class="ai-hub-stat__num" data-target="0" data-suffix="+">0</div>
                 <div class="ai-hub-stat__label" data-i18n="aihub_stat_cases">AI 生成用例</div>
             </div>
         </div>
         <div class="ai-hub-stat">
             <div class="ai-hub-stat__icon">⚡</div>
             <div class="ai-hub-stat__body">
-                <div class="ai-hub-stat__num" data-target="80" data-suffix="%">0</div>
+                <div class="ai-hub-stat__num" data-target="0" data-suffix="%">0</div>
                 <div class="ai-hub-stat__label" data-i18n="aihub_stat_efficiency">效率提升</div>
             </div>
         </div>
         <div class="ai-hub-stat">
             <div class="ai-hub-stat__icon">🎯</div>
             <div class="ai-hub-stat__body">
-                <div class="ai-hub-stat__num" data-target="95" data-suffix="%">0</div>
+                <div class="ai-hub-stat__num" data-target="0" data-suffix="%">0</div>
                 <div class="ai-hub-stat__label" data-i18n="aihub_stat_coverage">覆盖率提升</div>
             </div>
         </div>
@@ -61,7 +64,348 @@
         <a href="/cross-end" class="ai-hub-cross__btn">进入跨端编排 <i class="fas fa-arrow-right" style="margin-left:6px;"></i></a>
     </section>
 </div>
+
+<div class="ai-settings-backdrop" id="aiSettingsBackdrop" aria-hidden="true" title=""></div>
+<aside class="ai-settings-panel" id="aiSettingsPanel" role="dialog" aria-modal="true" aria-labelledby="aiSettingsTitle" aria-hidden="true">
+    <div class="ai-settings-panel__head">
+        <h4 id="aiSettingsTitle" data-i18n="aitest_settings_title">AI 与模型设置</h4>
+        <button type="button" class="ai-settings-close" onclick="window.toggleAiSettings(false)" aria-label="关闭">&times;</button>
+    </div>
+    <div class="ai-settings-panel__body">
+        <div class="ai-settings-section">
+            <h5 data-i18n="aitest_model_profiles_title">模型配置</h5>
+            <div id="aiOllamaStatus" class="text-muted" style="margin-bottom:12px;"></div>
+            <label class="ai-gen-label" data-i18n="aitest_model_current">当前推理模型</label>
+            <div class="ai-register-row" style="align-items:stretch;">
+                <select id="aiModelSelect" class="ai-gen-select" style="flex:2;"><option value="">加载中…</option></select>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:10px 12px;" onclick="window.saveActiveAiModel()" data-i18n="aitest_model_default">默认</button>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" style="margin-top:10px;width:100%;" onclick="window.openAiAddModelModal(true)" data-i18n="aitest_add_model">添加模型</button>
+        </div>
+        <div class="ai-settings-section">
+            <h5 data-i18n="aitest_registry">已注册模型</h5>
+            <p class="ai-settings-tip">每条配置右侧可「编辑」或「删除」；关闭请点右上角 ×，避免误触背景关闭。</p>
+            <div class="ai-register-row" style="margin-bottom:8px;">
+                <select id="aiOllamaNewSelect" class="ai-gen-select" style="flex:1;"><option value="">— 从 Ollama 列表选择 —</option></select>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:10px 12px;" onclick="window.refreshOllamaModels()" title="" data-i18n-title="aitest_ollama_refresh" data-i18n="aitest_ollama_refresh">刷新</button>
+            </div>
+            <label class="ai-chk-label" style="margin-top:4px;">
+                <input type="checkbox" id="aiVerifyOllamaChk" checked>
+                <span data-i18n="aitest_verify">添加前校验</span>
+            </label>
+            <button type="button" class="btn btn-info btn-sm" style="margin-top:8px;" onclick="window.quickAddOllamaFromList()" data-i18n="aitest_register_ollama">从列表注册 Ollama</button>
+            <div class="ai-model-registry" style="margin-top:12px;">
+                <div id="aiRegistryList" class="ai-registry-box"></div>
+            </div>
+        </div>
+        <div class="ai-settings-section">
+            <h5 data-i18n="aitest_env_section">环境</h5>
+            <p class="ai-settings-hint" data-i18n="aitest_env_hint">服务端环境变量可调整：LOCAL_LLM_BASE_URL、LOCAL_LLM_TIMEOUT 等。</p>
+        </div>
+    </div>
+</aside>
+
+<div class="ai-add-modal-backdrop" id="aiAddModelBackdrop" role="dialog" aria-modal="true" aria-labelledby="aiAddModelTitle">
+    <div class="ai-add-modal" id="aiAddModalRoot" onclick="event.stopPropagation()">
+        <div class="ai-add-modal__head">
+            <h4 id="aiAddModelTitle">添加模型</h4>
+            <button type="button" class="ai-settings-close" onclick="window.openAiAddModelModal(false)" aria-label="关闭">&times;</button>
+        </div>
+        <div class="ai-add-modal__body">
+            <div class="form-row">
+                <label><span class="req">*</span> <span data-i18n="aitest_field_model">模型名称</span></label>
+                <input type="text" id="aiAddModelId" placeholder="如 gpt-4o、deepseek-chat、qwen3:8b" data-i18n-placeholder="aitest_field_model_ph" autocomplete="off">
+                <p class="ai-add-model-hint" data-i18n="aitest_model_simple_hint">填写 API 文档中的 model 名称；本地 Ollama 填已 pull 的型号。</p>
+            </div>
+            <div class="form-row" id="aiAddApiKeyRow">
+                <label><span class="req" id="aiAddApiKeyStar">*</span> <span data-i18n="aitest_field_api_key">API 密钥</span></label>
+                <div class="api-key-wrap">
+                    <input type="password" id="aiAddApiKey" autocomplete="off" data-i18n-placeholder="aitest_field_api_key_ph" placeholder="API 密钥">
+                    <button type="button" onclick="window.toggleAiAddApiKeyVis()" aria-label="toggle"><i class="fas fa-eye" id="aiAddApiKeyEye"></i></button>
+                </div>
+                <p id="aiAddApiKeySavedHint" class="ai-add-model-hint ai-add-apikey-saved-hint" style="display:none;margin-top:8px;" role="status"></p>
+            </div>
+            <div class="form-row" id="aiAddBaseUrlRow">
+                <label><span data-i18n="aitest_field_base_url">API Base URL（可选）</span></label>
+                <input type="text" id="aiAddBaseUrl" placeholder="留空默认 OpenAI；Ollama 填 http://127.0.0.1:11434" data-i18n-placeholder="aitest_field_base_url_ph">
+                <p id="aiAddModelNotes" class="ai-add-model-hint ai-add-model-notes" style="display:none;margin-top:6px;color:#b45309;" role="status"></p>
+            </div>
+        </div>
+        <div class="ai-add-modal__foot">
+            <button type="button" class="btn-ghost" id="aiAddModalVerifyBtn">连接测试</button>
+            <button type="button" class="btn-ghost" onclick="window.openAiAddModelModal(false)" data-i18n="aitest_cancel">取消</button>
+            <button type="button" class="btn-primary-solid" id="aiAddModalSubmitBtn">添加</button>
+        </div>
+        <p id="aiAddVerifyStatus" class="ai-add-model-hint" style="padding:0 18px 12px;margin:0;display:none;" role="status"></p>
+    </div>
+</div>
+
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/ai_assistant.js') }}"></script>
+<script>
+(function() {
+    'use strict';
+    var aiModels = [], aiProfiles = [], activeAiModel = '', activeProfileId = '', providerCatalog = null;
+
+    function escapeHtml(text) { if (!text) return ''; var div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
+    function profileLabel(p) {
+        if (!p) return '';
+        var name = (p.label || p.model_id || '').trim();
+        var bu = (p.base_url || '').trim();
+        if (bu) { try { var host = new URL(bu.indexOf('://') >= 0 ? bu : 'https://' + bu).host; if (host) return name + ' \u00b7 ' + host; } catch (e) {} return name + ' \u00b7 ' + bu; }
+        return name;
+    }
+    function getSelectedAiModel() {
+        var el = document.getElementById('aiModelSelect');
+        return (el && el.value) ? el.value.trim() : '';
+    }
+    function ollamaRegisteredModelIds() {
+        return aiProfiles.filter(function(p) { return p.provider === 'ollama'; }).map(function(p) { return p.model_id; });
+    }
+    function updateActiveModelChip() {
+        var nameEl = document.getElementById('aiActiveModelName');
+        if (!nameEl) return;
+        var sid = getSelectedAiModel() || activeProfileId || '';
+        var p = aiProfiles.find(function(x) { return x.id === sid; });
+        nameEl.textContent = p ? profileLabel(p) : (sid || '\u2014');
+    }
+    function syncAgentEngineSelect() {
+        var m = document.getElementById('aiModelSelect');
+        var a = document.getElementById('aiAgentEngineSelect');
+        if (!m || !a) return;
+        a.innerHTML = m.innerHTML;
+        a.value = m.value || '';
+        if (!a.value && a.options.length) a.selectedIndex = 0;
+    }
+
+    window.toggleAiSettings = function(open) {
+        var panel = document.getElementById('aiSettingsPanel');
+        var backdrop = document.getElementById('aiSettingsBackdrop');
+        if (!panel || !backdrop) return;
+        var show = open === undefined ? !panel.classList.contains('is-open') : !!open;
+        panel.classList.toggle('is-open', show);
+        backdrop.classList.toggle('is-open', show);
+        panel.setAttribute('aria-hidden', show ? 'false' : 'true');
+        backdrop.setAttribute('aria-hidden', show ? 'false' : 'true');
+        document.body.style.overflow = show ? 'hidden' : '';
+        if (show) { setTimeout(function() { try { loadAiModels(); } catch (err) { console.warn(err); } }, 50); }
+    };
+
+    async function loadAiModels() {
+        if (window.__aiLoadingModels) return;
+        window.__aiLoadingModels = true;
+        var regBox = document.getElementById('aiRegistryList');
+        if (regBox && !regBox._refreshing) { regBox._refreshing = true; regBox.style.opacity = '0.5'; }
+        try {
+            var resp = await fetch('/api/ai/models');
+            var data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error);
+            providerCatalog = data.provider_catalog || providerCatalog;
+            aiProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+            activeProfileId = data.active_profile_id || '';
+            aiModels = Array.isArray(data.local_models) ? data.local_models : [];
+            activeAiModel = activeProfileId;
+            var ollamaModels = Array.isArray(data.ollama_models) ? data.ollama_models : [];
+            var ollamaError = data.ollama_error || null;
+            var baseUrl = data.ollama_base_url || '';
+            var statusDiv = document.getElementById('aiOllamaStatus');
+            if (statusDiv) statusDiv.innerHTML = ollamaError ? ('未连接 Ollama: ' + ollamaError) : ('已连接 Ollama (' + baseUrl + ')，已安装 ' + ollamaModels.length + ' 个模型');
+            var modelSelect = document.getElementById('aiModelSelect');
+            if (modelSelect) {
+                modelSelect.innerHTML = aiProfiles.length
+                    ? aiProfiles.map(function(p) { var sel = (p.id === activeProfileId) ? ' selected' : ''; return '<option value="' + escapeHtml(p.id) + '"' + sel + '>' + escapeHtml(profileLabel(p)) + '</option>'; }).join('')
+                    : '<option value="">\u6682\u65e0\u5df2\u6ce8\u518c\u6a21\u578b</option>';
+                modelSelect.onchange = function() { updateActiveModelChip(); };
+            }
+            var regOllama = ollamaRegisteredModelIds();
+            var pick = document.getElementById('aiOllamaNewSelect');
+            if (pick) pick.innerHTML = '<option value="">\u2014 \u4ece Ollama \u5217\u8868\u9009\u62e9 \u2014</option>' + ollamaModels.filter(function(m) { return regOllama.indexOf(m) < 0; }).map(function(m) { return '<option value="' + escapeHtml(m) + '">' + escapeHtml(m) + '</option>'; }).join('');
+            var registryBox = document.getElementById('aiRegistryList');
+            if (registryBox) registryBox.innerHTML = aiProfiles.length ? aiProfiles.map(function(p) {
+                var badge = (p.id === activeProfileId) ? ' <span class="ai-registry-badge">\u9ed8\u8ba4</span>' : '';
+                return '<div class="ai-registry-row"><span class="ai-registry-name">' + escapeHtml(profileLabel(p)) + badge + '</span>' +
+                    '<div class="ai-registry-actions">' +
+                    '<button type="button" class="ai-reg-btn ai-reg-btn--edit" data-ai-edit-profile="' + escapeHtml(p.id) + '">\u7f16\u8f91</button>' +
+                    '<button type="button" class="ai-reg-btn ai-reg-btn--del" data-ai-delete-profile="' + escapeHtml(p.id) + '">\u5220\u9664</button>' +
+                    '</div></div>';
+            }).join('') : '<div class="ai-registry-empty">\u6682\u65e0\u6ce8\u518c\u6a21\u578b</div>';
+            var verifyChk = document.getElementById('aiVerifyOllamaChk');
+            if (verifyChk) { verifyChk.disabled = !!ollamaError; verifyChk.checked = !ollamaError; }
+            updateActiveModelChip();
+        } catch (e) {
+            console.warn('\u52a0\u8f7d\u6a21\u578b\u5217\u8868\u5931\u8d25:', e);
+            var modelSelect = document.getElementById('aiModelSelect');
+            if (modelSelect && !modelSelect.options.length) modelSelect.innerHTML = '<option value="">\u2014 \u65e0\u6cd5\u52a0\u8f7d\u6a21\u578b\u5217\u8868 \u2014</option>';
+        } finally {
+            window.__aiLoadingModels = false;
+            if (regBox && regBox._refreshing) { regBox.style.opacity = '1'; regBox._refreshing = false; }
+        }
+    }
+    window.loadAiModels = loadAiModels;
+
+    window.__aiDeleteProfile = async function(profileId) {
+        if (!profileId || !confirm('\u786e\u5b9a\u79fb\u9664\u6b64\u6a21\u578b\u914d\u7f6e\uff1f')) return;
+        try {
+            var resp = await fetch('/api/ai/models', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: profileId }) });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error);
+            await loadAiModels();
+        } catch (e) { alert('\u5220\u9664\u5931\u8d25:' + e.message); }
+    };
+
+    window.refreshOllamaModels = async function() {
+        try {
+            var resp = await fetch('/api/ai/models/ollama');
+            var data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error);
+            var ollamaModels = data.ollama_models || [];
+            var ollamaError = data.ollama_error;
+            var baseUrl = data.ollama_base_url;
+            var statusDiv = document.getElementById('aiOllamaStatus');
+            if (statusDiv) statusDiv.innerHTML = ollamaError ? ('未连接 Ollama: ' + ollamaError) : ('已连接 Ollama (' + baseUrl + ')，已安装 ' + ollamaModels.length + ' 个模型');
+            var regOllama = ollamaRegisteredModelIds();
+            var pick = document.getElementById('aiOllamaNewSelect');
+            if (pick) pick.innerHTML = '<option value="">\u2014 \u4ece Ollama \u5217\u8868\u9009\u62e9 \u2014</option>' + ollamaModels.filter(function(m) { return regOllama.indexOf(m) < 0; }).map(function(m) { return '<option value="' + escapeHtml(m) + '">' + escapeHtml(m) + '</option>'; }).join('');
+            var verifyChk = document.getElementById('aiVerifyOllamaChk');
+            if (verifyChk) verifyChk.disabled = !!ollamaError;
+        } catch (e) { alert('\u5237\u65b0\u5931\u8d25:' + e.message); }
+    };
+
+    window.quickAddOllamaFromList = async function() {
+        var pick = document.getElementById('aiOllamaNewSelect');
+        var modelName = (pick && pick.value) ? pick.value.trim() : '';
+        if (!modelName) return;
+        var verify = document.getElementById('aiVerifyOllamaChk') && document.getElementById('aiVerifyOllamaChk').checked;
+        try {
+            var resp = await fetch('/api/ai/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_name: modelName, verify_ollama: verify }) });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error);
+            if (pick) pick.value = '';
+            await loadAiModels();
+        } catch (e) {
+            var statusDiv = document.getElementById('aiOllamaStatus');
+            if (statusDiv) statusDiv.innerHTML = '<span style="color:#ef4444;">\u5931\u8d25: ' + escapeHtml(e.message) + '</span>';
+        }
+    };
+
+    window.saveActiveAiModel = async function() {
+        var model = getSelectedAiModel();
+        if (!model) return;
+        try {
+            var resp = await fetch('/api/ai/models/active', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: model }) });
+            var data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.error);
+            activeProfileId = model;
+            await loadAiModels();
+        } catch (e) {
+            var statusDiv = document.getElementById('aiOllamaStatus');
+            if (statusDiv) statusDiv.innerHTML = '<span style="color:#ef4444;">\u5931\u8d25: ' + escapeHtml(e.message) + '</span>';
+        }
+    };
+
+    window.openAiAddModelModal = function(show, editProfileId) {
+        var el = document.getElementById('aiAddModelBackdrop');
+        if (!el) return;
+        var open = show === undefined ? !el.classList.contains('is-open') : !!show;
+        if (!open) {
+            window.__aiAddModalEditId = null;
+            el.classList.remove('is-open');
+            var hintClose = document.getElementById('aiAddApiKeySavedHint');
+            if (hintClose) { hintClose.style.display = 'none'; hintClose.textContent = ''; }
+            return;
+        }
+        window.__aiAddModalEditId = (editProfileId && String(editProfileId).trim()) || null;
+        var editP = window.__aiAddModalEditId ? aiProfiles.find(function(x) { return x.id === window.__aiAddModalEditId; }) : null;
+        var idInp = document.getElementById('aiAddModelId');
+        var keyInp = document.getElementById('aiAddApiKey');
+        var urlInp = document.getElementById('aiAddBaseUrl');
+        var notes = document.getElementById('aiAddModelNotes');
+        var star = document.getElementById('aiAddApiKeyStar');
+        var verifyBtn = document.getElementById('aiAddModalVerifyBtn');
+        var submitBtn = document.getElementById('aiAddModalSubmitBtn');
+        if (idInp) idInp.value = editP ? (editP.model_id || '') : '';
+        if (keyInp) keyInp.value = '';
+        if (urlInp) urlInp.value = editP ? (editP.base_url || '') : '';
+        if (notes) { notes.style.display = editP ? 'block' : 'none'; notes.textContent = editP ? '\u7f16\u8f91\u65f6\u53ef\u4fdd\u7559 API Key \u4e3a\u7a7a\uff0c\u4e0d\u4f1a\u8986\u76d6\u5df2\u4fdd\u5b58\u7684\u5bc6\u94a5\u3002' : ''; }
+        if (star) star.style.visibility = editP ? 'hidden' : 'visible';
+        if (verifyBtn) verifyBtn.style.display = editP ? 'none' : 'inline-block';
+        if (submitBtn) submitBtn.textContent = editP ? '\u4fdd\u5b58\u66f4\u6539' : '\u6dfb\u52a0';
+        el.classList.add('is-open');
+    };
+
+    window.toggleAiAddApiKeyVis = function() {
+        var inp = document.getElementById('aiAddApiKey');
+        var eye = document.getElementById('aiAddApiKeyEye');
+        if (!inp || !eye) return;
+        if (inp.type === 'password') { inp.type = 'text'; eye.className = 'fas fa-eye-slash'; }
+        else { inp.type = 'password'; eye.className = 'fas fa-eye'; }
+    };
+
+    document.addEventListener('click', function(ev) {
+        var editTgt = ev.target && ev.target.closest('[data-ai-edit-profile]');
+        if (editTgt) { var pid = editTgt.getAttribute('data-ai-edit-profile'); if (pid) window.openAiAddModelModal(true, pid); return; }
+        var delTgt = ev.target && ev.target.closest('[data-ai-delete-profile]');
+        if (delTgt) { var pidDel = delTgt.getAttribute('data-ai-delete-profile'); if (pidDel) window.__aiDeleteProfile(pidDel); }
+    });
+
+    var spanel = document.getElementById('aiSettingsPanel');
+    var setBd = document.getElementById('aiSettingsBackdrop');
+    if (setBd) {
+        setBd.addEventListener('click', function(ev) {
+            if (ev.target === setBd && typeof window.toggleAiSettings === 'function') window.toggleAiSettings(false);
+        });
+    }
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Escape') return;
+        var addBd = document.getElementById('aiAddModelBackdrop');
+        var addOpen = addBd && addBd.classList.contains('is-open');
+        if (addOpen) { window.openAiAddModelModal(false); return; }
+        var panelOpen = spanel && spanel.classList.contains('is-open');
+        if (panelOpen && typeof window.toggleAiSettings === 'function') window.toggleAiSettings(false);
+    });
+
+    var verifyBtn = document.getElementById('aiAddModalVerifyBtn');
+    if (verifyBtn) {
+        verifyBtn.addEventListener('click', async function() {
+            var modelId = document.getElementById('aiAddModelId') ? (document.getElementById('aiAddModelId').value || '').trim() : '';
+            var apiKey = document.getElementById('aiAddApiKey') ? (document.getElementById('aiAddApiKey').value || '').trim() : '';
+            var baseUrl = document.getElementById('aiAddBaseUrl') ? (document.getElementById('aiAddBaseUrl').value || '').trim() : '';
+            var status = document.getElementById('aiAddVerifyStatus');
+            if (!modelId) { if (status) { status.style.display = 'block'; status.textContent = '\u8bf7\u586b\u5199\u6a21\u578b\u540d\u79f0'; status.style.color = '#ef4444'; } return; }
+            if (status) { status.style.display = 'block'; status.textContent = '\u6b63\u5728\u6d4b\u8bd5\u8fde\u63a5...'; status.style.color = '#64748b'; }
+            try {
+                var resp = await fetch('/api/ai/models/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_id: modelId, api_key: apiKey, base_url: baseUrl }) });
+                var data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.error);
+                if (status) { status.textContent = '\u8fde\u63a5\u6210\u529f: ' + (data.message || ''); status.style.color = '#059669'; }
+            } catch (e) { if (status) { status.textContent = '\u8fde\u63a5\u5931\u8d25: ' + e.message; status.style.color = '#ef4444'; } }
+        });
+    }
+
+    var submitBtn = document.getElementById('aiAddModalSubmitBtn');
+    if (submitBtn) {
+        submitBtn.addEventListener('click', async function() {
+            var modelId = document.getElementById('aiAddModelId') ? (document.getElementById('aiAddModelId').value || '').trim() : '';
+            var apiKey = document.getElementById('aiAddApiKey') ? (document.getElementById('aiAddApiKey').value || '').trim() : '';
+            var baseUrl = document.getElementById('aiAddBaseUrl') ? (document.getElementById('aiAddBaseUrl').value || '').trim() : '';
+            var status = document.getElementById('aiAddVerifyStatus');
+            var editId = window.__aiAddModalEditId || null;
+            if (!modelId) { if (status) { status.style.display = 'block'; status.textContent = '\u8bf7\u586b\u5199\u6a21\u578b\u540d\u79f0'; status.style.color = '#ef4444'; } return; }
+            if (!editId && !apiKey) { if (status) { status.style.display = 'block'; status.textContent = '\u8bf7\u586b\u5199 API Key'; status.style.color = '#ef4444'; } return; }
+            if (status) { status.style.display = 'block'; status.textContent = '\u6b63\u5728\u4fdd\u5b58...'; status.style.color = '#64748b'; }
+            try {
+                var body = { model_id: modelId, api_key: apiKey || undefined, base_url: baseUrl || undefined };
+                if (editId) body.profile_id = editId;
+                var resp = await fetch('/api/ai/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                var data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.error);
+                window.openAiAddModelModal(false);
+                await loadAiModels();
+            } catch (e) { if (status) { status.textContent = '\u4fdd\u5b58\u5931\u8d25: ' + e.message; status.style.color = '#ef4444'; } }
+        });
+    }
+})();
+</script>
 <script src="{{ url_for('static', filename='js/ai_hub.js') }}?v=1"></script>
 {% endblock %}

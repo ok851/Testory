@@ -1,0 +1,192 @@
+{
+  "selectors": {
+    "input#username": {
+      "selector_type": "css",
+      "action": "input",
+      "description": "Input the account username in the login field.",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "input#password": {
+      "selector_type": "css",
+      "action": "input",
+      "description": "Input the account password in the login field.",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "button#login": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click the login button to submit credentials.",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "a.nav-item:first-child": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click the first menu item in the left navigation bar to start traversal.",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "a.nav-item:nth-child(2)": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click the second menu item in the left navigation bar.",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "a.nav-item:nth-child(3)": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click the third menu item in the left navigation bar.",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "button.action-btn": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Perform a basic operation by clicking an action button on the current page (e.g., for testing).",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "input.form-field": {
+      "selector_type": "css",
+      "action": "input",
+      "description": "Perform a basic operation by filling a form field with test data on the current page.",
+      "case_urls": [
+        "http://localhost:3000"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:37:25.934545+00:00",
+      "alternates": []
+    },
+    "#username": {
+      "selector_type": "css",
+      "action": "input",
+      "description": "Enter username admin",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:39:30.013297+00:00",
+      "alternates": []
+    },
+    "input[type='password']": {
+      "selector_type": "css",
+      "action": "input",
+      "description": "Enter password",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:39:30.013297+00:00",
+      "alternates": []
+    },
+    "button[type='submit']": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click login button",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:39:30.013297+00:00",
+      "alternates": []
+    },
+    "nav > ul > li:nth-child(1) > a": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click the first menu item in navigation",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:39:30.013297+00:00",
+      "alternates": []
+    },
+    "nav > ul > li:nth-child(2) > a": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click the second menu item",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:39:30.013297+00:00",
+      "alternates": []
+    },
+    "nav > ul > li:nth-child(3)": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click a menu item with submenu to expand it",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:39:30.013297+00:00",
+      "alternates": []
+    },
+    "nav > ul > li:nth-child(3) ul li:first-child a": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "Click the first submenu item",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-16T11:39:30.013297+00:00",
+      "alternates": []
+    },
+    "input": {
+      "selector_type": "css",
+      "action": "input",
+      "description": "在用户名输入框中输入 'admin'",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 2,
+      "last_used": "2026-07-17T06:37:00.239072+00:00",
+      "alternates": []
+    },
+    "button": {
+      "selector_type": "css",
+      "action": "click",
+      "description": "点击登录按钮",
+      "case_urls": [
+        "https://admin.hypaas.com/"
+      ],
+      "success_count": 1,
+      "last_used": "2026-07-17T06:37:00.239072+00:00",
+      "alternates": []
+    }
+  },
+  "updated_at": "2026-07-17T06:37:00.239072+00:00"
+}

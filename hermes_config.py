@@ -28,6 +28,25 @@ def hermes_skills_dir() -> Path:
     return hermes_home_dir() / "skills"
 
 
+def hermes_skill_versions_dir() -> Path:
+    """技能版本历史存储目录。"""
+    return hermes_home_dir() / "skill_versions"
+
+
+def hermes_selector_store_path() -> Path:
+    """跨用例选择器知识库 JSON 路径。"""
+    p = hermes_home_dir() / "selector_store.json"
+    return p
+
+
+def hermes_skill_max_versions() -> int:
+    """每个 Skill 保留的最大历史版本数（0 表示不限制）。"""
+    try:
+        return max(0, int(os.environ.get("HERMES_SKILL_MAX_VERSIONS", "10") or "10"))
+    except ValueError:
+        return 10
+
+
 def _read_active_llm_profile() -> Dict[str, Any]:
     try:
         from ai_config_paths import ai_model_registry_path
@@ -108,10 +127,11 @@ def build_hermes_env_lines(*, api_key: Optional[str] = None) -> str:
 
 
 def ensure_hermes_home(*, force_env: bool = False) -> Path:
-    """创建 HERMES_HOME、skills 目录与默认 .env（不覆盖已有 .env 除非 force_env）。"""
+    """创建 HERMES_HOME、skills / skill_versions 目录与默认 .env（不覆盖已有 .env 除非 force_env）。"""
     home = hermes_home_dir()
     home.mkdir(parents=True, exist_ok=True)
     hermes_skills_dir().mkdir(parents=True, exist_ok=True)
+    hermes_skill_versions_dir().mkdir(parents=True, exist_ok=True)
     env_path = home / ".env"
     if force_env or not env_path.is_file():
         env_path.write_text(build_hermes_env_lines(), encoding="utf-8")

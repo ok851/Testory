@@ -124,6 +124,8 @@ def _execute_ui_stage(
     try:
         if layer == "web":
             from browser_manager import get_page
+            from .web_runner import execute_single_web_step
+
             page = get_page()
             if page is None:
                 result.setdefault("warnings", []).append(
@@ -131,29 +133,11 @@ def _execute_ui_stage(
                 )
             else:
                 for step in steps:
-                    action = step.get("action", "")
-                    if action in ("navigate", "goto"):
-                        url = step.get("url") or step.get("value", "")
-                        if url:
-                            page.goto(url, wait_until="domcontentloaded")
-                    elif action in ("click", "tap"):
-                        sel = step.get("selector", "")
-                        if sel:
-                            page.click(sel)
-                    elif action in ("fill", "input", "input_text"):
-                        sel = step.get("selector", "")
-                        val = step.get("value", "")
-                        if sel:
-                            page.fill(sel, str(val))
-                    elif action in ("verify", "assert"):
-                        pass
-                    elif action == "screenshot":
-                        pass
-                    elif action == "wait":
-                        try:
-                            time.sleep(float(step.get("value", 1)))
-                        except (ValueError, TypeError):
-                            time.sleep(1)
+                    step_result = execute_single_web_step(step, page)
+                    if not step_result.get("ok"):
+                        result["ok_assert"] = False
+                        result["error"] = step_result.get("error")
+                        break
         elif layer == "mobile":
             from mobile_executor import get_mobile_executor
             executor = get_mobile_executor()
@@ -257,15 +241,20 @@ def execute_cross_end_plan(
 
     for cleanup_stage in cleanup_stages:
         stage_id = cleanup_stage.get("id", "cleanup")
+        cleanup_layer = cleanup_stage.get("layer", "api")
         if progress_callback:
             try:
                 progress_callback(f"cleanup-{stage_id}", None)
             except Exception:
                 pass
         try:
-            result, _ = _execute_api_stage(cleanup_stage, context)
+            # 清理阶段按 layer 分派：API / Web / Mobile / Desktop
+            if cleanup_layer == "api":
+                result, _ = _execute_api_stage(cleanup_stage, context)
+            else:
+                result, _ = _execute_ui_stage(cleanup_stage, context)
             result["stage_id"] = stage_id
-            result["layer"] = "api"
+            result["layer"] = cleanup_layer
             result["cleanup"] = True
             stage_results.append(result)
             context.record_stage_result(stage_id, result)
@@ -274,6 +263,7 @@ def execute_cross_end_plan(
                 "stage_id": stage_id,
                 "ok_assert": False,
                 "error": str(e),
+                "layer": cleanup_layer,
                 "cleanup": True,
             })
 

@@ -306,6 +306,7 @@ def save_design_drafts_to_project(
             draft.get("expected_result", "") or "",
             case_type=case_type,
             case_role=role,
+            generated_by_ai=True,
         )
         steps = draft.get("steps") or []
         for idx, step in enumerate(steps, start=1):

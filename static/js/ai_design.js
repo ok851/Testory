@@ -185,7 +185,7 @@
     state.drafts.forEach(function (d, i) {
       var steps = (d.steps && d.steps.length) || 0;
       var role = ROLE_LABELS[d.case_role] || d.case_role || '业务';
-      html += '<label class="ai-design-draft-card" style="animation-delay:' + (i * 60) + 'ms">'
+      html += '<label class="ai-design-draft-card ai-design-draft-card-v2" style="animation-delay:' + (i * 60) + 'ms">'
         + '<input type="checkbox" class="ai-design-draft-cb" data-idx="' + i + '" checked>'
         + '<div class="ai-design-draft-card__body">'
         + '<strong>' + escapeHtml(d.case_name || ('用例 ' + (i + 1))) + '</strong>'
@@ -263,18 +263,9 @@
 
   function setPlatform(p) {
     state.platform = p || 'web';
-    document.querySelectorAll('.ai-module-tabs button').forEach(function (btn) {
-      btn.classList.toggle('active', btn.getAttribute('data-platform') === state.platform);
+    document.querySelectorAll('.ai-design-platform-btn').forEach(function (btn) {
+      btn.classList.toggle('ai-design-platform-btn--active', btn.getAttribute('data-platform') === state.platform);
     });
-    var hint = document.getElementById('aiDesignPlatformHint');
-    if (!hint) return;
-    if (state.platform === 'web') {
-      hint.textContent = '按等价类、边界值、场景法等生成 6–10 条 Web 草案；登录功能用例保留完整登录步骤，业务用例可复用会话。确认后保存。';
-    } else if (state.platform === 'api') {
-      hint.textContent = '生成接口测试草案；业务用例可使用 {{auth_token}} 占位符。确认后保存。';
-    } else {
-      hint.textContent = '生成 Android 自动化草案。确认后保存到项目。';
-    }
   }
 
   function setBusy(busy) {
@@ -283,6 +274,67 @@
     var save = document.getElementById('aiDesignSaveBtn');
     if (gen) gen.disabled = busy;
     if (save) save.disabled = busy;
+  }
+
+  var DESIGN_THINKING_CHAIN = [
+    { id: 'parse', text: '正在解析测试需求…', icon: '📝' },
+    { id: 'probe', text: '正在探测目标页面元素…', icon: '🔍' },
+    { id: 'analyze', text: '正在分析业务场景…', icon: '🧩' },
+    { id: 'generate', text: '正在生成测试用例…', icon: '✨' },
+    { id: 'validate', text: '正在验证步骤可行性…', icon: '🔒' }
+  ];
+
+  function showDesignThinking() {
+    var panel = document.getElementById('aiDesignThinking');
+    var inner = document.getElementById('aiDesignThinkingInner');
+    if (!panel || !inner) return;
+    inner.innerHTML = '';
+    DESIGN_THINKING_CHAIN.forEach(function(s) {
+      var row = document.createElement('div');
+      row.className = 'ai-thinking-chain__step';
+      row.id = 'aiDesignThink_' + s.id;
+      row.innerHTML = '<span class="ai-thinking-chain__dot ai-thinking-chain__dot--wait"></span><span>' + s.icon + ' ' + s.text + '</span>';
+      inner.appendChild(row);
+    });
+    panel.style.display = '';
+  }
+
+  function updateDesignThinkingStep(stepId, state) {
+    var row = document.getElementById('aiDesignThink_' + stepId);
+    if (!row) return;
+    var dot = row.querySelector('.ai-thinking-chain__dot');
+    if (state === 'active') {
+      row.className = 'ai-thinking-chain__step ai-thinking-chain__step--active';
+      if (dot) dot.className = 'ai-thinking-chain__dot ai-thinking-chain__dot--active';
+    } else if (state === 'done') {
+      row.className = 'ai-thinking-chain__step ai-thinking-chain__step--done';
+      if (dot) { dot.className = 'ai-thinking-chain__dot ai-thinking-chain__dot--done'; dot.innerHTML = '✓'; }
+    }
+  }
+
+  function hideDesignThinking() {
+    var panel = document.getElementById('aiDesignThinking');
+    if (panel) panel.style.display = 'none';
+  }
+
+  function renderDesignSummary(count, warnings) {
+    var container = document.getElementById('aiDesignSummary');
+    if (!container) return;
+    var html = '<div class="ai-task-summary__header">' +
+      '<div><div class="ai-task-summary__title">生成完成</div>' +
+      '<div class="ai-task-summary__meta">共生成 ' + count + ' 条用例草案</div></div>' +
+      '<div class="ai-task-summary__ring" style="--pct:100%;"><span>100%</span></div>' +
+      '</div>';
+    if (warnings && warnings.length) {
+      html += '<div style="margin-top:10px;font-size:12px;color:#64748b;">提示：' + warnings.join('；') + '</div>';
+    }
+    container.innerHTML = html;
+    container.style.display = '';
+  }
+
+  function hideDesignSummary() {
+    var el = document.getElementById('aiDesignSummary');
+    if (el) el.style.display = 'none';
   }
 
   async function generateDrafts() {
@@ -299,10 +351,14 @@
     setBusy(true);
     state.drafts = [];
     renderDraftList();
+    hideDesignSummary();
     setStatus('正在根据需求生成用例草案（约 6–10 条），请稍候…', 'busy');
-    if (out) out.textContent = '';
+    showDesignThinking();
+    updateDesignThinkingStep('parse', 'active');
     try {
       var model = await getSelectedModel();
+      updateDesignThinkingStep('parse', 'done');
+      updateDesignThinkingStep('probe', 'active');
       var result = await postDesignPreview({ model: model });
       var resp = result.resp;
       var data = result.data;
@@ -312,6 +368,10 @@
         throw new Error(err);
       }
       state.drafts = data.drafts || [];
+      updateDesignThinkingStep('probe', 'done');
+      updateDesignThinkingStep('analyze', 'done');
+      updateDesignThinkingStep('generate', 'done');
+      updateDesignThinkingStep('validate', 'done');
       renderDraftList();
       var msg = '已生成 ' + (data.draft_count || state.drafts.length) + ' 条草案（尚未写入项目）。请勾选后点击「保存到当前项目」。';
       if (data.warnings && data.warnings.length) {
@@ -319,8 +379,11 @@
       }
       setStatus('草案生成完成。', 'ok');
       if (out) typeText(out, msg);
+      renderDesignSummary(data.draft_count || state.drafts.length, data.warnings);
+      setTimeout(hideDesignThinking, 600);
     } catch (e) {
       setStatus('生成失败', 'err');
+      hideDesignThinking();
       if (out) out.textContent = String(e && e.message ? e.message : e);
     } finally {
       setBusy(false);
@@ -368,6 +431,7 @@
       if (out) out.textContent = msg;
       state.drafts = [];
       renderDraftList();
+      hideDesignSummary();
     } catch (e) {
       setStatus('保存失败', 'err');
       if (out) out.textContent = String(e && e.message ? e.message : e);
@@ -391,8 +455,15 @@
     var saveBtn = document.getElementById('aiDesignSaveBtn');
     if (genBtn) genBtn.addEventListener('click', function () { void generateDrafts(); });
     if (saveBtn) saveBtn.addEventListener('click', function () { void saveDrafts(); });
-    document.querySelectorAll('.ai-module-tabs button').forEach(function (b) {
+    document.querySelectorAll('.ai-design-platform-btn').forEach(function (b) {
       b.addEventListener('click', function () { setPlatform(b.getAttribute('data-platform')); });
+    });
+    document.querySelectorAll('.ai-chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        var text = chip.getAttribute('data-example') || '';
+        var ta = document.getElementById('aiDesignReqText');
+        if (ta) { ta.value = text; ta.focus(); }
+      });
     });
     setPlatform('web');
   });

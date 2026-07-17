@@ -23,6 +23,33 @@ def ai_chat_tools_enabled() -> bool:
     return os.environ.get("AI_CHAT_TOOLS_ENABLE", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _prune_old_screen_observations(messages: List[Dict[str, Any]], max_observations: int = 3) -> None:
+    """当 messages 中 [Screen Observation] 消息超过 max_observations 时，移除最旧的。"""
+    observation_indices = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "user" and isinstance(m.get("content"), str) and m["content"].startswith("[Screen Observation]")
+    ]
+    while len(observation_indices) > max_observations:
+        idx = observation_indices.pop(0)
+        messages.pop(idx)
+        # 索引需要重新计算
+        observation_indices = [
+            i for i, m in enumerate(messages)
+            if m.get("role") == "user" and isinstance(m.get("content"), str) and m["content"].startswith("[Screen Observation]")
+        ]
+
+
+def _result_looks_unhealthy(result_text: str) -> bool:
+    """判断 hermes_execute 结果是否异常，需要触发屏幕观察。"""
+    text = (result_text or "").lower()
+    # 明确的错误标志
+    if '"ok": false' in text or "'ok': false" in text:
+        return True
+    # 常见异常关键词
+    error_keywords = ("error", "exception", "failed", "failure", "timeout", "refused", "unreachable", "crash")
+    return any(k in text for k in error_keywords)
+
+
 def profile_supports_ai_chat_tools(profile: Optional[Dict[str, Any]], legacy_model: str) -> bool:
     """Whether we attempt tool-loop (Ollama, OpenAI-compatible, or Anthropic)."""
     if profile and isinstance(profile, dict):
@@ -66,25 +93,19 @@ def _ai_allow_main_playwright_fallback() -> bool:
 
 def hermes_execute_allowed(*, embedded_session_id: str = "", platform_type: str = "web") -> bool:
     """
-    Web：画布 CDP attach 后允许 hermes_execute（同一 Chromium）。
+    Web：严格限制——只有 CDP attach 到前台浏览器后才允许 hermes_execute。
     Desktop：Hermes 已配置时允许 OS 层探索。
+    Android：不支持。
     """
     plat = (platform_type or "web").strip().lower()
     if plat == "desktop":
         from agent_gateway_client import agent_gateway_configured
-
         return agent_gateway_configured()
     if plat == "android":
         return False
-    if not embedded_gateway_enabled():
-        return True
-    if _ai_allow_main_playwright_fallback():
-        return True
-    if hermes_cdp_attached():
-        return True
-    if (embedded_session_id or "").strip() and hermes_cdp_attached():
-        return True
-    return False
+    # Web 平台：严格限制——只有 CDP attach 到前台浏览器后才允许 hermes_execute
+    # 禁止 Hermes 在独立后台浏览器中执行
+    return hermes_cdp_attached()
 
 
 def openclaw_execute_allowed(*, embedded_session_id: str = "", platform_type: str = "web") -> bool:
@@ -192,7 +213,14 @@ def _build_system_prompt(
     if len(mem) > 4000:
         mem = mem[:3999] + "…"
     parts = [
-        "你是资深 QA / 自动化架构师，负责对话式维护并扩展 AI 自动化测试用例计划。",
+        "你是 Testory 平台的 AI 测试助手，可以帮助用户进行自动化测试任务，也可以进行日常对话。",
+        "",
+        "## 意图判断（重要）",
+        "请先判断用户输入的意图：",
+        "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。",
+        "- 如果用户要求执行具体的浏览器/桌面测试操作（如打开网站、点击按钮、输入内容、验证结果、探索页面结构） → 才调用 hermes_execute。",
+        "- 如果用户要求修改用例步骤、调整选择器、增加断言 → 调用 refine_test_plan。",
+        "- 如果用户只是询问测试建议、用例设计思路 → 直接回答，不要调用工具。",
         "",
         "## Hermes Agent 与多轮工具",
     ]
@@ -241,7 +269,8 @@ def _build_system_prompt(
         parts.extend([
             "",
             "## 输出用例质量",
-            "最终必须输出且仅输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
+            "当用户明确要求生成测试用例时，最终输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
+            "日常对话、询问建议、闲聊时不需要输出 JSON，直接自然语言回答即可。",
             "整系统/模块任务时：steps 应覆盖完整流程（含 navigate、必要 wait、click/input、关键 assert），步数可较多；避免只给 3～5 步骨架。",
             "若 LIVE 快照存在：步骤应优先 probe_index 或快照中的 recommended 选择器，勿臆造 class。",
         ])
@@ -249,7 +278,8 @@ def _build_system_prompt(
         parts.extend([
             "",
             "## 输出用例质量（Windows 桌面）",
-            "最终必须输出且仅输出一个 JSON 对象。case_url 留空。每步 automation_layer=desktop。",
+            "当用户明确要求生成测试用例时，输出一个 JSON 对象。case_url 留空。每步 automation_layer=desktop。",
+            "日常对话不需要输出 JSON。",
             "禁止 navigate/css/xpath。首步 launch_app 或 attach_window；窗口校验用 selector_type=window。",
         ])
     parts.extend([
@@ -355,6 +385,53 @@ class ChatToolLoopParams:
     embedded_session_id: Optional[str] = None
     platform_type: str = "web"
     abort_event: Optional[threading.Event] = None
+    recorder: Any = None  # ActionRecorder 实例，用于观测 hermes_execute 结果
+    screen_observer: Any = None  # ScreenObserver 实例，用于屏幕视觉观察
+
+
+def _get_bridge_page_state() -> Dict[str, str]:
+    """获取前台浏览器当前状态（URL、标题），用于验证 Hermes 是否在此浏览器中执行。"""
+    try:
+        from ai_external_browser_bridge import get_page
+        page = get_page()
+        if page and not page.is_closed():
+            return {"url": page.url, "title": page.title()}
+    except Exception:
+        pass
+    return {"url": "", "title": ""}
+
+
+def _inject_execution_env_verify(result_text: str, before: Dict[str, str], after: Dict[str, str]) -> str:
+    """在 Hermes 返回结果中注入执行环境验证信息。"""
+    try:
+        data = json.loads(result_text)
+    except Exception:
+        return result_text
+    if not isinstance(data, dict):
+        return result_text
+
+    # 记录执行前后浏览器状态
+    data["_env_verify"] = {
+        "before_url": before.get("url", ""),
+        "before_title": before.get("title", ""),
+        "after_url": after.get("url", ""),
+        "after_title": after.get("title", ""),
+        "page_changed": (before.get("url") != after.get("url")) or (before.get("title") != after.get("title")),
+    }
+
+    # 如果页面未变化，但结果声称成功，追加警告提示
+    if not data["_env_verify"]["page_changed"] and data.get("ok") is True:
+        # 检查 result 或 output 中是否包含操作描述
+        output = str(data.get("result") or data.get("output") or "").lower()
+        action_keywords = ("输入", "点击", "填写", "提交", "登录", "navigate", "click", "input", "type")
+        if any(k in output for k in action_keywords):
+            data["_env_verify"]["warning"] = (
+                "Hermes 返回操作成功，但前台浏览器页面未发生变化（URL/标题均未变）。"
+                "可能原因：1) Hermes 未 attach 到前台浏览器，在独立后台浏览器中执行；"
+                "2) 操作被浏览器的安全策略阻止；3) 操作在 iframe 或 shadow DOM 中完成，未反映在顶层页面。"
+            )
+
+    return json.dumps(data, ensure_ascii=False)
 
 
 def _handle_agent_execute(
@@ -364,6 +441,7 @@ def _handle_agent_execute(
     allow_agent: bool,
     agent_client: Any,
     meta: Dict[str, Any],
+    abort_event: Optional[threading.Event] = None,
 ) -> str:
     tool_key = "hermes_execute" if name == "hermes_execute" else "openclaw_execute"
     if not allow_agent:
@@ -379,6 +457,9 @@ def _handle_agent_execute(
             },
             ensure_ascii=False,
         )
+    if abort_event is not None and abort_event.is_set():
+        meta["tools_used"].append(f"{tool_key}_aborted")
+        return json.dumps({"ok": False, "error": "操作已被用户取消"}, ensure_ascii=False)
     instr = _compose_agent_instruction(args)
     sid = (args.get("session_id") or "").strip()
     if not instr.strip():
@@ -387,7 +468,13 @@ def _handle_agent_execute(
             {"ok": False, "error": "instruction 经拼装后仍为空；请填写主任务或 environment_notes/scope"},
             ensure_ascii=False,
         )
-    result_text = agent_client.execute_user_instruction(instr, sid)
+
+    # 执行环境验证：记录执行前的前台浏览器状态
+    before_state = _get_bridge_page_state()
+    result_text = agent_client.execute_user_instruction(instr, sid, abort_event=abort_event)
+    after_state = _get_bridge_page_state()
+    result_text = _inject_execution_env_verify(result_text, before_state, after_state)
+
     meta["tools_used"].append(tool_key)
     return result_text
 
@@ -543,6 +630,7 @@ def run_ai_chat_with_tools(
                     allow_agent=allow_agent,
                     agent_client=agent_client,
                     meta=meta,
+                    abort_event=_abort,
                 )
             elif name == "refine_test_plan":
                 adj = (args.get("adjustment") or "").strip()
@@ -643,6 +731,24 @@ def run_ai_chat_with_tools_stream(
 
         yield ("thinking", {"round": round_idx, "content": "AI 正在推理..."})
 
+        # --- 屏幕观察：检查上一轮异步分析的结果，注入到 messages 中 ---
+        if params.screen_observer:
+            pending = params.screen_observer.pop_pending_result()
+            if pending:
+                yield ("vision_result", {"text": pending[:300]})
+                messages.append({
+                    "role": "user",
+                    "content": f"[Screen Observation] {pending[:300]}",
+                })
+                _prune_old_screen_observations(messages, max_observations=3)
+
+        # --- 屏幕观察：触发新一轮异步截图分析 ---
+        if params.screen_observer and params.screen_observer.should_capture():
+            yield ("vision_start", {"message": "AI 正在观察当前屏幕..."})
+            params.screen_observer.capture_and_analyze_async(
+                instruction_hint=f"Task: {params.message}. Current screen before reasoning round {round_idx}.",
+            )
+
         # 流式调用 LLM
         content_buf = ""
         assistant_msg: Optional[Dict[str, Any]] = None
@@ -737,6 +843,7 @@ def run_ai_chat_with_tools_stream(
                 result_text = _handle_agent_execute(
                     name=name, args=args, allow_agent=allow_agent,
                     agent_client=agent_client, meta=meta,
+                    abort_event=_abort,
                 )
             elif name == "refine_test_plan":
                 adj = (args.get("adjustment") or "").strip()
@@ -772,6 +879,43 @@ def run_ai_chat_with_tools_stream(
                 "round": round_idx, "tool": name,
                 "result_preview": result_text[:500],
             })
+
+            # 动作记录：从 hermes_execute 结果中提取结构化动作
+            env_verify = None
+            if name in ("hermes_execute", "openclaw_execute"):
+                try:
+                    parsed = json.loads(result_text)
+                    if isinstance(parsed, dict):
+                        env_verify = parsed.get("_env_verify")
+                except Exception:
+                    pass
+
+            if params.recorder and name in ("hermes_execute", "openclaw_execute"):
+                try:
+                    new_recs = params.recorder.capture_from_hermes_result(result_text)
+                    if new_recs:
+                        yield ("action_records", [
+                            {
+                                "action_type": r.action_type,
+                                "target": r.target,
+                                "status": r.status,
+                                "result": (r.result or "")[:100],
+                                "has_vision": bool(r.vision_info),
+                                "env_verify": env_verify,
+                            }
+                            for r in new_recs
+                        ])
+                except Exception:
+                    pass
+
+            # --- 屏幕观察：按需触发截图（仅在结果异常或首次执行时） ---
+            if params.screen_observer and name in ("hermes_execute", "openclaw_execute"):
+                if _result_looks_unhealthy(result_text):
+                    import time as _time
+                    _time.sleep(0.5)
+                    params.screen_observer.capture_and_analyze_async(
+                        instruction_hint=f"Task: {params.message}. Error detected after '{name}'. Analyze what went wrong on screen.",
+                    )
 
             messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
 

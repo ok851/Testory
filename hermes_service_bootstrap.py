@@ -12,7 +12,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from hermes_config import ensure_hermes_home
-from hermes_gateway_client import HermesGatewayClient
+from hermes_gateway_client import HermesGatewayClient, _norm
 from subprocess_win import subprocess_creationflags_no_window
 
 _BOOTED = False
@@ -75,6 +75,20 @@ def _port_listening(host: str, port: int, timeout: float = 0.4) -> bool:
         return False
 
 
+def _kill_process_on_port(port: int) -> bool:
+    """尝试终止占用指定端口的进程（Windows 专用）。"""
+    try:
+        result = subprocess.run(
+            ["cmd", "/c", f'for /f "tokens=5" %a in (\'netstat -ano ^| findstr :{port}\') do @taskkill /PID %a /F 2>nul'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return "SUCCESS" in result.stdout or "SUCCESS" in result.stderr
+    except Exception:
+        return False
+
+
 def _gateway_log_handle():
     try:
         base = (os.environ.get("UAT_DATA_DIR") or "").strip()
@@ -100,10 +114,21 @@ def _inject_hermes_env(env: dict) -> None:
                     env[k] = str(v)
         except ImportError:
             pass
-    if not env.get("HERMES_API_SERVER_KEY"):
-        env["HERMES_API_SERVER_KEY"] = env.get("API_SERVER_KEY", "")
+
+    # 如果 HERMES_API_SERVER_KEY 为空或占位符，尝试使用 API_SERVER_KEY 或生成默认 key
+    hermes_key = _norm(env.get("HERMES_API_SERVER_KEY", ""))
+    if not hermes_key or "replace-with" in hermes_key.lower() or "placeholder" in hermes_key.lower():
+        fallback_key = _norm(env.get("API_SERVER_KEY", ""))
+        if fallback_key and "replace-with" not in fallback_key.lower() and "placeholder" not in fallback_key.lower():
+            env["HERMES_API_SERVER_KEY"] = fallback_key
+        else:
+            env["HERMES_API_SERVER_KEY"] = "testory-local-key"
     if not env.get("HERMES_GATEWAY_URL"):
         env["HERMES_GATEWAY_URL"] = "http://127.0.0.1:8642"
+    
+    # 允许所有用户访问（本地开发环境）
+    if not env.get("GATEWAY_ALLOW_ALL_USERS"):
+        env["GATEWAY_ALLOW_ALL_USERS"] = "true"
 
 
 def _start_gateway_process() -> None:
@@ -176,10 +201,28 @@ def bootstrap_hermes_services(*, force: bool = False) -> dict:
     parsed = urlparse(client.base_url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 8642
+
+    temp_env = os.environ.copy()
+    _inject_hermes_env(temp_env)
+    actual_key = temp_env.get("HERMES_API_SERVER_KEY", "")
+    if actual_key and actual_key != client.token:
+        os.environ["HERMES_API_SERVER_KEY"] = actual_key
+        client = HermesGatewayClient()
+
     if client.health_check():
         out["hermes_started"] = True
         out["already_running"] = True
         return out
+
+    # 端口被占用但 health_check 失败，说明存在残留的旧进程（key 不匹配等）
+    if _port_listening(host, port):
+        _kill_process_on_port(port)
+        time.sleep(1.0)
+        # 清理后再次尝试 health_check，如果新 key 已同步可能直接可用
+        if client.health_check(timeout_sec=2.0):
+            out["hermes_started"] = True
+            out["already_running"] = True
+            return out
 
     try:
         _start_gateway_process()

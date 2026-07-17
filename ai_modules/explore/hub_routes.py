@@ -5,7 +5,7 @@ from __future__ import annotations
 from flask import Blueprint, request, jsonify
 
 from . import ExplorationBudget, ExplorationStrategy, ExplorationContext
-from .exploration_engine import WebExplorer, DesktopExplorer, ExplorationReporter
+from .exploration_engine import WebExplorer, DesktopExplorer, AnomalyDetector, ExplorationReporter
 
 explore_bp = Blueprint("explore", __name__, url_prefix="/api/ai/explore")
 
@@ -18,9 +18,15 @@ def start_explore():
     layer = (body.get("layer") or "web").lower()
     max_depth = int(body.get("max_depth", 5))
     max_steps = int(body.get("max_steps", 20))
+    max_duration_s = float(body.get("max_duration_s", 120.0))
     scope = body.get("scope_urls", [])
 
-    budget = ExplorationBudget(max_depth=max_depth, max_steps=max_steps, scope_urls=scope)
+    budget = ExplorationBudget(
+        max_depth=max_depth,
+        max_steps=max_steps,
+        max_duration_s=max_duration_s,
+        scope_urls=scope,
+    )
     strategy_mode = body.get("strategy", ExplorationStrategy.GREEDY)
     strategy = ExplorationStrategy(mode=strategy_mode)
     ctx = ExplorationContext()

@@ -9,7 +9,7 @@ import random
 import time
 from datetime import datetime, timezone
 from io import BytesIO
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import ExplorationBudget, ExplorationStrategy, ExplorationContext
 
@@ -44,8 +44,50 @@ class WebExplorer:
         except Exception:
             return []
 
+    def _check_console_errors(self, page: Any) -> List[str]:
+        """收集页面控制台错误（JS 异常 / 资源加载失败等）。"""
+        try:
+            errors = page.evaluate("""() => {
+                const errs = [];
+                if (window.__explore_console_errors) {
+                    for (const e of window.__explore_console_errors.splice(0, 20)) {
+                        errs.push(String(e).slice(0, 200));
+                    }
+                }
+                return errs;
+            }""")
+            return errors if isinstance(errors, list) else []
+        except Exception:
+            return []
+
+    def _install_console_listener(self, page: Any) -> None:
+        """注入 JS 监听器，捕获 console.error 与未处理异常。"""
+        try:
+            page.evaluate("""() => {
+                if (window.__explore_console_listener_installed) return;
+                window.__explore_console_errors = [];
+                window.addEventListener('error', (ev) => {
+                    window.__explore_console_errors.push(ev.message || 'unknown error');
+                });
+                window.addEventListener('unhandledrejection', (ev) => {
+                    window.__explore_console_errors.push('Promise rejection: ' + (ev.reason || ''));
+                });
+                window.__explore_console_listener_installed = true;
+            }""")
+        except Exception:
+            pass
+
     def explore_page(self, page: Any, page_label: str = "") -> Dict[str, Any]:
-        result: Dict[str, Any] = {"page_label": page_label, "actions": [], "errors": [], "screenshots": []}
+        result: Dict[str, Any] = {
+            "page_label": page_label,
+            "actions": [],
+            "errors": [],
+            "screenshots": [],
+            "anomalies": [],
+        }
+
+        self._install_console_listener(page)
+
         try:
             elements = self.discover_interactive_elements(page)
         except Exception:
@@ -54,6 +96,13 @@ class WebExplorer:
             return result
 
         visited: set = set()
+        last_url: str = ""
+        try:
+            last_url = page.url or ""
+        except Exception:
+            pass
+        rediscovery_count = 0
+
         while self.budget.can_continue():
             candidate = self.strategy.select_next(
                 [{"priority": 2 if e.get("tag") == "button" else 0, **e} for e in elements],
@@ -85,6 +134,19 @@ class WebExplorer:
 
             elapsed = round((time.perf_counter() - start_ts) * 1000, 1)
 
+            # --- URL 变化后重新发现元素 ---
+            try:
+                current_url = page.url or ""
+            except Exception:
+                current_url = ""
+            if current_url and current_url != last_url:
+                last_url = current_url
+                new_elements = self.discover_interactive_elements(page)
+                if new_elements:
+                    elements = new_elements
+                    rediscovery_count += 1
+                    self._install_console_listener(page)
+
             action_record = {
                 "label": text,
                 "selector": sel,
@@ -104,6 +166,7 @@ class WebExplorer:
                 })
                 result["errors"].append(action_record)
 
+            # --- 截图 + 异常检测 ---
             try:
                 ss_buf = page.screenshot(type="png")
                 ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -117,9 +180,39 @@ class WebExplorer:
                     f.write(ss_buf)
                 result["screenshots"].append(ss_path)
                 self.context.record_screenshot(ss_path)
+
+                # 异常检测：白屏 / 低对比度
+                ss_b64 = base64.b64encode(ss_buf).decode("ascii")
+                for check_fn, label in (
+                    (AnomalyDetector.check_white_screen, "white_screen"),
+                    (AnomalyDetector.check_low_contrast, "low_contrast"),
+                ):
+                    detected, detail = check_fn(ss_b64)
+                    if detected:
+                        anomaly = {
+                            "type": label,
+                            "detail": detail,
+                            "step": self.budget.steps_taken,
+                            "page": page_label,
+                        }
+                        result["anomalies"].append(anomaly)
+                        self.context.record_error(anomaly)
             except Exception:
                 pass
 
+            # --- 控制台错误检测 ---
+            console_errs = self._check_console_errors(page)
+            for cerr in console_errs[:5]:
+                anomaly = {
+                    "type": "console_error",
+                    "detail": cerr,
+                    "step": self.budget.steps_taken,
+                    "page": page_label,
+                }
+                result["anomalies"].append(anomaly)
+                self.context.record_error(anomaly)
+
+        result["rediscovery_count"] = rediscovery_count
         return result
 
 
@@ -165,6 +258,8 @@ class DesktopExplorer:
         random.shuffle(regions)
         steps = min(len(regions), self.budget.max_steps)
         for i in range(steps):
+            if not self.budget.can_continue():
+                break
             reg = regions[i]
             cx = int(reg["x"] + reg["w"] / 2)
             cy = int(reg["y"] + reg["h"] / 2)
@@ -236,6 +331,32 @@ class AnomalyDetector:
         except Exception:
             return False, ""
 
+    @staticmethod
+    def check_console_errors(
+        errors: List[str],
+        critical_patterns: Optional[List[str]] = None,
+    ) -> Tuple[bool, str]:
+        """检查控制台错误是否包含关键异常模式。"""
+        if not errors:
+            return False, ""
+        patterns = critical_patterns or [
+            "Uncaught TypeError",
+            "Uncaught ReferenceError",
+            "Uncaught SyntaxError",
+            "net::ERR_",
+            "Failed to load resource",
+            "CORS policy",
+        ]
+        hits: List[str] = []
+        for err in errors:
+            for pat in patterns:
+                if pat in err:
+                    hits.append(err[:120])
+                    break
+        if hits:
+            return True, f"控制台关键错误 ({len(hits)}): {'; '.join(hits[:3])}"
+        return False, ""
+
 
 class ExplorationReporter:
 
@@ -253,6 +374,10 @@ class ExplorationReporter:
                 "error_count": len(context.errors),
                 "screenshots": len(context.screenshots),
                 "budget_remaining": budget.max_steps - budget.steps_taken,
+                "elapsed_s": round(budget.elapsed_s, 1),
+                "time_budget_s": budget.max_duration_s,
+                "timed_out": budget.timed_out,
+                "progress_ratio": round(budget.progress_ratio, 3),
             },
             "errors": context.errors[:50],
             "actions": actions[:100],

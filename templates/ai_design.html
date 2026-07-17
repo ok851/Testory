@@ -1,62 +1,148 @@
 {% extends "base.html" %}
 {% block title %}AI 用例设计 - {{ product_name }}{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_hub.css') }}?v=3">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_hub.css') }}?v=4">
+<style>
+    .ai-design-page { padding: 24px; min-height: calc(100vh - 64px); position: relative; }
+    .ai-design-conversation { max-width: 720px; margin: 0 auto; padding-bottom: 40px; }
+    .ai-design-platform-bar {
+        display: flex; justify-content: center; gap: 12px; margin-bottom: 16px;
+    }
+    .ai-design-platform-btn {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;
+        border: 1px solid #c7d2fe; background: rgba(255,255,255,0.6); color: #4f46e5;
+        cursor: pointer; transition: background 0.2s, box-shadow 0.2s;
+    }
+    .ai-design-platform-btn--active {
+        background: #fff; box-shadow: 0 2px 10px rgba(79,70,229,0.12);
+        border-color: #a5b4fc;
+    }
+    .ai-design-input-wrap {
+        display: flex; gap: 10px; align-items: flex-end;
+        background: rgba(255,255,255,0.8);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(199,210,254,0.6);
+        border-radius: 16px;
+        padding: 12px 14px;
+        box-shadow: 0 4px 20px rgba(79,70,229,0.06);
+    }
+    .ai-design-input-wrap textarea {
+        flex: 1; border: none; background: transparent; resize: none;
+        font-size: 14px; line-height: 1.5; color: #334155; outline: none;
+        min-height: 24px; max-height: 120px;
+    }
+    .ai-design-input-wrap textarea::placeholder { color: #94a3b8; }
+    .ai-design-hidden { display: none !important; }
+    .ai-design-advanced-row {
+        display: flex; gap: 12px; align-items: center;
+        padding: 12px 16px; margin-top: 12px;
+        background: rgba(255,255,255,0.6);
+        border: 1px solid rgba(199,210,254,0.6);
+        border-radius: 12px;
+    }
+    .ai-design-advanced-row select, .ai-design-advanced-row input[type="url"] {
+        flex: 1; padding: 6px 10px; border: 1px solid #c7d2fe;
+        border-radius: 8px; font-size: 13px; background: #fff;
+    }
+    html.dark .ai-design-advanced-row {
+        background: rgba(30,41,59,0.6);
+        border-color: rgba(67,56,202,0.4);
+    }
+    html.dark .ai-design-advanced-row select, html.dark .ai-design-advanced-row input[type="url"] {
+        background: rgba(15,23,42,0.8); border-color: rgba(67,56,202,0.4); color: #e2e8f0;
+    }
+    .ai-design-thinking-wrap { margin-top: 16px; }
+    .ai-design-summary-wrap { margin-top: 20px; }
+    html.dark .ai-design-input-wrap {
+        background: rgba(30,41,59,0.7);
+        border-color: rgba(67,56,202,0.4);
+    }
+    html.dark .ai-design-input-wrap textarea { color: #e2e8f0; }
+    html.dark .ai-design-input-wrap textarea::placeholder { color: #64748b; }
+    html.dark .ai-design-platform-btn {
+        background: rgba(30,41,59,0.6);
+        border-color: rgba(67,56,202,0.4);
+        color: #a5b4fc;
+    }
+    html.dark .ai-design-platform-btn--active {
+        background: rgba(67,56,202,0.4);
+        color: #e0e7ff;
+    }
+</style>
 {% endblock %}
 {% block content %}
 <div class="ai-design-page">
-    <div class="ai-module-shell">
-        <header class="ai-module-top">
+    <div class="ai-particle-bg"></div>
+    <div class="ai-design-conversation">
+        <header class="ai-module-top" style="margin-bottom:24px;">
             <a href="/ai-hub" class="ai-hub-back" title="返回 AI 中心"><i class="fas fa-arrow-left"></i></a>
             <div>
                 <h1 data-i18n="aidesign_title">AI 用例设计</h1>
                 <p data-i18n="aidesign_subtitle_v2">上传或粘贴需求，按多种测试方法生成 6–10 条草案，确认后再保存到项目。</p>
             </div>
         </header>
-        <div class="ai-module-body">
-            <div class="ai-design-row">
-                <label for="aiDesignProject" data-i18n="aidesign_project">目标项目</label>
-                <select id="aiDesignProject" class="ai-design-control"><option value="">加载中…</option></select>
-            </div>
-            <div class="ai-design-row ai-design-row--model">
-                <label for="aiDesignModelSelect">推理模型</label>
-                <div class="ai-design-model-bar">
-                    <select id="aiDesignModelSelect" class="ai-design-control"><option value="">加载中…</option></select>
-                    <a href="/ai-test?open_ai_settings=1" class="ai-btn ai-btn--ghost ai-design-model-manage" target="_blank" rel="noopener">管理模型…</a>
-                </div>
-            </div>
-            <div class="ai-design-row">
-                <label for="aiDesignBaseUrl" data-i18n="aidesign_base_url">Web 基础 URL（Web 用例可选）</label>
-                <input type="url" id="aiDesignBaseUrl" class="ai-design-control" placeholder="https://example.com" />
-            </div>
-            <div class="ai-design-row">
-                <label for="aiDesignReqText" data-i18n="aidesign_req_text">需求文本（与文件二选一或同时提供）</label>
-                <textarea id="aiDesignReqText" class="ai-design-control" rows="5" placeholder="粘贴需求说明…"></textarea>
-            </div>
-            <div class="ai-design-row">
-                <label for="aiDesignReqFile" data-i18n="aidesign_req_file">需求文件</label>
-                <input type="file" id="aiDesignReqFile" class="ai-design-file testory-upload-input" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" />
-            </div>
 
-            <div class="ai-module-tabs" role="tablist">
-                <button type="button" class="active" data-platform="web" id="aiDesignTabWeb">Web UI</button>
-                <button type="button" data-platform="api" id="aiDesignTabApi">接口测试</button>
-                <button type="button" data-platform="android" id="aiDesignTabAndroid">移动端</button>
+        <!-- AI 助手气泡 -->
+        <div class="ai-chat-bubble" style="margin-bottom:20px;">
+            <strong style="display:block;margin-bottom:6px;font-size:15px;">你好！我是 Testory AI 助手。</strong>
+            告诉我你的测试需求，我会自动生成完整的测试用例。
+            <div class="ai-chip-row">
+                <button type="button" class="ai-chip" data-example="测试电商网站的登录功能，包括正常登录、密码错误、账号锁定等场景">🛒 电商登录测试</button>
+                <button type="button" class="ai-chip" data-example="测试支付接口的安全性，包括参数校验、签名验证、重复支付防护">💳 支付安全测试</button>
+                <button type="button" class="ai-chip" data-example="测试 APP 的注册流程，包括手机号注册、验证码校验、密码强度检查">📱 APP 注册测试</button>
+                <button type="button" class="ai-chip" data-example="测试 API 的异常情况处理，包括参数缺失、类型错误、越权访问">🔌 API 异常测试</button>
             </div>
-            <p id="aiDesignPlatformHint" class="ai-design-hint"></p>
+        </div>
 
-            <div class="ai-design-actions ai-design-actions--primary">
-                <button type="button" class="ai-btn ai-btn--primary" id="aiDesignGenerateBtn" data-i18n="aidesign_btn_generate">生成草案</button>
-                <button type="button" class="ai-btn ai-btn--secondary" id="aiDesignSaveBtn" style="display:none;">保存到当前项目</button>
-                <a href="#" id="aiDesignCasesLink" class="ai-btn ai-btn--secondary" style="display:none;" data-i18n="aidesign_open_cases">打开项目用例列表</a>
-            </div>
-            <div id="aiDesignStatus" class="ai-design-status" role="status" aria-live="polite"></div>
-            <div id="aiDesignDraftList" class="ai-design-draft-list" style="display:none;"></div>
-            <pre id="aiDesignBatchOut" class="ai-design-pre"></pre>
+        <!-- 平台切换 -->
+        <div class="ai-design-platform-bar">
+            <button type="button" class="ai-design-platform-btn ai-design-platform-btn--active" data-platform="web" id="aiDesignPlatformWeb">🌐 Web UI</button>
+            <button type="button" class="ai-design-platform-btn" data-platform="api" id="aiDesignPlatformApi">🔌 接口测试</button>
+            <button type="button" class="ai-design-platform-btn" data-platform="android" id="aiDesignPlatformAndroid">📱 移动端</button>
+        </div>
+
+        <!-- 输入区 -->
+        <div class="ai-design-input-wrap">
+            <textarea id="aiDesignReqText" rows="1" placeholder="描述你的测试需求，例如：测试购物车的增删改查功能"></textarea>
+            <button type="button" class="ai-glow-btn ai-glow-pulse" id="aiDesignGenerateBtn" style="padding:10px 18px;font-size:13px;min-height:40px;">生成用例</button>
+        </div>
+
+        <!-- 高级选项：项目选择 + URL + 文件上传 -->
+        <div class="ai-design-advanced-row">
+            <select id="aiDesignProject" style="flex:1;" class="ai-design-control"><option value="">请选择项目</option></select>
+            <input type="url" id="aiDesignBaseUrl" style="flex:1;" placeholder="目标 URL（可选）" />
+            <label style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px dashed #c7d2fe;border-radius:8px;cursor:pointer;font-size:13px;color:#4f46e5;">
+                <i class="fas fa-upload"></i>
+                <span>上传文档</span>
+                <input type="file" id="aiDesignReqFile" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" class="ai-design-file" style="display:none;" />
+            </label>
+        </div>
+        <div class="ai-design-hidden">
+            <select id="aiDesignModelSelect"><option value="">加载中…</option></select>
+        </div>
+
+        <!-- 思维链 -->
+        <div id="aiDesignThinking" class="ai-thinking-chain ai-design-thinking-wrap" style="display:none;">
+            <div class="ai-thinking-chain__title"><span class="ai-thinking-chain__pulse"></span>AI 正在生成用例</div>
+            <div id="aiDesignThinkingInner"></div>
+        </div>
+
+        <!-- 生成总结 -->
+        <div id="aiDesignSummary" class="ai-task-summary ai-design-summary-wrap" style="display:none;"></div>
+
+        <!-- 草案列表 -->
+        <div id="aiDesignDraftList" style="display:none;margin-top:20px;"></div>
+        <div id="aiDesignStatus" class="ai-design-status" role="status" aria-live="polite" style="margin-top:12px;"></div>
+        <pre id="aiDesignBatchOut" class="ai-design-pre" style="display:none;"></pre>
+
+        <div class="ai-design-actions ai-design-actions--primary" style="margin-top:16px;">
+            <button type="button" class="ai-btn ai-btn--secondary" id="aiDesignSaveBtn" style="display:none;">保存到当前项目</button>
+            <a href="#" id="aiDesignCasesLink" class="ai-btn ai-btn--secondary" style="display:none;" data-i18n="aidesign_open_cases">打开项目用例列表</a>
         </div>
     </div>
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/ai_design.js') }}?v=4"></script>
+<script src="{{ url_for('static', filename='js/ai_design.js') }}?v=5"></script>
 {% endblock %}

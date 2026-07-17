@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -48,9 +49,14 @@ class HermesGatewayClient:
     def is_configured(self) -> bool:
         if os.environ.get("HERMES_ENABLE", "1").strip().lower() in ("0", "false", "no", "off"):
             return False
-        return bool(self.base_url and self.token)
+        if not self.base_url:
+            return False
+        # 只要配置了 Gateway URL 即视为已配置；空/占位符 API key 会在启动时自动替换为默认 key
+        return True
 
-    def execute_user_instruction(self, instruction: str, session_id: str = "") -> str:
+    def execute_user_instruction(
+        self, instruction: str, session_id: str = "", abort_event=None
+    ) -> str:
         instruction = _norm(instruction)
         if not instruction:
             return json.dumps({"ok": False, "error": "instruction 为空"}, ensure_ascii=False)
@@ -62,16 +68,38 @@ class HermesGatewayClient:
                 },
                 ensure_ascii=False,
             )
+        if abort_event is not None and abort_event.is_set():
+            return json.dumps({"ok": False, "error": "操作已被用户取消"}, ensure_ascii=False)
         if session_id:
             instruction = f"[session_id={session_id}]\n\n{instruction}"
-        try:
-            out = self._chat_completions(instruction)
-        except RequestException as e:
-            uat_logger.warning("Hermes Gateway 请求失败: %s", e)
-            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
-        except ValueError as e:
-            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
-        return _clip_tool_result(out, max_chars=hermes_tool_result_max_chars())
+
+        # 使用后台线程 + 轮询检查 abort_event，实现可中断的 HTTP 请求
+        result_holder: Dict[str, Any] = {"text": None, "error": None}
+
+        def _call():
+            try:
+                result_holder["text"] = self._chat_completions(instruction)
+            except Exception as e:
+                result_holder["error"] = e
+
+        t = threading.Thread(target=_call, daemon=True)
+        t.start()
+
+        # 每 200ms 检查一次 abort_event，确保用户点击停止后最多等 200ms 就响应
+        while t.is_alive():
+            t.join(timeout=0.2)
+            if abort_event is not None and abort_event.is_set():
+                # 无法真正中断 requests 的 socket 读取，但立即返回取消结果
+                # 后台线程会在 HTTP 超时后自然结束
+                return json.dumps({"ok": False, "error": "操作已被用户取消"}, ensure_ascii=False)
+
+        if result_holder["error"]:
+            err = result_holder["error"]
+            if isinstance(err, RequestException):
+                uat_logger.warning("Hermes Gateway 请求失败: %s", err)
+                return json.dumps({"ok": False, "error": str(err)}, ensure_ascii=False)
+            return json.dumps({"ok": False, "error": str(err)}, ensure_ascii=False)
+        return _clip_tool_result(result_holder["text"], max_chars=hermes_tool_result_max_chars())
 
     def _headers(self) -> Dict[str, str]:
         return {
@@ -104,7 +132,8 @@ class HermesGatewayClient:
         resp = requests.post(url, json=payload, headers=self._headers(), timeout=self.timeout)
         if not resp.ok:
             raise ValueError(_http_error_detail(resp))
-        data = resp.json() if resp.content else {}
+        raw_text = resp.content.decode('utf-8', errors='replace')
+        data = json.loads(raw_text) if raw_text.strip() else {}
         choices = data.get("choices")
         if isinstance(choices, list) and choices:
             msg = choices[0].get("message") or {}
@@ -117,7 +146,7 @@ class HermesGatewayClient:
         raise ValueError("Hermes Gateway 返回为空或无法解析")
 
     def health_check(self, timeout_sec: float = 2.5) -> bool:
-        if not self.base_url or not self.token:
+        if not self.base_url:
             return False
         try:
             resp = requests.get(
@@ -125,9 +154,29 @@ class HermesGatewayClient:
                 headers=self._headers(),
                 timeout=timeout_sec,
             )
-            return resp.ok
-        except RequestException:
+            if resp.ok:
+                return True
+            # 如果是 401，可能是 API key 不匹配，再尝试不带 Authorization 的请求
+            if resp.status_code == 401:
+                try:
+                    resp = requests.get(
+                        f"{self.base_url}/v1/models",
+                        timeout=timeout_sec,
+                    )
+                    return resp.ok
+                except RequestException:
+                    return False
             return False
+        except RequestException:
+            # 网络错误，再尝试不带 Authorization 的健康检查
+            try:
+                resp = requests.get(
+                    f"{self.base_url}/v1/models",
+                    timeout=timeout_sec,
+                )
+                return resp.ok
+            except RequestException:
+                return False
 
 
 def _http_error_detail(resp: requests.Response) -> str:

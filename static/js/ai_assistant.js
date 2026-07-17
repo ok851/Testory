@@ -669,6 +669,216 @@
     return { destroy: function () { var r = document.getElementById('hufirst-ai-steps-assistant'); if (r) r.remove(); var s = document.getElementById('hufirst-ai-assistant-style'); if (s) s.remove(); } };
   }
 
+  // ============================================================
+  // 思考气泡：AI 推理过程中实时展示步骤进展
+  // ============================================================
+
+  /**
+   * 在指定容器（通常是 ai-chat-log）底部创建一个思考气泡。
+   * 返回气泡 DOM 元素（内含 .ai-thinking-bubble__inner）。
+   * @param {HTMLElement} container - 聊天消息容器
+   * @returns {HTMLElement} 气泡根元素
+   */
+  function showThinkingBubble(container) {
+    if (!container) return null;
+    // 移除之前残留的气泡（防止重复）
+    removeThinkingBubble(container);
+    var wrap = document.createElement('div');
+    wrap.className = 'ai-thinking-bubble';
+    wrap.setAttribute('role', 'status');
+    wrap.setAttribute('aria-live', 'polite');
+    var inner = document.createElement('div');
+    inner.className = 'ai-thinking-bubble__inner';
+    wrap.appendChild(inner);
+    container.appendChild(wrap);
+    container.scrollTop = container.scrollHeight;
+    return wrap;
+  }
+
+  /**
+   * 在思考气泡中追加或更新一个步骤。
+   * @param {HTMLElement} bubble - showThinkingBubble 返回的元素
+   * @param {string} stepText - 步骤描述文字
+   * @param {boolean} [done=false] - 是否已完成（绿色圆点 + 灰色文字）
+   * @returns {HTMLElement} 新增的步骤行元素
+   */
+  function updateThinkingStep(bubble, stepText, done) {
+    if (!bubble) return null;
+    var inner = bubble.querySelector('.ai-thinking-bubble__inner') || bubble;
+    var row = document.createElement('div');
+    row.className = 'ai-thinking-step' + (done ? ' ai-thinking-step--done' : '');
+    var dot = document.createElement('span');
+    dot.className = 'ai-thinking-step__dot';
+    var label = document.createElement('span');
+    label.textContent = stepText || '';
+    row.appendChild(dot);
+    row.appendChild(label);
+    inner.appendChild(row);
+    // 自动滚动到气泡底部
+    var log = bubble.closest('.ai-chat-log');
+    if (log) log.scrollTop = log.scrollHeight;
+    return row;
+  }
+
+  /**
+   * 将气泡内最后一步标记为已完成。
+   * @param {HTMLElement} bubble
+   */
+  function markLastStepDone(bubble) {
+    if (!bubble) return;
+    var inner = bubble.querySelector('.ai-thinking-bubble__inner') || bubble;
+    var steps = inner.querySelectorAll('.ai-thinking-step');
+    if (steps.length) {
+      var last = steps[steps.length - 1];
+      last.classList.add('ai-thinking-step--done');
+    }
+  }
+
+  /**
+   * 从容器中移除思考气泡。
+   * @param {HTMLElement} container
+   */
+  function removeThinkingBubble(container) {
+    if (!container) return;
+    var old = container.querySelector('.ai-thinking-bubble');
+    if (old) old.remove();
+  }
+
+  // ============================================================
+  // SSE 解析工具：解析 text/event-stream 格式的 chunk
+  // ============================================================
+
+  /**
+   * 将 SSE buffer 解析为已完成的事件数组。
+   * 返回 { events: [{data: ...}], rest: "未解析完的尾部" }。
+   * 每个事件的 data 字段已做 JSON.parse，失败时返回原始字符串。
+   * @param {string} buffer - 累积的 SSE 文本
+   * @returns {{ events: Array, rest: string }}
+   */
+  function parseSSEBuffer(buffer) {
+    var events = [];
+    var parts = buffer.split('\n\n');
+    var rest = parts.pop() || '';
+    for (var i = 0; i < parts.length; i++) {
+      var block = parts[i];
+      if (!block.trim()) continue;
+      var dataLines = [];
+      var lines = block.split('\n');
+      for (var j = 0; j < lines.length; j++) {
+        var line = lines[j];
+        if (line.indexOf('data: ') === 0) {
+          dataLines.push(line.slice(6));
+        }
+        // 忽略 event: / id: / retry: 等字段（当前后端未使用）
+      }
+      if (dataLines.length) {
+        var raw = dataLines.join('\n');
+        var parsed;
+        try { parsed = JSON.parse(raw); } catch (e) { parsed = raw; }
+        events.push(parsed);
+      }
+    }
+    return { events: events, rest: rest };
+  }
+
+  /**
+   * 从 Response body 读取 SSE 流，对每个事件调用 onEvent(data)。
+   * 返回一个 Promise，在流结束或出错时 resolve。
+   * 可通过 AbortController 中断。
+   *
+   * @param {Response} resp - fetch 返回的 Response 对象（body 必须可读）
+   * @param {function} onEvent - 回调：onEvent(parsedData)
+   * @param {AbortSignal} [signal] - 中断信号
+   * @returns {Promise<void>}
+   */
+  function consumeSSEStream(resp, onEvent, signal) {
+    if (!resp.body || !resp.body.getReader) {
+      // 浏览器不支持 ReadableStream，回退到 polling
+      return Promise.reject(new Error('ReadableStream 不可用'));
+    }
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var buf = '';
+    function pump() {
+      return reader.read().then(function (result) {
+        if (result.done) return;
+        if (signal && signal.aborted) {
+          reader.cancel();
+          return;
+        }
+        buf += dec.decode(result.value, { stream: true }).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        var parsed = parseSSEBuffer(buf);
+        buf = parsed.rest;
+        for (var i = 0; i < parsed.events.length; i++) {
+          try { onEvent(parsed.events[i]); } catch (e) { /* 不阻塞流 */ }
+        }
+        return pump();
+      });
+    }
+    return pump();
+  }
+
+  /**
+   * 发起 SSE 流式请求。返回 { promise, abort }。
+   * 若浏览器不支持流式读取或请求失败，reject 以便调用方回退。
+   *
+   * @param {string} url - POST 端点
+   * @param {object} body - 请求体对象（将 JSON.stringify）
+   * @param {function} onEvent - 每收到一个 SSE 事件时回调
+   * @param {object} [options] - { signal, timeoutMs }
+   * @returns {{ promise: Promise, abort: function }}
+   */
+  function fetchSSE(url, body, onEvent, options) {
+    var opts = options || {};
+    var ctl = opts.signal ? null : new AbortController();
+    var sig = opts.signal || (ctl && ctl.signal);
+    var timer = null;
+    var promise = fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      credentials: 'same-origin',
+      signal: sig
+    }).then(function (resp) {
+      if (!resp.ok) {
+        return resp.text().then(function (t) {
+          throw new Error('SSE 请求失败 HTTP ' + resp.status + ': ' + (t || '').slice(0, 200));
+        });
+      }
+      return consumeSSEStream(resp, onEvent, sig);
+    });
+    if (opts.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(function () {
+        if (ctl) try { ctl.abort(); } catch (e) {}
+      }, opts.timeoutMs);
+      promise = promise.finally(function () { if (timer) clearTimeout(timer); });
+    }
+    return {
+      promise: promise,
+      abort: function () { if (ctl) try { ctl.abort(); } catch (e) {} }
+    };
+  }
+
+  /**
+   * 用户友好的错误消息映射。
+   * @param {Error|string} err
+   * @returns {string}
+   */
+  function friendlyErrorMessage(err) {
+    var msg = (err && err.message) ? err.message : String(err || '');
+    if (/abort|AbortError/i.test(msg)) return '请求已取消。';
+    if (/超时|timeout/i.test(msg)) return '请求超时，请检查模型服务是否运行。';
+    if (/NetworkError|Failed to fetch|Load failed/i.test(msg)) return '网络连接失败，请检查服务器是否可达。';
+    if (/HTTP 401|HTTP 403/.test(msg)) return '认证失败，请重新登录。';
+    if (/HTTP 500/.test(msg)) return '服务器内部错误，请查看后台日志。';
+    if (/HTTP 502|HTTP 503/.test(msg)) return '服务暂时不可用，请稍后重试。';
+    return msg;
+  }
+
+  // ============================================================
+  // 汇出
+  // ============================================================
+
   var HuFirstAiAssistant = {
     formatPlanStatusLine: formatPlanStatusLine,
     appendInteractionToPayload: appendInteractionToPayload,
@@ -685,7 +895,17 @@
     loadStudioSession: loadStudioSession,
     saveCaseChatHistory: saveCaseChatHistory,
     loadCaseChatHistory: loadCaseChatHistory,
-    mountStepsPageAssistant: mountStepsPageAssistant
+    mountStepsPageAssistant: mountStepsPageAssistant,
+    /* 思考气泡 */
+    showThinkingBubble: showThinkingBubble,
+    updateThinkingStep: updateThinkingStep,
+    markLastStepDone: markLastStepDone,
+    removeThinkingBubble: removeThinkingBubble,
+    /* SSE 解析 */
+    parseSSEBuffer: parseSSEBuffer,
+    consumeSSEStream: consumeSSEStream,
+    fetchSSE: fetchSSE,
+    friendlyErrorMessage: friendlyErrorMessage
   };
 
   global.HuFirstAiAssistant = HuFirstAiAssistant;

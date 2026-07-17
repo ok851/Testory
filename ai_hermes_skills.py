@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
 """Hermes Skills 与平台用例计划互转（agentskills.io SKILL.md 格式）。"""
+
 from __future__ import annotations
 
 import json
+import os
 import re
-from datetime import datetime
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hermes_config import hermes_skills_dir
+from hermes_config import (
+    hermes_skills_dir,
+    hermes_skill_versions_dir,
+    hermes_selector_store_path,
+    hermes_skill_max_versions,
+)
 
 
 def _slug(name: str) -> str:
@@ -26,6 +34,7 @@ def list_skills() -> List[Dict[str, Any]]:
         rel = skill_md.relative_to(root)
         module = str(rel.parent).replace("\\", "/")
         meta = _parse_skill_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+        versions = list_skill_versions(module)
         out.append(
             {
                 "id": module,
@@ -33,6 +42,8 @@ def list_skills() -> List[Dict[str, Any]]:
                 "name": meta.get("name") or module,
                 "description": meta.get("description") or "",
                 "updated": datetime.fromtimestamp(skill_md.stat().st_mtime).isoformat(),
+                "version": len(versions) + 1,
+                "version_count": len(versions),
             }
         )
     return out
@@ -53,6 +64,85 @@ def _parse_skill_frontmatter(text: str) -> Dict[str, str]:
     return meta
 
 
+# ---------------------------------------------------------------------------
+# 版本历史
+# ---------------------------------------------------------------------------
+
+def _snapshot_before_export(skill_id: str, skill_path: Path) -> None:
+    """将当前 SKILL.md 快照到版本历史目录（如果存在且有变更）。"""
+    if not skill_path.is_file():
+        return
+    versions_dir = hermes_skill_versions_dir() / skill_id.replace("/", "_")
+    versions_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    dest = versions_dir / f"SKILL_{ts}.md"
+
+    # 避免短时间内重复快照（<2s 视为同一次）
+    existing = sorted(versions_dir.glob("SKILL_*.md"), reverse=True)
+    if existing:
+        latest = existing[0]
+        try:
+            if latest.read_bytes() == skill_path.read_bytes():
+                return  # 内容完全相同，不重复快照
+        except OSError:
+            pass
+
+    shutil.copy2(str(skill_path), str(dest))
+
+    # 清理旧版本
+    max_ver = hermes_skill_max_versions()
+    if max_ver > 0:
+        all_versions = sorted(versions_dir.glob("SKILL_*.md"))
+        while len(all_versions) > max_ver:
+            oldest = all_versions.pop(0)
+            try:
+                oldest.unlink()
+            except OSError:
+                pass
+
+
+def list_skill_versions(skill_id: str) -> List[Dict[str, Any]]:
+    """列出某 Skill 的历史版本快照。"""
+    versions_dir = hermes_skill_versions_dir() / skill_id.replace("/", "_")
+    if not versions_dir.is_dir():
+        return []
+    out: List[Dict[str, Any]] = []
+    for f in sorted(versions_dir.glob("SKILL_*.md"), reverse=True):
+        meta = _parse_skill_frontmatter(f.read_text(encoding="utf-8", errors="replace"))
+        out.append({
+            "file": str(f),
+            "name": meta.get("name", ""),
+            "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+            "size_bytes": f.stat().st_size,
+        })
+    return out
+
+
+def get_skill_version(skill_id: str, timestamp_tag: str) -> Optional[str]:
+    """读取指定版本的 SKILL.md 内容（timestamp_tag 格式：YYYYMMDDTHHMMSS）。"""
+    versions_dir = hermes_skill_versions_dir() / skill_id.replace("/", "_")
+    target = versions_dir / f"SKILL_{timestamp_tag}.md"
+    if target.is_file():
+        return target.read_text(encoding="utf-8", errors="replace")
+    return None
+
+
+def restore_skill_version(skill_id: str, timestamp_tag: str) -> Tuple[bool, str]:
+    """将 Skill 恢复到指定历史版本。"""
+    content = get_skill_version(skill_id, timestamp_tag)
+    if content is None:
+        return False, f"版本不存在: {timestamp_tag}"
+    skill_path = hermes_skills_dir() / skill_id / "SKILL.md"
+    _snapshot_before_export(skill_id, skill_path)
+    skill_path.write_text(content, encoding="utf-8")
+    return True, f"已恢复到版本 {timestamp_tag}"
+
+
+# ---------------------------------------------------------------------------
+# 导出 / 应用
+# ---------------------------------------------------------------------------
+
 def export_plan_to_skill(
     plan: Dict[str, Any],
     *,
@@ -69,11 +159,21 @@ def export_plan_to_skill(
     steps_json = json.dumps(steps, ensure_ascii=False, indent=2)
     desc = (plan.get("description") or f"自动化流程：{case_name}").strip()
     env_block = (environment_notes or plan.get("precondition") or "").strip()
+
+    # 快照旧版本
+    skill_path = skill_root / "SKILL.md"
+    _snapshot_before_export(mod, skill_path)
+
+    existing_versions = list_skill_versions(mod)
+    version_num = len(existing_versions) + 1
+
     body = f"""---
 name: {case_name}
 description: {desc[:240]}
 format: agentskills.io/v1
 source: testory-ai-plan
+version: {version_num}
+updated_at: {datetime.now(timezone.utc).isoformat()}
 ---
 
 # {case_name}
@@ -100,9 +200,14 @@ source: testory-ai-plan
 
 UI 变更时可在 AI Heal / AI Test 对话中说明变更，由 Hermes 更新本 Skill 并同步回用例步骤。
 """
-    path = skill_root / "SKILL.md"
-    path.write_text(body, encoding="utf-8")
-    return path, {"id": mod, "path": str(path), "name": case_name, "step_count": len(steps)}
+    skill_path.write_text(body, encoding="utf-8")
+    return skill_path, {
+        "id": mod,
+        "path": str(skill_path),
+        "name": case_name,
+        "step_count": len(steps),
+        "version": version_num,
+    }
 
 
 def apply_skill_to_plan(skill_id: str, *, base_plan: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], List[str]]:
@@ -172,3 +277,164 @@ def request_hermes_skill_update(
         "并说明修改了哪些选择器或步骤。"
     )
     return client.execute_user_instruction(instruction)
+
+
+# ---------------------------------------------------------------------------
+# 跨用例选择器学习
+# ---------------------------------------------------------------------------
+
+def _load_selector_store() -> Dict[str, Any]:
+    """加载选择器知识库。"""
+    path = hermes_selector_store_path()
+    if not path.is_file():
+        return {"selectors": {}, "updated_at": ""}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {"selectors": {}, "updated_at": ""}
+    except (json.JSONDecodeError, OSError):
+        return {"selectors": {}, "updated_at": ""}
+
+
+def _save_selector_store(store: Dict[str, Any]) -> None:
+    """保存选择器知识库。"""
+    path = hermes_selector_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store["updated_at"] = datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def extract_selectors_from_plan(plan: Dict[str, Any]) -> List[Dict[str, str]]:
+    """从 plan 步骤中提取选择器模式。"""
+    selectors: List[Dict[str, str]] = []
+    for step in plan.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        sel = step.get("selector") or step.get("selector_value", "")
+        sel_type = step.get("selector_type", "css")
+        action = (step.get("action") or "").strip().lower()
+        desc = step.get("description", "")
+        url = step.get("url") or plan.get("case_url", "")
+        if sel and action in ("click", "input", "fill", "select", "tap", "double_click"):
+            selectors.append({
+                "selector": sel,
+                "selector_type": sel_type,
+                "action": action,
+                "description": desc,
+                "case_url": url,
+            })
+    return selectors
+
+
+def learn_selectors_from_plan(
+    plan: Dict[str, Any],
+    *,
+    case_name: str = "",
+) -> int:
+    """从成功执行的 plan 中提取选择器并存入知识库。返回新增条目数。"""
+    selectors = extract_selectors_from_plan(plan)
+    if not selectors:
+        return 0
+
+    store = _load_selector_store()
+    sel_db: Dict[str, Any] = store.setdefault("selectors", {})
+    added = 0
+
+    for item in selectors:
+        key = item["selector"]
+        if key not in sel_db:
+            sel_db[key] = {
+                "selector_type": item["selector_type"],
+                "action": item["action"],
+                "description": item["description"],
+                "case_urls": [],
+                "success_count": 0,
+                "last_used": "",
+                "alternates": [],
+            }
+        entry = sel_db[key]
+        entry["success_count"] = int(entry.get("success_count", 0)) + 1
+        entry["last_used"] = datetime.now(timezone.utc).isoformat()
+        url = item.get("case_url", "")
+        if url and url not in entry.get("case_urls", []):
+            entry.setdefault("case_urls", []).append(url)
+            entry["case_urls"] = entry["case_urls"][-10:]
+        added += 1
+
+    _save_selector_store(store)
+    return added
+
+
+def lookup_alternate_selectors(selector: str) -> List[Dict[str, Any]]:
+    """查询某选择器的替代选择器（来自其他用例的成功经验）。"""
+    store = _load_selector_store()
+    entry = store.get("selectors", {}).get(selector)
+    if not entry:
+        return []
+    alternates = entry.get("alternates", [])
+    return alternates
+
+
+def record_selector_healing(
+    old_selector: str,
+    new_selector: str,
+    *,
+    selector_type: str = "css",
+    action: str = "click",
+    case_url: str = "",
+) -> None:
+    """记录选择器自愈事件：旧选择器失败 → 新选择器成功。
+    更新知识库，为未来跨用例提供替代选择器。"""
+    store = _load_selector_store()
+    sel_db: Dict[str, Any] = store.setdefault("selectors", {})
+
+    # 更新旧选择器的 alternates
+    if old_selector in sel_db:
+        alts = sel_db[old_selector].setdefault("alternates", [])
+        existing_sel = {a.get("selector") for a in alts}
+        if new_selector not in existing_sel:
+            alts.append({
+                "selector": new_selector,
+                "selector_type": selector_type,
+                "action": action,
+                "learned_at": datetime.now(timezone.utc).isoformat(),
+            })
+            sel_db[old_selector]["alternates"] = alts[-20:]
+
+    # 确保新选择器也被记录
+    if new_selector not in sel_db:
+        sel_db[new_selector] = {
+            "selector_type": selector_type,
+            "action": action,
+            "description": f"healed from {old_selector[:60]}",
+            "case_urls": [case_url] if case_url else [],
+            "success_count": 1,
+            "last_used": datetime.now(timezone.utc).isoformat(),
+            "alternates": [],
+        }
+    else:
+        sel_db[new_selector]["success_count"] = int(sel_db[new_selector].get("success_count", 0)) + 1
+        sel_db[new_selector]["last_used"] = datetime.now(timezone.utc).isoformat()
+
+    _save_selector_store(store)
+
+
+def get_selector_stats() -> Dict[str, Any]:
+    """返回选择器知识库统计摘要。"""
+    store = _load_selector_store()
+    sel_db = store.get("selectors", {})
+    total = len(sel_db)
+    healed = sum(1 for v in sel_db.values() if v.get("alternates"))
+    top_used = sorted(
+        sel_db.items(),
+        key=lambda x: int(x[1].get("success_count", 0)),
+        reverse=True,
+    )[:10]
+    return {
+        "total_selectors": total,
+        "healed_selectors": healed,
+        "updated_at": store.get("updated_at", ""),
+        "top_used": [
+            {"selector": k, "count": int(v.get("success_count", 0))}
+            for k, v in top_used
+        ],
+    }

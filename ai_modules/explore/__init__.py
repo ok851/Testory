@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
@@ -22,11 +23,20 @@ class ExplorationBudget:
         self.steps_taken = 0
         self.current_depth = 0
         self.visited: Set[str] = set()
+        self._start_ts: float = time.monotonic()
+        self.timed_out: bool = False
+
+    @property
+    def elapsed_s(self) -> float:
+        return time.monotonic() - self._start_ts
 
     def can_continue(self) -> bool:
         if self.steps_taken >= self.max_steps:
             return False
         if self.current_depth > self.max_depth:
+            return False
+        if self.max_duration_s > 0 and self.elapsed_s >= self.max_duration_s:
+            self.timed_out = True
             return False
         return True
 
@@ -45,9 +55,12 @@ class ExplorationBudget:
 
     @property
     def progress_ratio(self) -> float:
-        if self.max_steps <= 0:
-            return 0.0
-        return min(1.0, self.steps_taken / self.max_steps)
+        ratios: List[float] = []
+        if self.max_steps > 0:
+            ratios.append(self.steps_taken / self.max_steps)
+        if self.max_duration_s > 0:
+            ratios.append(self.elapsed_s / self.max_duration_s)
+        return min(1.0, max(ratios)) if ratios else 0.0
 
 
 class ExplorationStrategy:

@@ -2,10 +2,13 @@
 {% block title %}{{ product_name }}{% endblock %}
 {% block head %}
     <script>
-        tailwind.config.theme.extend.fontFamily = { sans: ['Inter', 'system-ui', 'sans-serif'] };
-        tailwind.config.theme.extend.colors = Object.assign({}, tailwind.config.theme.extend.colors, {
-            light: '#f3f4f6',
-            dark: '#1f2937',
+        document.addEventListener('DOMContentLoaded', function () {
+            if (typeof tailwind === 'undefined') return;
+            tailwind.config.theme.extend.fontFamily = { sans: ['Inter', 'system-ui', 'sans-serif'] };
+            tailwind.config.theme.extend.colors = Object.assign({}, tailwind.config.theme.extend.colors, {
+                light: '#f3f4f6',
+                dark: '#1f2937',
+            });
         });
     </script>
     <style type="text/tailwindcss">
