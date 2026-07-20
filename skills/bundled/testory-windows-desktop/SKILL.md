@@ -62,17 +62,24 @@ POST /internal/session/{id}/inspect     {"max_depth": 4, "max_nodes": 120}
 
 ## Hermes 使用方式
 
-1. 确认 desktop gateway 运行：`GET` health 或平台桌面测试页
+1. 确认 desktop gateway 运行：`GET /health` 或平台桌面测试页
 2. 加载本 skill：`skill_view(name='testory-windows-desktop')`
-3. 通过 terminal 调用 curl 访问 gateway，或让 Hermes `computer_use` 配合平台步骤 JSON
+3. 通过 terminal 调用 gateway 时**必须**带鉴权头（平台会把密钥写入环境变量）：
+   - `X-Desktop-Agent-Secret: $env:DESKTOP_AGENT_GATEWAY_SECRET`
+   - 或 `Authorization: Bearer $env:DESKTOP_AGENT_GATEWAY_SECRET`
+4. 收到 401 时**不要反复重试**同一请求；检查密钥后换步骤或回报失败
+5. **混用**：Web 流程中出现 Windows/macOS 系统弹窗时，从 `testory-web-browser` 切到本 skill
+6. 弱 UIA（如微信自定义绘制）时：先 inspect，失败则视觉/computer_use 降级；勿假装成功
 
 ## 触发词
 
 - Windows 桌面自动化 / GUI 自动化 / RPA
 - 打开记事本 / 点击窗口按钮
 - 桌面应用测试
+- OS 弹窗 / UAC / 系统确认框
 
 ## 平台入口
 
 - AI 测试左栏：桌面自动化层
 - `/api/ai/agent/gateway-stream` + `platform: desktop` 意图
+- 统一 Hermes 会话（platform=auto）内与 Web/API 同会话切换

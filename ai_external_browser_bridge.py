@@ -1,7 +1,6 @@
 """
-外部有头浏览器桥接层。
-替代嵌入式画布，提供 CDP 连接、页面快照、DOM 探测、截图能力。
-Hermes 通过 sync_hermes_cdp_endpoint() attach 到同一浏览器。
+本机有头浏览器桥接层（系统 Edge/Chrome + CDP）。
+已取消内嵌画布 Chromium；Hermes 通过 sync_hermes_cdp_endpoint() attach 到同一本机浏览器。
 """
 from __future__ import annotations
 
@@ -21,13 +20,18 @@ _screen_share_active = False  # 共享屏幕开关
 _screen_share_interval = 3    # 共享屏幕截图间隔（秒）
 
 
-def ensure_browser(*, headless: bool = False, url: str = "") -> bool:
+def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edge") -> bool:
     """
-    确保有头浏览器已启动并连接 CDP。
-    若已启动则复用；否则启动新实例。
-    返回是否就绪。
+    确保本机有头浏览器已启动并连接 CDP（优先系统 Edge/Chrome）。
+    Hermes 通过 sync_hermes_cdp_endpoint() attach 到同一浏览器。
     """
     global _browser, _context, _page, _cdp_ws
+    kind = (browser or "edge").strip().lower()
+    if kind in ("chromium", "chrome"):
+        kind = "chrome"
+    else:
+        kind = "edge"
+
     with _bridge_lock:
         if _page and not _page.is_closed():
             if url:
@@ -36,6 +40,79 @@ def ensure_browser(*, headless: bool = False, url: str = "") -> bool:
                 except Exception:
                     pass
             return True
+
+        # --- 本机浏览器：web_capture.cdp_browser（Edge/Chrome + remote debugging）---
+        try:
+            from web_capture import cdp_browser as _cdp_mod
+            from playwright.sync_api import sync_playwright
+
+            _cdp_state = _cdp_mod._snap()
+            _debug_port = int(_cdp_state.get("debug_port") or 0)
+            _ws = ""
+            if _debug_port:
+                _ws = _cdp_mod.fetch_cdp_ws(_debug_port) or ""
+
+            if not _ws:
+                launched = _cdp_mod.launch_debug_browser(browser=kind, url=url or "")
+                if not launched.get("success"):
+                    # Edge 找不到时再试 Chrome
+                    if kind == "edge":
+                        launched = _cdp_mod.launch_debug_browser(browser="chrome", url=url or "")
+                    if not launched.get("success"):
+                        uat_logger.warning("本机浏览器启动失败: %s", launched.get("error"))
+                        return False
+                _debug_port = int(launched.get("debug_port") or 0)
+                _ws = (launched.get("cdp_ws") or "").strip() or (_cdp_mod.fetch_cdp_ws(_debug_port) or "")
+
+            if not _ws:
+                uat_logger.warning("本机浏览器已启动但未拿到 CDP WebSocket")
+                return False
+
+            conn = _cdp_mod.connect_playwright_over_cdp(_debug_port)
+            if conn.get("success"):
+                _page = _cdp_mod.get_active_page()
+                snap2 = _cdp_mod._snap()
+                _browser = snap2.get("browser")
+                _context = snap2.get("context")
+            else:
+                from playwright.sync_api import sync_playwright as _sp
+
+                _pw = _sp().start()
+                _browser = _pw.chromium.connect_over_cdp(_ws)
+                _context = _browser.contexts[0] if _browser.contexts else _browser.new_context()
+                _page = _context.pages[0] if _context.pages else _context.new_page()
+
+            if not _page:
+                uat_logger.warning("本机浏览器 CDP 已连接但无可用 Page")
+                return False
+
+            _cdp_ws = _ws
+            try:
+                from hermes_config import sync_hermes_cdp_endpoint
+
+                ok = sync_hermes_cdp_endpoint(_cdp_ws, restart_gateway=False)
+                if not ok:
+                    uat_logger.warning("CDP 热更新失败，尝试重启 Hermes")
+                    sync_hermes_cdp_endpoint(_cdp_ws, restart_gateway=True)
+            except Exception as e:
+                uat_logger.warning("CDP 同步到 Hermes 失败: %s", e)
+
+            if url and _page and not _page.is_closed():
+                try:
+                    _page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                except Exception:
+                    pass
+            return bool(_page and not _page.is_closed())
+        except Exception as e:
+            uat_logger.warning("本机浏览器桥接失败: %s", e)
+
+        # --- 仅显式允许时：Playwright 自带 Chromium（非默认）---
+        allow_pw = (os.environ.get("AI_ALLOW_PLAYWRIGHT_CHROMIUM_FALLBACK") or "0").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if not allow_pw:
+            return False
+
         try:
             from playwright.sync_api import sync_playwright
             import requests as _requests
@@ -50,31 +127,25 @@ def ensure_browser(*, headless: bool = False, url: str = "") -> bool:
             )
             _context = _browser.new_context(viewport={"width": 1280, "height": 800})
             _page = _context.new_page()
-
-            # 通过 DevTools HTTP API 获取 CDP WebSocket URL（不用私有属性）
             try:
                 resp = _requests.get("http://127.0.0.1:9222/json/version", timeout=5)
                 _cdp_ws = resp.json().get("webSocketDebuggerUrl", "")
             except Exception:
                 _cdp_ws = ""
-
-            # 同步到 Hermes（先尝试热更新，失败则重启）
             if _cdp_ws:
                 try:
                     from hermes_config import sync_hermes_cdp_endpoint
-                    # 先尝试热更新，失败则重启确保 CDP 配置生效
+
                     success = sync_hermes_cdp_endpoint(_cdp_ws, restart_gateway=False)
                     if not success:
-                        uat_logger.warning("CDP 热更新失败，尝试重启 Hermes")
                         sync_hermes_cdp_endpoint(_cdp_ws, restart_gateway=True)
                 except Exception as e:
                     uat_logger.warning("CDP 同步到 Hermes 失败: %s", e)
-
             if url:
                 _page.goto(url, wait_until="domcontentloaded", timeout=20000)
             return True
         except Exception as e:
-            uat_logger.warning("ExternalBrowserBridge 启动失败: %s", e)
+            uat_logger.warning("Playwright Chromium 兜底启动失败: %s", e)
             return False
 
 
@@ -87,22 +158,43 @@ def get_page() -> Any:
 
 
 def is_browser_alive() -> bool:
-    """验证 Playwright 浏览器实例是否仍然存活（进程未退出、Page 未关闭）。
+    """验证浏览器实例是否仍然存活。
+    先检查本地 Playwright 实例，再检查 cdp_browser 的浏览器。
     当检测到死亡时，同步清理本地引用和 hermes_config 中的 CDP 状态。"""
     global _browser, _context, _page, _cdp_ws
     with _bridge_lock:
-        if _browser is None or _page is None:
-            return False
+        # --- 第一层：检查本地 Playwright 实例 ---
+        _local_dead = _browser is None or _page is None
+        if not _local_dead:
+            try:
+                # 多层检测：先检查底层进程是否还在（如果 API 可用）
+                if hasattr(_browser, "process") and _browser.process:
+                    if hasattr(_browser.process, "poll") and _browser.process.poll() is not None:
+                        raise RuntimeError("Browser process exited")
+                # 再检查 page 是否可交互
+                _ = _page.url
+                if not _page.is_closed():
+                    return True
+                _local_dead = True
+            except Exception:
+                _local_dead = True
+
+        # --- 第二层：先检查 cdp_browser 是否有存活的浏览器（在清理 hermes 之前） ---
+        _cdp_alive = False
         try:
-            # 多层检测：先检查底层进程是否还在（如果 API 可用）
-            if hasattr(_browser, "process") and _browser.process:
-                if hasattr(_browser.process, "poll") and _browser.process.poll() is not None:
-                    raise RuntimeError("Browser process exited")
-            # 再检查 page 是否可交互
-            _ = _page.url
-            return not _page.is_closed()
+            from web_capture import cdp_browser as _cdp_mod
+            _cdp_state = _cdp_mod._snap()
+            _debug_port = _cdp_state.get("debug_port") or 0
+            if _debug_port:
+                _ws = _cdp_mod.fetch_cdp_ws(_debug_port)
+                if _ws:
+                    _cdp_ws = _ws
+                    _cdp_alive = True
         except Exception:
-            # 浏览器进程已死或连接断开，清理所有引用
+            pass
+
+        # 本地实例已死，清理引用（但只在 cdp_browser 也死了的时候才清理 hermes 配置）
+        if _local_dead and _browser is not None:
             try:
                 if _context:
                     _context.close()
@@ -114,18 +206,23 @@ def is_browser_alive() -> bool:
             except Exception:
                 pass
             _browser = _context = _page = None
-            _cdp_ws = ""
-            # 同步清理 hermes_config 中的 CDP 状态，防止状态残留
-            try:
-                from hermes_config import clear_hermes_cdp_endpoint
-                clear_hermes_cdp_endpoint(restart_gateway=False)
-            except Exception:
-                pass
-            return False
+            _cdp_ws = _ws if _cdp_alive else ""
+            # 只有当 cdp_browser 也死了，才清理 hermes_config 中的 CDP 状态
+            if not _cdp_alive:
+                try:
+                    from hermes_config import clear_hermes_cdp_endpoint
+                    clear_hermes_cdp_endpoint(restart_gateway=False)
+                except Exception:
+                    pass
+
+        if _cdp_alive:
+            return True
+
+        return False
 
 
 def force_cleanup_browser() -> None:
-    """强制关闭浏览器并清理所有相关状态，供外部兜底调用。"""
+    """强制关闭浏览器并清理所有相关状态（含 cdp_browser），供外部兜底调用。"""
     global _browser, _context, _page, _cdp_ws
     with _bridge_lock:
         try:
@@ -145,6 +242,12 @@ def force_cleanup_browser() -> None:
             clear_hermes_cdp_endpoint(restart_gateway=False)
         except Exception:
             pass
+    # 清理 cdp_browser 的状态，防止孤儿浏览器进程
+    try:
+        from web_capture import cdp_browser as _cdp_mod
+        _cdp_mod.disconnect(stop_browser=True)
+    except Exception:
+        pass
 
 
 def get_page_snapshot() -> str:

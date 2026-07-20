@@ -498,14 +498,22 @@ class DesktopAutomation:
         if action in ("input", "fill"):
             if not str(input_value):
                 raise ValueError("桌面输入步骤缺少 input_value")
-            self._run_visual_pointer({**step, "action": "click"})
-            time.sleep(0.15)
+            # 热键/附着后的键盘输入：无 visual 模板时不要强行视觉点击（否则微信搜索必失败）
+            st = (step.get("selector_type") or "").strip().lower()
+            keyboard_only = bool(spec.get("keyboard_only")) or (
+                (compare_type or "").strip().lower() in ("keyboard", "type", "paste")
+            )
+            has_visual = st == "visual" or bool(spec.get("template_path") or spec.get("template"))
+            if has_visual and not keyboard_only:
+                self._run_visual_pointer({**step, "action": "click"})
+                time.sleep(0.15)
             sendinput_type_text(str(input_value))
             return {
                 "status": "success",
                 "action": action,
                 "verified": True,
-                "pointer_executed": True,
+                "pointer_executed": bool(has_visual and not keyboard_only),
+                "keyboard_only": bool(keyboard_only or not has_visual),
             }
 
         if action == "hotkey":

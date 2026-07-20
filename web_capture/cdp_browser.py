@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.request import urlopen
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 _state: Dict[str, Any] = {
     "browser_process": None,
     "debug_port": 0,
@@ -46,14 +46,52 @@ def pick_free_port() -> int:
     return port
 
 
+def _tcp_port_open(port: int, timeout: float = 0.25) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def fetch_cdp_ws(debug_port: int) -> Optional[str]:
     url = f"http://127.0.0.1:{debug_port}/json/version"
     try:
-        with urlopen(url, timeout=3.0) as resp:
+        with urlopen(url, timeout=2.0) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
         return (data.get("webSocketDebuggerUrl") or "").strip() or None
     except Exception:
         return None
+
+
+def _wait_cdp_ws(debug_port: int, *, timeout_sec: float = 15.0) -> Optional[str]:
+    deadline = time.monotonic() + max(3.0, float(timeout_sec))
+    while time.monotonic() < deadline:
+        ws = fetch_cdp_ws(debug_port)
+        if ws:
+            return ws
+        time.sleep(0.15)
+    return None
+
+
+def _adopt_existing_cdp(debug_port: int, *, kind: str = "") -> Optional[Dict[str, Any]]:
+    ws = fetch_cdp_ws(debug_port)
+    if not ws:
+        return None
+    _set(
+        debug_port=int(debug_port),
+        cdp_ws=ws,
+        browser_kind=kind or _snap().get("browser_kind") or "",
+        # 外部已有调试浏览器：不持有 Popen，仅记录端口
+        browser_process=_snap().get("browser_process"),
+    )
+    return {
+        "success": True,
+        "already_running": True,
+        "debug_port": int(debug_port),
+        "cdp_ws": ws,
+        "executable": _snap().get("executable") or "",
+    }
 
 
 def fetch_cdp_pages(debug_port: int) -> List[Dict[str, Any]]:
@@ -144,52 +182,80 @@ def launch_debug_browser(
     url: str = "",
     user_data_dir: str = "",
 ) -> Dict[str, Any]:
-    """启动带 remote-debugging-port 的 Chrome/Edge。"""
+    """启动带 remote-debugging-port 的 Chrome/Edge（固定优先 9222，可复用已有 CDP）。"""
+    with _lock:
+        return _launch_debug_browser_unlocked(
+            browser=browser, port=port, url=url, user_data_dir=user_data_dir
+        )
+
+
+def _launch_debug_browser_unlocked(
+    *,
+    browser: str = "edge",
+    port: Optional[int] = None,
+    url: str = "",
+    user_data_dir: str = "",
+) -> Dict[str, Any]:
     snap = _snap()
+    kind = (browser or "edge").strip().lower() or "edge"
+
+    # 1) 复用本进程已跟踪且仍存活的实例
     if snap.get("browser_process") and snap.get("debug_port"):
         proc = snap["browser_process"]
         try:
             if proc.poll() is None:
-                return {
-                    "success": True,
-                    "already_running": True,
-                    "debug_port": snap["debug_port"],
-                    "executable": snap.get("executable") or "",
-                }
+                debug_port = int(snap["debug_port"])
+                ws = fetch_cdp_ws(debug_port) or (snap.get("cdp_ws") or "")
+                if ws:
+                    _set(cdp_ws=ws)
+                    return {
+                        "success": True,
+                        "already_running": True,
+                        "debug_port": debug_port,
+                        "cdp_ws": ws,
+                        "executable": snap.get("executable") or "",
+                    }
         except Exception:
             pass
 
-    exe = detect_browser_executable(browser)
+    preferred = int(port or os.environ.get("WEB_CAPTURE_CDP_PORT", "9222") or 9222)
+
+    # 2) 复用本机已在监听的 CDP（避免反复换端口新开浏览器）
+    for candidate in (preferred, int(snap.get("debug_port") or 0)):
+        if candidate <= 0:
+            continue
+        adopted = _adopt_existing_cdp(candidate, kind=kind)
+        if adopted:
+            return adopted
+
+    exe = detect_browser_executable(kind)
     if not exe:
-        return {"success": False, "error": f"未找到 {browser} 可执行文件"}
+        return {"success": False, "error": f"未找到 {kind} 可执行文件"}
 
-    debug_port = int(port or os.environ.get("WEB_CAPTURE_CDP_PORT", "9222") or 9222)
-    if not port:
-        for _ in range(5):
-            if fetch_cdp_ws(debug_port):
-                break
-            if _ == 0:
-                pass
-            else:
-                debug_port = pick_free_port()
+    # 3) 选择端口：优先 preferred；若被非 CDP 占用则另选空闲端口（只选一次）
+    debug_port = preferred
+    if _tcp_port_open(debug_port) and not fetch_cdp_ws(debug_port):
+        debug_port = pick_free_port()
 
+    # 稳定 profile，避免每次换 pid 目录导致连点狂开新实例
     udir = user_data_dir or os.path.join(
-        os.environ.get("TEMP", "."),
-        f"uat-cdp-profile-{os.getpid()}",
+        os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP", "."),
+        "Testory",
+        "cdp-browser-profile",
     )
     os.makedirs(udir, exist_ok=True)
+
+    start_url = (url or "").strip() or "about:blank"
     args = [
         exe,
         f"--remote-debugging-port={debug_port}",
+        "--remote-allow-origins=*",
         f"--user-data-dir={udir}",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-popup-blocking",
+        start_url,
     ]
-    if url:
-        args.append(url)
-    else:
-        args.append("about:blank")
 
     try:
         proc = subprocess.Popen(
@@ -203,31 +269,40 @@ def launch_debug_browser(
     except Exception as exc:
         return {"success": False, "error": str(exc) or "启动浏览器失败"}
 
-    ws = None
-    for _ in range(80):
-        ws = fetch_cdp_ws(debug_port)
-        if ws:
-            break
-        time.sleep(0.1)
+    ws = _wait_cdp_ws(debug_port, timeout_sec=15.0)
+    if not ws:
+        try:
+            if sys.platform == "win32" and proc.pid:
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    timeout=8,
+                )
+            else:
+                proc.kill()
+        except Exception:
+            pass
+        return {
+            "success": False,
+            "error": (
+                f"浏览器已启动但无法连接 CDP 端口 {debug_port}。"
+                "请关闭多余的 Edge/Chrome 调试窗口后重试，或确认未被安全软件拦截。"
+            ),
+            "debug_port": debug_port,
+        }
 
     _set(
         browser_process=proc,
         debug_port=debug_port,
-        browser_kind=browser,
+        browser_kind=kind,
         executable=exe,
-        cdp_ws=ws or "",
+        cdp_ws=ws,
         user_data_dir=udir,
         playwright=None,
         browser=None,
         context=None,
         page=None,
     )
-    if not ws:
-        return {
-            "success": False,
-            "error": f"浏览器已启动但无法连接 CDP 端口 {debug_port}",
-            "debug_port": debug_port,
-        }
     return {
         "success": True,
         "debug_port": debug_port,

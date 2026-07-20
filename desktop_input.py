@@ -313,9 +313,19 @@ def _sendinput_click(*, left: bool) -> None:
 
 
 def sendinput_type_text(text: str) -> None:
-    """Unicode 文本输入（SendInput KEYEVENTF_UNICODE）。"""
+    """Unicode 文本输入。含中文等非 ASCII 时优先剪贴板粘贴，避免逐键截断。"""
     import ctypes
     from ctypes import wintypes
+
+    raw = str(text or "")
+    if not raw:
+        return
+    if any(ord(c) > 127 for c in raw):
+        try:
+            _paste_unicode_via_clipboard(raw)
+            return
+        except Exception:
+            pass
 
     user32 = _user32()
 
@@ -331,13 +341,78 @@ def sendinput_type_text(text: str) -> None:
     class INPUT(ctypes.Structure):
         _fields_ = [("type", wintypes.DWORD), ("ki", KEYBDINPUT)]
 
-    for ch in str(text or ""):
-        for flag in (0x0004, 0x0006):
-            inp = INPUT()
-            inp.type = 1
-            inp.ki = KEYBDINPUT(0, ord(ch), flag, 0, None)
-            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-            time.sleep(0.01)
+    for ch in raw:
+        code = ord(ch)
+        # BMP 以外需 UTF-16 代理对
+        units = []
+        if code > 0xFFFF:
+            c = code - 0x10000
+            units = [0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF)]
+        else:
+            units = [code]
+        for u in units:
+            for flag in (0x0004, 0x0006):  # KEYEVENTF_UNICODE / KEYEVENTF_UNICODE|KEYUP
+                inp = INPUT()
+                inp.type = 1
+                inp.ki = KEYBDINPUT(0, u, flag, 0, None)
+                user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+            time.sleep(0.008)
+
+
+def _paste_unicode_via_clipboard(text: str) -> None:
+    """写入剪贴板后 Ctrl+V，适合微信等对逐键 Unicode 不友好的输入框。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+    kernel32 = ctypes.windll.kernel32
+    CF_UNICODETEXT = 13
+    GMEM_MOVEABLE = 0x0002
+
+    data = str(text or "")
+    if not user32.OpenClipboard(None):
+        raise RuntimeError("OpenClipboard failed")
+    try:
+        user32.EmptyClipboard()
+        buf = ctypes.create_unicode_buffer(data)
+        nbytes = (len(data) + 1) * 2
+        h = kernel32.GlobalAlloc(GMEM_MOVEABLE, nbytes)
+        if not h:
+            raise RuntimeError("GlobalAlloc failed")
+        ptr = kernel32.GlobalLock(h)
+        ctypes.memmove(ptr, buf, nbytes)
+        kernel32.GlobalUnlock(h)
+        if not user32.SetClipboardData(CF_UNICODETEXT, h):
+            raise RuntimeError("SetClipboardData failed")
+    finally:
+        user32.CloseClipboard()
+
+    # Ctrl+V
+    VK_CONTROL, VK_V = 0x11, 0x56
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("ki", KEYBDINPUT)]
+
+    def _key(vk: int, down: bool) -> None:
+        inp = INPUT()
+        inp.type = 1
+        inp.ki = KEYBDINPUT(vk, 0, 0 if down else 0x0002, 0, None)
+        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+    _key(VK_CONTROL, True)
+    _key(VK_V, True)
+    _key(VK_V, False)
+    _key(VK_CONTROL, False)
+    time.sleep(0.05)
 
 
 _SHELL_ROOT_CLASSES = frozenset({"Progman", "WorkerW", "#32769"})

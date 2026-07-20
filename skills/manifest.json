@@ -25,6 +25,18 @@
       "name": "testory-ui-design",
       "version": "1.0.0",
       "source": "ui-new-1.0.0"
+    },
+    {
+      "id": "testory-api-http",
+      "name": "testory-api-http",
+      "version": "1.0.0",
+      "source": "testory-platform-api-1.0.0"
+    },
+    {
+      "id": "testory-cross-end",
+      "name": "testory-cross-end",
+      "version": "1.0.0",
+      "source": "testory-cross-end-1.0.0"
     }
   ]
 }

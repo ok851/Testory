@@ -14,7 +14,18 @@ _ACTIVE_CDP_ENDPOINT: str = ""
 def hermes_home_dir() -> Path:
     raw = (os.environ.get("HERMES_HOME") or "").strip()
     if raw:
-        return Path(raw)
+        # 展开未解析的 %UAT_DATA_DIR% 占位（部分 .env 会原样写入）
+        uat = (os.environ.get("UAT_DATA_DIR") or "").strip()
+        if "%UAT_DATA_DIR%" in raw or "%uat_data_dir%" in raw.lower():
+            if uat:
+                raw = raw.replace("%UAT_DATA_DIR%", uat).replace("%uat_data_dir%", uat)
+            else:
+                # 仓库内常见字面目录名「%UAT_DATA_DIR%/hermes」
+                lit = Path(__file__).resolve().parent / "%UAT_DATA_DIR%" / "hermes"
+                if lit.is_dir():
+                    return lit
+                return Path(os.environ.get("LOCALAPPDATA", "")) / "Testory" / "hermes"
+        return Path(os.path.expandvars(raw))
     uat = (os.environ.get("UAT_DATA_DIR") or "").strip()
     if uat:
         return Path(uat) / "hermes"
@@ -80,7 +91,7 @@ def build_hermes_env_lines(*, api_key: Optional[str] = None) -> str:
         f"API_SERVER_KEY={key}",
         "API_SERVER_HOST=127.0.0.1",
         "API_SERVER_PORT=8642",
-        'toolsets=["hermes-cli","browser","web","memory","skills"]',
+        'toolsets=["hermes-cli","browser","web","memory","skills","terminal"]',
         "HERMES_BROWSER_MODE=cdp_attach",
     ]
     cdp = (os.environ.get("HERMES_CDP_ENDPOINT") or "").strip()
@@ -123,7 +134,202 @@ def build_hermes_env_lines(*, api_key: Optional[str] = None) -> str:
         lines.append(f"HERMES_LLM_PROVIDER={hermes_provider}")
     if hermes_model:
         lines.append(f"HERMES_LLM_MODEL={hermes_model}")
+    # 无 LLM key 时 Hermes 会报 Missing Authentication header，并导致「只能启动应用」的假象
+    has_llm_key = any(ln.startswith("OPENAI_API_KEY=") and not ln.endswith("=ollama") for ln in lines)
+    if hermes_provider and hermes_provider != "ollama" and not has_llm_key and not (os.environ.get("HERMES_LLM_API_KEY") or "").strip():
+        # 回退到平台当前推理配置
+        if api_key_llm:
+            lines.append(f"OPENAI_API_KEY={api_key_llm}")
+        elif (os.environ.get("OPENAI_API_KEY") or "").strip():
+            lines.append(f"OPENAI_API_KEY={os.environ.get('OPENAI_API_KEY').strip()}")
     return "\n".join(lines) + "\n"
+
+
+def resolve_hermes_api_server_key(*, persist_if_empty: bool = False) -> str:
+    """解析与 Hermes Gateway 一致的 API_SERVER_KEY。
+
+    优先级：HERMES_HOME/.env 的 API_SERVER_KEY → 进程 HERMES_API_SERVER_KEY / API_SERVER_KEY。
+    注意：不要因为 key 含「replace-with」就擅自换成另一个值——官方 Hermes 会把该字符串当真实密钥使用；
+    平台曾因此用 testory-local-key 探测，导致已就绪的 Gateway 一直被判定为未启动直至超时。
+    """
+    home_key = ""
+    env_path = hermes_home_dir() / ".env"
+    if env_path.is_file():
+        try:
+            from dotenv import dotenv_values
+
+            vals = dotenv_values(env_path)
+            home_key = (vals.get("API_SERVER_KEY") or vals.get("HERMES_API_SERVER_KEY") or "").strip()
+        except Exception:
+            try:
+                for line in env_path.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("API_SERVER_KEY="):
+                        home_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+            except OSError:
+                pass
+    proc_key = (
+        (os.environ.get("HERMES_API_SERVER_KEY") or "").strip()
+        or (os.environ.get("API_SERVER_KEY") or "").strip()
+    )
+    key = home_key or proc_key
+    if not key:
+        key = "testory-local-key"
+        if persist_if_empty and env_path.parent.is_dir():
+            try:
+                ensure_hermes_home()
+                lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.is_file() else []
+                lines = _upsert_env_line(list(lines), "API_SERVER_KEY", key)
+                _write_hermes_env_lines(lines)
+            except Exception:
+                pass
+    # 同步到进程，供 HermesGatewayClient 使用
+    os.environ["HERMES_API_SERVER_KEY"] = key
+    os.environ["API_SERVER_KEY"] = key
+    return key
+
+
+def hermes_upstream_llm_status() -> Dict[str, Any]:
+    """检查当前平台推理配置能否被 Hermes（OpenAI 兼容 + Bearer）正常使用。"""
+    prof = _read_active_llm_profile()
+    from ai_multi_provider import normalize_api_key, _uses_xiaomimimo_auth
+
+    base = (prof.get("base_url") or "").strip()
+    key = normalize_api_key(prof.get("api_key"))
+    prov = (prof.get("provider") or "").strip()
+    style = (prof.get("api_style") or "").strip()
+    out: Dict[str, Any] = {
+        "ok": True,
+        "provider": prov,
+        "model_id": (prof.get("model_id") or "").strip(),
+        "label": (prof.get("label") or prof.get("model_id") or "").strip(),
+        "reason": "",
+    }
+    if style == "ollama" or prov == "ollama":
+        out["ok"] = True
+        out["reason"] = "ollama"
+        return out
+    if _uses_xiaomimimo_auth(base, prov, key):
+        # 尝试从注册表找一个 Bearer 兼容配置给 Hermes 用
+        alt = _find_bearer_compatible_profile()
+        if alt:
+            out["ok"] = True
+            out["reason"] = "fallback_bearer_profile"
+            out["fallback_profile_id"] = alt.get("id")
+            out["fallback_model_id"] = alt.get("model_id")
+            out["message"] = (
+                f"当前页面引擎为小米 MiMo（不兼容 Hermes），"
+                f"已为智能体改用备用模型 {(alt.get('label') or alt.get('model_id') or '')}。"
+            )
+            out["active_is_xiaomi"] = True
+            out["hermes_profile"] = alt
+            return out
+        out["ok"] = False
+        out["reason"] = "xiaomi_mimo_api_key_header"
+        out["message"] = (
+            "当前推理引擎为小米 MiMo（api-key 头）。Hermes 只支持 Authorization: Bearer，"
+            "会报 Missing Authentication header。"
+            "请在左侧改选 DeepSeek / OpenAI 等 Bearer 兼容模型并设为当前引擎，然后停止再启动智能体。"
+            "桌面任务将自动走平台本机执行。"
+        )
+        return out
+    if style in ("anthropic_messages",) or prov == "anthropic":
+        out["ok"] = False
+        out["reason"] = "anthropic_not_openai_compat"
+        out["message"] = (
+            "当前推理引擎为 Anthropic Messages API，Hermes 默认按 OpenAI 兼容调用。"
+            "请为智能体改用 OpenAI 兼容模型，或桌面任务走平台本机执行。"
+        )
+        return out
+    if not key:
+        out["ok"] = False
+        out["reason"] = "missing_api_key"
+        out["message"] = "未配置推理引擎 API Key，Hermes 无法调用上游模型。"
+        return out
+    if not base:
+        out["ok"] = False
+        out["reason"] = "missing_base_url"
+        out["message"] = "未配置推理引擎 base_url。"
+        return out
+    out["reason"] = "openai_compatible"
+    out["hermes_profile"] = prof
+    return out
+
+
+def _find_bearer_compatible_profile() -> Optional[Dict[str, Any]]:
+    """在模型注册表中找一个 Hermes 可用的 Bearer 配置（跳过小米 MiMo / Anthropic）。"""
+    try:
+        from ai_config_paths import ai_model_registry_path
+        from ai_multi_provider import normalize_api_key, _uses_xiaomimimo_auth
+
+        path = ai_model_registry_path()
+        if not path.is_file():
+            return None
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for p in raw.get("profiles") or []:
+            if not isinstance(p, dict):
+                continue
+            prov = (p.get("provider") or "").strip()
+            style = (p.get("api_style") or "").strip()
+            base = (p.get("base_url") or "").strip()
+            key = normalize_api_key(p.get("api_key"))
+            if style == "ollama" or prov == "ollama":
+                return p
+            if style == "anthropic_messages" or prov == "anthropic":
+                continue
+            if _uses_xiaomimimo_auth(base, prov, key):
+                continue
+            if key and base:
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def sync_platform_llm_credentials_to_hermes_env() -> Dict[str, Any]:
+    """把平台当前（或备用 Bearer）推理配置 upsert 进 HERMES_HOME/.env。"""
+    home = hermes_home_dir()
+    home.mkdir(parents=True, exist_ok=True)
+    env_path = home / ".env"
+    status = hermes_upstream_llm_status()
+    from ai_multi_provider import normalize_api_key
+
+    prof = status.get("hermes_profile") or _read_active_llm_profile()
+    if status.get("reason") == "fallback_bearer_profile" and status.get("hermes_profile"):
+        prof = status["hermes_profile"]
+
+    base = (prof.get("base_url") or os.environ.get("LOCAL_LLM_BASE_URL") or "").strip()
+    model_id = (prof.get("model_id") or "").strip()
+    key = normalize_api_key(prof.get("api_key"))
+    prov = (prof.get("provider") or "").strip()
+    style = (prof.get("api_style") or "").strip()
+
+    lines: list[str] = []
+    if env_path.is_file():
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+    if not lines:
+        lines = build_hermes_env_lines().splitlines()
+
+    if style == "ollama" or prov == "ollama":
+        lines = _upsert_env_line(lines, "PROVIDER", "openai_compatible")
+        if base:
+            lines = _upsert_env_line(lines, "OPENAI_API_BASE", base.rstrip("/"))
+        if model_id:
+            lines = _upsert_env_line(lines, "OPENAI_MODEL", model_id)
+        lines = _upsert_env_line(lines, "OPENAI_API_KEY", "ollama")
+    elif status.get("ok") and key and base:
+        lines = _upsert_env_line(lines, "PROVIDER", "openai_compatible")
+        lines = _upsert_env_line(lines, "OPENAI_API_BASE", base.rstrip("/"))
+        if model_id:
+            lines = _upsert_env_line(lines, "OPENAI_MODEL", model_id)
+        lines = _upsert_env_line(lines, "OPENAI_API_KEY", key)
+
+    _write_hermes_env_lines(lines)
+    _sync_hermes_env_to_process(env_path)
+    return {"synced": True, "status": status, "env_path": str(env_path)}
 
 
 def ensure_hermes_home(*, force_env: bool = False) -> Path:
@@ -139,8 +345,53 @@ def ensure_hermes_home(*, force_env: bool = False) -> Path:
     return home
 
 
+# 平台推理配置写入 HERMES_HOME/.env 后，必须强制覆盖进程内旧值（否则会一直用上次的 MiMo Key）
+_HERMES_LLM_ENV_KEYS = frozenset(
+    {
+        "PROVIDER",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+    }
+)
+
+
+def hermes_desired_llm_fingerprint() -> str:
+    """当前平台应为 Hermes 使用的上游模型指纹（用于检测是否需重启）。"""
+    from ai_multi_provider import normalize_api_key
+
+    status = hermes_upstream_llm_status()
+    prof = status.get("hermes_profile") or _read_active_llm_profile()
+    base = (prof.get("base_url") or "").strip().rstrip("/")
+    model = (prof.get("model_id") or "").strip()
+    key = normalize_api_key(prof.get("api_key"))
+    tail = key[-8:] if key else ""
+    return f"{base}|{model}|{tail}"
+
+
+def hermes_env_llm_snapshot() -> Dict[str, str]:
+    """读取 HERMES_HOME/.env 中的上游模型摘要（供 UI 展示「智能体实际模型」）。"""
+    env_path = hermes_home_dir() / ".env"
+    out: Dict[str, str] = {"model": "", "base_url": "", "provider": ""}
+    if not env_path.is_file():
+        return out
+    try:
+        from dotenv import dotenv_values
+
+        vals = dotenv_values(env_path)
+        out["model"] = str(vals.get("OPENAI_MODEL") or "").strip()
+        out["base_url"] = str(vals.get("OPENAI_API_BASE") or vals.get("OPENAI_BASE_URL") or "").strip()
+        out["provider"] = str(vals.get("PROVIDER") or "").strip()
+    except Exception:
+        pass
+    return out
+
+
 def _sync_hermes_env_to_process(env_path: Path) -> None:
-    """将 HERMES_HOME/.env 中的 API key 同步到进程环境（供 HermesGatewayClient 读取）。"""
+    """将 HERMES_HOME/.env 同步到进程环境（供 HermesGatewayClient / 子进程继承）。"""
     if not env_path.is_file():
         return
     try:
@@ -149,13 +400,23 @@ def _sync_hermes_env_to_process(env_path: Path) -> None:
         for key, val in dotenv_values(env_path).items():
             if not key or val is None:
                 continue
-            if key not in os.environ:
-                os.environ[key] = str(val)
+            sval = str(val)
+            if key in _HERMES_LLM_ENV_KEYS:
+                # 模型切换后必须覆盖，不能保留父进程里的旧 OPENAI_*
+                os.environ[key] = sval
+                continue
+            current = os.environ.get(key)
+            if not current or not current.strip():
+                os.environ[key] = sval
     except ImportError:
         pass
+    # Hermes 认 API_SERVER_KEY；平台客户端认 HERMES_API_SERVER_KEY —— 必须一致
     api_key = (os.environ.get("API_SERVER_KEY") or "").strip()
-    if api_key and not (os.environ.get("HERMES_API_SERVER_KEY") or "").strip():
+    hermes_key = (os.environ.get("HERMES_API_SERVER_KEY") or "").strip()
+    if api_key:
         os.environ["HERMES_API_SERVER_KEY"] = api_key
+    elif hermes_key:
+        os.environ["API_SERVER_KEY"] = hermes_key
     if not (os.environ.get("HERMES_GATEWAY_URL") or "").strip():
         os.environ["HERMES_GATEWAY_URL"] = "http://127.0.0.1:8642"
 
@@ -224,8 +485,8 @@ def _try_hot_update_cdp(ws: str) -> bool:
 
 def sync_hermes_cdp_endpoint(cdp_ws_url: str, *, restart_gateway: bool = True) -> bool:
     """
-    将 Browser Runtime 返回的 cdp_browser_ws 写入 HERMES_HOME/.env 与进程环境，
-    供 Hermes gateway 以 cdp_attach 模式操作画布 Chromium。
+    将本机浏览器（Edge/Chrome remote debugging）的 CDP WebSocket URL
+    写入 HERMES_HOME/.env 与进程环境，供 Hermes gateway 以 cdp_attach 模式操作。
     """
     global _ACTIVE_CDP_ENDPOINT
     ws = (cdp_ws_url or "").strip()
@@ -257,7 +518,7 @@ def sync_hermes_cdp_endpoint(cdp_ws_url: str, *, restart_gateway: bool = True) -
 
 
 def clear_hermes_cdp_endpoint(*, restart_gateway: bool = True) -> None:
-    """画布会话结束时清除 CDP attach 配置。"""
+    """本机浏览器会话结束时清除 CDP attach 配置。"""
     global _ACTIVE_CDP_ENDPOINT
     _ACTIVE_CDP_ENDPOINT = ""
     os.environ.pop("HERMES_CDP_ENDPOINT", None)

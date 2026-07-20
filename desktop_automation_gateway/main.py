@@ -30,7 +30,25 @@ def _secret_ok(request: Request) -> bool:
     if not expected:
         return False
     got = (request.headers.get("X-Desktop-Agent-Secret") or "").strip()
-    return secrets.compare_digest(got, expected)
+    if got and secrets.compare_digest(got, expected):
+        return True
+    # Hermes / curl 常误用 Authorization: Bearer <secret>，一并接受以免反复 401
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        if token and secrets.compare_digest(token, expected):
+            return True
+    return False
+
+
+@app.get("/health")
+async def health():
+    """无鉴权；供平台能力探测与 Hermes 探活。"""
+    return {
+        "ok": True,
+        "service": "desktop_automation_gateway",
+        "auth": "X-Desktop-Agent-Secret or Authorization: Bearer",
+    }
 
 
 @app.post("/internal/session")

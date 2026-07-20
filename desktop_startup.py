@@ -44,17 +44,14 @@ def mark_app_ready() -> None:
 
 
 def _deferred_gateway_worker() -> None:
-    set_startup_phase("gateways", "正在初始化 AI 与浏览器组件…", gateways="starting")
+    set_startup_phase("gateways", "正在初始化 AI 组件…", gateways="starting")
+    # Hermes 默认不自动启动，由 AI 页手动「启动智能体」
+    # 仅当显式 HERMES_AUTO_START_GATEWAY=1 时才后台拉起
     try:
-        from embedded_browser_service_bootstrap import bootstrap_embedded_browser_services
+        from hermes_service_bootstrap import bootstrap_hermes_services, hermes_auto_start_gateway
 
-        bootstrap_embedded_browser_services()
-    except Exception as exc:
-        set_startup_phase("gateways", f"浏览器组件初始化异常：{exc}", gateways="error")
-    try:
-        from hermes_service_bootstrap import bootstrap_hermes_services
-
-        bootstrap_hermes_services()
+        if hermes_auto_start_gateway():
+            bootstrap_hermes_services()
     except Exception as exc:
         set_startup_phase("gateways", f"Hermes 组件初始化异常：{exc}", gateways="error")
     set_startup_phase("ready", "准备就绪", gateways="done", ready=True)
@@ -74,7 +71,6 @@ def schedule_deferred_gateway_boot() -> None:
 def shutdown_all_services() -> None:
     """终止桌面版拉起的子进程（网关等）。"""
     for mod_name, func_name in (
-        ("embedded_browser_service_bootstrap", "stop_embedded_gateway"),
         ("hermes_service_bootstrap", "stop_hermes_gateway"),
         ("desktop_service_bootstrap", "stop_desktop_gateway"),
         ("mobile_service_bootstrap", "stop_mobile_gateway"),

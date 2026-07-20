@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 from desktop_env_config import (
@@ -56,10 +56,18 @@ def _ensure_local_profile_defaults() -> None:
         os.environ["DESKTOP_EXECUTION_MODE"] = "inprocess"
 
 
-def _ensure_desktop_env_defaults() -> None:
-    """未配置时写入进程内默认值（enterprise / gateway 模式）。"""
-    if is_local_deployment() and desktop_execution_mode() == "inprocess":
-        return
+def _ensure_desktop_env_defaults(*, force: bool = False) -> None:
+    """未配置时写入进程内默认值。
+
+    force=True：即使 local+inprocess 也写入 URL/SECRET，供 Hermes 经 gateway 操控桌面。
+    """
+    if (
+        not force
+        and is_local_deployment()
+        and desktop_execution_mode() == "inprocess"
+    ):
+        # 仍补齐 secret/url，避免 Hermes 侧空鉴权；但不强制改执行模式
+        pass
     if not os.environ.get("DESKTOP_AGENT_GATEWAY_URL", "").strip():
         port = os.environ.get("DESKTOP_AGENT_GATE_PORT", "8766")
         os.environ["DESKTOP_AGENT_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
@@ -70,6 +78,68 @@ def _ensure_desktop_env_defaults() -> None:
         os.environ["DESKTOP_APP_ALIASES"] = '{"default":"notepad.exe"}'
     if sys.platform == "win32" and not os.environ.get("DESKTOP_DEFAULT_ATTACH_TITLE_RE", "").strip():
         os.environ["DESKTOP_DEFAULT_ATTACH_TITLE_RE"] = ".*记事本.*|.*Notepad.*"
+
+
+def ensure_desktop_gateway_for_agent() -> dict:
+    """为 Hermes/智能体保证桌面 gateway 可调用（补 env + 必要时拉起进程）。"""
+    out: dict = {"ok": False, "gateway_url": "", "started": False}
+    if sys.platform != "win32":
+        out["reason"] = "non-windows"
+        return out
+    _ensure_desktop_env_defaults(force=True)
+    url = os.environ.get("DESKTOP_AGENT_GATEWAY_URL", "").strip()
+    out["gateway_url"] = url
+    parsed = urlparse(url or "http://127.0.0.1:8766")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or int(os.environ.get("DESKTOP_AGENT_GATE_PORT", "8766") or "8766")
+
+    def _auth_probe() -> Tuple[bool, str]:
+        try:
+            from desktop_agent_client import desktop_agent_json
+
+            payload, err = desktop_agent_json(
+                "POST", "/internal/session", body={}, timeout_sec=2.0
+            )
+            if err and "401" in str(err).lower():
+                return False, "unauthorized"
+            if err and payload is None:
+                # 无 /internal 可达或连接失败
+                return False, str(err)[:80]
+            return True, "ok"
+        except Exception as e:
+            return False, str(e)[:80]
+
+    if _port_listening(host, port):
+        ok_auth, auth_detail = _auth_probe()
+        if ok_auth:
+            out["ok"] = True
+            out["already_running"] = True
+            return out
+        # 端口在听但密钥不一致：停掉本进程拉起的旧 gateway 再重启
+        out["auth_mismatch"] = auth_detail
+        try:
+            stop_desktop_gateway()
+        except Exception:
+            pass
+        time.sleep(0.3)
+
+    try:
+        _start_gateway_process()
+        for _ in range(40):
+            if _port_listening(host, port):
+                ok_auth, auth_detail = _auth_probe()
+                if ok_auth:
+                    out["ok"] = True
+                    out["started"] = True
+                    return out
+                out["auth_mismatch"] = auth_detail
+                break
+            time.sleep(0.15)
+        if not out.get("ok"):
+            out["error"] = out.get("auth_mismatch") or "gateway_start_timeout"
+    except Exception as e:
+        out["error"] = str(e)[:160]
+    return out
 
 
 def _start_gateway_process() -> None:

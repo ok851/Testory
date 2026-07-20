@@ -50,6 +50,49 @@ def _result_looks_unhealthy(result_text: str) -> bool:
     return any(k in text for k in error_keywords)
 
 
+def _result_is_auth_fatal(result_text: str) -> bool:
+    """鉴权类失败：再调 hermes_execute 只会重复同一 401，应立即停止重试。"""
+    t = (result_text or "").lower()
+    if "missing authentication header" in t:
+        return True
+    if "401" in t and any(
+        k in t
+        for k in (
+            "auth",
+            "unauthorized",
+            "authentication",
+            "鉴权",
+            "认证",
+            "api key",
+            "api_key",
+            "token",
+            "secret",
+            "桌面",
+            "gateway",
+        )
+    ):
+        return True
+    if "unauthorized" in t and ("desktop" in t or "gateway" in t or "桌面" in (result_text or "")):
+        return True
+    if "桌面" in (result_text or "") and ("401" in t or "鉴权" in (result_text or "") or "认证" in (result_text or "")):
+        return True
+    return False
+
+
+def _auth_fatal_user_message(result_text: str) -> str:
+    t = (result_text or "").lower()
+    if "missing authentication header" in t:
+        return (
+            "智能体上游模型鉴权失败（Missing Authentication header）。"
+            "请检查 Hermes 使用的 LLM API Key/请求头配置后，停止并重新启动智能体；不要重复提交同一任务。"
+        )
+    return (
+        "桌面自动化网关鉴权失败（401）。平台已尝试补齐密钥并拉起网关；"
+        "若仍失败请确认 DESKTOP_AGENT_GATEWAY_SECRET 与网关进程一致，然后「停止」再「启动」智能体。"
+        "请勿对同一鉴权错误反复重试。"
+    )
+
+
 def profile_supports_ai_chat_tools(profile: Optional[Dict[str, Any]], legacy_model: str) -> bool:
     """Whether we attempt tool-loop (Ollama, OpenAI-compatible, or Anthropic)."""
     if profile and isinstance(profile, dict):
@@ -93,19 +136,26 @@ def _ai_allow_main_playwright_fallback() -> bool:
 
 def hermes_execute_allowed(*, embedded_session_id: str = "", platform_type: str = "web") -> bool:
     """
-    Web：严格限制——只有 CDP attach 到前台浏览器后才允许 hermes_execute。
-    Desktop：Hermes 已配置时允许 OS 层探索。
-    Android：不支持。
+    Web：优先要求 CDP；若未附着仍允许（按需 ensure_browser），由执行层处理失败。
+    Desktop / Auto：Hermes Gateway 已配置即可。
+    Android：设备已连接且 Hermes 已配置时允许。
     """
     plat = (platform_type or "web").strip().lower()
-    if plat == "desktop":
+    if plat in ("desktop", "auto", "api", "cross"):
         from agent_gateway_client import agent_gateway_configured
         return agent_gateway_configured()
-    if plat == "android":
-        return False
-    # Web 平台：严格限制——只有 CDP attach 到前台浏览器后才允许 hermes_execute
-    # 禁止 Hermes 在独立后台浏览器中执行
-    return hermes_cdp_attached()
+    if plat in ("android", "mobile"):
+        from agent_gateway_client import agent_gateway_configured
+        if not agent_gateway_configured():
+            return False
+        try:
+            from mobile_device_manager import get_connected_udid
+            return bool(get_connected_udid())
+        except Exception:
+            return False
+    # Web：已附着最优；未附着也允许（执行前 ensure_browser）
+    from agent_gateway_client import agent_gateway_configured
+    return agent_gateway_configured()
 
 
 def openclaw_execute_allowed(*, embedded_session_id: str = "", platform_type: str = "web") -> bool:
@@ -119,10 +169,9 @@ def _agent_execute_tool_schema() -> Dict[str, Any]:
         "function": {
             "name": "hermes_execute",
             "description": (
-                "通过内嵌 Hermes Agent 在真实浏览器中执行自然语言测试任务（可长链路、多页面、整模块）。"
-                "适用于：探索系统、走通业务流程、收集页面 URL/标题/控件线索，供后续写入用例步骤或 Skill。"
-                "复杂任务可多次调用：先登录与主干路径，再按模块分次探索；用 continuation_from 衔接上下文。"
-                "调用后根据返回文本整理出具体 navigate/click/input/wait/assert 步骤，必要时再调用 refine_test_plan。"
+                "通过 Hermes 跨层执行代理完成自动化（Web CDP / 桌面 gateway / 移动 bridge / 接口 HTTP）。"
+                "适用于探索流程、操作系统弹窗、多端联动；复杂任务可多次调用并用 continuation_from / session_id 衔接。"
+                "执行后根据返回整理 navigate/click/input/launch_app/api_request 等步骤，必要时再 refine_test_plan。"
             ),
             "parameters": {
                 "type": "object",
@@ -149,7 +198,7 @@ def _agent_execute_tool_schema() -> Dict[str, Any]:
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "可选，Agent 侧会话标识",
+                        "description": "可选，Agent 侧会话标识（与任务上下文总线对齐）",
                     },
                 },
                 "required": ["instruction"],
@@ -225,7 +274,18 @@ def _build_system_prompt(
         "## Hermes Agent 与多轮工具",
     ]
     plat = (platform_type or "web").strip().lower()
-    if plat == "desktop":
+    if plat == "auto":
+        parts_agent = [
+            "【重要】你是全栈测试编排助手：运行时由 Hermes 充当手和眼睛（单脑执行）。",
+            "- 闲聊、问身份/能力、要建议 → 直接自然语言回答，禁止 hermes_execute。",
+            "- 任何真实环境操作（网页/桌面/移动/接口/混用）→ 调用 hermes_execute；不要自己用关键词分流。",
+            "- Hermes 可在同会话切换 Web CDP、桌面 gateway、接口 HTTP；OS 弹窗用桌面工具。",
+            "- 需要改用例 steps → refine_test_plan。",
+            "- 收到 NEED_USER_ACTION 时向用户说明并等待，不要假装已完成。",
+            "",
+            "禁止在未确认用户要操作真实环境时调用 hermes_execute。",
+        ]
+    elif plat == "desktop":
         parts_agent = [
             "【重要】当前为 **Windows 桌面** 测试场景，无需 URL。",
             "可调用 hermes_execute 让 Hermes 在本机操作系统层探索（启动应用、点按窗口、输入文字等）；",
@@ -265,7 +325,15 @@ def _build_system_prompt(
             "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
         ]
     parts.extend(parts_agent)
-    if plat != "desktop":
+    if plat == "auto":
+        parts.extend([
+            "",
+            "## 输出用例质量",
+            "当用户明确要求生成测试用例时，最终输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
+            "automation_layer 字段根据实际执行方式填写：Web 操作填 'web'，桌面操作填 'desktop'，API 操作填 'api'。",
+            "日常对话、询问建议、闲聊时不需要输出 JSON，直接自然语言回答即可。",
+        ])
+    elif plat != "desktop":
         parts.extend([
             "",
             "## 输出用例质量",
@@ -387,6 +455,14 @@ class ChatToolLoopParams:
     abort_event: Optional[threading.Event] = None
     recorder: Any = None  # ActionRecorder 实例，用于观测 hermes_execute 结果
     screen_observer: Any = None  # ScreenObserver 实例，用于屏幕视觉观察
+    # 仅在真正调用 hermes_execute 前按需拉起本机浏览器；返回 (ok, error_message)
+    ensure_browser_before_agent: Any = None
+    # None=按 hermes_execute_allowed 自动判断；False=强制禁用自动化工具（纯对话）
+    allow_hermes_execute: Optional[bool] = None
+    # 跨端任务上下文 session_id（agent_task_context）
+    task_session_id: Optional[str] = None
+    # 预检得到的能力摘要（注入 Hermes）
+    capabilities_summary: Optional[str] = None
 
 
 def _get_bridge_page_state() -> Dict[str, str]:
@@ -401,35 +477,51 @@ def _get_bridge_page_state() -> Dict[str, str]:
     return {"url": "", "title": ""}
 
 
-def _inject_execution_env_verify(result_text: str, before: Dict[str, str], after: Dict[str, str]) -> str:
-    """在 Hermes 返回结果中注入执行环境验证信息。"""
+def _inject_execution_env_verify(
+    result_text: str,
+    before: Dict[str, str],
+    after: Dict[str, str],
+    *,
+    platform_type: str = "auto",
+) -> str:
+    """在 Hermes 返回结果中注入执行环境验证；仅 Web 前景会话时用 URL 未变判失败。"""
     try:
         data = json.loads(result_text)
+        if not isinstance(data, dict):
+            data = {"ok": True, "result": result_text}
     except Exception:
-        return result_text
-    if not isinstance(data, dict):
-        return result_text
+        data = {"ok": True, "result": result_text}
 
-    # 记录执行前后浏览器状态
     data["_env_verify"] = {
         "before_url": before.get("url", ""),
         "before_title": before.get("title", ""),
         "after_url": after.get("url", ""),
         "after_title": after.get("title", ""),
         "page_changed": (before.get("url") != after.get("url")) or (before.get("title") != after.get("title")),
+        "platform_type": platform_type,
     }
 
-    # 如果页面未变化，但结果声称成功，追加警告提示
-    if not data["_env_verify"]["page_changed"] and data.get("ok") is True:
-        # 检查 result 或 output 中是否包含操作描述
-        output = str(data.get("result") or data.get("output") or "").lower()
-        action_keywords = ("输入", "点击", "填写", "提交", "登录", "navigate", "click", "input", "type")
+    plat = (platform_type or "auto").strip().lower()
+    # 桌面/移动/接口/auto 混用：禁止用「浏览器 URL 未变」一刀切判失败
+    if plat in ("desktop", "android", "mobile", "api", "auto"):
+        return json.dumps(data, ensure_ascii=False)
+
+    if not data["_env_verify"]["page_changed"] and data.get("ok") is not False:
+        output = str(data.get("result") or data.get("output") or data.get("error") or result_text or "").lower()
+        action_keywords = (
+            "输入", "点击", "填写", "提交", "登录", "导航", "打开", "访问",
+            "navigate", "click", "input", "type", "goto", "press",
+        )
         if any(k in output for k in action_keywords):
-            data["_env_verify"]["warning"] = (
-                "Hermes 返回操作成功，但前台浏览器页面未发生变化（URL/标题均未变）。"
-                "可能原因：1) Hermes 未 attach 到前台浏览器，在独立后台浏览器中执行；"
-                "2) 操作被浏览器的安全策略阻止；3) 操作在 iframe 或 shadow DOM 中完成，未反映在顶层页面。"
-            )
+            if (before.get("url") or after.get("url") or "").startswith("http"):
+                msg = (
+                    "前台本机浏览器页面未变化，但 Hermes 回报已操作。"
+                    "请确认已启动本机浏览器并完成 CDP 附着，避免在独立后台浏览器中执行。"
+                )
+                data["_env_verify"]["warning"] = msg
+                data["_env_verify"]["fatal"] = True
+                data["ok"] = False
+                data["error"] = msg
 
     return json.dumps(data, ensure_ascii=False)
 
@@ -442,13 +534,14 @@ def _handle_agent_execute(
     agent_client: Any,
     meta: Dict[str, Any],
     abort_event: Optional[threading.Event] = None,
+    params: Optional[ChatToolLoopParams] = None,
 ) -> str:
     tool_key = "hermes_execute" if name == "hermes_execute" else "openclaw_execute"
     if not allow_agent:
         meta["tools_used"].append(f"{tool_key}_blocked")
         err_msg = (
-            f"{tool_key} 已禁用：画布 CDP 未 attach 到 Hermes。"
-            "请先在 AI 测试页连接实时画面，或改用 refine_test_plan。"
+            f"{tool_key} 已禁用：智能体未就绪或当前模式不允许自动化。"
+            "请先启动智能体后再试。"
         )
         return json.dumps(
             {
@@ -462,6 +555,8 @@ def _handle_agent_execute(
         return json.dumps({"ok": False, "error": "操作已被用户取消"}, ensure_ascii=False)
     instr = _compose_agent_instruction(args)
     sid = (args.get("session_id") or "").strip()
+    if params and getattr(params, "task_session_id", None):
+        sid = sid or str(params.task_session_id).strip()
     if not instr.strip():
         meta["tools_used"].append(tool_key)
         return json.dumps(
@@ -469,11 +564,211 @@ def _handle_agent_execute(
             ensure_ascii=False,
         )
 
-    # 执行环境验证：记录执行前的前台浏览器状态
+    plat = (getattr(params, "platform_type", None) or "auto") if params else "auto"
+    vision_summary = ""
+    if params and getattr(params, "screen_observer", None):
+        try:
+            obs = params.screen_observer
+            # 桌面任务：强制截桌面/前台窗，并在首次 Hermes 调用前同步分析（避免共享屏幕“开了却空”）
+            try:
+                from agent_desktop_fastpath import is_desktop_nl_task
+
+                user_msg = (getattr(params, "message", None) or "").strip()
+                if plat in ("desktop",) or (user_msg and is_desktop_nl_task(user_msg)):
+                    if hasattr(obs, "set_prefer_surface"):
+                        obs.set_prefer_surface("desktop")
+                    if getattr(obs, "platform_type", "") in ("auto", "web", ""):
+                        obs.platform_type = "desktop"
+            except Exception:
+                pass
+            vision_summary = obs.get_last_analysis() or ""
+            if not vision_summary:
+                vision_summary = obs.capture_and_analyze_sync(
+                    instruction_hint=(
+                        f"Desktop/UI automation context. User task: "
+                        f"{(getattr(params, 'message', '') or '')[:200]}"
+                    ),
+                    force=True,
+                ) or ""
+        except Exception:
+            vision_summary = ""
+
+    # 桌面任务：保证 gateway 进程与密钥就绪，避免 Hermes curl 401 空转
+    if plat in ("auto", "desktop", "all", "cross"):
+        try:
+            from desktop_service_bootstrap import ensure_desktop_gateway_for_agent
+
+            ensure_desktop_gateway_for_agent()
+        except Exception:
+            pass
+
+    ctx_prefix = ""
+    try:
+        from agent_task_context import get_task_context
+
+        ctx = get_task_context(sid) if sid else None
+        if ctx:
+            ctx_prefix = ctx.instruction_prefix()
+            # 绑定桌面 session
+            try:
+                import os as _os
+                _os.environ["DESKTOP_AGENT_SESSION_ID"] = ctx.desktop_session_id
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        from hermes_skill_hints import build_explore_instruction
+
+        instr = build_explore_instruction(
+            instr,
+            {
+                "platform": plat,
+                "context_prefix": ctx_prefix,
+                "vision_summary": vision_summary,
+                "capabilities_summary": getattr(params, "capabilities_summary", None) or "",
+            },
+        )
+    except Exception:
+        if ctx_prefix:
+            instr = ctx_prefix + instr
+
     before_state = _get_bridge_page_state()
-    result_text = agent_client.execute_user_instruction(instr, sid, abort_event=abort_event)
+    # 默认不把平台 task session 传给 Hermes（避免 [session_id=] 触发内部会话损坏）。
+    # 仅当上下文显式带有 hermes_session_id 且开启 HERMES_PASS_SESSION_ID 时才会注入。
+    hermes_sid = ""
+    try:
+        from agent_task_context import get_task_context
+
+        ctx_h = get_task_context(sid) if sid else None
+        if ctx_h and (ctx_h.hermes_session_id or "").strip():
+            hermes_sid = (ctx_h.hermes_session_id or "").strip()
+    except Exception:
+        hermes_sid = ""
+    try:
+        result_text = agent_client.execute_user_instruction(
+            instr, hermes_sid, abort_event=abort_event
+        )
+    except Exception as ex:
+        from hermes_gateway_client import _friendly_corrupt_msg, _is_corrupt_session_error
+
+        err_s = str(ex)
+        result_text = json.dumps(
+            {
+                "ok": False,
+                "error": _friendly_corrupt_msg(err_s) if _is_corrupt_session_error(err_s) else err_s[:400],
+                "corrupt_session": _is_corrupt_session_error(err_s),
+            },
+            ensure_ascii=False,
+        )
+
+    # 鉴权失败：平台侧桌面兜底一次，并标记禁止再调 Hermes（避免重复 401）
+    if _result_is_auth_fatal(result_text):
+        meta["hermes_auth_blocked"] = True
+        meta["hermes_auth_error"] = _auth_fatal_user_message(result_text)
+        fallback_note = ""
+        user_msg = ""
+        if params is not None:
+            user_msg = (getattr(params, "message", None) or "").strip()
+        try:
+            from agent_desktop_fastpath import is_desktop_nl_task, execute_desktop_nl
+
+            if user_msg and is_desktop_nl_task(user_msg):
+                desk = execute_desktop_nl(user_msg)
+                # 即使 partial，只要有可读 reply/steps 也作为兜底结果（避免再回 app_query 死胡同）
+                if desk.get("ok") or desk.get("steps") or desk.get("reply"):
+                    result_text = json.dumps(
+                        {
+                            "ok": bool(desk.get("ok")) and not desk.get("partial"),
+                            "partial": bool(desk.get("partial") or not desk.get("ok")),
+                            "via": desk.get("via") or "platform_desktop_fallback",
+                            "reply": desk.get("reply")
+                            or desk.get("error")
+                            or meta["hermes_auth_error"],
+                            "steps": desk.get("steps") or [],
+                            "hermes_auth_error": meta["hermes_auth_error"],
+                            "hint": (
+                                "平台已完成本机桌面兜底。请把 reply 原样告知用户；"
+                                "不要编造「输入为空字符串」；不要再调用 hermes_execute。"
+                            ),
+                            "_desktop_fallback_done": True,
+                        },
+                        ensure_ascii=False,
+                    )
+                    fallback_note = "platform_desktop_fallback"
+                    meta["desktop_fallback_reply"] = desk.get("reply") or ""
+                    meta["desktop_fallback_steps"] = desk.get("steps") or []
+                    meta["desktop_fallback_partial"] = bool(
+                        desk.get("partial") or not desk.get("ok")
+                    )
+                else:
+                    fallback_note = desk.get("error") or "desktop_fallback_failed"
+        except Exception as ex:
+            fallback_note = str(ex)[:120]
+        if fallback_note != "platform_desktop_fallback":
+            try:
+                parsed = json.loads(result_text)
+            except Exception:
+                parsed = {"raw": result_text[:800]}
+            if not isinstance(parsed, dict):
+                parsed = {"raw": str(parsed)[:800]}
+            parsed["ok"] = False
+            parsed["auth_fatal"] = True
+            parsed["error"] = meta["hermes_auth_error"]
+            if fallback_note:
+                parsed["desktop_fallback"] = fallback_note
+            parsed["hint"] = "鉴权失败已确认：禁止再次调用 hermes_execute；请直接向用户说明并输出可保存的用例 JSON。"
+            result_text = json.dumps(parsed, ensure_ascii=False)
+
     after_state = _get_bridge_page_state()
-    result_text = _inject_execution_env_verify(result_text, before_state, after_state)
+    result_text = _inject_execution_env_verify(
+        result_text, before_state, after_state, platform_type=plat
+    )
+
+    # 动作后同步视觉（写入 observer + 上下文），供下一轮 Hermes / 平台使用
+    if params and getattr(params, "screen_observer", None):
+        try:
+            import time as _time
+            _time.sleep(0.45)
+            sync_result = params.screen_observer.capture_and_analyze_sync(
+                instruction_hint=f"After hermes_execute. Task: {getattr(params, 'message', '')}"
+            )
+            if sync_result:
+                try:
+                    data = json.loads(result_text)
+                    if isinstance(data, dict):
+                        data["_vision_after"] = sync_result[:500]
+                        result_text = json.dumps(data, ensure_ascii=False)
+                except Exception:
+                    pass
+                try:
+                    from agent_task_context import get_task_context
+                    ctx2 = get_task_context(sid) if sid else None
+                    if ctx2:
+                        ctx2.add_artifact("vision", sync_result[:800])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        from agent_task_context import get_task_context
+        ctx3 = get_task_context(sid) if sid else None
+        if ctx3:
+            ok_flag = True
+            try:
+                parsed = json.loads(result_text)
+                if isinstance(parsed, dict) and parsed.get("ok") is False:
+                    ok_flag = False
+                if isinstance(parsed, dict) and parsed.get("corrupt_session"):
+                    from agent_task_context import reset_task_context
+                    reset_task_context(sid)
+            except Exception:
+                pass
+            ctx3.append_trace("hermes_execute", result_text[:300], ok=ok_flag)
+    except Exception:
+        pass
 
     meta["tools_used"].append(tool_key)
     return result_text
@@ -492,7 +787,10 @@ def run_ai_chat_with_tools(
     """
     embed_sid = (params.embedded_session_id or "").strip()
     plat = (params.platform_type or "web").strip().lower()
-    allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid, platform_type=plat)
+    if params.allow_hermes_execute is not None:
+        allow_agent = bool(params.allow_hermes_execute)
+    else:
+        allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid, platform_type=plat)
     tools = chat_tool_schemas(allow_hermes=allow_agent)
     agent_client = get_agent_gateway_client()
 
@@ -624,6 +922,45 @@ def run_ai_chat_with_tools(
             result_text = ""
 
             if name in ("hermes_execute", "openclaw_execute"):
+                if meta.get("hermes_auth_blocked"):
+                    result_text = json.dumps(
+                        {
+                            "ok": False,
+                            "auth_fatal": True,
+                            "error": meta.get("hermes_auth_error")
+                            or "鉴权失败已确认，禁止重复调用 hermes_execute",
+                            "hint": "请直接向用户说明原因并输出可保存的用例 JSON，不要再调用自动化工具。",
+                        },
+                        ensure_ascii=False,
+                    )
+                    meta["tools_used"].append(f"{name}_auth_blocked")
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tid,
+                            "content": result_text,
+                        }
+                    )
+                    continue
+                if callable(getattr(params, "ensure_browser_before_agent", None)):
+                    try:
+                        ok_br, err_br = params.ensure_browser_before_agent()
+                    except Exception as ex:
+                        ok_br, err_br = False, str(ex)[:200]
+                    if not ok_br:
+                        result_text = json.dumps(
+                            {"ok": False, "error": err_br or "本机浏览器未就绪，无法执行自动化"},
+                            ensure_ascii=False,
+                        )
+                        meta["tools_used"].append(f"{name}_browser_blocked")
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tid,
+                                "content": result_text,
+                            }
+                        )
+                        continue
                 result_text = _handle_agent_execute(
                     name=name,
                     args=args,
@@ -631,6 +968,7 @@ def run_ai_chat_with_tools(
                     agent_client=agent_client,
                     meta=meta,
                     abort_event=_abort,
+                    params=params,
                 )
             elif name == "refine_test_plan":
                 adj = (args.get("adjustment") or "").strip()
@@ -667,6 +1005,17 @@ def run_ai_chat_with_tools(
                     "content": result_text,
                 }
             )
+            if name in ("hermes_execute", "openclaw_execute") and meta.get("hermes_auth_blocked"):
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[System] 鉴权失败已确认（401）。禁止再次调用 hermes_execute。"
+                            "请用中文向用户说明原因；若有部分步骤可写入用例 JSON；"
+                            "不要重复描述同一鉴权错误多次。"
+                        ),
+                    }
+                )
 
     raise ValueError(f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务或提高 AI_CHAT_TOOLS_MAX_ROUNDS")
 
@@ -689,7 +1038,10 @@ def run_ai_chat_with_tools_stream(
     """
     embed_sid = (params.embedded_session_id or "").strip()
     plat = (params.platform_type or "web").strip().lower()
-    allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid, platform_type=plat)
+    if params.allow_hermes_execute is not None:
+        allow_agent = bool(params.allow_hermes_execute)
+    else:
+        allow_agent = hermes_execute_allowed(embedded_session_id=embed_sid, platform_type=plat)
     tools = chat_tool_schemas(allow_hermes=allow_agent)
     agent_client = get_agent_gateway_client()
 
@@ -776,7 +1128,7 @@ def run_ai_chat_with_tools_stream(
         content = assistant_msg.get("content") or content_buf
 
         if not tool_calls:
-            # 无 tool call，尝试解析为最终 plan
+            # 无 tool call：优先当作自然语言回复（闲聊/说明），不要强行走用例 refine
             text = (content or "").strip()
             if not text:
                 yield ("error", "模型返回空内容")
@@ -793,27 +1145,13 @@ def run_ai_chat_with_tools_stream(
                 meta["final_round"] = round_idx
                 n = len(normalized.get("steps") or [])
                 yield ("plan_update", {"plan": normalized, "step_count": n})
-                yield ("done", {"total_rounds": round_idx + 1, "plan": normalized, "meta": meta})
+                yield ("done", {"total_rounds": round_idx + 1, "plan": normalized, "meta": meta, "reply": ""})
                 return
             except ValueError:
-                # 非 JSON，回退到 refine
-                try:
-                    refined = local_ai_service.refine_case_and_steps(
-                        user_message=params.message, project_name=params.project_name,
-                        current_plan=last_plan,
-                        history=params.history if isinstance(params.history, list) else [],
-                        model=params.legacy_model, profile=prof,
-                        page_snapshot=params.page_snapshot, probe_registry=params.probe_registry,
-                        probe_url=params.probe_url, memory_context=params.memory_context,
-                        dom_context_pack=params.dom_context_pack,
-                        interaction_context=params.interaction_context,
-                    )
-                    meta["fallback"] = "refine_after_non_json"
-                    n = len(refined.get("steps") or [])
-                    yield ("plan_update", {"plan": refined, "step_count": n})
-                    yield ("done", {"total_rounds": round_idx + 1, "plan": refined, "meta": meta})
-                except Exception as e2:
-                    yield ("error", f"回退 refine 也失败: {e2}")
+                meta["final_round"] = round_idx
+                meta["chat_reply"] = True
+                yield ("reply", {"text": text})
+                yield ("done", {"total_rounds": round_idx + 1, "plan": last_plan, "meta": meta, "reply": text})
                 return
 
         # 有 tool calls
@@ -840,10 +1178,46 @@ def run_ai_chat_with_tools_stream(
             yield ("tool_call_start", {"round": round_idx, "tool": name, "args_summary": args_summary[:200]})
 
             if name in ("hermes_execute", "openclaw_execute"):
+                if meta.get("hermes_auth_blocked"):
+                    result_text = json.dumps(
+                        {
+                            "ok": False,
+                            "auth_fatal": True,
+                            "error": meta.get("hermes_auth_error")
+                            or "鉴权失败已确认，禁止重复调用 hermes_execute",
+                            "hint": "请直接向用户说明原因并输出可保存的用例 JSON，不要再调用自动化工具。",
+                        },
+                        ensure_ascii=False,
+                    )
+                    meta["tools_used"].append(f"{name}_auth_blocked")
+                    yield ("tool_call_result", {
+                        "round": round_idx, "tool": name,
+                        "result_preview": result_text[:500],
+                    })
+                    messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                    continue
+                if callable(getattr(params, "ensure_browser_before_agent", None)):
+                    try:
+                        ok_br, err_br = params.ensure_browser_before_agent()
+                    except Exception as ex:
+                        ok_br, err_br = False, str(ex)[:200]
+                    if not ok_br:
+                        result_text = json.dumps(
+                            {"ok": False, "error": err_br or "本机浏览器未就绪，无法执行自动化"},
+                            ensure_ascii=False,
+                        )
+                        meta["tools_used"].append(f"{name}_browser_blocked")
+                        yield ("tool_call_result", {
+                            "round": round_idx, "tool": name,
+                            "result_preview": result_text[:500],
+                        })
+                        messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                        continue
                 result_text = _handle_agent_execute(
                     name=name, args=args, allow_agent=allow_agent,
                     agent_client=agent_client, meta=meta,
                     abort_event=_abort,
+                    params=params,
                 )
             elif name == "refine_test_plan":
                 adj = (args.get("adjustment") or "").strip()
@@ -908,6 +1282,68 @@ def run_ai_chat_with_tools_stream(
                 except Exception:
                     pass
 
+            # 桌面兜底已执行：把真实 steps 推到前端，并用平台 reply 直接结束（避免模型编造空参数）
+            if (
+                name in ("hermes_execute", "openclaw_execute")
+                and meta.get("desktop_fallback_steps") is not None
+            ):
+                fb_steps = meta.get("desktop_fallback_steps") or []
+                fb_recs = []
+                for st in fb_steps:
+                    if not isinstance(st, dict):
+                        continue
+                    act = (st.get("action") or "desktop").strip()
+                    if act in ("wait",):
+                        continue
+                    tgt = (
+                        st.get("description")
+                        or st.get("target")
+                        or st.get("input_value")
+                        or act
+                    )
+                    fb_recs.append(
+                        {
+                            "action_type": act,
+                            "target": str(tgt)[:120],
+                            "status": "success",
+                            "result": "",
+                            "has_vision": False,
+                            "env_verify": env_verify,
+                        }
+                    )
+                if fb_recs:
+                    yield ("action_records", fb_recs)
+                fb_reply = (meta.get("desktop_fallback_reply") or "").strip()
+                if not fb_reply:
+                    try:
+                        _p = json.loads(result_text)
+                        if isinstance(_p, dict):
+                            fb_reply = (_p.get("reply") or _p.get("error") or "").strip()
+                    except Exception:
+                        fb_reply = ""
+                if not fb_reply:
+                    fb_reply = meta.get("hermes_auth_error") or "桌面任务已由平台本机兜底执行。"
+                last_plan = dict(last_plan) if isinstance(last_plan, dict) else {}
+                last_plan["platform"] = "desktop"
+                last_plan["steps"] = fb_steps
+                last_plan.setdefault("case_name", (params.message or "")[:40] or "桌面操作")
+                last_plan.setdefault("description", params.message or "")
+                meta["partial"] = bool(meta.get("desktop_fallback_partial"))
+                meta["chat_reply"] = True
+                meta["via"] = "platform_desktop_fallback"
+                yield ("reply", {"text": fb_reply})
+                yield (
+                    "done",
+                    {
+                        "total_rounds": round_idx + 1,
+                        "plan": last_plan,
+                        "meta": meta,
+                        "reply": fb_reply,
+                        "partial": bool(meta.get("desktop_fallback_partial")),
+                    },
+                )
+                return
+
             # --- 屏幕观察：按需触发截图（仅在结果异常或首次执行时） ---
             if params.screen_observer and name in ("hermes_execute", "openclaw_execute"):
                 if _result_looks_unhealthy(result_text):
@@ -918,5 +1354,16 @@ def run_ai_chat_with_tools_stream(
                     )
 
             messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+            if name in ("hermes_execute", "openclaw_execute") and meta.get("hermes_auth_blocked"):
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[System] 鉴权失败已确认（401）。禁止再次调用 hermes_execute。"
+                            "请用中文向用户说明原因；若有部分步骤可写入用例 JSON；"
+                            "不要重复描述同一鉴权错误多次。"
+                        ),
+                    }
+                )
 
     yield ("error", f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务")

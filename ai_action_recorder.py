@@ -201,18 +201,103 @@ class ActionRecorder:
             uat_logger.debug("ActionRecorder 视觉分析失败: %s", e)
 
     def to_case_steps(self) -> List[Dict[str, Any]]:
-        """将动作记录转换为原始步骤列表（供 ai_step_normalization 处理）。"""
+        """将动作记录转换为步骤列表（供 ai_step_normalization 处理）。"""
+        probe_by_text: Dict[str, Dict[str, Any]] = {}
+        try:
+            from ai_external_browser_bridge import get_probe_registry
+
+            for entry in get_probe_registry() or []:
+                if not isinstance(entry, dict):
+                    continue
+                for key in ("text", "name", "label", "aria"):
+                    val = (entry.get(key) or "").strip()
+                    if val and val not in probe_by_text:
+                        probe_by_text[val] = entry
+        except Exception:
+            pass
+
         steps = []
         for rec in self.records:
-            step = {
+            step: Dict[str, Any] = {
                 "action": rec.action_type,
                 "target": rec.target,
                 "input_value": rec.input_data,
                 "description": rec.result[:100] if rec.result else "",
-                "automation_layer": self.platform,
+                "automation_layer": self.platform if self.platform in ("web", "desktop", "android") else "web",
             }
+            if rec.locator:
+                step["locator"] = rec.locator
+            # 尝试把可见文案绑到 probe ref，便于回放
+            hit = probe_by_text.get((rec.target or "").strip())
+            if hit:
+                if hit.get("i") is not None:
+                    step["probe_index"] = hit.get("i")
+                css = (hit.get("css") or hit.get("selector") or "").strip()
+                if css and not step.get("locator"):
+                    step["locator"] = css
+                    step["target"] = css
+            if self.platform == "desktop":
+                step["selector_type"] = "window"
+                if rec.action_type == "launch_app":
+                    step["input_value"] = rec.target
+                elif rec.action_type == "hotkey":
+                    step["input_value"] = rec.target
+            if rec.vision_info:
+                step["vision_info"] = rec.vision_info
             steps.append(step)
         return steps
+
+    def build_normalized_plan(
+        self,
+        *,
+        case_name: str = "",
+        case_url: str = "",
+        instruction: str = "",
+    ) -> tuple:
+        """热路径：动作记录 → normalize 全管线 → 可保存用例 plan。"""
+        from ai_step_normalization import (
+            apply_step_normalization_to_plan,
+            dedupe_and_validate_ai_steps,
+            normalize_ai_step,
+            repair_raw_ai_steps_for_platform,
+        )
+
+        raw = self.to_case_steps()
+        if not raw:
+            return {
+                "case_name": (case_name or instruction or "AI 生成用例")[:80],
+                "case_url": case_url or "",
+                "steps": [],
+            }, []
+
+        plat = (self.platform or "web").strip().lower()
+        if plat in ("auto", "all", "cross"):
+            plat = "web"  # normalize 管线默认按 web；步骤可自带 automation_layer
+        if plat not in ("web", "desktop", "android"):
+            plat = "web"
+        normalized = [normalize_ai_step(s) for s in raw]
+        warnings1 = repair_raw_ai_steps_for_platform(normalized) or []
+        clean, warnings2 = dedupe_and_validate_ai_steps(normalized, platform=plat)
+        plan = {
+            "case_name": (case_name or instruction or "AI 生成用例")[:80],
+            "case_url": case_url or "",
+            "description": (instruction or "")[:400],
+            "steps": clean,
+            "platform": plat,
+            "meta": {"source": "action_recorder", "platform_type": plat},
+        }
+        plan, warnings3 = apply_step_normalization_to_plan(plan)
+        try:
+            from ai_external_browser_bridge import get_probe_registry
+            from ai_locator_resolution import resolve_plan_steps_locators_with_snapshot
+
+            registry = get_probe_registry()
+            if registry and plan.get("steps"):
+                plan = resolve_plan_steps_locators_with_snapshot(plan, registry)
+        except Exception:
+            pass
+        warnings = list(warnings1) + list(warnings2 or []) + list(warnings3 or [])
+        return plan, warnings
 
     def _extract_target_from_text(self, text: str) -> str:
         """从文本中提取操作目标。"""

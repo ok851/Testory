@@ -669,7 +669,7 @@ def openai_compatible_chat_stream(
                 chunk = json.loads(data_str)
             except json.JSONDecodeError:
                 continue
-            delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+            delta = ((chunk.get("choices") or [{}])[0] or {}).get("delta") or {}
             # 内容增量
             content_delta = delta.get("content")
             if content_delta:
@@ -825,6 +825,45 @@ def anthropic_messages_stream(
     if tool_calls:
         out["tool_calls"] = tool_calls
     yield ("done", out)
+
+
+def get_llm_profile_by_id(profile_id: str) -> Optional[Dict[str, Any]]:
+    """按 id 取模型配置；找不到返回 None。"""
+    pid = (profile_id or "").strip()
+    if not pid:
+        return None
+    try:
+        from ai_config_paths import ai_model_registry_path
+
+        reg_path = ai_model_registry_path()
+        if not reg_path.is_file():
+            return None
+        reg = json.loads(reg_path.read_text(encoding="utf-8"))
+        for p in reg.get("profiles") or []:
+            if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def set_active_llm_profile_id(profile_id: str) -> bool:
+    """将 registry 的 active_profile_id 设为指定配置。"""
+    pid = (profile_id or "").strip()
+    if not pid or not get_llm_profile_by_id(pid):
+        return False
+    try:
+        from ai_config_paths import ai_model_registry_path
+
+        reg_path = ai_model_registry_path()
+        reg = json.loads(reg_path.read_text(encoding="utf-8")) if reg_path.is_file() else {}
+        reg["active_profile_id"] = pid
+        reg["version"] = 2
+        reg_path.parent.mkdir(parents=True, exist_ok=True)
+        reg_path.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
 
 
 def get_active_llm_profile() -> Optional[Dict[str, Any]]:
