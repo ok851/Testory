@@ -969,6 +969,14 @@ def bootstrap_hermes_services(*, force: bool = False, manual: bool = False) -> d
         ensure_hermes_home()
         shared_key = resolve_hermes_api_server_key(persist_if_empty=True)
 
+        # 限制 api_server 工具集：去掉 skill_view/terminal（须在 Gateway 启动前写入）
+        try:
+            from hermes_config import ensure_hermes_api_server_toolsets
+
+            out["api_server_toolsets"] = ensure_hermes_api_server_toolsets()
+        except Exception as e:
+            out["api_server_toolsets_error"] = str(e)[:160]
+
         # 每次启动把平台推理 Key/Base 同步进 Hermes .env（修复 Missing Authentication header）
         try:
             from hermes_config import sync_platform_llm_credentials_to_hermes_env

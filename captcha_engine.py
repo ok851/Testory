@@ -29,10 +29,10 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import cv2
 import numpy as np
 
 from logger import uat_logger
+from optional_cv2 import cv2, require_cv2
 
 # ---------------------------------------------------------------------------
 # 状态回调（供 UI 显示「正在识别…」「正在 AI 分析…」）
@@ -340,7 +340,7 @@ def _get_ddddocr_det():
 
 
 def _png_to_bgr(png_bytes: bytes) -> Optional[np.ndarray]:
-    if not png_bytes:
+    if not png_bytes or cv2 is None:
         return None
     arr = np.frombuffer(png_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -349,7 +349,7 @@ def _png_to_bgr(png_bytes: bytes) -> Optional[np.ndarray]:
 
 def _png_to_gray(png_bytes: bytes) -> Optional[np.ndarray]:
     img = _png_to_bgr(png_bytes)
-    if img is None:
+    if img is None or cv2 is None:
         return None
     return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -481,6 +481,7 @@ def solve_slider_gap(bg_png: bytes, slider_png: Optional[bytes] = None) -> Optio
     """
     拼图滑块缺口水平偏移（像素）。OpenCV 为主；ddddocr 为可选增强。
     """
+    require_cv2("滑块验证码识别")
     if not bg_png:
         return None
 

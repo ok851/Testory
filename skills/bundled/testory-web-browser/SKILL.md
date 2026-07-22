@@ -15,9 +15,14 @@ metadata:
 ## 核心铁律（最高优先级）
 
 1. **必须使用用户本机浏览器**：通过 `web_capture.cdp_browser.launch_debug_browser` 启动 Edge/Chrome（remote debugging），再 `HERMES_BROWSER_MODE=cdp_attach` 连接 `HERMES_CDP_ENDPOINT`。
-2. **禁止**依赖已废弃的内嵌画布 Chromium / Browser Runtime 画布会话。
-3. **禁止** Agent 另起独立 headless 浏览器（除非显式开启 `AI_ALLOW_PLAYWRIGHT_CHROMIUM_FALLBACK`）。
-4. 遇到登录、滑块、验证码、扫码时：**暂停自动化**，提示用户在本机浏览器窗口中手动完成，完成后继续。
+2. **启动方式**：浏览器进程只开 `about:blank` 单标签；业务 URL 用 `page.goto` 在该标签内导航。**禁止**把业务 URL 放进启动命令行（否则 Edge 会「新建标签页」+ 目标页双开）。
+3. **禁止**依赖已废弃的内嵌画布 Chromium / Browser Runtime 画布会话。
+4. **禁止** Agent 另起独立 headless 浏览器（除非显式开启 `AI_ALLOW_PLAYWRIGHT_CHROMIUM_FALLBACK`）。
+5. 遇到登录、滑块、验证码、扫码时：**暂停自动化**，提示用户在本机浏览器窗口中手动完成，完成后继续。
+6. **禁止**用 `terminal`/`curl` 探测 CDP；平台已打开目标页时**禁止**反复 `browser_navigate`。
+7. **DOM 优先**：用页面可交互控件/DOM 结构定位；`browser_snapshot` 是无障碍树/DOM ref（不是视觉截图），仅难定位时兜底一次；视觉截图仅最终兜底。
+8. 浏览器以 `--start-maximized` 启动，并尽量 CDP/Win32 最大化窗口。
+9. Hermes API Server 工具集须为 `platform_toolsets.api_server: [browser, web, memory]`（**不含** skills/terminal，否则会 skill_view 死循环）。
 
 ## Testory 架构
 

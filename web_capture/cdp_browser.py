@@ -25,6 +25,7 @@ _state: Dict[str, Any] = {
     "page": None,
     "cdp_ws": "",
     "user_data_dir": "",
+    "pending_start_url": "",
 }
 
 
@@ -119,6 +120,267 @@ def fetch_cdp_pages(debug_port: int) -> List[Dict[str, Any]]:
         return out
     except Exception:
         return []
+
+
+def _is_blank_page_url(url: str) -> bool:
+    """狭义空白页（about:blank / chrome|edge newtab scheme）。"""
+    u = (url or "").strip().lower()
+    if not u:
+        return True
+    return u in (
+        "about:blank",
+        "chrome://newtab/",
+        "chrome://new-tab-page/",
+        "edge://newtab/",
+        "edge://new-tab-page/",
+        "about:newtab",
+    ) or u.startswith("chrome://newtab") or u.startswith("edge://newtab")
+
+
+def _is_idle_startup_page(url: str) -> bool:
+    """启动时多开的「看起来正常、但未做业务导航」的页（含 Edge NTP 首页）。
+
+    用户反馈：多余标签不是 about:blank，而是正常浏览器页、地址栏无业务导航。
+    Edge 常见为 https://ntp.msn.com/... ，Chrome 为 chrome://new-tab-page。
+    """
+    if _is_blank_page_url(url):
+        return True
+    u = (url or "").strip().lower()
+    if not u:
+        return True
+    # Edge / MSN 新标签页（外观完全像正常网页）
+    if "ntp.msn." in u or "/edge/ntp" in u or "ntp.msn.cn" in u:
+        return True
+    if "chrome://new-tab" in u or "edge://new-tab" in u:
+        return True
+    # Chrome WebUI 起始页
+    if u.startswith("chrome://") or u.startswith("edge://") or u.startswith("devtools://"):
+        return True
+    return False
+
+
+def _host_of(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+
+        return (urlparse(url or "").netloc or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def close_blank_cdp_targets(debug_port: int, *, keep_url_substr: str = "") -> int:
+    """关闭空白/NTP/非目标页；有目标 URL 时只保留目标站标签。"""
+    port = int(debug_port or 0)
+    if port <= 0:
+        return 0
+    return close_idle_or_non_target_tabs(port, target_url=keep_url_substr)
+
+
+def close_idle_or_non_target_tabs(debug_port: int, *, target_url: str = "") -> int:
+    """经 CDP HTTP 关掉启动多余页（NTP 等）以及非目标站标签。"""
+    port = int(debug_port or 0)
+    if port <= 0:
+        return 0
+    pages = fetch_cdp_pages(port)
+    if len(pages) <= 1:
+        # 仍可能是唯一一页 NTP；无目标时不关，有目标且唯一页是 idle 则留给 goto
+        return 0
+
+    target = (target_url or "").strip()
+    target_host = _host_of(target)
+    keep_ids: set[str] = set()
+
+    if target_host:
+        for p in pages:
+            tid = str(p.get("id") or "").strip()
+            u = str(p.get("url") or "")
+            if tid and _host_of(u) == target_host and not _is_idle_startup_page(u):
+                keep_ids.add(tid)
+        # 同 host 但尚无精确匹配时：保留含 target 子串的页
+        if not keep_ids and target:
+            tlow = target.lower()
+            for p in pages:
+                tid = str(p.get("id") or "").strip()
+                u = str(p.get("url") or "").lower()
+                if tid and tlow.rstrip("/") in u.rstrip("/") and not _is_idle_startup_page(u):
+                    keep_ids.add(tid)
+
+    if not keep_ids:
+        # 无明确目标页：至少保留一个非 idle；其余 idle 全关
+        for p in pages:
+            tid = str(p.get("id") or "").strip()
+            if tid and not _is_idle_startup_page(str(p.get("url") or "")):
+                keep_ids.add(tid)
+                break
+        if not keep_ids and pages:
+            # 全是 idle：保留第一个，关掉其余
+            keep_ids.add(str(pages[0].get("id") or ""))
+
+    closed = 0
+    for p in pages:
+        tid = str(p.get("id") or "").strip()
+        if not tid or tid in keep_ids:
+            continue
+        url = str(p.get("url") or "")
+        # 有目标保留集：关掉其它一切（含「正常外观」的 NTP）
+        # 无目标：只关 idle
+        should_close = bool(keep_ids) or _is_idle_startup_page(url)
+        if not should_close:
+            continue
+        if len(pages) - closed <= 1:
+            break
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/json/close/{tid}", timeout=2.0) as resp:
+                resp.read()
+            closed += 1
+        except Exception:
+            continue
+    return closed
+
+
+def pick_best_page(context, *, prefer_url: str = "") -> Any:
+    """优先选择业务页；跳过 Edge NTP 等「看起来正常但未导航」的启动页。"""
+    pages = list(getattr(context, "pages", None) or [])
+    if not pages:
+        return None
+    prefer_host = _host_of(prefer_url)
+
+    def _score(p: Any) -> int:
+        try:
+            u = str(p.url or "")
+        except Exception:
+            return -10
+        if _is_idle_startup_page(u):
+            return -5
+        host = _host_of(u)
+        if prefer_host and host == prefer_host:
+            return 100
+        if u.lower().startswith(("http://", "https://")):
+            return 50
+        if not _is_blank_page_url(u):
+            return 10
+        return 0
+
+    ranked = sorted(pages, key=_score, reverse=True)
+    return ranked[0] if ranked else pages[0]
+
+
+def close_extra_blank_tabs(context, keep_page: Any = None, *, target_url: str = "") -> int:
+    """关闭 NTP/空白/非目标标签，保留 keep_page 与目标站。"""
+    closed = 0
+    keep_u = (target_url or "").strip()
+    if keep_page is not None and not keep_u:
+        try:
+            keep_u = str(keep_page.url or "")
+        except Exception:
+            keep_u = ""
+    keep_host = _host_of(keep_u)
+
+    try:
+        pages = list(getattr(context, "pages", None) or [])
+    except Exception:
+        pages = []
+    if len(pages) > 1:
+        for p in pages:
+            try:
+                if keep_page is not None and p is keep_page:
+                    continue
+                u = str(p.url or "")
+                if _is_idle_startup_page(u):
+                    p.close()
+                    closed += 1
+                    continue
+                if keep_host and _host_of(u) and _host_of(u) != keep_host:
+                    p.close()
+                    closed += 1
+            except Exception:
+                continue
+    try:
+        port = int(_snap().get("debug_port") or 0)
+        closed += close_idle_or_non_target_tabs(port, target_url=keep_u)
+    except Exception:
+        pass
+    return closed
+
+
+def maximize_debug_browser_window(
+    *,
+    debug_port: int = 0,
+    process_pid: int = 0,
+    page: Any = None,
+) -> bool:
+    """尽量把调试浏览器窗口最大化（CDP windowState + Win32 ShowWindow）。"""
+    ok = False
+    # 1) 已有 Playwright page：用 CDP session（勿再 connect_over_cdp，避免冲掉桥接）
+    if page is not None:
+        try:
+            cdp = page.context.new_cdp_session(page)
+            wid = None
+            try:
+                info = cdp.send("Browser.getWindowForTarget")
+                wid = (info or {}).get("windowId")
+            except Exception:
+                wid = None
+            if wid is None:
+                port = int(debug_port or _snap().get("debug_port") or 0)
+                for item in fetch_cdp_pages(port) if port else []:
+                    tid = str(item.get("id") or "")
+                    if not tid:
+                        continue
+                    try:
+                        info = cdp.send("Browser.getWindowForTarget", {"targetId": tid})
+                        wid = (info or {}).get("windowId")
+                        if wid is not None:
+                            break
+                    except Exception:
+                        continue
+            if wid is not None:
+                cdp.send(
+                    "Browser.setWindowBounds",
+                    {"windowId": wid, "bounds": {"windowState": "maximized"}},
+                )
+                ok = True
+        except Exception:
+            pass
+
+    # 2) Win32：按进程 PID 最大化顶层窗
+    if sys.platform == "win32":
+        pid = int(process_pid or 0)
+        if not pid:
+            try:
+                proc = _snap().get("browser_process")
+                pid = int(getattr(proc, "pid", 0) or 0)
+            except Exception:
+                pid = 0
+        if pid:
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                user32 = ctypes.windll.user32
+                SW_MAXIMIZE = 3
+                targets: List[int] = []
+
+                @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+                def _enum(hwnd, _lp):
+                    try:
+                        if not user32.IsWindowVisible(hwnd):
+                            return True
+                        p = wintypes.DWORD()
+                        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(p))
+                        if int(p.value or 0) == pid:
+                            targets.append(int(hwnd))
+                    except Exception:
+                        pass
+                    return True
+
+                user32.EnumWindows(_enum, 0)
+                for hwnd in targets[:4]:
+                    user32.ShowWindow(hwnd, SW_MAXIMIZE)
+                    ok = True
+            except Exception:
+                pass
+    return ok
 
 
 def _registry_browser_path(kind: str) -> Optional[str]:
@@ -245,7 +507,10 @@ def _launch_debug_browser_unlocked(
     )
     os.makedirs(udir, exist_ok=True)
 
-    start_url = (url or "").strip() or "about:blank"
+    start_url = (url or "").strip()
+    # 关键：命令行不要带业务 URL。
+    # Edge/Chrome 带 URL 启动时常见「新建标签页」+ 目标页双标签；
+    # 正确做法是只开一个默认标签，再由 Playwright page.goto 在该标签内导航。
     args = [
         exe,
         f"--remote-debugging-port={debug_port}",
@@ -254,7 +519,12 @@ def _launch_debug_browser_unlocked(
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-popup-blocking",
-        start_url,
+        "--start-maximized",
+        "--window-position=0,0",
+        "--disable-features=TranslateUI,InfiniteSessionRestore",
+        "--noerrdialogs",
+        "--homepage=about:blank",
+        "about:blank",
     ]
 
     try:
@@ -298,21 +568,30 @@ def _launch_debug_browser_unlocked(
         executable=exe,
         cdp_ws=ws,
         user_data_dir=udir,
+        pending_start_url=start_url,
         playwright=None,
         browser=None,
         context=None,
         page=None,
     )
+    try:
+        maximize_debug_browser_window(debug_port=debug_port, process_pid=getattr(proc, "pid", 0) or 0)
+    except Exception:
+        pass
     return {
         "success": True,
         "debug_port": debug_port,
         "cdp_ws": ws,
         "executable": exe,
         "user_data_dir": udir,
+        "maximized": True,
+        "pending_start_url": start_url,
     }
 
 
-def connect_playwright_over_cdp(debug_port: Optional[int] = None) -> Dict[str, Any]:
+def connect_playwright_over_cdp(
+    debug_port: Optional[int] = None, *, prefer_url: str = ""
+) -> Dict[str, Any]:
     snap = _snap()
     port = int(debug_port or snap.get("debug_port") or 0)
     if not port:
@@ -332,7 +611,11 @@ def connect_playwright_over_cdp(debug_port: Optional[int] = None) -> Dict[str, A
         pw = sync_playwright().start()
         browser = pw.chromium.connect_over_cdp(ws)
         context = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = context.pages[0] if context.pages else context.new_page()
+        page = pick_best_page(context, prefer_url=prefer_url)
+        if page is None:
+            pages = list(getattr(context, "pages", None) or [])
+            page = pages[0] if pages else context.new_page()
+        # 不再以「关标签」为主策略；单标签启动 + goto 才是正解
         _set(
             playwright=pw,
             browser=browser,

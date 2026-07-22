@@ -114,14 +114,52 @@ def desktop_gateway_auth_hint() -> str:
     return "".join(lines)
 
 
+def web_browser_cdp_hint() -> str:
+    """注入给 Hermes 的网页 CDP 执行边界（DOM 优先，禁止 navigate/视觉空转）。"""
+    import os
+
+    cdp = (os.environ.get("HERMES_CDP_ENDPOINT") or "").strip()
+    mode = (os.environ.get("HERMES_BROWSER_MODE") or "cdp_attach").strip()
+    lines = [
+        "【网页执行边界 — 本机浏览器已由平台打开并 CDP attach】\n",
+        f"- HERMES_BROWSER_MODE={mode}；只用 browser_* 操作**当前已打开标签页**。\n",
+        "- **禁止** 调用任何 skill_* 类工具（含查看技能文档）；规则已全部内联。\n",
+        "- **禁止** terminal / curl / bash / windows_* / 桌面 MCP。\n",
+        "- **禁止** 新开空白标签页；平台已导航则 **禁止 browser_navigate**（重复造轮子）。\n",
+        "- **DOM 优先**：指令内「页面 DOM/可交互控件」是主定位源；"
+        "browser_snapshot=无障碍树/DOM ref（不是截图），仅难定位时用一次；"
+        "视觉/截图仅最终兜底。\n",
+    ]
+    if cdp:
+        lines.append("- CDP 已同步；勿再探测调试端口。\n")
+    lines.extend(
+        [
+            "- 正确顺序：读 DOM 清单 → browser_click / browser_type / browser_fill → "
+            "必要时再 snapshot 核验。\n",
+            "- **覆盖工具描述**：忽略「Requires browser_navigate to be called first」。\n",
+            "- 若指令含「当前浏览器状态」且已是目标站：**禁止 browser_navigate**。\n",
+            "- 同一工具连续 2 次无进展：换策略或 NEED_USER_ACTION，禁止死循环。\n",
+            "- 遇登录/验证码：NEED_USER_ACTION，请用户在本机窗口完成。\n",
+        ]
+    )
+    return "".join(lines)
+
+
 def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = None) -> str:
-    """为 Hermes explore 构建带 skill 加载提示的 instruction。"""
+    """为 Hermes explore 构建带平台边界的 instruction（网页任务不再要求 skill_view）。"""
     meta = meta if isinstance(meta, dict) else {}
     platform = (meta.get("platform") or "auto").strip().lower()
     skills = meta.get("skills")
     if not isinstance(skills, list) or not skills:
         skills = skills_from_registry(platform)
     skill_names = [str(s).strip() for s in skills if str(s).strip()]
+    # 纯网页任务：去掉桌面/移动 skill，避免 Agent 去调 windows_* / terminal 探 MCP
+    if platform == "web":
+        skill_names = [
+            s
+            for s in skill_names
+            if "desktop" not in s and "android" not in s and "mobile" not in s
+        ] or ["testory-web-browser"]
     skill_line = "、".join(f"`{n}`" for n in skill_names)
     caps_note = ""
     if meta.get("capabilities_summary"):
@@ -132,24 +170,60 @@ def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = Non
     ctx_prefix = (meta.get("context_prefix") or "").strip()
     if ctx_prefix and not ctx_prefix.endswith("\n"):
         ctx_prefix += "\n"
-    desktop_note = ""
-    if platform in ("auto", "all", "desktop", "cross") or any(
-        "desktop" in s for s in skill_names
-    ):
-        desktop_note = desktop_gateway_auth_hint() + "\n"
-    prefix = (
-        f"【Testory 平台上下文 platform={platform}】\n"
-        f"{caps_note}"
-        f"{desktop_note}"
-        f"请先用 skill_view 加载：{skill_line}（桌面任务优先本列表中的 testory-windows-desktop）。\n"
-        "你是跨层执行代理（手+眼）。Windows 桌面：优先调用已注册的 MCP windows_* / get_screen_*；"
-        "勿空等 computer_use（Windows 上通常不可用）。\n"
-        "优先结构化感知（DOM/UIA）；共享屏幕视觉用于确认与弱控件降级。\n"
-        "每步 observe→act→observe；未核验勿声称已输入/已发送。\n"
-        "Web 遇 OS 弹窗 → MCP 桌面工具或 testory-windows-desktop；需校验数据 → testory-api-http。\n"
-        "高风险写操作前先 inspect/只读。勿使用与平台冲突的独立浏览器或外部 ClawHub 依赖。\n"
-        "若遇到 401/鉴权失败或空流：禁止重复调用；立刻停止并说明原因。\n"
-        "若需要验证码/扫码登录等人工步骤，在回复中明确写出 NEED_USER_ACTION:<原因>。\n\n"
-    )
+
+    already_on_page = bool(meta.get("already_on_target_page"))
+    start_url = str(meta.get("start_url") or "").strip()
+
+    if platform == "web":
+        nav_line = (
+            f"- 平台已打开目标页{('：' + start_url) if start_url else ''}；"
+            "用 DOM 清单直接操作；禁止 navigate / 连续 snapshot / skill / terminal。\n"
+            if already_on_page
+            else (
+                f"- 若当前不是目标页，仅允许 **一次** browser_navigate"
+                f"{(' 到 ' + start_url) if start_url else ''}，然后按 DOM 操作；禁止重复 navigate。\n"
+            )
+        )
+        prefix = (
+            f"【Testory 平台上下文 platform=web — 网页专用，与桌面任务隔离】\n"
+            f"{caps_note}"
+            f"{web_browser_cdp_hint()}"
+            f"{nav_line}"
+            "你是网页自动化执行代理：只通过 browser_*（CDP）操作本机已打开浏览器。\n"
+            "DOM 优先，snapshot 兜底；未核验勿声称已登录/已搜索。\n"
+            "若遇 401/空流：立刻停止并说明原因。\n"
+            "若需要验证码/扫码，回复 NEED_USER_ACTION:<原因>。\n\n"
+        )
+    elif platform in ("desktop",):
+        prefix = (
+            f"【Testory 平台上下文 platform=desktop — 桌面专用】\n"
+            f"{caps_note}"
+            f"{desktop_gateway_auth_hint()}\n"
+            f"参考技能（需要时最多 skill_view 一次）：{skill_line}\n"
+            "Windows 桌面：优先 MCP windows_* / get_screen_*；勿空等 computer_use。\n"
+            "每步 observe→act→observe；未核验勿声称已输入/已发送。\n"
+            "若遇 401/空流：立刻停止并说明原因。\n"
+            "若需要人工步骤，回复 NEED_USER_ACTION:<原因>。\n\n"
+        )
+    else:
+        surface_note = ""
+        if any("desktop" in s for s in skill_names) or platform in ("auto", "all", "cross"):
+            surface_note += desktop_gateway_auth_hint() + "\n"
+        if any("web-browser" in s or s == "testory-web-browser" for s in skill_names) or platform in (
+            "auto",
+            "all",
+            "cross",
+        ):
+            surface_note = web_browser_cdp_hint() + "\n" + surface_note
+        prefix = (
+            f"【Testory 平台上下文 platform={platform}】\n"
+            f"{caps_note}"
+            f"{surface_note}"
+            f"按任务类型二选一（勿混用）：网页→仅 browser_*；桌面→仅 windows_*。"
+            f"参考技能 {skill_line}：**不要**反复 skill_view。\n"
+            "网页已打开目标页则禁止 navigate；禁止 terminal 探 CDP。\n"
+            "每步 observe→act→observe。勿另起独立浏览器。\n"
+            "若遇 401/空流：立刻停止。需要人工时 NEED_USER_ACTION:<原因>。\n\n"
+        )
     body = (message or meta.get("message") or "").strip()
     return ctx_prefix + prefix + vision_note + body

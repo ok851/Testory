@@ -31,10 +31,25 @@ class TestMessageNeedsAutomation(unittest.TestCase):
         self.assertFalse(message_needs_automation("你好"))
         self.assertFalse(message_needs_automation("谢谢"))
 
-    def test_capability_question_is_chat(self):
-        from agent_intent import message_needs_automation
+    def test_ui_desktop_enables_tools_without_keywords(self):
+        from agent_intent import resolve_task_route
 
-        self.assertFalse(message_needs_automation("你有什么能力"))
+        r = resolve_task_route("帮我操作一下那个软件", ui_platform="desktop")
+        self.assertEqual(r.mode, "automation")
+        self.assertEqual(r.platform, "desktop")
+        self.assertTrue(r.needs_desktop_tools)
+
+    def test_flow_profile_generic_vs_im(self):
+        from ai_chat_tool_loop import _resolve_desktop_flow_profile
+
+        self.assertEqual(
+            _resolve_desktop_flow_profile("打开记事本写一段字"),
+            "generic",
+        )
+        self.assertEqual(
+            _resolve_desktop_flow_profile("用微信给张三发消息你好"),
+            "im_search",
+        )
 
 
 if __name__ == "__main__":

@@ -91,7 +91,9 @@ def build_hermes_env_lines(*, api_key: Optional[str] = None) -> str:
         f"API_SERVER_KEY={key}",
         "API_SERVER_HOST=127.0.0.1",
         "API_SERVER_PORT=8642",
-        'toolsets=["hermes-cli","browser","web","memory","skills","terminal"]',
+        # 不含 skills/terminal：避免 Hermes 默认提示驱动 skill_view / bash 死循环；
+        # 网页走 browser_*（CDP attach），桌面走 MCP windows_*。
+        'toolsets=["hermes-cli","browser","web","memory"]',
         "HERMES_BROWSER_MODE=cdp_attach",
     ]
     cdp = (os.environ.get("HERMES_CDP_ENDPOINT") or "").strip()
@@ -497,6 +499,107 @@ def sync_platform_llm_credentials_to_hermes_env() -> Dict[str, Any]:
         "hermes_snapshot": after_snap,
     }
 
+def _testory_soul_md() -> str:
+    """覆盖 Hermes SOUL：DOM 优先，禁止 skill_view / 重复 navigate / 空白标签。"""
+    return (
+        "You are Testory's browser/desktop automation executor (via Hermes).\n"
+        "CRITICAL OVERRIDES (higher priority than any default Hermes guidance):\n"
+        "1. Do NOT call skill_view, skill_list, skill_manage, or terminal/bash/curl.\n"
+        "2. Web tasks: browser is already CDP-attached and usually already on the target URL. "
+        "Do NOT call browser_navigate again (that reinventing-the-wheel opens blank tabs). "
+        "Prefer the DOM/interactive-controls list in the user message; "
+        "browser_snapshot is an accessibility/DOM ref tree (NOT a screenshot) — use at most once when DOM list is insufficient; "
+        "vision/screenshot is last-resort only.\n"
+        "3. Never open blank tabs.\n"
+        "4. Same tool twice with no progress → stop and say NEED_USER_ACTION.\n"
+        "5. Desktop short tasks prefer MCP windows_* / get_screen_* when available.\n"
+    )
+
+
+def ensure_hermes_web_safe_toolsets() -> bool:
+    """把已有 HERMES_HOME/.env 的 toolsets 中 skills/terminal/脏空项去掉。"""
+    env_path = hermes_home_dir() / ".env"
+    if not env_path.is_file():
+        return False
+    try:
+        text = env_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    safe = '["hermes-cli","browser","web","memory"]'
+    changed = False
+    out_lines: list[str] = []
+    for line in text.splitlines():
+        if line.strip().startswith("toolsets="):
+            val = line.split("=", 1)[1]
+            if any(tok in val for tok in ("skills", "terminal", '""', ",,")):
+                out_lines.append(f"toolsets={safe}")
+                changed = True
+                continue
+        out_lines.append(line)
+    if changed:
+        try:
+            _write_hermes_env_lines(out_lines)
+        except Exception:
+            return False
+    return changed
+
+
+# Hermes API Server 真正读的是 config.yaml platform_toolsets.api_server，
+# 默认 hermes-api-server 复合集含 skill_view/terminal —— .env toolsets= 管不了。
+_API_SERVER_SAFE_TOOLSETS = ["browser", "web", "memory"]
+
+
+def ensure_hermes_api_server_toolsets() -> Dict[str, Any]:
+    """写入 platform_toolsets.api_server，从工具列表中拿掉 skills/terminal。
+
+    必须重启 Hermes Gateway 后生效。
+    """
+    out: Dict[str, Any] = {"ok": False, "changed": False, "path": ""}
+    path = hermes_home_dir() / "config.yaml"
+    out["path"] = str(path)
+    try:
+        import yaml
+    except ImportError:
+        out["error"] = "PyYAML missing"
+        return out
+
+    cfg: Dict[str, Any] = {}
+    if path.is_file():
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if isinstance(raw, dict):
+                cfg = raw
+        except Exception as e:
+            out["error"] = str(e)[:160]
+            return out
+
+    pt = cfg.get("platform_toolsets")
+    if not isinstance(pt, dict):
+        pt = {}
+    desired = list(_API_SERVER_SAFE_TOOLSETS)
+    current = pt.get("api_server")
+    if isinstance(current, list) and [str(x) for x in current] == desired:
+        out["ok"] = True
+        out["toolsets"] = desired
+        return out
+
+    pt["api_server"] = desired
+    cfg["platform_toolsets"] = pt
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump(cfg, allow_unicode=True, default_flow_style=False, sort_keys=False),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        out["error"] = str(e)[:160]
+        return out
+    out["ok"] = True
+    out["changed"] = True
+    out["toolsets"] = desired
+    return out
+
+
 def ensure_hermes_home(*, force_env: bool = False) -> Path:
     """创建 HERMES_HOME、skills / skill_versions 目录与默认 .env（不覆盖已有 .env 除非 force_env）。"""
     home = hermes_home_dir()
@@ -506,6 +609,22 @@ def ensure_hermes_home(*, force_env: bool = False) -> Path:
     env_path = home / ".env"
     if force_env or not env_path.is_file():
         env_path.write_text(build_hermes_env_lines(), encoding="utf-8")
+    else:
+        # 已有 .env：仍剥离 skills/terminal，避免旧配置继续放出 skill_view
+        try:
+            ensure_hermes_web_safe_toolsets()
+        except Exception:
+            pass
+    # 始终写入/覆盖 SOUL.md，压过 Hermes 默认「先 skill_view」倾向
+    try:
+        (home / "SOUL.md").write_text(_testory_soul_md(), encoding="utf-8")
+    except OSError:
+        pass
+    # 关键：限制 API Server 工具集（去掉 skill_view / terminal）
+    try:
+        ensure_hermes_api_server_toolsets()
+    except Exception:
+        pass
     _sync_hermes_env_to_process(env_path)
     return home
 

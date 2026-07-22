@@ -839,6 +839,10 @@
                     <p style="font-size:11px;color:#94a3b8;margin:6px 0 0;line-height:1.4;">切换后立即生效；若智能体服务已启动，会自动按新模型重启。</p>
                     <label>超时时间（秒）</label>
                     <input type="number" id="aiTestTimeout" value="120" min="30" max="600" step="10" style="width:100%;">
+                    <label class="ai-chk-label" style="margin-top:10px;display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+                        <input type="checkbox" id="aiGenerateCaseAfterRunChk" style="margin-top:2px;">
+                        <span style="font-size:12px;line-height:1.45;color:#334155;">执行后生成用例<br><span style="font-size:11px;color:#94a3b8;font-weight:400;">开启后从动作轨迹本地规范化生成（不二次调用大模型）；关闭则只执行并汇报</span></span>
+                    </label>
                 </div>
 
                 <div class="ai-left-card">
@@ -1615,7 +1619,8 @@
             engine: document.getElementById('aiTestEngine').value,
             platform: (document.getElementById('aiTestPlatform') || {}).value || 'auto',
             enable_vision: AI_TEST_STATE.isScreenSharing,
-            timeout: timeout
+            timeout: timeout,
+            generate_case_after_run: !!(document.getElementById('aiGenerateCaseAfterRunChk') || {}).checked
         });
 
         AI_TEST_STATE.abortController = new AbortController();
@@ -1902,7 +1907,10 @@
             body: JSON.stringify({
                 goal: task,
                 platform: document.getElementById('aiTestPlatform').value,
-                base_url: document.getElementById('aiTestUrl').value
+                base_url: (function() {
+                    var m = (task || '').match(/https?:\/\/[^\s\]\}\"'<>]+/i);
+                    return m ? m[0].replace(/[).,;]+$/, '') : '';
+                })()
             })
         })
         .then(function(res) { return res.json(); })
@@ -1944,7 +1952,11 @@
                 actions: AI_TEST_STATE.actions,
                 project_id: document.getElementById('aiTestProject').value,
                 case_name: 'AI 生成用例 ' + new Date().toLocaleString(),
-                url: document.getElementById('aiTestUrl').value,
+                url: (function() {
+                    var src = AI_TEST_STATE.lastTask || '';
+                    var m = (src || '').match(/https?:\/\/[^\s\]\}\"'<>]+/i);
+                    return m ? m[0].replace(/[).,;]+$/, '') : '';
+                })(),
                 instruction: AI_TEST_STATE.lastTask || ''
             })
         })

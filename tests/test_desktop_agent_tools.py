@@ -20,11 +20,14 @@ class TestChatToolSchemasDesktop(unittest.TestCase):
         ]
         self.assertNotIn("wechat_send_message", names)
         self.assertIn("windows_focus_app", names)
+        self.assertIn("windows_launch_app", names)
         self.assertIn("windows_click_element", names)
         self.assertIn("windows_type_text", names)
         self.assertIn("windows_press_key", names)
         self.assertIn("windows_wait", names)
-        self.assertIn("refine_test_plan", names)
+        # 桌面精简 profile：不暴露 refine / hermes，避免工具淹没
+        self.assertNotIn("refine_test_plan", names)
+        self.assertNotIn("hermes_execute", names)
 
     def test_desktop_default_includes_windows_tools(self):
         import os
@@ -33,17 +36,19 @@ class TestChatToolSchemasDesktop(unittest.TestCase):
         os.environ.pop("PLATFORM_OUTER_DESKTOP_TOOLS", None)
         names = [s["function"]["name"] for s in chat_tool_schemas(platform_type="desktop")]
         self.assertIn("windows_focus_app", names)
-        self.assertIn("hermes_execute", names)
+        self.assertIn("get_screen_text", names)
+        self.assertNotIn("hermes_execute", names)
 
-    def test_screen_tools_gated_by_flag(self):
+    def test_screen_tools_on_desktop_by_default(self):
         from ai_chat_tool_loop import chat_tool_schemas
 
-        off = [s["function"]["name"] for s in chat_tool_schemas(platform_type="desktop", allow_screen_tools=False)]
-        on = [s["function"]["name"] for s in chat_tool_schemas(platform_type="desktop", allow_screen_tools=True)]
-        self.assertNotIn("get_screen_text", off)
-        self.assertNotIn("get_screen_description", off)
-        self.assertIn("get_screen_text", on)
-        self.assertIn("get_screen_description", on)
+        names = [
+            s["function"]["name"]
+            for s in chat_tool_schemas(platform_type="desktop", allow_screen_tools=False)
+        ]
+        # 桌面精简 profile 自带观察工具
+        self.assertIn("get_screen_text", names)
+        self.assertIn("get_screen_description", names)
 
     def test_web_without_desktop_tools(self):
         from ai_chat_tool_loop import chat_tool_schemas
@@ -124,20 +129,53 @@ class TestWindowsClickElementErrors(unittest.TestCase):
         self.assertIn("搜索", r.get("screen_text") or [])
         self.assertTrue(r.get("suggestion"))
 
-    def test_multi_candidate_no_random_click(self):
+    def test_multi_candidate_picks_instead_of_halt(self):
+        """多候选时择优点击，不再直接 flow_halt（避免模型空转）。"""
         from windows_desktop_tools import windows_click_element
 
         cands = [
-            {"name": "搜索", "x": 10, "y": 10, "score": 0.9, "via": "uia"},
-            {"name": "搜索历史", "x": 20, "y": 20, "score": 0.9, "via": "uia"},
+            {"name": "确定", "x": 10, "y": 40, "score": 0.9, "via": "uia"},
+            {"name": "确定", "x": 20, "y": 200, "score": 0.9, "via": "uia"},
         ]
-        with patch("windows_desktop_tools._try_search_hotkey_shortcut", return_value=None), patch(
-            "windows_desktop_tools._uia_find_candidates", return_value=cands
-        ), patch("windows_desktop_tools._screen_text_list", return_value=["搜索", "搜索历史"]):
-            r = windows_click_element("搜索")
-        self.assertFalse(r.get("success"))
-        self.assertIn("多个候选", r.get("error") or "")
-        self.assertEqual(len(r.get("candidates") or []), 2)
+        with (
+            patch("windows_desktop_tools._try_search_hotkey_shortcut", return_value=None),
+            patch("windows_desktop_tools._uia_find_candidates", return_value=cands),
+            patch("windows_desktop_tools._ocr_find_candidates", return_value=[]),
+            patch(
+                "screen_tools.capture_for_observation",
+                return_value=(b"", {"left": 0, "top": 0}),
+            ),
+            patch("windows_desktop_tools._screen_text_list", return_value=["确定"]),
+            patch("windows_desktop_tools._capture_target_hash", return_value="h0"),
+            patch("windows_desktop_tools._wait_stable_quiet", return_value=None),
+            patch(
+                "windows_desktop_tools.capture_after_action",
+                return_value={"ok": True, "changed": True},
+            ),
+            patch("windows_desktop_tools._nearby_texts", return_value=["确定"]),
+            patch("desktop_input.force_focus_hwnd", return_value=True),
+            patch("desktop_input.message_click_at_screen", return_value=None),
+            patch("desktop_input.screen_click", return_value=None),
+            patch("windows_desktop_tools.get_desktop_target", return_value={"hwnd": 1, "label": "App"}),
+            patch("windows_desktop_tools.time.sleep", return_value=None),
+        ):
+            r = windows_click_element("确定")
+        self.assertTrue(r.get("success"), r)
+        self.assertIn(int(r.get("y") or 0), (40, 200))
+
+    def test_generate_case_flag_controls_refine_schema(self):
+        from ai_chat_tool_loop import chat_tool_schemas
+
+        with_refine = [
+            s["function"]["name"]
+            for s in chat_tool_schemas(allow_hermes=False, allow_refine_test_plan=True)
+        ]
+        without = [
+            s["function"]["name"]
+            for s in chat_tool_schemas(allow_hermes=False, allow_refine_test_plan=False)
+        ]
+        self.assertIn("refine_test_plan", with_refine)
+        self.assertNotIn("refine_test_plan", without)
 
 
 class TestWindowsFocusAppAliases(unittest.TestCase):
@@ -206,9 +244,120 @@ class TestMcpWindowsToolsRegistered(unittest.TestCase):
         _, tools = mcp_kit_for_port(_Port())
         names = [t["name"] for t in tools]
         self.assertIn("windows_focus_app", names)
+        self.assertIn("windows_launch_app", names)
         self.assertIn("get_screen_text", names)
         self.assertIn("get_screen_description", names)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestWindowsLaunchApp(unittest.TestCase):
+    def test_schema_includes_launch_app(self):
+        from ai_chat_tool_loop import chat_tool_schemas
+
+        names = [
+            s["function"]["name"]
+            for s in chat_tool_schemas(
+                platform_type="desktop",
+                allow_desktop_windows_tools=True,
+                allow_hermes=False,
+            )
+        ]
+        self.assertIn("windows_launch_app", names)
+
+    def test_resolve_launch_aliases(self):
+        from windows_desktop_tools import _resolve_launch_input
+
+        self.assertEqual(_resolve_launch_input("记事本")[0], "notepad")
+        self.assertEqual(_resolve_launch_input("Notepad")[0], "notepad")
+        self.assertEqual(_resolve_launch_input("计算器")[0], "calc")
+
+    def test_focus_miss_auto_launches(self):
+        import windows_desktop_tools as wdt
+
+        miss = {
+            "success": False,
+            "error": "未找到「Notepad」对应窗口",
+            "can_launch": True,
+            "suggestion": "请调用 windows_launch_app",
+        }
+        launched = {
+            "success": True,
+            "app_name": "Notepad",
+            "launched": True,
+            "via": "os_startfile",
+        }
+        with patch.object(wdt, "_run_with_timeout", side_effect=lambda fn, timeout=8.0: miss), patch.object(
+            wdt, "windows_launch_app", return_value=launched
+        ) as mock_launch:
+            r = wdt.windows_focus_app("Notepad", auto_launch=True)
+        self.assertTrue(r.get("success"))
+        self.assertTrue(r.get("auto_launched_after_focus_miss"))
+        mock_launch.assert_called_once_with("Notepad")
+
+    def test_focus_miss_without_can_launch_does_not_auto_launch(self):
+        import windows_desktop_tools as wdt
+
+        reclaim_fail = {
+            "success": False,
+            "error": "无法捕获应用前台",
+            "hwnd": 123,
+        }
+        with patch.object(
+            wdt, "_run_with_timeout", side_effect=lambda fn, timeout=8.0: reclaim_fail
+        ), patch.object(wdt, "windows_launch_app") as mock_launch:
+            r = wdt.windows_focus_app("记事本", auto_launch=True)
+        self.assertFalse(r.get("success"))
+        mock_launch.assert_not_called()
+
+    def test_type_content_phrase_redirects_to_type_text(self):
+        from windows_desktop_tools import windows_click_element
+
+        r = windows_click_element('编辑内容为我已经学会写记事本了')
+        self.assertFalse(r.get("success"))
+        self.assertEqual(r.get("redirect"), "windows_type_text")
+
+    def test_uia_score_rejects_menu_edit_in_long_term(self):
+        from windows_desktop_tools import _uia_score_name_term
+
+        self.assertLess(_uia_score_name_term("编辑", "编辑内容"), 0.5)
+        self.assertEqual(_uia_score_name_term("编辑", "编辑"), 1.0)
+
+    def test_noise_gdi_window_filter(self):
+        from windows_desktop_tools import _is_noise_focus_window
+
+        self.assertTrue(_is_noise_focus_window("GDI+ Window", "foo.exe", ""))
+        self.assertTrue(_is_noise_focus_window("", "GDI+windows.exe", ""))
+        self.assertFalse(_is_noise_focus_window("无标题 - 记事本", "notepad.exe", "Notepad"))
+
+
+class TestHermesStartUrl(unittest.TestCase):
+    def test_resolve_start_url_from_probe(self):
+        from ai_chat_tool_loop import ChatToolLoopParams, _resolve_start_url_for_hermes
+
+        params = ChatToolLoopParams(
+            message="测一下搜索",
+            project_name="p",
+            current_plan={"case_url": ""},
+            history=[],
+            profile=None,
+            legacy_model="",
+            page_snapshot=None,
+            probe_registry=None,
+            probe_url="https://example.com/login",
+            memory_context=None,
+            dom_context_pack=None,
+            interaction_context={},
+        )
+        self.assertEqual(
+            _resolve_start_url_for_hermes(params, {}),
+            "https://example.com/login",
+        )
+
+    def test_resolve_start_url_from_message(self):
+        from ai_chat_tool_loop import _resolve_start_url_for_hermes
+
+        self.assertIn(
+            "example.com",
+            _resolve_start_url_for_hermes(
+                None, {"instruction": "打开 https://example.com/a 并登录"}
+            ),
+        )

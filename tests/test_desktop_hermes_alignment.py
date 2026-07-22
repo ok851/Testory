@@ -21,7 +21,8 @@ class TestNoWeChatDeadTemplateInOuterFC(unittest.TestCase):
         ]
         self.assertNotIn("wechat_send_message", names)
         self.assertIn("windows_focus_app", names)
-        self.assertIn("hermes_execute", names)
+        # 桌面精简 profile：外层只留 windows_* + 观察
+        self.assertNotIn("hermes_execute", names)
 
     def test_outer_desktop_tools_can_disable(self):
         import os
@@ -324,7 +325,7 @@ class TestThinOuterDesktopPrompt(unittest.TestCase):
             platform_type="desktop",
         )
         self.assertIn("windows_", sp)
-        self.assertIn("执行脑", sp)
+        self.assertIn("流程闸", sp)
         self.assertIn("禁止", sp)
 
 

@@ -96,7 +96,11 @@ def _strip_invented_case_json(text: str) -> str:
 
 
 def _hermes_retry_blocked(meta: Dict[str, Any]) -> bool:
-    return bool(meta.get("hermes_auth_blocked") or meta.get("hermes_stream_blocked"))
+    return bool(
+        meta.get("hermes_auth_blocked")
+        or meta.get("hermes_stream_blocked")
+        or meta.get("hermes_tool_loop_blocked")
+    )
 
 
 def _hermes_retry_blocked_payload(meta: Dict[str, Any]) -> str:
@@ -115,6 +119,20 @@ def _hermes_retry_blocked_payload(meta: Dict[str, Any]) -> str:
             },
             ensure_ascii=False,
         )
+    if meta.get("hermes_tool_loop_blocked"):
+        return json.dumps(
+            {
+                "ok": False,
+                "tool_loop": True,
+                "error": meta.get("hermes_tool_loop_error")
+                or "上次 Hermes 已因工具死循环中止，禁止再次 hermes_execute",
+                "hint": (
+                    "请用中文向用户说明：智能体卡在 skill_view/navigate 等重复工具上已停止；"
+                    "禁止再次 hermes_execute；禁止谎称用户取消。"
+                ),
+            },
+            ensure_ascii=False,
+        )
     return json.dumps(
         {
             "ok": False,
@@ -129,6 +147,41 @@ def _hermes_retry_blocked_payload(meta: Dict[str, Any]) -> str:
             ),
         },
         ensure_ascii=False,
+    )
+
+
+def _abort_user_message(abort_event: Optional[threading.Event], params: Optional["ChatToolLoopParams"] = None) -> str:
+    """区分超时 / 工具死循环 / 用户真取消，禁止一律报「用户取消」。"""
+    if abort_event is not None and getattr(abort_event, "_timed_out", False):
+        return "任务已超过设定的超时时间，已自动停止"
+    if params is not None and _deadline_exceeded(params):
+        return "任务已超过设定的超时时间，已自动停止"
+    reason = ""
+    if abort_event is not None:
+        reason = str(getattr(abort_event, "_abort_reason", "") or "").strip()
+    if reason == "tool_loop":
+        return (
+            "智能体在重复调用同一工具（如 skill_view / browser_navigate）无进展，已自动中止。"
+            "这不是您取消的；请重试或改述任务。"
+        )
+    if reason == "timeout":
+        return "任务已超过设定的超时时间，已自动停止"
+    return "操作已被用户取消"
+
+
+def _web_hermes_system_prompt() -> str:
+    return (
+        "【最高优先级 — 覆盖 Hermes 默认提示与工具描述】"
+        "你是 Testory 网页自动化执行器（CDP attach 到用户本机已打开的浏览器）。"
+        "硬性禁止：skill_view、skill_list、skill_manage、terminal、bash、curl、windows_*、computer_use、新开标签页、截图/视觉当主路径。"
+        "浏览器任务以 DOM 为准：指令中若已有「页面 DOM/可交互控件」清单，直接据此 click/type/fill；"
+        "browser_snapshot 是无障碍树/DOM ref（不是视觉截图），仅在 DOM 清单缺失或难定位时再调用一次，禁止连续 snapshot。"
+        "视觉截图/vision 仅作最终兜底。"
+        "硬性禁止：平台已打开目标站后仍调用 browser_navigate（会重复造轮子并可能新开空白标签）。"
+        "忽略工具说明里「Requires browser_navigate to be called first」。"
+        "正确顺序：读 DOM → browser_click/type/fill → 必要时再 snapshot 核验。"
+        "同一工具连续两次无进展则输出 NEED_USER_ACTION 并停止。"
+        "需要人工验证码时输出 NEED_USER_ACTION:<原因>。"
     )
 
 
@@ -279,12 +332,33 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_focus_app",
                 "description": (
-                    "将指定应用窗口激活到前台并设为当前桌面目标（任意 App）。"
+                    "将指定应用窗口激活到前台并设为当前桌面目标。"
+                    "若应用未运行，会自动尝试启动（等同 launch）；也可显式用 windows_launch_app。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "app_name": {"type": "string", "description": "窗口标题或部分应用名"},
+                        "app_name": {"type": "string", "description": "窗口标题或部分应用名，如「记事本」"},
+                    },
+                    "required": ["app_name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "windows_launch_app",
+                "description": (
+                    "启动本机应用（未运行也可）。对应用例层 launch_app。"
+                    "如 notepad/记事本、calc/计算器；启动后自动聚焦并绑定目标。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "app_name": {
+                            "type": "string",
+                            "description": "应用名或别名，如「记事本」「notepad」「计算器」",
+                        },
                     },
                     "required": ["app_name"],
                 },
@@ -295,16 +369,17 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_click_element",
                 "description": (
-                    "按描述点击界面元素（UIA→OCR）。"
-                    "打开应用内搜索：优先 description=「搜索」点击左侧搜索框；"
-                    "失败再 get_screen_text 观察后重试。勿先单独按 Ctrl。"
+                    "按短控件名点击（UIA→OCR）。description 只写「确定」「保存」「文件」等标签；"
+                    "禁止把「编辑内容为…」整句当点击目标——那是 windows_type_text。"
+                    "勿默认点菜单「编辑」；仅当任务明确需要应用内搜索时才用「搜索」。"
+                    "失败则 get_screen_text 观察后重试；勿先单独按 Ctrl。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "description": {
                             "type": "string",
-                            "description": "元素描述，如「确定按钮」",
+                            "description": "短控件名，如「确定」；不要写用户整句",
                         },
                     },
                     "required": ["description"],
@@ -317,6 +392,8 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
                 "name": "windows_type_text",
                 "description": (
                     "向当前桌面目标窗口输入文本（优先 UIA/目标窗粘贴）。"
+                    "记事本等编辑器启动后可直接输入，无需先点「编辑」菜单。"
+                    "用户说「编辑内容为X / 输入X / 写入X」时，把 X 作为 text。"
                     "返回 capture_after；未核验时勿声称已输入。"
                 ),
                 "parameters": {
@@ -334,15 +411,15 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "windows_press_key",
                 "description": (
-                    "按键或组合键。必须一次传入完整键，如 Enter、Esc、Ctrl+F；"
-                    "禁止只传 ctrl。有搜索框时优先 windows_click_element('搜索')，勿只按修饰键。"
+                    "按键或组合键。必须一次传入完整键，如 Enter、Esc、Ctrl+N、Ctrl+S；"
+                    "禁止只传 ctrl。新建文件/新页用 Ctrl+N；勿默认用 Ctrl+F 或点搜索。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "key": {
                             "type": "string",
-                            "description": "完整按键名，如 Enter / Ctrl+F（不要只写 ctrl）",
+                            "description": "完整按键名，如 Enter / Ctrl+N（不要只写 ctrl）",
                         },
                     },
                     "required": ["key"],
@@ -353,14 +430,17 @@ def _desktop_windows_tool_schemas() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "windows_wait",
-                "description": "短暂等待 duration_ms 毫秒（尽量少用；优先依赖工具内部等待）。",
+                "description": (
+                    "短暂等待。duration_ms 毫秒；或 condition=stable / desktop_change / window:标题关键词。"
+                    "动作用后可用 desktop_change 核验窗口变化。"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "duration_ms": {"type": "integer", "description": "等待毫秒数"},
                         "condition": {
                             "type": "string",
-                            "description": "可选 condition=stable",
+                            "description": "stable | desktop_change | window:标题",
                         },
                     },
                 },
@@ -526,6 +606,8 @@ def _desktop_action_fingerprint(
     n = (name or "").strip()
     if n == "windows_focus_app":
         return f"{n}|app={_norm_tool_arg_text(a.get('app_name') or a.get('name'))}"
+    if n == "windows_launch_app":
+        return f"{n}|app={_norm_tool_arg_text(a.get('app_name') or a.get('name') or a.get('path'))}"
     if n == "windows_click_element":
         desc = _norm_tool_arg_text(a.get("description") or a.get("locate") or a.get("text"))
         if _is_search_ui_click_desc(desc):
@@ -617,6 +699,7 @@ def _record_succeeded_desktop_action(
 ) -> None:
     if name not in (
         "windows_focus_app",
+        "windows_launch_app",
         "windows_click_element",
         "windows_type_text",
         "windows_press_key",
@@ -629,46 +712,71 @@ def _record_succeeded_desktop_action(
     if not isinstance(fps, list):
         fps = []
         meta["succeeded_action_fps"] = fps
+    attempted = meta.setdefault("attempted_action_fps", [])
+    if not isinstance(attempted, list):
+        attempted = []
+        meta["attempted_action_fps"] = attempted
     if name in ("get_screen_text", "get_screen_description"):
         meta["obs_count"] = int(meta.get("obs_count") or 0) + 1
 
-    # 输入：即便 OCR 失败，只要键盘/剪贴板投递成功，也锁定该文本防叠字
+    try:
+        data = json.loads(result_text or "")
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    # 输入：投递成功则锁文本防叠字，但不推进 phase / 不记「已验证成功」除非 verified
     if name == "windows_type_text" and _desktop_type_delivery_ok(result_text):
         text = str((args or {}).get("text") or "").strip()
         _remember_typed_text(meta, text)
         fp = _desktop_action_fingerprint(name, args, meta)
-        if fp not in fps:
+        if fp not in attempted:
+            attempted.append(fp)
+        verified_ok = bool(data.get("verified") is True or data.get("success") is True)
+        if verified_ok and fp not in fps:
             fps.append(fp)
         if not meta.get("last_search_query") and text:
-            # 搜索阶段首次灌字
             phase = str(meta.get("desktop_phase") or "start")
             if phase in ("start", "app_focused", "search_ready", "query_typed"):
                 meta["last_search_query"] = text
-        if _desktop_tool_succeeded(result_text):
+        if verified_ok:
             _advance_desktop_phase(meta, name, args or {}, result_text)
-        elif str(meta.get("desktop_phase") or "") in ("start", "app_focused", "search_ready"):
-            meta["desktop_phase"] = "query_typed"
         return
 
     if not _desktop_tool_succeeded(result_text):
         return
+
+    # 点击：须 verified 才记成功指纹并推进阶段（避免假成功导致重播/乱序）
+    if name == "windows_click_element":
+        fp = _desktop_action_fingerprint(name, args, meta)
+        if fp not in attempted:
+            attempted.append(fp)
+        if data.get("verified") is False:
+            return
+        if fp not in fps:
+            fps.append(fp)
+        desc = str((args or {}).get("description") or "")
+        if _is_search_ui_click_desc(desc) or data.get("search_armed"):
+            meta["search_ui_done"] = True
+        _advance_desktop_phase(meta, name, args or {}, result_text)
+        return
+
     fp = _desktop_action_fingerprint(name, args, meta)
     if fp not in fps:
         fps.append(fp)
-    if name == "windows_click_element":
-        desc = str((args or {}).get("description") or "")
-        if _is_search_ui_click_desc(desc):
-            meta["search_ui_done"] = True
-        try:
-            data = json.loads(result_text or "")
-            if isinstance(data, dict) and data.get("search_armed"):
-                meta["search_ui_done"] = True
-        except Exception:
-            pass
     if name == "windows_focus_app":
         apps = meta.setdefault("focused_apps", [])
         if isinstance(apps, list):
             app = _norm_tool_arg_text((args or {}).get("app_name") or (args or {}).get("name"))
+            if app and app not in apps:
+                apps.append(app)
+    if name == "windows_launch_app":
+        apps = meta.setdefault("focused_apps", [])
+        if isinstance(apps, list):
+            app = _norm_tool_arg_text(
+                (args or {}).get("app_name") or (args or {}).get("name") or (args or {}).get("path")
+            )
             if app and app not in apps:
                 apps.append(app)
     _advance_desktop_phase(meta, name, args or {}, result_text)
@@ -680,6 +788,46 @@ def _advance_desktop_phase(
     args: Dict[str, Any],
     result_text: str,
 ) -> None:
+    profile = str(meta.get("flow_profile") or "generic")
+    # 通用 profile：不进入 search_ready 流水线，避免非搜索任务被锁死
+    if profile != "im_search":
+        order_g = ("start", "app_focused", "acted", "done")
+        cur = str(meta.get("desktop_phase") or "start")
+        if cur not in order_g:
+            cur = "start"
+
+        def _bump_g(to: str) -> None:
+            nonlocal cur
+            if order_g.index(to) >= order_g.index(cur):
+                meta["desktop_phase"] = to
+                cur = to
+
+        try:
+            data = json.loads(result_text or "")
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        if name == "windows_focus_app":
+            _bump_g("app_focused")
+            return
+        if name == "windows_launch_app":
+            _bump_g("app_focused")
+            return
+        if name in (
+            "windows_click_element",
+            "windows_type_text",
+            "windows_press_key",
+        ):
+            _bump_g("acted")
+            if data.get("search_armed") or _is_search_ui_click_desc(
+                str((args or {}).get("description") or "")
+            ):
+                # 记录但不切换到 IM 专属 phase
+                meta["search_ui_touched"] = True
+            return
+        return
+
     order = (
         "start",
         "app_focused",
@@ -708,6 +856,9 @@ def _advance_desktop_phase(
         data = {}
 
     if name == "windows_focus_app":
+        _bump("app_focused")
+        return
+    if name == "windows_launch_app":
         _bump("app_focused")
         return
     if name == "windows_click_element":
@@ -789,6 +940,32 @@ def _desktop_progress_reminder(meta: Dict[str, Any]) -> str:
     )
 
 
+def _desktop_flow_should_stop(meta: Optional[Dict[str, Any]]) -> bool:
+    """桌面步骤失败后整任务停：禁止进入下一轮 LLM。"""
+    m = meta or {}
+    return bool(m.get("desktop_flow_halted"))
+
+
+def _desktop_halt_user_facing(tool_name: str, result_text: str) -> str:
+    """给前端/用户看的失败说明（非注入给模型的继续指令）。"""
+    err = ""
+    sug = ""
+    try:
+        data = json.loads(result_text or "")
+        if isinstance(data, dict):
+            err = str(data.get("error") or "")[:300]
+            sug = str(data.get("suggestion") or "")[:300]
+    except Exception:
+        pass
+    parts = [f"桌面步骤 `{tool_name}` 失败，任务已停止。"]
+    if err:
+        parts.append(err)
+    if sug:
+        parts.append(f"建议：{sug}")
+    parts.append("请处理界面后重发指令，或说明下一步。")
+    return " ".join(parts)
+
+
 def _desktop_fail_stop_message(tool_name: str, result_text: str, *, meta: Optional[Dict[str, Any]] = None) -> str:
     err = ""
     sug = ""
@@ -799,18 +976,19 @@ def _desktop_fail_stop_message(tool_name: str, result_text: str, *, meta: Option
             sug = str(data.get("suggestion") or "")[:200]
     except Exception:
         pass
-    meta = meta or {}
+    if meta is None:
+        meta = {}
+    meta["desktop_flow_halted"] = True
+    meta["failed"] = True
+    meta["partial"] = True
     meta["repair_forward_only"] = True
     locked = _forbidden_replay_summary(meta)
     return (
         f"[System] 流程闸：上一步 `{tool_name}` 失败"
         + (f"（{err}）" if err else "")
-        + "。本轮剩余工具已取消。"
-        f"【已锁定勿回退】{locked}。"
-        "你只能：①最多一次 get_screen_text；②对「尚未成功」的下一步做一次新动作"
-        "（例如尚未确认结果则 Enter；已确认则输入未出现过的正文）。"
-        "严禁再次 focus 同一应用、再次点击搜索/清空、再次输入已输入过的文字。"
-        "若无法前进，向用户说明并停止。"
+        + "。本轮剩余工具已取消；**整任务已停止，禁止再调用任何 windows_* / 猜测下一步**。"
+        f"【进度摘要】{locked}。"
+        "请用中文向用户说明失败原因并结束；不要继续 focus、点搜索、输入或按键。"
         + (f" 建议：{sug}" if sug else "")
     )
 
@@ -869,6 +1047,15 @@ def _should_skip_replay_desktop_tool(
             return _skip_payload(
                 "repair_skip_refocus",
                 "修复模式禁止回退 focus；请做下一步新动作。",
+            )
+
+    if n == "windows_launch_app":
+        app = _norm_tool_arg_text(args.get("app_name") or args.get("name") or args.get("path"))
+        focused = meta.get("focused_apps") if isinstance(meta.get("focused_apps"), list) else []
+        if app and app in focused:
+            return _skip_payload(
+                "launch_already_done",
+                "该应用已启动/聚焦，禁止重复 launch；请继续后续操作。",
             )
 
     if n == "windows_click_element":
@@ -970,6 +1157,39 @@ def _pending_contact_from_user_message(message: str) -> str:
     return _pending_search_query_from_user_message(message)
 
 
+def _message_wants_search_autofill(message: str) -> bool:
+    """仅当用户意图是「搜联系人/条目并继续」时，平台才自动 type+Enter。"""
+    t = (message or "").strip()
+    if not t:
+        return False
+    sendish = any(
+        k in t
+        for k in (
+            "发消息",
+            "发给",
+            "发送",
+            "发一句",
+            "发一条",
+            "发条",
+            "搜索",
+            "搜一下",
+            "查找",
+            "找一下",
+        )
+    )
+    # 「给X发」类：有可解析关键词即可
+    if not sendish and not re.search(r"给.+发", t):
+        return False
+    return bool(_pending_search_query_from_user_message(t))
+
+
+def _resolve_desktop_flow_profile(message: str, platform_type: str = "") -> str:
+    """im_search：搜→输→Enter 流水线；generic：通用 focus→act。"""
+    if _message_wants_search_autofill(message):
+        return "im_search"
+    return "generic"
+
+
 def _auto_type_contact_after_search_click(
     *,
     params: Any,
@@ -982,6 +1202,10 @@ def _auto_type_contact_after_search_click(
     """
     if meta.get("auto_typed_search"):
         return None
+    # 非 IM 搜索意图：不自动灌词，交给模型下一步
+    if str(meta.get("flow_profile") or "") != "im_search":
+        if not _message_wants_search_autofill(getattr(params, "message", "") or ""):
+            return None
     try:
         data = json.loads(click_result_text or "")
     except Exception:
@@ -1016,8 +1240,10 @@ def _auto_open_wechat_search_hit_after_type(
     meta: Dict[str, Any],
     type_result_json: str,
 ) -> Optional[str]:
-    """搜索关键词输入成功后按 Enter 确认首条结果（通用：列表搜索→确认）。"""
+    """搜索关键词输入成功后按 Enter 确认首条结果（仅 im_search profile）。"""
     if meta.get("auto_opened_search_hit"):
+        return None
+    if str(meta.get("flow_profile") or "") != "im_search" and not meta.get("auto_typed_search"):
         return None
     try:
         data = json.loads(type_result_json or "")
@@ -1052,6 +1278,37 @@ def _auto_open_wechat_search_hit_after_type(
     return press_json
 
 
+def _maybe_persist_desktop_run_memory(
+    meta: Dict[str, Any],
+    *,
+    message: str = "",
+    failed: bool = False,
+) -> None:
+    if failed or meta.get("desktop_flow_halted") or meta.get("failed"):
+        return
+    tools = meta.get("tools_used") or []
+    if not isinstance(tools, list) or not tools:
+        return
+    winish = any(str(t).startswith("windows_") for t in tools)
+    if not winish:
+        return
+    try:
+        from desktop_run_memory import apps_from_meta, record_successful_run
+
+        app = apps_from_meta(meta) or ""
+        if not app:
+            # 从用户话里取前几个字作粗标签
+            app = (message or "").strip()[:24] or "desktop"
+        record_successful_run(
+            app_label=app,
+            tools_used=[str(t) for t in tools if not str(t).endswith("_skipped_replay")],
+            phase=str(meta.get("desktop_phase") or ""),
+            user_goal=message or "",
+        )
+    except Exception:
+        pass
+
+
 def prefer_outer_desktop_tools(*, platform_type: str = "", message: str = "") -> bool:
     """桌面任务是否走外层 windows_*（禁止再包一层 hermes_execute 空转）。"""
     return _should_enable_desktop_windows_tools(platform_type, message)
@@ -1065,6 +1322,7 @@ def chat_tool_schemas(
     allow_screen_tools: bool = False,
     allow_desktop_windows_tools: Optional[bool] = None,
     message: str = "",
+    allow_refine_test_plan: bool = True,
 ) -> List[Dict[str, Any]]:
     allow = allow_hermes if allow_hermes is not None else allow_openclaw
     schemas: List[Dict[str, Any]] = []
@@ -1073,34 +1331,44 @@ def chat_tool_schemas(
         if allow_desktop_windows_tools is not None
         else _should_enable_desktop_windows_tools(platform_type, message)
     )
+    plat = (platform_type or "web").strip().lower()
+    # 桌面精简 profile：只暴露 windows_* + 轻量观察，避免 hermes/refine 淹没模型
+    desktop_slim = enable_win and plat in ("desktop", "auto") and (
+        plat == "desktop"
+        or _should_enable_desktop_windows_tools("desktop", message)
+    )
     if enable_win:
         schemas.extend(_desktop_windows_tool_schemas())
-    if allow_screen_tools:
+        # 桌面任务默认带观察工具（精简集）
+        if desktop_slim or allow_screen_tools:
+            schemas.extend(_screen_observation_tool_schemas())
+    elif allow_screen_tools:
         schemas.extend(_screen_observation_tool_schemas())
-    if allow:
+    if allow and not (desktop_slim and plat == "desktop"):
         schemas.append(_agent_execute_tool_schema())
-    schemas.append(
-        {
-            "type": "function",
-            "function": {
-                "name": "refine_test_plan",
-                "description": (
-                    "根据自然语言调整当前 AI 自动化测试用例计划（JSON steps）。"
-                    "在需要增删改步骤、修正选择器或断言时调用。"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "adjustment": {
-                            "type": "string",
-                            "description": "要如何修改用例的说明（中文或英文均可）",
-                        }
+    if allow_refine_test_plan and not (desktop_slim and plat == "desktop"):
+        schemas.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "refine_test_plan",
+                    "description": (
+                        "根据自然语言调整当前 AI 自动化测试用例计划（JSON steps）。"
+                        "在需要增删改步骤、修正选择器或断言时调用。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "adjustment": {
+                                "type": "string",
+                                "description": "要如何修改用例的说明（中文或英文均可）",
+                            }
+                        },
+                        "required": ["adjustment"],
                     },
-                    "required": ["adjustment"],
                 },
-            },
-        }
-    )
+            }
+        )
     return schemas
 
 
@@ -1134,6 +1402,7 @@ def _build_system_prompt(
     test_scope: str,
     embedded_session_id: str = "",
     platform_type: str = "web",
+    generate_case_after_run: bool = False,
 ) -> str:
     plan_preview = json.dumps(current_plan or {}, ensure_ascii=False)
     if len(plan_preview) > 12000:
@@ -1155,9 +1424,15 @@ def _build_system_prompt(
         "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。",
         "- 如果用户要求执行具体的浏览器测试操作 → 可调用 hermes_execute（同一任务只调用一次）。",
         "- 如果是 Windows 桌面 GUI 操作（打开应用、点击、输入等）→ **直接调用 windows_***"
-        "（focus → 观察 → type/press/click），逐步执行；每步根据工具返回再决定下一步。"
+        "（launch/focus → 新建用 Ctrl+N → type_text；「编辑内容为X」勿点菜单编辑），逐步执行；"
+        "每步根据工具返回再决定下一步。"
         "禁止只调用 hermes_execute 后空等；禁止臆造「已输入/已发送」。",
-        "- 如果用户要求修改用例步骤、调整选择器、增加断言 → 调用 refine_test_plan。",
+        (
+            "- 开启「执行后生成用例」时：操作成功后只需简短中文汇报；"
+            "平台会从动作轨迹自动规范化生成用例，禁止 refine_test_plan，禁止手写大段用例 JSON。"
+            if generate_case_after_run
+            else "- 未开启「执行后生成用例」：操作完成后简短中文汇报即可，禁止 refine_test_plan，禁止输出用例 JSON。"
+        ),
         "- 如果用户只是询问测试建议、用例设计思路 → 直接回答，不要调用工具。",
         "- 若 hermes_execute 返回 stream_empty / auth_fatal → 禁止再次 hermes_execute。",
         "",
@@ -1169,14 +1444,18 @@ def _build_system_prompt(
             "【重要】你是可执行 Agent：闲聊直接答；真实环境用工具逐步操作。",
             "- 闲聊、问身份/能力、要建议 → 直接自然语言回答，禁止乱调工具。",
             "- Windows 桌面 GUI（任意本机应用）→ **必须用 windows_***："
-            "windows_focus_app →（必要时 get_screen_text）→ click/type/press；"
-            "有搜索则：点搜索框 → 立刻 type 关键词 → Enter 或点结果 → 再操作主界面。"
+            "launch/focus →（新建用 Ctrl+N）→ type_text 写正文 / press；"
+            "「编辑内容为X」= type_text(X)，禁止点菜单「编辑」；勿默认点「搜索」。"
             "每步看工具返回再继续；禁止只调一次 hermes_execute 然后声称完成。"
             "同轮不要一次提交多个互依赖动作；若上一步失败/flow_halt，禁止继续 type/press/click。"
-            "【进度】已成功步骤禁止回退重跑；失败只修当前点。"
+            "【进度】已成功步骤禁止回退重跑；失败即停止并向用户说明。"
             "严禁编造「无法操作某应用/只能测网页」；用 windows_* 真实执行。",
             "- 网页 / 移动 / 跨层复杂探索 → 可一次 hermes_execute。",
-            "- 需要改用例 steps → refine_test_plan。",
+            (
+                "- 开启生成用例：成功后简短汇报；用例由平台从动作轨迹自动生成，禁止 refine_test_plan / 手写大段 JSON。"
+                if generate_case_after_run
+                else "- 未开启生成用例：完成后简短汇报，禁止 refine_test_plan / 用例 JSON。"
+            ),
             "- 收到 NEED_USER_ACTION / stream_empty / auth_fatal 时向用户说明；"
             "禁止编造未实际执行的 steps JSON。",
             "",
@@ -1185,17 +1464,25 @@ def _build_system_prompt(
     elif plat == "desktop":
         parts_agent = [
             "【重要】当前为 **Windows 桌面** 场景。用 windows_* 逐步操控本机任意 GUI 应用。",
-            "通用流程：windows_focus_app(目标应用) →（界面不明时 get_screen_text）→ "
-            "windows_click_element → windows_type_text / windows_press_key。",
-            "若应用有搜索：点「搜索」→ 立刻 type 关键词 → 优先 Enter 确认首条结果"
-            "（同名多候选时勿盲点）→ 再在主界面输入/提交。",
-            "禁止单独按 ctrl；热键须完整组合（如 Ctrl+F）。",
-            "【进度锁】已成功的 focus/点击/同一段输入禁止回退重跑；失败时只修复当前失败点，不要从头再来。"
+            "通用流程：若应用可能未打开，先 windows_launch_app / windows_focus_app → "
+            "需要新建文件/新页时用 windows_press_key(Ctrl+N) → "
+            "「编辑内容为… / 输入… / 写入…」请直接 windows_type_text(正文)，不要点菜单「编辑」。",
+            "记事本等文本编辑器：启动后文档区通常已可输入，优先 type_text；仅当输入失败再 click 正文区域。",
+            "windows_click_element 的 description 只写短控件名（如「确定」「保存」），禁止把用户整句（如「编辑内容为xxx」）当作点击目标。",
+            "按用户目标点击控件；勿默认点「搜索」。仅当用户要搜索联系人/条目时才点搜索并输入关键词，再 Enter 确认。",
+            "禁止单独按 ctrl；热键须完整组合（如 Ctrl+N 新建、Ctrl+S 保存）。",
+            "【进度锁】已成功的 focus/点击/同一段输入禁止回退重跑。"
             "少用反复 get_screen_description。",
-            "禁止未看工具返回就声称「已完成」；失败时用中文说明真实工具错误。",
-            "【流程闸】同轮每步只调一个 windows_*；上一步 success=false / flow_halt 则停止后续动作。",
+            "禁止未看工具返回就声称「已完成」；失败时用中文说明真实工具错误。"
+            "【流程闸】同轮每步只调一个 windows_*；上一步 success=false / flow_halt 则整任务停止，禁止继续猜测下一步。",
             "【严禁编造能力限制】你具备 windows_*，可操作本机已安装/已打开的桌面应用。"
             "禁止回答「只能测网页」「某某应用无法自动化所以不做」等推脱。",
+            (
+                "【收尾】开启生成用例：windows_* 成功后一两句中文汇报即可；"
+                "平台从动作轨迹自动生成用例，禁止 refine_test_plan / 手写大段 JSON。"
+                if generate_case_after_run
+                else "【收尾】未开启生成用例：windows_* 目标完成后立刻用一两句中文汇报结果并结束，禁止再调工具、禁止输出用例 JSON。"
+            ),
         ]
     elif embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
         if hermes_cdp_attached():
@@ -1225,6 +1512,8 @@ def _build_system_prompt(
     else:
         parts_agent = [
             "当用户要「在真实浏览器里跑」「探索系统/模块」「走通流程」「验证一整条业务」时，可调用 hermes_execute。",
+            "起始网址在用户消息里（平台无独立 URL 输入框）；instruction 须带上完整任务（含 URL、账号、验收点）。"
+            "平台会尝试从消息解析 URL 并预导航；若仍停在 about:blank，Hermes 须先 navigate 到消息中的地址。",
             "hermes_execute 可把 scope / environment_notes / acceptance_criteria / continuation_from 与 instruction 组合成长指令；"
             "对大系统请分多轮调用。拿到 Agent 文本结果后提炼选择器、URL、断言文案；必要时调用 refine_test_plan 合并。",
             "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
@@ -1234,9 +1523,18 @@ def _build_system_prompt(
         parts.extend([
             "",
             "## 输出用例质量",
-            "仅当自动化实际执行成功（或用户明确只要「生成用例不执行」）时，才输出可保存的用例 JSON。",
-            "当用户明确要求生成测试用例时，最终输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
-            "automation_layer 字段根据实际执行方式填写：Web 操作填 'web'，桌面操作填 'desktop'，API 操作填 'api'。",
+            (
+                "开启生成用例时：不要手写用例 JSON / 不要 refine_test_plan；"
+                "平台在工具结束后从 ActionRecorder 轨迹自动规范化并给出可保存用例。"
+                if generate_case_after_run
+                else "未开启「执行后生成用例」：禁止输出用例 JSON，禁止 refine_test_plan；完成后自然语言汇报即可。"
+            ),
+            (
+                ""
+                if generate_case_after_run
+                else "若用户之后单独点「生成用例」，再走用例生成入口。"
+            ),
+            "",
             "若 hermes_execute 失败/空流：只用中文说明原因与排查建议，禁止输出「供参考」假 steps。",
             "日常对话、询问建议、闲聊时不需要输出 JSON，直接自然语言回答即可。",
         ])
@@ -1244,22 +1542,29 @@ def _build_system_prompt(
         parts.extend([
             "",
             "## 输出用例质量",
-            "仅当自动化实际执行成功（或用户明确只要生成用例）时才输出用例 JSON。",
-            "当用户明确要求生成测试用例时，最终输出一个 JSON 对象（不要用 markdown 代码块），字段 case_name, case_url, description, precondition, expected_result, steps（与平台 runner 一致）。",
+            (
+                "开启生成用例时：禁止手写用例 JSON / refine_test_plan；平台从动作轨迹自动生成。"
+                if generate_case_after_run
+                else "未开启生成用例：禁止输出用例 JSON；操作完成后简短汇报。"
+            ),
             "日常对话、询问建议、闲聊时不需要输出 JSON，直接自然语言回答即可。",
             "若执行失败/空流：禁止编造 steps。",
-            "整系统/模块任务时：steps 应覆盖完整流程（含 navigate、必要 wait、click/input、关键 assert），步数可较多；避免只给 3～5 步骨架。",
-            "若 LIVE 快照存在：步骤应优先 probe_index 或快照中的 recommended 选择器，勿臆造 class。",
         ])
     else:
         parts.extend([
             "",
             "## 输出用例质量（Windows 桌面）",
-            "仅当桌面操作实际执行成功（或用户只要生成用例）时才输出用例 JSON。case_url 留空。每步 automation_layer=desktop。",
+            (
+                "开启生成用例时：成功后简短汇报即可；平台从 ActionRecorder 轨迹自动生成 desktop 用例，"
+                "禁止 refine_test_plan / 手写大段 JSON。"
+                if generate_case_after_run
+                else "未开启「执行后生成用例」：禁止输出用例 JSON / refine_test_plan；目标达成后一两句中文汇报并结束。"
+            ),
             "日常对话不需要输出 JSON。",
             "若 hermes_execute 空流/失败：只用中文说明，禁止输出假 launch_app/input steps。",
-            "禁止 navigate/css/xpath。首步 launch_app 或 attach_window；窗口校验用 selector_type=window。",
         ])
+    # 去掉空段落
+    parts = [p for p in parts if p is not None and str(p).strip() != ""]
     parts.extend([
         "",
         f"项目名: {project_name or 'unknown'}",
@@ -1378,6 +1683,10 @@ class ChatToolLoopParams:
     task_session_id: Optional[str] = None
     # 预检得到的能力摘要（注入 Hermes）
     capabilities_summary: Optional[str] = None
+    # 执行后是否从 ActionRecorder 轨迹生成用例（不走二次 LLM refine）
+    generate_case_after_run: bool = False
+    # 是否暴露 refine_test_plan（任务执行默认 False；用例对话可 True）
+    allow_refine_test_plan: Optional[bool] = None
 
 
 def _remaining_deadline_sec(params: "ChatToolLoopParams") -> Optional[float]:
@@ -1460,6 +1769,49 @@ def _inject_execution_env_verify(
     return json.dumps(data, ensure_ascii=False)
 
 
+def _resolve_start_url_for_hermes(params: Optional[ChatToolLoopParams], args: Dict[str, Any]) -> str:
+    """任务起始 URL：优先用户消息原文（前端无独立 URL 框），再 plan / probe / 工具参数。"""
+    candidates: List[str] = []
+    if params:
+        candidates.append(str(getattr(params, "message", None) or "").strip())
+        candidates.append(str(getattr(params, "test_scope", None) or "").strip())
+        candidates.append(str(getattr(params, "probe_url", None) or "").strip())
+        plan = getattr(params, "current_plan", None) or {}
+        if isinstance(plan, dict):
+            candidates.append(str(plan.get("case_url") or "").strip())
+        ctx = getattr(params, "interaction_context", None) or {}
+        if isinstance(ctx, dict):
+            candidates.append(str(ctx.get("url") or "").strip())
+    candidates.append(str((args or {}).get("start_url") or (args or {}).get("url") or "").strip())
+    candidates.append(str((args or {}).get("instruction") or "").strip())
+    try:
+        from agent_intent import extract_task_url
+    except Exception:
+        extract_task_url = None  # type: ignore
+    for c in candidates:
+        if not c:
+            continue
+        if extract_task_url:
+            hit = extract_task_url(c, allow_seed=False)
+            if hit:
+                return hit
+            # 候选本身已是纯 URL
+            hit2 = extract_task_url(f"打开 {c}", allow_seed=False)
+            if hit2 and c.strip().lower().startswith(("http://", "https://", "www.", "localhost")):
+                return hit2
+        cl = c.strip()
+        if re.match(r"^https?://\S+$", cl, re.I):
+            return cl.rstrip(").,;]}\"'")
+    # 最后允许百度等种子（仅用户消息）
+    if params and extract_task_url:
+        msg = str(getattr(params, "message", None) or "").strip()
+        if msg:
+            seeded = extract_task_url(msg, allow_seed=True)
+            if seeded:
+                return seeded
+    return ""
+
+
 def _handle_agent_execute(
     *,
     name: str,
@@ -1469,6 +1821,7 @@ def _handle_agent_execute(
     meta: Dict[str, Any],
     abort_event: Optional[threading.Event] = None,
     params: Optional[ChatToolLoopParams] = None,
+    on_trace: Any = None,
 ) -> str:
     tool_key = "hermes_execute" if name == "hermes_execute" else "openclaw_execute"
     if not allow_agent:
@@ -1486,7 +1839,10 @@ def _handle_agent_execute(
         )
     if abort_event is not None and abort_event.is_set():
         meta["tools_used"].append(f"{tool_key}_aborted")
-        return json.dumps({"ok": False, "error": "操作已被用户取消"}, ensure_ascii=False)
+        return json.dumps(
+            {"ok": False, "error": _abort_user_message(abort_event, params), "aborted": True},
+            ensure_ascii=False,
+        )
     instr = _compose_agent_instruction(args)
     sid = (args.get("session_id") or "").strip()
     if params and getattr(params, "task_session_id", None):
@@ -1498,11 +1854,102 @@ def _handle_agent_execute(
             ensure_ascii=False,
         )
 
+    start_url = _resolve_start_url_for_hermes(params, args)
+    cur_url = ""
+    cur_title = ""
+    try:
+        cur = _get_bridge_page_state()
+        cur_url = str(cur.get("url") or "").strip()
+        cur_title = str(cur.get("title") or "").strip()
+    except Exception:
+        pass
+    # 桥接页状态为空时，从 CDP /json/list 取最佳 http 页，避免误判「未到达」而反复 navigate
+    if not cur_url or cur_url.lower() in ("about:blank", "chrome://newtab/", "edge://newtab/"):
+        try:
+            from web_capture.cdp_browser import fetch_cdp_pages, _snap as _cdp_snap, _is_blank_page_url
+
+            port = int((_cdp_snap() or {}).get("debug_port") or 0)
+            for item in fetch_cdp_pages(port):
+                u = str(item.get("url") or "").strip()
+                if u and not _is_blank_page_url(u) and u.lower().startswith(("http://", "https://")):
+                    cur_url = u
+                    cur_title = str(item.get("title") or cur_title or "").strip()
+                    break
+        except Exception:
+            pass
+
+    def _url_looks_on_target(current: str, target: str) -> bool:
+        if not current or not target:
+            return False
+        if current in ("about:blank", "chrome://newtab/", "edge://newtab/"):
+            return False
+        try:
+            from urllib.parse import urlparse
+
+            a, b = urlparse(current), urlparse(target)
+            if (a.scheme or "http") and (b.netloc or "").lower() and (a.netloc or "").lower() == (b.netloc or "").lower():
+                # 同 host 即视为已到达（路径可能因登录跳转略有不同）
+                return True
+        except Exception:
+            pass
+        return target.rstrip("/") in current or current.rstrip("/") in target
+
+    already_on = _url_looks_on_target(cur_url, start_url) if start_url else (
+        bool(cur_url) and cur_url not in ("about:blank", "chrome://newtab/", "edge://newtab/")
+    )
+    # 平台侧再清一次空白标签，避免 Hermes navigate 前已有多余 NTP
+    try:
+        from web_capture.cdp_browser import close_blank_cdp_targets, _snap as _cdp_snap
+
+        port = int((_cdp_snap() or {}).get("debug_port") or 0)
+        close_blank_cdp_targets(port, keep_url_substr=cur_url or start_url or "")
+    except Exception:
+        pass
+
+    # 注入平台已采集的 DOM（JS 可交互控件），减少对 snapshot/navigate 的依赖
+    dom_pack = ""
+    try:
+        from ai_external_browser_bridge import get_dom_context_pack, get_page_snapshot
+
+        dom_pack = (get_dom_context_pack() or "").strip()
+        if not dom_pack:
+            dom_pack = (get_page_snapshot() or "").strip()
+    except Exception:
+        dom_pack = ""
+
+    if already_on and cur_url:
+        instr = (
+            f"【当前浏览器状态】URL={cur_url}，标题={cur_title}。\n"
+            f"**禁止** browser_navigate / skill_view / terminal / 新开标签（平台已导航成功，再 navigate=重复造轮子）。\n"
+            f"优先使用下方 DOM 控件清单直接 click/type；"
+            f"仅当清单不足以定位时，才允许 **一次** browser_snapshot（DOM/a11y ref，非视觉）。\n\n"
+            + (f"【页面 DOM/可交互控件】\n{dom_pack[:6000]}\n\n" if dom_pack else "")
+            + instr
+        )
+    elif start_url:
+        instr = (
+            f"【起始 URL】{start_url}\n"
+            f"平台通常已预导航；若指令含「当前浏览器状态」或 DOM 清单，**禁止** browser_navigate。\n"
+            f"仅当确认仍在 about:blank 时，允许 **仅一次** browser_navigate 到该地址；到达后禁止再 navigate。\n"
+            f"勿新开空白标签。优先 DOM 清单；snapshot 仅作难定位兜底。\n\n"
+            + (f"【页面 DOM/可交互控件】\n{dom_pack[:6000]}\n\n" if dom_pack else "")
+            + instr
+        )
+    elif dom_pack:
+        instr = f"【页面 DOM/可交互控件】\n{dom_pack[:6000]}\n\n" + instr
+
+    # 供熔断：已在目标页时，navigate 出现 1 次即中止
+    meta["hermes_already_on_page"] = bool(already_on)
+    meta["hermes_forbid_navigate"] = bool(already_on)
+
     plat = (getattr(params, "platform_type", None) or "auto") if params else "auto"
     vision_summary = ""
 
-    # 桌面任务：保证 gateway 进程与密钥就绪，避免 Hermes curl 401 空转
-    if plat in ("auto", "desktop", "all", "cross"):
+    # 纯 web / 含 URL 的 auto：不拉桌面 gateway，避免桌面侧车干扰 Hermes
+    _need_desktop_gw = plat in ("desktop", "all", "cross") or (
+        plat == "auto" and not start_url
+    )
+    if _need_desktop_gw:
         try:
             from desktop_service_bootstrap import ensure_desktop_gateway_for_agent
 
@@ -1516,15 +1963,25 @@ def _handle_agent_execute(
 
         ctx = get_task_context(sid) if sid else None
         if ctx:
+            if plat == "web" or (start_url and plat in ("auto", "web")):
+                ctx.active_surface = "web"
+            elif plat == "desktop":
+                ctx.active_surface = "desktop"
             ctx_prefix = ctx.instruction_prefix()
-            # 绑定桌面 session
-            try:
-                import os as _os
-                _os.environ["DESKTOP_AGENT_SESSION_ID"] = ctx.desktop_session_id
-            except Exception:
-                pass
+            if plat == "desktop":
+                try:
+                    import os as _os
+
+                    _os.environ["DESKTOP_AGENT_SESSION_ID"] = ctx.desktop_session_id
+                except Exception:
+                    pass
     except Exception:
         pass
+
+    # 外层已路由为 web 时，强制 Hermes 网页专用指令（避免 auto 混入桌面）
+    explore_plat = "web" if (plat == "web" or (start_url and plat == "auto")) else plat
+    if explore_plat == "auto" and start_url:
+        explore_plat = "web"
 
     try:
         from hermes_skill_hints import build_explore_instruction
@@ -1532,10 +1989,12 @@ def _handle_agent_execute(
         instr = build_explore_instruction(
             instr,
             {
-                "platform": plat,
+                "platform": explore_plat,
                 "context_prefix": ctx_prefix,
                 "vision_summary": vision_summary,
                 "capabilities_summary": getattr(params, "capabilities_summary", None) or "",
+                "start_url": start_url,
+                "already_on_target_page": already_on,
             },
         )
     except Exception:
@@ -1554,14 +2013,121 @@ def _handle_agent_execute(
             hermes_sid = (ctx_h.hermes_session_id or "").strip()
     except Exception:
         hermes_sid = ""
+
+    hermes_system = ""
+    if explore_plat == "web":
+        hermes_system = _web_hermes_system_prompt()
+
     try:
         result_text = None
         traces: List[str] = []
         tool_events: List[Dict[str, Any]] = []
+        # Hermes 同名工具死循环熔断（skill_view / terminal / browser_navigate / 连续 snapshot）
+        _rep_name = ""
+        _rep_count = 0
+        _forbid_nav = bool(meta.get("hermes_forbid_navigate"))
+        _REP_LIMIT = 2
+        _REP_WATCH = frozenset(
+            {
+                "terminal",
+                "bash",
+                "shell",
+                "skill_view",
+                "browser_navigate",
+                "browser_goto",
+                "navigate",
+                "browser_snapshot",
+            }
+        )
+        _NAV_NAMES = frozenset({"browser_navigate", "browser_goto", "navigate"})
+
+        def _note_hermes_tool_name(raw: str) -> Optional[str]:
+            nonlocal _rep_name, _rep_count
+            n = (raw or "").strip().lower()
+            if n.startswith("hermes:"):
+                n = n.split(":", 1)[-1].strip()
+            # "browser_navigate(...)" / "terminal"
+            n = re.split(r"[\s(/]", n, maxsplit=1)[0].strip()
+            if not n:
+                return None
+            # 「Hermes 开始执行」等非工具轨迹不计入
+            if n in ("hermes", "start", "trace", "hint", "tool", "tool_progress"):
+                return None
+            if "开始执行" in (raw or ""):
+                return None
+            watch = n in _REP_WATCH or any(n.startswith(w) for w in _REP_WATCH)
+            if not watch:
+                _rep_name = ""
+                _rep_count = 0
+                return None
+            if n == _rep_name:
+                _rep_count += 1
+            else:
+                _rep_name = n
+                _rep_count = 1
+            # 已在目标页：任意一次 navigate 即视为重复造轮子
+            limit = 1 if (_forbid_nav and n in _NAV_NAMES) else _REP_LIMIT
+            # snapshot 连续 2 次无动作也熔断（应基于 DOM 直接操作）
+            if _rep_count >= limit:
+                return n
+            return None
+
+        def _halt_tool_loop(looped: str) -> str:
+            err = (
+                f"智能体工具「{looped}」连续调用仍无进展，已中止（非用户取消）。"
+                "网页任务应优先用平台注入的 DOM 控件清单 click/type；"
+                "browser_snapshot 仅难定位时用一次（DOM ref，非视觉）；"
+                "禁止 skill_view / 反复 browser_navigate。"
+            )
+            meta["hermes_tool_loop_blocked"] = True
+            meta["hermes_tool_loop_error"] = err
+            meta["hermes_stream_blocked"] = True
+            meta["hermes_stream_error"] = err
+            meta["hermes_failed"] = True
+            meta["savable"] = False
+            meta["failed"] = True
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": err,
+                    "tool_loop": True,
+                    "loop_tool": looped,
+                    "hint": "请用中文向用户说明死循环已停止；禁止再次 hermes_execute；禁止说用户取消。",
+                },
+                ensure_ascii=False,
+            )
+
         if hasattr(agent_client, "execute_user_instruction_stream"):
             for ev_kind, ev_payload in agent_client.execute_user_instruction_stream(
-                instr, hermes_sid, abort_event=abort_event
+                instr,
+                hermes_sid,
+                abort_event=abort_event,
+                system_prompt=hermes_system,
             ):
+                if params is not None and _deadline_exceeded(params):
+                    if abort_event is not None:
+                        setattr(abort_event, "_timed_out", True)
+                        setattr(abort_event, "_abort_reason", "timeout")
+                        abort_event.set()
+                    result_text = json.dumps(
+                        {
+                            "ok": False,
+                            "error": "任务已超过设定超时，Hermes 跨层执行已中止",
+                            "timeout": True,
+                        },
+                        ensure_ascii=False,
+                    )
+                    break
+                if abort_event is not None and abort_event.is_set():
+                    result_text = json.dumps(
+                        {
+                            "ok": False,
+                            "error": _abort_user_message(abort_event, params),
+                            "aborted": True,
+                        },
+                        ensure_ascii=False,
+                    )
+                    break
                 if ev_kind == "trace":
                     msg = str(
                         (ev_payload or {}).get("message")
@@ -1570,21 +2136,48 @@ def _handle_agent_execute(
                     ).strip()
                     if msg:
                         traces.append(msg[:300])
+                        if callable(on_trace):
+                            try:
+                                on_trace(msg[:300])
+                            except Exception:
+                                pass
+                        looped = _note_hermes_tool_name(msg)
+                        if looped:
+                            # 切勿 abort_event.set()：会被外层误报成「用户取消」
+                            result_text = _halt_tool_loop(looped)
+                            break
                 elif ev_kind == "tool":
                     if isinstance(ev_payload, dict):
                         tool_events.append(ev_payload)
                         sum_m = str(
-                            ev_payload.get("summary") or ev_payload.get("name") or "tool"
+                            ev_payload.get("summary")
+                            or ev_payload.get("name")
+                            or "tool"
                         ).strip()
                         if sum_m:
                             traces.append(sum_m[:300])
+                            if callable(on_trace):
+                                try:
+                                    on_trace(sum_m[:300])
+                                except Exception:
+                                    pass
+                            looped = _note_hermes_tool_name(
+                                str(ev_payload.get("name") or sum_m)
+                            )
+                            if looped:
+                                result_text = _halt_tool_loop(looped)
+                                break
                 elif ev_kind == "tool_events":
                     evs = (ev_payload or {}).get("events") if isinstance(ev_payload, dict) else None
                     if isinstance(evs, list):
                         tool_events.extend([e for e in evs if isinstance(e, dict)])
                 elif ev_kind == "error":
+                    err_m = str((ev_payload or {}).get("error") or "Hermes 失败")
+                    # 网关因 abort 回灌的「用户取消」若实际是超时/死循环，改写文案
+                    if "用户取消" in err_m and abort_event is not None:
+                        err_m = _abort_user_message(abort_event, params)
                     result_text = json.dumps(
-                        {"ok": False, "error": (ev_payload or {}).get("error") or "Hermes 失败"},
+                        {"ok": False, "error": err_m},
                         ensure_ascii=False,
                     )
                     break
@@ -1599,7 +2192,7 @@ def _handle_agent_execute(
                 meta["hermes_tool_events"] = tool_events[-80:]
         if result_text is None:
             result_text = agent_client.execute_user_instruction(
-                instr, hermes_sid, abort_event=abort_event
+                instr, hermes_sid, abort_event=abort_event, system_prompt=hermes_system
             )
     except Exception as ex:
         from hermes_gateway_client import _friendly_corrupt_msg, _is_corrupt_session_error
@@ -1803,6 +2396,11 @@ def run_ai_chat_with_tools(
         allow_screen_tools=bool(getattr(params, "allow_screen_tools", False)),
         allow_desktop_windows_tools=getattr(params, "allow_desktop_windows_tools", None),
         message=params.message or "",
+        allow_refine_test_plan=(
+            bool(params.allow_refine_test_plan)
+            if getattr(params, "allow_refine_test_plan", None) is not None
+            else True
+        ),
     )
     agent_client = get_agent_gateway_client()
 
@@ -1823,6 +2421,7 @@ def run_ai_chat_with_tools(
         test_scope=(params.test_scope or "").strip() if params.test_scope else "",
         embedded_session_id=embed_sid,
         platform_type=plat,
+        generate_case_after_run=bool(getattr(params, "generate_case_after_run", False)),
     )
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -1837,6 +2436,9 @@ def run_ai_chat_with_tools(
         "tools_used": [],
         "succeeded_action_fps": [],
         "desktop_phase": "start",
+        "flow_profile": _resolve_desktop_flow_profile(
+            getattr(params, "message", "") or "", plat
+        ),
         "obs_count": 0,
         "typed_texts": [],
         "focused_apps": [],
@@ -1851,9 +2453,21 @@ def run_ai_chat_with_tools(
 
     for round_idx in range(_max_tool_rounds()):
         if _abort is not None and _abort.is_set():
-            raise InterruptedError("操作已被用户取消")
+            raise InterruptedError(_abort_user_message(_abort, params))
         if _deadline_exceeded(params):
             raise InterruptedError("任务已超过设定超时时间")
+        if _desktop_flow_should_stop(meta):
+            meta["final_round"] = round_idx
+            meta["savable"] = False
+            reply = _desktop_halt_user_facing(
+                str(meta.get("desktop_last_failed_tool") or "windows_*"),
+                json.dumps(
+                    {"error": meta.get("desktop_last_error") or "", "suggestion": ""},
+                    ensure_ascii=False,
+                ),
+            )
+            meta["halt_reply"] = reply
+            return {}, [], meta
         if prof:
             assistant_msg = dispatch_chat_completion_messages(
                 messages,
@@ -1997,30 +2611,49 @@ def run_ai_chat_with_tools(
                     params=params,
                 )
             elif name == "refine_test_plan":
-                adj = (args.get("adjustment") or "").strip()
-                if not adj:
-                    result_text = json.dumps({"ok": False, "error": "adjustment 为空"}, ensure_ascii=False)
-                else:
-                    refined = local_ai_service.refine_case_and_steps(
-                        user_message=adj,
-                        project_name=params.project_name,
-                        current_plan=last_plan,
-                        history=params.history if isinstance(params.history, list) else [],
-                        model=params.legacy_model,
-                        profile=prof,
-                        page_snapshot=params.page_snapshot,
-                        probe_registry=params.probe_registry,
-                        probe_url=params.probe_url,
-                        memory_context=params.memory_context,
-                        dom_context_pack=params.dom_context_pack,
-                        interaction_context=params.interaction_context,
-                    )
-                    last_plan = refined
+                _allow_ref = getattr(params, "allow_refine_test_plan", None)
+                if _allow_ref is None:
+                    _allow_ref = True
+                if not _allow_ref:
                     result_text = json.dumps(
-                        {"ok": True, "plan": refined, "hint": "已更新 current_plan，请在最终回复输出完整 JSON 用例"},
+                        {
+                            "ok": False,
+                            "skipped": True,
+                            "error": "当前任务不走二次 LLM 润色用例",
+                            "hint": (
+                                "用例将由平台从动作轨迹自动生成；请直接用中文汇报执行结果。"
+                                if bool(getattr(params, "generate_case_after_run", False))
+                                else "请直接用中文汇报执行结果并结束。"
+                            ),
+                        },
                         ensure_ascii=False,
-                    )[: min(96000, max_result)]
-                meta["tools_used"].append("refine_test_plan")
+                    )
+                    meta["tools_used"].append("refine_test_plan_skipped")
+                else:
+                    adj = (args.get("adjustment") or "").strip()
+                    if not adj:
+                        result_text = json.dumps({"ok": False, "error": "adjustment 为空"}, ensure_ascii=False)
+                    else:
+                        refined = local_ai_service.refine_case_and_steps(
+                            user_message=adj,
+                            project_name=params.project_name,
+                            current_plan=last_plan,
+                            history=params.history if isinstance(params.history, list) else [],
+                            model=params.legacy_model,
+                            profile=prof,
+                            page_snapshot=params.page_snapshot,
+                            probe_registry=params.probe_registry,
+                            probe_url=params.probe_url,
+                            memory_context=params.memory_context,
+                            dom_context_pack=params.dom_context_pack,
+                            interaction_context=params.interaction_context,
+                        )
+                        last_plan = refined
+                        result_text = json.dumps(
+                            {"ok": True, "plan": refined, "hint": "已更新 current_plan，请在最终回复输出完整 JSON 用例"},
+                            ensure_ascii=False,
+                        )[: min(96000, max_result)]
+                    meta["tools_used"].append("refine_test_plan")
             elif name in WINDOWS_TOOL_NAMES or name in SCREEN_TOOL_NAMES:
                 skip_json = _should_skip_replay_desktop_tool(name, args or {}, meta)
                 if skip_json:
@@ -2090,7 +2723,10 @@ def run_ai_chat_with_tools(
                         messages.append({"role": "user", "content": next_hint})
                     else:
                         meta["desktop_flow_halted"] = True
+                        meta["desktop_last_failed_tool"] = "windows_type_text"
                         meta["failed"] = True
+                        meta["partial"] = True
+                        meta["savable"] = False
                         messages.append(
                             {
                                 "role": "user",
@@ -2099,7 +2735,11 @@ def run_ai_chat_with_tools(
                                 ),
                             }
                         )
-                        break
+                        meta["final_round"] = round_idx
+                        meta["halt_reply"] = _desktop_halt_user_facing(
+                            "windows_type_text", type_json
+                        )
+                        return {}, [], meta
             if name in ("hermes_execute", "openclaw_execute") and _hermes_retry_blocked(meta):
                 if meta.get("hermes_stream_blocked") and not meta.get("hermes_auth_blocked"):
                     messages.append(
@@ -2141,8 +2781,14 @@ def run_ai_chat_with_tools(
             if name in WINDOWS_TOOL_NAMES and _desktop_tool_failed(result_text):
                 meta["desktop_flow_halted"] = True
                 meta["desktop_last_failed_tool"] = name
+                try:
+                    _ed = json.loads(result_text or "{}")
+                    meta["desktop_last_error"] = str((_ed or {}).get("error") or "")[:300]
+                except Exception:
+                    meta["desktop_last_error"] = ""
                 meta["failed"] = True
                 meta["partial"] = True
+                meta["savable"] = False
                 while idx_tc < len(pending_calls):
                     skip = pending_calls[idx_tc]
                     idx_tc += 1
@@ -2160,13 +2806,11 @@ def run_ai_chat_with_tools(
                     )
                     messages.append({"role": "tool", "tool_call_id": sid, "content": blocked})
                     meta["tools_used"].append(f"{sname}_flow_halted")
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": _desktop_fail_stop_message(name, result_text, meta=meta),
-                    }
-                )
-                break
+                stop_msg = _desktop_fail_stop_message(name, result_text, meta=meta)
+                messages.append({"role": "user", "content": stop_msg})
+                meta["final_round"] = round_idx
+                meta["halt_reply"] = _desktop_halt_user_facing(name, result_text)
+                return {}, [], meta
 
     raise ValueError(f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务或提高 AI_CHAT_TOOLS_MAX_ROUNDS")
 
@@ -2199,6 +2843,11 @@ def run_ai_chat_with_tools_stream(
         allow_screen_tools=bool(getattr(params, "allow_screen_tools", False)),
         allow_desktop_windows_tools=getattr(params, "allow_desktop_windows_tools", None),
         message=params.message or "",
+        allow_refine_test_plan=(
+            bool(params.allow_refine_test_plan)
+            if getattr(params, "allow_refine_test_plan", None) is not None
+            else True
+        ),
     )
     agent_client = get_agent_gateway_client()
 
@@ -2219,6 +2868,7 @@ def run_ai_chat_with_tools_stream(
         test_scope=(params.test_scope or "").strip() if params.test_scope else "",
         embedded_session_id=embed_sid,
         platform_type=plat,
+        generate_case_after_run=bool(getattr(params, "generate_case_after_run", False)),
     )
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -2226,6 +2876,15 @@ def run_ai_chat_with_tools_stream(
         _history_to_messages(params.history, local_ai_service._sanitize_chat_history_for_prompt)
     )
     messages.append({"role": "user", "content": params.message})
+    # 轻量桌面记忆 hint（若有）
+    try:
+        from desktop_run_memory import hint_for_app
+
+        mem_hint = hint_for_app((params.message or "")[:80])
+        if mem_hint:
+            messages.append({"role": "user", "content": f"[System] {mem_hint}"})
+    except Exception:
+        pass
 
     last_plan: Dict[str, Any] = dict(params.current_plan) if isinstance(params.current_plan, dict) else {}
     meta: Dict[str, Any] = {
@@ -2233,6 +2892,9 @@ def run_ai_chat_with_tools_stream(
         "tools_used": [],
         "succeeded_action_fps": [],
         "desktop_phase": "start",
+        "flow_profile": _resolve_desktop_flow_profile(
+            getattr(params, "message", "") or "", plat
+        ),
         "obs_count": 0,
         "typed_texts": [],
         "focused_apps": [],
@@ -2256,15 +2918,39 @@ def run_ai_chat_with_tools_stream(
 
     for round_idx in range(_max_tool_rounds()):
         if _abort is not None and _abort.is_set():
-            if _deadline_exceeded(params):
-                yield ("error", "任务已超过设定的超时时间，已自动停止")
-            else:
-                yield ("error", "操作已被用户取消")
+            yield ("error", _abort_user_message(_abort, params))
             return
         if _deadline_exceeded(params):
             if _abort is not None:
+                setattr(_abort, "_timed_out", True)
+                setattr(_abort, "_abort_reason", "timeout")
                 _abort.set()
             yield ("error", "任务已超过设定的超时时间，已自动停止")
+            return
+        if _desktop_flow_should_stop(meta):
+            reply = meta.get("halt_reply") or _desktop_halt_user_facing(
+                str(meta.get("desktop_last_failed_tool") or "windows_*"),
+                json.dumps(
+                    {"error": meta.get("desktop_last_error") or ""},
+                    ensure_ascii=False,
+                ),
+            )
+            meta["final_round"] = round_idx
+            meta["savable"] = False
+            yield ("thinking", {"round": round_idx, "content": "步骤失败，任务已停止"})
+            yield ("reply", {"text": reply})
+            yield (
+                "done",
+                {
+                    "total_rounds": round_idx + 1,
+                    "plan": {},
+                    "meta": meta,
+                    "reply": reply,
+                    "failed": True,
+                    "savable": False,
+                    "partial": True,
+                },
+            )
             return
 
         if round_idx == 0:
@@ -2376,6 +3062,9 @@ def run_ai_chat_with_tools_stream(
                 )
                 meta["final_round"] = round_idx
                 n = len(normalized.get("steps") or [])
+                _maybe_persist_desktop_run_memory(
+                    meta, message=params.message or "", failed=False
+                )
                 yield ("plan_update", {"plan": normalized, "step_count": n})
                 yield (
                     "done",
@@ -2393,6 +3082,11 @@ def run_ai_chat_with_tools_stream(
             except ValueError:
                 meta["final_round"] = round_idx
                 meta["chat_reply"] = True
+                _maybe_persist_desktop_run_memory(
+                    meta,
+                    message=params.message or "",
+                    failed=bool(meta.get("hermes_failed") or meta.get("failed")),
+                )
                 yield ("reply", {"text": text})
                 yield (
                     "done",
@@ -2422,13 +3116,12 @@ def run_ai_chat_with_tools_stream(
             tc = pending_calls[idx_tc]
             idx_tc += 1
             if _abort is not None and _abort.is_set():
-                if _deadline_exceeded(params):
-                    yield ("error", "任务已超过设定的超时时间，已自动停止")
-                else:
-                    yield ("error", "操作已被用户取消")
+                yield ("error", _abort_user_message(_abort, params))
                 return
             if _deadline_exceeded(params):
                 if _abort is not None:
+                    setattr(_abort, "_timed_out", True)
+                    setattr(_abort, "_abort_reason", "timeout")
                     _abort.set()
                 yield ("error", "任务已超过设定的超时时间，已自动停止")
                 return
@@ -2464,7 +3157,26 @@ def run_ai_chat_with_tools_stream(
                         "result_preview": result_text[:500],
                     })
                     messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
-                    continue
+                    halt = (
+                        meta.get("hermes_tool_loop_error")
+                        or meta.get("hermes_stream_error")
+                        or meta.get("hermes_auth_error")
+                        or "智能体执行已中止"
+                    )
+                    yield ("reply", {"text": halt})
+                    yield (
+                        "done",
+                        {
+                            "total_rounds": round_idx + 1,
+                            "plan": {},
+                            "meta": meta,
+                            "reply": halt,
+                            "failed": True,
+                            "savable": False,
+                            "partial": False,
+                        },
+                    )
+                    return
                 if callable(getattr(params, "ensure_browser_before_agent", None)):
                     try:
                         ok_br, err_br = params.ensure_browser_before_agent()
@@ -2482,14 +3194,83 @@ def run_ai_chat_with_tools_stream(
                         })
                         messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
                         continue
-                result_text = _handle_agent_execute(
-                    name=name, args=args, allow_agent=allow_agent,
-                    agent_client=agent_client, meta=meta,
-                    abort_event=_abort, params=params,
-                )
-                for tr in (meta.get("hermes_traces") or [])[-20:]:
-                    yield ("thinking", {"round": round_idx, "content": f"Hermes: {tr}"})
-                    yield ("hermes_trace", {"round": round_idx, "message": tr, "tool": name})
+                result_text = ""
+                _trace_q: Any = None
+                try:
+                    import queue as _queue
+
+                    _trace_q = _queue.Queue()
+                except Exception:
+                    _trace_q = None
+
+                def _on_hermes_trace(msg: str) -> None:
+                    if _trace_q is not None:
+                        try:
+                            _trace_q.put_nowait(str(msg or "")[:300])
+                        except Exception:
+                            pass
+
+                _holder: Dict[str, Any] = {"text": "", "err": None}
+
+                def _hermes_worker() -> None:
+                    try:
+                        _holder["text"] = _handle_agent_execute(
+                            name=name,
+                            args=args,
+                            allow_agent=allow_agent,
+                            agent_client=agent_client,
+                            meta=meta,
+                            abort_event=_abort,
+                            params=params,
+                            on_trace=_on_hermes_trace if _trace_q is not None else None,
+                        )
+                    except Exception as _hex:
+                        _holder["err"] = _hex
+                        _holder["text"] = json.dumps(
+                            {"ok": False, "error": str(_hex)[:400]},
+                            ensure_ascii=False,
+                        )
+                    finally:
+                        if _trace_q is not None:
+                            try:
+                                _trace_q.put_nowait(None)
+                            except Exception:
+                                pass
+
+                _ht = threading.Thread(target=_hermes_worker, daemon=True)
+                _ht.start()
+                _live_trace_n = 0
+                while _ht.is_alive() or (_trace_q is not None and not _trace_q.empty()):
+                    if _deadline_exceeded(params):
+                        if _abort is not None:
+                            setattr(_abort, "_timed_out", True)
+                            setattr(_abort, "_abort_reason", "timeout")
+                            _abort.set()
+                        yield ("error", "任务已超过设定的超时时间，已自动停止")
+                        return
+                    msg_tr = None
+                    if _trace_q is not None:
+                        try:
+                            msg_tr = _trace_q.get(timeout=0.4)
+                        except Exception:
+                            msg_tr = "__wait__"
+                    else:
+                        _ht.join(timeout=0.4)
+                        continue
+                    if msg_tr is None:
+                        break
+                    if msg_tr == "__wait__":
+                        continue
+                    if msg_tr:
+                        _live_trace_n += 1
+                        yield ("thinking", {"round": round_idx, "content": f"Hermes: {msg_tr}"})
+                        yield ("hermes_trace", {"round": round_idx, "message": msg_tr, "tool": name})
+                _ht.join(timeout=2.0)
+                result_text = str(_holder.get("text") or "")
+                if _live_trace_n == 0:
+                    for tr in (meta.get("hermes_traces") or [])[-20:]:
+                        yield ("thinking", {"round": round_idx, "content": f"Hermes: {tr}"})
+                        yield ("hermes_trace", {"round": round_idx, "message": tr, "tool": name})
                 meta.pop("hermes_traces", None)
                 # 真实工具轨迹 → 动作卡（禁止散文猜测）
                 tool_evs = meta.pop("hermes_tool_events", None) or []
@@ -2538,32 +3319,73 @@ def run_ai_chat_with_tools_stream(
                             continue
                     if out_recs:
                         yield ("action_records", out_recs)
+                # Hermes 工具死循环：立即向用户说明并结束，禁止再开一轮被误报成「用户取消」
+                if meta.get("hermes_tool_loop_blocked"):
+                    halt = meta.get("hermes_tool_loop_error") or "智能体因工具死循环已中止"
+                    yield ("tool_call_result", {
+                        "round": round_idx, "tool": name,
+                        "result_preview": (result_text or "")[:500],
+                    })
+                    messages.append({"role": "tool", "tool_call_id": tid, "content": result_text})
+                    yield ("reply", {"text": halt})
+                    yield (
+                        "done",
+                        {
+                            "total_rounds": round_idx + 1,
+                            "plan": {},
+                            "meta": meta,
+                            "reply": halt,
+                            "failed": True,
+                            "savable": False,
+                            "partial": False,
+                        },
+                    )
+                    return
             elif name == "refine_test_plan":
-                adj = (args.get("adjustment") or "").strip()
-                if not adj:
-                    result_text = json.dumps({"ok": False, "error": "adjustment 为空"}, ensure_ascii=False)
+                _allow_ref = getattr(params, "allow_refine_test_plan", None)
+                if _allow_ref is None:
+                    _allow_ref = True
+                if not _allow_ref:
+                    result_text = json.dumps(
+                        {
+                            "ok": False,
+                            "skipped": True,
+                            "error": "当前任务不走二次 LLM 润色用例",
+                            "hint": (
+                                "用例将由平台从动作轨迹自动生成；请直接用中文汇报执行结果。"
+                                if bool(getattr(params, "generate_case_after_run", False))
+                                else "请直接用中文汇报执行结果并结束。"
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
+                    meta["tools_used"].append("refine_test_plan_skipped")
                 else:
-                    try:
-                        refined = local_ai_service.refine_case_and_steps(
-                            user_message=adj, project_name=params.project_name,
-                            current_plan=last_plan,
-                            history=params.history if isinstance(params.history, list) else [],
-                            model=params.legacy_model, profile=prof,
-                            page_snapshot=params.page_snapshot, probe_registry=params.probe_registry,
-                            probe_url=params.probe_url, memory_context=params.memory_context,
-                            dom_context_pack=params.dom_context_pack,
-                            interaction_context=params.interaction_context,
-                        )
-                        last_plan = refined
-                        result_text = json.dumps(
-                            {"ok": True, "plan": refined, "hint": "已更新 current_plan"},
-                            ensure_ascii=False,
-                        )[: min(96000, max_result)]
-                        n = len(refined.get("steps") or [])
-                        yield ("plan_update", {"plan": refined, "step_count": n})
-                    except Exception as e:
-                        result_text = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
-                meta["tools_used"].append("refine_test_plan")
+                    adj = (args.get("adjustment") or "").strip()
+                    if not adj:
+                        result_text = json.dumps({"ok": False, "error": "adjustment 为空"}, ensure_ascii=False)
+                    else:
+                        try:
+                            refined = local_ai_service.refine_case_and_steps(
+                                user_message=adj, project_name=params.project_name,
+                                current_plan=last_plan,
+                                history=params.history if isinstance(params.history, list) else [],
+                                model=params.legacy_model, profile=prof,
+                                page_snapshot=params.page_snapshot, probe_registry=params.probe_registry,
+                                probe_url=params.probe_url, memory_context=params.memory_context,
+                                dom_context_pack=params.dom_context_pack,
+                                interaction_context=params.interaction_context,
+                            )
+                            last_plan = refined
+                            result_text = json.dumps(
+                                {"ok": True, "plan": refined, "hint": "已更新 current_plan"},
+                                ensure_ascii=False,
+                            )[: min(96000, max_result)]
+                            n = len(refined.get("steps") or [])
+                            yield ("plan_update", {"plan": refined, "step_count": n})
+                        except Exception as e:
+                            result_text = json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+                    meta["tools_used"].append("refine_test_plan")
             elif name in WINDOWS_TOOL_NAMES or name in SCREEN_TOOL_NAMES:
                 skip_json = _should_skip_replay_desktop_tool(name, args or {}, meta)
                 if skip_json:
@@ -2806,8 +3628,13 @@ def run_ai_chat_with_tools_stream(
                             meta["tools_used"].append(f"{nname}_skipped_replay")
                     else:
                         meta["desktop_flow_halted"] = True
+                        meta["desktop_last_failed_tool"] = "windows_type_text"
                         meta["failed"] = True
                         meta["partial"] = True
+                        meta["savable"] = False
+                        meta["halt_reply"] = _desktop_halt_user_facing(
+                            "windows_type_text", type_json
+                        )
                         messages.append(
                             {
                                 "role": "user",
@@ -2820,7 +3647,7 @@ def run_ai_chat_with_tools_stream(
                             "thinking",
                             {
                                 "round": round_idx,
-                                "content": "自动输入联系人失败，已暂停后续动作",
+                                "content": "自动输入失败，任务已停止",
                             },
                         )
                         # 取消同轮剩余
@@ -2987,12 +3814,19 @@ def run_ai_chat_with_tools_stream(
                         }
                     )
 
-            # —— 流程闸：桌面步骤失败则取消同轮后续工具 ——
+            # —— 流程闸：桌面步骤失败则取消同轮后续工具，并结束整任务 ——
             if name in WINDOWS_TOOL_NAMES and _desktop_tool_failed(result_text):
                 meta["desktop_flow_halted"] = True
                 meta["desktop_last_failed_tool"] = name
+                try:
+                    _ed = json.loads(result_text or "{}")
+                    meta["desktop_last_error"] = str((_ed or {}).get("error") or "")[:300]
+                except Exception:
+                    meta["desktop_last_error"] = ""
                 meta["failed"] = True
                 meta["partial"] = True
+                meta["savable"] = False
+                meta["halt_reply"] = _desktop_halt_user_facing(name, result_text)
                 yield (
                     "thinking",
                     {
@@ -3012,7 +3846,7 @@ def run_ai_chat_with_tools_stream(
                             "ok": False,
                             "flow_halt": True,
                             "error": f"已取消：因上一步 `{name}` 失败，不再执行 `{sname}`",
-                            "suggestion": "请先观察屏幕再决定下一步，或向用户说明失败。",
+                            "suggestion": "任务已停止，请处理后重发。",
                         },
                         ensure_ascii=False,
                     )
@@ -3046,5 +3880,30 @@ def run_ai_chat_with_tools_stream(
                     }
                 )
                 break
+
+        if _desktop_flow_should_stop(meta):
+            reply = meta.get("halt_reply") or _desktop_halt_user_facing(
+                str(meta.get("desktop_last_failed_tool") or "windows_*"),
+                json.dumps(
+                    {"error": meta.get("desktop_last_error") or ""},
+                    ensure_ascii=False,
+                ),
+            )
+            meta["final_round"] = round_idx
+            meta["savable"] = False
+            yield ("reply", {"text": reply})
+            yield (
+                "done",
+                {
+                    "total_rounds": round_idx + 1,
+                    "plan": {},
+                    "meta": meta,
+                    "reply": reply,
+                    "failed": True,
+                    "savable": False,
+                    "partial": True,
+                },
+            )
+            return
 
     yield ("error", f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务")

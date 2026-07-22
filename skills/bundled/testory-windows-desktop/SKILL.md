@@ -65,22 +65,23 @@ POST /internal/session/{id}/inspect     {"max_depth": 4, "max_nodes": 120}
 ## 最佳实践
 
 1. **观察→动作→核验**：`windows_type_text` / `windows_press_key` 先捕获目标窗（frame），再操作，最后用 OCR/画面证据确认；无证据不得报成功
-2. **UIA 优先**：inspect 获取控件树，按 name/automation_id 定位
-3. **视觉降级**：UIA 失败时用 ORB / 布局估算（如微信搜索栏）
-4. **搜索输入**：先 `windows_click_element('搜索')` 武装坐标，再立刻 `windows_type_text`；中文优先剪贴板 Ctrl+V，失败自动换 WM_PASTE / WM_CHAR
-5. **目标窗口投递**：先 focus/attach，再 type/press；一步失败则 flow_halt，勿连环盲点
-6. **合理等待**：应用启动后 wait 1-3s；gateway 返回逐步 results 便于排查
+2. **UIA 优先**：inspect 获取控件树，按 name/automation_id 定位；点击优先 UIA Invoke，再 PostMessage
+3. **后台模式**：`DESKTOP_NO_FOCUS_STEAL=1` 时不抢前台；`DESKTOP_PHYSICAL_MOUSE=0`（默认）不移动光标。Qt/弱 UIA 应用仍可能需要前台
+4. **视觉降级**：UIA 失败时用 ORB / OCR；微信搜索栏可用布局估算（仅目标确认为微信时）
+5. **搜索输入**：仅当任务需要搜索时再点搜索控件并 `windows_type_text`；中文优先剪贴板 Ctrl+V
+6. **核验等待**：`windows_wait(condition='desktop_change')` 或 `window:标题`；一步失败则 flow_halt，勿连环盲点
+7. **合理等待**：应用启动后 wait 1-3s；gateway 返回逐步 results 便于排查
 
 ## 应用专属配方（可选，非核心代码）
 
 应用差异写在本 Skill，由 Agent 用通用工具编排。示例（IM 发消息一类任务）：
 
 1. `windows_focus_app(应用名)`
-2. `windows_press_key("Ctrl+F")`（若该应用支持搜索）→ `get_screen_text` 确认
-3. `windows_type_text(联系人)` → 观察
-4. `windows_press_key("Enter")` 打开会话
+2. 仅需要时再点搜索 / `Ctrl+F` → `get_screen_text` 确认
+3. `windows_type_text(关键词)` → 观察
+4. `windows_press_key("Enter")` 打开条目
 5. `windows_type_text(正文)` → 观察
-6. `windows_press_key("Enter")` 发送 → 观察
+6. `windows_press_key("Enter")` 提交 → 观察
 
 禁止在平台 Python 核心路径写死某一 App 的热键宏。
 

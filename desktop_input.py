@@ -1054,6 +1054,10 @@ def force_focus_hwnd(
     if _fg_is_target():
         return True
 
+    # 后台模式：不抢前台，仅当已是目标窗才算成功
+    if no_focus_steal_enabled():
+        return False
+
     attempts = max(1, int(retries or 1))
     for i in range(attempts):
         try:
@@ -1234,6 +1238,45 @@ def uia_set_value_in_hwnd(hwnd: int, text: str) -> bool:
         return False
     except Exception:
         return False
+
+
+def no_focus_steal_enabled() -> bool:
+    raw = (os.environ.get("DESKTOP_NO_FOCUS_STEAL") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def uia_invoke_or_click_at_screen(x: int, y: int, *, hwnd: int = 0) -> dict:
+    """后台优先：UIA 在坐标处 Invoke/Click，不移动物理鼠标、尽量不抢前台。"""
+    try:
+        from pywinauto import Desktop  # type: ignore
+
+        desk = Desktop(backend="uia")
+        elem = None
+        try:
+            elem = desk.from_point(int(x), int(y))
+        except Exception:
+            elem = None
+        if elem is None and hwnd:
+            try:
+                win = desk.window(handle=int(hwnd))
+                elem = win.from_point(int(x), int(y))
+            except Exception:
+                elem = None
+        if elem is None:
+            return {"ok": False, "via": "uia_point", "error": "no element at point"}
+        # InvokePattern / 默认 click（不依赖物理鼠标）
+        try:
+            elem.invoke()
+            return {"ok": True, "via": "uia_invoke", "x": int(x), "y": int(y)}
+        except Exception:
+            pass
+        try:
+            elem.click_input(double=False)  # may move cursor; last UIA path
+            return {"ok": True, "via": "uia_click_input", "x": int(x), "y": int(y)}
+        except Exception as e:
+            return {"ok": False, "via": "uia_point", "error": str(e)[:160]}
+    except Exception as e:
+        return {"ok": False, "via": "uia_point", "error": str(e)[:160]}
 
 
 def deliver_keys_to_hwnd(hwnd: int, parts: List[str]) -> dict:
@@ -1549,6 +1592,51 @@ def wait_for_window_title_keyword(
             return True
         time.sleep(poll)
     return False
+
+
+def wait_for_desktop_change(
+    *,
+    timeout_ms: int = 8000,
+    poll_interval_ms: int = 400,
+    title_filter: str = "",
+    require_foreground_change: bool = True,
+) -> dict:
+    """等待桌面窗口集合或前台窗口变化（借鉴 allcanuse wait_for_desktop_change）。"""
+    import time as _time
+
+    timeout_s = max(0.3, float(timeout_ms) / 1000.0)
+    poll_s = max(0.1, float(poll_interval_ms) / 1000.0)
+    fg0 = int(get_foreground_hwnd() or 0)
+    titles0 = set(_enum_visible_window_titles())
+    deadline = _time.time() + timeout_s
+    filt = (title_filter or "").strip().lower()
+    while _time.time() < deadline:
+        fg1 = int(get_foreground_hwnd() or 0)
+        titles1 = set(_enum_visible_window_titles())
+        fg_changed = require_foreground_change and fg1 != fg0
+        set_changed = titles1 != titles0
+        filter_hit = False
+        if filt:
+            filter_hit = any(filt in (t or "").lower() for t in titles1)
+        if filter_hit or fg_changed or set_changed:
+            return {
+                "ok": True,
+                "success": True,
+                "changed": True,
+                "fg_changed": fg_changed,
+                "titles_changed": set_changed,
+                "filter_hit": filter_hit,
+                "foreground_hwnd": fg1,
+                "title_count": len(titles1),
+            }
+        _time.sleep(poll_s)
+    return {
+        "ok": False,
+        "success": False,
+        "changed": False,
+        "error": "等待桌面变化超时",
+        "suggestion": "可增大 timeout_ms，或改用 windows_wait(condition='stable')。",
+    }
 
 
 def _any_new_app_foreground(fg_before: int) -> bool:

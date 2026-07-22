@@ -176,6 +176,7 @@ def project_hiddenimports(root: Path) -> list:
         "pypdf",
         "docx",
         "cv2",
+        "optional_cv2",
         "numpy",
         "PIL",
         "websockets",

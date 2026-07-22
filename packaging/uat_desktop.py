@@ -312,6 +312,37 @@ def _log_error(root: Path, user_data: Path, exc: Exception) -> None:
         pass
 
 
+def _tail_backend_error(user_data: Path, max_lines: int = 40) -> str:
+    log_file = user_data / "logs" / "backend_startup.log"
+    if not log_file.is_file():
+        return ""
+    try:
+        lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if not lines:
+        return ""
+    # 优先截取最近一次启动段中的 Traceback
+    start_idx = 0
+    for i, line in enumerate(lines):
+        if "backend start" in line.lower():
+            start_idx = i
+    chunk = lines[start_idx:]
+    err_start = None
+    for i, line in enumerate(chunk):
+        if line.startswith("Traceback") or "Error]" in line or "ModuleNotFoundError" in line:
+            err_start = i
+            break
+    if err_start is None:
+        snippet = chunk[-min(max_lines, len(chunk)) :]
+    else:
+        snippet = chunk[err_start : err_start + max_lines]
+    text = "\n".join(snippet).strip()
+    if len(text) > 1800:
+        text = text[:1800] + "\n…"
+    return text
+
+
 def _startup_failed_message(root: Path, user_data: Path, port: int, proc: Optional[subprocess.Popen]) -> str:
     lines = [
         "Testory 服务未能启动。",
@@ -325,6 +356,17 @@ def _startup_failed_message(root: Path, user_data: Path, port: int, proc: Option
         lines.append("后台进程已退出，请打开 backend_startup.log 查看原因。")
     else:
         lines.append(f"请检查 {port} 端口是否被占用。")
+    detail = _tail_backend_error(user_data)
+    if detail:
+        lines.append("")
+        lines.append("最近后端错误：")
+        lines.append(detail)
+        if "No module named 'cv2'" in detail or "ModuleNotFoundError: No module named 'cv2'" in detail:
+            lines.append("")
+            lines.append(
+                "提示：当前为精简包且缺少 OpenCV。请重新打包时加 -WithOpenCV/-Full，"
+                "或安装含本修复的新版本（已改为启动时不强制依赖 cv2）。"
+            )
     lines.append("")
     lines.append("可在「开始菜单 → Testory → 打开安装目录」查看程序文件。")
     return "\n".join(lines)

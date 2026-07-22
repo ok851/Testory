@@ -62,11 +62,18 @@ class TaskContext:
         注意：不要写成 Hermes 可解析的 `[session_id=…]` 恢复令牌；
         平台 task id 仅作上下文说明，避免触发 Hermes 内部损坏会话。
         """
+        surface = (self.active_surface or "auto").strip().lower()
         lines = [
             f"【Testory 任务上下文 task_id={self.session_id}】",
-            f"active_surface={self.active_surface}",
-            f"desktop_session_id={self.desktop_session_id}",
+            f"active_surface={surface}",
         ]
+        if surface == "web":
+            lines.append("本任务为网页自动化：只用 browser_*，禁止 windows_* / skill_view / terminal 探环境。")
+        elif surface == "desktop":
+            lines.append(f"desktop_session_id={self.desktop_session_id}")
+            lines.append("本任务为桌面 GUI：优先 MCP windows_* / get_screen_*。")
+        else:
+            lines.append(f"desktop_session_id={self.desktop_session_id}")
         if self.mobile_udid:
             lines.append(f"mobile_udid={self.mobile_udid}")
         if self.vars:
@@ -81,11 +88,22 @@ class TaskContext:
                 + str(self.hitl_pending.get("reason") or "")
                 + " — 等待用户完成后继续"
             )
-        lines.append(
-            "跨端规则：可用时优先结构化感知（DOM/UIA/dump）；视觉为辅。"
-            "Web 遇 OS 弹窗时切桌面 gateway；需要接口校验时调用 testory-api-http。"
-            "高风险写操作前先 inspect/只读确认。将可复用结果写入 vars。"
-        )
+        if surface == "web":
+            lines.append(
+                "网页规则：当前标签页内操作；禁止新开空白标签；"
+                "已在目标 URL 则禁止 navigate；优先 DOM 控件清单 click/type；"
+                "browser_snapshot 仅难定位兜底（DOM ref，非视觉）。"
+            )
+        elif surface == "desktop":
+            lines.append(
+                "桌面规则：优先 UIA/结构化感知；视觉为辅；未核验勿声称已输入。"
+            )
+        else:
+            lines.append(
+                "跨端规则：可用时优先结构化感知（DOM/UIA/dump）；视觉为辅。"
+                "Web 遇 OS 弹窗时切桌面 gateway；需要接口校验时调用 testory-api-http。"
+                "高风险写操作前先 inspect/只读确认。将可复用结果写入 vars。"
+            )
         return "\n".join(lines) + "\n\n"
 
     def to_public_dict(self) -> Dict[str, Any]:

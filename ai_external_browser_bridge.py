@@ -24,6 +24,9 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
     """
     确保本机有头浏览器已启动并连接 CDP（优先系统 Edge/Chrome）。
     Hermes 通过 sync_hermes_cdp_endpoint() attach 到同一浏览器。
+
+    启动策略：进程只开 about:blank 单标签，业务 URL 一律 page.goto；
+    禁止把业务 URL 放进浏览器命令行（否则 Edge 会「新建标签页」+ 目标页双开）。
     """
     global _browser, _context, _page, _cdp_ws
     kind = (browser or "edge").strip().lower()
@@ -33,19 +36,28 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
         kind = "edge"
 
     with _bridge_lock:
+        from web_capture import cdp_browser as _cdp_mod
+
+        nav_url = (url or "").strip() or str(
+            (_cdp_mod._snap() or {}).get("pending_start_url") or ""
+        ).strip()
+
         if _page and not _page.is_closed():
-            if url:
+            if nav_url:
                 try:
-                    _page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
+                    _cdp_mod._set(pending_start_url="")
                 except Exception:
                     pass
+            try:
+                from web_capture.cdp_browser import maximize_debug_browser_window
+
+                maximize_debug_browser_window(page=_page)
+            except Exception:
+                pass
             return True
 
-        # --- 本机浏览器：web_capture.cdp_browser（Edge/Chrome + remote debugging）---
         try:
-            from web_capture import cdp_browser as _cdp_mod
-            from playwright.sync_api import sync_playwright
-
             _cdp_state = _cdp_mod._snap()
             _debug_port = int(_cdp_state.get("debug_port") or 0)
             _ws = ""
@@ -53,22 +65,28 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
                 _ws = _cdp_mod.fetch_cdp_ws(_debug_port) or ""
 
             if not _ws:
-                launched = _cdp_mod.launch_debug_browser(browser=kind, url=url or "")
+                launched = _cdp_mod.launch_debug_browser(browser=kind, url=nav_url or "")
                 if not launched.get("success"):
-                    # Edge 找不到时再试 Chrome
                     if kind == "edge":
-                        launched = _cdp_mod.launch_debug_browser(browser="chrome", url=url or "")
+                        launched = _cdp_mod.launch_debug_browser(
+                            browser="chrome", url=nav_url or ""
+                        )
                     if not launched.get("success"):
                         uat_logger.warning("本机浏览器启动失败: %s", launched.get("error"))
                         return False
                 _debug_port = int(launched.get("debug_port") or 0)
-                _ws = (launched.get("cdp_ws") or "").strip() or (_cdp_mod.fetch_cdp_ws(_debug_port) or "")
+                _ws = (launched.get("cdp_ws") or "").strip() or (
+                    _cdp_mod.fetch_cdp_ws(_debug_port) or ""
+                )
+                nav_url = nav_url or str(launched.get("pending_start_url") or "").strip()
 
             if not _ws:
                 uat_logger.warning("本机浏览器已启动但未拿到 CDP WebSocket")
                 return False
 
-            conn = _cdp_mod.connect_playwright_over_cdp(_debug_port)
+            conn = _cdp_mod.connect_playwright_over_cdp(
+                _debug_port, prefer_url=nav_url or ""
+            )
             if conn.get("success"):
                 _page = _cdp_mod.get_active_page()
                 snap2 = _cdp_mod._snap()
@@ -79,8 +97,13 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
 
                 _pw = _sp().start()
                 _browser = _pw.chromium.connect_over_cdp(_ws)
-                _context = _browser.contexts[0] if _browser.contexts else _browser.new_context()
-                _page = _context.pages[0] if _context.pages else _context.new_page()
+                _context = (
+                    _browser.contexts[0] if _browser.contexts else _browser.new_context()
+                )
+                _page = _cdp_mod.pick_best_page(_context, prefer_url=nav_url or "")
+                if _page is None:
+                    pages = list(getattr(_context, "pages", None) or [])
+                    _page = pages[0] if pages else _context.new_page()
 
             if not _page:
                 uat_logger.warning("本机浏览器 CDP 已连接但无可用 Page")
@@ -97,18 +120,30 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
             except Exception as e:
                 uat_logger.warning("CDP 同步到 Hermes 失败: %s", e)
 
-            if url and _page and not _page.is_closed():
+            if nav_url and _page and not _page.is_closed():
                 try:
-                    _page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                    _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
+                    _cdp_mod._set(pending_start_url="")
                 except Exception:
                     pass
+            try:
+                from web_capture.cdp_browser import maximize_debug_browser_window
+
+                maximize_debug_browser_window(
+                    debug_port=int(_debug_port or 0),
+                    page=_page,
+                )
+            except Exception:
+                pass
             return bool(_page and not _page.is_closed())
         except Exception as e:
             uat_logger.warning("本机浏览器桥接失败: %s", e)
 
-        # --- 仅显式允许时：Playwright 自带 Chromium（非默认）---
         allow_pw = (os.environ.get("AI_ALLOW_PLAYWRIGHT_CHROMIUM_FALLBACK") or "0").strip().lower() in (
-            "1", "true", "yes", "on",
+            "1",
+            "true",
+            "yes",
+            "on",
         )
         if not allow_pw:
             return False
@@ -141,8 +176,8 @@ def ensure_browser(*, headless: bool = False, url: str = "", browser: str = "edg
                         sync_hermes_cdp_endpoint(_cdp_ws, restart_gateway=True)
                 except Exception as e:
                     uat_logger.warning("CDP 同步到 Hermes 失败: %s", e)
-            if url:
-                _page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            if nav_url:
+                _page.goto(nav_url, wait_until="domcontentloaded", timeout=20000)
             return True
         except Exception as e:
             uat_logger.warning("Playwright Chromium 兜底启动失败: %s", e)

@@ -196,7 +196,7 @@ def execute_desktop_launch(message: str) -> Dict[str, Any]:
         if not fuzzy:
             return {
                 "ok": False,
-                "error": "未能识别要打开的桌面应用。可尝试：微信、控制面板、记事本、计算器。",
+                "error": "未能识别要打开的桌面应用。请给出窗口标题或应用名（如记事本、计算器、资源管理器）。",
             }
         resolved = fuzzy
     path, display = resolved

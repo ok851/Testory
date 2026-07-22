@@ -54,6 +54,20 @@ def _friendly_corrupt_msg(detail: str = "") -> str:
     return base
 
 
+def _abort_error_message(abort_event) -> str:
+    """区分超时 / 工具死循环 / 用户真取消，禁止一律报「用户取消」。"""
+    if abort_event is None:
+        return "操作已被用户取消"
+    if getattr(abort_event, "_timed_out", False):
+        return "任务已超过设定的超时时间，已自动停止"
+    reason = str(getattr(abort_event, "_abort_reason", "") or "").strip()
+    if reason == "tool_loop":
+        return "智能体因工具死循环已中止（非用户取消）"
+    if reason == "timeout":
+        return "任务已超过设定的超时时间，已自动停止"
+    return "操作已被用户取消"
+
+
 class HermesGatewayClient:
     def __init__(self) -> None:
         self.base_url = _norm(os.environ.get("HERMES_GATEWAY_URL", "http://127.0.0.1:8642")).rstrip("/")
@@ -101,7 +115,10 @@ class HermesGatewayClient:
                 ensure_ascii=False,
             )
         if abort_event is not None and abort_event.is_set():
-            return json.dumps({"ok": False, "error": "操作已被用户取消"}, ensure_ascii=False)
+            return json.dumps(
+                {"ok": False, "error": _abort_error_message(abort_event)},
+                ensure_ascii=False,
+            )
 
         if pass_session_prefix is None:
             pass_session_prefix = os.environ.get("HERMES_PASS_SESSION_ID", "0").strip().lower() in (
@@ -130,7 +147,10 @@ class HermesGatewayClient:
             while t.is_alive():
                 t.join(timeout=0.2)
                 if abort_event is not None and abort_event.is_set():
-                    return json.dumps({"ok": False, "error": "操作已被用户取消"}, ensure_ascii=False)
+                    return json.dumps(
+                        {"ok": False, "error": _abort_error_message(abort_event)},
+                        ensure_ascii=False,
+                    )
 
             if result_holder["error"]:
                 err = result_holder["error"]
@@ -193,14 +213,13 @@ class HermesGatewayClient:
 
     def _default_system_prompt(self) -> str:
         return (
-            "你是 Testory 跨层自动化执行代理（用户的手和眼睛）。"
-            "Windows 桌面优先使用已注册的 MCP windows_* / get_screen_*（经 :8766）；"
-            "macOS 可选 computer_use。"
-            "网页用 browser_* / CDP；文件用 read/write；Shell 用 terminal。"
-            "优先结构化感知，视觉用于确认与弱控件界面。"
-            "Web 流程中的 OS 弹窗请切桌面 MCP 工具处理。"
-            "在回复中给出可复现为自动化步骤的摘要；需要人工介入时输出 NEED_USER_ACTION:<原因>。"
-            "高风险破坏性操作前先只读确认。未核验勿声称已输入/已发送。"
+            "【最高优先级】你是 Testory 跨层自动化执行代理。"
+            "网页：CDP 已 attach 且平台常已预导航；禁止再 browser_navigate / 新开空白标签；"
+            "优先用指令内 DOM 控件清单 click/type；"
+            "browser_snapshot 是 DOM/a11y ref（非截图），仅难定位时用一次；视觉仅兜底。"
+            "禁止 skill_view / terminal。"
+            "Windows 桌面优先 MCP windows_* / get_screen_*。"
+            "未核验勿声称已完成。同一工具连续无进展超过 2 次必须换策略或 NEED_USER_ACTION。"
         )
 
     def _build_chat_payload(
@@ -268,7 +287,7 @@ class HermesGatewayClient:
             )
             return
         if abort_event is not None and abort_event.is_set():
-            yield ("error", {"error": "操作已被用户取消"})
+            yield ("error", {"error": _abort_error_message(abort_event)})
             return
 
         url = f"{self.base_url}/v1/chat/completions"
@@ -305,7 +324,7 @@ class HermesGatewayClient:
         try:
             for raw_line in resp.iter_lines(decode_unicode=True):
                 if abort_event is not None and abort_event.is_set():
-                    yield ("error", {"error": "操作已被用户取消"})
+                    yield ("error", {"error": _abort_error_message(abort_event)})
                     return
                 if raw_line is None:
                     continue

@@ -15,10 +15,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
 import numpy as np
 
 from logger import uat_logger
+from optional_cv2 import cv2
 
 
 @dataclass
@@ -71,7 +71,7 @@ def shrink_viewport_png(png_bytes: bytes, factor: Optional[float] = None) -> Tup
     """
     缩小截图以降低 token。返回 (png, scale) 其中 scale = 原宽/新宽，用于坐标还原。
     """
-    if not png_bytes:
+    if not png_bytes or cv2 is None:
         return png_bytes, 1.0
     fac = factor if factor is not None else _shrink_factor()
     if fac <= 1.0:

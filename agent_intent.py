@@ -15,6 +15,88 @@ TaskMode = Literal["chat", "automation"]
 TaskPlatform = Literal["web", "desktop", "android", "auto"]
 
 _URL_RE = re.compile(r"https?://[^\s\]\}\"'<>]+", re.I)
+# 无协议主机：打开/访问 xxx.com/path
+_BARE_HOST_RE = re.compile(
+    r"(?:打开|访问|导航到?|跳转到?|前往|进入|登录到?|打开网址|访问网址|打开网站)"
+    r"[\s:：]*"
+    r"((?:www\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"
+    r"(?::\d{2,5})?(?:/[^\s\]\}\"'<>]*)?)",
+    re.I,
+)
+_WWW_HOST_RE = re.compile(
+    r"(?<![/@\w])(www\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}"
+    r"(?::\d{2,5})?(?:/[^\s\]\}\"'<>]*)?)",
+    re.I,
+)
+# 内网 IP / localhost（常不带协议）
+_HOSTPORT_RE = re.compile(
+    r"(?:打开|访问|导航到?|跳转到?|前往|进入|登录到?)[\s:：]*"
+    r"((?:localhost|127\.0\.0\.1|(?:\d{1,3}\.){3}\d{1,3})(?::\d{2,5})?(?:/[^\s\]\}\"'<>]*)?)",
+    re.I,
+)
+
+
+def _sanitize_extracted_url(raw: str) -> str:
+    u = (raw or "").strip()
+    if not u:
+        return ""
+    # 中文冒号、全角斜杠等
+    u = u.replace("：", ":").replace("／", "/").replace("．", ".")
+    u = u.rstrip(").,;]}、，。；》〉\"'")
+    return u
+
+
+def _ensure_http_scheme(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if re.match(r"^https?://", u, re.I):
+        return u
+    return "http://" + u.lstrip("/")
+
+
+def _first_url(text: str) -> str:
+    """从文本取首个 http(s) URL（兼容中文标点）。"""
+    t = _sanitize_extracted_url(text or "")
+    if not t:
+        return ""
+    # 先把 http：// 归一
+    t_norm = re.sub(r"https?\s*：\s*//", lambda m: m.group(0).replace("：", ":").replace(" ", ""), t, flags=re.I)
+    t_norm = t_norm.replace("http：//", "http://").replace("https：//", "https://")
+    m = _URL_RE.search(t_norm)
+    if not m:
+        return ""
+    return _sanitize_extracted_url(m.group(0))
+
+
+def extract_task_url(text: str, *, allow_seed: bool = True) -> str:
+    """
+    从用户任务原文解析浏览器起始 URL（无独立 URL 输入框时的唯一来源）。
+
+    优先级：显式 http(s) → 打开/访问+主机或 IP → www.主机 → 常见站点种子（百度等）。
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    hit = _first_url(t)
+    if hit:
+        return hit
+
+    for rx in (_HOSTPORT_RE, _BARE_HOST_RE, _WWW_HOST_RE):
+        m = rx.search(t)
+        if m:
+            return _ensure_http_scheme(_sanitize_extracted_url(m.group(1)))
+
+    if allow_seed:
+        try:
+            from ai_local_inference import _goal_suggests_seed_url
+
+            seed = (_goal_suggests_seed_url(t) or "").strip()
+            if seed:
+                return seed
+        except Exception:
+            pass
+    return ""
 
 # 明确像闲聊/问答（须整句偏闲聊；正文里的「你好」不能误伤发消息）
 _CHAT_HINTS = (
@@ -136,6 +218,15 @@ _DESKTOP_APP_HINTS = (
     "钉钉",
     "飞书",
     "企微",
+    "vscode",
+    "visual studio",
+    "chrome",
+    "edge",
+    "firefox",
+    "wps",
+    "截图",
+    "任务管理器",
+    "taskmgr",
 )
 
 _DESKTOP_CONTEXT_HINTS = (
@@ -187,13 +278,6 @@ class TaskRoute:
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
-
-
-def _first_url(text: str) -> str:
-    m = _URL_RE.search(text or "")
-    if not m:
-        return ""
-    return m.group(0).rstrip(").,;]}\"'")
 
 
 def _looks_like_greeting_only(message: str) -> bool:
@@ -330,7 +414,47 @@ def resolve_task_route(
         )
 
     # 无自动化信号 → 默认 chat（避免误启浏览器）
+    # 但 UI 已显式选 desktop/android/web 时，按 UI 走自动化（弱话术仍可执行）
     if not action and web_s == 0 and desk_s == 0 and andr_s == 0:
+        if ui == "desktop":
+            return TaskRoute(
+                mode="automation",
+                platform="desktop",
+                needs_automation=True,
+                needs_browser=False,
+                needs_desktop_tools=True,
+                ui_platform=ui,
+                reason="ui_desktop_no_message_signal",
+                web_score=web_s,
+                desktop_score=desk_s,
+                android_score=andr_s,
+            )
+        if ui == "android":
+            return TaskRoute(
+                mode="automation",
+                platform="android",
+                needs_automation=True,
+                needs_browser=False,
+                needs_desktop_tools=False,
+                ui_platform=ui,
+                reason="ui_android_no_message_signal",
+                web_score=web_s,
+                desktop_score=desk_s,
+                android_score=andr_s,
+            )
+        if ui == "web":
+            return TaskRoute(
+                mode="automation",
+                platform="web",
+                needs_automation=True,
+                needs_browser=True,
+                needs_desktop_tools=False,
+                ui_platform=ui,
+                reason="ui_web_no_message_signal",
+                web_score=web_s,
+                desktop_score=desk_s,
+                android_score=andr_s,
+            )
         return TaskRoute(
             mode="chat",
             platform="auto" if ui == "auto" else ui,  # type: ignore[arg-type]
@@ -455,7 +579,7 @@ def parse_agent_intent(message: str, has_plan_steps: bool) -> Tuple[IntentKind, 
         return "execute_plan", {}
 
     nav_words = ("打开", "导航", "访问", "跳转", "goto", "navigate", "open ")
-    url = _first_url(t)
+    url = extract_task_url(t, allow_seed=False) or _first_url(t)
     if url and any(w in t for w in nav_words):
         return "navigate_url", {"url": url}
     if url and re.match(r"^https?://", t.strip()):

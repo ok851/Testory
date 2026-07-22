@@ -19,9 +19,15 @@ def mcp_windows_desktop_tools() -> List[Dict[str, Any]]:
     return [
         {
             "name": "windows_focus_app",
-            "description": "将指定窗口激活到前台并设为桌面目标（任意 App）",
+            "description": "将指定窗口激活到前台；未运行时自动尝试启动",
             "parameters": {"app_name": "str"},
             "handler": lambda app_name="": _h("windows_focus_app")(app_name=app_name),
+        },
+        {
+            "name": "windows_launch_app",
+            "description": "启动本机应用（未运行也可），等同用例 launch_app",
+            "parameters": {"app_name": "str"},
+            "handler": lambda app_name="": _h("windows_launch_app")(app_name=app_name),
         },
         {
             "name": "windows_click_element",

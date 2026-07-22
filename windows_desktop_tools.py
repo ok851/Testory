@@ -28,6 +28,29 @@ _desktop_target: Dict[str, Any] = {
     "last_search_query": "",
 }
 
+# 单一最优节奏：在可验证投递前提下压短空等（失败时各策略仍会自行加长/回退）
+_PACE: Dict[str, float] = {
+    "post_click_stable_ms": 220,
+    "post_key_stable_ms": 160,
+    "type_settle_sec": 0.14,
+    "reclick_settle_sec": 0.07,
+    "strategy_gap_sec": 0.05,
+    "focus_gap_sec": 0.035,
+}
+
+
+def set_desktop_action_pace(pace: Optional[str] = None) -> str:
+    """兼容旧调用：桌面节奏已固定为单一最优档，忽略入参。"""
+    return "default"
+
+
+def get_desktop_action_pace() -> str:
+    return "default"
+
+
+def _pace_val(key: str) -> float:
+    return float(_PACE.get(key) or 0)
+
 
 def set_desktop_target(
     *,
@@ -102,7 +125,7 @@ def _reclick_armed_search_if_needed() -> Dict[str, Any]:
             time.sleep(0.05)
         # 必须物理点击：PostMessage 点不到 Qt 键盘焦点
         screen_click(x, y)
-        time.sleep(0.18)
+        time.sleep(_pace_val("reclick_settle_sec"))
         return {"ok": True, "x": x, "y": y, "via": "physical_reclick_search"}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200]}
@@ -173,13 +196,14 @@ def _steal_focus_enabled():
             os.environ["DESKTOP_STEAL_FOCUS"] = prev
 
 
-def _wait_stable_quiet(timeout_ms: int = 1500) -> None:
+def _wait_stable_quiet(timeout_ms: Optional[int] = None) -> None:
+    ms = int(timeout_ms if timeout_ms is not None else _pace_val("post_click_stable_ms"))
     try:
         from screen_tools import wait_screen_stable
 
-        wait_screen_stable(timeout_ms=timeout_ms, poll_ms=150)
+        wait_screen_stable(timeout_ms=max(80, ms), poll_ms=100)
     except Exception:
-        time.sleep(0.25)
+        time.sleep(min(0.25, max(0.05, ms / 1000.0)))
 
 
 def _hwnd_class(hwnd: int) -> str:
@@ -202,8 +226,11 @@ _APP_FOCUS_ALIASES: Dict[str, List[str]] = {
     "weixin": ["微信", "weixin", "wechat", "weixin.exe", "wechat.exe"],
     "企业微信": ["企业微信", "wxwork", "wecom"],
     "qq": ["qq", "tencent"],
-    "记事本": ["记事本", "notepad"],
-    "计算器": ["计算器", "calculator"],
+    "记事本": ["记事本", "notepad", "notepad.exe"],
+    "notepad": ["记事本", "notepad", "notepad.exe"],
+    "计算器": ["计算器", "calculator", "calc", "calc.exe"],
+    "calc": ["计算器", "calculator", "calc", "calc.exe"],
+    "calculator": ["计算器", "calculator", "calc", "calc.exe"],
 }
 
 _SKIP_FOCUS_CLASSES = frozenset(
@@ -218,8 +245,24 @@ _SKIP_FOCUS_CLASSES = frozenset(
         "displayicc_systemmessagewindow",
         "chrome_systemmessagewindow",
         "tooltips_class32",
+        "gdi+ hook window class",
+        "gdi+ window",
     }
 )
+
+
+def _is_noise_focus_window(title: str, process: str, class_name: str) -> bool:
+    """过滤 GDI+ 钩子窗、无意义辅助窗，避免误 focus / 误以为多开了应用。"""
+    t = (title or "").strip().lower()
+    p = (process or "").strip().lower()
+    c = (class_name or "").strip().lower()
+    if "gdi+" in t or "gdi+" in p or "gdi+" in c:
+        return True
+    if t in ("gdi+ window", "gdi+windows", "gdi+windows.exe"):
+        return True
+    if p in ("gdi+windows.exe", "gdi+windows"):
+        return True
+    return False
 
 
 def _focus_needles(app_name: str) -> List[str]:
@@ -276,7 +319,7 @@ def _enum_focus_candidate_windows() -> List[Dict[str, Any]]:
                 cls_l = (cls or "").lower()
                 if cls_l in _SKIP_FOCUS_CLASSES:
                     return True
-                if any(skip in cls_l for skip in ("tooltip", "ime", "sopy_")):
+                if any(skip in cls_l for skip in ("tooltip", "ime", "sopy_", "gdi+")):
                     return True
                 pid = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -287,6 +330,8 @@ def _enum_focus_candidate_windows() -> List[Dict[str, Any]]:
                         proc_name = psutil.Process(pid_val).name() or ""
                     except Exception:
                         proc_name = ""
+                if _is_noise_focus_window(title, proc_name, cls):
+                    return True
                 rect = wintypes.RECT()
                 w = h = 0
                 if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
@@ -438,7 +483,7 @@ def refresh_desktop_target_hwnd() -> Dict[str, Any]:
 
 
 def capture_desktop_target_foreground(*, step: str = "") -> Dict[str, Any]:
-    """操作前：刷新目标绑定 + 多策略抢前台（捕获窗口，而不是取消操作）。"""
+    """操作前：刷新目标绑定；默认多策略抢前台。DESKTOP_NO_FOCUS_STEAL=1 时不抢前台。"""
     refreshed = refresh_desktop_target_hwnd()
     if not refreshed.get("ok"):
         return {
@@ -456,7 +501,7 @@ def capture_desktop_target_foreground(*, step: str = "") -> Dict[str, Any]:
     if xy and isinstance(xy, (tuple, list)) and len(xy) == 2:
         steal_xy = (int(xy[0]), int(xy[1]) + 4)
     try:
-        from desktop_input import get_foreground_hwnd, reclaim_foreground_hwnd
+        from desktop_input import get_foreground_hwnd, reclaim_foreground_hwnd, no_focus_steal_enabled
 
         if int(get_foreground_hwnd() or 0) == hwnd:
             return {
@@ -465,6 +510,17 @@ def capture_desktop_target_foreground(*, step: str = "") -> Dict[str, Any]:
                 "already_fg": True,
                 "fg_title": _hwnd_title(hwnd),
                 "refresh": refreshed,
+            }
+        if no_focus_steal_enabled():
+            # 后台模式：仍绑定目标，不抢前台；后续依赖 UIA/PostMessage
+            return {
+                "ok": True,
+                "hwnd": hwnd,
+                "already_fg": False,
+                "no_focus_steal": True,
+                "fg_title": _hwnd_title(hwnd),
+                "refresh": refreshed,
+                "note": "DESKTOP_NO_FOCUS_STEAL：未抢前台，使用后台投递",
             }
         reclaim = reclaim_foreground_hwnd(hwnd, retries=4, steal_click_xy=steal_xy)
         if reclaim.get("ok"):
@@ -859,8 +915,12 @@ def _windows_focus_app_impl(app_name: str) -> Dict[str, Any]:
             "error": f"未找到「{name}」对应窗口",
             "visible_titles": titles,
             "matched_processes": procs,
-            "suggestion": "请确认应用已启动；若仅在托盘，可先手动点开一次主窗口。",
+            "suggestion": (
+                "应用可能未启动。请调用 windows_launch_app(应用名) 启动后再操作；"
+                "若已在托盘，可先手动点开主窗口。"
+            ),
             "candidates_scanned": len(windows),
+            "can_launch": True,
         }
     hwnd = int(picked.get("hwnd") or 0)
     # 先绑定目标，再抢前台（后续 refresh 依赖 process/title）
@@ -910,13 +970,184 @@ def _windows_focus_app_impl(app_name: str) -> Dict[str, Any]:
     }
 
 
-def windows_focus_app(app_name: str) -> Dict[str, Any]:
+def windows_focus_app(app_name: str, *, auto_launch: bool = True) -> Dict[str, Any]:
+    """聚焦已打开窗口；若未找到且 auto_launch=True，则自动 windows_launch_app。"""
     try:
-        return _run_with_timeout(lambda: _windows_focus_app_impl(app_name), timeout=8.0)
+        r = _run_with_timeout(lambda: _windows_focus_app_impl(app_name), timeout=8.0)
     except TimeoutError as e:
         return {"success": False, "error": str(e), "suggestion": "稍后重试 windows_focus_app。"}
     except Exception as e:
         return {"success": False, "error": str(e)[:300], "suggestion": "检查窗口是否可见。"}
+    if r.get("success") or not auto_launch:
+        return r
+    # 仅在「未找到窗口」时自动启动；抢前台失败等不要二次 launch
+    if r.get("can_launch") is not True:
+        return r
+    launched = windows_launch_app(app_name)
+    if launched.get("success"):
+        launched["auto_launched_after_focus_miss"] = True
+        return launched
+    # 合并提示
+    r["launch_attempt"] = {
+        "success": False,
+        "error": launched.get("error"),
+        "suggestion": launched.get("suggestion"),
+    }
+    r["suggestion"] = (
+        launched.get("suggestion")
+        or r.get("suggestion")
+        or "请调用 windows_launch_app 启动应用。"
+    )
+    return r
+
+
+def _resolve_launch_input(app_name: str) -> Tuple[str, str]:
+    """返回 (launch_input_value, display_name)。"""
+    name = (app_name or "").strip()
+    if not name:
+        return "", ""
+    try:
+        from agent_desktop_fastpath import resolve_desktop_launch_target
+
+        hit = resolve_desktop_launch_target(f"打开{name}")
+        if hit:
+            return hit[0], hit[1]
+    except Exception:
+        pass
+    low = name.lower()
+    alias_map = {
+        "notepad": ("notepad", "记事本"),
+        "notepad.exe": ("notepad", "记事本"),
+        "记事本": ("notepad", "记事本"),
+        "calc": ("calc", "计算器"),
+        "calc.exe": ("calc", "计算器"),
+        "计算器": ("calc", "计算器"),
+        "calculator": ("calc", "计算器"),
+        "explorer": ("explorer", "资源管理器"),
+        "cmd": ("cmd", "命令提示符"),
+        "powershell": ("powershell", "PowerShell"),
+    }
+    if low in alias_map:
+        return alias_map[low]
+    if name in alias_map:
+        return alias_map[name]
+    return name, name
+
+
+def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
+    """启动应用（未运行也可）：resolve → startfile/gateway → 等待窗口 → focus 绑定。"""
+    name = (app_name or "").strip()
+    if not name:
+        return {
+            "success": False,
+            "error": "app_name 为空",
+            "suggestion": "请传入应用名，如「记事本」「计算器」「notepad」。",
+        }
+    launch_val, display = _resolve_launch_input(name)
+    if not launch_val:
+        return {"success": False, "error": "无法解析启动目标", "suggestion": "请给出程序名或别名。"}
+
+    already = _windows_focus_app_impl(display if display else name)
+    if already.get("success"):
+        already["via"] = "already_running_focus"
+        already["launched"] = False
+        return already
+
+    path = launch_val
+    try:
+        from desktop_env_config import smart_resolve_launch_path
+
+        path = smart_resolve_launch_path(launch_val) or launch_val
+    except Exception:
+        path = launch_val
+
+    launched_via = "os_startfile"
+    try:
+        from desktop_agent_client import desktop_agent_enabled, remote_execute_step
+
+        if desktop_agent_enabled():
+            step = {
+                "action": "launch_app",
+                "input_value": launch_val,
+                "description": f"打开{display}",
+                "automation_layer": "desktop",
+            }
+            r0 = remote_execute_step(step)
+            if isinstance(r0, dict) and (
+                r0.get("ok") is True
+                or r0.get("success") is True
+                or str(r0.get("status") or "").lower() in ("success", "ok", "passed")
+            ):
+                launched_via = "desktop_gateway"
+            else:
+                import sys
+
+                if sys.platform == "win32":
+                    os.startfile(path)  # type: ignore[attr-defined]
+                else:
+                    import subprocess
+
+                    subprocess.Popen([path], shell=False)
+        else:
+            import sys
+
+            if sys.platform == "win32":
+                os.startfile(path)  # type: ignore[attr-defined]
+            else:
+                import subprocess
+
+                subprocess.Popen([path], shell=False)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"启动失败: {e}",
+            "app_name": name,
+            "launch_value": launch_val,
+            "resolved_path": path,
+            "suggestion": "请确认程序已安装，或改用完整 exe 路径。",
+        }
+
+    deadline = time.time() + 12.0
+    last_focus: Dict[str, Any] = {}
+    while time.time() < deadline:
+        time.sleep(0.4)
+        last_focus = _windows_focus_app_impl(display if display else name)
+        if last_focus.get("success"):
+            last_focus["launched"] = True
+            last_focus["via"] = launched_via
+            last_focus["launch_value"] = launch_val
+            last_focus["resolved_path"] = path
+            last_focus["display"] = display
+            return last_focus
+
+    return {
+        "success": False,
+        "error": last_focus.get("error")
+        or f"已尝试启动「{display}」，但未出现可聚焦窗口",
+        "launched": True,
+        "via": launched_via,
+        "launch_value": launch_val,
+        "resolved_path": path,
+        "focus_detail": last_focus,
+        "suggestion": "请目视确认应用是否弹出；可手动点开后说「继续」。",
+    }
+
+
+def windows_launch_app(app_name: str) -> Dict[str, Any]:
+    try:
+        return _run_with_timeout(lambda: _windows_launch_app_impl(app_name), timeout=20.0)
+    except TimeoutError as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "suggestion": "启动超时；请手动打开应用后用 windows_focus_app。",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)[:300],
+            "suggestion": "稍后重试 windows_launch_app，或手动启动应用。",
+        }
 
 
 def _type_text_impl(text: str, *, clear: bool = False, hwnd: int = 0) -> Dict[str, Any]:
@@ -972,6 +1203,58 @@ def wechat_send_message(contact: str, text: str) -> Dict[str, Any]:
     }
 
 
+def _is_type_content_click_phrase(description: str) -> bool:
+    """用户把「编辑内容为…」误当成 click 目标时识别。"""
+    d = (description or "").strip()
+    if not d:
+        return False
+    if re.search(r"(编辑内容|输入内容|写入内容|填写内容)", d):
+        return True
+    if re.match(r"^(编辑|输入|写入|填写)(内容)?[为：:].+", d):
+        return True
+    return False
+
+
+def _normalize_click_search_terms(desc: str) -> List[str]:
+    """从点击描述抽出短标签；丢掉易误命中菜单的「编辑内容」类短语。"""
+    quoted = re.findall(r"[「『\"'‘’“”]([^「『\"'‘’””]+)[」』\"'‘’””]", desc or "")
+    search_terms = [q.strip() for q in quoted if q.strip()] or [(desc or "").strip()]
+    out: List[str] = []
+    for term in search_terms:
+        cleaned = re.sub(
+            r"(按钮|输入框|搜索框|文本框|链接|图标|联系人|会话|窗口|菜单项)$",
+            "",
+            term,
+        ).strip()
+        if cleaned in ("编辑内容", "输入内容", "写入内容", "填写内容"):
+            continue
+        cleaned2 = re.sub(r"内容$", "", cleaned).strip()
+        for cand in (cleaned, cleaned2, term):
+            if not cand or cand in out or cand in ("编辑内容", "输入内容"):
+                continue
+            if len(cand) > 24 or re.search(r"[为：:，,。]", cand):
+                continue
+            out.append(cand)
+    return out or ([((desc or "").strip()[:24])] if (desc or "").strip() else [])
+
+
+def _uia_score_name_term(name: str, term: str) -> float:
+    """名称匹配分；禁止短菜单名靠「在长 term 里」误高分（编辑 ⊂ 编辑内容）。"""
+    name_l = (name or "").strip().lower()
+    tl = (term or "").strip().lower()
+    if not name_l or not tl:
+        return 0.0
+    if name_l == tl:
+        return 1.0
+    if tl in name_l:
+        return 0.9
+    if name_l in tl:
+        if len(name_l) <= 4 and len(tl) >= len(name_l) + 2:
+            return 0.35
+        return 0.7
+    return 0.0
+
+
 def _uia_find_candidates(description: str, max_candidates: int = 8) -> List[Dict[str, Any]]:
     desc = (description or "").strip()
     if not desc:
@@ -998,18 +1281,7 @@ def _uia_find_candidates(description: str, max_candidates: int = 8) -> List[Dict
             roots = list(desktop.windows())[:6]
 
         needle = desc.lower()
-        # 从描述中抽取引号内实体（如 联系人‘舒琪宝宝大王’）
-        quoted = re.findall(r"[「『\"'‘’“”]([^「『\"'‘’””]+)[」』\"'‘’””]", desc)
-        search_terms = [q.strip() for q in quoted if q.strip()] or [desc]
-        # 也尝试去掉「按钮/输入框」等后缀
-        for term in list(search_terms):
-            cleaned = re.sub(
-                r"(按钮|输入框|搜索框|文本框|链接|图标|联系人|会话|窗口|菜单项)$",
-                "",
-                term,
-            ).strip()
-            if cleaned and cleaned not in search_terms:
-                search_terms.append(cleaned)
+        search_terms = _normalize_click_search_terms(desc)
 
         seen = set()
         for root in roots:
@@ -1025,15 +1297,11 @@ def _uia_find_candidates(description: str, max_candidates: int = 8) -> List[Dict
                     name_l = name.lower()
                     score = 0.0
                     for term in search_terms:
-                        tl = term.lower()
-                        if name_l == tl:
-                            score = max(score, 1.0)
-                        elif tl in name_l or name_l in tl:
-                            score = max(score, 0.85)
-                    if score < 0.85 and needle not in name_l:
+                        score = max(score, _uia_score_name_term(name, term))
+                    if score < 0.7 and needle not in name_l:
                         continue
-                    if score < 0.85:
-                        score = 0.8
+                    if score < 0.7:
+                        continue
                     rect = el.rectangle()
                     cx = int((rect.left + rect.right) / 2)
                     cy = int((rect.top + rect.bottom) / 2)
@@ -1046,6 +1314,9 @@ def _uia_find_candidates(description: str, max_candidates: int = 8) -> List[Dict
                         ctype = str(el.element_info.control_type or "")
                     except Exception:
                         pass
+                    ct_l = ctype.lower()
+                    if ct_l in ("menuitem", "menu", "menubar") and score < 0.99:
+                        score *= 0.45
                     candidates.append(
                         {
                             "name": name,
@@ -1075,10 +1346,16 @@ def _ocr_text_matches_term(text: str, term: str) -> bool:
     term = (term or "").strip()
     if not t or not term:
         return False
+    # 短 OCR 块嵌在长「编辑内容」类 term 中：不当作命中
+    if t in term and len(t) <= 4 and len(term) >= len(t) + 2:
+        if term.startswith(t) and not term == t:
+            return False
     if term in t or t in term:
         return True
     tl, term_l = t.lower(), term.lower()
     if term_l in tl or tl in term_l:
+        if tl in term_l and len(tl) <= 4 and len(term_l) >= len(tl) + 2:
+            return False
         return True
     # 搜索相关：常见误识
     if term in ("搜索", "搜索框") or "search" in term_l:
@@ -1333,14 +1610,14 @@ def _type_observe_act_verify(
         )
 
     for i, strategy in enumerate(order):
-        # 每轮策略前：若搜索武装则复点，确保焦点在搜索框（消息栏阶段禁止）
-        if search_armed:
+        # 仅首轮策略复点搜索；后续换通道不再反复物理点击
+        if search_armed and i == 0:
             _reclick_armed_search_if_needed()
-            time.sleep(0.08)
+            time.sleep(_pace_val("strategy_gap_sec"))
         delivered = _run_one_type_strategy(
             hwnd, text, strategy, clear=(need_clear and i == 0)
         )
-        time.sleep(0.4)
+        time.sleep(_pace_val("type_settle_sec"))
         ocr_check = (
             _verify_typed_text_on_screen(expect, field=verify_field)
             if expect
@@ -1710,7 +1987,11 @@ def _activate_wechat_search_for_input() -> Dict[str, Any]:
                 "steps": steps,
                 "probe": probe,
                 "delivery_ctrl_f": delivery,
-                "suggestion": "请确认微信主窗口可见；可再调 windows_focus_app('微信')。",
+                "suggestion": (
+                    "请确认目标应用主窗口可见；可再调 windows_focus_app(应用名)。"
+                    if not _is_wechat_desktop_target()
+                    else "请确认微信主窗口可见；可再调 windows_focus_app('微信')。"
+                ),
             }
     return {
         "ok": True,
@@ -1776,7 +2057,7 @@ def _is_wechat_desktop_target() -> bool:
     return any(k in blob for k in ("微信", "wechat", "weixin"))
 
 
-def _pick_wechat_search_result_candidate(
+def _pick_search_list_candidate(
     candidates: List[Dict[str, Any]],
     *,
     query: str = "",
@@ -1863,9 +2144,25 @@ def _pick_wechat_search_result_candidate(
         pool.sort(key=lambda c: (int(c.get("y") or 0), int(c.get("x") or 0)))
         return pool[0]
     best = dict(best)
-    best["via"] = f"{best.get('via') or 'ocr'}_wechat_result_pick"
+    best["via"] = f"{best.get('via') or 'ocr'}_search_list_pick"
     best["pick_score"] = best_score
     return best
+
+
+def _pick_wechat_search_result_candidate(
+    candidates: List[Dict[str, Any]],
+    *,
+    query: str = "",
+    all_blocks: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """兼容旧名 → `_pick_search_list_candidate`。"""
+    picked = _pick_search_list_candidate(
+        candidates, query=query, all_blocks=all_blocks
+    )
+    if isinstance(picked, dict) and "search_list_pick" in str(picked.get("via") or ""):
+        picked = dict(picked)
+        picked["via"] = str(picked["via"]).replace("search_list_pick", "wechat_result_pick")
+    return picked
 
 
 def windows_click_element(description: str) -> Dict[str, Any]:
@@ -1875,6 +2172,16 @@ def windows_click_element(description: str) -> Dict[str, Any]:
             "success": False,
             "error": "description 为空",
             "suggestion": "请描述要点击的元素，如「确定按钮」或「搜索框」。",
+        }
+    if _is_type_content_click_phrase(desc):
+        return {
+            "success": False,
+            "error": "该描述像「输入/编辑正文」，不是可点击控件名",
+            "suggestion": (
+                "请改用 windows_type_text(要写入的正文)；"
+                "新建页用 windows_press_key(Ctrl+N)。不要点菜单「编辑」。"
+            ),
+            "redirect": "windows_type_text",
         }
 
     def _work() -> Dict[str, Any]:
@@ -1999,7 +2306,7 @@ def windows_click_element(description: str) -> Dict[str, Any]:
                 "flow_halt": True,
                 "error": "无法定位搜索框（OCR 未识别到「搜索」，布局/Ctrl+F 也未确认成功）",
                 "suggestion": (
-                    "请确认微信已登录主界面；可手动点开搜索后说「继续」。"
+                    "请确认目标应用主界面可见；可手动点开搜索后说「继续」。"
                     "长期可安装 PaddleOCR 提升中文识别：pip install paddleocr。"
                 ),
                 "screen_text": _screen_text_list(),
@@ -2032,7 +2339,7 @@ def windows_click_element(description: str) -> Dict[str, Any]:
                 "capture": cap_meta,
                 "suggestion": (
                     "请先 get_screen_text / get_screen_description 观察，"
-                    "再点击左侧「搜索」文字；勿先单独按 Ctrl。"
+                    "再按用户目标点击对应控件；勿默认点「搜索」或单独按 Ctrl。"
                     + (
                         " 当前 OCR 引擎不可用，请安装 paddleocr/tesseract。"
                         if not ocr_available()
@@ -2045,30 +2352,52 @@ def windows_click_element(description: str) -> Dict[str, Any]:
         x, y = int(target["x"]), int(target["y"])
         hwnd = int(get_desktop_target().get("hwnd") or 0)
         before = _capture_target_hash(hwnd)
+        click_via = ""
         try:
-            from desktop_input import force_focus_hwnd, message_click_at_screen, screen_click
+            from desktop_input import (
+                force_focus_hwnd,
+                message_click_at_screen,
+                screen_click,
+                uia_invoke_or_click_at_screen,
+                physical_mouse_enabled,
+                no_focus_steal_enabled,
+            )
 
             # 搜索框 / 微信列表：必须物理点击，PostMessage 对 Qt 微信经常无效
             if search_like or wechat_tgt:
-                if hwnd:
+                if hwnd and not no_focus_steal_enabled():
                     force_focus_hwnd(hwnd)
                     time.sleep(0.05)
                 screen_click(x, y)
+                click_via = "physical"
             else:
-                try:
-                    message_click_at_screen(x, y)
-                except Exception:
-                    screen_click(x, y)
+                # 非 Qt：UIA Invoke → PostMessage → 物理（仅 opt-in）
+                uia = uia_invoke_or_click_at_screen(x, y, hwnd=hwnd)
+                if uia.get("ok") and uia.get("via") == "uia_invoke":
+                    click_via = "uia_invoke"
+                else:
+                    try:
+                        message_click_at_screen(x, y)
+                        click_via = "postmessage"
+                    except Exception:
+                        if physical_mouse_enabled() or not no_focus_steal_enabled():
+                            screen_click(x, y)
+                            click_via = "physical_fallback"
+                        else:
+                            raise RuntimeError(
+                                uia.get("error")
+                                or "后台点击失败（UIA/PostMessage）；可设 DESKTOP_PHYSICAL_MOUSE=1"
+                            )
         except Exception as e:
             return {
                 "success": False,
                 "error": f"点击失败: {e}",
                 "x": x,
                 "y": y,
-                "suggestion": "确认目标窗口在前台且未被遮挡。",
+                "suggestion": "确认目标窗口可见；后台模式可关闭 DESKTOP_NO_FOCUS_STEAL 或开启物理鼠标。",
             }
 
-        _wait_stable_quiet(800)
+        _wait_stable_quiet()
         cap = capture_after_action(hwnd, before_hash=before, require_change=False)
         nearby = _nearby_texts(x, y)
         verified = bool(cap.get("changed") or nearby)
@@ -2124,19 +2453,20 @@ def windows_click_element(description: str) -> Dict[str, Any]:
             "y": y,
             "matched": target.get("name"),
             "via": target.get("via"),
+            "click_via": click_via,
             "nearby_text": nearby,
             "capture_after": cap,
             "search_armed": bool(search_like),
             "steps_done": ["click_attempted", "click"] if verified else ["click_attempted"],
             "flow_halt": False,
             "suggestion": (
-                "搜索已点击，请立刻 windows_type_text 输入联系人（勿先点聊天框）。"
+                "搜索已点击，请立刻 windows_type_text 输入关键词（勿先点其他区域）。"
                 if search_like
                 else (
                     "若已打开会话，请 windows_type_text 输入消息后 Enter；"
-                    "若仍在搜索列表，可 windows_press_key('Enter') 打开首条联系人。"
+                    "若仍在搜索列表，可 windows_press_key('Enter') 打开首条。"
                     if wechat_tgt
-                    else None
+                    else "请根据画面继续下一步操作。"
                 )
             ),
         }
@@ -2316,7 +2646,7 @@ def windows_type_text(
             "steps_done": steps,
             "suggestion": (
                 "搜索框需先有光标；平台已尝试剪贴板Ctrl+V / WM_PASTE / WM_CHAR。"
-                "请确认微信前台后重试，或手动点搜索框再说「继续」。"
+                "请确认目标应用前台后重试，或手动点搜索框再说「继续」。"
                 if search_armed
                 else (
                     "会话消息栏已聚焦时请直接 windows_type_text 消息正文（勿再点搜索）。"
@@ -2480,7 +2810,7 @@ def windows_press_key(key: str, *, require_change: Optional[bool] = None) -> Dic
         if (
             "ctrl" in parts_l or "control" in parts_l
         ) and "f" in parts_l:
-            _wait_stable_quiet(400)
+            _wait_stable_quiet(int(_pace_val("post_key_stable_ms")))
             if not _search_ui_looks_open(hwnd):
                 cap = capture_after_action(hwnd, before_hash=before, require_change=False)
                 return {
@@ -2505,7 +2835,7 @@ def windows_press_key(key: str, *, require_change: Optional[bool] = None) -> Dic
                 "suggestion": "搜索已打开，请 windows_type_text 输入关键词。",
             }
 
-        _wait_stable_quiet(400)
+        _wait_stable_quiet(int(_pace_val("post_key_stable_ms")))
         cap = capture_after_action(hwnd, before_hash=before, require_change=need_change)
         if need_change and not cap.get("ok") and not cap.get("changed"):
             return {
@@ -2546,6 +2876,24 @@ def windows_wait(
 
         ms = int(duration_ms) if duration_ms else 3000
         return wait_screen_stable(timeout_ms=max(200, ms))
+    if cond in ("desktop_change", "window_change", "桌面变化", "窗口变化"):
+        from desktop_input import wait_for_desktop_change
+
+        ms = int(duration_ms) if duration_ms else 8000
+        return wait_for_desktop_change(timeout_ms=max(300, ms))
+    if cond.startswith("window:") or cond.startswith("title:"):
+        from desktop_input import wait_for_window_title_keyword
+
+        key = cond.split(":", 1)[-1].strip()
+        ms = int(duration_ms) if duration_ms else 8000
+        ok = wait_for_window_title_keyword(key, timeout=max(0.3, ms / 1000.0))
+        return {
+            "success": bool(ok),
+            "ok": bool(ok),
+            "condition": condition,
+            "title_filter": key,
+            "error": "" if ok else f"未等到标题含「{key}」的窗口",
+        }
     if duration_ms is not None:
         ms = max(0, int(duration_ms))
         time.sleep(ms / 1000.0)
@@ -2556,12 +2904,12 @@ def windows_wait(
         return {
             "success": False,
             "error": f"未知 condition: {condition}",
-            "suggestion": "使用 condition='stable' 或传入 duration_ms。",
+            "suggestion": "使用 condition='stable' / 'desktop_change' / 'window:标题' 或传入 duration_ms。",
         }
     return {
         "success": False,
         "error": "请提供 duration_ms 或 condition",
-        "suggestion": "例如 duration_ms=800 或 condition='stable'。",
+        "suggestion": "例如 duration_ms=800 或 condition='stable' / 'desktop_change'。",
     }
 
 
@@ -2570,6 +2918,7 @@ def windows_wait(
 # 核心通用原语（不含应用死模板）
 WINDOWS_TOOL_NAMES = (
     "windows_focus_app",
+    "windows_launch_app",
     "windows_click_element",
     "windows_type_text",
     "windows_press_key",
@@ -2605,6 +2954,8 @@ def dispatch_windows_or_screen_tool(name: str, args: Dict[str, Any]) -> Dict[str
         )
     if n == "windows_focus_app":
         return windows_focus_app(a.get("app_name") or a.get("name") or "")
+    if n == "windows_launch_app":
+        return windows_launch_app(a.get("app_name") or a.get("name") or a.get("path") or "")
     if n == "windows_click_element":
         return windows_click_element(a.get("description") or a.get("locate") or "")
     if n == "windows_type_text":

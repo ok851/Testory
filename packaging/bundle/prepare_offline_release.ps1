@@ -159,7 +159,9 @@ if (-not $WithChromium) {
     }
 }
 
-# OpenCV 视觉库（70 MB），从 .venv 和 runtime/_internal 两处移除
+# OpenCV 视觉库（约 70 MB）：精简包从 .venv 移除，运行时按需安装。
+# runtime/_internal/cv2 一并移除时，后端必须对 cv2 软导入（见 optional_cv2.py），
+# 否则 TestoryBackend 会在 import playwright_automation 时直接崩溃无法启动。
 if (-not $WithOpenCV) {
     $cvDirs = @(
         (Join-Path $release ".venv\Lib\site-packages\cv2"),

@@ -13,6 +13,34 @@ def test_build_hermes_env_contains_api_server(monkeypatch):
     assert "test-key-123" in text
 
 
+def test_build_hermes_env_excludes_skills_terminal(monkeypatch):
+    monkeypatch.setenv("HERMES_API_SERVER_KEY", "test-key-123")
+    text = build_hermes_env_lines()
+    assert "browser" in text
+    assert '"skills"' not in text and "'skills'" not in text
+    assert "terminal" not in text.split("toolsets=", 1)[-1].split("\n", 1)[0]
+
+
+def test_ensure_api_server_toolsets_drops_skills(tmp_path, monkeypatch):
+    monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
+    from hermes_config import ensure_hermes_api_server_toolsets, hermes_home_dir
+
+    home = hermes_home_dir()
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.yaml").write_text(
+        "platform_toolsets:\n  api_server:\n    - hermes-api-server\n",
+        encoding="utf-8",
+    )
+    out = ensure_hermes_api_server_toolsets()
+    assert out.get("ok")
+    assert out.get("changed")
+    text = (home / "config.yaml").read_text(encoding="utf-8")
+    assert "browser" in text
+    assert "skills" not in text
+    assert "hermes-api-server" not in text
+
+
+
 def test_ensure_hermes_home_creates_skills_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
     home = ensure_hermes_home(force_env=True)

@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_TITLE = "Testory"
 CREATE_NO_WINDOW = 0x08000000
-STARTUP_GRACE_SEC = 5.0
+STARTUP_GRACE_SEC = 12.0
 
 
 def _load_testory_runtime():

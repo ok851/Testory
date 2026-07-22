@@ -51,6 +51,38 @@ class TestDesktopToolFailed(unittest.TestCase):
         self.assertTrue(_desktop_tool_failed(json.dumps({"flow_halt": True})))
 
 
+class TestDesktopFlowHardStop(unittest.TestCase):
+    def test_should_stop_reads_halt_flag(self):
+        from ai_chat_tool_loop import _desktop_flow_should_stop
+
+        self.assertFalse(_desktop_flow_should_stop({}))
+        self.assertFalse(_desktop_flow_should_stop({"failed": True}))
+        self.assertTrue(_desktop_flow_should_stop({"desktop_flow_halted": True}))
+
+    def test_fail_stop_message_forbids_continue(self):
+        from ai_chat_tool_loop import _desktop_fail_stop_message
+
+        meta: dict = {}
+        msg = _desktop_fail_stop_message(
+            "windows_click_element",
+            json.dumps({"success": False, "error": "未找到"}),
+            meta=meta,
+        )
+        self.assertTrue(meta.get("desktop_flow_halted"))
+        self.assertIn("整任务已停止", msg)
+        self.assertNotIn("做一次新动作", msg)
+
+    def test_halt_user_facing(self):
+        from ai_chat_tool_loop import _desktop_halt_user_facing
+
+        text = _desktop_halt_user_facing(
+            "windows_type_text",
+            json.dumps({"error": "输入失败", "suggestion": "手动点一下"}),
+        )
+        self.assertIn("任务已停止", text)
+        self.assertIn("输入失败", text)
+
+
 class TestPreferOuterDesktopTools(unittest.TestCase):
     def test_export(self):
         from ai_chat_tool_loop import prefer_outer_desktop_tools

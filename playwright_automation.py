@@ -1,7 +1,7 @@
 import asyncio
 import random
-import cv2
 import numpy as np
+from optional_cv2 import cv2, require_cv2
 from playwright.async_api import async_playwright
 from typing import List, Dict, Any, Optional, Tuple
 from collections import deque
@@ -7670,6 +7670,7 @@ class PlaywrightAutomation:
                 await page.screenshot(path=screenshot_path, full_page=False)
             
             # 读取截图并进行图像处理
+            require_cv2("滑块缺口图像识别")
             image = cv2.imread(screenshot_path)
             if image is None:
                 uat_logger.error("❌ 无法读取截图")
@@ -13794,10 +13795,10 @@ def sync_exit_iframe():
 
 import asyncio
 import random
-import cv2
 import numpy as np
 from typing import Optional, Tuple, List
 from logger import uat_logger
+from optional_cv2 import cv2, require_cv2
 
 
 class SliderCaptchaOptimizer:

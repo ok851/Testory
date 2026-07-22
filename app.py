@@ -4155,8 +4155,13 @@ def _start_ai_bg_job_thread(job_id: str, kind: str, data: dict, user_id: int, us
                 out = _execute_ai_task_chat(data_copy, user_id, username, remote_addr, abort_event=abort_event)
             else:
                 out = {'success': False, 'error': 'unknown job kind', '_http': 400}
-        except InterruptedError:
-            out = {'success': False, 'error': '任务已被用户取消', '_http': 499}
+        except InterruptedError as ie:
+            # 超时/死循环已被包装成 InterruptedError 时，保留原文，勿一律改成「用户取消」
+            out = {
+                'success': False,
+                'error': str(ie).strip() or '任务已被用户取消',
+                '_http': 499,
+            }
         except Exception as ex:
             uat_logger.exception('ai bg job %s', job_id)
             out = {'success': False, 'error': str(ex), '_http': 500}
@@ -5991,9 +5996,33 @@ def api_ai_task_execute():
     project_id = data.get('project_id')
     platform = (data.get('platform') or 'auto').strip().lower() or 'auto'
     engine = (data.get('engine') or '').strip()  # profile_id from UI
-    url = ''
+    # 起始 URL 一律从用户任务原文解析（前端已无独立 URL 输入框）
+    try:
+        from agent_intent import extract_task_url
+
+        url = extract_task_url(task) or ''
+    except Exception:
+        url = ''
+    if not url:
+        # 兼容 API 调用方仍传 url/case_url
+        explicit = (data.get('url') or data.get('case_url') or '').strip()
+        if explicit:
+            try:
+                from agent_intent import extract_task_url as _etu
+
+                url = _etu(explicit) or (
+                    explicit if explicit.lower().startswith(('http://', 'https://')) else ''
+                )
+            except Exception:
+                url = explicit if explicit.lower().startswith(('http://', 'https://')) else ''
     enable_vision = data.get('enable_vision', False)
     timeout = data.get('timeout', 120)
+    # 默认关闭：日常操控完成后立刻结束，避免卡在「优化测试用例」直到超时
+    generate_case_after_run = bool(
+        data.get("generate_case_after_run")
+        or data.get("refine_after_run")
+        or data.get("generate_test_case")
+    )
 
     if not task:
         return jsonify({'success': False, 'error': '请输入任务描述'}), 400
@@ -6108,6 +6137,7 @@ def api_ai_task_execute():
                 return
             # 标记为超时（而非用户取消），便于错误文案
             setattr(abort_event, "_timed_out", True)
+            setattr(abort_event, "_abort_reason", "timeout")
             abort_event.set()
 
         threading.Thread(target=_timeout_watchdog, daemon=True, name="ai-task-timeout").start()
@@ -6309,9 +6339,13 @@ def api_ai_task_execute():
             yield send('think', text=f'能力：{caps_summary}', status='done')
 
             task_ctx = new_task_context(
-                active_surface=run_platform or "auto",
+                active_surface=(
+                    "web"
+                    if (url or run_platform == "web")
+                    else (run_platform or "auto")
+                ),
                 mobile_udid=((caps.get("mobile") or {}).get("udid") or ""),
-                meta={"task": task[:200], "user_id": user_id},
+                meta={"task": task[:200], "user_id": user_id, "start_url": url or ""},
             )
             yield send(
                 'session',
@@ -6322,15 +6356,23 @@ def api_ai_task_execute():
             browser_ready_holder = {"ready": False}
 
             def _ensure_browser_before_agent():
-                """Web 需要时拉起浏览器；桌面/接口不强制。auto 下浏览器失败不阻断桌面路径。"""
-                from agent_intent import message_needs_browser
+                """Web 需要时拉起浏览器；起始 URL 从任务原文解析，禁止依赖已移除的 URL 输入框。"""
+                from agent_intent import extract_task_url, message_needs_browser
 
-                needs_br = message_needs_browser(task)
+                needs_br = message_needs_browser(task) or (run_platform == "web")
                 if not needs_br:
                     return True, ""
+                nav_url = (extract_task_url(task) or url or "").strip()
                 if browser_ready_holder["ready"]:
                     from hermes_config import hermes_cdp_attached
                     if hermes_cdp_attached():
+                        if nav_url:
+                            try:
+                                from ai_external_browser_bridge import ensure_browser
+
+                                ensure_browser(headless=False, url=nav_url, browser="edge")
+                            except Exception:
+                                pass
                         return True, ""
                 if not hermes_available:
                     return False, "智能体未启动，无法执行浏览器自动化"
@@ -6340,11 +6382,17 @@ def api_ai_task_execute():
                     if hermes_cdp_attached() and not is_browser_alive():
                         force_cleanup_browser()
                     if not hermes_cdp_attached() or not is_browser_alive():
-                        ok = ensure_browser(headless=False, url=url or "", browser="edge")
+                        ok = ensure_browser(headless=False, url=nav_url or "", browser="edge")
                         if not ok:
                             if run_platform == "auto":
                                 return True, ""  # 允许 Hermes 改走桌面/其它手
                             return False, "本机浏览器启动失败，请确认已安装 Edge/Chrome"
+                    elif nav_url:
+                        # 已有会话时仍导航到任务目标 URL，避免卡在 about:blank
+                        try:
+                            ensure_browser(headless=False, url=nav_url, browser="edge")
+                        except Exception:
+                            pass
                     browser_ready_holder["ready"] = True
                     if not hermes_cdp_attached():
                         if run_platform == "auto":
@@ -6493,6 +6541,12 @@ def api_ai_task_execute():
                 use_outer_desktop = run_platform_early == "desktop"
 
             # Step 2: 工具循环（桌面=外层 windows_*；其它=Hermes）
+            if url and not use_outer_desktop:
+                yield send(
+                    'think',
+                    text=f'已从任务解析起始 URL：{url}',
+                    status='running',
+                )
             yield send(
                 'think',
                 text=(
@@ -6580,12 +6634,18 @@ def api_ai_task_execute():
                     abort_event=abort_event,
                     recorder=recorder,
                     allow_screen_tools=True if use_outer_desktop else allow_screen_tools,
-                    allow_desktop_windows_tools=True if use_outer_desktop else None,
+                    # 网页任务严禁外层 windows_*，避免桌面工具污染 Hermes
+                    allow_desktop_windows_tools=True if use_outer_desktop else (
+                        False if run_platform == "web" else None
+                    ),
                     deadline_ts=deadline_ts,
                     ensure_browser_before_agent=_ensure_browser_before_agent if allow_agent else None,
                     allow_hermes_execute=allow_agent,
                     task_session_id=task_ctx.session_id,
                     capabilities_summary=caps_summary,
+                    generate_case_after_run=generate_case_after_run,
+                    # 任务执行：用例走 ActionRecorder，禁止二次 LLM refine（会卡在「优化测试用例」）
+                    allow_refine_test_plan=False,
                 )
 
                 final_plan = None
@@ -6825,7 +6885,7 @@ def api_ai_task_execute():
                         try:
                             if hermes_failed:
                                 final_plan = None
-                            elif recorder and getattr(recorder, "records", None):
+                            elif generate_case_after_run and recorder and getattr(recorder, "records", None):
                                 built, norm_warnings = recorder.build_normalized_plan(
                                     case_name=(final_plan or {}).get("case_name") or task[:60],
                                     case_url=url or (final_plan or {}).get("case_url") or "",
@@ -6845,7 +6905,8 @@ def api_ai_task_execute():
                                         status='done',
                                     )
                             elif (
-                                not hermes_failed
+                                generate_case_after_run
+                                and not hermes_failed
                                 and task_ctx.tool_trace
                                 and (not final_plan or not final_plan.get("steps"))
                             ):
@@ -6926,6 +6987,8 @@ def api_ai_task_execute():
                             deadline_ts and _time.time() >= deadline_ts
                         ):
                             err_text = "任务已超过设定的超时时间，已自动停止"
+                        elif str(getattr(abort_event, "_abort_reason", "") or "") == "tool_loop":
+                            err_text = "智能体因工具死循环已中止（非用户取消）"
                         yield send('error', error=err_text)
 
             except ImportError as e:

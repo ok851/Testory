@@ -6,13 +6,15 @@ from __future__ import annotations
 import os
 from typing import Dict, Optional, Tuple
 
-import cv2
 import numpy as np
 
 from locator_tier_utils import parse_visual_template_value
+from optional_cv2 import cv2
 
 
 def _bgr_from_png_bytes(png: bytes) -> Optional[np.ndarray]:
+    if cv2 is None:
+        return None
     try:
         arr = np.frombuffer(png, dtype=np.uint8)
         im = cv2.imdecode(arr, cv2.IMREAD_COLOR)

@@ -54,11 +54,12 @@ POST /internal/session/{id}/inspect     {"max_depth": 4, "max_nodes": 120}
 
 ## 最佳实践
 
-1. **观察→动作→核验**：`windows_type_text` / `windows_press_key` 先捕获目标窗（frame），再操作，最后用 OCR/画面证据确认；无证据不得报成功
-2. **UIA 优先**：inspect 获取控件树，按 name/automation_id 定位
-3. **视觉降级**：UIA 失败时用 ORB / 布局估算（如微信搜索栏）
-4. **搜索输入**：先 `windows_click_element('搜索')` 武装坐标，再立刻 `windows_type_text`；中文优先剪贴板 Ctrl+V，失败自动换 WM_PASTE / WM_CHAR
-5. **合理等待**：应用启动后 wait 1-3s；一步失败则 flow_halt，勿连环盲点
+1. **观察→动作→核验**：无证据不得报成功
+2. **UIA 优先**：点击优先 Invoke，再 PostMessage；输入优先 ValuePattern
+3. **后台模式**：`DESKTOP_NO_FOCUS_STEAL=1` 不抢前台；`DESKTOP_PHYSICAL_MOUSE=0` 不移光标
+4. **勿默认点搜索**：仅任务需要搜索时再点搜索控件并输入
+5. **核验等待**：`windows_wait(condition='desktop_change'|'window:标题'|'stable')`
+6. **一步失败则 flow_halt**：整任务停止，勿连环盲点
 
 ## Hermes 使用方式
 
