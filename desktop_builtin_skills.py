@@ -413,12 +413,23 @@ class TypeTextSkill(DesktopSkill):
             if clear_first and hasattr(control, "set_text"):
                 control.set_text("")
 
-            # 输入文本
+            # 输入文本：优先 set_text，避免 type_keys 把 +^%{} 编译成热键
             interval = self.get_param(context, "interval", 0.01)
-            if hasattr(control, "type_keys"):
-                control.type_keys(text, with_spaces=True, pause=interval)
+            if hasattr(control, "set_edit_text"):
+                try:
+                    control.set_edit_text(text)
+                except Exception:
+                    if hasattr(control, "set_text"):
+                        control.set_text(text)
+                    else:
+                        raise
             elif hasattr(control, "set_text"):
                 control.set_text(text)
+            elif hasattr(control, "type_keys"):
+                safe = "".join(("{" + c + "}" if c in "+^%(){}~" else c) for c in str(text))
+                control.type_keys(safe, with_spaces=True, pause=interval)
+            else:
+                return SkillResult.failure("控件不支持文本输入")
 
             context.record_action("type_text", {"text_length": len(text)})
 

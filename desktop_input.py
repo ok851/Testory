@@ -359,8 +359,67 @@ def sendinput_type_text(text: str) -> None:
             time.sleep(0.008)
 
 
-def _paste_unicode_via_clipboard(text: str) -> None:
-    """写入剪贴板后 Ctrl+V，适合微信等对逐键 Unicode 不友好的输入框。"""
+def postmessage_type_text_to_hwnd(hwnd: int, text: str) -> dict:
+    """向目标窗口异步投递 WM_CHAR（只用 PostMessage，禁止 SendMessage）。
+
+    原因：对微信 Qt 窗口同步 SendMessage 会占用其 UI 线程，表现为窗口卡死、
+    搜索结果无法刷新。ASCII 用 WM_CHAR 实测有效；中文同样走 PostMessage WM_CHAR。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    hwnd = int(hwnd or 0)
+    raw = str(text if text is not None else "")
+    if not hwnd:
+        return {"ok": False, "via": "wm_char_post", "error": "hwnd 无效"}
+    if not raw:
+        return {"ok": True, "via": "wm_char_post", "chars": 0}
+    user32 = _user32()
+    WM_CHAR = 0x0102
+    sent = 0
+    try:
+        user32.PostMessageW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.PostMessageW.restype = wintypes.BOOL
+    except Exception:
+        pass
+
+    for ch in raw:
+        code = ord(ch)
+        units = []
+        if code > 0xFFFF:
+            c = code - 0x10000
+            units = [0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF)]
+        else:
+            units = [code & 0xFFFF]
+        for u in units:
+            try:
+                if not user32.PostMessageW(hwnd, WM_CHAR, int(u), 1):
+                    return {
+                        "ok": False,
+                        "via": "wm_char_post",
+                        "error": "PostMessageW 失败",
+                        "chars": sent,
+                    }
+                sent += 1
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "via": "wm_char_post",
+                    "error": str(e)[:200],
+                    "chars": sent,
+                }
+            time.sleep(0.015)
+    time.sleep(0.06)
+    return {"ok": True, "via": "wm_char_post", "chars": sent, "hwnd": hwnd}
+
+
+def _set_clipboard_unicode(text: str) -> None:
+    """仅写入剪贴板（不按 Ctrl+V）。Win64 需正确 restype。"""
     import ctypes
     from ctypes import wintypes
 
@@ -368,6 +427,19 @@ def _paste_unicode_via_clipboard(text: str) -> None:
     kernel32 = ctypes.windll.kernel32
     CF_UNICODETEXT = 13
     GMEM_MOVEABLE = 0x0002
+
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.restype = wintypes.BOOL
 
     data = str(text or "")
     if not user32.OpenClipboard(None):
@@ -380,14 +452,55 @@ def _paste_unicode_via_clipboard(text: str) -> None:
         if not h:
             raise RuntimeError("GlobalAlloc failed")
         ptr = kernel32.GlobalLock(h)
-        ctypes.memmove(ptr, buf, nbytes)
-        kernel32.GlobalUnlock(h)
+        if not ptr:
+            raise RuntimeError("GlobalLock returned NULL")
+        try:
+            ctypes.memmove(ptr, buf, nbytes)
+        finally:
+            kernel32.GlobalUnlock(h)
         if not user32.SetClipboardData(CF_UNICODETEXT, h):
             raise RuntimeError("SetClipboardData failed")
     finally:
         user32.CloseClipboard()
 
-    # Ctrl+V
+
+def paste_text_via_wm_paste(hwnd: int, text: str) -> dict:
+    """剪贴板 + 异步 PostMessage(WM_PASTE)。避免 SendMessage 堵死微信 UI。"""
+    import ctypes
+    from ctypes import wintypes
+
+    hwnd = int(hwnd or 0)
+    if not hwnd:
+        return {"ok": False, "via": "wm_paste", "error": "hwnd 无效"}
+    try:
+        _set_clipboard_unicode(text)
+    except Exception as e:
+        return {"ok": False, "via": "wm_paste", "error": f"clipboard: {e}"[:200]}
+    user32 = _user32()
+    WM_PASTE = 0x0302
+    try:
+        user32.PostMessageW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        user32.PostMessageW.restype = wintypes.BOOL
+        if not user32.PostMessageW(hwnd, WM_PASTE, 0, 0):
+            return {"ok": False, "via": "wm_paste", "error": "PostMessage WM_PASTE 失败"}
+        time.sleep(0.12)
+        return {"ok": True, "via": "wm_paste_post", "hwnd": hwnd, "text_length": len(text or "")}
+    except Exception as e:
+        return {"ok": False, "via": "wm_paste", "error": str(e)[:200]}
+
+
+def _paste_unicode_via_clipboard(text: str) -> None:
+    """写入剪贴板后 Ctrl+V（不检查前台；调用方应先 reclaim）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    _set_clipboard_unicode(text)
+    user32 = _user32()
     VK_CONTROL, VK_V = 0x11, 0x56
 
     class KEYBDINPUT(ctypes.Structure):
@@ -409,10 +522,153 @@ def _paste_unicode_via_clipboard(text: str) -> None:
         user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
     _key(VK_CONTROL, True)
+    time.sleep(0.02)
     _key(VK_V, True)
+    time.sleep(0.02)
     _key(VK_V, False)
     _key(VK_CONTROL, False)
-    time.sleep(0.05)
+    time.sleep(0.08)
+
+
+def paste_text_via_ctrl_v(hwnd: int, text: str) -> dict:
+    """剪贴板 + Ctrl+V（SendInput）。先捕获目标前台，适合 Qt 微信中文。"""
+    hwnd = int(hwnd or 0)
+    raw = str(text if text is not None else "")
+    if not hwnd:
+        return {"ok": False, "via": "clipboard_ctrl_v", "error": "hwnd 无效"}
+    reclaim = reclaim_foreground_hwnd(hwnd, retries=3)
+    if not reclaim.get("ok"):
+        return {
+            "ok": False,
+            "via": "clipboard_ctrl_v",
+            "error": reclaim.get("error") or "未能捕获目标前台",
+            "reclaim": reclaim,
+        }
+    try:
+        _set_clipboard_unicode(raw)
+    except Exception as e:
+        return {"ok": False, "via": "clipboard_ctrl_v", "error": f"clipboard: {e}"[:200]}
+    if int(get_foreground_hwnd() or 0) != hwnd:
+        reclaim2 = reclaim_foreground_hwnd(hwnd, retries=2)
+        if not reclaim2.get("ok"):
+            return {
+                "ok": False,
+                "via": "clipboard_ctrl_v",
+                "error": "Ctrl+V 前目标窗失前台",
+                "reclaim": reclaim2,
+            }
+    delivery = deliver_keys_to_hwnd(hwnd, ["ctrl", "v"])
+    if not delivery.get("ok"):
+        try:
+            _paste_unicode_via_clipboard(raw)
+            time.sleep(0.12)
+            return {
+                "ok": True,
+                "via": "clipboard_ctrl_v_sendinput",
+                "hwnd": hwnd,
+                "text_length": len(raw),
+                "delivery": delivery,
+                "reclaim": reclaim,
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "via": "clipboard_ctrl_v",
+                "error": delivery.get("error") or str(e)[:200],
+                "delivery": delivery,
+            }
+    time.sleep(0.15)
+    return {
+        "ok": True,
+        "via": "clipboard_ctrl_v",
+        "hwnd": hwnd,
+        "text_length": len(raw),
+        "delivery": delivery,
+        "reclaim": reclaim,
+    }
+
+
+def deliver_text_strategies(
+    hwnd: int,
+    text: str,
+    *,
+    clear: bool = False,
+    prefer_qt: bool = False,
+) -> dict:
+    """多策略灌字；画面核验由调用方负责。返回最后一次成功投递或全部失败结果。"""
+    hwnd = int(hwnd or 0)
+    raw = str(text if text is not None else "")
+    attempts: List[dict] = []
+    if clear and hwnd:
+        try:
+            deliver_keys_to_hwnd(hwnd, ["ctrl", "a"])
+            time.sleep(0.04)
+            deliver_keys_to_hwnd(hwnd, ["delete"])
+            time.sleep(0.04)
+        except Exception:
+            pass
+
+    has_cjk = any(ord(c) > 127 for c in raw)
+    if prefer_qt:
+        order = (
+            ["clipboard_ctrl_v", "wm_paste", "wm_char", "sendinput_unicode"]
+            if has_cjk
+            else ["wm_char", "clipboard_ctrl_v", "wm_paste"]
+        )
+    else:
+        order = ["uia", "clipboard_ctrl_v", "wm_char", "sendinput"]
+
+    last: dict = {"ok": False, "via": "none", "error": "no strategy"}
+    for name in order:
+        try:
+            if name == "uia" and hwnd:
+                if uia_set_value_in_hwnd(hwnd, raw):
+                    last = {"ok": True, "via": "uia_value", "hwnd": hwnd, "text_length": len(raw)}
+                else:
+                    last = {"ok": False, "via": "uia_value", "error": "uia set_value 失败"}
+            elif name == "clipboard_ctrl_v" and hwnd:
+                last = paste_text_via_ctrl_v(hwnd, raw)
+            elif name == "wm_paste" and hwnd:
+                last = paste_text_via_wm_paste(hwnd, raw)
+            elif name == "wm_char" and hwnd:
+                last = postmessage_type_text_to_hwnd(hwnd, raw)
+            elif name == "sendinput_unicode":
+                if hwnd:
+                    force_focus_hwnd(hwnd, retries=2)
+                sendinput_type_text(raw)
+                last = {
+                    "ok": True,
+                    "via": "sendinput_unicode",
+                    "hwnd": hwnd,
+                    "text_length": len(raw),
+                }
+            elif name == "sendinput":
+                if hwnd:
+                    force_focus_hwnd(hwnd, retries=2)
+                if has_cjk:
+                    _paste_unicode_via_clipboard(raw)
+                    last = {
+                        "ok": True,
+                        "via": "clipboard_paste",
+                        "hwnd": hwnd,
+                        "text_length": len(raw),
+                    }
+                else:
+                    sendinput_type_text(raw)
+                    last = {
+                        "ok": True,
+                        "via": "sendinput_fallback",
+                        "hwnd": hwnd,
+                        "text_length": len(raw),
+                    }
+            else:
+                continue
+        except Exception as e:
+            last = {"ok": False, "via": name, "error": str(e)[:200]}
+        attempts.append(dict(last))
+        if last.get("ok"):
+            return {**last, "attempts": attempts, "strategy": name}
+    return {**last, "attempts": attempts}
 
 
 _SHELL_ROOT_CLASSES = frozenset({"Progman", "WorkerW", "#32769"})
@@ -438,7 +694,11 @@ def resolve_hwnd_from_spec(spec: Optional[dict]) -> int:
     if is_valid_hwnd(hwnd):
         return hwnd
     title_pat = (s.get("window_title_re") or "").strip()
-    title_sub = (s.get("window_title") or "").strip()
+    title_sub = (
+        (s.get("window_title") or "").strip()
+        or (s.get("title_contains") or "").strip()
+        or (s.get("title") or "").strip()
+    )
     if not title_pat and not title_sub:
         return 0
     for wh, wt, _cls in _enum_visible_windows():
@@ -449,7 +709,7 @@ def resolve_hwnd_from_spec(spec: Optional[dict]) -> int:
             except re.error:
                 if title_pat in (wt or ""):
                     return int(wh)
-        elif title_sub and title_sub in (wt or ""):
+        elif title_sub and title_sub.lower() in (wt or "").lower():
             return int(wh)
     return 0
 
@@ -725,6 +985,465 @@ def focus_hwnd(hwnd: int) -> None:
         time.sleep(0.12)
     except Exception:
         pass
+
+
+def _alt_unlock_foreground() -> None:
+    """模拟一次 Alt 键松开，绕过 Windows「前台锁」（后台进程常被拒绝 SetForegroundWindow）。"""
+    try:
+        import ctypes
+
+        user32 = _user32()
+        VK_MENU = 0x12
+        KEYEVENTF_KEYUP = 0x0002
+        user32.keybd_event(VK_MENU, 0, 0, 0)
+        time.sleep(0.01)
+        user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+    except Exception:
+        pass
+
+
+def _click_window_chrome_to_steal_fg(hwnd: int) -> bool:
+    """物理点击目标窗标题栏安全区抢前台（比空 SetForeground 更稳；避开内容区以免误点搜索/聊天）。"""
+    hwnd = int(hwnd or 0)
+    if not hwnd:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = _user32()
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False
+        left, top, right, bottom = int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+        w = max(0, right - left)
+        h = max(0, bottom - top)
+        if w < 80 or h < 40:
+            return False
+        # 标题栏中部偏左：避开右上角关闭/最大化，也避开内容区输入框
+        x = left + max(40, min(w // 3, w - 40))
+        y = top + 12
+        screen_click(x, y)
+        time.sleep(0.12)
+        return int(user32.GetForegroundWindow() or 0) == hwnd
+    except Exception:
+        return False
+
+
+def force_focus_hwnd(
+    hwnd: int, *, retries: int = 3, steal_click_xy: Optional[Tuple[int, int]] = None
+) -> bool:
+    """多策略把目标窗抢到前台并验证（核心能力，而非「前台不对就放弃」）。
+
+    策略阶梯：已前台 → AttachThreadInput+SetFG → TOPMOST 闪一下 → Alt 解锁 → 物理点击。
+    steal_click_xy：若提供则优先生理点击该点（如搜索框）抢前台，避免点标题栏弄丢输入焦点。
+    禁止对顶层 hwnd 调 SetFocus（会把 Qt 微信搜索焦点打回聊天框）。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    hwnd = int(hwnd or 0)
+    if not hwnd or not is_valid_hwnd(hwnd):
+        return False
+    user32 = _user32()
+    kernel32 = ctypes.windll.kernel32
+
+    def _fg_is_target() -> bool:
+        return int(user32.GetForegroundWindow() or 0) == hwnd
+
+    if _fg_is_target():
+        return True
+
+    attempts = max(1, int(retries or 1))
+    for i in range(attempts):
+        try:
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.ShowWindow(hwnd, 5)  # SW_SHOW
+            try:
+                user32.AllowSetForegroundWindow(-1)
+            except Exception:
+                pass
+
+            fg = int(user32.GetForegroundWindow() or 0)
+            tid_cur = int(kernel32.GetCurrentThreadId() or 0)
+            pid = wintypes.DWORD()
+            tid_fg = int(user32.GetWindowThreadProcessId(fg, ctypes.byref(pid)) or 0) if fg else 0
+            tid_tg = int(user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)) or 0)
+            attached: List[int] = []
+            try:
+                if tid_fg and tid_fg != tid_cur:
+                    if user32.AttachThreadInput(tid_cur, tid_fg, True):
+                        attached.append(tid_fg)
+                if tid_tg and tid_tg != tid_cur and tid_tg != tid_fg:
+                    if user32.AttachThreadInput(tid_cur, tid_tg, True):
+                        attached.append(tid_tg)
+
+                user32.BringWindowToTop(hwnd)
+                user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
+                user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
+                if i >= 1:
+                    _alt_unlock_foreground()
+                user32.SetForegroundWindow(hwnd)
+                time.sleep(0.06 + 0.04 * i)
+            finally:
+                for tid in attached:
+                    try:
+                        user32.AttachThreadInput(tid_cur, tid, False)
+                    except Exception:
+                        pass
+
+            if _fg_is_target():
+                return True
+
+            if i >= 1:
+                if steal_click_xy and len(steal_click_xy) == 2:
+                    try:
+                        screen_click(int(steal_click_xy[0]), int(steal_click_xy[1]))
+                        time.sleep(0.12)
+                        if _fg_is_target():
+                            return True
+                    except Exception:
+                        pass
+                if _click_window_chrome_to_steal_fg(hwnd):
+                    return True
+        except Exception:
+            continue
+    return _fg_is_target()
+
+
+def reclaim_foreground_hwnd(
+    hwnd: int,
+    *,
+    retries: int = 4,
+    steal_click_xy: Optional[Tuple[int, int]] = None,
+) -> dict:
+    """显式「捕获目标窗口前台」：返回策略结果，供热键/输入前调用。"""
+    hwnd = int(hwnd or 0)
+    if not hwnd:
+        return {"ok": False, "error": "hwnd 无效", "hwnd": 0}
+    if not is_valid_hwnd(hwnd):
+        return {"ok": False, "error": "hwnd 已失效，需重新 windows_focus_app", "hwnd": hwnd}
+    before = get_foreground_hwnd()
+    ok = force_focus_hwnd(hwnd, retries=retries, steal_click_xy=steal_click_xy)
+    after = get_foreground_hwnd()
+    title, cls = _hwnd_title_class(hwnd)
+    fg_title, _ = _hwnd_title_class(after)
+    return {
+        "ok": bool(ok and after == hwnd),
+        "hwnd": hwnd,
+        "title": title,
+        "class_name": cls,
+        "before_fg": before,
+        "after_fg": after,
+        "fg_title": fg_title,
+        "error": (
+            ""
+            if ok and after == hwnd
+            else f"未能把「{title or hwnd}」抢到前台（当前前台={fg_title or after}）"
+        ),
+    }
+
+
+def _vk_map() -> dict:
+    return {
+        "ctrl": 0x11,
+        "control": 0x11,
+        "shift": 0x10,
+        "alt": 0x12,
+        "win": 0x5B,
+        "enter": 0x0D,
+        "return": 0x0D,
+        "esc": 0x1B,
+        "escape": 0x1B,
+        "tab": 0x09,
+        "space": 0x20,
+        "backspace": 0x08,
+        "delete": 0x2E,
+        "del": 0x2E,
+        "up": 0x26,
+        "down": 0x28,
+        "left": 0x25,
+        "right": 0x27,
+        "home": 0x24,
+        "end": 0x23,
+        "f1": 0x70,
+        "f2": 0x71,
+        "f3": 0x72,
+        "f4": 0x73,
+        "f5": 0x74,
+    }
+
+
+def postmessage_key_to_hwnd(hwnd: int, vk: int, *, down: bool = True) -> bool:
+    """向目标 hwnd 投递 WM_KEYDOWN/WM_KEYUP（不依赖全局前台）。"""
+    hwnd = int(hwnd or 0)
+    if not hwnd or not vk:
+        return False
+    user32 = _user32()
+    WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+    msg = WM_KEYDOWN if down else WM_KEYUP
+    # lParam: repeat=1, scan=MapVirtualKey, flags
+    try:
+        scan = int(user32.MapVirtualKeyW(int(vk), 0) or 0)
+    except Exception:
+        scan = 0
+    lparam = 1 | (scan << 16)
+    if not down:
+        lparam |= 1 << 30 | 1 << 31
+    try:
+        return bool(user32.PostMessageW(hwnd, msg, int(vk) & 0xFFFF, lparam))
+    except Exception:
+        return False
+
+
+def uia_set_value_in_hwnd(hwnd: int, text: str) -> bool:
+    """优先对**当前焦点**可编辑控件写值；禁止盲写第一个 Edit（易写错控件）。"""
+    hwnd = int(hwnd or 0)
+    raw = str(text if text is not None else "")
+    if not hwnd:
+        return False
+    try:
+        from pywinauto import Desktop  # type: ignore
+
+        win = Desktop(backend="uia").window(handle=hwnd)
+        focused = None
+        try:
+            focused = win.get_focus()
+        except Exception:
+            focused = None
+        if focused is not None:
+            try:
+                focused.set_edit_text(raw)
+                return True
+            except Exception:
+                # 禁止 type_keys(raw)：pywinauto 会把 + ^ % { } 编译成 Shift/Ctrl/Alt/特殊键，
+                # 导致正文里出现莫名字母/数字或触发热键。交给剪贴板 / Unicode SendInput。
+                pass
+            # 焦点控件不可编辑：再在其祖先/兄弟中找带焦点的 Edit
+            try:
+                ct = ""
+                try:
+                    ct = str(focused.element_info.control_type or "")
+                except Exception:
+                    ct = ""
+                if "edit" in ct.lower():
+                    return False
+            except Exception:
+                pass
+        # 无可靠焦点时不盲写第一个 Edit，交给剪贴板/SendInput 降级
+        return False
+    except Exception:
+        return False
+
+
+def deliver_keys_to_hwnd(hwnd: int, parts: List[str]) -> dict:
+    """
+    向目标窗口投递按键。
+
+    含 Ctrl/Alt/Win 的组合热键必须用 SendInput（先 force_focus）：
+    PostMessage 不会更新 GetKeyState，微信等应用会把 F 当成普通字符打进输入框。
+    单键仍可先试 PostMessage。
+    """
+    hwnd = int(hwnd or 0)
+    names = [str(p or "").strip().lower() for p in (parts or []) if str(p or "").strip()]
+    if not names:
+        return {"ok": False, "via": "none", "error": "empty keys"}
+    vkm = _vk_map()
+    vks = []
+    for n in names:
+        if n in vkm:
+            vks.append(vkm[n])
+        elif len(n) == 1:
+            vks.append(ord(n.upper()))
+        else:
+            vks = []
+            break
+    has_modifier = any(n in ("ctrl", "control", "shift", "alt", "win") for n in names)
+    # 组合热键：禁止 PostMessage（会导致「只打出 f」）
+    if hwnd and vks and all(vks) and not has_modifier:
+        mods = [v for v, n in zip(vks, names) if n in ("ctrl", "control", "shift", "alt", "win")]
+        mains = [v for v, n in zip(vks, names) if n not in ("ctrl", "control", "shift", "alt", "win")]
+        ok_pm = True
+        for m in mods:
+            ok_pm = postmessage_key_to_hwnd(hwnd, m, down=True) and ok_pm
+        for main in mains or ([vks[-1]] if vks and not mains else []):
+            ok_pm = postmessage_key_to_hwnd(hwnd, main, down=True) and ok_pm
+            ok_pm = postmessage_key_to_hwnd(hwnd, main, down=False) and ok_pm
+        for m in reversed(mods):
+            ok_pm = postmessage_key_to_hwnd(hwnd, m, down=False) and ok_pm
+        if ok_pm:
+            time.sleep(0.05)
+            return {
+                "ok": True,
+                "via": "postmessage",
+                "keys": names,
+                "hwnd": hwnd,
+                "tentative": True,
+                "note": "PostMessage 仅表示消息已入队，须结合画面观察确认",
+            }
+
+    # SendInput（组合热键必经）——先多策略捕获目标窗前台，再发送（失败才报错，不「消极取消」）
+    reclaim = None
+    if hwnd:
+        reclaim = reclaim_foreground_hwnd(hwnd, retries=4)
+        if not reclaim.get("ok"):
+            return {
+                "ok": False,
+                "via": "focus_reclaim_failed",
+                "error": reclaim.get("error")
+                or "未能捕获目标窗口前台，热键未发送",
+                "keys": names,
+                "hwnd": hwnd,
+                "reclaim": reclaim,
+                "suggestion": "请确认目标应用已打开；可再调 windows_focus_app 后重试。",
+            }
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = _user32()
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+            ]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", wintypes.DWORD), ("ki", KEYBDINPUT)]
+
+        def _key(vk: int, down: bool) -> None:
+            inp = INPUT()
+            inp.type = 1
+            inp.ki = KEYBDINPUT(vk, 0, 0 if down else 0x0002, 0, None)
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+        resolved = []
+        for n in names:
+            if n in vkm:
+                resolved.append(vkm[n])
+            elif len(n) == 1:
+                resolved.append(ord(n.upper()))
+        if not resolved:
+            return {"ok": False, "via": "sendinput", "error": f"unparsed keys: {names}"}
+        mods = []
+        main = None
+        for n, vk in zip(names, resolved):
+            if n in ("ctrl", "control", "shift", "alt", "win"):
+                mods.append(vk)
+            else:
+                main = vk
+        if mods and not main:
+            return {
+                "ok": False,
+                "via": "sendinput",
+                "error": "不能只按修饰键（如单独 Ctrl）；请使用完整组合键 Ctrl+F",
+                "keys": names,
+            }
+        # 发送前再确认/抢一次，防止刚被浏览器抢回
+        if hwnd and int(get_foreground_hwnd() or 0) != hwnd:
+            reclaim2 = reclaim_foreground_hwnd(hwnd, retries=2)
+            if not reclaim2.get("ok"):
+                return {
+                    "ok": False,
+                    "via": "focus_reclaim_failed",
+                    "error": "热键发送前目标窗又失前台，已中止",
+                    "keys": names,
+                    "hwnd": hwnd,
+                    "reclaim": reclaim2,
+                }
+        for m in mods:
+            _key(m, True)
+            time.sleep(0.02)
+        if main:
+            _key(main, True)
+            time.sleep(0.02)
+            _key(main, False)
+        for m in reversed(mods):
+            _key(m, False)
+            time.sleep(0.01)
+        time.sleep(0.05)
+        return {
+            "ok": True,
+            "via": "sendinput" if has_modifier else "sendinput_fallback",
+            "keys": names,
+            "hwnd": hwnd,
+            "fg_captured": True,
+            "reclaim": reclaim,
+        }
+    except Exception as e:
+        return {"ok": False, "via": "sendinput_fallback", "error": str(e)[:200]}
+
+
+def deliver_text_to_hwnd(
+    hwnd: int, text: str, *, clear: bool = False, force_paste: bool = False
+) -> dict:
+    """
+    向目标窗口输入文本。
+
+    Qt 微信等：优先 WM_CHAR（实测剪贴板/SendInput 进不了搜索框）；
+    其它应用：UIA → 剪贴板 → SendInput。
+    """
+    hwnd = int(hwnd or 0)
+    raw = str(text if text is not None else "")
+    if clear and hwnd:
+        deliver_keys_to_hwnd(hwnd, ["ctrl", "a"])
+        time.sleep(0.04)
+        deliver_keys_to_hwnd(hwnd, ["delete"])
+        time.sleep(0.04)
+
+    # 1) Qt/微信：中文优先 Ctrl+V；ASCII 优先 WM_CHAR
+    if hwnd:
+        try:
+            title, cls = _hwnd_title_class(hwnd)
+            blob = f"{title} {cls}".lower()
+            prefer_qt = force_paste or any(
+                k in blob for k in ("微信", "wechat", "weixin", "qt515", "qt5")
+            )
+        except Exception:
+            prefer_qt = bool(force_paste)
+        if prefer_qt:
+            return deliver_text_strategies(
+                hwnd, raw, clear=False, prefer_qt=True
+            )
+
+    if (not force_paste) and hwnd and uia_set_value_in_hwnd(hwnd, raw):
+        return {"ok": True, "via": "uia_value", "hwnd": hwnd, "text_length": len(raw)}
+    if hwnd:
+        try:
+            if int(get_foreground_hwnd() or 0) != hwnd:
+                force_focus_hwnd(hwnd)
+        except Exception:
+            force_focus_hwnd(hwnd)
+    # 2) 仍优先 WM_CHAR（非微信窗口也常比 SendInput 稳）
+    if hwnd:
+        r = postmessage_type_text_to_hwnd(hwnd, raw)
+        if r.get("ok"):
+            return r
+    try:
+        use_paste = bool(force_paste) or any(ord(c) > 127 for c in raw) or len(raw) > 8
+        if use_paste:
+            _paste_unicode_via_clipboard(raw)
+            return {
+                "ok": True,
+                "via": "clipboard_paste",
+                "hwnd": hwnd,
+                "text_length": len(raw),
+                "fallback": True,
+            }
+        sendinput_type_text(raw)
+        return {
+            "ok": True,
+            "via": "sendinput_fallback",
+            "hwnd": hwnd,
+            "text_length": len(raw),
+            "fallback": True,
+        }
+    except Exception as e:
+        return {"ok": False, "via": "none", "error": str(e)[:200], "hwnd": hwnd}
 
 
 def get_foreground_hwnd() -> int:

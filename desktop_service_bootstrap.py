@@ -56,6 +56,137 @@ def _ensure_local_profile_defaults() -> None:
         os.environ["DESKTOP_EXECUTION_MODE"] = "inprocess"
 
 
+_DEFAULT_DESKTOP_SECRET = "testory-desktop-local"
+
+
+def _dotenv_secret_candidates() -> list[str]:
+    """从平台/ Hermes 目录的 .env 收集桌面密钥候选（用户无需关心变量名）。"""
+    out: list[str] = []
+    paths: list[Path] = [_ROOT / ".env"]
+    uat = (os.environ.get("UAT_DATA_DIR") or "").strip()
+    if uat:
+        paths.append(Path(uat) / ".env")
+    local = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if local:
+        paths.append(Path(local) / "Testory" / ".env")
+        paths.append(Path(local) / "Testory" / "hermes" / ".env")
+    try:
+        from hermes_config import hermes_home_dir
+
+        paths.append(hermes_home_dir() / ".env")
+    except Exception:
+        pass
+    seen: set[str] = set()
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            from dotenv import dotenv_values
+
+            vals = dotenv_values(path)
+        except Exception:
+            continue
+        for key in (
+            "DESKTOP_AGENT_GATEWAY_SECRET",
+            "EMBEDDED_BROWSER_GATEWAY_SECRET",
+        ):
+            raw = (vals.get(key) or "").strip()
+            if raw and raw not in seen:
+                seen.add(raw)
+                out.append(raw)
+    return out
+
+
+def _persist_desktop_secret_to_hermes(secret: str) -> None:
+    """写入 HERMES_HOME/.env，供 Hermes / MCP 子进程继承同一密钥。"""
+    secret = (secret or "").strip()
+    if not secret:
+        return
+    try:
+        from hermes_config import (
+            ensure_hermes_home,
+            hermes_home_dir,
+            _upsert_env_line,
+            _write_hermes_env_lines,
+        )
+
+        ensure_hermes_home()
+        env_path = hermes_home_dir() / ".env"
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.is_file() else []
+        lines = _upsert_env_line(list(lines), "DESKTOP_AGENT_GATEWAY_SECRET", secret)
+        url = (os.environ.get("DESKTOP_AGENT_GATEWAY_URL") or "http://127.0.0.1:8766").strip()
+        lines = _upsert_env_line(lines, "DESKTOP_AGENT_GATEWAY_URL", url)
+        _write_hermes_env_lines(lines)
+    except Exception:
+        pass
+
+
+def _probe_desktop_secret(secret: str, *, host: str, port: int) -> bool:
+    secret = (secret or "").strip()
+    if not secret:
+        return False
+    try:
+        import json
+        import urllib.error
+        import urllib.request
+
+        url = f"http://{host}:{port}/internal/session"
+        req = urllib.request.Request(
+            url,
+            data=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "X-Desktop-Agent-Secret": secret,
+                "Authorization": f"Bearer {secret}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw) if raw.strip() else {}
+            return bool(data.get("success") or data.get("session_id") or resp.status == 200)
+    except urllib.error.HTTPError as e:
+        return int(getattr(e, "code", 0) or 0) != 401
+    except Exception:
+        return False
+
+
+def resolve_desktop_gateway_secret(*, persist_to_hermes: bool = True) -> str:
+    """解析本机桌面网关密钥：进程环境 → .env 文件 → 稳定默认值。
+
+    若 :8766 已在跑，优先采用能通过鉴权探测的候选，避免平台默认值与旧进程不一致。
+    """
+    if not os.environ.get("DESKTOP_AGENT_GATEWAY_URL", "").strip():
+        port = os.environ.get("DESKTOP_AGENT_GATE_PORT", "8766")
+        os.environ["DESKTOP_AGENT_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
+
+    candidates: list[str] = []
+    for raw in (
+        (os.environ.get("DESKTOP_AGENT_GATEWAY_SECRET") or "").strip(),
+        *(_dotenv_secret_candidates()),
+        (os.environ.get("EMBEDDED_BROWSER_GATEWAY_SECRET") or "").strip(),
+        "hufirst-desktop-local",  # 兼容旧默认
+        _DEFAULT_DESKTOP_SECRET,
+    ):
+        if raw and raw not in candidates:
+            candidates.append(raw)
+
+    parsed = urlparse(os.environ.get("DESKTOP_AGENT_GATEWAY_URL") or "http://127.0.0.1:8766")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or int(os.environ.get("DESKTOP_AGENT_GATE_PORT", "8766") or "8766")
+    chosen = candidates[0] if candidates else _DEFAULT_DESKTOP_SECRET
+    if _port_listening(host, port):
+        for cand in candidates:
+            if _probe_desktop_secret(cand, host=host, port=port):
+                chosen = cand
+                break
+
+    os.environ["DESKTOP_AGENT_GATEWAY_SECRET"] = chosen
+    if persist_to_hermes:
+        _persist_desktop_secret_to_hermes(chosen)
+    return chosen
+
+
 def _ensure_desktop_env_defaults(*, force: bool = False) -> None:
     """未配置时写入进程内默认值。
 
@@ -71,9 +202,7 @@ def _ensure_desktop_env_defaults(*, force: bool = False) -> None:
     if not os.environ.get("DESKTOP_AGENT_GATEWAY_URL", "").strip():
         port = os.environ.get("DESKTOP_AGENT_GATE_PORT", "8766")
         os.environ["DESKTOP_AGENT_GATEWAY_URL"] = f"http://127.0.0.1:{port}"
-    if not os.environ.get("DESKTOP_AGENT_GATEWAY_SECRET", "").strip():
-        emb = (os.environ.get("EMBEDDED_BROWSER_GATEWAY_SECRET") or "").strip()
-        os.environ["DESKTOP_AGENT_GATEWAY_SECRET"] = emb or "hufirst-desktop-local"
+    resolve_desktop_gateway_secret(persist_to_hermes=True)
     if sys.platform == "win32" and not os.environ.get("DESKTOP_APP_ALIASES", "").strip():
         os.environ["DESKTOP_APP_ALIASES"] = '{"default":"notepad.exe"}'
     if sys.platform == "win32" and not os.environ.get("DESKTOP_DEFAULT_ATTACH_TITLE_RE", "").strip():
@@ -94,6 +223,8 @@ def ensure_desktop_gateway_for_agent() -> dict:
     port = parsed.port or int(os.environ.get("DESKTOP_AGENT_GATE_PORT", "8766") or "8766")
 
     def _auth_probe() -> Tuple[bool, str]:
+        # 先重新解析：可能采用已在跑的网关所认的密钥，无需重启
+        resolve_desktop_gateway_secret(persist_to_hermes=True)
         try:
             from desktop_agent_client import desktop_agent_json
 
@@ -114,6 +245,7 @@ def ensure_desktop_gateway_for_agent() -> dict:
         if ok_auth:
             out["ok"] = True
             out["already_running"] = True
+            out["secret_aligned"] = True
             return out
         # 端口在听但密钥不一致：停掉本进程拉起的旧 gateway 再重启
         out["auth_mismatch"] = auth_detail

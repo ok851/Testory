@@ -112,7 +112,7 @@ class WebVisionActionPort(VisionActionPort):
             return ActResult(ok=False, message=err)
         rs = (j or {}).get("results") or [{}]
         if rs and rs[0].get("ok"):
-            return ActResult(ok=True, message="已点击")
+            return ActResult(ok=True, message="已尝试点击（请结合画面确认）")
         return ActResult(ok=False, message=str(rs[0].get("error") if rs else "失败"))
 
     def input_text(self, description: str, text: str) -> ActResult:
@@ -132,7 +132,7 @@ class WebVisionActionPort(VisionActionPort):
             return ActResult(ok=False, message=err)
         rs = (j or {}).get("results") or [{}]
         if rs and rs[0].get("ok"):
-            return ActResult(ok=True, message="已输入")
+            return ActResult(ok=True, message="已尝试输入（请结合画面确认）")
         return ActResult(ok=False, message=str(rs[0].get("error") if rs else "失败"))
 
     def run_steps(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -189,7 +189,7 @@ class MobileVisionActionPort(VisionActionPort):
         j = agent_replay_step(self.udid, step, step_index=0)
         if (j or {}).get("success") is False:
             return ActResult(ok=False, message=str((j or {}).get("error") or "输入失败"))
-        return ActResult(ok=True, message="已输入")
+        return ActResult(ok=True, message="已尝试输入（请结合画面确认）")
 
     def run_steps(self, steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         from mobile_agent_client import agent_replay_steps
@@ -229,7 +229,7 @@ class DesktopVisionActionPort(VisionActionPort):
             import pyautogui  # type: ignore
 
             pyautogui.click(pt.x, pt.y)
-            return ActResult(ok=True, message="已点击")
+            return ActResult(ok=True, message="已尝试点击（请结合画面确认）")
         except Exception as e:
             return ActResult(ok=False, message=str(e))
 
@@ -241,7 +241,7 @@ class DesktopVisionActionPort(VisionActionPort):
             import pyautogui  # type: ignore
 
             pyautogui.typewrite(text, interval=0.02)
-            return ActResult(ok=True, message="已输入")
+            return ActResult(ok=True, message="已尝试输入（请结合画面确认）")
         except Exception as e:
             return ActResult(ok=False, message=str(e))
 

@@ -685,6 +685,7 @@ def openai_compatible_chat_stream(
                     fn = tc.get("function") or {}
                     if fn.get("name"):
                         tool_buffers[idx]["name"] = fn["name"]
+                        yield ("tool_call_delta", {"index": idx, "name": fn["name"]})
                     if fn.get("arguments"):
                         tool_buffers[idx]["arguments"] += fn["arguments"]
                     if tc.get("id"):

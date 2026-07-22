@@ -2,6 +2,7 @@
 """桌面自然语言执行：本机 DesktopAutomation / DesktopAgent，不经浏览器。"""
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -270,8 +271,78 @@ def _attach_step(display: str, title_hint: str = "") -> Dict[str, Any]:
         return {"ok": False, "error": err, "display": display, "step": step}
 
 
+_QUOTE_CHARS = "「」『』\"'“”‘’＂"
+_OPEN_QUOTES = "「『\"“‘＂"
+_CLOSE_QUOTES = "」』\"”’＂"
+_STRUCTURAL_CONTACT_BLOCKLIST = frozenset(
+    {
+        "为",
+        "是",
+        "的",
+        "人",
+        "一个",
+        "备注",
+        "备注名",
+        "联系人",
+        "好友",
+        "发送",
+        "消息",
+        "发送消息",
+        "内容",
+        "微信",
+    }
+)
+
+
+def _extract_quoted_segments(text: str) -> List[str]:
+    """抽取各类引号中的片段（至少 1 字）。"""
+    if not text:
+        return []
+    # 成对引号：中文弯引号 / 直角引号 / 英文 / 全角
+    pairs = (
+        ("「", "」"),
+        ("『", "』"),
+        ("“", "”"),
+        ("‘", "’"),
+        ('"', '"'),
+        ("'", "'"),
+        ("＂", "＂"),
+    )
+    out: List[str] = []
+    for left, right in pairs:
+        for m in re.finditer(
+            re.escape(left) + r"([^" + re.escape(left + right) + r"]{1,200})" + re.escape(right),
+            text,
+        ):
+            seg = (m.group(1) or "").strip()
+            if seg and seg not in out:
+                out.append(seg)
+    return out
+
+
+def _looks_like_structural_filler(value: str) -> bool:
+    v = (value or "").strip()
+    if not v:
+        return True
+    if v in _STRUCTURAL_CONTACT_BLOCKLIST:
+        return True
+    if len(v) <= 2 and v in ("为", "是", "的", "和", "与", "给", "向"):
+        return True
+    # 「，消息内容为」这类把模板词当成正文
+    if v.startswith("，") or v.startswith(","):
+        return True
+    if v in ("消息内容为", "消息内容是", "发送消息", "内容为", "内容是"):
+        return True
+    if re.fullmatch(r"[，,。.\s]*消息内容[为是]?[，,。.\s]*", v):
+        return True
+    return False
+
+
 def _parse_wechat_send(message: str) -> Optional[Tuple[str, str]]:
-    """解析「给XX发消息YYY」→ (contact, text)。"""
+    """解析「给XX发消息YYY」→ (contact, text)。
+
+    高置信：两条引号内实体；否则再走结构化短语。解析结果若像模板词则视为失败。
+    """
     t = (message or "").strip()
     if not t:
         return None
@@ -281,33 +352,78 @@ def _parse_wechat_send(message: str) -> Optional[Tuple[str, str]]:
     if not (looks_wechat or looks_send):
         return None
 
-    # 优先抽取中英文引号内片段：通常第 1 个是联系人，第 2 个是消息
-    quoted = re.findall(r"[「\"'“]([^」\"'”]{1,200})[」\"'”]", t)
+    quoted = _extract_quoted_segments(t)
     contact = ""
     body = ""
-    if len(quoted) >= 2:
-        contact, body = quoted[0].strip(), quoted[1].strip()
-    elif len(quoted) == 1:
-        # 只有一处引号时，再从上下文补另一端
-        body = quoted[0].strip()
+
+    if quoted:
+        contact_cand = ""
+        body_cand = ""
+        for seg in quoted:
+            pos = t.find(seg)
+            prefix = t[max(0, pos - 16) : pos] if pos >= 0 else ""
+            if any(k in prefix for k in ("备注", "联系人", "好友", "给", "向", "找")):
+                if not contact_cand:
+                    contact_cand = seg
+            if any(k in prefix for k in ("消息内容", "内容为", "内容是", "说")):
+                body_cand = seg
+        if len(quoted) >= 2:
+            contact = contact_cand or quoted[0].strip()
+            body = body_cand or quoted[1].strip()
+            # 若误把同一段赋给两边，用首尾两段
+            if contact == body and len(quoted) >= 2:
+                contact, body = quoted[0].strip(), quoted[-1].strip()
+        elif len(quoted) == 1:
+            body = body_cand or quoted[0].strip()
 
     if not contact:
         m = re.search(
-            r"(?:备注名(?:为|是)?|联系人|好友)\s*[「\"'“]?([^」\"'”\s，,。]{1,40})[」\"'”]?",
+            r"(?:备注名(?:为|是)?|联系人|好友)\s*["
+            + _OPEN_QUOTES
+            + r"]([^"
+            + _CLOSE_QUOTES
+            + r"]{1,40})["
+            + _CLOSE_QUOTES
+            + r"]",
             t,
         )
         if m:
             contact = m.group(1).strip()
     if not contact:
         m = re.search(
-            r"给\s*[「\"'“]?([^」\"'”\s，,。]{1,40})[」\"'”]?\s*(?:发送|发消息|发一条|发一句|发)",
+            r"(?:备注名(?:为|是)?|联系人|好友)\s*["
+            + _OPEN_QUOTES
+            + r"]?([^"
+            + _CLOSE_QUOTES
+            + r"\s，,。]{2,40})["
+            + _CLOSE_QUOTES
+            + r"]?",
             t,
         )
         if m:
-            contact = m.group(1).strip()
+            contact = re.sub(r"的人$", "", m.group(1).strip()).strip()
     if not contact:
         m = re.search(
-            r"(?:向|找)\s*[「\"'“]?([^」\"'”\s，,。]{1,40})[」\"'”]?\s*(?:发送|发消息|发)",
+            r"给\s*["
+            + _OPEN_QUOTES
+            + r"]?([^"
+            + _CLOSE_QUOTES
+            + r"\s，,。]{2,40})["
+            + _CLOSE_QUOTES
+            + r"]?\s*(?:发送|发消息|发一条|发一句|发)",
+            t,
+        )
+        if m:
+            contact = re.sub(r"的人$", "", m.group(1).strip()).strip()
+    if not contact:
+        m = re.search(
+            r"(?:向|找)\s*["
+            + _OPEN_QUOTES
+            + r"]?([^"
+            + _CLOSE_QUOTES
+            + r"\s，,。]{2,40})["
+            + _CLOSE_QUOTES
+            + r"]?\s*(?:发送|发消息|发)",
             t,
         )
         if m:
@@ -315,51 +431,246 @@ def _parse_wechat_send(message: str) -> Optional[Tuple[str, str]]:
 
     if not body:
         m2 = re.search(
-            r"(?:消息内容(?:为|是)?|发送(?:消息)?(?:内容)?(?:为|是)?|内容(?:为|是)?|说)\s*[「\"'“]?([^」\"'”]{1,200})[」\"'”]?",
+            r"消息内容(?:为|是)?\s*["
+            + _OPEN_QUOTES
+            + r"]([^"
+            + _CLOSE_QUOTES
+            + r"]{1,200})["
+            + _CLOSE_QUOTES
+            + r"]",
+            t,
+        )
+        if m2:
+            body = m2.group(1).strip()
+    if not body:
+        m2 = re.search(
+            r"消息内容(?:为|是)?\s*[" + _OPEN_QUOTES + r"]?(.+)$",
+            t,
+        )
+        if m2:
+            body = m2.group(1).strip().strip(_QUOTE_CHARS + "，,。 ")
+    if not body:
+        m2 = re.search(
+            r"(?:内容(?:为|是)?|说)\s*["
+            + _OPEN_QUOTES
+            + r"]([^"
+            + _CLOSE_QUOTES
+            + r"]{1,200})["
+            + _CLOSE_QUOTES
+            + r"]",
             t,
         )
         if m2:
             body = m2.group(1).strip()
     if not body and contact:
-        # 「给XX发消息YYY」（无引号）
         m3 = re.search(
-            re.escape(contact) + r"\s*(?:发送|发消息|发一条|发一句|发)\s*[「\"'“]?([^」\"'”]{1,200})[」\"'”]?",
+            re.escape(contact)
+            + r"(?:的人)?\s*(?:发送|发消息|发一条|发一句|发)\s*["
+            + _OPEN_QUOTES
+            + r"]?([^"
+            + _CLOSE_QUOTES
+            + r"]{1,200})["
+            + _CLOSE_QUOTES
+            + r"]?",
             t,
         )
         if m3:
             body = m3.group(1).strip()
-    if contact and body:
-        return contact, body
-    return None
+            m4 = re.search(
+                r"消息内容(?:为|是)?\s*[" + _OPEN_QUOTES + r"]?(.+)$",
+                body,
+            )
+            if m4:
+                body = m4.group(1).strip().strip(_QUOTE_CHARS + "，,。 ")
+
+    contact = (contact or "").strip().strip(_QUOTE_CHARS)
+    body = (body or "").strip().strip(_QUOTE_CHARS)
+    if not contact or not body:
+        return None
+    if _looks_like_structural_filler(contact) or _looks_like_structural_filler(body):
+        return None
+    return contact, body
+
+
+def looks_like_wechat_send_task(message: str) -> bool:
+    """粗判是否像微信发消息（不要求正则抽参成功）。"""
+    t = (message or "").strip()
+    if not t:
+        return False
+    tl = t.lower()
+    has_app = any(k in t or k in tl for k in ("微信", "wechat", "weixin"))
+    has_send = any(k in t for k in ("发送", "发消息", "发给", "消息内容", "备注", "发一句", "发条"))
+    return has_app and has_send
 
 
 def is_wechat_send_task(message: str) -> bool:
-    """是否为「微信发消息」类任务（供平台确定性执行，跳过 Hermes）。"""
+    """是否已能用规则可靠解析出联系人与正文。"""
     return _parse_wechat_send(message) is not None
 
 
+def llm_extract_wechat_send(
+    message: str,
+    *,
+    local_ai_service: Any = None,
+    profile: Optional[Dict[str, Any]] = None,
+    abort_event: Any = None,
+    timeout: int = 45,
+) -> Optional[Tuple[str, str]]:
+    """用当前配置的 LLM 抽取 (contact, text)。失败返回 None。"""
+    t = (message or "").strip()
+    if not t:
+        return None
+    if profile is None or local_ai_service is None:
+        return None
+    try:
+        from ai_multi_provider import dispatch_chat_completion_messages
+    except Exception:
+        return None
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是参数抽取器。从用户中文指令中提取微信发消息的联系人备注名与消息正文。"
+                "只输出一行 JSON，不要 markdown，不要解释。格式："
+                '{"contact":"...","text":"..."}\n'
+                "规则：contact 是人名/备注（如舒琪宝宝大王），绝不是「为/是/备注名」等句式词；"
+                "text 是要发送的正文（如你好，我是AI），绝不是「消息内容为」等模板词。"
+                "若无法确定任一字段，输出 {\"contact\":\"\",\"text\":\"\"}。"
+            ),
+        },
+        {"role": "user", "content": t},
+    ]
+    try:
+        resp = dispatch_chat_completion_messages(
+            messages,
+            None,
+            profile,
+            local_ai_service,
+            temperature=0.0,
+            timeout=max(15, int(timeout)),
+            abort_event=abort_event,
+        )
+    except Exception:
+        return None
+
+    content = ""
+    if isinstance(resp, dict):
+        content = (resp.get("content") or "").strip()
+        if not content:
+            # OpenAI style choices
+            try:
+                content = (
+                    ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                ).strip()
+            except Exception:
+                content = ""
+    if not content:
+        return None
+
+    # 剥 markdown 代码块
+    m = re.search(r"\{[^{}]+\}", content, re.S)
+    raw = m.group(0) if m else content
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    contact = str(data.get("contact") or data.get("to") or "").strip()
+    body = str(data.get("text") or data.get("message") or data.get("body") or "").strip()
+    if not contact or not body:
+        return None
+    if _looks_like_structural_filler(contact) or _looks_like_structural_filler(body):
+        return None
+    return contact, body
+
+
+def resolve_wechat_send_args(
+    message: str,
+    *,
+    local_ai_service: Any = None,
+    profile: Optional[Dict[str, Any]] = None,
+    abort_event: Any = None,
+) -> Tuple[Optional[Tuple[str, str]], str]:
+    """解析微信发消息参数。
+
+    返回 ((contact, text)|None, via)：
+    via = regex | llm | none
+    """
+    parsed = _parse_wechat_send(message)
+    if parsed:
+        return parsed, "regex"
+    llm = llm_extract_wechat_send(
+        message,
+        local_ai_service=local_ai_service,
+        profile=profile,
+        abort_event=abort_event,
+    )
+    if llm:
+        return llm, "llm"
+    return None, "none"
+
+
 def _run_desktop_steps(steps: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]], str]:
+    """逐步执行；gateway 连接失败时回退本机 DesktopAutomation。返回逐步结果。"""
     results: List[Dict[str, Any]] = []
     try:
-        from desktop_agent_client import desktop_agent_enabled, remote_execute_step
+        from desktop_agent_client import desktop_agent_enabled
 
         use_gw = desktop_agent_enabled()
     except Exception:
         use_gw = False
     eng = None
-    if not use_gw:
-        from desktop_automation import DesktopAutomation
 
-        eng = DesktopAutomation()
+    def _local_eng():
+        nonlocal eng
+        if eng is None:
+            from desktop_automation import DesktopAutomation
+
+            eng = DesktopAutomation()
+        return eng
+
     for st in steps:
         try:
+            r = None
+            via = "local"
             if use_gw:
-                from desktop_agent_client import remote_execute_step
+                try:
+                    from desktop_agent_client import remote_execute_step
 
-                r = remote_execute_step(st)
+                    r = remote_execute_step(st)
+                    via = "gateway"
+                except Exception as gw_ex:
+                    err_s = str(gw_ex)
+                    # 连接拒绝 / 超时：回退本机，避免「假计划步骤」与仅 attach 成功
+                    if any(
+                        k in err_s.lower()
+                        for k in (
+                            "10061",
+                            "refused",
+                            "actively refused",
+                            "连接",
+                            "timed out",
+                            "timeout",
+                            "unreachable",
+                        )
+                    ):
+                        r = _local_eng().execute_step(st)
+                        via = "local_fallback"
+                    else:
+                        raise
             else:
-                r = eng.execute_step(st)  # type: ignore[union-attr]
-            results.append({"step": st, "result": r, "ok": True})
+                r = _local_eng().execute_step(st)
+            # 部分引擎返回 dict 且带 status/ok
+            step_ok = True
+            if isinstance(r, dict):
+                if r.get("ok") is False or r.get("status") == "error":
+                    step_ok = False
+            if not step_ok:
+                results.append({"step": st, "result": r, "ok": False, "via": via})
+                return False, results, str((r or {}).get("error") or "步骤返回失败")[:200]
+            results.append({"step": st, "result": r, "ok": True, "via": via})
         except Exception as e:
             results.append({"step": st, "error": str(e)[:200], "ok": False})
             return False, results, str(e)[:200]
@@ -483,13 +794,25 @@ def _try_wechat_send_message_inner(
         },
     ]
     ok, results, err = _run_desktop_steps(flow)
-    steps_acc.extend(flow)
+    # 只把真正执行过的步骤写入 steps（含失败的那一步），禁止把未执行的计划步骤标成成功
+    executed_steps: List[Dict[str, Any]] = []
+    step_results: List[Dict[str, Any]] = []
+    # 预备步骤（attach/launch）视为已成功执行
+    for ps in prep_steps:
+        step_results.append({"step": ps, "ok": True, "via": "prep"})
+    for item in results:
+        st = item.get("step") if isinstance(item, dict) else None
+        if isinstance(st, dict):
+            executed_steps.append(st)
+            step_results.append(item)
+    steps_acc.extend(executed_steps)
     if ok:
         return {
             "ok": True,
             "partial": False,
             "display": "微信",
             "steps": steps_acc,
+            "step_results": step_results,
             "result": results,
             "via": "desktop_wechat_send",
             "reply": (
@@ -502,6 +825,7 @@ def _try_wechat_send_message_inner(
         "partial": True,
         "display": "微信",
         "steps": steps_acc,
+        "step_results": step_results,
         "result": results,
         "via": "desktop_wechat_send",
         "error": err,
@@ -514,20 +838,27 @@ def _try_wechat_send_message_inner(
 
 def execute_desktop_nl(message: str) -> Dict[str, Any]:
     """
-    桌面自然语言统一入口：
-    1) 微信发消息：优先 attach 已运行窗口 + 热键/输入链路（不依赖残缺 DesktopAgent）
-    2) 简单打开：launch 或 attach
-    3) 其它复杂指令：再尝试 DesktopAgent
+    桌面自然语言统一入口（仅 DESKTOP_NL_FASTPATH=1 调试旁路）：
+    通用 launch/attach + DesktopAgent；不再自动抢跑任一应用死模板宏。
     """
+    import os
+
     t = (message or "").strip()
     if not t:
         return {"ok": False, "error": "指令为空"}
 
     steps: List[Dict[str, Any]] = []
 
-    wechat_try = _try_wechat_send_message(t, steps)
-    if wechat_try is not None:
-        return wechat_try
+    # 应用专属宏默认关闭；仅 COMPOSITE_APP_FASTPATH=1 时保留旧微信路径（调试）
+    if os.environ.get("COMPOSITE_APP_FASTPATH", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        wechat_try = _try_wechat_send_message(t, steps)
+        if wechat_try is not None:
+            return wechat_try
 
     launched = None
     resolved = resolve_desktop_launch_target(t)

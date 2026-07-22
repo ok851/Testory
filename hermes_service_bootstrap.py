@@ -329,6 +329,38 @@ def hermes_log_tail(max_lines: int = 40) -> str:
         return ""
 
 
+def _resolve_git_bash_path() -> str:
+    """定位 Git Bash，供 Hermes terminal 工具使用（Windows 必备）。"""
+    import shutil
+    from pathlib import Path
+
+    existing = (os.environ.get("HERMES_GIT_BASH_PATH") or "").strip()
+    if existing and Path(existing).is_file():
+        return existing
+    which = shutil.which("bash")
+    if which and Path(which).is_file():
+        return which
+    git = shutil.which("git")
+    if git:
+        # .../Git/cmd/git.exe → .../Git/bin/bash.exe
+        p = Path(git).resolve()
+        for cand in (
+            p.parent.parent / "bin" / "bash.exe",
+            p.parent.parent / "usr" / "bin" / "bash.exe",
+            p.parent / "bash.exe",
+        ):
+            if cand.is_file():
+                return str(cand)
+    for cand in (
+        Path(r"D:\Program Files\Git\bin\bash.exe"),
+        Path(r"C:\Program Files\Git\bin\bash.exe"),
+        Path(r"C:\Program Files (x86)\Git\bin\bash.exe"),
+    ):
+        if cand.is_file():
+            return str(cand)
+    return ""
+
+
 def _inject_hermes_env(env: dict) -> None:
     from hermes_config import _HERMES_LLM_ENV_KEYS, resolve_hermes_api_server_key
 
@@ -363,13 +395,23 @@ def _inject_hermes_env(env: dict) -> None:
     if not env.get("GATEWAY_ALLOW_ALL_USERS"):
         env["GATEWAY_ALLOW_ALL_USERS"] = "true"
 
-    # 桌面 gateway 鉴权：注入到 Hermes 子进程，避免 terminal/curl 缺 header → 401 死循环
-    try:
-        from desktop_service_bootstrap import _ensure_desktop_env_defaults
+    bash = _resolve_git_bash_path()
+    if bash:
+        env["HERMES_GIT_BASH_PATH"] = bash
+        os.environ["HERMES_GIT_BASH_PATH"] = bash
 
-        _ensure_desktop_env_defaults(force=True)
+    # 桌面 gateway 鉴权：统一解析并强制注入 Hermes 子进程（覆盖父进程旧默认值）
+    try:
+        from desktop_service_bootstrap import resolve_desktop_gateway_secret
+
+        resolve_desktop_gateway_secret(persist_to_hermes=True)
     except Exception:
-        pass
+        try:
+            from desktop_service_bootstrap import _ensure_desktop_env_defaults
+
+            _ensure_desktop_env_defaults(force=True)
+        except Exception:
+            pass
     for k in (
         "DESKTOP_AGENT_GATEWAY_URL",
         "DESKTOP_AGENT_GATEWAY_SECRET",
@@ -458,6 +500,13 @@ def stop_hermes_gateway(*, clear_cdp: bool = True, cleanup_browser: bool = True)
 
     host, port = _gateway_listen_endpoint()
     detail: Dict[str, Any] = {"epoch": epoch, "port": port, "steps": []}
+    try:
+        from hermes_desktop_enable import stop_testory_desktop_mcp
+
+        stop_testory_desktop_mcp()
+        detail["steps"].append("desktop_mcp_stopped")
+    except Exception as e:
+        detail["steps"].append(f"desktop_mcp_stop_err:{e}")
     deadline = time.monotonic() + 12.0
 
     def _timed_out() -> bool:
@@ -593,31 +642,65 @@ def restart_hermes_gateway() -> dict:
 def ensure_hermes_llm_current(*, restart_if_stale: bool = True) -> dict:
     """同步平台所选模型到 Hermes；若 Gateway 仍在跑旧 Key/模型则重启。
 
-    根因：仅改 registry / .env 时，已运行的 Hermes 子进程不会热加载 OPENAI_*。
+    根因：仅改 registry / .env 时，已运行的 Hermes 子进程不会热加载；
+    且新版 Hermes 以 config.yaml model 为准，config 变更后必须重启。
     """
     global _LOADED_LLM_FP
     from hermes_config import (
         hermes_desired_llm_fingerprint,
+        hermes_disk_llm_fingerprint,
         hermes_env_llm_snapshot,
         sync_platform_llm_credentials_to_hermes_env,
     )
 
     sync_info = sync_platform_llm_credentials_to_hermes_env()
     desired = hermes_desired_llm_fingerprint()
+    disk_fp = hermes_disk_llm_fingerprint()
     snap = hermes_env_llm_snapshot()
+    config_changed = bool(sync_info.get("config_changed"))
+    disk_mismatch = bool(desired and disk_fp and desired != disk_fp)
+    loaded_mismatch = bool(desired and _LOADED_LLM_FP and _LOADED_LLM_FP != desired)
     out: dict = {
-        "synced": True,
+        "synced": bool(sync_info.get("synced")),
         "desired_fingerprint": desired,
+        "disk_fingerprint": disk_fp,
         "loaded_fingerprint": _LOADED_LLM_FP,
         "env_model": snap.get("model") or "",
+        "env_base_url": snap.get("base_url") or "",
+        "env_provider": snap.get("provider") or "",
+        "synced_model": sync_info.get("synced_model") or "",
+        "active_profile_id": sync_info.get("active_profile_id") or "",
         "action": "synced",
         "llm_sync": sync_info,
+        "config_changed": config_changed,
+        "disk_mismatch": disk_mismatch,
     }
     st = get_bootstrap_status()
     if not st.get("running"):
         out["action"] = "not_running"
         return out
-    if _LOADED_LLM_FP and desired and _LOADED_LLM_FP == desired:
+    # 磁盘已是目标模型且本次未改配置：采纳指纹，勿因内存 FP 为空反复 restart（可空等十几秒）
+    if (
+        (not config_changed)
+        and (not disk_mismatch)
+        and desired
+        and disk_fp
+        and disk_fp == desired
+        and (not loaded_mismatch)
+    ):
+        _LOADED_LLM_FP = desired
+        out["action"] = "already_current"
+        out["loaded_fingerprint"] = _LOADED_LLM_FP
+        return out
+    # 仅当：磁盘已是目标模型、内存指纹一致、且本次未改配置 → 才跳过重启
+    if (
+        (not config_changed)
+        and (not disk_mismatch)
+        and (not loaded_mismatch)
+        and _LOADED_LLM_FP
+        and desired
+        and _LOADED_LLM_FP == desired
+    ):
         out["action"] = "already_current"
         return out
     if not restart_if_stale:
@@ -791,16 +874,41 @@ def bootstrap_hermes_services(*, force: bool = False, manual: bool = False) -> d
                 resolve_hermes_api_server_key()
             except Exception:
                 pass
+            desk_early = None
+            desk_early_changed = False
+            try:
+                from hermes_desktop_enable import ensure_hermes_desktop_control
+
+                desk_early = ensure_hermes_desktop_control()
+                desk_early_changed = bool(desk_early.get("changed"))
+            except Exception:
+                pass
             if HermesGatewayClient().health_check(timeout_sec=0.8):
                 try:
                     from hermes_config import hermes_desired_llm_fingerprint
 
                     desired = hermes_desired_llm_fingerprint()
-                    if _LOADED_LLM_FP and desired and _LOADED_LLM_FP == desired:
-                        return {"skipped": True, "already_running": True, "hermes_started": True}
+                    if (
+                        not desk_early_changed
+                        and _LOADED_LLM_FP
+                        and desired
+                        and _LOADED_LLM_FP == desired
+                    ):
+                        return {
+                            "skipped": True,
+                            "already_running": True,
+                            "hermes_started": True,
+                            "desktop_control": desk_early,
+                        }
                 except Exception:
-                    return {"skipped": True, "already_running": True, "hermes_started": True}
-                # 上游模型已变：继续往下强制重拉
+                    if not desk_early_changed:
+                        return {
+                            "skipped": True,
+                            "already_running": True,
+                            "hermes_started": True,
+                            "desktop_control": desk_early,
+                        }
+                # 上游模型已变或桌面 MCP 配置变更：继续往下强制重拉
             _BOOTED = False
         # 卡住的 starting：允许 force 或看门狗后重试
         if _STARTING and not force:
@@ -882,6 +990,17 @@ def bootstrap_hermes_services(*, force: bool = False, manual: bool = False) -> d
         except Exception as e:
             out["skills_sync_error"] = str(e)[:160]
 
+        # 桌面操控：:8766 gateway + config.yaml MCP + :9820 MCP HTTP（用户点启动即可控桌面）
+        desktop_changed = False
+        try:
+            from hermes_desktop_enable import ensure_hermes_desktop_control
+
+            desk = ensure_hermes_desktop_control()
+            out["desktop_control"] = desk
+            desktop_changed = bool(desk.get("changed"))
+        except Exception as e:
+            out["desktop_control_error"] = str(e)[:160]
+
         client = HermesGatewayClient()
         out["hermes_url"] = client.base_url
         out["hermes_configured"] = client.is_configured()
@@ -904,7 +1023,7 @@ def bootstrap_hermes_services(*, force: bool = False, manual: bool = False) -> d
         if _cancelled():
             return _finish(False, "已取消")
 
-        # 已在跑：仅当本进程记录的上游模型指纹仍匹配时才复用；否则杀掉并用新 OPENAI_* 重拉
+        # 已在跑：仅当本进程记录的上游模型指纹仍匹配、且桌面 MCP 配置未变时才复用
         if client.health_check(timeout_sec=0.8):
             try:
                 from hermes_config import hermes_desired_llm_fingerprint
@@ -912,10 +1031,18 @@ def bootstrap_hermes_services(*, force: bool = False, manual: bool = False) -> d
                 desired_fp = hermes_desired_llm_fingerprint()
             except Exception:
                 desired_fp = ""
-            if _LOADED_LLM_FP and desired_fp and _LOADED_LLM_FP == desired_fp:
+            if (
+                not desktop_changed
+                and _LOADED_LLM_FP
+                and desired_fp
+                and _LOADED_LLM_FP == desired_fp
+            ):
                 out["already_running"] = True
                 return _finish(True)
-            out["replacing_for_llm"] = True
+            if desktop_changed:
+                out["replacing_for_desktop_mcp"] = True
+            else:
+                out["replacing_for_llm"] = True
             out["prev_llm_fingerprint"] = _LOADED_LLM_FP
             try:
                 _stop_gateway_process()

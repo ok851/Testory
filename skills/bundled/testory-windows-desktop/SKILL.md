@@ -12,15 +12,25 @@ metadata:
 
 # Testory Windows 桌面自动化
 
+## 与官方 Hermes computer_use 的关系
+
+| 路径 | 何时用 |
+|------|--------|
+| **Windows 默认** 本 Skill + MCP `testory-desktop`（`:9820/mcp`）+ Desktop Gateway `:8766` | 用户点「启动智能体」后由平台自动注册/拉起 |
+| **macOS 可选** Hermes `computer_use` + skill `computer-use` + cua-driver | Darwin 且 doctor 通过 |
+
+平台外层 **不** 再 FC 编排桌面点击；只做入口、超时、SSE 展示与用例 JSON。
+
 ## 架构
 
 | 组件 | 端口 | 说明 |
 |------|------|------|
-| Desktop Automation Gateway | `8766` | FastAPI，`desktop_automation_gateway/main.py` |
+| Hermes Agent | `8642` | NL→单脑工具循环；桌面优先 computer_use |
+| Desktop Automation Gateway | `8766` | FastAPI，cua 不可用时的 UIA/SendInput 后备 |
 | 执行引擎 | — | `desktop_automation.py`：UIA + ORB 视觉 + SendInput |
 | Bootstrap | — | `desktop_service_bootstrap.py` 随 Flask 启动 |
 
-**不依赖** ClawHub 外部技能；全部通过 Testory 内置 gateway。
+**不依赖** ClawHub 外部技能；全部通过 Testory 内置 gateway 或 Hermes 官方 computer_use。
 
 ## 环境变量
 
@@ -54,27 +64,40 @@ POST /internal/session/{id}/inspect     {"max_depth": 4, "max_nodes": 120}
 
 ## 最佳实践
 
-1. **UIA 优先**：inspect 获取控件树，按 name/automation_id 定位
-2. **视觉降级**：UIA 失败时用 ORB 模板匹配（desktop_spec.image）
-3. **合理等待**：应用启动后 wait 1-3s
-4. **每步截图**：失败时平台自动保存 artifact PNG
-5. **日志**：gateway 返回逐步 results 便于排查
+1. **观察→动作→核验**：`windows_type_text` / `windows_press_key` 先捕获目标窗（frame），再操作，最后用 OCR/画面证据确认；无证据不得报成功
+2. **UIA 优先**：inspect 获取控件树，按 name/automation_id 定位
+3. **视觉降级**：UIA 失败时用 ORB / 布局估算（如微信搜索栏）
+4. **搜索输入**：先 `windows_click_element('搜索')` 武装坐标，再立刻 `windows_type_text`；中文优先剪贴板 Ctrl+V，失败自动换 WM_PASTE / WM_CHAR
+5. **目标窗口投递**：先 focus/attach，再 type/press；一步失败则 flow_halt，勿连环盲点
+6. **合理等待**：应用启动后 wait 1-3s；gateway 返回逐步 results 便于排查
+
+## 应用专属配方（可选，非核心代码）
+
+应用差异写在本 Skill，由 Agent 用通用工具编排。示例（IM 发消息一类任务）：
+
+1. `windows_focus_app(应用名)`
+2. `windows_press_key("Ctrl+F")`（若该应用支持搜索）→ `get_screen_text` 确认
+3. `windows_type_text(联系人)` → 观察
+4. `windows_press_key("Enter")` 打开会话
+5. `windows_type_text(正文)` → 观察
+6. `windows_press_key("Enter")` 发送 → 观察
+
+禁止在平台 Python 核心路径写死某一 App 的热键宏。
 
 ## Hermes 使用方式
 
-1. 确认 desktop gateway 运行：`GET /health` 或平台桌面测试页
-2. 加载本 skill：`skill_view(name='testory-windows-desktop')`
-3. 通过 terminal 调用 gateway 时**必须**带鉴权头（平台会把密钥写入环境变量）：
-   - `X-Desktop-Agent-Secret: $env:DESKTOP_AGENT_GATEWAY_SECRET`
-   - 或 `Authorization: Bearer $env:DESKTOP_AGENT_GATEWAY_SECRET`
-4. 收到 401 时**不要反复重试**同一请求；检查密钥后换步骤或回报失败
-5. **混用**：Web 流程中出现 Windows/macOS 系统弹窗时，从 `testory-web-browser` 切到本 skill
-6. 弱 UIA（如微信自定义绘制）时：先 inspect，失败则视觉/computer_use 降级；勿假装成功
+1. **用户点「启动智能体」**：平台写入 `HERMES_HOME/config.yaml` 的 `mcp_servers.testory-desktop`，并拉起 `:8766` + MCP `:9820`
+2. 桌面任务优先调用 MCP `windows_*` / `get_screen_*`（observe→act→observe）
+3. 若需流程知识：`skill_view(name='testory-windows-desktop')`
+4. macOS 且已装 cua：可选 `skill_view(name='computer-use')` + `computer_use`
+5. 收到 401 / 空流时**不要反复重试**同一请求
+6. **混用**：Web 流程中出现系统弹窗时，切 MCP 桌面工具或本 skill
+7. 弱 UIA 时：先 inspect，失败则视觉降级；勿假装成功
 
 ## 触发词
 
 - Windows 桌面自动化 / GUI 自动化 / RPA
-- 打开记事本 / 点击窗口按钮
+- 打开记事本 / 点击窗口按钮 / 任意桌面应用
 - 桌面应用测试
 - OS 弹窗 / UAC / 系统确认框
 
@@ -83,3 +106,4 @@ POST /internal/session/{id}/inspect     {"max_depth": 4, "max_nodes": 120}
 - AI 测试左栏：桌面自动化层
 - `/api/ai/agent/gateway-stream` + `platform: desktop` 意图
 - 统一 Hermes 会话（platform=auto）内与 Web/API 同会话切换
+- Skills 单一来源：`HERMES_HOME/skills` + `skill_view`

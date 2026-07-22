@@ -787,7 +787,7 @@
 <div class="ai-test-page">
     <div class="ai-screen-toast" id="aiScreenToast">
         <i class="fas fa-desktop"></i>
-        <span>共享屏幕已开启</span>
+        <span>屏幕观察工具已启用</span>
     </div>
     <div class="ai-test-shell">
         <header class="ai-test-topbar">
@@ -844,10 +844,10 @@
                 <div class="ai-left-card">
                     <div class="ai-left-card__title">视觉识别</div>
                     <div class="ai-screen-share-toggle">
-                        <span><i class="fas fa-desktop"></i> 共享屏幕</span>
+                        <span><i class="fas fa-desktop"></i> 允许观察屏幕</span>
                         <div class="ai-toggle-switch" id="aiScreenShareToggle" onclick="toggleScreenShare()"></div>
                     </div>
-                    <p style="font-size: 11px; color: #94a3b8; margin: 0;">开启后将截取<strong>主显示器整屏</strong>供 AI 视觉分析（不是只看本应用窗口）</p>
+                    <p style="font-size: 11px; color: #94a3b8; margin: 0;">开启后 AI 可按需调用屏幕观察工具（OCR/视觉描述），不会定时自动截图</p>
                 </div>
 
             </aside>
@@ -895,7 +895,7 @@
                         </div>
                         <div class="ai-vision-indicator disabled" id="aiVisionIndicator">
                             <span class="ai-vision-indicator__pulse"></span>
-                            <span>共享屏幕已关闭，AI 将通过执行日志生成用例</span>
+                            <span>屏幕观察已关闭；开启后 AI 可按需调用 OCR/视觉工具</span>
                         </div>
                     </div>
                 </div>
@@ -1134,14 +1134,14 @@
             if (AI_TEST_STATE.isScreenSharing) {
                 toggle.classList.add('on');
                 indicator.classList.remove('disabled');
-                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>共享屏幕已开启</span>';
-                visionStatus.textContent = '识别中';
+                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>屏幕观察工具已启用（按需调用）</span>';
+                visionStatus.textContent = '可用';
                 visionStatus.className = 'ai-status-bar__value running';
                 showScreenShareOverlay();
             } else {
                 toggle.classList.remove('on');
                 indicator.classList.add('disabled');
-                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>共享屏幕已关闭，AI 将通过执行日志生成用例</span>';
+                indicator.innerHTML = '<span class="ai-vision-indicator__pulse"></span><span>屏幕观察已关闭；开启后 AI 可按需调用 OCR/视觉工具</span>';
                 visionStatus.textContent = '未开启';
                 visionStatus.className = 'ai-status-bar__value';
                 hideScreenShareOverlay();
@@ -1613,6 +1613,7 @@
             task: task,
             project_id: document.getElementById('aiTestProject').value,
             engine: document.getElementById('aiTestEngine').value,
+            platform: (document.getElementById('aiTestPlatform') || {}).value || 'auto',
             enable_vision: AI_TEST_STATE.isScreenSharing,
             timeout: timeout
         });
@@ -1719,25 +1720,30 @@
                 status: ev.status || 'success'
             });
             updateReportCard();
-            // 对话框过滤：hermes_execute 等元动作不显示，只保留实际平台动作
+            // 对话框过滤：内部工具细节不刷屏；只保留关键结果的一句人话
             var isMetaAction = (ev.action_type === 'hermes_execute' || ev.action_type === 'openclaw_execute' || ev.action_type === 'refine_test_plan');
-            if (!isMetaAction) {
+            var quietChat = !!ev.quiet_chat
+                || ev.action_type === 'windows_wait'
+                || (ev.action_type && String(ev.action_type).indexOf('get_screen_') === 0);
+            if (!isMetaAction && !quietChat) {
                 if (ev.status === 'success' || ev.status === 'failed') {
                     var statusIcon = ev.status === 'success' ? '✅' : '❌';
-                    addChatMessage(statusIcon + ' ' + (ev.action_type || '执行') + ' → ' + (ev.target || ''), false);
+                    var label = ev.action_type || '执行';
+                    addChatMessage(statusIcon + ' ' + label + (ev.target ? ' → ' + ev.target : ''), false);
                     saveChatHistory();
                 }
-                if (ev.status === 'running') {
-                    addChatMessage('▶️ ' + (ev.action_type || '执行') + ' → ' + (ev.target || '') + '...', false);
-                    saveChatHistory();
-                }
+                // running 状态不再刷对话框（避免「开始+结束」双倍噪音）
             }
         } else if (ev.type === 'case_step') {
+            // 仅成功步骤进入实时用例（失败只留在执行动作）
+            if (ev.verified === false) {
+                return;
+            }
             AI_TEST_STATE.caseSteps.push({
                 num: AI_TEST_STATE.caseSteps.length + 1,
                 action: ev.action || '操作',
                 target: ev.target || '目标',
-                verified: ev.verified || false
+                verified: true
             });
             updateCaseCard();
         } else if (ev.type === 'action_record') {
@@ -1790,15 +1796,34 @@
             setStatus('success', '已回复');
         } else if (ev.type === 'done') {
             hideTyping();
-            var isPartial = !!ev.partial;
-            // 纯对话已通过 reply 展示正文；有用例时再提示完成
-            if (ev.plan && ev.plan.steps && ev.plan.steps.length > 0) {
+            var isFailed = !!ev.failed;
+            var isPartial = !isFailed && !!ev.partial;
+            var plan = ev.plan || {};
+            var steps = plan.steps || [];
+            var metaSrc = (plan.meta && plan.meta.source) || '';
+            var canSave = !isFailed
+                && ev.savable !== false
+                && steps.length > 0
+                && metaSrc !== 'hermes_trace'
+                && !(plan.meta && plan.meta.unsavable);
+            // 纯对话已通过 reply 展示正文；仅真实可保存用例才提示完成并弹出保存
+            if (canSave) {
                 addChatMessage((isPartial ? '⚠️ ' : '🎉 ') + (ev.message || (isPartial ? '部分完成' : '任务执行完成')), false);
                 saveChatHistory();
-                AI_TEST_STATE.lastGeneratedPlan = ev.plan;
-                showSaveCaseBanner(ev.plan);
+                AI_TEST_STATE.lastGeneratedPlan = plan;
+                showSaveCaseBanner(plan);
                 var reportSaveBtn = document.getElementById('aiReportSaveCase');
                 if (reportSaveBtn) reportSaveBtn.style.display = 'block';
+            } else if (isFailed) {
+                AI_TEST_STATE.lastGeneratedPlan = null;
+                var reportSaveBtnFail = document.getElementById('aiReportSaveCase');
+                if (reportSaveBtnFail) reportSaveBtnFail.style.display = 'none';
+                var bannerFail = document.getElementById('aiSaveCaseBanner');
+                if (bannerFail) bannerFail.remove();
+                if (ev.message && ev.message !== '已回复') {
+                    addChatMessage('❌ ' + ev.message, false);
+                    saveChatHistory();
+                }
             } else if (!ev.message || ev.message === '已回复' || ev.message === '完成') {
                 // 对话模式：不重复刷「任务执行完成」
             } else {
@@ -1807,6 +1832,8 @@
             }
             if (ev.need_user_action) {
                 setStatus('warning', '待人工');
+            } else if (isFailed) {
+                setStatus('error', '失败');
             } else {
                 setStatus(isPartial ? 'warning' : 'success', isPartial ? '部分完成' : '完成');
             }
@@ -2034,9 +2061,16 @@
     }
 
     function updateReportCard() {
-        var total = AI_TEST_STATE.actions.length;
-        var success = AI_TEST_STATE.actions.filter(function(a) { return a.status === 'success'; }).length;
-        var fail = total - success;
+        // 报告排除元动作（hermes_execute 等），只统计真实平台/工具动作
+        var reportActions = AI_TEST_STATE.actions.filter(function(a) {
+            var t = a.type || '';
+            return t !== 'hermes_execute' && t !== 'openclaw_execute' && t !== 'refine_test_plan';
+        });
+        var total = reportActions.length;
+        var success = reportActions.filter(function(a) { return a.status === 'success'; }).length;
+        var fail = reportActions.filter(function(a) {
+            return a.status === 'failed' || a.status === 'fail' || a.status === 'error';
+        }).length;
 
         document.getElementById('aiReportTotal').textContent = total;
         document.getElementById('aiReportSuccess').textContent = success;
@@ -2057,9 +2091,9 @@
         detailEl.style.display = 'block';
         emptyEl.style.display = 'none';
 
-        listEl.innerHTML = AI_TEST_STATE.actions.map(function(a, i) {
-            var statusClass = a.status === 'success' ? 'success' : (a.status === 'failed' ? 'fail' : '');
-            var icon = a.status === 'success' ? '✓' : (a.status === 'failed' ? '✗' : '•');
+        listEl.innerHTML = reportActions.map(function(a, i) {
+            var statusClass = a.status === 'success' ? 'success' : ((a.status === 'failed' || a.status === 'fail' || a.status === 'error') ? 'fail' : 'warn');
+            var icon = a.status === 'success' ? '✓' : ((a.status === 'failed' || a.status === 'fail' || a.status === 'error') ? '✗' : '•');
             return '<div class="ai-report-detail__item ' + statusClass + '">' +
                 '<span class="ai-report-detail__item__idx">' + icon + '</span>' +
                 '<span class="ai-report-detail__item__text">' +
@@ -2105,6 +2139,15 @@
             alert('没有可保存的用例，请先执行任务');
             return;
         }
+        if (plan.meta && (plan.meta.unsavable || plan.meta.source === 'hermes_trace')) {
+            alert('当前结果不可保存为用例（执行未成功或仅为占位轨迹）');
+            return;
+        }
+        var steps = plan.steps || [];
+        if (!steps.length) {
+            alert('用例没有步骤，无法保存');
+            return;
+        }
         var projectId = document.getElementById('aiTestProject') ? document.getElementById('aiTestProject').value : '';
         if (!projectId) {
             alert('请先选择项目');
@@ -2115,9 +2158,10 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ project_id: projectId, plan: plan })
         })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.success) {
+        .then(function(r) { return r.json().then(function(data) { return { ok: r.ok, data: data }; }); })
+        .then(function(res) {
+            var data = res.data || {};
+            if (res.ok && data.success) {
                 alert('用例保存成功：' + data.case_name + '（' + data.steps_created + ' 个步骤）');
                 var banner = document.getElementById('aiSaveCaseBanner');
                 if (banner) banner.remove();
@@ -2141,6 +2185,7 @@
 
     function updateDurationTimer() {
         stopDurationTimer();
+        var timeoutSec = parseInt((document.getElementById('aiTestTimeout') || {}).value) || 120;
         AI_TEST_STATE.durationTimer = setInterval(function() {
             if (!AI_TEST_STATE.startTime) return;
             var diff = Date.now() - AI_TEST_STATE.startTime;
@@ -2148,6 +2193,14 @@
             var secs = Math.floor((diff % 60000) / 1000);
             document.getElementById('aiDurationValue').textContent =
                 (mins < 10 ? '0' : '') + mins + ':' + (secs < 10 ? '0' : '') + secs;
+            // 前端兜底：到达左侧超时时间后主动停止，避免后端卡在单次 LLM/工具上拖过计时
+            if (AI_TEST_STATE.isExecuting && timeoutSec > 0 && diff >= timeoutSec * 1000) {
+                hideTyping();
+                addChatMessage('⏱️ 已达设定超时（' + timeoutSec + 's），正在停止任务…', false);
+                saveChatHistory();
+                setStatus('error', '超时');
+                aiStopExecution();
+            }
         }, 1000);
     }
 
@@ -2200,11 +2253,17 @@
                                     var label = (d.active_label) || (p && (p.label || p.model_id)) || pid;
                                     if (modelNameEl) modelNameEl.textContent = label;
                                     var hermesAct = (d.hermes && d.hermes.action) || '';
+                                    var hermesModel = (d.hermes_model || (d.hermes && d.hermes.env_model) || '').trim();
                                     var tip = '已切换推理引擎：' + label;
+                                    if (hermesModel && hermesModel !== ((d.active_model_id) || '')) {
+                                        tip += '；智能体同步为 ' + hermesModel;
+                                    }
                                     if (hermesAct === 'restarted') {
                                         tip += '（智能体已按新模型重启）';
                                     } else if (hermesAct === 'not_running') {
                                         tip += '（请启动智能体后生效于 Agent）';
+                                    } else if (hermesAct === 'already_current') {
+                                        tip += '（智能体已是当前模型）';
                                     }
                                     if (typeof showToast === 'function') showToast(tip, 'success');
                                     if (typeof checkHermesStatus === 'function') checkHermesStatus();
@@ -2352,7 +2411,7 @@
             var sid = getSelectedAiModel();
             if (!sid) return;
             try {
-                var resp = await fetch('/api/ai/models/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: sid }) });
+                var resp = await fetch('/api/ai/models/active', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: sid }) });
                 var data = await resp.json();
                 if (!resp.ok || !data.success) throw new Error(data.error);
                 activeProfileId = sid;

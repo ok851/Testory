@@ -74,30 +74,44 @@ def skills_from_registry(platform: str = "auto") -> List[str]:
 
 
 def desktop_gateway_auth_hint() -> str:
-    """注入给 Hermes 的桌面 gateway 鉴权说明（含真实 secret，仅本机 localhost）。"""
+    """注入给 Hermes 的桌面执行边界（启动智能体时自动挂 MCP + :8766）。"""
     try:
-        from desktop_service_bootstrap import _ensure_desktop_env_defaults
+        from desktop_service_bootstrap import resolve_desktop_gateway_secret
 
-        _ensure_desktop_env_defaults(force=True)
+        resolve_desktop_gateway_secret(persist_to_hermes=True)
     except Exception:
-        pass
+        try:
+            from desktop_service_bootstrap import _ensure_desktop_env_defaults
+
+            _ensure_desktop_env_defaults(force=True)
+        except Exception:
+            pass
     import os
+    import sys
 
     url = (os.environ.get("DESKTOP_AGENT_GATEWAY_URL") or "http://127.0.0.1:8766").rstrip("/")
-    secret = (os.environ.get("DESKTOP_AGENT_GATEWAY_SECRET") or "hufirst-desktop-local").strip()
-    sid = (os.environ.get("DESKTOP_AGENT_SESSION_ID") or "default").strip() or "default"
-    return (
-        "【桌面 gateway 鉴权 — 必读，禁止省略 header】\n"
-        f"Base URL: {url}\n"
-        f"每个请求必须带 header：X-Desktop-Agent-Secret: {secret}\n"
-        f"（也可用 Authorization: Bearer {secret}）\n"
-        "缺少上述 header 会 401 unauthorized，且不要反复重试同一请求。\n"
-        "PowerShell 示例：\n"
-        f"$h=@{{'X-Desktop-Agent-Secret'='{secret}';'Content-Type'='application/json'}}\n"
-        f"Invoke-RestMethod -Method POST -Uri '{url}/internal/session/{sid}/run-steps' "
-        f"-Headers $h -Body '{{\"steps\":[{{\"action\":\"attach_window\",\"target\":\"微信\"}}]}}'\n"
-        "鉴权失败时：停止重试，向用户说明需检查 DESKTOP_AGENT_GATEWAY_SECRET，并返回已完成的部分步骤。\n"
+    mcp_url = (os.environ.get("TESTORY_DESKTOP_MCP_URL") or "http://127.0.0.1:9820/mcp").rstrip("/")
+    lines = [
+        "【桌面执行边界 — 启动智能体后默认可用】\n",
+        "- Hermes Gateway `:8642`：跨层探索脑；**Windows 桌面短任务优先由平台外层 windows_* 直接执行**。\n",
+        f"- MCP `testory-desktop`（`{mcp_url}`）与 Desktop Gateway `{url}` 已就绪。\n",
+        "- 若你仍被调用：只调用 MCP windows_* / get_screen_*，"
+        "**禁止**用 terminal/curl 探测 MCP，**禁止**因缺 Git Bash 空转重试。\n",
+        "- 优先：windows_focus_app → get_screen_* → type/press/click。\n",
+    ]
+    if sys.platform == "darwin":
+        lines.append(
+            "- macOS 可选：`skill_view('computer-use')` + `computer_use`（需 cua-driver）。\n"
+        )
+    else:
+        lines.append(
+            "- Windows 上官方 computer_use/cua 通常不可用；不要空等 computer_use，直接用 MCP windows_*。\n"
+        )
+    lines.append(
+        "- 上游模型余额不足/鉴权失败或空流时禁止反复重试；用中文说明原因"
+        "（充值/换模型，或请用户点「停止」再「启动」智能体），勿提及环境变量名。\n"
     )
+    return "".join(lines)
 
 
 def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = None) -> str:
@@ -127,12 +141,14 @@ def build_explore_instruction(message: str, meta: Optional[Dict[str, Any]] = Non
         f"【Testory 平台上下文 platform={platform}】\n"
         f"{caps_note}"
         f"{desktop_note}"
-        f"请先用 skill_view 加载以下**当前可用**技能：{skill_line}。\n"
-        "你是跨层执行代理（手+眼）：可在 Web CDP、桌面 gateway、移动 bridge、接口 HTTP 间切换。\n"
-        "优先结构化感知（DOM/UIA/dump）；共享屏幕视觉用于确认与弱控件降级。\n"
-        "Web 遇 OS 弹窗 → 切 testory-windows-desktop；需校验数据 → testory-api-http。\n"
+        f"请先用 skill_view 加载：{skill_line}（桌面任务优先本列表中的 testory-windows-desktop）。\n"
+        "你是跨层执行代理（手+眼）。Windows 桌面：优先调用已注册的 MCP windows_* / get_screen_*；"
+        "勿空等 computer_use（Windows 上通常不可用）。\n"
+        "优先结构化感知（DOM/UIA）；共享屏幕视觉用于确认与弱控件降级。\n"
+        "每步 observe→act→observe；未核验勿声称已输入/已发送。\n"
+        "Web 遇 OS 弹窗 → MCP 桌面工具或 testory-windows-desktop；需校验数据 → testory-api-http。\n"
         "高风险写操作前先 inspect/只读。勿使用与平台冲突的独立浏览器或外部 ClawHub 依赖。\n"
-        "若遇到 401/鉴权失败：禁止重复调用同一失败请求；立刻停止并说明原因。\n"
+        "若遇到 401/鉴权失败或空流：禁止重复调用；立刻停止并说明原因。\n"
         "若需要验证码/扫码登录等人工步骤，在回复中明确写出 NEED_USER_ACTION:<原因>。\n\n"
     )
     body = (message or meta.get("message") or "").strip()

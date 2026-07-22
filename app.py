@@ -3084,7 +3084,7 @@ def _api_add_ai_profile(data: dict):
     })
 
 
-@app.route('/api/ai/models/active', methods=['PUT'])
+@app.route('/api/ai/models/active', methods=['PUT', 'POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
@@ -3104,7 +3104,7 @@ def api_set_active_ai_model():
         try:
             from hermes_service_bootstrap import ensure_hermes_llm_current
 
-            # 切换引擎 = 立刻写入 Hermes .env；若智能体在跑则重启以加载新 Key/模型
+            # 切换引擎 = 写入 Hermes .env + config.yaml model；若智能体在跑则重启加载
             hermes_info = ensure_hermes_llm_current(restart_if_stale=True)
         except Exception as e:
             hermes_info = {'error': str(e)[:160]}
@@ -3115,6 +3115,8 @@ def api_set_active_ai_model():
             'active_label': (active or {}).get('label') or (active or {}).get('model_id') or '',
             'active_model_id': (active or {}).get('model_id') or '',
             'hermes': hermes_info,
+            'hermes_model': (hermes_info or {}).get('env_model') or (hermes_info or {}).get('synced_model') or '',
+            'hermes_base_url': (hermes_info or {}).get('env_base_url') or '',
             'profiles': [_mask_profile_for_api(p) for p in profiles],
         })
     ok, model_name_or_err = _validate_ai_model_name(data.get('model_name') or '')
@@ -5554,8 +5556,38 @@ def api_ai_agent_gateway_stream():
                     return
             yield _agent_gateway_sse_line({"t": "log", "message": "正在通过 Testory AI (Hermes) 执行探索…"})
             client = get_agent_gateway_client()
-            result = client.execute_user_instruction(meta.get("message") or message)
-            yield _agent_gateway_sse_line({"t": "hermes_result", "content": result[:48000]})
+            result = ""
+            try:
+                from hermes_skill_hints import build_explore_instruction
+
+                explore_instr = build_explore_instruction(
+                    meta.get("message") or message,
+                    {"platform": (data.get("platform") or meta.get("platform") or "auto")},
+                )
+            except Exception:
+                explore_instr = meta.get("message") or message
+            try:
+                for ev_kind, ev_payload in client.execute_user_instruction_stream(explore_instr):
+                    if ev_kind == "trace":
+                        msg = (ev_payload or {}).get("message") or (ev_payload or {}).get("stage") or "…"
+                        yield _agent_gateway_sse_line(
+                            {"t": "hermes_trace", "message": str(msg)[:400], **(ev_payload or {})}
+                        )
+                    elif ev_kind == "delta":
+                        piece = (ev_payload or {}).get("text") or ""
+                        if piece:
+                            yield _agent_gateway_sse_line({"t": "hermes_delta", "text": piece[:800]})
+                    elif ev_kind == "error":
+                        yield _agent_gateway_sse_line(
+                            {"t": "error", "message": (ev_payload or {}).get("error") or "Hermes 失败"}
+                        )
+                        yield _agent_gateway_sse_line({"t": "end"})
+                        return
+                    elif ev_kind == "result":
+                        result = (ev_payload or {}).get("content") or ""
+            except Exception:
+                result = client.execute_user_instruction(explore_instr)
+            yield _agent_gateway_sse_line({"t": "hermes_result", "content": (result or "")[:48000]})
             try:
                 from hermes_skill_loop import record_execution_success
 
@@ -5837,6 +5869,16 @@ def api_ai_task_chat_stream():
     platform_type = (data.get('platform_type') or 'web').strip()
     interaction_context = data.get('interaction_context')
 
+    # gateway-stream 同样走统一路由，避免桌面话术却挂网页工具
+    try:
+        from agent_intent import resolve_task_route
+
+        _gs_route = resolve_task_route(message, ui_platform=platform_type)
+        if _gs_route.needs_automation and _gs_route.platform in ("web", "desktop", "android"):
+            platform_type = _gs_route.platform
+    except Exception:
+        pass
+
     abort_event = threading.Event()
 
     def generate():
@@ -5947,7 +5989,7 @@ def api_ai_task_execute():
     data = request.get_json(silent=True) or {}
     task = data.get('task', '')
     project_id = data.get('project_id')
-    platform = 'auto'
+    platform = (data.get('platform') or 'auto').strip().lower() or 'auto'
     engine = (data.get('engine') or '').strip()  # profile_id from UI
     url = ''
     enable_vision = data.get('enable_vision', False)
@@ -5956,18 +5998,57 @@ def api_ai_task_execute():
     if not task:
         return jsonify({'success': False, 'error': '请输入任务描述'}), 400
 
+    # 统一路由：chat / web / desktop / android（消息信号可纠正错误的 UI 平台）
+    try:
+        from agent_intent import resolve_task_route
+
+        _route = resolve_task_route(task, ui_platform=platform)
+        if _route.platform in ("web", "desktop", "android") and _route.platform != platform:
+            uat_logger.info(
+                "task route override platform %s -> %s reason=%s task=%s",
+                platform,
+                _route.platform,
+                _route.reason,
+                (task or "")[:80],
+            )
+        if _route.needs_automation and _route.platform in ("web", "desktop", "android"):
+            platform = _route.platform
+    except Exception as _route_ex:
+        uat_logger.debug("resolve_task_route failed: %s", _route_ex)
+        _route = None
+
     # 执行前：UI 所选引擎必须成为本次（及全局）生效模型，避免「下拉显示 A、后台仍是 B」
+    # 桌面外层 windows_* 不依赖 Hermes 进程热加载；跳过可能长达 ~25s 的 restart，避免 SSE 前空白
+    _desk_skip_hermes_restart = bool(
+        platform == "desktop"
+        or (
+            _route is not None
+            and (
+                getattr(_route, "needs_desktop_tools", False)
+                or getattr(_route, "platform", "") == "desktop"
+            )
+        )
+    )
     if engine:
         try:
             from ai_multi_provider import get_llm_profile_by_id, set_active_llm_profile_id
 
             if get_llm_profile_by_id(engine):
                 set_active_llm_profile_id(engine)
-                try:
-                    from hermes_service_bootstrap import ensure_hermes_llm_current
+                if not _desk_skip_hermes_restart:
+                    try:
+                        from hermes_service_bootstrap import ensure_hermes_llm_current
 
-                    ensure_hermes_llm_current(restart_if_stale=True)
-                except Exception:
+                        ensure_hermes_llm_current(restart_if_stale=True)
+                    except Exception:
+                        try:
+                            from hermes_config import sync_platform_llm_credentials_to_hermes_env
+
+                            sync_platform_llm_credentials_to_hermes_env()
+                        except Exception:
+                            pass
+                else:
+                    # 桌面路径：仅轻量同步凭证到 env，绝不在进流前重启 Gateway
                     try:
                         from hermes_config import sync_platform_llm_credentials_to_hermes_env
 
@@ -6017,39 +6098,91 @@ def api_ai_task_execute():
 
         abort_event = threading.Event()
         user_id = _exec_user_id
+        task_timeout_sec = max(30, int(timeout or 120))
+        deadline_ts = _time.time() + float(task_timeout_sec)
+
+        def _timeout_watchdog():
+            # 左侧「超时时间」生效：到期后置位 abort，打断工具循环
+            remain = max(0.5, deadline_ts - _time.time())
+            if abort_event.wait(timeout=remain):
+                return
+            # 标记为超时（而非用户取消），便于错误文案
+            setattr(abort_event, "_timed_out", True)
+            abort_event.set()
+
+        threading.Thread(target=_timeout_watchdog, daemon=True, name="ai-task-timeout").start()
 
         with _ai_task_abort_lock:
             _ai_task_abort_events[job_id] = abort_event
 
-        yield send('job_started', job_id=job_id)
+        yield send('job_started', job_id=job_id, timeout_sec=task_timeout_sec)
 
         try:
-            from agent_intent import message_needs_automation
+            # 立刻推送，避免用户感觉「点了没反应」
+            yield send('think', text='已收到任务，正在解析意图…', status='running')
 
+            from agent_intent import message_needs_automation, resolve_task_route
+
+            # 勿在本生成器内给闭包名 platform 赋值，否则整函数变成局部变量 → UnboundLocalError
+            run_platform = (platform or "auto").strip().lower() or "auto"
+            task_route = None
             needs_automation = message_needs_automation(task)
+            try:
+                task_route = resolve_task_route(task, ui_platform=run_platform)
+                needs_automation = bool(task_route.needs_automation)
+                if task_route.needs_automation and task_route.platform in (
+                    "web",
+                    "desktop",
+                    "android",
+                ):
+                    run_platform = task_route.platform
+            except Exception:
+                task_route = None
             yield send(
                 'think',
-                text='正在理解您的意图…' if not needs_automation else '正在检查智能体状态…',
+                text='正在理解您的意图…' if not needs_automation else '正在检查执行环境…',
                 status='running',
             )
+            if task_route is not None and needs_automation:
+                yield send(
+                    'think',
+                    text=(
+                        f"任务路由：{task_route.platform}"
+                        f"（UI={task_route.ui_platform}，{task_route.reason}）"
+                    ),
+                    status='done',
+                )
 
             # 不自动启动：仅检测用户是否已手动点「启动智能体」
             from hermes_gateway_client import HermesGatewayClient
             hermes_client = HermesGatewayClient()
-            hermes_available = hermes_client.is_configured() and hermes_client.health_check(timeout_sec=1.5)
+            # 桌面外层工具不依赖 Hermes；缩短探测，避免再卡 1.5s+
+            _desk_only_early = run_platform == "desktop" or (
+                task_route is not None and bool(getattr(task_route, "needs_desktop_tools", False))
+            )
+            _hermes_probe_sec = 0.4 if _desk_only_early else 1.5
+            hermes_available = hermes_client.is_configured() and hermes_client.health_check(
+                timeout_sec=_hermes_probe_sec
+            )
 
             if abort_event.is_set():
                 yield send('error', error='任务已取消')
                 return
 
             # 明确要做真实操作时才要求智能体已启动；闲聊/问答可走平台 LLM
-            if needs_automation and not hermes_available:
+            # 桌面外层 windows_* 不依赖 Hermes Gateway
+            _desk_only = _desk_only_early or (
+                task_route is not None and bool(getattr(task_route, "needs_desktop_tools", False))
+            )
+            if needs_automation and not hermes_available and not _desk_only:
                 yield send('think', text='智能体未启动。请先在左上角点击「启动」后再执行自动化任务。', status='warning')
                 yield send('error', error='请先启动智能体后再执行操作类任务')
                 return
 
             if hermes_available:
                 yield send('think', text='智能体已就绪', status='done')
+            elif _desk_only and needs_automation:
+                yield send('think', text='桌面工具就绪（无需 Hermes）', status='done')
             else:
                 yield send('think', text='以对话模式回复（未启动自动化）', status='done')
 
@@ -6066,7 +6199,11 @@ def api_ai_task_execute():
                         return
                     chat_prompt = (
                         "你是 Testory 平台的 AI 测试助手。用简洁中文回答用户问题。"
-                        "若用户只是闲聊或询问身份/能力，直接回答，不要输出测试用例 JSON，不要假装去操作浏览器。\n\n"
+                        "若用户只是闲聊或询问身份/能力，直接回答，不要输出测试用例 JSON，"
+                        "不要假装去操作浏览器或桌面。"
+                        "注意：你当前处于「纯对话」模式（未进入自动化工具循环）。"
+                        "若用户其实想操作微信/桌面/网页，请明确告诉他："
+                        "请再发一次任务指令（或确认左栏为桌面/对应平台），不要声称「平台永远无法操作桌面应用」。\n\n"
                         f"用户：{task}"
                     )
                     reply = (dispatch_chat(chat_prompt, profile, local_ai_service) or "").strip()
@@ -6093,13 +6230,28 @@ def api_ai_task_execute():
                     desk = execute_desktop_nl(task)
                     if desk.get("ok"):
                         display = desk.get("display") or "桌面应用"
-                        for st in desk.get("steps") or []:
-                            yield send(
-                                'action',
-                                action_type=st.get("action") or "launch_app",
-                                target=st.get("target") or display,
-                                status='success',
-                            )
+                        step_results = desk.get("step_results") or []
+                        if step_results:
+                            for item in step_results:
+                                st = item.get("step") if isinstance(item.get("step"), dict) else {}
+                                act = (st.get("action") or "launch_app").strip()
+                                if act in ("wait",):
+                                    continue
+                                yield send(
+                                    'action',
+                                    action_type=act,
+                                    target=st.get("target") or st.get("description") or display,
+                                    status='success' if item.get("ok") else 'failed',
+                                )
+                        else:
+                            overall_ok = bool(desk.get("ok")) and not desk.get("partial")
+                            for st in desk.get("steps") or []:
+                                yield send(
+                                    'action',
+                                    action_type=st.get("action") or "launch_app",
+                                    target=st.get("target") or display,
+                                    status='success' if overall_ok else 'failed',
+                                )
                         plan = {
                             "case_name": (task[:40] or f"桌面操作-{display}"),
                             "case_url": "",
@@ -6119,14 +6271,30 @@ def api_ai_task_execute():
                         else:
                             yield send('done', message='完成', plan=plan)
                     else:
-                        yield send('error', error=desk.get("error") or "桌面操作失败")
+                        # 部分步骤可能已执行：按 step_results 如实展示
+                        for item in desk.get("step_results") or []:
+                            st = item.get("step") if isinstance(item.get("step"), dict) else {}
+                            act = (st.get("action") or "desktop").strip()
+                            if act in ("wait",):
+                                continue
+                            yield send(
+                                'action',
+                                action_type=act,
+                                target=st.get("description") or st.get("target") or act,
+                                status='success' if item.get("ok") else 'failed',
+                            )
+                        yield send('error', error=desk.get("error") or desk.get("reply") or "桌面操作失败")
                     return
 
             # 预检 + 能力注册表 + 任务上下文总线
             from agent_capability_registry import preflight_for_task, snapshot_capabilities
             from agent_task_context import new_task_context
 
-            pf_ok, pf_msg, pf_snap = preflight_for_task(task, require_hermes=True)
+            # 桌面外层工具：不强制 Hermes；避免重复 health 拖慢首包
+            _pf_need_hermes = not _desk_only
+            pf_ok, pf_msg, pf_snap = preflight_for_task(
+                task, require_hermes=_pf_need_hermes
+            )
             if not pf_ok:
                 yield send('error', error=pf_msg or "预检失败")
                 return
@@ -6141,7 +6309,7 @@ def api_ai_task_execute():
             yield send('think', text=f'能力：{caps_summary}', status='done')
 
             task_ctx = new_task_context(
-                active_surface=platform or "auto",
+                active_surface=run_platform or "auto",
                 mobile_udid=((caps.get("mobile") or {}).get("udid") or ""),
                 meta={"task": task[:200], "user_id": user_id},
             )
@@ -6174,17 +6342,17 @@ def api_ai_task_execute():
                     if not hermes_cdp_attached() or not is_browser_alive():
                         ok = ensure_browser(headless=False, url=url or "", browser="edge")
                         if not ok:
-                            if (platform or "auto").strip().lower() == "auto":
+                            if run_platform == "auto":
                                 return True, ""  # 允许 Hermes 改走桌面/其它手
                             return False, "本机浏览器启动失败，请确认已安装 Edge/Chrome"
                     browser_ready_holder["ready"] = True
                     if not hermes_cdp_attached():
-                        if (platform or "auto").strip().lower() == "auto":
+                        if run_platform == "auto":
                             return True, ""
                         return False, "浏览器 CDP 未连接"
                     return True, ""
                 except Exception as ex:
-                    if (platform or "auto").strip().lower() == "auto":
+                    if run_platform == "auto":
                         return True, ""
                     return False, f"浏览器桥接失败: {str(ex)[:160]}"
 
@@ -6194,64 +6362,93 @@ def api_ai_task_execute():
                 yield send('error', error='任务已取消')
                 return
 
-            # Hermes 上游：页面引擎为小米 MiMo 或不兼容时，桌面任务直接本机执行
-            # （运行中的 Hermes 进程不会热加载新 Key，必须改引擎后重启智能体）
+            # Hermes 上游鉴权不兼容时：若聊天工具循环可用，仍走 windows_* FC；
+            # 仅在工具循环关闭时才回退到本机桌面确定性路径（不再对微信任务抢跑热键方案）。
             try:
                 from hermes_config import (
                     hermes_upstream_llm_status,
                     sync_platform_llm_credentials_to_hermes_env,
                 )
-                from agent_desktop_fastpath import (
-                    is_desktop_nl_task,
-                    execute_desktop_nl,
-                    is_wechat_send_task,
-                )
+                from agent_desktop_fastpath import is_desktop_nl_task, execute_desktop_nl
+                from ai_chat_tool_loop import ai_chat_tools_enabled
 
-                sync_platform_llm_credentials_to_hermes_env()
-                llm_st = hermes_upstream_llm_status()
-                # 微信发消息：平台确定性热键链路，避免 Hermes 鉴权/空参数胡编
-                use_desktop_first = is_desktop_nl_task(task) and (
-                    not llm_st.get("ok")
-                    or bool(llm_st.get("active_is_xiaomi"))
-                    or is_wechat_send_task(task)
+                # 桌面外层路径已不依赖 Hermes 子进程模型；跳过二次 sync
+                if not _desk_only:
+                    sync_platform_llm_credentials_to_hermes_env()
+                llm_st = hermes_upstream_llm_status() if not _desk_only else {"ok": True}
+                # MiMo 已证实可用 Bearer，不再因 active_is_xiaomi 判定 Hermes 不可用
+                hermes_llm_bad = not bool(llm_st.get("ok"))
+                # 微信/桌面 GUI：优先外层 windows_* 工具循环；禁止因「是微信」就绕过 Agent
+                use_desktop_first = (
+                    is_desktop_nl_task(task)
+                    and hermes_llm_bad
+                    and not ai_chat_tools_enabled()
                 )
                 if use_desktop_first:
                     tip = (
-                        "微信发消息走平台本机桌面执行…"
-                        if is_wechat_send_task(task)
-                        else (
-                            llm_st.get("message")
-                            or "当前引擎与 Hermes 鉴权不兼容，改走平台本机桌面执行…"
-                        )
+                        llm_st.get("message")
+                        or "当前引擎与 Hermes 鉴权不兼容且未启用聊天工具，改走平台本机桌面执行…"
                     )
                     yield send('think', text=tip, status='warning')
                     desk = execute_desktop_nl(task)
-                    # 把真实桌面步骤推到前端「执行动作」，避免只有文字声称却无卡片
-                    for st in desk.get("steps") or []:
-                        if not isinstance(st, dict):
-                            continue
-                        act = (st.get("action") or "desktop").strip()
-                        if act in ("wait",):
-                            continue
-                        tgt = (
-                            st.get("description")
-                            or st.get("target")
-                            or st.get("input_value")
-                            or act
-                        )
-                        yield send(
-                            'action',
-                            action_type=act,
-                            target=str(tgt)[:120],
-                            status='success' if desk.get("ok") or not desk.get("partial") else 'success',
-                        )
-                        yield send(
-                            'action_record',
-                            action_type=act,
-                            target=str(tgt)[:120],
-                            status='success',
-                            has_vision=False,
-                        )
+                    # 仅上报真实执行过的步骤；失败步骤标 failed，未执行的不展示为成功
+                    step_results = desk.get("step_results") or []
+                    if step_results:
+                        for item in step_results:
+                            if not isinstance(item, dict):
+                                continue
+                            st = item.get("step") if isinstance(item.get("step"), dict) else {}
+                            act = (st.get("action") or item.get("action") or "desktop").strip()
+                            if act in ("wait",):
+                                continue
+                            tgt = (
+                                st.get("description")
+                                or st.get("target")
+                                or st.get("input_value")
+                                or act
+                            )
+                            st_ok = bool(item.get("ok"))
+                            yield send(
+                                'action',
+                                action_type=act,
+                                target=str(tgt)[:120],
+                                status='success' if st_ok else 'failed',
+                            )
+                            yield send(
+                                'action_record',
+                                action_type=act,
+                                target=str(tgt)[:120],
+                                status='success' if st_ok else 'failed',
+                                has_vision=False,
+                            )
+                    else:
+                        for st in desk.get("steps") or []:
+                            if not isinstance(st, dict):
+                                continue
+                            act = (st.get("action") or "desktop").strip()
+                            if act in ("wait",):
+                                continue
+                            tgt = (
+                                st.get("description")
+                                or st.get("target")
+                                or st.get("input_value")
+                                or act
+                            )
+                            # 无逐步结果时：整体失败则一律标 failed，避免假绿勾
+                            overall_ok = bool(desk.get("ok")) and not desk.get("partial")
+                            yield send(
+                                'action',
+                                action_type=act,
+                                target=str(tgt)[:120],
+                                status='success' if overall_ok else 'failed',
+                            )
+                            yield send(
+                                'action_record',
+                                action_type=act,
+                                target=str(tgt)[:120],
+                                status='success' if overall_ok else 'failed',
+                                has_vision=False,
+                            )
                     reply = desk.get("reply") or desk.get("error") or "桌面任务已处理"
                     yield send('reply', text=reply)
                     plan = {
@@ -6278,10 +6475,31 @@ def api_ai_task_execute():
             except Exception as _desk_first_ex:
                 uat_logger.debug("desktop-first path skipped: %s", _desk_first_ex)
 
-            # Step 2: Hermes 工具循环（单脑编排）
+            run_platform_early = run_platform or "auto"
+            use_outer_desktop = False
+            try:
+                from ai_chat_tool_loop import prefer_outer_desktop_tools
+                from agent_intent import resolve_task_route
+
+                route2 = resolve_task_route(task, ui_platform=run_platform_early)
+                if route2.needs_automation and route2.platform in ("web", "desktop", "android"):
+                    run_platform_early = route2.platform
+                    run_platform = run_platform_early
+                use_outer_desktop = bool(route2.needs_desktop_tools) or prefer_outer_desktop_tools(
+                    platform_type=run_platform_early,
+                    message=task,
+                )
+            except Exception:
+                use_outer_desktop = run_platform_early == "desktop"
+
+            # Step 2: 工具循环（桌面=外层 windows_*；其它=Hermes）
             yield send(
                 'think',
-                text='正在通过智能体跨层工具链处理任务…',
+                text=(
+                    '正在通过桌面工具逐步操控本机…'
+                    if use_outer_desktop
+                    else '正在通过智能体跨层工具链处理任务…'
+                ),
                 status='running',
             )
 
@@ -6319,52 +6537,23 @@ def api_ai_task_execute():
                 _dom_context_pack = ""
 
                 screen_share_state = _screen_share_states.get(user_id, {})
-                effective_vision = screen_share_state.get('enabled', False) or enable_vision
+                allow_screen_tools = bool(
+                    screen_share_state.get('enabled', False) or enable_vision
+                )
 
                 from ai_action_recorder import ActionRecorder
-                recorder = ActionRecorder(vision_enabled=bool(effective_vision), platform=platform)
+                recorder = ActionRecorder(vision_enabled=bool(allow_screen_tools), platform=run_platform)
 
-                # 桌面自然语言任务：观察器优先截桌面，避免 auto 误截浏览器导致「共享屏幕无效」
-                observer_platform = platform or "auto"
-                try:
-                    from agent_desktop_fastpath import is_desktop_nl_task
-
-                    if is_desktop_nl_task(task):
-                        observer_platform = "desktop"
-                except Exception:
-                    pass
-
-                screen_observer = None
-                if effective_vision:
-                    from ai_screen_observer import ScreenObserver
-                    screen_observer = ScreenObserver(
-                        platform_type=observer_platform,
-                        interval_sec=screen_share_state.get('interval', 3),
-                    )
-                    # 共享屏幕 = 整张主显示器，禁止截 Testory 前台窗
-                    screen_observer.set_full_desktop(True)
-                    if observer_platform == "desktop":
-                        screen_observer.set_prefer_surface("desktop")
-                    # 任务开始前预热一帧，供首轮 Hermes 注入
-                    try:
-                        yield send('vision_start', message='共享屏幕已开启')
-                        warm = screen_observer.capture_and_analyze_sync(
-                            instruction_hint=(
-                                f"This is a FULL DESKTOP screenshot (primary monitor), "
-                                f"not the Testory app. User task: {task[:200]}"
-                            ),
-                            force=True,
-                        )
-                        if warm:
-                            yield send('vision_result', text=warm[:300])
-                    except Exception as _vis_ex:
-                        uat_logger.debug("vision warm-up failed: %s", _vis_ex)
-
+                run_platform = run_platform_early
+                # 桌面 NL：外层直接 windows_*（OpenClaw 式）；避免 hermes_execute 嵌套空转
                 allow_agent = bool(
                     hermes_available
                     and needs_automation
-                    and hermes_execute_allowed(embedded_session_id="", platform_type=platform)
+                    and hermes_execute_allowed(embedded_session_id="", platform_type=run_platform)
+                    and not use_outer_desktop
                 )
+                if use_outer_desktop:
+                    run_platform = "desktop"
 
                 params = ChatToolLoopParams(
                     message=task,
@@ -6380,16 +6569,19 @@ def api_ai_task_execute():
                     dom_context_pack=_dom_context_pack,
                     interaction_context={
                         "url": url,
-                        "platform": platform,
-                        "enable_vision": effective_vision,
+                        "platform": run_platform,
+                        "enable_vision": allow_screen_tools,
+                        "allow_screen_tools": allow_screen_tools,
                         "session_id": task_ctx.session_id,
                     },
                     test_scope=task,
                     embedded_session_id="",
-                    platform_type=platform,
+                    platform_type=run_platform,
                     abort_event=abort_event,
                     recorder=recorder,
-                    screen_observer=screen_observer,
+                    allow_screen_tools=True if use_outer_desktop else allow_screen_tools,
+                    allow_desktop_windows_tools=True if use_outer_desktop else None,
+                    deadline_ts=deadline_ts,
                     ensure_browser_before_agent=_ensure_browser_before_agent if allow_agent else None,
                     allow_hermes_execute=allow_agent,
                     task_session_id=task_ctx.session_id,
@@ -6399,6 +6591,7 @@ def api_ai_task_execute():
                 final_plan = None
                 need_user_action = None
                 hermes_partial = False
+                hermes_failed = False
                 last_reply_sent = ""
                 for evt_type, evt_data in run_ai_chat_with_tools_stream(
                     local_ai_service=local_ai_service,
@@ -6414,21 +6607,54 @@ def api_ai_task_execute():
                         if tool_name == "hermes_execute":
                             yield send('action', action_type='hermes_execute', target=args_summary[:80], status='running')
                             yield send('think', text='Hermes 正在跨层执行…', status='running')
+                        elif tool_name in ("windows_wait", "get_screen_text", "get_screen_description"):
+                            yield send('think', text=f'{tool_name}…', status='running')
+                        elif tool_name.startswith("windows_"):
+                            yield send(
+                                'action',
+                                action_type=tool_name,
+                                target=str(args_summary)[:80],
+                                status='running',
+                                quiet_chat=True,
+                            )
+                            yield send('think', text=f'桌面操作：{tool_name}', status='running')
                         elif tool_name == "refine_test_plan":
                             yield send('think', text='正在优化测试用例', status='running')
+
+                    elif evt_type == "hermes_trace":
+                        yield send(
+                            'think',
+                            text=f"Hermes: {(evt_data.get('message') or '')[:200]}",
+                            status='running',
+                        )
 
                     elif evt_type == "tool_call_result":
                         tool_name = evt_data.get('tool', '')
                         result_preview = evt_data.get('result_preview', '')
                         if tool_name == "hermes_execute":
-                            # 工具结果里的 corrupt / NoneType.id 不应标成「执行完成」
+                            # 工具结果里的 corrupt / NoneType.id / 空流 不应标成「执行完成」
                             _bad = False
+                            _had_tools = False
+                            _stream_empty = False
                             try:
                                 from hermes_gateway_client import _is_corrupt_session_error
+                                import json as _j_prev
+                                _preview_l = (result_preview or "").lower()
+                                _stream_empty = "stream_empty_text" in _preview_l
                                 _bad = _is_corrupt_session_error(result_preview) or (
-                                    '"ok": false' in (result_preview or "").lower()
-                                    or '"ok":false' in (result_preview or "").lower()
+                                    '"ok": false' in _preview_l
+                                    or '"ok":false' in _preview_l
+                                    or _stream_empty
+                                    or "auth_fatal" in _preview_l
                                 )
+                                try:
+                                    _pj = _j_prev.loads(result_preview)
+                                    if isinstance(_pj, dict):
+                                        _had_tools = bool(_pj.get("had_tool_activity"))
+                                        if _pj.get("ok") is False and not _pj.get("partial"):
+                                            hermes_failed = True
+                                except Exception:
+                                    pass
                             except Exception:
                                 _bad = "NoneType" in (result_preview or "")
                             yield send(
@@ -6439,7 +6665,13 @@ def api_ai_task_execute():
                                 result=result_preview[:200],
                             )
                             if _bad:
-                                hermes_partial = True
+                                # 空流且无工具 = 失败；有工具但无摘要/部分失败 = 部分完成
+                                if _stream_empty and not _had_tools:
+                                    hermes_failed = True
+                                elif "auth_fatal" in (result_preview or "").lower():
+                                    hermes_failed = True
+                                else:
+                                    hermes_partial = True
                             from agent_hitl import looks_like_hitl_needed, set_need_user_action
                             if looks_like_hitl_needed(result_preview):
                                 need_user_action = set_need_user_action(
@@ -6450,18 +6682,96 @@ def api_ai_task_execute():
                                 )
                                 task_ctx.request_hitl(need_user_action["reason"], need_user_action.get("hint") or "")
                                 yield send('need_user_action', **need_user_action)
-                            if "partial" in result_preview.lower() or "未完整" in result_preview or "未能" in result_preview:
+                            if (
+                                not hermes_failed
+                                and (
+                                    '"partial": true' in (result_preview or "").lower()
+                                    or '"partial":true' in (result_preview or "").lower()
+                                    or "未完整" in (result_preview or "")
+                                    or "未能" in (result_preview or "")
+                                )
+                            ):
                                 hermes_partial = True
+                            if _stream_empty:
+                                yield send(
+                                    'think',
+                                    text=(
+                                        'Hermes 空流结束，已禁止再次 hermes_execute'
+                                        + ('（判定为失败，不可保存编造用例）' if hermes_failed else '')
+                                    ),
+                                    status='done',
+                                )
                         elif tool_name == "refine_test_plan":
                             yield send('think', text='测试用例已更新', status='done')
+                        elif tool_name in ("windows_wait", "get_screen_text", "get_screen_description"):
+                            yield send('think', text=f'{tool_name} 完成', status='done')
+                        elif tool_name.startswith("windows_"):
+                            _ok = True
+                            _verified = True
+                            _human = ""
+                            try:
+                                import json as _j
+                                _p = _j.loads(result_preview)
+                                if isinstance(_p, dict):
+                                    if _p.get("success") is False or _p.get("ok") is False:
+                                        _ok = False
+                                    if _p.get("verified") is False:
+                                        _verified = False
+                                    cap = _p.get("capture_after") if isinstance(_p.get("capture_after"), dict) else {}
+                                    _human = (
+                                        _p.get("reply")
+                                        or _p.get("matched_title")
+                                        or _p.get("matched")
+                                        or _p.get("error")
+                                        or ""
+                                    )
+                                    if cap.get("unchanged"):
+                                        _verified = False
+                                        yield send(
+                                            'think',
+                                            text='观察：操作后画面无变化（可能未打入目标窗）',
+                                            status='warning',
+                                        )
+                                    elif cap.get("texts_preview"):
+                                        preview = " / ".join(
+                                            str(x) for x in (cap.get("texts_preview") or [])[:6]
+                                        )
+                                        yield send(
+                                            'think',
+                                            text=f'观察摘要：{preview[:160]}',
+                                            status='done',
+                                        )
+                            except Exception:
+                                low = (result_preview or "").lower()
+                                _ok = '"success": false' not in low and '"success":false' not in low
+                            # unchanged / verified=false 一律不得标 success
+                            if _ok and _verified:
+                                status = 'success'
+                            elif not _ok:
+                                status = 'failed'
+                            else:
+                                status = 'warning'
+                            yield send(
+                                'action',
+                                action_type=tool_name,
+                                target=str(_human or result_preview)[:80],
+                                status=status,
+                                result=(_human or result_preview)[:200],
+                                quiet_chat=True,
+                            )
 
                     elif evt_type == "action_records":
                         for rec in (evt_data if isinstance(evt_data, list) else []):
                             yield send('action_record', **rec)
-                            yield send('case_step',
-                                action=rec.get('action_type', '操作'),
-                                target=rec.get('target', '目标'),
-                                verified=True)
+                            st = (rec.get('status') or '').lower()
+                            # 实时用例只收录成功步骤；失败/取消留在「执行动作」
+                            if st in ('success', 'ok', 'done', 'completed', 'complete'):
+                                yield send(
+                                    'case_step',
+                                    action=rec.get('action_type', '操作'),
+                                    target=rec.get('target', '目标'),
+                                    verified=True,
+                                )
 
                     elif evt_type == "vision_start":
                         yield send('vision_start', message=evt_data.get('message', 'AI 正在观察屏幕...'))
@@ -6490,18 +6800,32 @@ def api_ai_task_execute():
 
                     elif evt_type == "done":
                         plan = evt_data.get('plan', {}) if isinstance(evt_data, dict) else {}
-                        if plan:
+                        done_meta = evt_data.get('meta') if isinstance(evt_data, dict) else {}
+                        if not isinstance(done_meta, dict):
+                            done_meta = {}
+                        if done_meta.get("hermes_failed") or done_meta.get("failed"):
+                            hermes_failed = True
+                        if done_meta.get("savable") is False:
+                            hermes_failed = hermes_failed or bool(done_meta.get("hermes_failed") or done_meta.get("failed"))
+                        if evt_data.get("failed") if isinstance(evt_data, dict) else False:
+                            hermes_failed = True
+                        if plan and not hermes_failed:
                             final_plan = plan
+                        elif hermes_failed:
+                            # 失败时丢弃模型编造的 plan，避免弹出「可保存用例」
+                            final_plan = None
                         reply_text = (evt_data.get('reply') or "").strip() if isinstance(evt_data, dict) else ""
                         # 避免 reply + done.reply 重复刷同一段说明
                         if reply_text and reply_text.strip() != last_reply_sent.strip():
                             last_reply_sent = reply_text
                             yield send('reply', text=reply_text)
 
-                        # 热路径：ActionRecorder → normalize；并合并上下文 trace
+                        # 热路径：ActionRecorder → normalize；失败时不生成可保存 plan
                         norm_warnings = []
                         try:
-                            if recorder and getattr(recorder, "records", None):
+                            if hermes_failed:
+                                final_plan = None
+                            elif recorder and getattr(recorder, "records", None):
                                 built, norm_warnings = recorder.build_normalized_plan(
                                     case_name=(final_plan or {}).get("case_name") or task[:60],
                                     case_url=url or (final_plan or {}).get("case_url") or "",
@@ -6520,53 +6844,74 @@ def api_ai_task_execute():
                                         text=f'已将 {len(built["steps"])} 步动作规范化为可维护用例',
                                         status='done',
                                     )
-                            elif task_ctx.tool_trace and (not final_plan or not final_plan.get("steps")):
-                                # 无 recorder 步骤时，用 trace 生成占位 plan 便于回放编辑
+                            elif (
+                                not hermes_failed
+                                and task_ctx.tool_trace
+                                and (not final_plan or not final_plan.get("steps"))
+                            ):
+                                # 仅非失败时：用真实 tool_trace 生成占位 plan（仍默认不强制可保存）
                                 steps = []
                                 for tr in task_ctx.tool_trace:
+                                    tool_name_tr = (tr.get("tool") or "").strip()
+                                    if tool_name_tr in ("hermes_execute", "openclaw_execute"):
+                                        continue
                                     steps.append({
                                         "action": "note",
-                                        "target": tr.get("tool") or "hermes",
+                                        "target": tool_name_tr or "hermes",
                                         "description": tr.get("summary") or "",
-                                        "automation_layer": platform or "auto",
+                                        "automation_layer": run_platform or "auto",
                                     })
-                                final_plan = {
-                                    "case_name": task[:60],
-                                    "case_url": url or "",
-                                    "description": task,
-                                    "platform": platform or "auto",
-                                    "steps": steps,
-                                    "meta": {
-                                        "source": "hermes_trace",
-                                        "session_id": task_ctx.session_id,
-                                        "vars": dict(task_ctx.vars),
-                                    },
-                                }
-                                try:
-                                    from ai_step_normalization import apply_step_normalization_to_plan
-                                    final_plan, norm_warnings = apply_step_normalization_to_plan(final_plan)
-                                except Exception:
-                                    pass
+                                if steps:
+                                    final_plan = {
+                                        "case_name": task[:60],
+                                        "case_url": url or "",
+                                        "description": task,
+                                        "platform": run_platform or "auto",
+                                        "steps": steps,
+                                        "meta": {
+                                            "source": "hermes_trace",
+                                            "unsavable": True,
+                                            "session_id": task_ctx.session_id,
+                                            "vars": dict(task_ctx.vars),
+                                        },
+                                    }
                         except Exception as ex:
                             uat_logger.debug("hot-path normalize failed: %s", ex)
 
-                        if final_plan and isinstance(final_plan, dict) and final_plan.get('steps'):
-                            try:
-                                from hermes_skill_loop import record_execution_success
-                                record_execution_success(
-                                    final_plan,
-                                    case_url=url or final_plan.get('case_url', ''),
-                                    instruction=task,
-                                    outcome='ok' if not hermes_partial else 'partial',
-                                )
-                            except Exception:
-                                pass
-                        done_msg = '部分完成' if hermes_partial or need_user_action else '完成'
+                        savable = False
+                        if (
+                            not hermes_failed
+                            and final_plan
+                            and isinstance(final_plan, dict)
+                            and final_plan.get("steps")
+                        ):
+                            meta_fp = final_plan.get("meta") if isinstance(final_plan.get("meta"), dict) else {}
+                            if not meta_fp.get("unsavable") and meta_fp.get("source") != "hermes_trace":
+                                savable = True
+                                try:
+                                    from hermes_skill_loop import record_execution_success
+                                    record_execution_success(
+                                        final_plan,
+                                        case_url=url or final_plan.get('case_url', ''),
+                                        instruction=task,
+                                        outcome='ok' if not hermes_partial else 'partial',
+                                    )
+                                except Exception:
+                                    pass
+
+                        if hermes_failed:
+                            done_msg = '执行失败'
+                        elif hermes_partial or need_user_action:
+                            done_msg = '部分完成'
+                        else:
+                            done_msg = '完成'
                         done_payload = {
                             'message': done_msg,
                             'plan': final_plan or {},
                             'session_id': task_ctx.session_id,
-                            'partial': bool(hermes_partial or need_user_action),
+                            'partial': bool(not hermes_failed and (hermes_partial or need_user_action)),
+                            'failed': bool(hermes_failed),
+                            'savable': bool(savable),
                         }
                         if need_user_action:
                             done_payload['need_user_action'] = need_user_action
@@ -6576,7 +6921,12 @@ def api_ai_task_execute():
 
                     elif evt_type == "error":
                         raw_err = evt_data.get("error") if isinstance(evt_data, dict) else evt_data
-                        yield send('error', error=_friendly_sse_error(raw_err))
+                        err_text = _friendly_sse_error(raw_err)
+                        if getattr(abort_event, "_timed_out", False) or (
+                            deadline_ts and _time.time() >= deadline_ts
+                        ):
+                            err_text = "任务已超过设定的超时时间，已自动停止"
+                        yield send('error', error=err_text)
 
             except ImportError as e:
                 yield send('think', text='工具循环模块不可用: ' + str(e), status='warning')
@@ -6590,7 +6940,7 @@ def api_ai_task_execute():
                         instruction = build_explore_instruction(
                             instruction,
                             {
-                                "platform": platform or "auto",
+                                "platform": run_platform or "auto",
                                 "context_prefix": task_ctx.instruction_prefix(),
                                 "capabilities_summary": caps_summary,
                             },
@@ -6968,7 +7318,7 @@ _screen_share_states: Dict[str, Dict[str, Any]] = {}
 @login_required
 @api_error_handler
 def api_ai_screen_share_toggle():
-    """开启/关闭共享屏幕。开启后定期截图供 AI 视觉分析。"""
+    """开启/关闭屏幕观察工具。开启后 Agent 工具列表包含 get_screen_text / get_screen_description。"""
     data = request.get_json(silent=True) or {}
     enabled = bool(data.get('enabled', False))
     user_id = str(current_user.id)
@@ -6990,7 +7340,7 @@ def api_ai_screen_share_toggle():
     return jsonify({
         'success': True,
         'enabled': enabled,
-        'message': '共享屏幕已开启' if enabled else '共享屏幕已关闭',
+        'message': '已启用屏幕观察工具（按需调用）' if enabled else '已关闭屏幕观察工具',
     })
 
 
@@ -7152,21 +7502,27 @@ def api_ai_create_case_from_plan():
     if not _db.check_project_access(current_user.id, project_id, 'editor'):
         return jsonify({'success': False, 'error': '无权限在此项目创建用例'}), 403
 
-    # 创建用例
+    # 创建用例（勿传 created_by：create_test_case_v2 无此参数）
     case_name = _ai_str(plan.get('case_name')) or 'AI 生成用例'
     case_url = _ai_str(plan.get('case_url')) or ''
     description = _ai_str(plan.get('description')) or ''
+    platform = _ai_str(plan.get('platform')) or 'web'
+    if (plan.get('meta') or {}).get('unsavable') or (plan.get('meta') or {}).get('source') == 'hermes_trace':
+        return jsonify({'success': False, 'error': '该计划来自失败/占位轨迹，不可保存为用例'}), 400
+    steps = plan.get('steps') or []
+    if not isinstance(steps, list) or not steps:
+        return jsonify({'success': False, 'error': 'plan.steps 为空，无法保存'}), 400
 
     case_id = db.create_test_case_v2(
         project_id=project_id,
         name=case_name,
         url=case_url,
         description=description,
-        created_by=current_user.id,
+        platform=platform,
+        generated_by_ai=True,
     )
 
     # 写入步骤
-    steps = plan.get('steps') or []
     created_steps = 0
     warnings = []
     if steps:
@@ -7178,7 +7534,7 @@ def api_ai_create_case_from_plan():
             None,
         )
         clean_steps, warnings = dedupe_and_validate_ai_steps(steps)
-        ct_ai = _app_case_type({'url': case_url})
+        ct_ai = _app_case_type({'url': case_url, 'platform': platform})
         if ct_ai == "ui":
             clean_steps = [s for s in clean_steps if (s.get("action") or "").strip().lower() != "api_request"]
         for idx, step in enumerate(clean_steps, start=1):

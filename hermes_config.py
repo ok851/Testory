@@ -190,7 +190,11 @@ def resolve_hermes_api_server_key(*, persist_if_empty: bool = False) -> str:
 
 
 def hermes_upstream_llm_status() -> Dict[str, Any]:
-    """检查当前平台推理配置能否被 Hermes（OpenAI 兼容 + Bearer）正常使用。"""
+    """检查当前平台「前端所选」推理配置能否同步给 Hermes。
+
+    原则：智能体必须与页面当前引擎一致，禁止静默回退到注册表里另一个供应商
+   （曾导致 UI 显示 MiMo、Hermes 仍打 DeepSeek）。
+    """
     prof = _read_active_llm_profile()
     from ai_multi_provider import normalize_api_key, _uses_xiaomimimo_auth
 
@@ -204,55 +208,42 @@ def hermes_upstream_llm_status() -> Dict[str, Any]:
         "model_id": (prof.get("model_id") or "").strip(),
         "label": (prof.get("label") or prof.get("model_id") or "").strip(),
         "reason": "",
+        "hermes_profile": prof,
+        "active_profile_id": (prof.get("id") or "").strip(),
     }
     if style == "ollama" or prov == "ollama":
         out["ok"] = True
         out["reason"] = "ollama"
         return out
     if _uses_xiaomimimo_auth(base, prov, key):
-        # 尝试从注册表找一个 Bearer 兼容配置给 Hermes 用
-        alt = _find_bearer_compatible_profile()
-        if alt:
-            out["ok"] = True
-            out["reason"] = "fallback_bearer_profile"
-            out["fallback_profile_id"] = alt.get("id")
-            out["fallback_model_id"] = alt.get("model_id")
-            out["message"] = (
-                f"当前页面引擎为小米 MiMo（不兼容 Hermes），"
-                f"已为智能体改用备用模型 {(alt.get('label') or alt.get('model_id') or '')}。"
-            )
-            out["active_is_xiaomi"] = True
-            out["hermes_profile"] = alt
-            return out
-        out["ok"] = False
-        out["reason"] = "xiaomi_mimo_api_key_header"
-        out["message"] = (
-            "当前推理引擎为小米 MiMo（api-key 头）。Hermes 只支持 Authorization: Bearer，"
-            "会报 Missing Authentication header。"
-            "请在左侧改选 DeepSeek / OpenAI 等 Bearer 兼容模型并设为当前引擎，然后停止再启动智能体。"
-            "桌面任务将自动走平台本机执行。"
-        )
+        # MiMo Token Plan 同时接受 api-key 与 Authorization: Bearer；Hermes 用 Bearer 即可
+        out["ok"] = True
+        out["reason"] = "openai_compatible_xiaomi"
+        out["active_is_xiaomi"] = True
+        if not key or not base:
+            out["ok"] = False
+            out["reason"] = "xiaomi_missing_credentials"
+            out["message"] = "当前引擎为小米 MiMo，但缺少 API Key 或地址，请到模型配置补全。"
         return out
     if style in ("anthropic_messages",) or prov == "anthropic":
         out["ok"] = False
         out["reason"] = "anthropic_not_openai_compat"
         out["message"] = (
             "当前推理引擎为 Anthropic Messages API，Hermes 默认按 OpenAI 兼容调用。"
-            "请为智能体改用 OpenAI 兼容模型，或桌面任务走平台本机执行。"
+            "请改选 OpenAI 兼容模型后再启动智能体。"
         )
         return out
     if not key:
         out["ok"] = False
         out["reason"] = "missing_api_key"
-        out["message"] = "未配置推理引擎 API Key，Hermes 无法调用上游模型。"
+        out["message"] = "未配置推理引擎 API Key，智能体无法调用上游模型。"
         return out
     if not base:
         out["ok"] = False
         out["reason"] = "missing_base_url"
-        out["message"] = "未配置推理引擎 base_url。"
+        out["message"] = "未配置推理引擎地址。"
         return out
     out["reason"] = "openai_compatible"
-    out["hermes_profile"] = prof
     return out
 
 
@@ -286,16 +277,137 @@ def _find_bearer_compatible_profile() -> Optional[Dict[str, Any]]:
     return None
 
 
+def hermes_config_yaml_path() -> Path:
+    return hermes_home_dir() / "config.yaml"
+
+
+def _load_hermes_config_yaml() -> Dict[str, Any]:
+    path = hermes_config_yaml_path()
+    if not path.is_file():
+        return {}
+    try:
+        import yaml
+
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _dump_hermes_config_yaml(data: Dict[str, Any]) -> None:
+    import yaml
+
+    path = hermes_config_yaml_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = yaml.safe_dump(
+        data,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def _normalize_openai_compatible_base_url(url: str) -> str:
+    """OpenAI 兼容端点补全 /v1（DeepSeek/MiMo 等）；已带版本路径则不动。"""
+    u = (url or "").strip().rstrip("/")
+    if not u:
+        return u
+    lower = u.lower()
+    if lower.endswith("/v1") or "/v1/" in lower or lower.endswith("/v1beta") or "/openai/v1" in lower:
+        return u
+    return f"{u}/v1"
+
+
+def _vendor_api_key_env_name(base_url: str) -> str:
+    """从 host 推导 DEEPSEEK_API_KEY 这类变量名（对齐 Hermes _host_derived_api_key）。"""
+    try:
+        from urllib.parse import urlparse
+
+        host = (urlparse(base_url if "://" in base_url else f"https://{base_url}").hostname or "").lower()
+    except Exception:
+        host = ""
+    if not host or host in ("localhost", "127.0.0.1"):
+        return ""
+    # api.deepseek.com → deepseek；api.groq.com → groq
+    parts = [p for p in host.split(".") if p and p not in ("www", "api", "openai", "open")]
+    if not parts:
+        return ""
+    vendor = parts[0].replace("-", "").upper()
+    if vendor in ("OPENAI", "OPENROUTER", "OLLAMA"):
+        return ""
+    return f"{vendor}_API_KEY"
+
+
+def sync_platform_llm_to_hermes_config_yaml(
+    *,
+    base_url: str,
+    model_id: str,
+    api_key: str,
+    api_style: str = "",
+) -> Dict[str, Any]:
+    """把平台所选模型写入 HERMES_HOME/config.yaml 的 model 段。
+
+    新版 Hermes 以 config.yaml 为端点/模型唯一真相源，不再读 OPENAI_API_BASE。
+    provider=custom + base_url + api_key，避免回落到默认 OpenRouter。
+    """
+    out: Dict[str, Any] = {"changed": False, "path": str(hermes_config_yaml_path())}
+    base = (base_url or "").strip().rstrip("/")
+    model = (model_id or "").strip()
+    key = (api_key or "").strip()
+    style = (api_style or "").strip().lower()
+    if not base or not model:
+        out["skipped"] = True
+        out["reason"] = "missing_base_or_model"
+        return out
+
+    if style in ("", "openai", "openai_compatible", "openai-compatible", "ollama"):
+        base = _normalize_openai_compatible_base_url(base)
+
+    cfg = _load_hermes_config_yaml()
+    before_model = cfg.get("model")
+    before_snap = json.dumps(before_model, ensure_ascii=False, sort_keys=True) if before_model is not None else ""
+
+    if style in ("anthropic", "claude"):
+        model_cfg: Dict[str, Any] = {
+            "provider": "anthropic",
+            "default": model,
+            "base_url": base,
+        }
+    else:
+        # custom：非 OpenRouter 的 OpenAI 兼容网关（DeepSeek / 通义 / 本地等）
+        model_cfg = {
+            "provider": "custom",
+            "default": model,
+            "base_url": base,
+            "api_mode": "chat_completions",
+        }
+    if key and key.lower() != "ollama":
+        model_cfg["api_key"] = key
+
+    cfg["model"] = model_cfg
+    after_snap = json.dumps(model_cfg, ensure_ascii=False, sort_keys=True)
+    if before_snap != after_snap:
+        _dump_hermes_config_yaml(cfg)
+        out["changed"] = True
+    out["model"] = {"provider": model_cfg.get("provider"), "default": model, "base_url": base}
+    return out
+
+
 def sync_platform_llm_credentials_to_hermes_env() -> Dict[str, Any]:
-    """把平台当前（或备用 Bearer）推理配置 upsert 进 HERMES_HOME/.env。"""
+    """把平台「当前前端所选」推理配置同步到 Hermes：.env + config.yaml model。
+
+    始终以 active profile 为准，禁止改写成注册表里其它供应商。
+    """
     home = hermes_home_dir()
     home.mkdir(parents=True, exist_ok=True)
     env_path = home / ".env"
     status = hermes_upstream_llm_status()
     from ai_multi_provider import normalize_api_key
 
-    prof = status.get("hermes_profile") or _read_active_llm_profile()
-    if status.get("reason") == "fallback_bearer_profile" and status.get("hermes_profile"):
+    # 强制用前端当前引擎；不再使用 fallback_bearer_profile 替换供应商
+    prof = _read_active_llm_profile()
+    if not prof and status.get("hermes_profile"):
         prof = status["hermes_profile"]
 
     base = (prof.get("base_url") or os.environ.get("LOCAL_LLM_BASE_URL") or "").strip()
@@ -303,6 +415,7 @@ def sync_platform_llm_credentials_to_hermes_env() -> Dict[str, Any]:
     key = normalize_api_key(prof.get("api_key"))
     prov = (prof.get("provider") or "").strip()
     style = (prof.get("api_style") or "").strip()
+    before_snap = hermes_env_llm_snapshot()
 
     lines: list[str] = []
     if env_path.is_file():
@@ -313,24 +426,76 @@ def sync_platform_llm_credentials_to_hermes_env() -> Dict[str, Any]:
     if not lines:
         lines = build_hermes_env_lines().splitlines()
 
+    effective_base = base.rstrip("/")
+    can_sync = bool(status.get("ok")) and bool(model_id) and (
+        style == "ollama" or prov == "ollama" or (bool(key) and bool(base))
+    )
     if style == "ollama" or prov == "ollama":
+        effective_base = _normalize_openai_compatible_base_url(effective_base) if effective_base else ""
         lines = _upsert_env_line(lines, "PROVIDER", "openai_compatible")
-        if base:
-            lines = _upsert_env_line(lines, "OPENAI_API_BASE", base.rstrip("/"))
+        lines = _upsert_env_line(lines, "HERMES_INFERENCE_PROVIDER", "custom")
+        if effective_base:
+            lines = _upsert_env_line(lines, "OPENAI_API_BASE", effective_base)
+            lines = _upsert_env_line(lines, "CUSTOM_BASE_URL", effective_base)
         if model_id:
             lines = _upsert_env_line(lines, "OPENAI_MODEL", model_id)
         lines = _upsert_env_line(lines, "OPENAI_API_KEY", "ollama")
-    elif status.get("ok") and key and base:
-        lines = _upsert_env_line(lines, "PROVIDER", "openai_compatible")
-        lines = _upsert_env_line(lines, "OPENAI_API_BASE", base.rstrip("/"))
-        if model_id:
-            lines = _upsert_env_line(lines, "OPENAI_MODEL", model_id)
-        lines = _upsert_env_line(lines, "OPENAI_API_KEY", key)
+    elif can_sync and key and base:
+        if style.lower() in ("anthropic", "claude"):
+            lines = _upsert_env_line(lines, "PROVIDER", "anthropic")
+            lines = _upsert_env_line(lines, "HERMES_INFERENCE_PROVIDER", "anthropic")
+            lines = _upsert_env_line(lines, "ANTHROPIC_BASE_URL", base.rstrip("/"))
+            lines = _upsert_env_line(lines, "ANTHROPIC_API_KEY", key)
+            if model_id:
+                lines = _upsert_env_line(lines, "OPENAI_MODEL", model_id)
+        else:
+            effective_base = _normalize_openai_compatible_base_url(base)
+            lines = _upsert_env_line(lines, "PROVIDER", "openai_compatible")
+            lines = _upsert_env_line(lines, "HERMES_INFERENCE_PROVIDER", "custom")
+            lines = _upsert_env_line(lines, "OPENAI_API_BASE", effective_base)
+            lines = _upsert_env_line(lines, "CUSTOM_BASE_URL", effective_base)
+            if model_id:
+                lines = _upsert_env_line(lines, "OPENAI_MODEL", model_id)
+            lines = _upsert_env_line(lines, "OPENAI_API_KEY", key)
+            vendor_key = _vendor_api_key_env_name(effective_base)
+            if vendor_key:
+                lines = _upsert_env_line(lines, vendor_key, key)
 
     _write_hermes_env_lines(lines)
     _sync_hermes_env_to_process(env_path)
-    return {"synced": True, "status": status, "env_path": str(env_path)}
 
+    yaml_info: Dict[str, Any] = {"skipped": True, "reason": "no_credentials"}
+    if (style == "ollama" or prov == "ollama") and effective_base and model_id:
+        yaml_info = sync_platform_llm_to_hermes_config_yaml(
+            base_url=effective_base,
+            model_id=model_id,
+            api_key="ollama",
+            api_style="ollama",
+        )
+    elif can_sync and key and base and model_id:
+        yaml_info = sync_platform_llm_to_hermes_config_yaml(
+            base_url=effective_base or base,
+            model_id=model_id,
+            api_key=key,
+            api_style=style or "openai_compatible",
+        )
+
+    after_snap = hermes_env_llm_snapshot()
+    model_switched = (
+        (before_snap.get("model") or "") != (after_snap.get("model") or "")
+        or (before_snap.get("base_url") or "") != (after_snap.get("base_url") or "")
+    )
+    return {
+        "synced": bool(can_sync),
+        "status": status,
+        "env_path": str(env_path),
+        "config_yaml": yaml_info,
+        "config_changed": bool(yaml_info.get("changed")) or model_switched,
+        "active_profile_id": (prof.get("id") or "").strip(),
+        "synced_model": model_id,
+        "synced_base_url": effective_base or base,
+        "hermes_snapshot": after_snap,
+    }
 
 def ensure_hermes_home(*, force_env: bool = False) -> Path:
     """创建 HERMES_HOME、skills / skill_versions 目录与默认 .env（不覆盖已有 .env 除非 force_env）。"""
@@ -349,12 +514,15 @@ def ensure_hermes_home(*, force_env: bool = False) -> Path:
 _HERMES_LLM_ENV_KEYS = frozenset(
     {
         "PROVIDER",
+        "HERMES_INFERENCE_PROVIDER",
         "OPENAI_API_BASE",
         "OPENAI_BASE_URL",
+        "CUSTOM_BASE_URL",
         "OPENAI_MODEL",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
+        "DEEPSEEK_API_KEY",
     }
 )
 
@@ -363,28 +531,72 @@ def hermes_desired_llm_fingerprint() -> str:
     """当前平台应为 Hermes 使用的上游模型指纹（用于检测是否需重启）。"""
     from ai_multi_provider import normalize_api_key
 
-    status = hermes_upstream_llm_status()
-    prof = status.get("hermes_profile") or _read_active_llm_profile()
-    base = (prof.get("base_url") or "").strip().rstrip("/")
+    prof = _read_active_llm_profile()
+    base = (prof.get("base_url") or "").strip()
+    style = (prof.get("api_style") or "").strip()
+    prov = (prof.get("provider") or "").strip()
+    if style not in ("anthropic", "claude") and prov not in ("anthropic",):
+        base = _normalize_openai_compatible_base_url(base) if base else ""
+    else:
+        base = base.rstrip("/")
     model = (prof.get("model_id") or "").strip()
     key = normalize_api_key(prof.get("api_key"))
     tail = key[-8:] if key else ""
     return f"{base}|{model}|{tail}"
 
 
+def hermes_disk_llm_fingerprint() -> str:
+    """HERMES_HOME 磁盘上实际写入的模型指纹（config.yaml / .env）。"""
+    from ai_multi_provider import normalize_api_key
+
+    snap = hermes_env_llm_snapshot()
+    base = (snap.get("base_url") or "").strip()
+    if base:
+        base = _normalize_openai_compatible_base_url(base)
+    model = (snap.get("model") or "").strip()
+    key = ""
+    try:
+        cfg = _load_hermes_config_yaml().get("model")
+        if isinstance(cfg, dict):
+            key = normalize_api_key(cfg.get("api_key"))
+        if not key:
+            from dotenv import dotenv_values
+
+            vals = dotenv_values(hermes_home_dir() / ".env")
+            key = normalize_api_key(vals.get("OPENAI_API_KEY") or vals.get("DEEPSEEK_API_KEY"))
+    except Exception:
+        pass
+    tail = key[-8:] if key else ""
+    return f"{base}|{model}|{tail}"
+
+
 def hermes_env_llm_snapshot() -> Dict[str, str]:
-    """读取 HERMES_HOME/.env 中的上游模型摘要（供 UI 展示「智能体实际模型」）。"""
-    env_path = hermes_home_dir() / ".env"
+    """读取 Hermes 实际应使用的上游模型摘要（优先 config.yaml，其次 .env）。"""
     out: Dict[str, str] = {"model": "", "base_url": "", "provider": ""}
+    cfg = _load_hermes_config_yaml()
+    model_cfg = cfg.get("model")
+    if isinstance(model_cfg, dict):
+        out["model"] = str(model_cfg.get("default") or model_cfg.get("model") or "").strip()
+        out["base_url"] = str(model_cfg.get("base_url") or "").strip()
+        out["provider"] = str(model_cfg.get("provider") or "").strip()
+    elif isinstance(model_cfg, str) and model_cfg.strip():
+        out["model"] = model_cfg.strip()
+    if out["model"] and out["base_url"]:
+        return out
+    env_path = hermes_home_dir() / ".env"
     if not env_path.is_file():
         return out
     try:
         from dotenv import dotenv_values
 
         vals = dotenv_values(env_path)
-        out["model"] = str(vals.get("OPENAI_MODEL") or "").strip()
-        out["base_url"] = str(vals.get("OPENAI_API_BASE") or vals.get("OPENAI_BASE_URL") or "").strip()
-        out["provider"] = str(vals.get("PROVIDER") or "").strip()
+        out["model"] = out["model"] or str(vals.get("OPENAI_MODEL") or "").strip()
+        out["base_url"] = out["base_url"] or str(
+            vals.get("CUSTOM_BASE_URL") or vals.get("OPENAI_API_BASE") or vals.get("OPENAI_BASE_URL") or ""
+        ).strip()
+        out["provider"] = out["provider"] or str(
+            vals.get("HERMES_INFERENCE_PROVIDER") or vals.get("PROVIDER") or ""
+        ).strip()
     except Exception:
         pass
     return out

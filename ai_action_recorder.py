@@ -1,9 +1,11 @@
+# -*- coding: utf-8 -*-
 """
-动作记录器：从 Hermes 执行结果中提取结构化动作，按需触发视觉分析。
+动作记录器：只接受结构化工具事件，禁止从 Hermes 散文/JSON 关键词猜测「input ok」。
 不拦截 Hermes 的执行——只观测和记录。
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -15,28 +17,53 @@ from logger import uat_logger
 @dataclass
 class ActionRecord:
     action_id: str = ""
-    action_type: str = ""        # navigate / click / input / wait / assert / api_request
-    target: str = ""             # URL / 选择器 / 接口路径
-    locator: str = ""            # 元素定位器
-    input_data: str = ""         # 输入值
-    result: str = ""             # 执行结果摘要
-    status: str = "success"     # success / fail / skipped
+    action_type: str = ""  # navigate / click / input / wait / assert / tool name
+    target: str = ""
+    locator: str = ""
+    input_data: str = ""
+    result: str = ""
+    status: str = "success"  # success / fail / skipped / warning
     timestamp: float = field(default_factory=time.time)
-    screenshot: str = ""         # 截图路径（可选）
-    vision_info: Optional[Dict[str, Any]] = None  # 视觉识别结果（可选）
-    raw_text: str = ""           # 原始文本片段
+    screenshot: str = ""
+    vision_info: Optional[Dict[str, Any]] = None
+    raw_text: str = ""
 
 
-# 匹配 URL 的正则
 _URL_RE = re.compile(r'https?://[^\s<>"\']+', re.IGNORECASE)
-# 匹配引号内容
 _QUOTE_RE = re.compile(r'[""\']([^"\']+)[""\']')
-# 匹配括号内容
 _PAREN_RE = re.compile(r'[（(]([^)）]+)[)）]')
+# JSON 字段名，禁止当作操作目标展示
+_BAD_TARGETS = frozenset(
+    {
+        "ok",
+        "success",
+        "error",
+        "reply",
+        "partial",
+        "verified",
+        "true",
+        "false",
+        "null",
+        "stream_empty_text",
+        "type",
+        "input",
+        "status",
+    }
+)
+
+
+def _status_from_flags(*, ok: Optional[bool] = None, verified: Optional[bool] = None) -> str:
+    if ok is False:
+        return "fail"
+    if verified is False:
+        return "warning"
+    if ok is True:
+        return "success"
+    return "warning"
 
 
 class ActionRecorder:
-    """从 Hermes 返回文本中提取结构化动作，按需触发视觉分析。"""
+    """结构化动作记录；不再从 Hermes 长文本关键词臆造成功步骤。"""
 
     def __init__(self, *, vision_enabled: bool = False, platform: str = "web"):
         self.records: List[ActionRecord] = []
@@ -45,160 +72,182 @@ class ActionRecorder:
 
     def capture_from_hermes_result(self, result_text: str) -> List[ActionRecord]:
         """
-        从 Hermes 返回的文本中提取结构化动作。
-        Hermes 输出包含访问过的 URL、操作描述、发现的元素等。
+        仅当返回体含明确结构化 steps / tool 列表时记录。
+        散文、裸 JSON 的 ok 字段、stream_empty —— 一律不产出动作（避免「input ok」假绿勾）。
         """
-        if not result_text:
+        if not result_text or not str(result_text).strip():
             return []
-        new_records: List[ActionRecord] = []
-        lines = result_text.split("\n")
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            line_lower = line.lower()
-            rec: Optional[ActionRecord] = None
-
-            # 检测 URL 导航
-            url_match = _URL_RE.search(line)
-            if url_match and any(kw in line_lower for kw in
-                                 ["访问", "导航", "打开", "navigate", "visited", "opened", "goto", "前往"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="navigate",
-                    target=url_match.group(),
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            # 检测点击操作（增加"按下了""提交了"等常见中文表达）
-            elif any(kw in line_lower for kw in
-                     ["点击", "click", "press", "tap", "按下", "单击", "按下了", "触发了", "激活了"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="click",
-                    target=self._extract_target_from_text(line),
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            # 检测输入操作（增加"填入了""录入了""清空了"等）
-            elif any(kw in line_lower for kw in
-                     ["输入", "input", "type", "填写", "enter", "录入", "填入了", "录入了", "键入了", "清空了", "删除了"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="input",
-                    target=self._extract_target_from_text(line),
-                    input_data=self._extract_input_value(line),
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            # 检测选择/下拉操作
-            elif any(kw in line_lower for kw in
-                     ["选择", "select", "下拉", "切换", "checkbox", "radio", "勾选了", "取消了"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="select",
-                    target=self._extract_target_from_text(line),
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            # 检测等待
-            elif any(kw in line_lower for kw in
-                     ["等待", "wait", "sleep", "暂停", "停顿", "延迟"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="wait",
-                    target=self._extract_target_from_text(line),
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            # 检测断言/验证
-            elif any(kw in line_lower for kw in
-                     ["验证", "assert", "检查", "verify", "确认", "expect", "校验", "比对", "匹配"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="assert",
-                    target=line[:120],
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            # 检测滚动
-            elif any(kw in line_lower for kw in
-                     ["滚动", "scroll", "滑动", "拖拽", "drag"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="scroll",
-                    target=self._extract_target_from_text(line),
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            # 检测提交/登录（独立的业务动作）
-            elif any(kw in line_lower for kw in
-                     ["提交", "submit", "登录", "logout", "登出", "注册", "保存", "发送"]):
-                rec = ActionRecord(
-                    action_id=f"act_{len(self.records)}",
-                    action_type="submit",
-                    target=self._extract_target_from_text(line),
-                    result=line[:200],
-                    raw_text=line,
-                )
-
-            if rec:
-                new_records.append(rec)
-
-        self.records.extend(new_records)
-
-        # 按需触发视觉分析
-        if self.vision_enabled and new_records:
-            self._trigger_vision_for_records(new_records)
-
-        return new_records
-
-    def _trigger_vision_for_records(self, records: List[ActionRecord]):
-        """
-        按需触发视觉分析——只在 vision_enabled 时触发，复用 ai_vision_local 熔断器保护。
-        视觉分析失败不影响主流程。
-        """
+        text = str(result_text).strip()
+        # 空流 / 鉴权失败：禁止抽动作
+        if "stream_empty_text" in text or "auth_fatal" in text:
+            return []
         try:
-            from ai_vision_local import ocr_region_png, _vision_breaker
-            # 熔断器检查
-            if hasattr(_vision_breaker, "allow") and not _vision_breaker.allow():
-                return
+            data = json.loads(text)
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            if data.get("stream_empty_text") or data.get("auth_fatal"):
+                return []
+            if data.get("ok") is False or data.get("success") is False:
+                return []
+            structured = self._records_from_structured(data)
+            if structured:
+                self.records.extend(structured)
+                return structured
+            # 有 JSON 但无 steps/tools：不散文猜测
+            return []
+        # 非 JSON：明确关闭散文关键词抽取（历史假成功根因）
+        return []
 
-            from ai_external_browser_bridge import capture_screenshot
-            png = capture_screenshot()
-            if not png:
-                return
+    def capture_from_tool_event(
+        self,
+        *,
+        name: str,
+        args: Optional[Dict[str, Any]] = None,
+        result: Any = None,
+        status: str = "",
+    ) -> List[ActionRecord]:
+        """从 Hermes SSE 工具进度或真实 windows_* 结果写入一条可信记录。"""
+        args = args if isinstance(args, dict) else {}
+        name = (name or "tool").strip() or "tool"
+        ok: Optional[bool] = None
+        verified: Optional[bool] = None
+        summary = ""
+        target = ""
+        if isinstance(result, dict):
+            if result.get("ok") is False or result.get("success") is False:
+                ok = False
+            elif result.get("ok") is True or result.get("success") is True:
+                ok = True
+            if "verified" in result:
+                verified = bool(result.get("verified"))
+            summary = str(
+                result.get("error")
+                or result.get("reply")
+                or result.get("message")
+                or result.get("effect")
+                or ""
+            )[:200]
+            target = str(
+                result.get("matched")
+                or result.get("app_name")
+                or result.get("description")
+                or result.get("key")
+                or args.get("app")
+                or args.get("text")
+                or args.get("instruction")
+                or ""
+            )[:80]
+        elif result is not None:
+            summary = str(result)[:200]
+            low = summary.lower()
+            if '"ok": false' in low or '"success": false' in low:
+                ok = False
+            elif '"ok": true' in low or '"success": true' in low:
+                ok = True
+        if not target:
+            target = str(
+                args.get("app")
+                or args.get("text")
+                or args.get("element")
+                or args.get("action")
+                or args.get("name")
+                or name
+            )[:80]
+        if self._is_bad_target(target):
+            target = name
+        st = (status or "").strip().lower()
+        # Hermes SSE 常用 running / completed；completed 需结合 result 判定，不能原样保留
+        if st in ("running", "in_progress", "started", "progress"):
+            st = "running"
+        elif st in ("error", "failed", "fail"):
+            st = "fail"
+        elif st in ("ok", "done", "success", "completed", "complete"):
+            if ok is None and verified is None and result is None:
+                st = "warning"
+            else:
+                st = _status_from_flags(
+                    ok=True if ok is None else ok,
+                    verified=verified,
+                )
+        elif not st:
+            st = _status_from_flags(ok=ok, verified=verified)
+        else:
+            st = _status_from_flags(ok=ok, verified=verified) if ok is not None else "warning"
+        rec = ActionRecord(
+            action_id=f"act_{len(self.records)}",
+            action_type=self._normalize_action_type(name, args),
+            target=target or name,
+            input_data=str(args.get("text") or args.get("input_value") or "")[:100],
+            result=summary or f"{name}",
+            status=st,
+            raw_text=json.dumps({"name": name, "args": args}, ensure_ascii=False)[:300],
+        )
+        self.records.append(rec)
+        return [rec]
 
-            # OCR 提取文本（ocr_region_png 接受 bytes）
-            ocr_text = ""
-            try:
-                ocr_text = ocr_region_png(png)
-                if hasattr(_vision_breaker, "record_success"):
-                    _vision_breaker.record_success()
-            except Exception as e:
-                if hasattr(_vision_breaker, "record_failure"):
-                    _vision_breaker.record_failure()
-                uat_logger.debug("ActionRecorder OCR 失败: %s", e)
+    def _records_from_structured(self, data: Dict[str, Any]) -> List[ActionRecord]:
+        out: List[ActionRecord] = []
+        steps = data.get("steps") or data.get("step_results") or data.get("tool_calls")
+        if not isinstance(steps, list) or not steps:
+            return []
+        for item in steps:
+            if not isinstance(item, dict):
+                continue
+            step = item.get("step") if isinstance(item.get("step"), dict) else item
+            act = (
+                step.get("action")
+                or step.get("action_type")
+                or step.get("name")
+                or item.get("name")
+                or "step"
+            )
+            tgt = (
+                step.get("target")
+                or step.get("description")
+                or step.get("input_value")
+                or item.get("target")
+                or ""
+            )
+            if self._is_bad_target(str(tgt)):
+                tgt = str(act)
+            ok = item.get("ok")
+            if ok is None:
+                ok = item.get("success")
+            if ok is None and (item.get("status") or "").lower() in ("success", "ok", "done"):
+                ok = True
+            if ok is None and (item.get("status") or "").lower() in ("failed", "fail", "error"):
+                ok = False
+            verified = item.get("verified")
+            out.append(
+                ActionRecord(
+                    action_id=f"act_{len(self.records) + len(out)}",
+                    action_type=str(act)[:40],
+                    target=str(tgt)[:80] or str(act),
+                    input_data=str(step.get("input_value") or "")[:100],
+                    result=str(item.get("error") or step.get("description") or "")[:200],
+                    status=_status_from_flags(
+                        ok=bool(ok) if ok is not None else None,
+                        verified=bool(verified) if verified is not None else None,
+                    ),
+                    raw_text=json.dumps(item, ensure_ascii=False)[:300],
+                )
+            )
+        return out
 
-            # 将视觉信息附加到最新记录
-            if records and ocr_text:
-                records[-1].vision_info = {
-                    "ocr_text": ocr_text[:500],
-                    "screenshot": "captured",
-                }
-        except ImportError:
-            pass
-        except Exception as e:
-            uat_logger.debug("ActionRecorder 视觉分析失败: %s", e)
+    @staticmethod
+    def _is_bad_target(target: str) -> bool:
+        t = (target or "").strip().lower()
+        return (not t) or t in _BAD_TARGETS or t in ('"ok"', "'ok'")
+
+    @staticmethod
+    def _normalize_action_type(name: str, args: Dict[str, Any]) -> str:
+        n = (name or "").strip()
+        if n.startswith("windows_"):
+            return n.replace("windows_", "", 1)
+        if n == "computer_use":
+            return str(args.get("action") or "computer_use")[:40]
+        return n[:40] or "tool"
 
     def to_case_steps(self) -> List[Dict[str, Any]]:
         """将动作记录转换为步骤列表（供 ai_step_normalization 处理）。"""
@@ -218,16 +267,19 @@ class ActionRecorder:
 
         steps = []
         for rec in self.records:
+            if rec.status in ("fail", "failed", "error") and not rec.target:
+                continue
             step: Dict[str, Any] = {
                 "action": rec.action_type,
                 "target": rec.target,
                 "input_value": rec.input_data,
                 "description": rec.result[:100] if rec.result else "",
-                "automation_layer": self.platform if self.platform in ("web", "desktop", "android") else "web",
+                "automation_layer": self.platform
+                if self.platform in ("web", "desktop", "android")
+                else "web",
             }
             if rec.locator:
                 step["locator"] = rec.locator
-            # 尝试把可见文案绑到 probe ref，便于回放
             hit = probe_by_text.get((rec.target or "").strip())
             if hit:
                 if hit.get("i") is not None:
@@ -272,7 +324,7 @@ class ActionRecorder:
 
         plat = (self.platform or "web").strip().lower()
         if plat in ("auto", "all", "cross"):
-            plat = "web"  # normalize 管线默认按 web；步骤可自带 automation_layer
+            plat = "web"
         if plat not in ("web", "desktop", "android"):
             plat = "web"
         normalized = [normalize_ai_step(s) for s in raw]
@@ -300,30 +352,16 @@ class ActionRecorder:
         return plan, warnings
 
     def _extract_target_from_text(self, text: str) -> str:
-        """从文本中提取操作目标。"""
-        # 尝试提取引号中的内容
-        m = _QUOTE_RE.search(text)
+        """保留给兼容调用；过滤 JSON 字段名。"""
+        m = _QUOTE_RE.search(text or "")
+        if m:
+            cand = m.group(1)[:80]
+            if not self._is_bad_target(cand):
+                return cand
+        m = _PAREN_RE.search(text or "")
         if m:
             return m.group(1)[:80]
-        # 尝试提取括号中的内容
-        m = _PAREN_RE.search(text)
-        if m:
-            return m.group(1)[:80]
-        # 尝试提取 URL
-        m = _URL_RE.search(text)
+        m = _URL_RE.search(text or "")
         if m:
             return m.group()
-        return text[:60]
-
-    def _extract_input_value(self, text: str) -> str:
-        """从文本中提取输入值。"""
-        # 尝试引号内容
-        m = _QUOTE_RE.search(text)
-        if m:
-            return m.group(1)[:100]
-        # 尝试 "输入/填写 xxx 到/into" 模式
-        m = re.search(r'(?:输入|input|type|填写|enter|录入)[:\s]+(.+?)(?:到|into|to|$)',
-                      text, re.IGNORECASE)
-        if m:
-            return m.group(1).strip()[:100]
-        return ""
+        return (text or "")[:60]

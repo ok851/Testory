@@ -59,10 +59,10 @@ class TestUnifiedHermesSession(unittest.TestCase):
         )
 
     def test_screen_observer_sync_api(self):
-        from ai_screen_observer import ScreenObserver
+        from screen_tools import get_screen_description, get_screen_text
 
-        obs = ScreenObserver(platform_type="auto")
-        self.assertTrue(callable(obs.capture_and_analyze_sync))
+        self.assertTrue(callable(get_screen_text))
+        self.assertTrue(callable(get_screen_description))
 
     def test_api_skill_file_exists(self):
         from pathlib import Path
@@ -71,25 +71,36 @@ class TestUnifiedHermesSession(unittest.TestCase):
         self.assertTrue(p.is_file())
 
     def test_auth_fatal_detect(self):
-        from ai_chat_tool_loop import _result_is_auth_fatal
+        from ai_chat_tool_loop import _auth_fatal_user_message, _result_is_auth_fatal
         from hermes_gateway_client import HermesGatewayClient, _is_corrupt_session_error
 
         self.assertTrue(
             _result_is_auth_fatal("Error code: 401 - Missing Authentication header")
         )
         self.assertTrue(_result_is_auth_fatal("桌面自动化引擎 401 Authentication Error"))
+        self.assertTrue(
+            _result_is_auth_fatal(
+                "Error code: 402 - {'error': {'message': 'Insufficient Balance'}}"
+            )
+        )
         self.assertFalse(_result_is_auth_fatal("打开微信成功"))
         self.assertTrue(_is_corrupt_session_error("'NoneType' object has no attribute 'id'"))
+        bal = _auth_fatal_user_message("Insufficient Balance")
+        self.assertIn("余额不足", bal)
+        self.assertNotIn("HERMES_API_SERVER_KEY", bal)
+        self.assertNotIn("DESKTOP_AGENT_GATEWAY_SECRET", bal)
         out = HermesGatewayClient().execute_user_instruction("", session_id="abc")
         self.assertIn("instruction 为空", out)
 
-    def test_desktop_auth_hint_contains_secret_header(self):
+    def test_desktop_auth_hint_no_secret_leak(self):
         from hermes_skill_hints import build_explore_instruction, desktop_gateway_auth_hint
 
         hint = desktop_gateway_auth_hint()
-        self.assertIn("X-Desktop-Agent-Secret", hint)
+        self.assertIn("MCP", hint)
+        self.assertNotIn("X-Desktop-Agent-Secret", hint)
+        self.assertNotIn("DESKTOP_AGENT_GATEWAY_SECRET", hint)
         text = build_explore_instruction("打开控制面板", {"platform": "desktop"})
-        self.assertIn("X-Desktop-Agent-Secret", text)
+        self.assertNotIn("X-Desktop-Agent-Secret", text)
 
 
 if __name__ == "__main__":
