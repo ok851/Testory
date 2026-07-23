@@ -20,6 +20,7 @@
         <a href="{{ url_for('releases_page') }}" class="topnav-link{% if active_page|default('') == 'releases' %} active{% endif %}">安装包</a>
         <a href="{{ url_for('orders_page') }}" class="topnav-link{% if active_page|default('') == 'orders' %} active{% endif %}">订单</a>
         <a href="{{ url_for('users_page') }}" class="topnav-link{% if active_page|default('') == 'users' %} active{% endif %}">用户</a>
+        <a href="{{ url_for('visits_page') }}" class="topnav-link{% if active_page|default('') == 'visits' %} active{% endif %}">访问</a>
     </nav>
     <div class="topnav-right">
         <a href="{{ url_for('logout') }}" class="topnav-link logout">退出登录</a>

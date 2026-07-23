@@ -89,8 +89,10 @@
                     <td>
                         {% if lic.revoked %}
                             <span class="badge badge-danger">已吊销</span>
+                        {% elif (lic.activation_count or 0) > 0 or lic.binding_id %}
+                            <span class="badge badge-success">已激活</span>
                         {% else %}
-                            <span class="badge badge-success">有效</span>
+                            <span class="badge badge-warning">未激活</span>
                         {% endif %}
                     </td>
                     <td class="actions">
@@ -152,6 +154,11 @@ function openModal() {
 }
 
 function renderDetail(lic, activations) {
+    const actCount = Number(lic.activation_count || (activations && activations.length) || 0);
+    const hasBinding = !!(lic.binding_id && String(lic.binding_id).trim());
+    let statusLabel = '未激活';
+    if (lic.revoked) statusLabel = '已吊销';
+    else if (actCount > 0 || hasBinding) statusLabel = '已激活' + (actCount > 0 ? `（${actCount} 台/实例）` : '');
     const rows = [
         ['License ID', lic.license_id],
         ['类型', lic.license_type],
@@ -159,7 +166,8 @@ function renderDetail(lic, activations) {
         ['绑定', lic.binding_type ? `${lic.binding_type} · ${lic.binding_id || ''}` : '—'],
         ['到期', lic.expires_at ? lic.expires_at.slice(0, 10) : '—'],
         ['签发时间', lic.created_at ? lic.created_at.replace('T', ' ').slice(0, 19) : '—'],
-        ['状态', lic.revoked ? '已吊销' : '有效'],
+        ['最近激活', lic.last_activated_at ? String(lic.last_activated_at).replace('T', ' ').slice(0, 19) : '—'],
+        ['状态', statusLabel],
     ];
     detailFields.innerHTML = rows.map(([k, v]) =>
         `<div class="license-detail-row"><dt>${k}</dt><dd>${v}</dd></div>`
@@ -170,10 +178,10 @@ function renderDetail(lic, activations) {
             activations.map(a => `<li>${a.binding_type || '—'} · ${a.binding_id} · ${(a.activated_at || '').slice(0, 19).replace('T', ' ')}</li>`).join('') +
             '</ul>';
     } else {
-        activationsBox.innerHTML = '<span style="color:var(--text-secondary)">暂无上报的激活记录。</span>' +
+        activationsBox.innerHTML = '<span style="color:var(--text-secondary)">暂无上报的激活记录（状态：未激活）。</span>' +
             '<p style="margin:0.35rem 0 0;font-size:0.75rem;color:var(--text-muted)">' +
-            '客户端/服务器激活后需配置 <code>PLATFORM_ADMIN_URL</code> 并能访问控制面，才会在此显示设备或实例绑定；' +
-            '重启已激活的 Testory 客户端后会自动补报一次。</p>';
+            '客户端激活后需配置 <code>PLATFORM_ADMIN_URL</code>（直连控制面或带 <code>/admin</code> 的公网地址）并能访问；' +
+            '重启已激活的 Testory 会自动补报一次。</p>';
     }
     openModal();
 }

@@ -228,6 +228,34 @@ def api_contact():
     return jsonify({"success": True, "message": "感谢您的留言，我们会尽快与您联系。"})
 
 
+@app.route("/api/visit", methods=["POST"])
+def api_visit():
+    """官网埋点：转发至控制面（失败静默，不影响页面）。"""
+    data = request.get_json(silent=True) or {}
+    if not data and request.data:
+        try:
+            data = json.loads(request.data.decode("utf-8"))
+        except Exception:
+            data = {}
+    visitor_id = (data.get("visitor_id") or "").strip()
+    if not visitor_id:
+        return jsonify({"success": False, "error": "visitor_id 必填"}), 400
+    body = {
+        "visitor_id": visitor_id,
+        "path": (data.get("path") or "/")[:500],
+        "referrer": (data.get("referrer") or "")[:500],
+        "title": (data.get("title") or "")[:200],
+        "ip": (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip(),
+        "user_agent": (request.headers.get("User-Agent") or "")[:500],
+    }
+    result = platform_api_json("/api/public/visit", method="POST", body=body)
+    ok = bool(result.get("success"))
+    payload = {"success": ok}
+    if not ok:
+        payload["error"] = (result.get("error") or "上报失败")[:200]
+    return jsonify(payload)
+
+
 @app.route("/api/latest-release", methods=["GET"])
 def api_latest_release():
     r = _latest_release()

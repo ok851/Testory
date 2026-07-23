@@ -105,6 +105,19 @@ class PlatformAdminDB:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(external_user_id, team_server_url)
             );
+            CREATE TABLE IF NOT EXISTS site_visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                visitor_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                referrer TEXT,
+                title TEXT,
+                ip TEXT,
+                user_agent TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_site_visits_created ON site_visits(created_at);
+            CREATE INDEX IF NOT EXISTS idx_site_visits_visitor ON site_visits(visitor_id);
+            CREATE INDEX IF NOT EXISTS idx_license_activations_lid ON license_activations(license_id);
             """
         )
         self._migrate_platform_admin(cur)
@@ -120,6 +133,21 @@ class PlatformAdminDB:
             "ALTER TABLE orders ADD COLUMN username TEXT",
             "ALTER TABLE orders ADD COLUMN email TEXT",
             "ALTER TABLE orders ADD COLUMN period TEXT DEFAULT 'monthly'",
+            """
+            CREATE TABLE IF NOT EXISTS site_visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                visitor_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                referrer TEXT,
+                title TEXT,
+                ip TEXT,
+                user_agent TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_site_visits_created ON site_visits(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_site_visits_visitor ON site_visits(visitor_id)",
+            "CREATE INDEX IF NOT EXISTS idx_license_activations_lid ON license_activations(license_id)",
         ):
             try:
                 cur.execute(sql)
@@ -180,7 +208,21 @@ class PlatformAdminDB:
         conn = self._connect()
         cur = conn.cursor()
         cur.execute(
-            "SELECT * FROM licenses ORDER BY id DESC LIMIT ?",
+            """
+            SELECT l.*,
+                   COALESCE(a.activation_count, 0) AS activation_count,
+                   a.last_activated_at AS last_activated_at
+            FROM licenses l
+            LEFT JOIN (
+                SELECT license_id,
+                       COUNT(*) AS activation_count,
+                       MAX(activated_at) AS last_activated_at
+                FROM license_activations
+                GROUP BY license_id
+            ) a ON a.license_id = l.license_id
+            ORDER BY l.id DESC
+            LIMIT ?
+            """,
             (limit,),
         )
         rows = [dict(r) for r in cur.fetchall()]
@@ -190,7 +232,23 @@ class PlatformAdminDB:
     def get_license(self, license_id: str) -> Optional[Dict[str, Any]]:
         conn = self._connect()
         cur = conn.cursor()
-        cur.execute("SELECT * FROM licenses WHERE license_id = ?", (license_id,))
+        cur.execute(
+            """
+            SELECT l.*,
+                   COALESCE(a.activation_count, 0) AS activation_count,
+                   a.last_activated_at AS last_activated_at
+            FROM licenses l
+            LEFT JOIN (
+                SELECT license_id,
+                       COUNT(*) AS activation_count,
+                       MAX(activated_at) AS last_activated_at
+                FROM license_activations
+                GROUP BY license_id
+            ) a ON a.license_id = l.license_id
+            WHERE l.license_id = ?
+            """,
+            (license_id,),
+        )
         row = cur.fetchone()
         conn.close()
         return dict(row) if row else None
@@ -256,8 +314,134 @@ class PlatformAdminDB:
                 """,
                 (license_id, binding_type, binding_id),
             )
+        # 同步回 licenses 主表，列表「绑定」列与激活状态一致
+        cur.execute(
+            """
+            UPDATE licenses
+            SET binding_type = COALESCE(NULLIF(?, ''), binding_type),
+                binding_id = COALESCE(NULLIF(?, ''), binding_id)
+            WHERE license_id = ?
+            """,
+            (binding_type, binding_id, license_id),
+        )
         conn.commit()
         conn.close()
+
+    def record_site_visit(
+        self,
+        *,
+        visitor_id: str,
+        path: str,
+        referrer: str = "",
+        title: str = "",
+        ip: str = "",
+        user_agent: str = "",
+    ) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO site_visits (visitor_id, path, referrer, title, ip, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (visitor_id or "")[:64],
+                (path or "/")[:500],
+                (referrer or "")[:500],
+                (title or "")[:200],
+                (ip or "")[:64],
+                (user_agent or "")[:500],
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def visit_stats(self, days: int = 30) -> Dict[str, Any]:
+        days = max(1, min(int(days or 30), 365))
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM site_visits
+            WHERE created_at >= datetime('now', ?)
+            """,
+            (f"-{days} days",),
+        )
+        pv = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT visitor_id) FROM site_visits
+            WHERE created_at >= datetime('now', ?)
+            """,
+            (f"-{days} days",),
+        )
+        uv = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM site_visits
+            WHERE date(created_at) = date('now')
+            """
+        )
+        today_pv = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT visitor_id) FROM site_visits
+            WHERE date(created_at) = date('now')
+            """
+        )
+        today_uv = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT path, COUNT(*) AS hits
+            FROM site_visits
+            WHERE created_at >= datetime('now', ?)
+            GROUP BY path
+            ORDER BY hits DESC
+            LIMIT 20
+            """,
+            (f"-{days} days",),
+        )
+        top_paths = [{"path": r[0], "hits": int(r[1])} for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT date(created_at) AS d, COUNT(*) AS pv, COUNT(DISTINCT visitor_id) AS uv
+            FROM site_visits
+            WHERE created_at >= datetime('now', ?)
+            GROUP BY date(created_at)
+            ORDER BY d DESC
+            LIMIT 30
+            """,
+            (f"-{days} days",),
+        )
+        daily = [
+            {"date": r[0], "pv": int(r[1]), "uv": int(r[2])} for r in cur.fetchall()
+        ]
+        conn.close()
+        return {
+            "days": days,
+            "pv": pv,
+            "uv": uv,
+            "today_pv": today_pv,
+            "today_uv": today_uv,
+            "top_paths": top_paths,
+            "daily": daily,
+        }
+
+    def list_recent_visits(self, limit: int = 100) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT visitor_id, path, referrer, title, ip, user_agent, created_at
+            FROM site_visits
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit or 100), 500)),),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
 
     def list_revoked_license_ids(self) -> List[str]:
         conn = self._connect()
@@ -487,11 +671,16 @@ class PlatformAdminDB:
         revenue = float(cur.fetchone()[0])
         conn.close()
         dl = self.download_stats()
+        visits = self.visit_stats(30)
         return {
             "active_licenses": active_licenses,
             "activations": activations,
             "orders": orders,
             "revenue": revenue,
             "product_users": self.count_product_users(),
+            "visit_pv_30d": visits.get("pv", 0),
+            "visit_uv_30d": visits.get("uv", 0),
+            "visit_today_pv": visits.get("today_pv", 0),
+            "visit_today_uv": visits.get("today_uv", 0),
             **dl,
         }

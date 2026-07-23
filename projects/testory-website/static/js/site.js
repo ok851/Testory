@@ -106,4 +106,39 @@
       }
     });
   });
+
+  // 访问统计：匿名 visitor_id + 当前 path
+  try {
+    const storageKey = "testory_vid";
+    let visitorId = "";
+    try {
+      visitorId = localStorage.getItem(storageKey) || "";
+    } catch (_) {}
+    if (!visitorId || visitorId.length < 8) {
+      visitorId =
+        "v_" +
+        Math.random().toString(36).slice(2) +
+        Date.now().toString(36);
+      try {
+        localStorage.setItem(storageKey, visitorId);
+      } catch (_) {}
+    }
+    const payload = JSON.stringify({
+      visitor_id: visitorId,
+      path: location.pathname + location.search,
+      referrer: document.referrer || "",
+      title: document.title || "",
+    });
+    if (navigator.sendBeacon) {
+      const blob = new Blob([payload], { type: "application/json" });
+      navigator.sendBeacon("/api/visit", blob);
+    } else {
+      fetch("/api/visit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        keepalive: true,
+      }).catch(() => {});
+    }
+  } catch (_) {}
 })();

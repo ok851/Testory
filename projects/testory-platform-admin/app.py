@@ -174,6 +174,19 @@ def users_page():
     return render_template("users.html", users=_db.list_product_users(), active_page="users")
 
 
+@app.route("/visits")
+@login_required
+def visits_page():
+    stats = _db.visit_stats(30)
+    recent = _db.list_recent_visits(80)
+    return render_template(
+        "visits.html",
+        stats=stats,
+        recent=recent,
+        active_page="visits",
+    )
+
+
 def _direct_download_url(release: dict) -> str:
     url = (release.get("download_url") or "").strip()
     if url.startswith("http://") or url.startswith("https://"):
@@ -228,6 +241,30 @@ def api_public_latest_release():
         "direct_download_url": _direct_download_url(release),
     }
     return jsonify({"success": True, "release": payload})
+
+
+@app.route("/api/public/visit", methods=["POST"])
+def api_public_visit():
+    """官网埋点：记录一次页面访问（无需登录）。"""
+    data = request.get_json(silent=True) or {}
+    visitor_id = (data.get("visitor_id") or "").strip()
+    path = (data.get("path") or "/").strip() or "/"
+    if not visitor_id:
+        return jsonify({"success": False, "error": "visitor_id 必填"}), 400
+    if len(path) > 500:
+        path = path[:500]
+    _db.record_site_visit(
+        visitor_id=visitor_id,
+        path=path,
+        referrer=(data.get("referrer") or "")[:500],
+        title=(data.get("title") or "")[:200],
+        ip=(
+            (data.get("ip") or "").strip()
+            or (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
+        ),
+        user_agent=(data.get("user_agent") or request.headers.get("User-Agent") or "")[:500],
+    )
+    return jsonify({"success": True})
 
 
 @app.route("/api/platform/users/sync", methods=["POST"])
@@ -310,6 +347,8 @@ def api_create_license():
         binding_id,
         expires,
     )
+    if binding_id:
+        _db.record_activation(license_id, binding_type or "machine", binding_id)
     return jsonify({"success": True, "license_id": license_id, "license_key": key})
 
 

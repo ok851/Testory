@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}访问分析{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>访问分析</h1>
+    <p class="subtitle">官网页面浏览量（PV）与独立访客（UV），由官网埋点上报</p>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card accent-emerald">
+        <p class="label">今日 UV</p>
+        <p class="value">{{ stats.today_uv }}</p>
+    </div>
+    <div class="stat-card accent-indigo">
+        <p class="label">今日 PV</p>
+        <p class="value">{{ stats.today_pv }}</p>
+    </div>
+    <div class="stat-card accent-amber">
+        <p class="label">近 {{ stats.days }} 日 UV</p>
+        <p class="value">{{ stats.uv }}</p>
+    </div>
+    <div class="stat-card accent-slate">
+        <p class="label">近 {{ stats.days }} 日 PV</p>
+        <p class="value">{{ stats.pv }}</p>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h2>热门路径</h2>
+        <p>近 {{ stats.days }} 日访问次数 Top 20</p>
+    </div>
+    <div class="table-wrap">
+        {% if stats.top_paths %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>路径</th>
+                    <th>PV</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for p in stats.top_paths %}
+                <tr>
+                    <td class="mono">{{ p.path }}</td>
+                    <td>{{ p.hits }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="table-empty">暂无访问数据。请确认官网已部署且能连通控制面。</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h2>按日汇总</h2>
+        <p>最近最多 30 天</p>
+    </div>
+    <div class="table-wrap">
+        {% if stats.daily %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>日期</th>
+                    <th>PV</th>
+                    <th>UV</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for d in stats.daily %}
+                <tr>
+                    <td>{{ d.date }}</td>
+                    <td>{{ d.pv }}</td>
+                    <td>{{ d.uv }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="table-empty">暂无按日数据。</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h2>最近访问</h2>
+        <p>最新 {{ recent|length }} 条</p>
+    </div>
+    <div class="table-wrap">
+        {% if recent %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>路径</th>
+                    <th>访客 ID</th>
+                    <th>IP</th>
+                    <th>来源</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for v in recent %}
+                <tr>
+                    <td>{{ (v.created_at or '')[:19]|replace('T', ' ') }}</td>
+                    <td class="mono">{{ v.path }}</td>
+                    <td class="mono" style="font-size:0.75rem">{{ (v.visitor_id or '')[:12] }}…</td>
+                    <td class="mono">{{ v.ip or '—' }}</td>
+                    <td style="max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ v.referrer or '' }}">{{ v.referrer or '—' }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="table-empty">暂无明细。</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

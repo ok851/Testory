@@ -101,17 +101,39 @@ def report_license_activation(
         },
         ensure_ascii=False,
     ).encode("utf-8")
-    req = urllib.request.Request(
-        admin_url.rstrip("/") + "/api/licenses/activate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    base = admin_url.rstrip("/")
+    # 兼容直连 :5100 与 Nginx /admin 子路径
+    candidates = [f"{base}/api/licenses/activate"]
+    if not base.endswith("/admin"):
+        candidates.append(f"{base}/admin/api/licenses/activate")
+    last_err = ""
+    for url in candidates:
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    return True
+                last_err = f"HTTP {resp.status}"
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            last_err = str(e)[:160]
+            continue
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status == 200
-    except (urllib.error.URLError, OSError, ValueError):
-        return False
+        from logger import uat_logger
+
+        uat_logger.warning(
+            "License 激活上报失败 license_id=%s url=%s err=%s",
+            lid,
+            admin_url,
+            last_err,
+        )
+    except Exception:
+        pass
+    return False
 
 
 def report_current_license_activation() -> bool:

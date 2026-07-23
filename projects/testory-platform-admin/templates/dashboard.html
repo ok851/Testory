@@ -32,6 +32,14 @@
         <p class="label">产品用户</p>
         <p class="value">{{ stats.product_users }}</p>
     </div>
+    <div class="stat-card accent-emerald">
+        <p class="label">今日访问 UV / PV</p>
+        <p class="value">{{ stats.visit_today_uv }} / {{ stats.visit_today_pv }}</p>
+    </div>
+    <div class="stat-card accent-amber">
+        <p class="label">30 日 UV / PV</p>
+        <p class="value">{{ stats.visit_uv_30d }} / {{ stats.visit_pv_30d }}</p>
+    </div>
 </div>
 
 <div class="card" style="margin-top: 1.5rem;">
@@ -45,6 +53,7 @@
             <a href="{{ url_for('releases_page') }}" class="btn btn-secondary">发布安装包</a>
             <a href="{{ url_for('users_page') }}" class="btn btn-secondary">查看产品用户</a>
             <a href="{{ url_for('orders_page') }}" class="btn btn-secondary">订单记录</a>
+            <a href="{{ url_for('visits_page') }}" class="btn btn-secondary">访问分析</a>
         </div>
     </div>
 </div>
