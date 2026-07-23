@@ -10,11 +10,13 @@
                 var desktop = {{ 'true' if (is_client or is_tauri) else 'false' }};
                 if (dark) document.documentElement.classList.add('dark');
                 if (desktop) document.documentElement.classList.add('testory-desktop-html', 'testory-no-view-transition');
-                /* 桌面壳间隙底跟随主题，避免换页像黑蒙版 */
-                var bg = dark ? '#030712' : '#f9fafb';
-                if (desktop && !dark) bg = '#f9fafb';
-                if (desktop && dark) bg = '#030712';
-                document.documentElement.style.backgroundColor = bg;
+                /*
+                 * 桌面壳：
+                 * - 换页空隙（无文档时）靠 WebView DefaultBackgroundColor=#050816 防白闪
+                 * - 文档已解析时 html 跟主题，避免 body 隐藏期间像「关灯」
+                 */
+                var pageBg = dark ? '#030712' : '#f9fafb';
+                document.documentElement.style.backgroundColor = pageBg;
                 document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
                 var _l = localStorage.getItem('ui_lang');
                 if (_l === 'en') document.documentElement.lang = 'en';
@@ -37,15 +39,15 @@
     <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui5">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui6">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-upload.css') }}?v=1">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui8">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui9">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui5">
     {% if is_client or is_tauri %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=9">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=11">
     {% endif %}
     {% if is_client %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-layout.css') }}?v=2">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-layout.css') }}?v=3">
     {% endif %}
     {% if use_local_vendors %}
     <script src="{{ url_for('static', filename='vendor/tailwindcss/tailwind.min.js') }}"></script>
@@ -393,26 +395,32 @@
         html.dark .text-muted { color: #94a3b8; }
     </style>
     <style>
-        /* FOUC 防护：页面解析完成前隐藏，避免无样式内容闪烁。
-           桌面壳禁用：换页时 opacity:0 会露出 WebView 深色底，观感像「关灯/黑蒙版」。 */
-        html { opacity: 0; }
-        html.loaded { opacity: 1; transition: opacity 0.08s ease; }
-        html.testory-desktop-html,
-        html.testory-desktop-html.loaded {
-            opacity: 1 !important;
-            transition: none !important;
+        /* FOUC：只藏 body；html 保持主题底。桌面换页白闪由 WebView 深色 DefaultBackground 管，不靠整页 opacity。 */
+        html:not(.loaded) body {
+            visibility: hidden !important;
+        }
+        html.loaded body {
+            visibility: visible !important;
         }
     </style>
     <script>
-        (function() {
-            var ready = function() {
+        (function () {
+            var marked = false;
+            function mark() {
+                if (marked) return;
+                marked = true;
                 document.documentElement.classList.add('loaded');
-            };
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', ready);
-            } else {
-                ready();
             }
+            /* 首屏已有内联关键 CSS，DOM 就绪即显示，避免长时间空白被当成白屏 */
+            function showSoon() {
+                requestAnimationFrame(mark);
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', showSoon);
+            } else {
+                showSoon();
+            }
+            setTimeout(mark, 600);
         })();
     </script>
     <script src="{{ url_for('static', filename='js/i18n.js') }}" defer></script>
@@ -444,7 +452,7 @@
             <div class="flex items-center gap-3 flex-shrink-0">
                 <a href="/" class="testory-logo">
                     <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="{{ product_name }}">
-                    <span class="testory-logo-word">{{ product_name }}<small>{{ product_tagline }}</small></span>
+                    <span class="testory-logo-word"><span class="testory-logo-name">{{ product_name }}</span><small>{{ product_tagline }}</small></span>
                 </a>
             </div>
             <div class="flex items-center gap-2 flex-wrap justify-end">
@@ -943,7 +951,7 @@
             setInterval(_pollUatAiBgJobs, 2500);
         });
     </script>
-    <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui9" defer></script>
+    <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui10" defer></script>
     {% if is_tauri %}
     <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=3"></script>
     {% elif is_client %}

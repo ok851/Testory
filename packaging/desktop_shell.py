@@ -792,7 +792,7 @@ def run_native_shell(
                             pass
                 _ensure_chrome(force=True)
                 return
-            time.sleep(0.35)
+            time.sleep(0.12)
         _show_error(startup_failed_message())
         try:
             win.destroy()

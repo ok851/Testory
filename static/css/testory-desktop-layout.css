@@ -63,8 +63,13 @@ body.testory-desktop-client .testory-logo-word {
   font-size: 1.05rem !important;
 }
 
+body.testory-desktop-client .testory-logo-name {
+  font-weight: 700 !important;
+}
+
 body.testory-desktop-client .testory-logo-word small {
   font-size: 0.7rem !important;
+  font-weight: 500 !important;
 }
 
 /* ========== 3. 页面容器与间距 ========== */

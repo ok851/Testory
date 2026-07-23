@@ -36,6 +36,12 @@
   line-height: 1.1;
 }
 
+/* 品牌名统一加粗（与副标题 small 分离，避免部分页被继承成 500） */
+.testory-logo-name {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
 .testory-logo-word small {
   display: block;
   font-size: 0.65rem;
@@ -45,18 +51,36 @@
 }
 
 html.dark .testory-logo-word {
+  color: #e2e8f0;
+}
+
+html.dark .testory-logo-name {
   background: linear-gradient(120deg, #e0e7ff, #c4b5fd, #67e8f9);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  font-weight: 700;
 }
 
 html:not(.dark) .testory-logo-word {
   color: #0f172a;
 }
 
+html:not(.dark) .testory-logo-name {
+  color: #0f172a;
+  font-weight: 700;
+}
+
 html:not(.dark) .testory-logo-word small {
   color: #64748b;
+}
+
+html.dark .testory-logo-word small {
+  color: #94a3b8;
+  opacity: 0.85;
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
 }
 
 body.testory-desktop-client {

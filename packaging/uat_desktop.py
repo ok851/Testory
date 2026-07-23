@@ -101,6 +101,8 @@ def apply_local_env(root: Path, port: int) -> Path:
     os.environ.setdefault("ENABLE_MOBILE", "1")
     os.environ.setdefault("MOBILE_EMULATOR_MODE", "1")
     os.environ.setdefault("MOBILE_AUTO_CONNECT", "1")
+    # 启动页关键：导入期同步拉起 mobile 网关可卡数秒；用时再由 mobile_agent_client 拉起
+    os.environ["MOBILE_AUTO_START_GATEWAY"] = "0"
     os.environ.setdefault("SKIP_ENV_EXAMPLE_SYNC", "1")
     os.environ["PYTHONNOUSERSITE"] = "1"
     root_str = str(root.resolve())
@@ -146,11 +148,24 @@ def _patch_user_env_missing_keys(env_path: Path) -> None:
         "MOBILE_EMULATOR_MODE": "1",
         "MOBILE_AUTO_CONNECT": "1",
         "WEBSITE_URL": "https://www.hufirst.com",
+        "MOBILE_AUTO_START_GATEWAY": "0",
     }
     try:
         text = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
     except OSError:
         return
+    if "MOBILE_AUTO_START_GATEWAY=1" in text or "MOBILE_AUTO_START_GATEWAY = 1" in text:
+        try:
+            import re
+
+            text = re.sub(
+                r"(?m)^MOBILE_AUTO_START_GATEWAY\s*=\s*.*$",
+                "MOBILE_AUTO_START_GATEWAY=0",
+                text,
+            )
+            env_path.write_text(text, encoding="utf-8")
+        except OSError:
+            pass
     lines: list[str] = []
     for key, val in defaults.items():
         if f"{key}=" in text or f"{key} =" in text:
@@ -209,12 +224,24 @@ def _no_window_flags() -> int:
 
 
 def _backend_command(root: Path, python: Path) -> list:
+    """
+    后端启动命令。
+    安装目录若有 app.py，默认优先走源码（便于热更新注册/找回等 API）；
+    纯保护包无 app.py 时仍用 TestoryBackend.exe。
+    设置 TESTORY_PREFER_PROTECTED_BACKEND=1 可强制保护 exe。
+    """
+    force_protected = (os.environ.get("TESTORY_PREFER_PROTECTED_BACKEND") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    legacy = root / "app.py"
+    if legacy.is_file() and not force_protected:
+        return [str(python), str(legacy)]
     exe = _backend_exe_path(root)
     if exe is not None:
         return [str(exe)]
-    legacy = root / "app.py"
-    if legacy.is_file():
-        return [str(python), str(legacy)]
     return [str(python), str(root / "app.py")]
 
 
@@ -328,15 +355,25 @@ def _has_live_desktop_shell() -> bool:
     """是否仍有桌面壳进程（uat_desktop / pythonw 拉起的壳）。"""
     if sys.platform != "win32":
         return False
+    # 带 where 过滤，避免全量 wmic 枚举进程（部分机器可达数秒）
     try:
         out = subprocess.check_output(
-            ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:CSV"],
+            [
+                "wmic",
+                "process",
+                "where",
+                "name='pythonw.exe' or name='python.exe' or name='Testory.exe'",
+                "get",
+                "CommandLine",
+                "/FORMAT:LIST",
+            ],
             text=True,
             encoding="utf-8",
             errors="replace",
             creationflags=_no_window_flags(),
+            timeout=8,
         )
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
     for line in out.splitlines():
         low = line.lower()
@@ -379,16 +416,19 @@ def wait_until_ready(port: int, proc: subprocess.Popen, timeout_sec: float = 120
     """等待 Flask 进程可响应（/api/health 即可，不依赖 DB 就绪探针）。"""
     url = f"http://127.0.0.1:{port}/api/health"
     deadline = time.time() + timeout_sec
+    # 前几秒更密地轮询，缩短启动页停留；失败后再略放慢，避免空转占 CPU
+    attempt = 0
     while time.time() < deadline:
         if proc.poll() is not None:
             return False
         try:
-            with urllib.request.urlopen(url, timeout=2) as resp:
+            with urllib.request.urlopen(url, timeout=1.2) as resp:
                 if resp.status == 200:
                     return True
         except (urllib.error.URLError, OSError, TimeoutError):
             pass
-        time.sleep(0.35)
+        attempt += 1
+        time.sleep(0.12 if attempt < 40 else 0.35)
     return False
 
 

@@ -19,9 +19,9 @@
     <title>{% block title %}{{ product_name }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui7">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui8">
     {% if is_client or is_tauri %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=9">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=11">
     {% endif %}
     {% block auth_head %}{% endblock %}
 </head>

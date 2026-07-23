@@ -90,9 +90,14 @@
                     confirm_password: confirmPassword
                 })
             });
-            var data = await res.json();
-            if (!data.success) {
-                showError(data.error || '注册失败');
+            var data = {};
+            try { data = await res.json(); } catch (parseErr) { data = {}; }
+            if (!res.ok || !data.success) {
+                var err = data.error || ('注册失败（HTTP ' + res.status + '）');
+                if (res.status === 404) {
+                    err = '注册接口不可用：请完全退出 Testory 后重新打开（需加载最新本地服务）';
+                }
+                showError(err);
                 btn.disabled = false;
                 btnText.textContent = '立即注册';
                 return;

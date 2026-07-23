@@ -76,7 +76,7 @@ body.testory-frameless-shell .testory-desktop-chrome__mark {
 
 body.testory-frameless-shell .testory-desktop-chrome__title {
   font-size: 0.8rem;
-  font-weight: 600;
+  font-weight: 700 !important;
   letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;
@@ -174,9 +174,9 @@ body.testory-auth-page.testory-frameless-shell .testory-desktop-chrome--auth .te
 }
 
 body.testory-auth-page.testory-frameless-shell .testory-desktop-chrome--auth .testory-desktop-chrome__title {
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: #94a3b8;
+  font-size: 0.8rem;
+  font-weight: 700 !important;
+  color: #e2e8f0;
 }
 
 body.testory-auth-page.testory-frameless-shell .testory-auth-main {

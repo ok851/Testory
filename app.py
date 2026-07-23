@@ -37,17 +37,56 @@ except ImportError:
     pass
 
 if sys.platform == "win32":
+    # 桌面壳：侧车服务放到后台，避免阻塞 Flask 监听（启动页长时间停在「正在启动本地服务」）
     try:
-        from desktop_service_bootstrap import bootstrap_desktop_services
+        import threading as _boot_threading
 
-        bootstrap_desktop_services()
+        def _boot_desktop_side_services() -> None:
+            try:
+                from desktop_service_bootstrap import bootstrap_desktop_services
+
+                bootstrap_desktop_services()
+            except Exception:
+                pass
+
+        _lazy_boot = (
+            os.environ.get("DESKTOP_LAZY_GATEWAY_BOOT", "").strip().lower() in ("1", "true", "yes", "on")
+            or os.environ.get("UAT_DESKTOP_MODE", "").strip().lower() in ("1", "true", "yes")
+        )
+        if _lazy_boot:
+            _boot_threading.Thread(
+                target=_boot_desktop_side_services,
+                daemon=True,
+                name="desktop-side-boot",
+            ).start()
+        else:
+            _boot_desktop_side_services()
     except Exception:
         pass
 
 try:
-    from mobile_service_bootstrap import bootstrap_mobile_services
+    import threading as _mobile_boot_threading
 
-    bootstrap_mobile_services()
+    def _boot_mobile_side_services() -> None:
+        try:
+            from mobile_service_bootstrap import bootstrap_mobile_services
+
+            bootstrap_mobile_services()
+        except Exception:
+            pass
+
+    _lazy_mobile = (
+        os.environ.get("DESKTOP_LAZY_GATEWAY_BOOT", "").strip().lower() in ("1", "true", "yes", "on")
+        or os.environ.get("UAT_DESKTOP_MODE", "").strip().lower() in ("1", "true", "yes")
+    )
+    if _lazy_mobile:
+        _mobile_boot_threading.Thread(
+            target=_boot_mobile_side_services,
+            daemon=True,
+            name="mobile-side-boot",
+        ).start()
+    else:
+        _boot_mobile_side_services()
 except Exception:
     pass
 
@@ -201,23 +240,37 @@ _login_fail_lock = threading.Lock()
 _login_fail_timestamps: dict = {}
 
 if sys.platform == "win32":
+    # OpenCV 导入较慢：后台探测，避免拖慢 Flask 首响
     try:
-        from desktop_runtime import (
-            desktop_runtime_available,
-            desktop_runtime_unavailable_reason,
-        )
+        import threading as _desk_check_threading
 
-        if desktop_runtime_available():
-            uat_logger.info(
-                "桌面视觉自动化依赖就绪 (opencv+mss, 解释器=%s)", sys.executable
-            )
-        else:
-            uat_logger.warning(
-                "桌面自动化不可用: %s",
-                desktop_runtime_unavailable_reason() or "未知原因",
-            )
-    except Exception as _desk_boot_exc:
-        uat_logger.debug("桌面依赖自检跳过: %s", _desk_boot_exc)
+        def _log_desktop_runtime() -> None:
+            try:
+                from desktop_runtime import (
+                    desktop_runtime_available,
+                    desktop_runtime_unavailable_reason,
+                )
+
+                if desktop_runtime_available():
+                    uat_logger.info(
+                        "桌面视觉自动化依赖就绪 (opencv+mss, 解释器=%s)",
+                        sys.executable,
+                    )
+                else:
+                    uat_logger.warning(
+                        "桌面自动化不可用: %s",
+                        desktop_runtime_unavailable_reason() or "未知原因",
+                    )
+            except Exception as _desk_boot_exc:
+                uat_logger.debug("桌面依赖自检跳过: %s", _desk_boot_exc)
+
+        _desk_check_threading.Thread(
+            target=_log_desktop_runtime,
+            daemon=True,
+            name="desktop-runtime-check",
+        ).start()
+    except Exception:
+        pass
 
 
 def _is_production_env() -> bool:
@@ -1460,6 +1513,14 @@ def _generate_recovery_key() -> str:
     return "-".join(raw[i : i + 4] for i in range(0, 16, 4))
 
 
+def _normalize_recovery_key(raw: str) -> str:
+    """兼容带/不带横线的找回密钥输入。"""
+    s = (raw or "").strip().upper().replace(" ", "").replace("-", "")
+    if len(s) == 16 and all(c.isalnum() for c in s):
+        return "-".join(s[i : i + 4] for i in range(0, 16, 4))
+    return (raw or "").strip().upper().replace(" ", "")
+
+
 @app.route('/api/auth/register/local', methods=['POST'])
 @api_error_handler
 def api_register_local():
@@ -1522,7 +1583,7 @@ def api_forgot_password_recovery_reset():
 
     body = request.get_json(silent=True) or {}
     username = (body.get('username') or '').strip()
-    recovery_key = (body.get('recovery_key') or '').strip().upper().replace(' ', '')
+    recovery_key = _normalize_recovery_key(body.get('recovery_key') or '')
     new_password = (body.get('new_password') or '').strip()
     confirm_password = (body.get('confirm_password') or '').strip()
 

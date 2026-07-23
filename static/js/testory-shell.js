@@ -1,11 +1,13 @@
 /**
- * 全站壳：导航预取。桌面端换页不做 opacity/底色强刷，避免「关灯」黑蒙版。
+ * 全站壳：导航预取；桌面换页防白闪（WebView 深色间隙底，不整页 opacity 关灯）
  */
 (function () {
     'use strict';
 
     var prefetched = Object.create(null);
     var isDesktop = false;
+    /* 换页无文档间隙：必须用深色，近白 (#f9fafb) 会被看成白屏闪烁 */
+    var DESKTOP_GAP = '#050816';
 
     try {
         if (document.body && document.body.classList.contains('testory-desktop-client')) {
@@ -14,32 +16,25 @@
         }
     } catch (e) {}
 
-    function themeGapColor() {
-        var dark = document.documentElement.classList.contains('dark');
-        if (isDesktop) {
-            /* 桌面 WebView 间隙用接近页面的底色，暗色主题深底、浅色主题浅底 */
-            return dark ? '#030712' : '#f9fafb';
-        }
-        return dark ? '#030712' : '#f9fafb';
+    function pageBgColor() {
+        return document.documentElement.classList.contains('dark') ? '#030712' : '#f9fafb';
     }
 
-    function paintGapBg() {
+    function paintPageBg() {
         try {
-            var gap = themeGapColor();
-            document.documentElement.style.backgroundColor = gap;
-            /* 不强制改 body，避免与模块白卡片/主题 CSS 打架 */
+            document.documentElement.style.backgroundColor = pageBgColor();
         } catch (e) {}
     }
 
-    function syncWebviewBgSafe() {
-        paintGapBg();
+    function syncWebviewGapSafe() {
+        paintPageBg();
         if (!isDesktop) return;
         try {
             var a = window.pywebview && window.pywebview.api;
             if (!a || !a.set_chrome_background) return;
-            var gap = themeGapColor();
+            /* 只异步设深色间隙，禁止在点击路径同步调用（会死锁） */
             setTimeout(function () {
-                try { a.set_chrome_background(gap); } catch (e) {}
+                try { a.set_chrome_background(DESKTOP_GAP); } catch (e) {}
             }, 0);
         } catch (e) {}
     }
@@ -80,9 +75,7 @@
         if (a && a.href) prefetchUrl(a.href);
     });
 
-    /* 桌面端：换页点击不再刷深色底 / route-pending 蒙版感 */
     document.addEventListener('click', function (e) {
-        if (isDesktop) return;
         var a = e.target && e.target.closest
             ? e.target.closest('a[href^="/"]')
             : null;
@@ -98,19 +91,24 @@
         } catch (err) {
             return;
         }
-        paintGapBg();
+        /* 桌面：换页前异步把 WebView 间隙压成深色，防白闪；不改 body、不整页隐藏 */
+        if (isDesktop) {
+            syncWebviewGapSafe();
+            return;
+        }
+        paintPageBg();
         document.documentElement.classList.add('testory-route-pending');
     }, true);
 
     window.addEventListener('pageshow', function () {
         document.documentElement.classList.remove('testory-route-pending');
-        syncWebviewBgSafe();
+        syncWebviewGapSafe();
     });
 
     document.addEventListener('DOMContentLoaded', function () {
         document.documentElement.classList.remove('testory-route-pending');
-        syncWebviewBgSafe();
+        syncWebviewGapSafe();
     });
 
-    window.addEventListener('pywebviewready', syncWebviewBgSafe);
+    window.addEventListener('pywebviewready', syncWebviewGapSafe);
 })();

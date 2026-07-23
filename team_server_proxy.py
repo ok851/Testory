@@ -19,7 +19,13 @@ def should_proxy_path(path: str) -> bool:
 
     if not path.startswith("/api/"):
         return False
-    if path.startswith("/api/auth/login") or path.startswith("/api/client/"):
+    # 本机登录 / 简易注册 / 密钥找回 / 客户端配置 一律不代理
+    if (
+        path.startswith("/api/auth/login")
+        or path.startswith("/api/auth/register")
+        or path.startswith("/api/auth/forgot-password")
+        or path.startswith("/api/client/")
+    ):
         return False
     return not is_local_client_api(path)
 

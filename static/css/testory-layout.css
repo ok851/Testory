@@ -19,7 +19,7 @@ html.dark {
   color-scheme: dark;
 }
 
-/* 桌面壳：间隙底色跟随主题，避免换页露出固定深色「蒙版」 */
+/* 桌面壳：页面底跟随主题；换页无文档间隙由原生 WebView 深色底防白闪 */
 html.testory-desktop-html.dark {
   background-color: #030712 !important;
 }
