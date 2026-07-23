@@ -77,7 +77,19 @@ def get_platform_admin_url() -> str:
 
 
 def get_website_url() -> str:
-    return (os.environ.get("WEBSITE_URL") or "http://127.0.0.1:5200").strip().rstrip("/")
+    """官网根地址。未配置或仍为本地联调地址时，桌面客户端回落到正式官网。"""
+    from packages.testory_common.brand import OFFICIAL_WEBSITE_URL
+
+    raw = (os.environ.get("WEBSITE_URL") or "").strip().rstrip("/")
+    if not raw:
+        return OFFICIAL_WEBSITE_URL
+    # 安装包若残留 127.0.0.1:5200，用户点「升级订阅」会跳到无效本机地址
+    low = raw.lower()
+    if is_client_mode() and (
+        "127.0.0.1" in low or "localhost" in low or low.startswith("http://0.0.0.0")
+    ):
+        return OFFICIAL_WEBSITE_URL
+    return raw
 
 
 from brand_config import brand_context  # noqa: E402

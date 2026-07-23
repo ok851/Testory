@@ -95,6 +95,8 @@ def register_deployment_hooks(app, db_factory: Callable[[], Any], user_model_cla
             "/static/",
             "/api/auth/login",
             "/api/auth/me",
+            "/api/auth/register",
+            "/api/auth/forgot-password",
         )
         if any(path.startswith(p) for p in allowed):
             return None

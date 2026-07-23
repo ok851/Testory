@@ -139,25 +139,267 @@ def _find_shell_hwnd(title: str = APP_TITLE) -> int:
     return int(found.value or 0)
 
 
+_WM_NCLBUTTONDOWN = 0x00A1
+# 供测试与文档：边框命中区名称（实际缩放走软件 SetWindowPos，不用 HT*/SC_SIZE）
+_HT_EDGES = {
+    "left": 10,
+    "right": 11,
+    "top": 12,
+    "top-left": 13,
+    "top-right": 14,
+    "bottom": 15,
+    "bottom-left": 16,
+    "bottom-right": 17,
+}
+
+# DWM：暗色边框，消除无边框窗口浅色描边
+_DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+_DWMWA_BORDER_COLOR = 34
+_DWMWA_CAPTION_COLOR = 35
+
+_VK_LBUTTON = 0x01
+_SWP_NOACTIVATE = 0x0010
+_resize_lock = None
+_resize_active = False
+
+
+def _get_resize_lock():
+    global _resize_lock
+    if _resize_lock is None:
+        import threading
+
+        _resize_lock = threading.Lock()
+    return _resize_lock
+
+
 def _enable_frameless_border_resize(hwnd: int) -> None:
-    """无边框窗口补回 WS_THICKFRAME，允许拖边框缩放。"""
+    """仅做 DWM 暗色/去玻璃边处理，绝不注入 WS_THICKFRAME（会画出四周白框）。"""
+    if sys.platform != "win32" or not hwnd:
+        return
+    _apply_dwm_dark_frame(hwnd)
+    # 若历史上加过 THICKFRAME，这里主动清掉
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        style = int(user32.GetWindowLongW(hwnd, _GWL_STYLE) or 0)
+        if style & _WS_THICKFRAME:
+            user32.SetWindowLongW(hwnd, _GWL_STYLE, style & ~_WS_THICKFRAME)
+            user32.SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_FRAMECHANGED | _SWP_SHOWWINDOW,
+            )
+            _apply_dwm_dark_frame(hwnd)
+    except Exception:
+        pass
+
+
+def _apply_dwm_dark_frame(hwnd: int) -> None:
+    """关闭 DWM 玻璃扩展边；边框色与窗口深色底一致，避免白描边。"""
     if sys.platform != "win32" or not hwnd:
         return
     import ctypes
 
+    dwmapi = ctypes.windll.dwmapi
+    try:
+        dwmapi.DwmSetWindowAttribute(
+            hwnd,
+            _DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(ctypes.c_int(1)),
+            ctypes.sizeof(ctypes.c_int),
+        )
+    except Exception:
+        pass
+    # COLORREF 0x00BBGGRR = #050816（与壳背景一致，而不是白色）
+    border = ctypes.c_int(0x00160805)
+    for attr in (_DWMWA_BORDER_COLOR, _DWMWA_CAPTION_COLOR):
+        try:
+            dwmapi.DwmSetWindowAttribute(
+                hwnd,
+                attr,
+                ctypes.byref(border),
+                ctypes.sizeof(ctypes.c_int),
+            )
+        except Exception:
+            pass
+    try:
+
+        class _MARGINS(ctypes.Structure):
+            _fields_ = [
+                ("cxLeftWidth", ctypes.c_int),
+                ("cxRightWidth", ctypes.c_int),
+                ("cyTopHeight", ctypes.c_int),
+                ("cyBottomHeight", ctypes.c_int),
+            ]
+
+        m = _MARGINS(0, 0, 0, 0)
+        dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
+    except Exception:
+        pass
+
+
+def _begin_edge_resize(hwnd: int, edge: str) -> bool:
+    """纯软件缩放：跟踪鼠标 + SetWindowPos，不依赖系统边框（无白框）。"""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    key = (edge or "").strip().lower()
+    if key not in (
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+    ):
+        return False
+
+    import threading
+    import ctypes
+    from ctypes import wintypes
+
+    global _resize_active
+    lock = _get_resize_lock()
+    if not lock.acquire(blocking=False):
+        return False
+    if _resize_active:
+        lock.release()
+        return False
+    _resize_active = True
+
     user32 = ctypes.windll.user32
-    style = user32.GetWindowLongW(hwnd, _GWL_STYLE)
-    style |= _WS_THICKFRAME | _WS_MINIMIZEBOX | _WS_MAXIMIZEBOX | _WS_SYSMENU
-    user32.SetWindowLongW(hwnd, _GWL_STYLE, style)
-    user32.SetWindowPos(
-        hwnd,
-        0,
-        0,
-        0,
-        0,
-        0,
-        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_FRAMECHANGED | _SWP_SHOWWINDOW,
-    )
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", wintypes.LONG),
+            ("top", wintypes.LONG),
+            ("right", wintypes.LONG),
+            ("bottom", wintypes.LONG),
+        ]
+
+    start_pt = POINT()
+    start_rc = RECT()
+    if not user32.GetCursorPos(ctypes.byref(start_pt)):
+        _resize_active = False
+        lock.release()
+        return False
+    if not user32.GetWindowRect(hwnd, ctypes.byref(start_rc)):
+        _resize_active = False
+        lock.release()
+        return False
+
+    left0, top0 = int(start_rc.left), int(start_rc.top)
+    right0, bottom0 = int(start_rc.right), int(start_rc.bottom)
+    sx, sy = int(start_pt.x), int(start_pt.y)
+
+    move_left = key in ("left", "top-left", "bottom-left")
+    move_right = key in ("right", "top-right", "bottom-right")
+    move_top = key in ("top", "top-left", "top-right")
+    move_bottom = key in ("bottom", "bottom-left", "bottom-right")
+
+    def _worker() -> None:
+        global _resize_active
+        try:
+            pt = POINT()
+            while user32.GetAsyncKeyState(_VK_LBUTTON) & 0x8000:
+                if not user32.GetCursorPos(ctypes.byref(pt)):
+                    break
+                dx = int(pt.x) - sx
+                dy = int(pt.y) - sy
+                left, top, right, bottom = left0, top0, right0, bottom0
+                if move_left:
+                    left = left0 + dx
+                if move_right:
+                    right = right0 + dx
+                if move_top:
+                    top = top0 + dy
+                if move_bottom:
+                    bottom = bottom0 + dy
+                if right - left < MIN_WIDTH:
+                    if move_left:
+                        left = right - MIN_WIDTH
+                    else:
+                        right = left + MIN_WIDTH
+                if bottom - top < MIN_HEIGHT:
+                    if move_top:
+                        top = bottom - MIN_HEIGHT
+                    else:
+                        bottom = top + MIN_HEIGHT
+                user32.SetWindowPos(
+                    hwnd,
+                    0,
+                    left,
+                    top,
+                    right - left,
+                    bottom - top,
+                    _SWP_NOZORDER | _SWP_NOACTIVATE,
+                )
+                time.sleep(0.012)
+        finally:
+            _resize_active = False
+            try:
+                lock.release()
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, name="testory-resize", daemon=True).start()
+    return True
+
+
+def _set_webview_default_bg(hex_color: str = "#050816") -> None:
+    """确保 WebView2 换页间隙使用深色底。必须避免在 JS bridge 线程同步 Invoke（会死锁）。"""
+    if sys.platform != "win32":
+        return
+    try:
+        from System import Action  # type: ignore
+        from System.Drawing import Color  # type: ignore
+        from webview.platforms import winforms as wf
+    except Exception:
+        return
+
+    raw = (hex_color or "").lstrip("#")
+    if len(raw) != 6:
+        return
+    try:
+        r, g, b = int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+        color = Color.FromArgb(255, r, g, b)
+    except Exception:
+        return
+
+    def _apply() -> None:
+        for inst in list(getattr(wf.BrowserView, "instances", {}).values()):
+            try:
+                inst.BackColor = color
+                browser = getattr(inst, "browser", None)
+                webview_ctrl = getattr(browser, "webview", None) if browser else None
+                if webview_ctrl is not None:
+                    webview_ctrl.DefaultBackgroundColor = color
+            except Exception:
+                continue
+
+    try:
+        instances = list(getattr(wf.BrowserView, "instances", {}).values())
+        if not instances:
+            return
+        form = instances[0]
+        if getattr(form, "InvokeRequired", False):
+            form.BeginInvoke(Action(_apply))
+        else:
+            _apply()
+    except Exception:
+        try:
+            _apply()
+        except Exception:
+            pass
 
 
 def _set_winforms_maximized_bounds(hwnd: int) -> None:
@@ -208,13 +450,16 @@ def _maximize_to_work_area(hwnd: int) -> bool:
     return True
 
 
-def _apply_shell_chrome(frameless: bool) -> None:
+def _apply_shell_chrome(frameless: bool) -> bool:
     hwnd = _find_shell_hwnd(APP_TITLE)
     if not hwnd:
-        return
+        return False
+    _apply_dwm_dark_frame(hwnd)
     if frameless:
         _enable_frameless_border_resize(hwnd)
     _set_winforms_maximized_bounds(hwnd)
+    _set_webview_default_bg("#050816")
+    return True
 
 
 class DesktopWindowApi:
@@ -224,6 +469,108 @@ class DesktopWindowApi:
         self._root = root
         self._maximized = False
         self._restore_bounds: Optional[Tuple[int, int, int, int]] = None
+
+    def begin_resize(self, edge: str = "") -> bool:
+        """兼容旧前端：仍可用；推荐前端用 get_bounds/set_bounds 做 pointer 缩放。"""
+        hwnd = _find_shell_hwnd(APP_TITLE)
+        if not hwnd:
+            return False
+        return _begin_edge_resize(hwnd, edge)
+
+    def get_bounds(self) -> Dict[str, int]:
+        """返回窗口屏幕坐标与尺寸，供前端边框拖拽使用。"""
+        hwnd = _find_shell_hwnd(APP_TITLE)
+        if not hwnd:
+            return {
+                "left": 0,
+                "top": 0,
+                "width": DEFAULT_WIDTH,
+                "height": DEFAULT_HEIGHT,
+            }
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", wintypes.LONG),
+                    ("top", wintypes.LONG),
+                    ("right", wintypes.LONG),
+                    ("bottom", wintypes.LONG),
+                ]
+
+            rc = RECT()
+            if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rc)):
+                return {
+                    "left": 0,
+                    "top": 0,
+                    "width": DEFAULT_WIDTH,
+                    "height": DEFAULT_HEIGHT,
+                }
+            return {
+                "left": int(rc.left),
+                "top": int(rc.top),
+                "width": max(1, int(rc.right - rc.left)),
+                "height": max(1, int(rc.bottom - rc.top)),
+            }
+        except Exception:
+            return {
+                "left": 0,
+                "top": 0,
+                "width": DEFAULT_WIDTH,
+                "height": DEFAULT_HEIGHT,
+            }
+
+    def set_bounds(
+        self,
+        left: int = 0,
+        top: int = 0,
+        width: int = 0,
+        height: int = 0,
+    ) -> bool:
+        """按屏幕坐标设置窗口位置与大小（无系统边框，不引入白描边）。"""
+        if self._maximized:
+            return False
+        hwnd = _find_shell_hwnd(APP_TITLE)
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+
+            w = max(MIN_WIDTH, int(width or 0))
+            h = max(MIN_HEIGHT, int(height or 0))
+            ctypes.windll.user32.SetWindowPos(
+                hwnd,
+                0,
+                int(left),
+                int(top),
+                w,
+                h,
+                _SWP_NOZORDER | _SWP_NOACTIVATE,
+            )
+            return True
+        except Exception:
+            return False
+
+    def set_chrome_background(self, hex_color: str = "#050816") -> bool:
+        """页面主题变化时同步 WebView 默认底色，减轻换页闪白。"""
+        try:
+            _set_webview_default_bg(hex_color or "#050816")
+            return True
+        except Exception:
+            return False
+
+    def open_external(self, url: str = "") -> bool:
+        """用系统默认浏览器打开外链（升级订阅 / 支付页）。"""
+        target = (url or "").strip()
+        if not target.startswith(("http://", "https://")):
+            return False
+        try:
+            import webbrowser
+
+            return bool(webbrowser.open(target))
+        except Exception:
+            return False
 
     def minimize(self) -> None:
         import webview
@@ -378,9 +725,14 @@ def run_native_shell(
         confirm_close=False,
         js_api=api,
         frameless=frameless,
-        easy_drag=frameless,
+        # 关闭全窗 easy_drag，避免与边框缩放抢 mousedown；标题栏用 .pywebview-drag-region
+        easy_drag=False,
+        # shadow=True 会 DwmExtendFrameIntoClientArea(1px) 在顶部画出白线
+        shadow=False,
         resizable=True,
         maximized=False,
+        # 与启动页深色底一致：换页间隙 / 未绘制区域不再露默认白底
+        background_color="#050816",
     )
     # 旧代码曾把 icon 传给 create_window；pywebview 6 仅支持 start(icon=...)
     create_kwargs = _filter_create_window_kwargs(webview.create_window, create_kwargs)
@@ -396,12 +748,20 @@ def run_native_shell(
     backend_ready = {"ok": False}
     chrome_applied = {"ok": False}
 
-    def _ensure_chrome() -> None:
-        if chrome_applied["ok"]:
+    def _ensure_chrome(*, force: bool = False) -> None:
+        if chrome_applied["ok"] and not force:
+            # 仍周期性压掉 DWM 白边 / 同步 WebView 底色
+            try:
+                hwnd = _find_shell_hwnd(APP_TITLE)
+                if hwnd:
+                    _apply_dwm_dark_frame(hwnd)
+                _set_webview_default_bg("#050816")
+            except Exception:
+                pass
             return
         try:
-            _apply_shell_chrome(frameless)
-            chrome_applied["ok"] = True
+            if _apply_shell_chrome(frameless):
+                chrome_applied["ok"] = True
         except Exception:
             pass
 
@@ -430,6 +790,7 @@ def run_native_shell(
                             win.maximize()
                         except Exception:
                             pass
+                _ensure_chrome(force=True)
                 return
             time.sleep(0.35)
         _show_error(startup_failed_message())
@@ -455,7 +816,10 @@ def run_native_shell(
         on_closed()
 
     def _shown_handler() -> None:
-        _ensure_chrome()
+        _ensure_chrome(force=True)
+
+    def _loaded_handler() -> None:
+        _ensure_chrome(force=True)
 
     try:
         window.events.closed += _closed_handler
@@ -463,6 +827,10 @@ def run_native_shell(
         pass
     try:
         window.events.shown += _shown_handler
+    except Exception:
+        pass
+    try:
+        window.events.loaded += _loaded_handler
     except Exception:
         pass
 

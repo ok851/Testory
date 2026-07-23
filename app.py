@@ -1314,10 +1314,16 @@ def login_page():
 
 @app.route('/register')
 def register_page():
+    mode = (request.args.get('mode') or '').strip().lower()
+    if mode == 'email':
+        return render_template('register_email.html')
     return render_template('register.html')
 
 @app.route('/forgot-password')
 def forgot_password_page():
+    mode = (request.args.get('mode') or '').strip().lower()
+    if mode == 'email':
+        return render_template('forgot_password_email.html')
     return render_template('forgot_password.html')
 
 @app.route('/profile')
@@ -1434,6 +1440,123 @@ def _basic_email_format(email: str) -> bool:
     if not local or not domain or '.' not in domain:
         return False
     return True
+
+
+def _allow_local_auth() -> bool:
+    """本机桌面 / 单机部署允许免 SMTP 注册与找回密钥重置（零外部成本）。"""
+    try:
+        from deployment_config import is_client_mode, is_standalone_mode, is_local_standalone_desktop
+
+        return bool(is_client_mode() or is_standalone_mode() or is_local_standalone_desktop())
+    except Exception:
+        return True
+
+
+def _generate_recovery_key() -> str:
+    import secrets
+
+    # 形如 XXXX-XXXX-XXXX-XXXX，便于手抄/保管
+    raw = secrets.token_hex(8).upper()
+    return "-".join(raw[i : i + 4] for i in range(0, 16, 4))
+
+
+@app.route('/api/auth/register/local', methods=['POST'])
+@api_error_handler
+def api_register_local():
+    """免邮箱/SMTP 本地注册：用户名 + 密码，返回一次性找回密钥。"""
+    if not _allow_local_auth():
+        return jsonify({'success': False, 'error': '当前部署模式不支持本地简易注册'}), 403
+
+    body = request.get_json(silent=True) or {}
+    username = (body.get('username') or '').strip()
+    password = (body.get('password') or '').strip()
+    confirm_password = (body.get('confirm_password') or '').strip()
+
+    if not username:
+        return jsonify({'success': False, 'error': '用户名不能为空'}), 400
+    if not password:
+        return jsonify({'success': False, 'error': '密码不能为空'}), 400
+    if len(username) < 2 or len(username) > 64:
+        return jsonify({'success': False, 'error': '用户名长度须为 2-64 个字符'}), 400
+    if len(password) < 6:
+        return jsonify({'success': False, 'error': f'密码长度不能少于 6 位（当前长度：{len(password)}）'}), 400
+    if password != confirm_password:
+        return jsonify({'success': False, 'error': '两次输入的密码不一致'}), 400
+
+    _db = Database()
+    if _db.get_user_by_username(username):
+        return jsonify({'success': False, 'error': '用户名已被注册'}), 409
+
+    recovery_key = _generate_recovery_key()
+    role = 'admin' if _db.count_users() == 0 else 'tester'
+    user_id = _db.create_user(
+        username,
+        generate_password_hash(password),
+        email=None,
+        role=role,
+        recovery_key_hash=generate_password_hash(recovery_key),
+    )
+    if user_id is None:
+        return jsonify({'success': False, 'error': '注册失败，请稍后重试'}), 500
+
+    user_data = _db.get_user_by_id(user_id)
+    login_user(UserModel(user_data))
+    _db.update_user_last_login(user_id)
+
+    uat_logger.info("本地简易注册: %s (role=%s)", username, role)
+    return jsonify({
+        'success': True,
+        'message': '注册成功',
+        'user': {'id': user_id, 'username': username, 'role': role},
+        'role': role,
+        'recovery_key': recovery_key,
+    })
+
+
+@app.route('/api/auth/forgot-password/recovery-reset', methods=['POST'])
+@api_error_handler
+def api_forgot_password_recovery_reset():
+    """用注册时的找回密钥重置密码（无需 SMTP）。"""
+    if not _allow_local_auth():
+        return jsonify({'success': False, 'error': '当前部署模式不支持密钥找回'}), 403
+
+    body = request.get_json(silent=True) or {}
+    username = (body.get('username') or '').strip()
+    recovery_key = (body.get('recovery_key') or '').strip().upper().replace(' ', '')
+    new_password = (body.get('new_password') or '').strip()
+    confirm_password = (body.get('confirm_password') or '').strip()
+
+    if not username or not recovery_key or not new_password:
+        return jsonify({'success': False, 'error': '请填写用户名、找回密钥和新密码'}), 400
+    if len(new_password) < 6:
+        return jsonify({'success': False, 'error': '密码长度不能少于 6 位'}), 400
+    if new_password != confirm_password:
+        return jsonify({'success': False, 'error': '两次输入的密码不一致'}), 400
+
+    _db = Database()
+    user_data = _db.get_user_by_username(username)
+    if not user_data:
+        return jsonify({'success': False, 'error': '用户名或找回密钥不正确'}), 400
+    key_hash = user_data.get('recovery_key_hash')
+    if not key_hash or not check_password_hash(key_hash, recovery_key):
+        return jsonify({'success': False, 'error': '用户名或找回密钥不正确'}), 400
+
+    # 重置密码后轮换找回密钥，旧密钥失效
+    new_recovery_key = _generate_recovery_key()
+    ok = _db.update_user(
+        user_data['id'],
+        password_hash=generate_password_hash(new_password),
+        recovery_key_hash=generate_password_hash(new_recovery_key),
+    )
+    if not ok:
+        return jsonify({'success': False, 'error': '重置失败，请稍后重试'}), 500
+
+    uat_logger.info("用户 %s 已通过找回密钥重置密码", username)
+    return jsonify({
+        'success': True,
+        'message': '密码已重置，请使用新密码登录，并妥善保存新的找回密钥',
+        'recovery_key': new_recovery_key,
+    })
 
 
 @app.route('/api/auth/register/send-code', methods=['POST'])

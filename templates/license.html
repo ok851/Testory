@@ -575,6 +575,19 @@
                 });
                 const data = await resp.json();
                 if (data.success && data.url) {
+                    var a = window.pywebview && window.pywebview.api;
+                    if (a && a.open_external) {
+                        try {
+                            var opened = a.open_external(data.url);
+                            if (opened && typeof opened.then === 'function') {
+                                opened.then(function (ok) {
+                                    if (!ok) window.open(data.url, '_blank');
+                                });
+                                return;
+                            }
+                            if (opened) return;
+                        } catch (e1) {}
+                    }
                     window.open(data.url, '_blank');
                     return;
                 }

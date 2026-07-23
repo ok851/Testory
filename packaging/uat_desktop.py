@@ -125,6 +125,7 @@ def apply_local_env(root: Path, port: int) -> Path:
     os.environ.setdefault("EMBEDDED_BROWSER_PUBLIC_WS_BASE", "ws://127.0.0.1:8765")
     os.environ.setdefault("EMBEDDED_BROWSER_AUTO_START_GATEWAY", "1")
     os.environ.setdefault("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434")
+    os.environ.setdefault("WEBSITE_URL", "https://www.hufirst.com")
     return user_data
 
 
@@ -144,6 +145,7 @@ def _patch_user_env_missing_keys(env_path: Path) -> None:
         "ENABLE_MOBILE": "1",
         "MOBILE_EMULATOR_MODE": "1",
         "MOBILE_AUTO_CONNECT": "1",
+        "WEBSITE_URL": "https://www.hufirst.com",
     }
     try:
         text = env_path.read_text(encoding="utf-8") if env_path.is_file() else ""
@@ -193,7 +195,8 @@ def ensure_dotenv(root: Path, user_data: Path) -> Path:
         "EMBEDDED_BROWSER_GATEWAY_SECRET=hufirst-desktop-local\n"
         "EMBEDDED_BROWSER_PUBLIC_WS_BASE=ws://127.0.0.1:8765\n"
         "EMBEDDED_BROWSER_AUTO_START_GATEWAY=1\n"
-        "LOCAL_LLM_BASE_URL=http://127.0.0.1:11434\n",
+        "LOCAL_LLM_BASE_URL=http://127.0.0.1:11434\n"
+        "WEBSITE_URL=https://www.hufirst.com\n",
         encoding="utf-8",
     )
     return env_path
@@ -269,6 +272,107 @@ def _port_in_use(host: str, port: int) -> bool:
             return True
     except OSError:
         return False
+
+
+def _pids_listening_on_port(port: int) -> list[int]:
+    if sys.platform != "win32":
+        return []
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano", "-p", "tcp"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_no_window_flags(),
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    needle = f":{port} "
+    pids: list[int] = []
+    for line in out.splitlines():
+        if "LISTENING" not in line.upper() or needle not in line:
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        try:
+            pid = int(parts[-1])
+        except ValueError:
+            continue
+        if pid > 0 and pid not in pids:
+            pids.append(pid)
+    return pids
+
+
+def _process_image_name(pid: int) -> str:
+    if sys.platform != "win32" or pid <= 0:
+        return ""
+    try:
+        out = subprocess.check_output(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_no_window_flags(),
+        )
+        # "TestoryBackend.exe","1234",...
+        line = (out or "").strip().splitlines()[0] if out.strip() else ""
+        if line.startswith('"'):
+            return line.split('","')[0].strip('"')
+        return line.split(",")[0].strip().strip('"')
+    except (OSError, subprocess.CalledProcessError, IndexError):
+        return ""
+
+
+def _has_live_desktop_shell() -> bool:
+    """是否仍有桌面壳进程（uat_desktop / pythonw 拉起的壳）。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.check_output(
+            ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:CSV"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_no_window_flags(),
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    for line in out.splitlines():
+        low = line.lower()
+        if "uat_desktop.py" in low or "packaging\\uat_desktop" in low.replace("/", "\\"):
+            return True
+    return False
+
+
+def _reclaim_orphaned_backend(port: int) -> bool:
+    """
+    壳进程异常退出后，TestoryBackend 常会残留并占住端口。
+    若端口占用者是本产品后端且当前没有桌面壳，则自动结束后端以便重启。
+    """
+    if not _port_in_use("127.0.0.1", port):
+        return False
+    if _has_live_desktop_shell():
+        return False
+    reclaimed = False
+    for pid in _pids_listening_on_port(port):
+        name = _process_image_name(pid).lower()
+        if name not in ("testorybackend.exe", "testory_backend.exe"):
+            continue
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F"],
+                capture_output=True,
+                text=True,
+                creationflags=_no_window_flags(),
+                timeout=8,
+            )
+            reclaimed = True
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    if reclaimed:
+        time.sleep(0.4)
+    return reclaimed and not _port_in_use("127.0.0.1", port)
 
 
 def wait_until_ready(port: int, proc: subprocess.Popen, timeout_sec: float = 120.0) -> bool:
@@ -407,6 +511,9 @@ def run_desktop(port: int = DEFAULT_PORT) -> int:
         return 1
 
     user_data = apply_local_env(root, port)
+    if _port_in_use("127.0.0.1", port):
+        # 上次壳卡死退出后，后端常会残留占端口；优先自动回收本产品孤儿后端
+        _reclaim_orphaned_backend(port)
     if _port_in_use("127.0.0.1", port):
         _show_error(
             f"端口 {port} 已被占用，无法启动 Testory。\n\n"

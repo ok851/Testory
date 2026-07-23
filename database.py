@@ -824,6 +824,11 @@ class Database:
         except sqlite3.OperationalError:
             pass
 
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN recovery_key_hash TEXT")
+        except sqlite3.OperationalError:
+            pass
+
     def _create_sso_tables(self, cursor):
         """创建SSO相关表"""
         # SSO配置表
@@ -3009,15 +3014,22 @@ class Database:
 
     # ==================== 用户管理方法 ====================
 
-    def create_user(self, username: str, password_hash: str, email: str = None, role: str = 'tester') -> int:
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        email: str = None,
+        role: str = 'tester',
+        recovery_key_hash: str = None,
+    ) -> int:
         """创建用户"""
         email = _normalize_user_email(email)
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)",
-                (username, password_hash, email, role)
+                "INSERT INTO users (username, password_hash, email, role, recovery_key_hash) VALUES (?, ?, ?, ?, ?)",
+                (username, password_hash, email, role, recovery_key_hash),
             )
             user_id = cursor.lastrowid
             conn.commit()
@@ -3031,26 +3043,48 @@ class Database:
         """根据用户名获取用户"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, username, password_hash, email, role, is_active, created_at, last_login FROM users WHERE username = ?", (username,))
+        cursor.execute(
+            "SELECT id, username, password_hash, email, role, is_active, created_at, last_login, recovery_key_hash FROM users WHERE username = ?",
+            (username,),
+        )
         row = cursor.fetchone()
         conn.close()
         if row:
-            return {'id': row[0], 'username': row[1], 'password_hash': row[2],
-                    'email': row[3], 'role': row[4], 'is_active': row[5],
-                    'created_at': _bj_iso(row[6]), 'last_login': _bj_iso(row[7])}
+            return {
+                'id': row[0],
+                'username': row[1],
+                'password_hash': row[2],
+                'email': row[3],
+                'role': row[4],
+                'is_active': row[5],
+                'created_at': _bj_iso(row[6]),
+                'last_login': _bj_iso(row[7]),
+                'recovery_key_hash': row[8] if len(row) > 8 else None,
+            }
         return None
 
     def get_user_by_id(self, user_id: int) -> Dict[str, Any]:
         """根据ID获取用户"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, username, password_hash, email, role, is_active, created_at, last_login FROM users WHERE id = ?", (user_id,))
+        cursor.execute(
+            "SELECT id, username, password_hash, email, role, is_active, created_at, last_login, recovery_key_hash FROM users WHERE id = ?",
+            (user_id,),
+        )
         row = cursor.fetchone()
         conn.close()
         if row:
-            return {'id': row[0], 'username': row[1], 'password_hash': row[2],
-                    'email': row[3], 'role': row[4], 'is_active': row[5],
-                    'created_at': _bj_iso(row[6]), 'last_login': _bj_iso(row[7])}
+            return {
+                'id': row[0],
+                'username': row[1],
+                'password_hash': row[2],
+                'email': row[3],
+                'role': row[4],
+                'is_active': row[5],
+                'created_at': _bj_iso(row[6]),
+                'last_login': _bj_iso(row[7]),
+                'recovery_key_hash': row[8] if len(row) > 8 else None,
+            }
         return None
 
     def get_user_tenant_id(self, user_id: int) -> Optional[int]:
@@ -3160,6 +3194,7 @@ class Database:
         role: Any = _UNSET,
         is_active: Any = _UNSET,
         password_hash: Any = _UNSET,
+        recovery_key_hash: Any = _UNSET,
     ) -> bool:
         """更新用户信息（不以 rowcount 判定成功；email=None 可清空邮箱）。"""
         conn = self._sqlite_connect()
@@ -3184,6 +3219,9 @@ class Database:
             if password_hash is not _UNSET:
                 updates.append("password_hash = ?")
                 params.append(password_hash)
+            if recovery_key_hash is not _UNSET:
+                updates.append("recovery_key_hash = ?")
+                params.append(recovery_key_hash)
             if not updates:
                 return False
             params.append(user_id)

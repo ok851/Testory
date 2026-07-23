@@ -19,24 +19,26 @@
       height: 100%;
       overflow: hidden;
       font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: radial-gradient(circle at 20% 20%, rgba(99,102,241,.25), transparent 45%),
-                  radial-gradient(circle at 80% 0%, rgba(6,182,212,.18), transparent 40%),
-                  var(--bg);
+      background-color: var(--bg);
+      background-image: radial-gradient(circle at 20% 20%, rgba(99,102,241,.25), transparent 45%),
+                        radial-gradient(circle at 80% 0%, rgba(6,182,212,.18), transparent 40%);
       color: var(--text);
       user-select: none;
       display: flex;
       flex-direction: column;
     }
-    /* 窗口标题栏 */
+    /* 窗口标题栏：与主背景连续，避免暗色凹陷条 */
     .titlebar {
-      flex: 0 0 36px;
-      height: 36px;
-      min-height: 36px;
+      flex: 0 0 40px;
+      height: 40px;
+      min-height: 40px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 0 0 0.7rem;
-      border-bottom: 1px solid rgba(99, 102, 241, 0.25);
+      padding: 0 0 0 0.85rem;
+      background: transparent;
+      border-bottom: none;
+      box-shadow: none;
       color: #e2e8f0;
       user-select: none;
       z-index: 10000;
@@ -56,6 +58,7 @@
       border-radius: 4px;
       width: 18px;
       height: 18px;
+      opacity: 0.95;
     }
     .titlebar__title {
       font-size: 0.8rem;
@@ -64,6 +67,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      color: rgba(226, 232, 240, 0.92);
     }
     .titlebar__controls {
       display: flex;
@@ -74,7 +78,7 @@
     }
     .titlebar__btn {
       width: 46px;
-      height: 36px;
+      height: 40px;
       border: 0;
       background: transparent;
       color: #94a3b8;
@@ -157,7 +161,7 @@
 </head>
 <body>
   <header class="titlebar" aria-label="窗口标题栏">
-    <div class="titlebar__drag">
+    <div class="titlebar__drag pywebview-drag-region">
       <img class="titlebar__mark" src="../brand/testory-mark.svg" alt="">
       <span class="titlebar__title">Testory</span>
     </div>
@@ -173,7 +177,7 @@
       </button>
     </div>
   </header>
-  <div class="wrap">
+  <div class="wrap pywebview-drag-region">
     <img class="logo" src="../brand/testory-mark.svg" alt="Testory" width="72" height="72">
     <h1>Testory</h1>
     <p id="status">正在启动本地服务…</p>

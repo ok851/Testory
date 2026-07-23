@@ -8,6 +8,8 @@ PRODUCT_TAGLINE_EN = "AI Test Automation Platform"
 PRODUCT_FULL_NAME_ZH = "Testory · AI 自动化测试"
 PRODUCT_WINDOW_TITLE = "Testory"
 PRODUCT_COPYRIGHT = "© Testory. All rights reserved."
+# 生产官网（桌面端升级订阅 / 支付跳转默认地址）
+OFFICIAL_WEBSITE_URL = "http://62.234.135.115/"
 
 
 def brand_context() -> dict:
@@ -18,4 +20,5 @@ def brand_context() -> dict:
         "product_full_name": PRODUCT_FULL_NAME_ZH,
         "product_window_title": PRODUCT_WINDOW_TITLE,
         "product_copyright": PRODUCT_COPYRIGHT,
+        "official_website_url": OFFICIAL_WEBSITE_URL,
     }

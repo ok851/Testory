@@ -1,7 +1,39 @@
 /* 全站布局：顶栏与主内容区隔离，避免各模块页面 CSS 污染导航 */
 
-@view-transition {
-  navigation: auto;
+/* WebView2 / 部分浏览器的 View Transition 会在换页时闪白，仅在明确支持且非桌面壳时启用 */
+@supports (view-transition-name: none) {
+  html:not(.testory-desktop-html):not(.testory-no-view-transition) {
+    @view-transition {
+      navigation: auto;
+    }
+  }
+}
+
+html {
+  background-color: #f9fafb;
+  color-scheme: light;
+}
+
+html.dark {
+  background-color: #030712;
+  color-scheme: dark;
+}
+
+/* 桌面壳：间隙底色跟随主题，避免换页露出固定深色「蒙版」 */
+html.testory-desktop-html.dark {
+  background-color: #030712 !important;
+}
+
+html.testory-desktop-html:not(.dark) {
+  background-color: #f9fafb !important;
+}
+
+html.testory-desktop-html.dark body {
+  background-color: #030712;
+}
+
+html.testory-desktop-html:not(.dark) body {
+  background-color: #f9fafb;
 }
 
 #testoryMainNav .testory-nav-inner {
@@ -28,13 +60,10 @@ body.testory-desktop-client #testoryMainNav .testory-nav-inner {
 .testory-page-main {
   flex: 1;
   min-height: 0;
+  background-color: inherit;
 }
 
-html.testory-route-pending .testory-page-main {
-  opacity: 0.97;
-  pointer-events: none;
-}
-
+/* 换页时不再做半透明/扫光，避免叠加闪白观感 */
 html.testory-route-pending #testoryMainNav {
   pointer-events: none;
 }

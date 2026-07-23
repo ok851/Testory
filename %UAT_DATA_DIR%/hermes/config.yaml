@@ -1,0 +1,5 @@
+platform_toolsets:
+  api_server:
+  - browser
+  - web
+  - memory

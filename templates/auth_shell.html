@@ -2,20 +2,33 @@
 <html lang="zh-CN" class="h-full">
 <head>
     <meta charset="UTF-8">
+    <script>
+        (function () {
+            try {
+                document.documentElement.classList.add('dark', 'testory-desktop-html', 'testory-no-view-transition');
+                document.documentElement.style.backgroundColor = '#050816';
+                document.documentElement.style.colorScheme = 'dark';
+            } catch (e) {}
+        })();
+    </script>
+    <style>
+        html, body { background-color: #050816 !important; }
+    </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
     <title>{% block title %}{{ product_name }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui7">
     {% if is_client or is_tauri %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=5">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=9">
     {% endif %}
     {% block auth_head %}{% endblock %}
 </head>
 <body class="testory-auth-page{% if is_client or is_tauri %} testory-desktop-client testory-frameless-shell{% endif %}">
     {% if is_client or is_tauri %}
     <header id="testoryDesktopTitlebar" class="testory-desktop-chrome testory-desktop-chrome--auth" aria-label="窗口标题栏">
-        <div class="testory-desktop-chrome__drag"{% if is_tauri %} data-tauri-drag-region{% endif %}>
+        <div class="testory-desktop-chrome__drag pywebview-drag-region"{% if is_tauri %} data-tauri-drag-region{% endif %}>
             <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="" width="16" height="16" class="testory-desktop-chrome__mark">
             <span class="testory-desktop-chrome__title">{{ product_name }}</span>
         </div>
@@ -39,7 +52,7 @@
     {% if is_tauri %}
     <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=3"></script>
     {% elif is_client %}
-    <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=2"></script>
+    <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=5"></script>
     {% endif %}
 </body>
 </html>

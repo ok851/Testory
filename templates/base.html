@@ -2,29 +2,51 @@
 <html lang="zh-CN" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
-    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui5">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-upload.css') }}?v=1">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui5">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui5">
-    {% if is_client or is_tauri %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=5">
-    {% endif %}
-    {% if is_client %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-layout.css') }}?v=2">
-    {% endif %}
     <script>
+        /* 必须在任何 CSS/外链之前执行，避免首帧白底 */
         (function () {
             try {
-                if (localStorage.getItem('ui_theme') === 'dark') document.documentElement.classList.add('dark');
+                var dark = localStorage.getItem('ui_theme') === 'dark';
+                var desktop = {{ 'true' if (is_client or is_tauri) else 'false' }};
+                if (dark) document.documentElement.classList.add('dark');
+                if (desktop) document.documentElement.classList.add('testory-desktop-html', 'testory-no-view-transition');
+                /* 桌面壳间隙底跟随主题，避免换页像黑蒙版 */
+                var bg = dark ? '#030712' : '#f9fafb';
+                if (desktop && !dark) bg = '#f9fafb';
+                if (desktop && dark) bg = '#030712';
+                document.documentElement.style.backgroundColor = bg;
+                document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
                 var _l = localStorage.getItem('ui_lang');
                 if (_l === 'en') document.documentElement.lang = 'en';
             } catch (e) {}
         })();
     </script>
+    <style>
+        html, body { background-color: #f9fafb; }
+        html.dark, html.dark body { background-color: #030712; }
+        /* 桌面：html 先铺主题底，避免 WebView 换页间隙露白；body 跟随主题 */
+        html.testory-desktop-html.dark { background-color: #030712 !important; }
+        html.testory-desktop-html:not(.dark) { background-color: #f9fafb !important; }
+        html.testory-desktop-html:not(.dark) body,
+        html.testory-desktop-html:not(.dark) body.bg-gray-50 { background-color: #f9fafb !important; }
+        html.testory-desktop-html.dark body,
+        html.testory-desktop-html.dark body.bg-gray-50 { background-color: #030712 !important; }
+    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark light">
+    <title>{% block title %}{{ product_name }} · {{ product_tagline }}{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='brand/favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/app-icon.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-brand.css') }}?v=webui5">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-upload.css') }}?v=1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-layout.css') }}?v=webui8">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-shell.css') }}?v=webui5">
+    {% if is_client or is_tauri %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-chrome.css') }}?v=9">
+    {% endif %}
+    {% if is_client %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/testory-desktop-layout.css') }}?v=2">
+    {% endif %}
     {% if use_local_vendors %}
     <script src="{{ url_for('static', filename='vendor/tailwindcss/tailwind.min.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fontawesome/css/all.min.css') }}">
@@ -371,9 +393,15 @@
         html.dark .text-muted { color: #94a3b8; }
     </style>
     <style>
-        /* FOUC 防护：页面解析完成前隐藏，避免无样式内容闪烁 */
+        /* FOUC 防护：页面解析完成前隐藏，避免无样式内容闪烁。
+           桌面壳禁用：换页时 opacity:0 会露出 WebView 深色底，观感像「关灯/黑蒙版」。 */
         html { opacity: 0; }
         html.loaded { opacity: 1; transition: opacity 0.08s ease; }
+        html.testory-desktop-html,
+        html.testory-desktop-html.loaded {
+            opacity: 1 !important;
+            transition: none !important;
+        }
     </style>
     <script>
         (function() {
@@ -393,7 +421,7 @@
 <body class="{% block body_class %}bg-gray-50 min-h-screen text-gray-900 dark:bg-gray-950 dark:text-gray-100{% endblock %}{% if is_client or is_tauri %} testory-desktop-client testory-frameless-shell{% endif %}">
     {% if is_client or is_tauri %}
     <header id="testoryDesktopTitlebar" class="testory-desktop-chrome" aria-label="窗口标题栏">
-        <div class="testory-desktop-chrome__drag"{% if is_tauri %} data-tauri-drag-region{% endif %}>
+        <div class="testory-desktop-chrome__drag pywebview-drag-region"{% if is_tauri %} data-tauri-drag-region{% endif %}>
             <img src="{{ url_for('static', filename='brand/testory-mark.svg') }}" alt="" width="18" height="18" class="testory-desktop-chrome__mark">
             <span class="testory-desktop-chrome__title">{{ product_name }}</span>
         </div>
@@ -619,7 +647,7 @@
             }
         };
 
-        // 桌面客户端：跳转官网支付（须已登录）
+        // 桌面客户端：跳转官网支付（须已登录；外链用系统浏览器）
         async function openWebsiteUpgrade(plan) {
             try {
                 const resp = await fetch('/api/client/payment-link', {
@@ -629,6 +657,19 @@
                 });
                 const data = await resp.json();
                 if (data.success && data.url) {
+                    var a = window.pywebview && window.pywebview.api;
+                    if (a && a.open_external) {
+                        try {
+                            var opened = a.open_external(data.url);
+                            if (opened && typeof opened.then === 'function') {
+                                opened.then(function (ok) {
+                                    if (!ok) window.open(data.url, '_blank');
+                                });
+                                return;
+                            }
+                            if (opened) return;
+                        } catch (e1) {}
+                    }
                     window.open(data.url, '_blank');
                     return;
                 }
@@ -902,11 +943,11 @@
             setInterval(_pollUatAiBgJobs, 2500);
         });
     </script>
-    <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui4" defer></script>
+    <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui9" defer></script>
     {% if is_tauri %}
     <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=3"></script>
     {% elif is_client %}
-    <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=2" defer></script>
+    <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=5" defer></script>
     {% endif %}
     {% block scripts %}{% endblock %}
 </body>
