@@ -7,10 +7,48 @@ format: agentskills.io/v1
 metadata:
   testory:
     platform: mobile
+    risk_default: L1
     tags: [android, appium, adb, uiautomator2, webview, bridge]
 ---
 
 # Testory Android 移动端自动化
+
+## 输入 / 输出 Schema
+
+### 常用命令输入
+
+| 命令 | 参数示例 | 说明 |
+|------|----------|------|
+| `dump` | — | 结构化控件 JSON |
+| `tap` | `{"text":"查询"}` | 按文本/id 点击 |
+| `scroll` | `{"direction":"down"}` | 滑动 |
+| `wait` | `{"text":"提交","timeout":30}` | 等待出现 |
+
+跨端阶段：`layer=mobile|android`，步骤结果须经 `validate_mobile_step_result`；`ok_assert` 仅在校验通过时为 true。
+
+### 输出
+
+| 字段 | 说明 |
+|------|------|
+| dump JSON | buttons / 列表项 / alerts |
+| 步骤 `status` / `error` | 软失败字典不得在跨端当绿 |
+| `409 bridge_conflict` | 与 MobileExecutor 会话冲突 |
+
+## 失败处理（诚实）
+
+| 情况 | 结果 |
+|------|------|
+| 无设备 / adb 断开 | 阶段失败 |
+| 步骤返回软 error | `validate_mobile_step_result` 失败 → 阶段失败 |
+| Appium 与 u2 并行 | 冲突错误，停止而非假装成功 |
+| UC WebView collapsed 项 | 不可点；应滚动后再点，失败则报错 |
+| Daemon 超时 | 重启 bridge，勿连环盲点 |
+
+## 安全边界
+
+- 默认 **L1**；`install_apk` / `uninstall` / 清应用数据 → **L2** + RiskGuard。  
+- 真机可能含个人账号；截图与 dump 按脱敏策略处理。  
+- 禁止在生产 App 上默认跑破坏性清理。
 
 ## 双后端策略
 

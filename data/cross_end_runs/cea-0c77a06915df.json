@@ -1,0 +1,111 @@
+{
+  "audit_id": "cea-0c77a06915df",
+  "created_at": "2026-07-24T06:22:49.675419+00:00",
+  "status": "success",
+  "duration": 0.164255,
+  "error": "",
+  "flow_name": "hitl ok",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"hitl-plan-2\", \"scenario\": \"hitl ok\", \"test_type\": \"cross_end\", \"user_id\": \"\", \"project_id\": null, \"trigger_source\": \"ui\", \"agent_run_id\": \"\", \"error_code\": null, \"gate_passed\": true, \"success\": true, \"lock\": \"skipped\", \"assertion_passed\": 0, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"_hitl_gate_id\": \"orch-gate-2\", \"_hitl_prompt\": \"确认登录\"}, \"stage_count\": 1, \"hitl\": [{\"stage_id\": \"h2\", \"gate_id\": \"orch-gate-2\", \"outcome\": \"resumed\", \"events\": 4, \"ok_assert\": true}]}",
+  "expected_text": "{\"plan_id\": \"hitl-plan-2\", \"project_id\": null, \"agent_run_id\": \"\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": true,
+      "error": null,
+      "elapsed_ms": 151.6,
+      "stage_id": "h2",
+      "layer": "hitl",
+      "hitl_gate_id": "orch-gate-2",
+      "hitl_prompt": "确认登录",
+      "hitl_events": [
+        {
+          "event_id": "hitl-d5c1312b13",
+          "kind": "opened",
+          "gate_id": "orch-gate-2",
+          "reason": "确认登录",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-07-24T06:22:49.511164+00:00",
+          "ts": 1784874169.511165,
+          "detail": {}
+        },
+        {
+          "event_id": "hitl-75b90f716f",
+          "kind": "wait_started",
+          "gate_id": "orch-gate-2",
+          "reason": "确认登录",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-07-24T06:22:49.511164+00:00",
+          "ts": 1784874169.511165,
+          "detail": {
+            "timeout_s": 2.0
+          }
+        },
+        {
+          "event_id": "hitl-124f95ef4a",
+          "kind": "resumed",
+          "gate_id": "orch-gate-2",
+          "reason": "确认登录",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-07-24T06:22:49.674909+00:00",
+          "ts": 1784874169.6749096,
+          "detail": {
+            "idempotent": false
+          }
+        },
+        {
+          "event_id": "hitl-6354521073",
+          "kind": "wait_resumed",
+          "gate_id": "orch-gate-2",
+          "reason": "确认登录",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-07-24T06:22:49.675419+00:00",
+          "ts": 1784874169.6754198,
+          "detail": {}
+        }
+      ],
+      "hitl_outcome": "resumed"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "hitl-plan-2",
+    "scenario": "hitl ok",
+    "test_type": "cross_end",
+    "user_id": "",
+    "project_id": null,
+    "trigger_source": "ui",
+    "agent_run_id": "",
+    "error_code": null,
+    "gate_passed": true,
+    "success": true,
+    "lock": "skipped",
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "_hitl_gate_id": "orch-gate-2",
+      "_hitl_prompt": "确认登录"
+    },
+    "stage_count": 1,
+    "hitl": [
+      {
+        "stage_id": "h2",
+        "gate_id": "orch-gate-2",
+        "outcome": "resumed",
+        "events": 4,
+        "ok_assert": true
+      }
+    ]
+  }
+}

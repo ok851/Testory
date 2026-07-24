@@ -1,0 +1,78 @@
+{
+  "audit_id": "cea-bd11f597e7b8",
+  "created_at": "2026-07-24T08:13:33.609027+00:00",
+  "status": "failed",
+  "duration": 2.141194,
+  "error": "CROSS_END_ASSERT_FAILED | 找不到可执行程序「D:\\mkst_baixiang\\softawre_install_path\\python-3.12\\python-install-3.12\\python.exe\" \"D:\\mkst_baixiang\\Python_Code\\NewUITestPlatform\\NewUITestPlatform\\demos\\erp_desktop_sample\\fake_erp_client.py\" --order-id ORD-DEMO-404 --hold-sec 45」。 已尝试：direct_path、app_catalog、path_env、where_exe、system32、registry_app_paths、registry_uninstall、start_menu。 在步骤「输入值」填写完整路径，如 C:\\Program Files\\App\\client.exe 或先手动打开应用，使用「附着窗口」→「选择当前窗口」（无需找 exe） 在 .env 的 DESKTOP_APP_ALIASES 中为常用客户端配置别名 可在 .env 设置 DESKTOP_DEEP_SEARCH=1 启用 Program Files 浅层扫描（较慢）",
+  "flow_name": "ERP 桌面样例：API 订单 ORD-DEMO-404 ↔ Fake ERP 窗口",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"erp-desktop-sample\", \"scenario\": \"ERP 桌面样例：API 订单 ORD-DEMO-404 ↔ Fake ERP 窗口\", \"test_type\": \"cross_end\", \"user_id\": \"erp-accept\", \"project_id\": null, \"trigger_source\": \"erp-sample-accept\", \"agent_run_id\": \"\", \"error_code\": \"CROSS_END_ASSERT_FAILED\", \"gate_passed\": false, \"success\": false, \"lock\": \"held\", \"assertion_passed\": 0, \"assertion_failed\": 1, \"skipped_failure_stages\": [], \"variables\": {\"api_order_id\": \"ORD-DEMO-404\"}, \"stage_count\": 1, \"risk\": [{\"stage_id\": \"stage-desktop-erp\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 1, \"ok_assert\": false}]}",
+  "expected_text": "{\"plan_id\": \"erp-desktop-sample\", \"project_id\": null, \"agent_run_id\": \"\", \"audit_id\": \"cea-bd11f597e7b8\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": false,
+      "error": "找不到可执行程序「D:\\mkst_baixiang\\softawre_install_path\\python-3.12\\python-install-3.12\\python.exe\" \"D:\\mkst_baixiang\\Python_Code\\NewUITestPlatform\\NewUITestPlatform\\demos\\erp_desktop_sample\\fake_erp_client.py\" --order-id ORD-DEMO-404 --hold-sec 45」。 已尝试：direct_path、app_catalog、path_env、where_exe、system32、registry_app_paths、registry_uninstall、start_menu。 在步骤「输入值」填写完整路径，如 C:\\Program Files\\App\\client.exe 或先手动打开应用，使用「附着窗口」→「选择当前窗口」（无需找 exe） 在 .env 的 DESKTOP_APP_ALIASES 中为常用客户端配置别名 可在 .env 设置 DESKTOP_DEEP_SEARCH=1 启用 Program Files 浅层扫描（较慢）",
+      "elapsed_ms": 2139.5,
+      "stage_id": "stage-desktop-erp",
+      "layer": "desktop",
+      "executor": "classic",
+      "steps_executed": 0,
+      "steps_planned": 4,
+      "desktop_preflight": {
+        "ok": true,
+        "mode": "inprocess",
+        "detail": "inprocess_win32+vision"
+      },
+      "extracted": {},
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "risk_events": [
+        {
+          "at": 1784880811.467836,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L1",
+          "stage_id": "stage-desktop-erp",
+          "detail": {
+            "auto": true
+          }
+        }
+      ],
+      "recovery_action": "abort"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "erp-desktop-sample",
+    "scenario": "ERP 桌面样例：API 订单 ORD-DEMO-404 ↔ Fake ERP 窗口",
+    "test_type": "cross_end",
+    "user_id": "erp-accept",
+    "project_id": null,
+    "trigger_source": "erp-sample-accept",
+    "agent_run_id": "",
+    "error_code": "CROSS_END_ASSERT_FAILED",
+    "gate_passed": false,
+    "success": false,
+    "lock": "held",
+    "assertion_passed": 0,
+    "assertion_failed": 1,
+    "skipped_failure_stages": [],
+    "variables": {
+      "api_order_id": "ORD-DEMO-404"
+    },
+    "stage_count": 1,
+    "risk": [
+      {
+        "stage_id": "stage-desktop-erp",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 1,
+        "ok_assert": false
+      }
+    ]
+  }
+}

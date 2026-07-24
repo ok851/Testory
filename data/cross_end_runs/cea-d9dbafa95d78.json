@@ -1,0 +1,81 @@
+{
+  "audit_id": "cea-d9dbafa95d78",
+  "created_at": "2026-07-24T08:14:24.273349+00:00",
+  "status": "success",
+  "duration": 2.377034,
+  "error": "",
+  "flow_name": "ERP 桌面样例：API 订单 ORD-DEMO-404 ↔ Fake ERP 窗口",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"erp-desktop-sample\", \"scenario\": \"ERP 桌面样例：API 订单 ORD-DEMO-404 ↔ Fake ERP 窗口\", \"test_type\": \"cross_end\", \"user_id\": \"erp-accept\", \"project_id\": null, \"trigger_source\": \"erp-sample-accept\", \"agent_run_id\": \"\", \"error_code\": null, \"gate_passed\": true, \"success\": true, \"lock\": \"held\", \"assertion_passed\": 1, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"api_order_id\": \"ORD-DEMO-404\", \"stage-desktop-erp.erp_order_id\": \"ORD-DEMO-404\", \"erp_order_id\": \"ORD-DEMO-404\"}, \"stage_count\": 1, \"risk\": [{\"stage_id\": \"stage-desktop-erp\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 1, \"ok_assert\": true}]}",
+  "expected_text": "{\"plan_id\": \"erp-desktop-sample\", \"project_id\": null, \"agent_run_id\": \"\", \"audit_id\": \"cea-d9dbafa95d78\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": true,
+      "error": null,
+      "elapsed_ms": 2373.1,
+      "stage_id": "stage-desktop-erp",
+      "layer": "desktop",
+      "executor": "classic",
+      "steps_executed": 4,
+      "steps_planned": 4,
+      "desktop_preflight": {
+        "ok": true,
+        "mode": "inprocess",
+        "detail": "inprocess_win32+vision"
+      },
+      "extracted": {
+        "erp_order_id": "ORD-DEMO-404"
+      },
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "risk_events": [
+        {
+          "at": 1784880861.8979363,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L1",
+          "stage_id": "stage-desktop-erp",
+          "detail": {
+            "auto": true
+          }
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "erp-desktop-sample",
+    "scenario": "ERP 桌面样例：API 订单 ORD-DEMO-404 ↔ Fake ERP 窗口",
+    "test_type": "cross_end",
+    "user_id": "erp-accept",
+    "project_id": null,
+    "trigger_source": "erp-sample-accept",
+    "agent_run_id": "",
+    "error_code": null,
+    "gate_passed": true,
+    "success": true,
+    "lock": "held",
+    "assertion_passed": 1,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "api_order_id": "ORD-DEMO-404",
+      "stage-desktop-erp.erp_order_id": "ORD-DEMO-404",
+      "erp_order_id": "ORD-DEMO-404"
+    },
+    "stage_count": 1,
+    "risk": [
+      {
+        "stage_id": "stage-desktop-erp",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 1,
+        "ok_assert": true
+      }
+    ]
+  }
+}

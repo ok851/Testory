@@ -1,0 +1,190 @@
+{
+  "audit_id": "cea-b3bfeeab6d27",
+  "created_at": "2026-07-24T06:35:19.319823+00:00",
+  "status": "failed",
+  "duration": 0.10934,
+  "error": "DESKTOP_STEP_FAILED | name 'uat_logger' is not defined",
+  "flow_name": "HITL + Desktop + RiskGuard（合成 Demo）",
+  "test_type": "agent_teams",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"goai-guards-demo\", \"scenario\": \"HITL + Desktop + RiskGuard（合成 Demo）\", \"test_type\": \"agent_teams\", \"user_id\": \"goai-demo\", \"project_id\": null, \"trigger_source\": \"agent_teams\", \"agent_run_id\": \"run-f2d0b0ae2b81\", \"error_code\": \"DESKTOP_STEP_FAILED\", \"gate_passed\": false, \"success\": false, \"lock\": null, \"assertion_passed\": 0, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"order_id\": \"ORD-DEMO-404\", \"order_status\": \"failed\", \"ui_status_text\": \"下单失败\"}, \"stage_count\": 4, \"hitl\": [{\"stage_id\": \"stage-hitl-captcha\", \"gate_id\": \"goai-demo-captcha\", \"outcome\": \"resumed\", \"events\": 4, \"ok_assert\": true}], \"risk\": [{\"stage_id\": \"stage-api-order\", \"level\": \"L0\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": true}, {\"stage_id\": \"stage-hitl-captcha\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": true}, {\"stage_id\": \"stage-web-order\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": true}, {\"stage_id\": \"stage-desktop-erp\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": false}]}",
+  "expected_text": "{\"plan_id\": \"goai-guards-demo\", \"project_id\": null, \"agent_run_id\": \"run-f2d0b0ae2b81\"}",
+  "screenshots": "[\"artifacts/screenshots/ORD-DEMO-404-web.png\"]",
+  "stage_results": [
+    {
+      "stage_id": "stage-api-order",
+      "layer": "api",
+      "ok_assert": true,
+      "elapsed_ms": 10,
+      "risk_level": "L0",
+      "risk_decision": "allow",
+      "extracted": {
+        "order_id": "ORD-DEMO-404",
+        "order_status": "failed"
+      }
+    },
+    {
+      "stage_id": "stage-hitl-captcha",
+      "layer": "hitl",
+      "ok_assert": true,
+      "elapsed_ms": 101.1,
+      "hitl_gate_id": "goai-demo-captcha",
+      "hitl_prompt": "请在浏览器完成验证码后继续",
+      "hitl_events": [
+        {
+          "event_id": "hitl-e2bb1354e0",
+          "kind": "opened",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:19.207080+00:00",
+          "ts": 1784874919.2070801,
+          "detail": {}
+        },
+        {
+          "event_id": "hitl-1dca23cf99",
+          "kind": "wait_started",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:19.207080+00:00",
+          "ts": 1784874919.2070801,
+          "detail": {
+            "timeout_s": 5.0
+          }
+        },
+        {
+          "event_id": "hitl-c773da033a",
+          "kind": "resumed",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:19.296060+00:00",
+          "ts": 1784874919.2960606,
+          "detail": {
+            "idempotent": false
+          }
+        },
+        {
+          "event_id": "hitl-dc5f6eef4f",
+          "kind": "wait_resumed",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:19.316420+00:00",
+          "ts": 1784874919.31642,
+          "detail": {}
+        }
+      ],
+      "hitl_outcome": "resumed",
+      "risk_level": "L1",
+      "risk_decision": "allow"
+    },
+    {
+      "stage_id": "stage-web-order",
+      "layer": "web",
+      "ok_assert": true,
+      "elapsed_ms": 40,
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "extracted": {
+        "ui_status_text": "下单失败"
+      },
+      "screenshot_path": "artifacts/screenshots/ORD-DEMO-404-web.png"
+    },
+    {
+      "stage_id": "stage-desktop-erp",
+      "layer": "desktop",
+      "ok_assert": false,
+      "elapsed_ms": 0.0,
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "step_results": [
+        {
+          "status": "warning",
+          "warning": "控件未命中",
+          "error": "ERP 订单号未读到",
+          "extracted_text": null
+        }
+      ],
+      "simulate_desktop": true,
+      "error": "name 'uat_logger' is not defined",
+      "error_code": "DESKTOP_STEP_FAILED"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "goai-guards-demo",
+    "scenario": "HITL + Desktop + RiskGuard（合成 Demo）",
+    "test_type": "agent_teams",
+    "user_id": "goai-demo",
+    "project_id": null,
+    "trigger_source": "agent_teams",
+    "agent_run_id": "run-f2d0b0ae2b81",
+    "error_code": "DESKTOP_STEP_FAILED",
+    "gate_passed": false,
+    "success": false,
+    "lock": null,
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "order_id": "ORD-DEMO-404",
+      "order_status": "failed",
+      "ui_status_text": "下单失败"
+    },
+    "stage_count": 4,
+    "hitl": [
+      {
+        "stage_id": "stage-hitl-captcha",
+        "gate_id": "goai-demo-captcha",
+        "outcome": "resumed",
+        "events": 4,
+        "ok_assert": true
+      }
+    ],
+    "risk": [
+      {
+        "stage_id": "stage-api-order",
+        "level": "L0",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": true
+      },
+      {
+        "stage_id": "stage-hitl-captcha",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": true
+      },
+      {
+        "stage_id": "stage-web-order",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": true
+      },
+      {
+        "stage_id": "stage-desktop-erp",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": false
+      }
+    ]
+  }
+}

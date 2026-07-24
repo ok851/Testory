@@ -1,0 +1,459 @@
+{
+  "run_id": "run-cc741890a027",
+  "team_id": "testory-cross-end-qa-team",
+  "schema_version": "1.0",
+  "status": "failed",
+  "goal": "演示 HITL 事件、Desktop 诚实门禁与 L2 审批记录进入 Trace。",
+  "plan": {
+    "plan_id": "goai-guards-demo",
+    "scenario": "HITL + Desktop + RiskGuard（合成 Demo）",
+    "schema_version": "1.0",
+    "stages": [
+      {
+        "id": "stage-api-order",
+        "layer": "api",
+        "label": "ApiHttp：查询订单（L0 只读）",
+        "skill": "testory-api-test",
+        "risk_level": "L0",
+        "depends_on": [],
+        "timeout_seconds": 30,
+        "request": {
+          "method": "GET",
+          "url": "https://demo.testory.local/api/orders/ORD-DEMO-404"
+        },
+        "assert": {
+          "status_in": [
+            200
+          ]
+        },
+        "vars_to_store": [
+          {
+            "name": "order_id",
+            "from": "body.order_id"
+          },
+          {
+            "name": "order_status",
+            "from": "body.status"
+          }
+        ],
+        "sync_point": "order_loaded"
+      },
+      {
+        "id": "stage-hitl-captcha",
+        "layer": "hitl",
+        "label": "HitlGate：登录/验证码人工确认",
+        "risk_level": "L1",
+        "depends_on": [
+          "stage-api-order"
+        ],
+        "gate_id": "goai-demo-captcha",
+        "prompt": "请在浏览器完成验证码后继续",
+        "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+        "timeout_s": 5,
+        "poll_interval_s": 0.05,
+        "sync_point": "captcha_ok"
+      },
+      {
+        "id": "stage-web-order",
+        "layer": "web",
+        "label": "WebBrowse：核对失败文案",
+        "skill": "testory-web-browser",
+        "risk_level": "L1",
+        "depends_on": [
+          "stage-hitl-captcha"
+        ],
+        "timeout_seconds": 60,
+        "actions": [
+          {
+            "type": "navigate",
+            "url": "https://demo.testory.local/orders/ORD-DEMO-404"
+          },
+          {
+            "type": "assert_text",
+            "selector": ".order-status",
+            "contains": "下单失败"
+          }
+        ],
+        "vars_to_store": [
+          {
+            "name": "ui_status_text",
+            "from": "selector:.order-status"
+          }
+        ],
+        "sync_point": "ui_checked"
+      },
+      {
+        "id": "stage-desktop-erp",
+        "layer": "desktop",
+        "label": "WindowsDesktop：ERP 订单号核对（模拟）",
+        "skill": "testory-windows-desktop",
+        "risk_level": "L1",
+        "depends_on": [
+          "stage-web-order"
+        ],
+        "actions": [
+          {
+            "action": "get_text",
+            "store_as": "erp_order_id"
+          }
+        ],
+        "vars_to_store": [
+          {
+            "name": "erp_order_id",
+            "from": "step:erp_order_id"
+          }
+        ],
+        "sync_point": "desktop_checked"
+      },
+      {
+        "id": "stage-l2-clear",
+        "layer": "api",
+        "label": "RiskGuard L2：清理演示订单数据",
+        "skill": "testory-api-test",
+        "risk_level": "L2",
+        "risk_action": "clear_data",
+        "risk_reason": "会删除演示环境订单缓存",
+        "depends_on": [
+          "stage-desktop-erp"
+        ],
+        "request": {
+          "method": "POST",
+          "url": "https://demo.testory.local/admin/clear_data"
+        },
+        "sync_point": "cleared"
+      }
+    ],
+    "cross_end_assertions": [
+      {
+        "name": "order_id_present",
+        "left": {
+          "var": "order_id"
+        },
+        "op": "eq",
+        "right": {
+          "value": "ORD-DEMO-404"
+        }
+      },
+      {
+        "name": "api_status_is_failed",
+        "left": {
+          "var": "order_status"
+        },
+        "op": "eq",
+        "right": {
+          "value": "failed"
+        }
+      },
+      {
+        "name": "ui_shows_fail_copy",
+        "left": {
+          "var": "ui_status_text"
+        },
+        "op": "contains",
+        "right": {
+          "value": "下单失败"
+        }
+      },
+      {
+        "name": "erp_matches_order",
+        "left": {
+          "var": "erp_order_id"
+        },
+        "op": "eq",
+        "right": {
+          "value": "ORD-DEMO-404"
+        }
+      }
+    ]
+  },
+  "vars": {
+    "order_id": "ORD-DEMO-404",
+    "order_status": "failed"
+  },
+  "stage_results": [
+    {
+      "stage_id": "stage-api-order",
+      "layer": "api",
+      "ok_assert": true,
+      "elapsed_ms": 10,
+      "risk_level": "L0",
+      "risk_decision": "allow",
+      "extracted": {
+        "order_id": "ORD-DEMO-404",
+        "order_status": "failed"
+      }
+    },
+    {
+      "stage_id": "stage-hitl-captcha",
+      "layer": "hitl",
+      "ok_assert": false,
+      "elapsed_ms": 353.7,
+      "hitl_gate_id": "goai-demo-captcha",
+      "hitl_prompt": "请在浏览器完成验证码后继续",
+      "hitl_events": [
+        {
+          "event_id": "hitl-bda2419fdc",
+          "kind": "opened",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:18.567181+00:00",
+          "ts": 1784874918.5671816,
+          "detail": {}
+        },
+        {
+          "event_id": "hitl-ef90f30047",
+          "kind": "wait_started",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:18.567181+00:00",
+          "ts": 1784874918.5671816,
+          "detail": {
+            "timeout_s": 0.35
+          }
+        },
+        {
+          "event_id": "hitl-cb7b562321",
+          "kind": "wait_timed_out",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:18.934337+00:00",
+          "ts": 1784874918.9343379,
+          "detail": {
+            "timeout_s": 0.35
+          }
+        }
+      ],
+      "hitl_outcome": "timed_out",
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "error": "HITL 超时或已取消",
+      "error_code": "HITL_TIMEOUT"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "risk",
+      "stage_id": "stage-api-order",
+      "level": "L0",
+      "decision": "allow",
+      "approval_id": null,
+      "events": []
+    },
+    {
+      "kind": "hitl",
+      "stage_id": "stage-hitl-captcha",
+      "gate_id": "goai-demo-captcha",
+      "outcome": "timed_out",
+      "events": [
+        {
+          "event_id": "hitl-bda2419fdc",
+          "kind": "opened",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:18.567181+00:00",
+          "ts": 1784874918.5671816,
+          "detail": {}
+        },
+        {
+          "event_id": "hitl-ef90f30047",
+          "kind": "wait_started",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:18.567181+00:00",
+          "ts": 1784874918.5671816,
+          "detail": {
+            "timeout_s": 0.35
+          }
+        },
+        {
+          "event_id": "hitl-cb7b562321",
+          "kind": "wait_timed_out",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:35:18.934337+00:00",
+          "ts": 1784874918.9343379,
+          "detail": {
+            "timeout_s": 0.35
+          }
+        }
+      ]
+    },
+    {
+      "kind": "risk",
+      "stage_id": "stage-hitl-captcha",
+      "level": "L1",
+      "decision": "allow",
+      "approval_id": null,
+      "events": []
+    },
+    {
+      "kind": "stage_failure",
+      "stage_id": "stage-hitl-captcha",
+      "error": "HITL 超时或已取消",
+      "error_code": "HITL_TIMEOUT"
+    }
+  ],
+  "report": {
+    "passed": false,
+    "reason": "HITL 超时或已取消",
+    "evidence_level": "missing",
+    "evidence_counts": {
+      "strong": 0,
+      "weak": 3,
+      "missing": 1
+    },
+    "stages_total": 2,
+    "stages_failed": 1,
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "agents_seen": [
+      "system",
+      "Planner",
+      "WebApiExecutor",
+      "Verifier"
+    ],
+    "run_id": "run-cc741890a027"
+  },
+  "events": [
+    {
+      "event_id": "ev-5d81112f5b",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T06:35:18.567181+00:00",
+      "message": "TestRunState created",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-bc719dfd40",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T06:35:18.567181+00:00",
+      "message": "启动 Agent 团队闭环",
+      "payload": {
+        "team_id": "testory-cross-end-qa-team",
+        "roles": [
+          "Planner",
+          "WebApiExecutor",
+          "Verifier"
+        ]
+      }
+    },
+    {
+      "event_id": "ev-8940e4ccef",
+      "agent": "Planner",
+      "kind": "dispatch",
+      "at": "2026-07-24T06:35:18.567181+00:00",
+      "message": "规划跨端任务图",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-db5a153a8e",
+      "agent": "Planner",
+      "kind": "complete",
+      "at": "2026-07-24T06:35:18.567181+00:00",
+      "message": "使用调用方提供的 plan（跳过 LLM）",
+      "payload": {
+        "plan_id": "goai-guards-demo",
+        "stages": 5
+      }
+    },
+    {
+      "event_id": "ev-8923ec0ce8",
+      "agent": "WebApiExecutor",
+      "kind": "dispatch",
+      "at": "2026-07-24T06:35:18.567181+00:00",
+      "message": "执行跨端阶段",
+      "payload": {
+        "plan_id": "goai-guards-demo",
+        "stages": 5
+      }
+    },
+    {
+      "event_id": "ev-0d099ce0e0",
+      "agent": "WebApiExecutor",
+      "kind": "complete",
+      "at": "2026-07-24T06:35:18.934337+00:00",
+      "message": "执行结束（未通过）: HITL 超时或已取消",
+      "payload": {
+        "success": false,
+        "error_code": "HITL_TIMEOUT",
+        "stages": 2
+      }
+    },
+    {
+      "event_id": "ev-8fd24bc6c0",
+      "agent": "Verifier",
+      "kind": "dispatch",
+      "at": "2026-07-24T06:35:18.934337+00:00",
+      "message": "聚合断言与证据",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-9a5080a182",
+      "agent": "Verifier",
+      "kind": "complete",
+      "at": "2026-07-24T06:35:18.934337+00:00",
+      "message": "验证未通过: HITL 超时或已取消",
+      "payload": {
+        "passed": false,
+        "evidence_level": "missing"
+      }
+    },
+    {
+      "event_id": "ev-2f325d9122",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T06:35:18.976731+00:00",
+      "message": "已写入运行历史",
+      "payload": {
+        "run_history_id": 1160,
+        "audit_id": "cea-9a309304f384",
+        "status": "failed"
+      }
+    }
+  ],
+  "errors": [
+    "WebApiExecutor: HITL 超时或已取消",
+    "Verifier: HITL 超时或已取消"
+  ],
+  "idempotency_key": "goai-demo-guards-hitl_timeout-20260724T063518Z",
+  "user_id": "goai-demo",
+  "created_at": "2026-07-24T06:35:18.567181+00:00",
+  "updated_at": "2026-07-24T06:35:18.976731+00:00",
+  "finished_at": "2026-07-24T06:35:18.934337+00:00",
+  "execution": {
+    "success": false,
+    "error": "HITL 超时或已取消",
+    "error_code": "HITL_TIMEOUT",
+    "gate_passed": false,
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "user_hint": null,
+    "lock": null,
+    "run_history_id": null
+  },
+  "agents_seen": [
+    "system",
+    "Planner",
+    "WebApiExecutor",
+    "Verifier"
+  ]
+}

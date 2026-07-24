@@ -1,0 +1,132 @@
+{
+  "audit_id": "cea-1d52c6797776",
+  "created_at": "2026-07-24T06:33:20.776250+00:00",
+  "status": "failed",
+  "duration": 0.353287,
+  "error": "HITL_TIMEOUT | HITL 超时或已取消",
+  "flow_name": "HITL + Desktop + RiskGuard（合成 Demo）",
+  "test_type": "agent_teams",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"goai-guards-demo\", \"scenario\": \"HITL + Desktop + RiskGuard（合成 Demo）\", \"test_type\": \"agent_teams\", \"user_id\": \"goai-demo\", \"project_id\": null, \"trigger_source\": \"agent_teams\", \"agent_run_id\": \"run-baa60f30d339\", \"error_code\": \"HITL_TIMEOUT\", \"gate_passed\": false, \"success\": false, \"lock\": null, \"assertion_passed\": 0, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"order_id\": \"ORD-DEMO-404\", \"order_status\": \"failed\"}, \"stage_count\": 2, \"hitl\": [{\"stage_id\": \"stage-hitl-captcha\", \"gate_id\": \"goai-demo-captcha\", \"outcome\": \"timed_out\", \"events\": 3, \"ok_assert\": false}], \"risk\": [{\"stage_id\": \"stage-api-order\", \"level\": \"L0\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": true}, {\"stage_id\": \"stage-hitl-captcha\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": false}]}",
+  "expected_text": "{\"plan_id\": \"goai-guards-demo\", \"project_id\": null, \"agent_run_id\": \"run-baa60f30d339\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "stage_id": "stage-api-order",
+      "layer": "api",
+      "ok_assert": true,
+      "elapsed_ms": 10,
+      "risk_level": "L0",
+      "risk_decision": "allow",
+      "extracted": {
+        "order_id": "ORD-DEMO-404",
+        "order_status": "failed"
+      }
+    },
+    {
+      "stage_id": "stage-hitl-captcha",
+      "layer": "hitl",
+      "ok_assert": false,
+      "elapsed_ms": 352.4,
+      "hitl_gate_id": "goai-demo-captcha",
+      "hitl_prompt": "请在浏览器完成验证码后继续",
+      "hitl_events": [
+        {
+          "event_id": "hitl-64ad3f9bcb",
+          "kind": "opened",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:33:20.422963+00:00",
+          "ts": 1784874800.4229636,
+          "detail": {}
+        },
+        {
+          "event_id": "hitl-c97972904c",
+          "kind": "wait_started",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:33:20.422963+00:00",
+          "ts": 1784874800.4229636,
+          "detail": {
+            "timeout_s": 0.35
+          }
+        },
+        {
+          "event_id": "hitl-0b10e8d938",
+          "kind": "wait_timed_out",
+          "gate_id": "goai-demo-captcha",
+          "reason": "请在浏览器完成验证码后继续",
+          "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+          "user_id": "goai-demo",
+          "scope": "demo",
+          "at": "2026-07-24T06:33:20.776250+00:00",
+          "ts": 1784874800.7762501,
+          "detail": {
+            "timeout_s": 0.35
+          }
+        }
+      ],
+      "hitl_outcome": "timed_out",
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "error": "HITL 超时或已取消",
+      "error_code": "HITL_TIMEOUT"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "goai-guards-demo",
+    "scenario": "HITL + Desktop + RiskGuard（合成 Demo）",
+    "test_type": "agent_teams",
+    "user_id": "goai-demo",
+    "project_id": null,
+    "trigger_source": "agent_teams",
+    "agent_run_id": "run-baa60f30d339",
+    "error_code": "HITL_TIMEOUT",
+    "gate_passed": false,
+    "success": false,
+    "lock": null,
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "order_id": "ORD-DEMO-404",
+      "order_status": "failed"
+    },
+    "stage_count": 2,
+    "hitl": [
+      {
+        "stage_id": "stage-hitl-captcha",
+        "gate_id": "goai-demo-captcha",
+        "outcome": "timed_out",
+        "events": 3,
+        "ok_assert": false
+      }
+    ],
+    "risk": [
+      {
+        "stage_id": "stage-api-order",
+        "level": "L0",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": true
+      },
+      {
+        "stage_id": "stage-hitl-captcha",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": false
+      }
+    ]
+  }
+}

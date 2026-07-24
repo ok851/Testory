@@ -1,0 +1,114 @@
+{
+  "audit_id": "cea-ddc81af97f21",
+  "created_at": "2026-07-24T07:47:48.469434+00:00",
+  "status": "failed",
+  "duration": 1.758978,
+  "error": "未找到目标窗口：记事本",
+  "flow_name": "Windows 桌面主路径（记事本 launch→attach→input→verify）",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"desktop-notepad-mainpath\", \"scenario\": \"Windows 桌面主路径（记事本 launch→attach→input→verify）\", \"test_type\": \"cross_end\", \"user_id\": \"live-accept\", \"project_id\": null, \"trigger_source\": \"ui\", \"agent_run_id\": \"\", \"error_code\": null, \"gate_passed\": false, \"success\": false, \"lock\": \"held\", \"assertion_passed\": 0, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {}, \"stage_count\": 2, \"risk\": [{\"stage_id\": \"stage-desktop-launch\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 1, \"ok_assert\": true}, {\"stage_id\": \"stage-desktop-attach-type\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 1, \"ok_assert\": false}]}",
+  "expected_text": "{\"plan_id\": \"desktop-notepad-mainpath\", \"project_id\": null, \"agent_run_id\": \"\", \"audit_id\": \"cea-ddc81af97f21\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": true,
+      "error": null,
+      "elapsed_ms": 1688.3,
+      "stage_id": "stage-desktop-launch",
+      "layer": "desktop",
+      "executor": "classic",
+      "steps_executed": 2,
+      "steps_planned": 2,
+      "desktop_preflight": {
+        "ok": true,
+        "mode": "inprocess",
+        "detail": "inprocess_win32+vision"
+      },
+      "extracted": {},
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "risk_events": [
+        {
+          "at": 1784879266.7129526,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L1",
+          "stage_id": "stage-desktop-launch",
+          "detail": {
+            "auto": true
+          }
+        }
+      ]
+    },
+    {
+      "ok_assert": false,
+      "error": "未找到目标窗口：记事本",
+      "elapsed_ms": 65.8,
+      "stage_id": "stage-desktop-attach-type",
+      "layer": "desktop",
+      "executor": "classic",
+      "steps_executed": 0,
+      "steps_planned": 2,
+      "desktop_preflight": {
+        "ok": true,
+        "mode": "inprocess",
+        "detail": "inprocess_win32+vision"
+      },
+      "extracted": {},
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "risk_events": [
+        {
+          "at": 1784879268.402981,
+          "kind": "risk_allowed",
+          "approval_id": "",
+          "level": "L1",
+          "stage_id": "stage-desktop-attach-type",
+          "detail": {
+            "auto": true
+          }
+        }
+      ],
+      "recovery_action": "abort"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "desktop-notepad-mainpath",
+    "scenario": "Windows 桌面主路径（记事本 launch→attach→input→verify）",
+    "test_type": "cross_end",
+    "user_id": "live-accept",
+    "project_id": null,
+    "trigger_source": "ui",
+    "agent_run_id": "",
+    "error_code": null,
+    "gate_passed": false,
+    "success": false,
+    "lock": "held",
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {},
+    "stage_count": 2,
+    "risk": [
+      {
+        "stage_id": "stage-desktop-launch",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 1,
+        "ok_assert": true
+      },
+      {
+        "stage_id": "stage-desktop-attach-type",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 1,
+        "ok_assert": false
+      }
+    ]
+  }
+}

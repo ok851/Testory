@@ -1,0 +1,101 @@
+{
+  "audit_id": "cea-4f6bf266e2ce",
+  "created_at": "2026-07-24T06:22:49.489752+00:00",
+  "status": "failed",
+  "duration": 0.304409,
+  "error": "HITL_TIMEOUT_OR_CANCEL | HITL 超时或已取消（timeout_s=0.3）",
+  "flow_name": "hitl timeout",
+  "test_type": "cross_end",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"hitl-plan-1\", \"scenario\": \"hitl timeout\", \"test_type\": \"cross_end\", \"user_id\": \"\", \"project_id\": null, \"trigger_source\": \"ui\", \"agent_run_id\": \"\", \"error_code\": \"HITL_TIMEOUT_OR_CANCEL\", \"gate_passed\": false, \"success\": false, \"lock\": \"skipped\", \"assertion_passed\": 0, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"_hitl_gate_id\": \"cross_end:hitl-plan-1:h1\", \"_hitl_prompt\": \"请输入验证码\"}, \"stage_count\": 1, \"hitl\": [{\"stage_id\": \"h1\", \"gate_id\": \"cross_end:hitl-plan-1:h1\", \"outcome\": \"timed_out\", \"events\": 3, \"ok_assert\": false}]}",
+  "expected_text": "{\"plan_id\": \"hitl-plan-1\", \"project_id\": null, \"agent_run_id\": \"\"}",
+  "screenshots": "",
+  "stage_results": [
+    {
+      "ok_assert": false,
+      "error": "HITL 超时或已取消（timeout_s=0.3）",
+      "elapsed_ms": 302.3,
+      "stage_id": "h1",
+      "layer": "hitl",
+      "hitl_gate_id": "cross_end:hitl-plan-1:h1",
+      "hitl_prompt": "请输入验证码",
+      "error_code": "HITL_TIMEOUT_OR_CANCEL",
+      "hitl_events": [
+        {
+          "event_id": "hitl-844c93526c",
+          "kind": "opened",
+          "gate_id": "cross_end:hitl-plan-1:h1",
+          "reason": "请输入验证码",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-07-24T06:22:49.185343+00:00",
+          "ts": 1784874169.185344,
+          "detail": {}
+        },
+        {
+          "event_id": "hitl-3d37aa8134",
+          "kind": "wait_started",
+          "gate_id": "cross_end:hitl-plan-1:h1",
+          "reason": "请输入验证码",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-07-24T06:22:49.185343+00:00",
+          "ts": 1784874169.185344,
+          "detail": {
+            "timeout_s": 0.3
+          }
+        },
+        {
+          "event_id": "hitl-3de0797533",
+          "kind": "wait_timed_out",
+          "gate_id": "cross_end:hitl-plan-1:h1",
+          "reason": "请输入验证码",
+          "hint": "",
+          "user_id": "",
+          "scope": "cross_end",
+          "at": "2026-07-24T06:22:49.489752+00:00",
+          "ts": 1784874169.489752,
+          "detail": {
+            "timeout_s": 0.3
+          }
+        }
+      ],
+      "hitl_outcome": "timed_out",
+      "user_hint": "需要人工确认，但已超时或被取消：请处理验证码/登录后点「继续」，或在阶段配置中加大 timeout_s。超时与取消均记失败，不会假绿。"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "hitl-plan-1",
+    "scenario": "hitl timeout",
+    "test_type": "cross_end",
+    "user_id": "",
+    "project_id": null,
+    "trigger_source": "ui",
+    "agent_run_id": "",
+    "error_code": "HITL_TIMEOUT_OR_CANCEL",
+    "gate_passed": false,
+    "success": false,
+    "lock": "skipped",
+    "assertion_passed": 0,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "_hitl_gate_id": "cross_end:hitl-plan-1:h1",
+      "_hitl_prompt": "请输入验证码"
+    },
+    "stage_count": 1,
+    "hitl": [
+      {
+        "stage_id": "h1",
+        "gate_id": "cross_end:hitl-plan-1:h1",
+        "outcome": "timed_out",
+        "events": 3,
+        "ok_assert": false
+      }
+    ]
+  }
+}

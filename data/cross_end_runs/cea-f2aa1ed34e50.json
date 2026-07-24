@@ -1,0 +1,83 @@
+{
+  "audit_id": "cea-f2aa1ed34e50",
+  "created_at": "2026-07-24T06:33:21.219417+00:00",
+  "status": "success",
+  "duration": 0.0,
+  "error": "",
+  "flow_name": "下单失败一致性（合成 Demo）",
+  "test_type": "agent_teams",
+  "project_id": null,
+  "case_id": null,
+  "extracted_text": "{\"schema\": \"cross_end_run_audit/v1\", \"plan_id\": \"goai-order-fail-demo\", \"scenario\": \"下单失败一致性（合成 Demo）\", \"test_type\": \"agent_teams\", \"user_id\": \"goai-demo\", \"project_id\": null, \"trigger_source\": \"agent_teams\", \"agent_run_id\": \"run-e19b89113b90\", \"error_code\": null, \"gate_passed\": true, \"success\": true, \"lock\": null, \"assertion_passed\": 3, \"assertion_failed\": 0, \"skipped_failure_stages\": [], \"variables\": {\"order_id\": \"ORD-DEMO-404\", \"order_status\": \"failed\", \"ui_status_text\": \"下单失败\"}, \"stage_count\": 2, \"risk\": [{\"stage_id\": \"stage-api-order\", \"level\": \"L0\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": true}, {\"stage_id\": \"stage-web-order\", \"level\": \"L1\", \"decision\": \"allow\", \"approval_id\": null, \"events\": 0, \"ok_assert\": true}]}",
+  "expected_text": "{\"plan_id\": \"goai-order-fail-demo\", \"project_id\": null, \"agent_run_id\": \"run-e19b89113b90\"}",
+  "screenshots": "[\"artifacts/screenshots/ORD-DEMO-404-web.png\"]",
+  "stage_results": [
+    {
+      "stage_id": "stage-api-order",
+      "layer": "api",
+      "ok_assert": true,
+      "elapsed_ms": 12,
+      "risk_level": "L0",
+      "risk_decision": "allow",
+      "extracted": {
+        "order_id": "ORD-DEMO-404",
+        "order_status": "failed"
+      }
+    },
+    {
+      "stage_id": "stage-web-order",
+      "layer": "web",
+      "ok_assert": true,
+      "elapsed_ms": 45,
+      "error": null,
+      "error_code": null,
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "extracted": {
+        "ui_status_text": "下单失败"
+      },
+      "screenshot_path": "artifacts/screenshots/ORD-DEMO-404-web.png"
+    }
+  ],
+  "meta": {
+    "schema": "cross_end_run_audit/v1",
+    "plan_id": "goai-order-fail-demo",
+    "scenario": "下单失败一致性（合成 Demo）",
+    "test_type": "agent_teams",
+    "user_id": "goai-demo",
+    "project_id": null,
+    "trigger_source": "agent_teams",
+    "agent_run_id": "run-e19b89113b90",
+    "error_code": null,
+    "gate_passed": true,
+    "success": true,
+    "lock": null,
+    "assertion_passed": 3,
+    "assertion_failed": 0,
+    "skipped_failure_stages": [],
+    "variables": {
+      "order_id": "ORD-DEMO-404",
+      "order_status": "failed",
+      "ui_status_text": "下单失败"
+    },
+    "stage_count": 2,
+    "risk": [
+      {
+        "stage_id": "stage-api-order",
+        "level": "L0",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": true
+      },
+      {
+        "stage_id": "stage-web-order",
+        "level": "L1",
+        "decision": "allow",
+        "approval_id": null,
+        "events": 0,
+        "ok_assert": true
+      }
+    ]
+  }
+}

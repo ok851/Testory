@@ -2,7 +2,13 @@
 
 Base URL: `http://127.0.0.1:8766`（`DESKTOP_AGENT_GATE_PORT`）
 
-所有请求需 header：`X-Desktop-Agent-Secret: <DESKTOP_AGENT_GATEWAY_SECRET>`
+请求头（二选一）：
+- `X-Desktop-Agent-Secret: <DESKTOP_AGENT_GATEWAY_SECRET>`
+- `Authorization: Bearer <DESKTOP_AGENT_GATEWAY_SECRET>`
+
+## GET /health
+
+无鉴权探活。
 
 ## POST /internal/session
 

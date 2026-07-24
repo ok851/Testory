@@ -1,0 +1,301 @@
+{
+  "run_id": "run-4621e8716c01",
+  "team_id": "testory-cross-end-qa-team",
+  "schema_version": "1.0",
+  "status": "failed",
+  "goal": "验证订单 ORD-DEMO-404 在 API 为 failed，且下单页展示「下单失败」文案，两端一致。",
+  "plan": {
+    "plan_id": "goai-order-fail-demo",
+    "scenario": "下单失败一致性（合成 Demo）",
+    "schema_version": "1.0",
+    "stages": [
+      {
+        "id": "stage-api-order",
+        "layer": "api",
+        "label": "ApiHttp：查询订单状态",
+        "skill": "testory-api-test",
+        "depends_on": [],
+        "timeout_seconds": 30,
+        "request": {
+          "method": "GET",
+          "url": "https://demo.testory.local/api/orders/ORD-DEMO-404"
+        },
+        "assert": {
+          "status_in": [
+            200
+          ]
+        },
+        "vars_to_store": [
+          {
+            "name": "order_id",
+            "from": "body.order_id"
+          },
+          {
+            "name": "order_status",
+            "from": "body.status"
+          }
+        ],
+        "sync_point": "order_loaded"
+      },
+      {
+        "id": "stage-web-order",
+        "layer": "web",
+        "label": "WebBrowse：核对下单失败文案",
+        "skill": "testory-web-browser",
+        "depends_on": [
+          "stage-api-order"
+        ],
+        "timeout_seconds": 60,
+        "actions": [
+          {
+            "type": "navigate",
+            "url": "https://demo.testory.local/orders/ORD-DEMO-404"
+          },
+          {
+            "type": "assert_text",
+            "selector": ".order-status",
+            "contains": "下单失败"
+          }
+        ],
+        "vars_to_store": [
+          {
+            "name": "ui_status_text",
+            "from": "selector:.order-status"
+          }
+        ],
+        "sync_point": "ui_checked"
+      }
+    ],
+    "cross_end_assertions": [
+      {
+        "name": "order_id_present",
+        "left": {
+          "var": "order_id"
+        },
+        "op": "eq",
+        "right": {
+          "value": "ORD-DEMO-404"
+        }
+      },
+      {
+        "name": "api_status_is_failed",
+        "left": {
+          "var": "order_status"
+        },
+        "op": "eq",
+        "right": {
+          "value": "failed"
+        }
+      },
+      {
+        "name": "ui_shows_fail_copy",
+        "left": {
+          "var": "ui_status_text"
+        },
+        "op": "contains",
+        "right": {
+          "value": "下单失败"
+        }
+      }
+    ]
+  },
+  "vars": {
+    "order_id": "ORD-DEMO-404",
+    "order_status": "failed",
+    "ui_status_text": "下单成功"
+  },
+  "stage_results": [
+    {
+      "stage_id": "stage-api-order",
+      "layer": "api",
+      "ok_assert": true,
+      "elapsed_ms": 12,
+      "extracted": {
+        "order_id": "ORD-DEMO-404",
+        "order_status": "failed"
+      }
+    },
+    {
+      "stage_id": "stage-web-order",
+      "layer": "web",
+      "ok_assert": false,
+      "elapsed_ms": 45,
+      "error": "assert_text 未匹配: 下单失败",
+      "error_code": "ASSERT_TEXT_MISMATCH",
+      "extracted": {
+        "ui_status_text": "下单成功"
+      },
+      "screenshot_path": "artifacts/screenshots/ORD-DEMO-404-web.png"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "screenshot",
+      "stage_id": "stage-web-order",
+      "path": "artifacts/screenshots/ORD-DEMO-404-web.png"
+    },
+    {
+      "kind": "stage_failure",
+      "stage_id": "stage-web-order",
+      "error": "assert_text 未匹配: 下单失败",
+      "error_code": "ASSERT_TEXT_MISMATCH"
+    },
+    {
+      "kind": "assertion",
+      "passed": true,
+      "detail": {
+        "name": "order_id_present",
+        "passed": true
+      }
+    },
+    {
+      "kind": "assertion",
+      "passed": true,
+      "detail": {
+        "name": "api_status_is_failed",
+        "passed": true
+      }
+    },
+    {
+      "kind": "assertion",
+      "passed": false,
+      "detail": {
+        "name": "ui_shows_fail_copy",
+        "passed": false,
+        "error": "期望包含「下单失败」，实际「下单成功」"
+      }
+    }
+  ],
+  "report": {
+    "passed": false,
+    "reason": "跨端断言失败 1 条",
+    "evidence_level": "weak",
+    "evidence_counts": {
+      "strong": 2,
+      "weak": 1,
+      "missing": 2
+    },
+    "stages_total": 2,
+    "stages_failed": 1,
+    "assertion_passed": 2,
+    "assertion_failed": 1,
+    "agents_seen": [
+      "system",
+      "Planner",
+      "WebApiExecutor",
+      "Verifier"
+    ],
+    "run_id": "run-4621e8716c01"
+  },
+  "events": [
+    {
+      "event_id": "ev-4c8df913d7",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T03:28:54.430304+00:00",
+      "message": "TestRunState created",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-2503ef6f2f",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T03:28:54.430304+00:00",
+      "message": "启动 Agent 团队闭环",
+      "payload": {
+        "team_id": "testory-cross-end-qa-team",
+        "roles": [
+          "Planner",
+          "WebApiExecutor",
+          "Verifier"
+        ]
+      }
+    },
+    {
+      "event_id": "ev-f63aeb3576",
+      "agent": "Planner",
+      "kind": "dispatch",
+      "at": "2026-07-24T03:28:54.430304+00:00",
+      "message": "规划跨端任务图",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-13d12cc9a2",
+      "agent": "Planner",
+      "kind": "complete",
+      "at": "2026-07-24T03:28:54.430304+00:00",
+      "message": "使用调用方提供的 plan（跳过 LLM）",
+      "payload": {
+        "plan_id": "goai-order-fail-demo",
+        "stages": 2
+      }
+    },
+    {
+      "event_id": "ev-b1fbc459c5",
+      "agent": "WebApiExecutor",
+      "kind": "dispatch",
+      "at": "2026-07-24T03:28:54.432397+00:00",
+      "message": "执行跨端阶段",
+      "payload": {
+        "plan_id": "goai-order-fail-demo",
+        "stages": 2
+      }
+    },
+    {
+      "event_id": "ev-b0b70078c8",
+      "agent": "WebApiExecutor",
+      "kind": "complete",
+      "at": "2026-07-24T03:28:54.432397+00:00",
+      "message": "执行结束（未通过）: 跨端断言失败 1 条",
+      "payload": {
+        "success": false,
+        "error_code": "CROSS_END_ASSERT_FAILED",
+        "stages": 2
+      }
+    },
+    {
+      "event_id": "ev-1e68917c7c",
+      "agent": "Verifier",
+      "kind": "dispatch",
+      "at": "2026-07-24T03:28:54.432397+00:00",
+      "message": "聚合断言与证据",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-a677f0e778",
+      "agent": "Verifier",
+      "kind": "complete",
+      "at": "2026-07-24T03:28:54.432397+00:00",
+      "message": "验证未通过: 跨端断言失败 1 条",
+      "payload": {
+        "passed": false,
+        "evidence_level": "weak"
+      }
+    }
+  ],
+  "errors": [
+    "WebApiExecutor: 跨端断言失败 1 条",
+    "Verifier: 跨端断言失败 1 条"
+  ],
+  "idempotency_key": "goai-demo-mismatch-20260724T032854Z",
+  "user_id": "goai-demo",
+  "created_at": "2026-07-24T03:28:54.430304+00:00",
+  "updated_at": "2026-07-24T03:28:54.432397+00:00",
+  "finished_at": "2026-07-24T03:28:54.432397+00:00",
+  "execution": {
+    "success": false,
+    "error": "跨端断言失败 1 条",
+    "error_code": "CROSS_END_ASSERT_FAILED",
+    "gate_passed": false,
+    "assertion_passed": 2,
+    "assertion_failed": 1,
+    "user_hint": null,
+    "lock": null
+  },
+  "agents_seen": [
+    "system",
+    "Planner",
+    "WebApiExecutor",
+    "Verifier"
+  ]
+}

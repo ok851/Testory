@@ -1,10 +1,13 @@
 {
-  "manifest_version": "1.0.0",
+  "manifest_version": "1.1.0",
   "synced": [
     "testory-web-browser",
     "testory-android-mobile",
     "testory-windows-desktop",
-    "testory-ui-design"
+    "testory-ui-design",
+    "testory-api-http",
+    "testory-cross-end",
+    "testory-risk-guard"
   ],
   "skipped_skills": []
 }
