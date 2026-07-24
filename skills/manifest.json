@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Testory bundled Hermes skills synced to HERMES_HOME/skills on startup",
   "skills": [
     {
@@ -37,6 +37,12 @@
       "name": "testory-cross-end",
       "version": "1.0.0",
       "source": "testory-cross-end-1.0.0"
+    },
+    {
+      "id": "testory-risk-guard",
+      "name": "testory-risk-guard",
+      "version": "1.0.0",
+      "source": "testory-risk-guard-1.0.0"
     }
   ]
 }

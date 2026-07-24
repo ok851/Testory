@@ -292,10 +292,22 @@
             if (severity) url += `&severity=${severity}`;
             
             try {
-                const res = await fetch(url);
-                const data = await res.json();
+                const res = await fetch(url, {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const data = await res.json().catch(function () { return null; });
+
+                if (res.status === 403 && data && window.TestoryLicenseGate &&
+                    window.TestoryLicenseGate.isFeatureGatePayload(data)) {
+                    window.TestoryLicenseGate.showPageBanner(data, '.max-w-7xl');
+                    document.getElementById('defectList').innerHTML =
+                        window.TestoryLicenseGate.tableGateRowHtml(data, 8);
+                    window.TestoryLicenseGate.handleResponse(res, data, { notify: false });
+                    return;
+                }
                 
-                if (data.success) {
+                if (data && data.success) {
                     renderDefectList(data.defects);
                     renderPagination(data.total, data.page, data.total_pages);
                 }

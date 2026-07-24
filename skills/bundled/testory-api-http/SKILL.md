@@ -7,13 +7,53 @@ format: agentskills.io/v1
 metadata:
   testory:
     platform: api
+    risk_default: L1
     tags: [http, api, rest, cross-end]
-    risk: medium
 ---
 
 # Testory 接口自动化（API）
 
 Hermes **只编排**，执行落在 Testory 平台内核（勿自造第二套 HTTP 客户端逻辑）。
+
+## 输入 / 输出 Schema
+
+### 临时请求输入
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `method` | string | GET/POST/PUT/PATCH/DELETE… |
+| `url` | string | 完整 URL（优先测试环境） |
+| `headers` | object | 可选 |
+| `body` | any | JSON / 表单 |
+| `vars_to_store` | list | 从响应抽取写入跨端 vars |
+
+### 成功输出（摘要）
+
+| 字段 | 说明 |
+|------|------|
+| `status` | HTTP 状态码 |
+| `body` / extract | 响应体或 JSONPath 抽取 |
+| `ok_assert` | 断言通过才为 true |
+
+跨端阶段另含 `error_code`（如断言失败、抽取缺失 `VAR_EXTRACT_MISSING`）。
+
+## 失败处理（诚实）
+
+| 情况 | 结果 |
+|------|------|
+| 网络/DNS/TLS 失败 | 阶段失败，保留错误信息 |
+| status 不在 `assert.status_in` | 断言失败，不得绿 |
+| 必选 `vars_to_store` 抽不到 | `VAR_EXTRACT_MISSING` |
+| L2 写操作无审批 | 编排层 `RISK_APPROVAL_REQUIRED`（见 RiskGuard） |
+
+禁止：仅凭「返回了 JSON」当作业务成功。
+
+## 安全边界
+
+- 默认 **L1**；GET/HEAD 只读可视为 **L0**。  
+- 清库、删生产、批量写 → **L2** + RiskGuard 令牌。  
+- 不把 token/密码写入未脱敏日志；vars 中敏感键走平台脱敏。  
+- 未知主机默认谨慎，优先测试域名。
 
 ## 能力
 
@@ -48,7 +88,3 @@ HTTP（需登录 Cookie / 内部密钥，由平台暴露时使用）：
 
 - 调用接口 / 断言 200 / 拿 token 再登录网页  
 - 跑接口用例 / HTTP 探测  
-
-## 风险
-
-标注 `risk: medium`：可能触发生产写接口；默认对未知环境谨慎，优先用测试环境 URL。

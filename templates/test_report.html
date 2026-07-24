@@ -66,6 +66,7 @@
             <span data-i18n="rpt_h1">测试报告</span>
         </h2>
         <p class="text-gray-600 dark:text-gray-400" data-i18n="rpt_sub">查看测试执行统计、趋势分析和详细报告</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" id="overviewHonestyNote"></p>
     </div>
 
     <div class="card mb-6">
@@ -87,6 +88,8 @@
                     <option value="web">UI 测试</option>
                     <option value="api">接口测试</option>
                     <option value="android">移动端</option>
+                    <option value="desktop">桌面</option>
+                    <option value="cross_end">跨端 / AgentTeams</option>
                 </select>
             </div>
             <div>
@@ -148,6 +151,72 @@
                 </div>
                 <div class="w-12 h-12 bg-accent bg-opacity-20 rounded-full flex items-center justify-center">
                     <i class="fas fa-percentage text-accent text-2xl"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-8 border-l-4 border-amber-500 dark:border-amber-400" id="opsGovernanceCard">
+        <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+            <div>
+                <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-200">
+                    <i class="fas fa-shield-alt text-amber-600 dark:text-amber-400 mr-2"></i>
+                    治理与证据（HITL / Risk / CI）
+                </h3>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                    含无绑定用例的跨端运行；门禁阻断不计入「通过」美化。
+                    <a href="/run-history" class="text-primary underline ml-1">打开运行历史</a>
+                </p>
+            </div>
+            <p class="text-xs text-gray-400 dark:text-gray-500" id="opsScanMeta"></p>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">跨端运行</p>
+                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsCrossEnd">0</p>
+            </div>
+            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">含 HITL</p>
+                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsHitl">0</p>
+            </div>
+            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">含 Risk</p>
+                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsRisk">0</p>
+            </div>
+            <div class="rounded-md bg-amber-50 dark:bg-amber-950/40 p-3">
+                <p class="text-xs text-amber-700 dark:text-amber-300">门禁阻断</p>
+                <p class="text-xl font-semibold text-amber-800 dark:text-amber-200" id="opsGateBlocked">0</p>
+            </div>
+            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">可导出证据</p>
+                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsEvidence">0</p>
+            </div>
+            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">关联 CI</p>
+                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsCi">0</p>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div>
+                <h4 class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-2">高频错误码</h4>
+                <ul class="text-sm space-y-1" id="opsErrorCodes">
+                    <li class="text-gray-400">暂无</li>
+                </ul>
+            </div>
+            <div class="lg:col-span-2">
+                <h4 class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-2">近期门禁事件</h4>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-800">
+                        <thead class="bg-gray-50 dark:bg-gray-800">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs text-gray-500">名称</th>
+                                <th class="px-3 py-2 text-left text-xs text-gray-500">错误码</th>
+                                <th class="px-3 py-2 text-left text-xs text-gray-500">门禁</th>
+                                <th class="px-3 py-2 text-left text-xs text-gray-500">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="opsGateTable" class="divide-y divide-gray-200 dark:divide-gray-800"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
@@ -251,7 +320,14 @@
                 <i class="fas fa-file-pdf mr-2"></i>
                 <span data-i18n="rpt_exp_pdf">导出PDF</span>
             </button>
+            <button onclick="exportCustomerAuditPack()" class="btn btn-primary" title="按当前筛选导出客户审计 ZIP（含失败/门禁 Trace，不美化）">
+                <i class="fas fa-box-open mr-2"></i>
+                导出客户审计包
+            </button>
         </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">
+            客户审计包含运行索引、HITL/Risk 治理摘要，以及优先嵌入的失败/门禁 Trace；失败不会被改写成通过。
+        </p>
     </div>
 </div>
 {% endblock %}
@@ -355,8 +431,12 @@
             fetch(`/api/report/project-statistics?${params}`).then(r => {
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 return r.json();
+            }),
+            fetch(`/api/report/ops-summary?${params}`).then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
             })
-        ]).then(([overview, statusDist, durationDist, trend, caseStats, projectStats]) => {
+        ]).then(([overview, statusDist, durationDist, trend, caseStats, projectStats, opsSummary]) => {
             // 隐藏加载状态
             hideLoadingState();
             
@@ -371,6 +451,7 @@
             updateTrendChart(trend.data || {});
             updateCaseStatsTable(caseStats.data || []);
             updateProjectStatsTable(projectStats.data || []);
+            updateOpsGovernance((opsSummary && opsSummary.success) ? (opsSummary.data || {}) : {});
         }).catch(error => {
             console.error('加载报告数据失败:', error);
             hideLoadingState();
@@ -431,6 +512,79 @@
         document.getElementById('passedRuns').textContent = data.passed_runs || 0;
         document.getElementById('failedRuns').textContent = data.failed_runs || 0;
         document.getElementById('passRate').textContent = (data.pass_rate || 0) + '%';
+        const note = document.getElementById('overviewHonestyNote');
+        if (note) {
+            const orphan = data.orphan_cross_end_runs || 0;
+            note.textContent = data.includes_orphan_runs
+                ? `统计已含无绑定用例的跨端运行（当前筛选内 ${orphan} 条）；失败计入失败，不假绿。`
+                : '';
+        }
+    }
+
+    function updateOpsGovernance(data) {
+        const d = data || {};
+        const setText = (id, v) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = v;
+        };
+        setText('opsCrossEnd', (d.cross_end_runs || 0) + (d.agent_teams_runs ? `+${d.agent_teams_runs}` : ''));
+        setText('opsHitl', d.with_hitl || 0);
+        setText('opsRisk', d.with_risk || 0);
+        setText('opsGateBlocked', d.gate_blocked || 0);
+        setText('opsEvidence', d.with_evidence || 0);
+        setText('opsCi', d.with_ci || 0);
+        const meta = document.getElementById('opsScanMeta');
+        if (meta) {
+            const scanned = d.scanned_runs || 0;
+            const lim = d.scan_limit || 2000;
+            meta.textContent = d.truncated
+                ? `扫描最近 ${scanned} 条（已达上限 ${lim}）`
+                : `扫描 ${scanned} 条`;
+        }
+        const codesEl = document.getElementById('opsErrorCodes');
+        if (codesEl) {
+            const codes = d.top_error_codes || [];
+            codesEl.innerHTML = codes.length
+                ? codes.map(c => `<li><code class="text-xs">${escapeHtml(c.code)}</code> · ${c.count}</li>`).join('')
+                : '<li class="text-gray-400">暂无</li>';
+        }
+        const tbody = document.getElementById('opsGateTable');
+        if (tbody) {
+            const rows = d.recent_gate_events || [];
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="px-3 py-3 text-gray-400">近期无门禁阻断</td></tr>';
+            } else {
+                tbody.innerHTML = rows.map(r => {
+                    const name = escapeHtml(r.case_name || r.test_type || `#${r.id}`);
+                    const code = escapeHtml(r.error_code || '—');
+                    const gates = [];
+                    if (r.hitl_count) gates.push(`HITL×${r.hitl_count}`);
+                    if (r.risk_count) gates.push(`Risk×${r.risk_count}`);
+                    if (r.build_id) gates.push(`build=${escapeHtml(String(r.build_id))}`);
+                    const gateTxt = gates.join(' · ') || '—';
+                    const hist = r.history_url || '/run-history';
+                    const evidence = r.trace_export_url
+                        ? `<a class="text-primary underline ml-2" href="${escapeHtml(r.trace_export_url)}">证据</a>`
+                        : '';
+                    return `<tr>
+                        <td class="px-3 py-2">${name}</td>
+                        <td class="px-3 py-2"><code class="text-xs">${code}</code></td>
+                        <td class="px-3 py-2 text-xs">${gateTxt}</td>
+                        <td class="px-3 py-2 whitespace-nowrap">
+                            <a class="text-primary underline" href="${escapeHtml(hist)}">历史</a>${evidence}
+                        </td>
+                    </tr>`;
+                }).join('');
+            }
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
     function updateStatusChart(data) {
@@ -703,6 +857,56 @@
             console.error('导出报告失败:', error);
             alert(typeof t === 'function' ? t('rpt_exp_retry') : '');
         });
+    }
+
+    async function exportCustomerAuditPack() {
+        const projectId = document.getElementById('projectFilter').value;
+        const caseCategory = (document.getElementById('caseCategoryFilter') || {}).value || '';
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        const params = new URLSearchParams();
+        params.set('format', 'zip');
+        if (projectId) params.set('project_id', projectId);
+        if (caseCategory) params.set('case_category', caseCategory);
+        if (startDate) params.set('start_date', startDate);
+        if (endDate) params.set('end_date', endDate);
+        const url = '/api/report/customer-audit-pack?' + params.toString();
+        try {
+            const resp = await fetch(url, {
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/zip, application/json' },
+            });
+            const ct = (resp.headers.get('content-type') || '').toLowerCase();
+            if (resp.status === 403 && ct.indexOf('json') >= 0) {
+                const data = await resp.json();
+                if (window.TestoryLicenseGate && window.TestoryLicenseGate.handleResponse(resp, data)) {
+                    return;
+                }
+                alert((data && data.error) || '当前 License 不含客户审计包导出');
+                return;
+            }
+            if (!resp.ok) {
+                let msg = '导出失败 HTTP ' + resp.status;
+                if (ct.indexOf('json') >= 0) {
+                    try {
+                        const j = await resp.json();
+                        msg = (j && j.error) || msg;
+                    } catch (e) { /* ignore */ }
+                }
+                alert(msg);
+                return;
+            }
+            const blob = await resp.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'customer-audit-pack.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+        } catch (e) {
+            alert('导出客户审计包失败: ' + (e.message || e));
+        }
     }
 </script>
 {% endblock %}

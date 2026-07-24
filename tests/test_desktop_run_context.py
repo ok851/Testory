@@ -55,3 +55,22 @@ def test_context_updates_after_launch():
     ctx = get_desktop_run_context()
     assert ctx.attached_hwnd == 999
     assert ctx.last_window_title_hint == "控制面板"
+
+
+def test_enrich_injects_hwnd_even_when_title_spec_present():
+    """错误标题不得挡住 launch 已记住的 hwnd（主路径关键）。"""
+    ctx = DesktopRunContext()
+    ctx.remember_launch("notepad.exe", hwnd=4242, title_hint="无标题 - Notepad")
+    raw = {
+        "action": "attach_window",
+        "automation_layer": "desktop",
+        "desktop_spec": {"window_title_re": ".*记事本.*"},
+        "description": "附着",
+    }
+    enriched = enrich_desktop_step_with_run_context(raw, ctx)
+    assert enriched["desktop_spec"].get("hwnd") == 4242
+
+
+def test_notepad_hints_include_english_title():
+    hints = window_hints_for_launch("notepad.exe")
+    assert "Notepad" in hints

@@ -332,24 +332,42 @@ class DesktopAutomation:
         if err:
             raise ValueError(err)
         path = (
-            (step.get("input_value") or "")
-            or spec.get("path")
-            or spec.get("exe")
-            or ""
-        ).strip()
+            (spec.get("path") or spec.get("exe") or "").strip()
+            or (step.get("input_value") or "").strip()
+        )
         if not path:
             raise ValueError("launch_app 缺少 input_value 或 desktop_spec.path")
         try:
             from desktop_env_config import smart_resolve_launch_path
 
-            path = smart_resolve_launch_path(path)
+            # 带 args 时 path 常为 python.exe，勿被 alias 改写
+            if not (spec.get("args") or step.get("args")):
+                path = smart_resolve_launch_path(path)
         except ImportError:
             pass
-        if sys.platform == "win32":
+
+        raw_args = spec.get("args") if spec.get("args") is not None else step.get("args")
+        args: List[str] = []
+        if isinstance(raw_args, str) and raw_args.strip():
+            args = [raw_args.strip()]
+        elif isinstance(raw_args, (list, tuple)):
+            args = [str(a) for a in raw_args if a is not None and str(a).strip() != ""]
+
+        title_hint = ""
+        for a in args:
+            s = str(a).strip()
+            if s.upper().startswith("ORD-") or s.upper().startswith("TESTORYERP"):
+                title_hint = s
+                break
+
+        if args:
+            subprocess.Popen([path] + args, shell=False)
+        elif sys.platform == "win32":
             os.startfile(path)  # type: ignore[attr-defined]
         else:
             subprocess.Popen([path], shell=False)
-        hwnd, win_title = self._find_hwnd_after_launch(path)
+
+        hwnd, win_title = self._find_hwnd_after_launch(title_hint or path)
         if hwnd:
             from desktop_input import focus_hwnd
 
@@ -363,6 +381,8 @@ class DesktopAutomation:
             out["hwnd"] = int(hwnd)
         if win_title:
             out["window_title"] = win_title
+        elif title_hint:
+            out["window_title"] = title_hint
         return out
 
     def _find_hwnd_after_launch(self, launch_value: str, timeout: float = 10.0) -> tuple:
@@ -374,6 +394,8 @@ class DesktopAutomation:
             base = launch_value.replace("\\", "/").split("/")[-1]
             if base and "." in base:
                 hints = [base.rsplit(".", 1)[0]]
+            else:
+                hints = [launch_value.strip()]
         deadline = time.time() + float(timeout)
         while time.time() < deadline:
             for hint in hints:
@@ -654,6 +676,16 @@ class DesktopAutomation:
             hwnd = resolve_hwnd_from_spec(
                 {"window_title_re": f".*{re.escape(ctx.last_window_title_hint)}.*"}
             )
+        # 多语言 launch hints（如 Notepad / 记事本）逐一尝试
+        if not hwnd and ctx.last_launch_value:
+            from desktop_run_context import window_hints_for_launch
+
+            for hint in window_hints_for_launch(ctx.last_launch_value):
+                hwnd = resolve_hwnd_from_spec(
+                    {"window_title_re": f"(?i).*{re.escape(hint)}.*"}
+                )
+                if hwnd:
+                    break
         if not hwnd and not spec_has_window_target(spec):
             fg = get_foreground_hwnd()
             hint = self._window_title_from_step(step, spec) or ctx.last_window_title_hint
@@ -688,13 +720,18 @@ class DesktopAutomation:
             time.sleep(0.1)
         title, _ = _hwnd_title_class(hwnd)
         self._ensure_dwm_stable()
-        return {
+        out = {
             "status": "success",
             "action": "attach_window",
             "hwnd": int(hwnd),
             "verified": True,
             "window_title": title,
         }
+        store_as = str(step.get("store_as") or step.get("var_name") or "").strip()
+        if store_as and title:
+            out["extracted_text"] = title
+            out["store_as"] = store_as
+        return out
 
     def _verify_window_exists(
         self,

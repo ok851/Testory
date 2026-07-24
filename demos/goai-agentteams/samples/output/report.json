@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "reason": "全部阶段与断言通过",
+  "evidence_level": "strong",
+  "evidence_counts": {
+    "strong": 3,
+    "weak": 3,
+    "missing": 0
+  },
+  "stages_total": 2,
+  "stages_failed": 0,
+  "assertion_passed": 3,
+  "assertion_failed": 0,
+  "agents_seen": [
+    "system",
+    "Planner",
+    "WebApiExecutor",
+    "Verifier"
+  ],
+  "run_id": "run-e1b442314fb5"
+}

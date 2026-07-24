@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 import os
 import unittest
 
@@ -43,6 +44,37 @@ class TestDesktopEnvConfig(unittest.TestCase):
         os.environ.pop("DESKTOP_LAUNCH_FALLBACK", None)
         s = prepare_desktop_step({"action": "launch_app", "input_value": ""})
         self.assertNotIn("path", s.get("desktop_spec") or {})
+
+    def test_prepare_launch_from_alias_object_with_args(self):
+        os.environ["DESKTOP_APP_ALIASES"] = json.dumps(
+            {
+                "erp": {
+                    "path": r"C:\Python\python.exe",
+                    "args": [r"D:\fake_erp.py", "--order-id", "{order_id}"],
+                    "window_title_re": "(?i)^{order_id}$",
+                }
+            }
+        )
+        # 步骤侧不带 vars；对象 args 原样写入（token 由计划构建时替换）
+        s = prepare_desktop_step({"action": "launch_app", "input_value": "@erp"})
+        spec = s.get("desktop_spec") or {}
+        self.assertEqual(spec.get("path"), r"C:\Python\python.exe")
+        self.assertEqual(spec.get("args")[0], r"D:\fake_erp.py")
+        self.assertEqual(spec.get("alias"), "erp")
+
+    def test_resolve_launch_spec_substitutes_order_id(self):
+        from desktop_env_config import resolve_launch_spec
+
+        os.environ["DESKTOP_APP_ALIASES"] = json.dumps(
+            {
+                "erp": {
+                    "path": "py.exe",
+                    "args": ["app.py", "--order-id", "{order_id}"],
+                }
+            }
+        )
+        launch = resolve_launch_spec("@erp", variables={"order_id": "ORD-9"})
+        self.assertEqual(launch["args"][-1], "ORD-9")
 
     def test_launch_uses_selector_as_program_name(self):
         os.environ.pop("DESKTOP_APP_ALIASES", None)

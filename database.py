@@ -1146,6 +1146,10 @@ class Database:
             cursor.execute("ALTER TABLE run_history ADD COLUMN test_type TEXT DEFAULT 'web'")
         except sqlite3.OperationalError:
             pass
+        try:
+            cursor.execute("ALTER TABLE run_history ADD COLUMN project_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
 
         # step_results 新增自愈信息字段
         try:
@@ -1295,12 +1299,15 @@ class Database:
         cursor.execute(f"DELETE FROM run_history WHERE id IN ({ph})", rh_ids)
 
     def _cleanup_orphan_run_history(self, cursor) -> int:
-        """删除 case_id 为空或对应 test_cases 行已不存在的运行历史。返回删除的 run_history 条数。"""
+        """删除孤立运行历史。跨端/AgentTeams（无 case_id）受保护，不得误删。"""
         cursor.execute(
             """
             SELECT rh.id FROM run_history rh
-            WHERE rh.case_id IS NULL
-               OR NOT EXISTS (SELECT 1 FROM test_cases tc WHERE tc.id = rh.case_id)
+            WHERE COALESCE(rh.test_type, 'web') NOT IN ('cross_end', 'agent_teams')
+              AND (
+                    rh.case_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM test_cases tc WHERE tc.id = rh.case_id)
+              )
             """
         )
         orphan_ids = [row[0] for row in cursor.fetchall()]
@@ -2492,101 +2499,125 @@ class Database:
     
     # ==================== 运行历史记录管理方法 ====================
     
-    def create_run_history(self, case_id: int, status: str, duration: float, error: str = "", extracted_text: str = "", expected_text: str = "", test_type: str = "web") -> int:
-        """创建运行历史记录"""
+    def create_run_history(
+        self,
+        case_id: Optional[int],
+        status: str,
+        duration: float,
+        error: str = "",
+        extracted_text: str = "",
+        expected_text: str = "",
+        test_type: str = "web",
+        *,
+        flow_name: str = "",
+        project_id: Optional[int] = None,
+        screenshots: str = "",
+    ) -> int:
+        """创建运行历史记录。
+
+        case_id 可为 None：仅当 test_type 为 cross_end / agent_teams（可审计跨端运行）。
+        普通用例路径仍应传入真实 case_id。
+        """
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
-        # 与 SQLite CURRENT_TIMESTAMP 一致：写入 UTC，展示由 API 层转北京时间
+
         local_time = _utc_now_sql()
-        
+        tt = str(test_type or "web").strip() or "web"
+        cid = case_id
+        if cid is not None:
+            try:
+                cid = int(cid)
+            except (TypeError, ValueError):
+                cid = None
+        pid = project_id
+        if pid is not None:
+            try:
+                pid = int(pid)
+            except (TypeError, ValueError):
+                pid = None
+
         cursor.execute(
-            "INSERT INTO run_history (case_id, status, duration, error, extracted_text, expected_text, test_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (case_id, status, duration, error, extracted_text, expected_text, test_type, local_time)
+            """
+            INSERT INTO run_history (
+                case_id, status, duration, error, extracted_text, expected_text,
+                test_type, created_at, flow_name, project_id, screenshots
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cid,
+                status,
+                duration,
+                error,
+                extracted_text,
+                expected_text,
+                tt,
+                local_time,
+                flow_name or "",
+                pid,
+                screenshots or None,
+            ),
         )
         history_id = cursor.lastrowid
-        
+
         conn.commit()
         conn.close()
-        
+
         return history_id
     
     def get_all_run_history(self, page: int = 1, page_size: int = 20, case_id: int = None, search_text: str = None, project_id: int = None, status_filter: str = None) -> List[Dict[str, Any]]:
-        """获取所有运行历史记录（支持分页、按测试用例ID过滤、按项目ID过滤、搜索、执行状态过滤：passed/failed）"""
+        """获取所有运行历史记录（支持分页、按测试用例ID过滤、按项目ID过滤、搜索、执行状态过滤：passed/failed）。
+
+        跨端/AgentTeams 记录可无 case_id：展示名用 flow_name；项目过滤同时匹配 rh.project_id。
+        """
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
+
         offset = (page - 1) * page_size
         st_rh = ""
         if status_filter == 'passed':
             st_rh = " AND (rh.status IN ('passed', 'success'))"
         elif status_filter == 'failed':
             st_rh = " AND (rh.status IN ('failed', 'error', 'fail'))"
-        
+
+        select_cols = """
+            rh.id, rh.case_id, rh.status, rh.duration, rh.error, rh.extracted_text,
+            rh.created_at, rh.expected_text, rh.screenshots,
+            COALESCE(rh.test_type, 'web') as test_type,
+            COALESCE(rh.flow_name, '') as flow_name,
+            rh.project_id as rh_project_id,
+            COALESCE(tc.name, NULLIF(rh.flow_name, ''), '跨端计划') as case_name
+        """
+        from_join = """
+            FROM run_history rh
+            LEFT JOIN test_cases tc ON rh.case_id = tc.id
+        """
+
+        where = ["1=1"]
+        params: List[Any] = []
         if case_id:
-            if search_text:
-                cursor.execute(f"""
-                    SELECT rh.*, tc.name as case_name 
-                    FROM run_history rh 
-                    LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                    WHERE rh.case_id = ? AND tc.name LIKE ?{st_rh}
-                    ORDER BY rh.created_at DESC
-                    LIMIT ? OFFSET ?
-                """, (case_id, f'%{search_text}%', page_size, offset))
-            else:
-                cursor.execute(f"""
-                    SELECT rh.*, tc.name as case_name 
-                    FROM run_history rh 
-                    LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                    WHERE rh.case_id = ?{st_rh}
-                    ORDER BY rh.created_at DESC
-                    LIMIT ? OFFSET ?
-                """, (case_id, page_size, offset))
-        else:
-            if project_id:
-                if search_text:
-                    cursor.execute(f"""
-                        SELECT rh.*, tc.name as case_name 
-                        FROM run_history rh 
-                        LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ? AND tc.name LIKE ?{st_rh}
-                        ORDER BY rh.created_at DESC
-                        LIMIT ? OFFSET ?
-                    """, (project_id, f'%{search_text}%', page_size, offset))
-                else:
-                    cursor.execute(f"""
-                        SELECT rh.*, tc.name as case_name 
-                        FROM run_history rh 
-                        LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ?{st_rh}
-                        ORDER BY rh.created_at DESC
-                        LIMIT ? OFFSET ?
-                    """, (project_id, page_size, offset))
-            else:
-                if search_text:
-                    cursor.execute(f"""
-                        SELECT rh.*, tc.name as case_name 
-                        FROM run_history rh 
-                        LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.name LIKE ?{st_rh}
-                        ORDER BY rh.created_at DESC
-                        LIMIT ? OFFSET ?
-                    """, (f'%{search_text}%', page_size, offset))
-                else:
-                    cursor.execute(f"""
-                        SELECT rh.*, tc.name as case_name 
-                        FROM run_history rh 
-                        LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE 1=1{st_rh}
-                        ORDER BY rh.created_at DESC
-                        LIMIT ? OFFSET ?
-                    """, (page_size, offset))
+            where.append("rh.case_id = ?")
+            params.append(case_id)
+        if project_id:
+            where.append("(tc.project_id = ? OR rh.project_id = ?)")
+            params.extend([project_id, project_id])
+        if search_text:
+            where.append("(tc.name LIKE ? OR rh.flow_name LIKE ? OR rh.error LIKE ?)")
+            like = f'%{search_text}%'
+            params.extend([like, like, like])
+        where_sql = " AND ".join(where)
+        sql = f"""
+            SELECT {select_cols}
+            {from_join}
+            WHERE {where_sql}{st_rh}
+            ORDER BY rh.created_at DESC
+            LIMIT ? OFFSET ?
+        """
+        params.extend([page_size, offset])
+        cursor.execute(sql, tuple(params))
         rows = cursor.fetchall()
-        
+
         history = []
         for row in rows:
-            # run_history 表字段: id, case_id, status, duration, error, extracted_text, created_at, expected_text, screenshots
-            # 最后一个是 case_name (来自 JOIN)
             history.append({
                 'id': row[0],
                 'case_id': row[1],
@@ -2597,67 +2628,50 @@ class Database:
                 'created_at': _bj_iso(row[6]),
                 'expected_text': row[7] if len(row) > 7 else '',
                 'screenshots': row[8] if len(row) > 8 else None,
-                'case_name': row[9] if len(row) > 9 else '未知用例'
+                'test_type': row[9] if len(row) > 9 else 'web',
+                'flow_name': row[10] if len(row) > 10 else '',
+                'project_id': row[11] if len(row) > 11 else None,
+                'case_name': row[12] if len(row) > 12 else '未知用例',
             })
-        
+
         conn.close()
         return history
 
     def get_run_history_count(self, case_id: int = None, search_text: str = None, project_id: int = None, status_filter: str = None) -> int:
-        """获取运行历史记录总数（支持按测试用例ID过滤、按项目ID过滤、搜索和执行状态过滤）"""
+        """获取运行历史记录总数（与 get_all_run_history 过滤条件一致）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
+
         st_rh = ""
-        st_plain = ""
         if status_filter == 'passed':
             st_rh = " AND (rh.status IN ('passed', 'success'))"
-            st_plain = " AND status IN ('passed', 'success')"
         elif status_filter == 'failed':
             st_rh = " AND (rh.status IN ('failed', 'error', 'fail'))"
-            st_plain = " AND status IN ('failed', 'error', 'fail')"
-        
+
+        where = ["1=1"]
+        params: List[Any] = []
         if case_id:
-            if search_text:
-                cursor.execute(f"""
-                    SELECT COUNT(*) 
-                    FROM run_history rh 
-                    LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                    WHERE rh.case_id = ? AND tc.name LIKE ?{st_rh}
-                """, (case_id, f'%{search_text}%'))
-            else:
-                cursor.execute(f"SELECT COUNT(*) FROM run_history WHERE case_id = ?{st_plain}", (case_id,))
-        else:
-            if project_id:
-                if search_text:
-                    cursor.execute(f"""
-                        SELECT COUNT(*) 
-                        FROM run_history rh 
-                        LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ? AND tc.name LIKE ?{st_rh}
-                    """, (project_id, f'%{search_text}%'))
-                else:
-                    cursor.execute(f"""
-                        SELECT COUNT(*) 
-                        FROM run_history rh 
-                        LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.project_id = ?{st_rh}
-                    """, (project_id,))
-            else:
-                if search_text:
-                    cursor.execute(f"""
-                        SELECT COUNT(*) 
-                        FROM run_history rh 
-                        LEFT JOIN test_cases tc ON rh.case_id = tc.id 
-                        WHERE tc.name LIKE ?{st_rh}
-                    """, (f'%{search_text}%',))
-                else:
-                    if st_plain:
-                        cursor.execute(f"SELECT COUNT(*) FROM run_history WHERE 1=1{st_plain}")
-                    else:
-                        cursor.execute("SELECT COUNT(*) FROM run_history")
+            where.append("rh.case_id = ?")
+            params.append(case_id)
+        if project_id:
+            where.append("(tc.project_id = ? OR rh.project_id = ?)")
+            params.extend([project_id, project_id])
+        if search_text:
+            where.append("(tc.name LIKE ? OR rh.flow_name LIKE ? OR rh.error LIKE ?)")
+            like = f'%{search_text}%'
+            params.extend([like, like, like])
+        where_sql = " AND ".join(where)
+        cursor.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM run_history rh
+            LEFT JOIN test_cases tc ON rh.case_id = tc.id
+            WHERE {where_sql}{st_rh}
+            """,
+            tuple(params),
+        )
         count = cursor.fetchone()[0]
-        
+
         conn.close()
         return count
     
@@ -2730,21 +2744,28 @@ class Database:
             conn.close()
     
     def get_run_history_detail(self, record_id: int) -> Dict[str, Any]:
-        """获取运行历史记录详情"""
+        """获取运行历史记录详情（含跨端无 case 记录）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT rh.*, tc.name as case_name 
-            FROM run_history rh 
-            LEFT JOIN test_cases tc ON rh.case_id = tc.id 
+
+        cursor.execute(
+            """
+            SELECT
+                rh.id, rh.case_id, rh.status, rh.duration, rh.error, rh.extracted_text,
+                rh.created_at, rh.expected_text, rh.screenshots,
+                COALESCE(rh.test_type, 'web') as test_type,
+                COALESCE(rh.flow_name, '') as flow_name,
+                rh.project_id as rh_project_id,
+                COALESCE(tc.name, NULLIF(rh.flow_name, ''), '跨端计划') as case_name
+            FROM run_history rh
+            LEFT JOIN test_cases tc ON rh.case_id = tc.id
             WHERE rh.id = ?
-        """, (record_id,))
+            """,
+            (record_id,),
+        )
         row = cursor.fetchone()
-        
+
         if row:
-            # run_history 表字段: id, case_id, status, duration, error, extracted_text, created_at, expected_text, screenshots
-            # 最后一个是 case_name (来自 JOIN)
             result = {
                 'id': row[0],
                 'case_id': row[1],
@@ -2755,11 +2776,14 @@ class Database:
                 'created_at': _bj_iso(row[6]),
                 'expected_text': row[7] if len(row) > 7 else '',
                 'screenshots': row[8] if len(row) > 8 else None,
-                'case_name': row[9] if len(row) > 9 else '未知用例'
+                'test_type': row[9] if len(row) > 9 else 'web',
+                'flow_name': row[10] if len(row) > 10 else '',
+                'project_id': row[11] if len(row) > 11 else None,
+                'case_name': row[12] if len(row) > 12 else '未知用例',
             }
             conn.close()
             return result
-        
+
         conn.close()
         return None
     
@@ -4089,9 +4113,9 @@ class Database:
 
     # ==================== 审计日志方法 ====================
 
-    def add_audit_log(self, user_id: int, username: str, action: str, target_type: str,
+    def add_audit_log(self, user_id: Optional[int], username: str, action: str, target_type: str,
                       target_id: int = None, details: str = None, ip_address: str = None) -> int:
-        """添加审计日志"""
+        """添加审计日志。user_id 可为 None（如登录失败未知用户）。"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         cursor.execute(

@@ -29,10 +29,12 @@
                 </h2>
                 <p class="mt-2 text-gray-600 dark:text-gray-400" data-i18n="sso_sub">配置 LDAP、企业微信等单点登录方式</p>
             </div>
-            <button type="button" onclick="showCreateModal()" class="btn btn-primary">
+            <button type="button" id="ssoAddBtn" onclick="showCreateModal()" class="btn btn-primary">
                 <i class="fas fa-plus mr-2"></i><span data-i18n="sso_add">添加配置</span>
             </button>
         </div>
+
+        <div id="ssoGateBanner" class="hidden mb-4 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"></div>
 
         <!-- SSO 配置列表 -->
         <div class="card">
@@ -263,11 +265,38 @@
 
         async function loadConfigs() {
             try {
-                const response = await fetch('/api/sso/configs');
-                const result = await response.json();
-                
-                if (result.success) {
+                const response = await fetch('/api/sso/configs', {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const result = await response.json().catch(function () { return null; });
+
+                if (response.status === 403 && result && window.TestoryLicenseGate &&
+                    window.TestoryLicenseGate.isFeatureGatePayload(result)) {
+                    var banner = document.getElementById('ssoGateBanner');
+                    if (banner) {
+                        banner.classList.remove('hidden');
+                        banner.innerHTML =
+                            '<div class="flex flex-wrap items-center justify-between gap-2">' +
+                            '<span>' + (result.error || '需要企业版 SSO 授权') + '</span>' +
+                            '<a class="underline font-medium text-blue-700 dark:text-blue-300" href="' +
+                            (result.upgrade_url || '/license?gate=sso&denied=1') +
+                            '">打开 License</a></div>';
+                    }
+                    var addBtn = document.getElementById('ssoAddBtn');
+                    if (addBtn) addBtn.disabled = true;
+                    var tbody = document.getElementById('configsTableBody');
+                    if (tbody && window.TestoryLicenseGate.tableGateRowHtml) {
+                        tbody.innerHTML = window.TestoryLicenseGate.tableGateRowHtml(result, 5);
+                    }
+                    window.TestoryLicenseGate.handleResponse(response, result, { notify: false });
+                    return;
+                }
+
+                if (result && result.success) {
                     renderConfigs(result.configs);
+                } else if (result && result.error) {
+                    console.error('加载配置失败:', result.error);
                 }
             } catch (error) {
                 console.error('加载配置失败:', error);
@@ -528,6 +557,11 @@
                 });
                 
                 const result = await response.json();
+
+                if (response.status === 403 && window.TestoryLicenseGate &&
+                    window.TestoryLicenseGate.handleResponse(response, result)) {
+                    return;
+                }
                 
                 if (result.success) {
                     Swal.fire(typeof t === 'function' ? t('sso_save_ok') : '', '', 'success');

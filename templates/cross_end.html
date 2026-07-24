@@ -213,6 +213,25 @@
     @keyframes ce-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .ce-status-text { font-size: 11px; font-weight: 600; }
     .ce-step-time { font-size: 10px; color: #94a3b8; margin-left: auto; }
+    .ce-stage-error {
+        margin-top: 8px; padding: 8px 10px; border-radius: 8px;
+        background: #fef2f2; border: 1px solid #fecaca;
+        color: #991b1b; font-size: 11px; line-height: 1.5;
+        display: none;
+    }
+    .ce-stage-error.is-visible { display: block; }
+    .ce-stage-error__hint { color: #7f1d1d; margin-top: 4px; opacity: 0.9; }
+    .ce-result-banner {
+        margin: 0 26px 12px; padding: 12px 14px; border-radius: 12px;
+        border: 1px solid #fecaca; background: #fef2f2;
+        color: #991b1b; font-size: 13px; line-height: 1.55;
+        display: none;
+    }
+    .ce-result-banner.is-ok {
+        border-color: #a7f3d0; background: #ecfdf5; color: #065f46;
+    }
+    .ce-result-banner__title { font-weight: 700; margin-bottom: 4px; }
+    .ce-result-banner__hint { font-size: 12px; opacity: 0.92; }
 
     /* 日志面板 */
     .ce-log-panel {
@@ -240,6 +259,92 @@
     .ce-summary-item .num--ok { color: #10b981; }
     .ce-summary-item .num--fail { color: #ef4444; }
     .ce-summary-item .num--skip { color: #f59e0b; }
+
+    /* 多 Agent 时间线 / Verifier */
+    .ce-agent-panel {
+        display: none;
+        margin: 0 26px 14px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid #e2e8f0;
+        background: linear-gradient(180deg, #f8fafc 0%, #fff 55%);
+    }
+    .ce-agent-panel.is-visible { display: block; }
+    .ce-ops-panel {
+        display: none;
+        margin: 0 26px 14px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid #fde68a;
+        background: linear-gradient(180deg, #fffbeb 0%, #fff 60%);
+    }
+    .ce-ops-panel.is-visible { display: block; }
+    .ce-ops-panel__title {
+        font-size: 13px; font-weight: 700; color: #92400e; margin: 0 0 8px;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .ce-ops-panel__hint { font-size: 12px; color: #78716c; margin-bottom: 10px; line-height: 1.5; }
+    .ce-ops-item {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+        padding: 10px 12px; border-radius: 10px; background: #fff;
+        border: 1px solid #fef3c7; margin-bottom: 8px; font-size: 12px; color: #334155;
+    }
+    .ce-ops-item__kind {
+        font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+        background: #ffedd5; color: #c2410c;
+    }
+    .ce-ops-item__kind.is-risk { background: #fee2e2; color: #b91c1c; }
+    .ce-ops-item__meta { flex: 1; min-width: 160px; }
+    .ce-ops-item__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .ce-ops-empty { font-size: 12px; color: #a8a29e; }
+    .ce-agent-panel__head {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+        margin-bottom: 12px;
+    }
+    .ce-agent-panel__title {
+        font-size: 13px; font-weight: 700; color: #1e293b; margin: 0;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .ce-agent-panel__meta { font-size: 11px; color: #64748b; }
+    .ce-agent-chip {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+        background: #eef2ff; color: #4338ca;
+    }
+    .ce-agent-chip.is-ok { background: #d1fae5; color: #047857; }
+    .ce-agent-chip.is-fail { background: #fee2e2; color: #b91c1c; }
+    .ce-agent-report {
+        font-size: 12px; color: #334155; line-height: 1.55;
+        padding: 10px 12px; border-radius: 10px; background: #fff;
+        border: 1px solid #e2e8f0; margin-bottom: 12px;
+    }
+    .ce-agent-report strong { color: #0f172a; }
+    .ce-agent-timeline {
+        list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto;
+    }
+    .ce-agent-timeline__item {
+        display: grid; grid-template-columns: 64px 92px 72px 1fr;
+        gap: 8px; align-items: start;
+        padding: 8px 4px; border-bottom: 1px solid #f1f5f9;
+        font-size: 12px; color: #475569;
+    }
+    .ce-agent-timeline__item:last-child { border-bottom: none; }
+    .ce-agent-timeline__ts { font-family: ui-monospace, monospace; color: #94a3b8; font-size: 11px; }
+    .ce-agent-timeline__agent { font-weight: 600; color: #1e293b; }
+    .ce-agent-timeline__kind {
+        display: inline-block; padding: 1px 6px; border-radius: 6px;
+        font-size: 10px; font-weight: 700; text-transform: uppercase;
+        background: #f1f5f9; color: #64748b;
+    }
+    .ce-agent-timeline__kind.is-dispatch { background: #e0e7ff; color: #3730a3; }
+    .ce-agent-timeline__kind.is-complete { background: #d1fae5; color: #065f46; }
+    .ce-agent-timeline__kind.is-fail { background: #fee2e2; color: #991b1b; }
+    .ce-agent-timeline__msg { word-break: break-word; }
+    @media (max-width: 720px) {
+        .ce-agent-timeline__item {
+            grid-template-columns: 1fr; gap: 4px;
+        }
+    }
 
     /* 空状态 */
     .ce-empty {
@@ -308,7 +413,10 @@
     }
     .ce-scenario-row:hover { border-color: #6366f1; background: #eef2ff; }
     .ce-scenario-row__name { font-weight: 600; color: #1e293b; flex: 1; }
-    .ce-scenario-row__meta { font-size: 11px; color: #94a3b8; }
+    .ce-stage-badge--hermes { background: #fce7f3; color: #be185d; margin-left: 6px; }
+    .ce-store-hint {
+        margin-top: 8px; font-size: 11px; color: #64748b; line-height: 1.45;
+    }
 </style>
 {% endblock %}
 {% block content %}
@@ -381,6 +489,48 @@
                             <p>如 "通过 API 删除测试数据"，AI 会自动标记为清理阶段，执行后自动运行。</p>
                         </div>
                     </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#fee2e2;color:#dc2626;">!</div>
+                        <div class="ce-guide-card__body">
+                            <strong>写清要点击的控件</strong>
+                            <p>Web 步骤必须有元素定位（按钮文案/输入框名称）。空选择器会直接失败，不会假装通过。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#e0e7ff;color:#4338ca;">↔</div>
+                        <div class="ce-guide-card__body">
+                            <strong>写清变量怎么传</strong>
+                            <p>如「把 API 返回的 token 用于浏览器登录」。缺变量时会提示等待超时，并说明该检查上一阶段抽取。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#fce7f3;color:#be185d;">AI</div>
+                        <div class="ce-guide-card__body">
+                            <strong>可选 Hermes 执行器</strong>
+                            <p>默认用经典步骤（selector）。仅当阶段写明 executor: hermes 或 use_hermes 时才走 Agent；不可用会明确失败，不会假装跑过。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#ecfdf5;color:#047857;">=</div>
+                        <div class="ce-guide-card__body">
+                            <strong>写清要对齐的数据</strong>
+                            <p>如「断言 API 余额与浏览器页面余额一致」。系统会比对多端变量；缺来源或数值不一致会明确失败。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#eef2ff;color:#4f46e5;">👥</div>
+                        <div class="ce-guide-card__body">
+                            <strong>多 Agent 执行</strong>
+                            <p>分解后点「多 Agent 执行」：规划 → 执行 → 验证。下方时间线会显示各角色派单/完成，Verifier 报告标明证据强弱；未通过不会假绿。</p>
+                        </div>
+                    </div>
+                    <div class="ce-guide-card">
+                        <div class="ce-guide-card__icon" style="background:#fef3c7;color:#b45309;">PC</div>
+                        <div class="ce-guide-card__body">
+                            <strong>Windows 桌面阶段</strong>
+                            <p>执行前自动预检 Gateway/本机会话；不可用 → <code>DESKTOP_NO_SESSION</code>，不假绿。推荐「桌面主路径（记事本）」一键加载标准计划。</p>
+                        </div>
+                    </div>
                 </div>
                 <div class="ce-guide-example">
                     <strong>示例 — 完整描述：</strong>
@@ -392,7 +542,11 @@
                 <button class="ce-quick-cmd" onclick="CE.loadTemplate('order_sync')" title="API下单 → 浏览器验证 → 移动端核验 → 清理">🛒 订单同步验证</button>
                 <button class="ce-quick-cmd" onclick="CE.loadTemplate('data_consistency')" title="API查余额 → 桌面端OCR提取 → 断言一致性">📊 数据一致性检查</button>
                 <button class="ce-quick-cmd" onclick="CE.loadTemplate('mobile_desktop')" title="移动端截图 → 桌面端截图 → 断言两端数据一致">📱💻 移动端与桌面端对比</button>
+                <button class="ce-quick-cmd" onclick="CE.loadDesktopMainpath()" title="标准计划：launch 记事本 → attach → input → verify">💻 桌面主路径（记事本）</button>
+                <button class="ce-quick-cmd" onclick="CE.loadErpDesktopSample()" title="Fake ERP：API 订单号 ↔ 桌面窗口标题断言">🏢 ERP 桌面样例</button>
+                <button class="ce-quick-cmd" onclick="CE.loadErpAliasSample()" title="经 DESKTOP_APP_ALIASES 的 @erp 启动客户客户端">🏢 ERP @erp 别名</button>
             </div>
+            <p class="ce-ops-panel__hint" id="ceDesktopPreflightHint" style="margin-top:8px;"></p>
         </div>
 
         <div class="ce-stage-panels" id="ceStagePanels">
@@ -401,6 +555,28 @@
                 <p>在上方输入跨端场景描述</p>
                 <p style="font-size:12px;opacity:0.7;">AI 将自动分解为多阶段执行计划</p>
             </div>
+        </div>
+
+        <div class="ce-result-banner" id="ceResultBanner" aria-live="polite"></div>
+
+        <div class="ce-ops-panel" id="ceOpsPanel" aria-live="polite">
+            <h4 class="ce-ops-panel__title"><i class="fas fa-hand-paper"></i> 人机确认与风险审批</h4>
+            <p class="ce-ops-panel__hint">
+                执行采用异步模式：出现验证码/登录时点「继续」；L2 高风险点「批准」后可一键带令牌重试。超时与拒绝均记失败，不会假绿。
+            </p>
+            <div id="ceOpsList" class="ce-ops-empty">暂无待处理门禁</div>
+        </div>
+
+        <div class="ce-agent-panel" id="ceAgentPanel" aria-live="polite">
+            <div class="ce-agent-panel__head">
+                <h4 class="ce-agent-panel__title"><i class="fas fa-users"></i> 多 Agent 协同</h4>
+                <span class="ce-agent-chip" id="ceAgentStatusChip">未运行</span>
+                <span class="ce-agent-panel__meta" id="ceAgentRunMeta"></span>
+            </div>
+            <div class="ce-agent-report" id="ceAgentReport">
+                分解场景后，可点「多 Agent 执行」查看 Planner → 执行 → Verifier 时间线与证据报告。
+            </div>
+            <ul class="ce-agent-timeline" id="ceAgentTimeline"></ul>
         </div>
 
         <div class="ce-log-panel" id="ceLogPanel" style="display:none;">
@@ -427,6 +603,12 @@
             <button class="ce-btn ce-btn--primary" id="ceExecuteBtn" onclick="CE.execute()" disabled>
                 <i class="fas fa-play"></i> 执行全部阶段
             </button>
+            <button class="ce-btn ce-btn--ghost" id="ceAgentTeamBtn" onclick="CE.runAgentTeam()" disabled title="Planner → WebApiExecutor → Verifier，写出 TestRunState">
+                <i class="fas fa-users"></i> 多 Agent 执行
+            </button>
+            <button class="ce-btn ce-btn--ghost" id="ceTraceBtn" onclick="CE.exportTrace()" disabled title="导出 Trace 证据包（ZIP）">
+                <i class="fas fa-file-archive"></i> 导出证据包
+            </button>
             <button class="ce-btn ce-btn--ghost" id="ceSaveBtn" onclick="CE.saveScenario()" disabled>
                 <i class="fas fa-save"></i> 保存场景
             </button>
@@ -446,8 +628,16 @@
 
     CE.plan = null;
     CE.projectId = null;
+    CE.currentScenarioId = null;
     CE.projectName = null;
     CE._allProjects = [];
+    CE.lastAuditId = null;
+    CE.lastRunHistoryId = null;
+    CE.lastAgentRunId = null;
+    CE.lastAsyncRunId = null;
+    CE._opsPollTimer = null;
+    CE._runPollTimer = null;
+    CE._pendingRiskByStage = {};
 
     CE.PROJECT_COLORS = [
         '#6366f1', '#8b5cf6', '#3b82f6', '#06b6d4',
@@ -462,6 +652,9 @@
             CE.updateProjectBadge(CE.projectId, CE.projectName);
         }
         CE.loadSavedScenarios();
+        if (typeof CE.refreshDesktopPreflight === 'function') {
+            CE.refreshDesktopPreflight();
+        }
     };
 
     CE.toggleGuide = function() {
@@ -605,8 +798,66 @@
 
     CE.escapeHtml = function(s) {
         var d = document.createElement('div');
-        d.textContent = s;
+        d.textContent = s == null ? '' : String(s);
         return d.innerHTML;
+    };
+
+    CE.stageKey = function(stage, idx) {
+        if (!stage || typeof stage !== 'object') return String(idx);
+        return String(stage.id || stage.stage_id || idx);
+    };
+
+    CE.FRIENDLY_ERRORS = {
+        EMPTY_SELECTOR: '缺少页面元素定位：请写清要点击/输入的控件，或重新 AI 分解。',
+        EMPTY_URL: '缺少打开地址：请为导航步骤填写 url。',
+        EMPTY_ASSERT: '断言不完整：请补充选择器或预期文本。',
+        NO_BROWSER_PAGE: '浏览器未就绪：请先连接本机浏览器后再跑 Web 阶段。',
+        SYNC_DATA_TIMEOUT: '等待变量超时：请检查上一阶段是否抽出了同名变量。',
+        DEPENDS_ON_UNSATISFIED: '依赖阶段未通过：请先修复上游阶段。',
+        RECOVERY_SKIP_BLOCKS_SUCCESS: '有失败阶段被跳过，默认不算整体成功。',
+        VAR_EXTRACT_MISSING: '变量抽取失败：请检查选择器或 JSONPath。',
+        ALL_STEPS_SKIPPED: '本阶段步骤全部被跳过，没有实际执行。',
+        CROSS_END_ASSERT_FAILED: '跨端断言未通过：多端数据不一致，或变量/页面元素未读到。',
+        ASSERT_SOURCE_MISSING: '断言来源缺失：请检查上游是否抽出同名变量，或浏览器是否已打开。',
+        HERMES_UNAVAILABLE: 'Hermes 不可用：请先启动 Gateway，或去掉 executor/use_hermes 改用经典步骤。',
+        HERMES_FAILED: 'Hermes 未明确成功：回复需包含 [RESULT] ok。',
+        EXECUTION_LOCK_BUSY: '本机正忙：请等待当前自动化任务结束后再试。',
+        EXECUTION_LOCK_UNAVAILABLE: '执行锁不可用：请查看平台日志后重试。',
+        HITL_TIMEOUT_OR_CANCEL: '需要人工确认，但已超时或被取消。请处理验证码/登录后点「继续」，或加大超时。',
+        HITL_TIMEOUT: '人工确认超时：请在时限内完成验证码/登录并继续。',
+        HITL_CANCELLED: '人工确认已取消：流程按失败结束（不会假绿）。',
+        HITL_ERROR: '人工确认门禁异常：请查看日志后重试。',
+        RISK_APPROVAL_REQUIRED: '高风险（L2）动作需审批后才能执行，请完成 RiskGuard 审批。',
+        RISK_TOKEN_INVALID: '审批令牌无效或未批准，请重新申请。',
+        RISK_TOKEN_STAGE_MISMATCH: '审批令牌与当前阶段不匹配。',
+        RISK_DENIED: 'RiskGuard 已拒绝该动作，不会继续执行。',
+        DESKTOP_SOFT_FAIL: '桌面步骤未真正成功（含 warning）：请检查目标窗口/控件，不会假绿。',
+        DESKTOP_STEP_FAILED: '桌面步骤执行失败：请确认 Desktop Gateway 已启动，且控件可被 UIA/视觉定位。',
+        DESKTOP_NO_SESSION: '桌面会话不可用：请先启动智能体或 Desktop Gateway 后再跑 desktop 阶段。'
+    };
+
+    CE.friendlyMessage = function(detail) {
+        detail = detail || {};
+        if (detail.user_hint) return String(detail.user_hint);
+        var code = detail.error_code || '';
+        if (code && CE.FRIENDLY_ERRORS[code]) return CE.FRIENDLY_ERRORS[code];
+        return detail.error || detail.error_message || '';
+    };
+
+    CE.setResultBanner = function(ok, title, hint) {
+        var el = document.getElementById('ceResultBanner');
+        if (!el) return;
+        if (!title) {
+            el.style.display = 'none';
+            el.className = 'ce-result-banner';
+            el.innerHTML = '';
+            return;
+        }
+        el.style.display = 'block';
+        el.className = 'ce-result-banner' + (ok ? ' is-ok' : '');
+        el.innerHTML =
+            '<div class="ce-result-banner__title">' + CE.escapeHtml(title) + '</div>' +
+            (hint ? '<div class="ce-result-banner__hint">' + CE.escapeHtml(hint) + '</div>' : '');
     };
 
     CE.loadTemplate = function(name) {
@@ -614,12 +865,122 @@
             signup_flow: '1. 通过 API 接口注册新用户，用户名使用 {{run_id}}_{{timestamp}} 格式\n2. API 返回的 token 注入到浏览器 localStorage\n3. 在浏览器端验证登录状态，首页显示用户名\n4. 同时在移动端用 API 返回的凭证登录，验证首页一致',
             order_sync: '1. 通过 API 创建一笔测试订单，商品为 SKU-TEST-001\n2. 在浏览器端打开订单列表页，检查新订单出现在列表中\n3. 在移动端刷新订单页，检查订单金额与 API 返回一致\n4. 清理阶段：通过 API 取消该测试订单',
             data_consistency: '1. 通过 API 查询用户余额，记录为 {{api_balance}}\n2. 在桌面应用端打开钱包页面，截图并 OCR 提取余额数字\n3. 断言桌面端余额与 API 余额一致，误差 < 0.01',
-            mobile_desktop: '1. 在移动端打开商品详情页，截取价格和库存信息\n2. 在桌面端打开同一商品页面，截图 OCR 提取价格\n3. 断言两个端的价格和库存数据完全一致'
+            mobile_desktop: '1. 在移动端打开商品详情页，截取价格和库存信息\n2. 在桌面端打开同一商品页面，截图 OCR 提取价格\n3. 断言两个端的价格和库存数据完全一致',
+            desktop_mainpath: '1. 在 Windows 桌面启动 notepad.exe（记事本）\n2. 附着记事本窗口并输入探针文本 Testory desktop mainpath OK\n3. 校验记事本窗口仍存在（UIA/标题）；控件未命中不得当绿'
         };
         if (templates[name]) {
             document.getElementById('ceScenarioInput').value = templates[name];
             CE.addLog('info', '已加载模板: ' + name);
         }
+    };
+
+    CE.refreshDesktopPreflight = function() {
+        var el = document.getElementById('ceDesktopPreflightHint');
+        if (!el) return;
+        fetch('/api/ai/desktop/preflight')
+            .then(function(r) { return r.json().then(function(j) { return { status: r.status, body: j }; }); })
+            .then(function(res) {
+                var pre = (res.body && res.body.preflight) || {};
+                if (res.body && res.body.ok) {
+                    el.textContent = '桌面预检通过（' + (pre.mode || '') + ' · ' + (pre.detail || '') + '）';
+                    el.style.color = '';
+                } else {
+                    el.textContent = '桌面预检未通过：' + ((pre && pre.error) || (res.body && res.body.error) || 'DESKTOP_NO_SESSION') + ' — 执行将诚实失败，不假绿。';
+                    el.style.color = '#b45309';
+                }
+            })
+            .catch(function() {
+                el.textContent = '桌面预检请求失败（可稍后重试）';
+                el.style.color = '#b45309';
+            });
+    };
+
+    CE.loadDesktopMainpath = function() {
+        CE.loadTemplate('desktop_mainpath');
+        var qs = CE.projectId ? ('?project_id=' + encodeURIComponent(CE.projectId)) : '';
+        fetch('/api/ai/cross-end/desktop-mainpath-plan' + qs, {
+            method: 'GET',
+            headers: {'Accept': 'application/json'}
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data || !data.ok || !data.plan) {
+                CE.addLog('warn', (data && data.error) || '加载桌面主路径计划失败');
+                return;
+            }
+            CE.plan = data.plan;
+            CE.renderPlan(data.plan);
+            CE.addLog('info', '已加载桌面主路径标准计划（记事本）');
+            if (!data.ready_to_run) {
+                CE.addLog('warn', data.hint || '桌面预检未通过，执行将诚实失败');
+            }
+            CE.refreshDesktopPreflight();
+        })
+        .catch(function(err) {
+            CE.addLog('warn', '加载桌面主路径失败: ' + err);
+        });
+    };
+
+    CE.loadErpDesktopSample = function() {
+        document.getElementById('ceScenarioInput').value =
+            '1. 以 API 种子订单号 ORD-DEMO-404 作为上游结果\n' +
+            '2. 启动 Fake ERP 桌面窗口（标题=订单号）\n' +
+            '3. 附着窗口并抽取 erp_order_id\n' +
+            '4. 断言 api_order_id 与 erp_order_id 一致（不一致不得假绿）';
+        var qs = CE.projectId ? ('?project_id=' + encodeURIComponent(CE.projectId)) : '';
+        qs += (qs ? '&' : '?') + 'order_id=ORD-DEMO-404&mode=fake';
+        fetch('/api/ai/cross-end/erp-desktop-plan' + qs, {
+            method: 'GET',
+            headers: {'Accept': 'application/json'}
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data || !data.ok || !data.plan) {
+                CE.addLog('warn', (data && data.error) || '加载 ERP 桌面样例失败');
+                return;
+            }
+            CE.plan = data.plan;
+            CE.renderPlan(data.plan);
+            CE.addLog('info', '已加载 ERP 桌面样例（Fake ERP）');
+            if (!data.ready_to_run) {
+                CE.addLog('warn', data.hint || '桌面预检未通过，执行将诚实失败');
+            }
+            CE.refreshDesktopPreflight();
+        })
+        .catch(function(err) {
+            CE.addLog('warn', '加载 ERP 样例失败: ' + err);
+        });
+    };
+
+    CE.loadErpAliasSample = function() {
+        document.getElementById('ceScenarioInput').value =
+            '1. 以 API 种子订单号 ORD-DEMO-404 作为上游结果\n' +
+            '2. 经 DESKTOP_APP_ALIASES 别名 @erp 启动客户 ERP\n' +
+            '3. 附着窗口并抽取 erp_order_id（标题正则可配）\n' +
+            '4. 断言 api_order_id 与 erp_order_id 一致（不一致不得假绿）';
+        var qs = CE.projectId ? ('?project_id=' + encodeURIComponent(CE.projectId)) : '';
+        qs += (qs ? '&' : '?') + 'order_id=ORD-DEMO-404&mode=alias&alias=erp';
+        fetch('/api/ai/cross-end/erp-desktop-plan' + qs, {
+            method: 'GET',
+            headers: {'Accept': 'application/json'}
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data || !data.ok || !data.plan) {
+                CE.addLog('warn', (data && data.error) || '加载 ERP 别名计划失败');
+                return;
+            }
+            CE.plan = data.plan;
+            CE.renderPlan(data.plan);
+            CE.addLog('info', '已加载 ERP @erp 别名计划');
+            if (data.alias_error || !data.ready_to_run) {
+                CE.addLog('warn', data.hint || data.alias_error || '别名未就绪或桌面预检失败（不假绿）');
+            }
+            CE.refreshDesktopPreflight();
+        })
+        .catch(function(err) {
+            CE.addLog('warn', '加载 ERP 别名计划失败: ' + err);
+        });
     };
 
     CE.decompose = function() {
@@ -649,7 +1010,13 @@
                 }
                 document.getElementById('ceExecuteBtn').disabled = false;
                 document.getElementById('ceSaveBtn').disabled = false;
+                var atBtn = document.getElementById('ceAgentTeamBtn');
+                if (atBtn) atBtn.disabled = false;
+                var trBtn = document.getElementById('ceTraceBtn');
+                if (trBtn) trBtn.disabled = false;
                 document.getElementById('ceSummaryBar').style.display = 'flex';
+                var ap = document.getElementById('ceAgentPanel');
+                if (ap) ap.classList.add('is-visible');
             } else {
                 var errMsg = data.error || '未知错误';
                 CE.addLog('err', '分解失败: ' + errMsg);
@@ -688,37 +1055,66 @@
 
     CE.buildStageCard = function(stage, idx) {
         var card = document.createElement('div');
+        var sid = CE.stageKey(stage, idx);
         card.className = 'ce-stage-card ce-stage-card--' + (stage.layer || 'api');
-        card.id = 'ce-stage-' + (stage.stage_id || idx);
+        card.id = 'ce-stage-' + sid;
+        card.setAttribute('data-stage-id', sid);
 
         var layerBadge = (stage.layer || 'api').toUpperCase();
         var badgeClass = 'ce-stage-badge--' + (stage.layer || 'api');
-        var cleanupLabel = stage.cleanup ? ' 🧹清理' : '';
+        var cleanupLabel = stage.cleanup ? ' · 清理' : '';
+        var hermesOn = !!(
+            stage.use_hermes === true ||
+            (stage.executor && String(stage.executor).toLowerCase() === 'hermes') ||
+            (stage.runner && String(stage.runner).toLowerCase() === 'hermes') ||
+            (CE.plan && String(CE.plan.default_ui_executor || '').toLowerCase() === 'hermes' && stage.use_hermes !== false)
+        );
+        var hermesBadge = hermesOn
+            ? '<span class="ce-stage-badge ce-stage-badge--hermes" title="本阶段将走 Hermes Agent">Hermes</span>'
+            : '';
 
         var varsHtml = '';
         if (stage.vars_to_store) {
             Object.keys(stage.vars_to_store).forEach(function(k) {
-                varsHtml += '<div class="step-var">' + CE.escapeHtml(k) + ' = ' + CE.escapeHtml(stage.vars_to_store[k]) + '</div>';
+                varsHtml += '<div class="step-var">保存 ' + CE.escapeHtml(k) + ' = ' + CE.escapeHtml(
+                    typeof stage.vars_to_store[k] === 'string'
+                        ? stage.vars_to_store[k]
+                        : JSON.stringify(stage.vars_to_store[k])
+                ) + '</div>';
             });
         }
         if (stage.vars_to_read) {
             (Array.isArray(stage.vars_to_read) ? stage.vars_to_read : []).forEach(function(v) {
-                varsHtml += '<div class="step-var">读取: ' + CE.escapeHtml(v) + '</div>';
+                varsHtml += '<div class="step-var">等待变量: ' + CE.escapeHtml(v) + '</div>';
             });
         }
+        if (stage.depends_on && stage.depends_on.length) {
+            varsHtml += '<div class="step-var">依赖: ' + CE.escapeHtml(
+                (Array.isArray(stage.depends_on) ? stage.depends_on : [stage.depends_on]).join(', ')
+            ) + '</div>';
+        }
 
-        var desc = stage.description || stage.step || JSON.stringify(stage.action || {}).slice(0, 80);
+        var title = stage.label || stage.title || stage.name || ('阶段 ' + sid);
+        var desc = stage.description || stage.step || '';
+        if (!desc && stage.steps && stage.steps.length) {
+            desc = stage.steps.length + ' 个步骤';
+        }
+        if (!desc && stage.request) {
+            desc = (stage.request.method || 'GET') + ' ' + (stage.request.url || '');
+        }
 
         card.innerHTML =
             '<div class="ce-stage-header">' +
                 '<span class="ce-stage-header__title">' +
-                    (idx + 1) + '. ' + CE.escapeHtml(stage.title || ('Stage ' + (stage.stage_id || idx + 1))) + cleanupLabel +
+                    (idx + 1) + '. ' + CE.escapeHtml(title) + cleanupLabel +
                 '</span>' +
                 '<span class="ce-stage-badge ' + badgeClass + '">' + layerBadge + '</span>' +
+                hermesBadge +
             '</div>' +
             '<div class="ce-stage-body">' +
                 '<div class="step-desc">' + CE.escapeHtml(desc) + '</div>' +
                 varsHtml +
+                '<div class="ce-stage-error" data-role="stage-error"></div>' +
             '</div>' +
             '<div class="ce-stage-footer">' +
                 '<span class="ce-status-dot ce-status-dot--idle"></span>' +
@@ -731,6 +1127,14 @@
 
     CE.updateStageStatus = function(stageId, status, detail) {
         var card = document.getElementById('ce-stage-' + stageId);
+        if (!card && CE.plan && CE.plan.stages) {
+            // 兼容仅有下标 id 的旧卡片
+            CE.plan.stages.forEach(function(st, i) {
+                if (CE.stageKey(st, i) === String(stageId)) {
+                    card = document.getElementById('ce-stage-' + CE.stageKey(st, i));
+                }
+            });
+        }
         if (!card) return;
 
         var clsMap = {
@@ -739,97 +1143,597 @@
             failed: 'ce-stage-card--failed',
             skipped: 'ce-stage-card--cleanup'
         };
-        Object.values(clsMap).forEach(function(c) { card.classList.remove(c); });
+        Object.keys(clsMap).forEach(function(k) { card.classList.remove(clsMap[k]); });
         if (clsMap[status]) card.classList.add(clsMap[status]);
 
         var dot = card.querySelector('.ce-status-dot');
         var text = card.querySelector('.ce-status-text');
         var time = card.querySelector('.ce-step-time');
+        var errBox = card.querySelector('[data-role="stage-error"]');
 
-        dot.className = 'ce-status-dot ce-status-dot--' + status;
-        text.textContent = {running:'执行中...', passed:'通过', failed:'失败', skipped:'跳过'}[status] || status;
+        if (dot) dot.className = 'ce-status-dot ce-status-dot--' + status;
+        if (text) {
+            text.textContent = {
+                running: '执行中...',
+                passed: '通过',
+                failed: '失败',
+                skipped: '跳过'
+            }[status] || status;
+        }
 
-        if (detail && detail.elapsed_ms) {
+        if (detail && detail.elapsed_ms && time) {
             time.textContent = Math.round(detail.elapsed_ms / 100) / 10 + 's';
+        }
+
+        if (errBox) {
+            if (status === 'failed') {
+                var msg = CE.friendlyMessage(detail);
+                var raw = (detail && (detail.error || detail.error_message)) || '';
+                errBox.classList.add('is-visible');
+                errBox.innerHTML =
+                    CE.escapeHtml(msg || raw || '阶段执行失败') +
+                    (msg && raw && msg !== raw
+                        ? '<div class="ce-stage-error__hint">' + CE.escapeHtml(raw) + '</div>'
+                        : '');
+            } else {
+                errBox.classList.remove('is-visible');
+                errBox.innerHTML = '';
+            }
         }
     };
 
     CE.execute = function() {
-        if (!CE.plan || !CE.projectId) return;
+        if (!CE.plan || !CE.projectId) {
+            CE.addLog('warn', '请先选择项目并完成 AI 分解');
+            return;
+        }
 
         var btn = document.getElementById('ceExecuteBtn');
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 执行中...';
         document.getElementById('ceSummaryBar').style.display = 'flex';
+        CE.setResultBanner(false, '');
+        CE._pendingRiskByStage = {};
 
         if (CE.plan.stages) {
-            CE.plan.stages.forEach(function(stage) {
-                CE.updateStageStatus(stage.stage_id, 'running');
+            CE.plan.stages.forEach(function(stage, idx) {
+                CE.updateStageStatus(CE.stageKey(stage, idx), 'running');
             });
         }
 
-        CE.addLog('info', '开始执行跨端计划: ' + (CE.plan.name || '未命名'));
+        CE.addLog('info', '开始异步执行跨端计划: ' + (CE.plan.scenario || CE.plan.name || '未命名'));
+        CE.startOpsPolling();
 
         fetch('/api/ai/cross-end/execute', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({project_id: CE.projectId, plan: CE.plan})
+            body: JSON.stringify({project_id: CE.projectId, plan: CE.plan, async: true})
         })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play"></i> 执行全部阶段';
-
-            if (data.ok && data.result) {
-                CE.renderExecutionResult(data.result);
-                var passed = 0, failed = 0, skipped = 0;
-                if (data.result.stage_results) {
-                    data.result.stage_results.forEach(function(sr) {
-                        if (sr.ok_assert === false) failed++;
-                        else if (sr.cleanup) skipped++;
-                        else passed++;
-                    });
-                }
-                document.getElementById('ceSummaryPassed').textContent = passed;
-                document.getElementById('ceSummaryFailed').textContent = failed;
-                document.getElementById('ceSummarySkipped').textContent = skipped;
-                CE.addLog(failed === 0 ? 'ok' : 'err',
-                    '执行完成: ' + passed + ' 通过, ' + failed + ' 失败, ' + skipped + ' 跳过');
-            } else {
-                CE.addLog('err', '执行失败: ' + (data.error || '未知错误'));
-                if (CE.plan.stages) {
-                    CE.plan.stages.forEach(function(stage) {
-                        CE.updateStageStatus(stage.stage_id, 'failed');
-                    });
-                }
+        .then(function(r) {
+            return r.json().then(function(data) {
+                return { httpStatus: r.status, data: data };
+            });
+        })
+        .then(function(pack) {
+            var data = pack.data || {};
+            if (pack.httpStatus === 409 || data.lock === 'busy') {
+                CE.finishExecuteBtn();
+                var busyHint = CE.friendlyMessage(data) || data.error || '本机已有任务在执行';
+                CE.setResultBanner(false, '暂时无法执行', busyHint);
+                CE.addLog('err', busyHint);
+                CE.markAllStagesFailed(data);
+                return;
             }
+            if (!data.ok || !data.run_id) {
+                CE.finishExecuteBtn();
+                var errMsg = CE.friendlyMessage(data) || data.error || '启动失败';
+                CE.setResultBanner(false, '执行失败', errMsg);
+                CE.addLog('err', errMsg);
+                CE.markAllStagesFailed(data);
+                return;
+            }
+            CE.lastAsyncRunId = data.run_id;
+            CE.addLog('info', '异步运行 ' + data.run_id + ' 已启动，可在门禁面板处理 HITL/审批');
+            CE.pollAsyncRun(data.run_id);
         })
         .catch(function(err) {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-play"></i> 执行全部阶段';
+            CE.finishExecuteBtn();
+            CE.setResultBanner(false, '请求失败', err.message || String(err));
             CE.addLog('err', '执行请求失败: ' + err.message);
-            if (CE.plan.stages) {
-                CE.plan.stages.forEach(function(stage) {
-                    CE.updateStageStatus(stage.stage_id, 'failed');
+            CE.markAllStagesFailed();
+        });
+    };
+
+    CE.finishExecuteBtn = function() {
+        var btn = document.getElementById('ceExecuteBtn');
+        if (!btn) return;
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i> 执行全部阶段';
+    };
+
+    CE.markAllStagesFailed = function(data) {
+        if (!CE.plan || !CE.plan.stages) return;
+        CE.plan.stages.forEach(function(stage, idx) {
+            CE.updateStageStatus(CE.stageKey(stage, idx), 'failed', data || {});
+        });
+    };
+
+    CE.pollAsyncRun = function(runId) {
+        if (CE._runPollTimer) clearInterval(CE._runPollTimer);
+        var tries = 0;
+        CE._runPollTimer = setInterval(function() {
+            tries += 1;
+            if (tries > 600) {
+                clearInterval(CE._runPollTimer);
+                CE._runPollTimer = null;
+                CE.finishExecuteBtn();
+                CE.addLog('err', '轮询超时：请查看运行历史或证据包');
+                return;
+            }
+            fetch('/api/ai/cross-end/runs/' + encodeURIComponent(runId))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (!data || !data.ok) return;
+                    var st = data.status;
+                    if (st === 'queued' || st === 'running') {
+                        CE.refreshOpsGates();
+                        return;
+                    }
+                    clearInterval(CE._runPollTimer);
+                    CE._runPollTimer = null;
+                    CE.finishExecuteBtn();
+                    CE.applyExecutionPayload({ httpStatus: 200, data: { ok: true, result: data.result, error_code: data.error_code, user_hint: data.user_hint } });
+                    CE.refreshOpsGates();
+                })
+                .catch(function() { /* 短暂网络抖动忽略 */ });
+        }, 800);
+    };
+
+    CE.applyExecutionPayload = function(pack) {
+        var data = (pack && pack.data) || {};
+        var result = data.result || null;
+        if (result) {
+            CE.renderExecutionResult(result);
+            var passed = 0, failed = 0, skipped = 0;
+            (result.stage_results || []).forEach(function(sr) {
+                if (sr.skipped_failure || sr.recovery_action === 'skip') skipped++;
+                else if (sr.cleanup && sr.ok_assert === false) skipped++;
+                else if (sr.ok_assert === false) failed++;
+                else passed++;
+            });
+            document.getElementById('ceSummaryPassed').textContent = passed;
+            document.getElementById('ceSummaryFailed').textContent = failed;
+            document.getElementById('ceSummarySkipped').textContent = skipped;
+
+            var ok = result.success === true || result.gate_passed === true;
+            if (result.success === false) ok = false;
+            var hint = CE.friendlyMessage(result);
+            if (result.assertion_failed > 0) {
+                var ad = (result.assertion_details || []).filter(function(x) { return !x.ok; });
+                var first = ad[0] || {};
+                hint = CE.friendlyMessage({
+                    error_code: first.error_code || result.error_code || 'CROSS_END_ASSERT_FAILED',
+                    user_hint: result.user_hint,
+                    error: first.error || first.detail || result.error
                 });
+                CE.addLog('err', '跨端断言失败 ' + result.assertion_failed + ' 条: ' + (first.error || first.detail || ''));
+            } else if (result.assertion_passed > 0) {
+                CE.addLog('ok', '跨端断言通过 ' + result.assertion_passed + ' 条');
+            }
+            if (ok) {
+                CE.setResultBanner(true, '跨端执行通过', hint || ('共 ' + passed + ' 个阶段成功'));
+                CE.addLog('ok', '执行完成：全部通过');
+            } else {
+                CE.setResultBanner(
+                    false,
+                    result.assertion_failed > 0 ? '跨端断言未通过' : '跨端执行未通过',
+                    hint || result.error || ('有 ' + failed + ' 个阶段失败')
+                );
+                CE.addLog('err', hint || result.error || ('执行完成: ' + passed + ' 通过, ' + failed + ' 失败'));
+                CE.captureRiskFromResult(result);
+            }
+            if (result.run_history_id) {
+                CE.lastRunHistoryId = result.run_history_id;
+                CE.addLog('info', '运行历史 #' + result.run_history_id + (result.audit_id ? (' · audit ' + result.audit_id) : ''));
+            }
+            if (result.audit_id) CE.lastAuditId = result.audit_id;
+            var trBtn = document.getElementById('ceTraceBtn');
+            if (trBtn) trBtn.disabled = false;
+            return;
+        }
+        var errMsg = CE.friendlyMessage(data) || data.error || '未知错误';
+        CE.setResultBanner(false, '执行失败', errMsg);
+        CE.addLog('err', '执行失败: ' + errMsg);
+        CE.markAllStagesFailed(data);
+    };
+
+    CE.captureRiskFromResult = function(result) {
+        CE._pendingRiskByStage = CE._pendingRiskByStage || {};
+        (result.stage_results || []).forEach(function(sr) {
+            if (!sr || sr.ok_assert !== false) return;
+            if (sr.error_code === 'RISK_APPROVAL_REQUIRED' && sr.risk_approval_id) {
+                CE._pendingRiskByStage[sr.stage_id] = sr.risk_approval_id;
             }
         });
     };
 
+    CE.startOpsPolling = function() {
+        var panel = document.getElementById('ceOpsPanel');
+        if (panel) panel.classList.add('is-visible');
+        CE.refreshOpsGates();
+        if (CE._opsPollTimer) clearInterval(CE._opsPollTimer);
+        CE._opsPollTimer = setInterval(CE.refreshOpsGates, 1500);
+    };
+
+    CE.refreshOpsGates = function() {
+        fetch('/api/ai/ops/gates')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data || !data.ok) return;
+                CE.renderOpsGates(data);
+            })
+            .catch(function() {});
+    };
+
+    CE.renderOpsGates = function(data) {
+        var list = document.getElementById('ceOpsList');
+        var panel = document.getElementById('ceOpsPanel');
+        if (!list || !panel) return;
+        panel.classList.add('is-visible');
+        var hitl = data.hitl_waiting || [];
+        var risk = data.risk_pending || [];
+        if (!hitl.length && !risk.length) {
+            list.className = 'ce-ops-empty';
+            list.textContent = '暂无待处理门禁（执行中若出现验证码/L2，将显示在这里）';
+            return;
+        }
+        list.className = '';
+        var html = '';
+        hitl.forEach(function(g) {
+            var gid = g.gate_id || '';
+            html += '<div class="ce-ops-item">' +
+                '<span class="ce-ops-item__kind">HITL</span>' +
+                '<div class="ce-ops-item__meta"><strong>' + CE.esc(g.reason || '等待人工确认') + '</strong><br>' +
+                '<span style="color:#78716c">' + CE.esc(g.hint || '') + ' · gate=' + CE.esc(gid) + '</span></div>' +
+                '<div class="ce-ops-item__actions">' +
+                '<button class="ce-btn ce-btn--primary" type="button" data-hitl-resume="' + CE.escAttr(gid) + '">继续</button>' +
+                '<button class="ce-btn ce-btn--ghost" type="button" data-hitl-cancel="' + CE.escAttr(gid) + '">取消</button>' +
+                '</div></div>';
+        });
+        risk.forEach(function(r) {
+            var aid = r.approval_id || '';
+            var sid = r.stage_id || '';
+            html += '<div class="ce-ops-item">' +
+                '<span class="ce-ops-item__kind is-risk">L2</span>' +
+                '<div class="ce-ops-item__meta"><strong>' + CE.esc(r.reason || '高风险动作待审批') + '</strong><br>' +
+                '<span style="color:#78716c">stage=' + CE.esc(sid) + ' · ' + CE.esc(aid) + '</span></div>' +
+                '<div class="ce-ops-item__actions">' +
+                '<button class="ce-btn ce-btn--primary" type="button" data-risk-approve="' + CE.escAttr(aid) + '" data-stage="' + CE.escAttr(sid) + '">批准并重试</button>' +
+                '<button class="ce-btn ce-btn--ghost" type="button" data-risk-deny="' + CE.escAttr(aid) + '">拒绝</button>' +
+                '</div></div>';
+        });
+        list.innerHTML = html;
+        list.querySelectorAll('[data-hitl-resume]').forEach(function(btn) {
+            btn.onclick = function() { CE.resumeHitl(btn.getAttribute('data-hitl-resume')); };
+        });
+        list.querySelectorAll('[data-hitl-cancel]').forEach(function(btn) {
+            btn.onclick = function() { CE.cancelHitl(btn.getAttribute('data-hitl-cancel')); };
+        });
+        list.querySelectorAll('[data-risk-approve]').forEach(function(btn) {
+            btn.onclick = function() {
+                CE.approveRisk(btn.getAttribute('data-risk-approve'), btn.getAttribute('data-stage'));
+            };
+        });
+        list.querySelectorAll('[data-risk-deny]').forEach(function(btn) {
+            btn.onclick = function() { CE.denyRisk(btn.getAttribute('data-risk-deny')); };
+        });
+    };
+
+    CE.esc = function(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    };
+    CE.escAttr = function(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    };
+
+    CE.resumeHitl = function(gateId) {
+        fetch('/api/ai/agent/hitl/resume', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({gate_id: gateId})
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            CE.addLog(data.gate_resumed ? 'ok' : 'warn', data.message || 'HITL resume');
+            CE.refreshOpsGates();
+        }).catch(function(e) { CE.addLog('err', e.message || String(e)); });
+    };
+
+    CE.cancelHitl = function(gateId) {
+        fetch('/api/ai/agent/hitl/cancel', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({gate_id: gateId})
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            CE.addLog('warn', data.message || 'HITL 已取消');
+            CE.refreshOpsGates();
+        }).catch(function(e) { CE.addLog('err', e.message || String(e)); });
+    };
+
+    CE.approveRisk = function(approvalId, stageId) {
+        fetch('/api/ai/risk/approve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({approval_id: approvalId})
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            if (!data.ok || !data.token) {
+                CE.addLog('err', data.error || '批准失败');
+                return;
+            }
+            if (!CE.plan) return;
+            CE.plan.approvals = CE.plan.approvals || {};
+            if (stageId) CE.plan.approvals[stageId] = data.token;
+            else CE.plan.approvals['*'] = data.token;
+            CE.addLog('ok', 'L2 已批准，令牌已写入计划，正在重试…');
+            CE.refreshOpsGates();
+            CE.execute();
+        }).catch(function(e) { CE.addLog('err', e.message || String(e)); });
+    };
+
+    CE.denyRisk = function(approvalId) {
+        fetch('/api/ai/risk/deny', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({approval_id: approvalId, reason: '运营拒绝'})
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            CE.addLog('warn', data.message || '已拒绝 L2');
+            CE.refreshOpsGates();
+        }).catch(function(e) { CE.addLog('err', e.message || String(e)); });
+    };
+
     CE.renderExecutionResult = function(result) {
-        var stageResults = result.stage_results || result.stages || {};
+        var stageResults = result.stage_results || result.stages || [];
         if (Array.isArray(stageResults)) {
-            stageResults.forEach(function(sr) {
-                var sid = sr.stage_id || sr.id;
-                var status = sr.status || 'passed';
+            stageResults.forEach(function(sr, idx) {
+                var sid = sr.stage_id || sr.id || CE.stageKey(
+                    (CE.plan && CE.plan.stages && CE.plan.stages[idx]) || {},
+                    idx
+                );
+                var status = 'failed';
+                if (sr.skipped_failure || sr.recovery_action === 'skip') status = 'skipped';
+                else if (sr.ok_assert === true) status = 'passed';
+                else if (sr.status === 'passed' || sr.status === 'success') status = 'passed';
+                else if (sr.status === 'skipped') status = 'skipped';
                 CE.updateStageStatus(sid, status, sr);
             });
-        } else {
+        } else if (stageResults && typeof stageResults === 'object') {
             Object.keys(stageResults).forEach(function(sid) {
-                var sr = stageResults[sid];
-                CE.updateStageStatus(sid, sr.status || 'passed', sr);
+                var sr = stageResults[sid] || {};
+                var status = sr.ok_assert === true ? 'passed' : 'failed';
+                if (sr.skipped_failure) status = 'skipped';
+                CE.updateStageStatus(sid, status, sr);
             });
         }
+    };
+
+    CE.AGENT_LABELS = {
+        Planner: '规划 Agent',
+        WebApiExecutor: '执行 Agent',
+        Verifier: '验证 Agent',
+        HitlGate: '人机协作门禁',
+        RiskGuard: '风险审批',
+        stage: '阶段',
+        system: '系统'
+    };
+
+    CE.formatAgentTime = function(iso) {
+        if (!iso) return '--:--:--';
+        try {
+            var d = new Date(iso);
+            if (isNaN(d.getTime())) return String(iso).slice(11, 19) || String(iso);
+            return ('0' + d.getHours()).slice(-2) + ':' +
+                ('0' + d.getMinutes()).slice(-2) + ':' +
+                ('0' + d.getSeconds()).slice(-2);
+        } catch (e) {
+            return String(iso);
+        }
+    };
+
+    CE.renderAgentTeamState = function(state, report, meta) {
+        state = state || {};
+        report = report || state.report || {};
+        meta = meta || {};
+        var panel = document.getElementById('ceAgentPanel');
+        if (panel) panel.classList.add('is-visible');
+
+        var chip = document.getElementById('ceAgentStatusChip');
+        var runMeta = document.getElementById('ceAgentRunMeta');
+        var reportEl = document.getElementById('ceAgentReport');
+        var tl = document.getElementById('ceAgentTimeline');
+
+        var passed = report.passed === true || state.status === 'success';
+        var statusLabel = state.status || (passed ? 'success' : 'failed');
+        if (chip) {
+            chip.className = 'ce-agent-chip' + (passed ? ' is-ok' : ' is-fail');
+            chip.textContent = passed ? '验证通过' : ('未通过 · ' + statusLabel);
+        }
+        if (runMeta) {
+            var agents = (state.agents_seen || meta.agents_seen || []).filter(function(a) {
+                return a && a !== 'system';
+            });
+            runMeta.textContent =
+                (state.run_id ? ('run: ' + state.run_id) : '') +
+                (agents.length ? (' · 角色: ' + agents.join(' / ')) : '') +
+                (report.evidence_level ? (' · 证据: ' + report.evidence_level) : '');
+        }
+        if (reportEl) {
+            var reason = report.reason || meta.user_hint || '';
+            var counts = report.evidence_counts || {};
+            reportEl.innerHTML =
+                '<strong>Verifier 报告</strong>：' + CE.escapeHtml(reason || (passed ? '全部通过' : '未通过')) +
+                '<br>证据等级 <strong>' + CE.escapeHtml(String(report.evidence_level || '—')) + '</strong>' +
+                '（强 ' + (counts.strong || 0) +
+                ' / 弱 ' + (counts.weak || 0) +
+                ' / 缺失 ' + (counts.missing || 0) + '）' +
+                (typeof report.stages_failed === 'number'
+                    ? ' · 失败阶段 ' + report.stages_failed
+                    : '');
+        }
+        if (tl) {
+            tl.innerHTML = '';
+            var events = state.events || [];
+            if (!events.length) {
+                tl.innerHTML = '<li class="ce-agent-timeline__item"><span class="ce-agent-timeline__msg">暂无事件</span></li>';
+            } else {
+                events.forEach(function(ev) {
+                    var li = document.createElement('li');
+                    li.className = 'ce-agent-timeline__item';
+                    var kind = String(ev.kind || 'note');
+                    var agent = String(ev.agent || 'system');
+                    var label = CE.AGENT_LABELS[agent] || agent;
+                    li.innerHTML =
+                        '<span class="ce-agent-timeline__ts">' + CE.escapeHtml(CE.formatAgentTime(ev.at)) + '</span>' +
+                        '<span class="ce-agent-timeline__agent">' + CE.escapeHtml(label) + '</span>' +
+                        '<span class="ce-agent-timeline__kind is-' + CE.escapeHtml(kind) + '">' + CE.escapeHtml(kind) + '</span>' +
+                        '<span class="ce-agent-timeline__msg">' + CE.escapeHtml(ev.message || '') + '</span>';
+                    tl.appendChild(li);
+                });
+            }
+        }
+    };
+
+    CE.runAgentTeam = function() {
+        if (!CE.plan || !(CE.plan.stages || []).length) {
+            CE.addLog('warn', '请先完成 AI 分解或加载含 stages 的场景');
+            return;
+        }
+
+        var btn = document.getElementById('ceAgentTeamBtn');
+        var execBtn = document.getElementById('ceExecuteBtn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 多 Agent 执行中...';
+        }
+        if (execBtn) execBtn.disabled = true;
+        document.getElementById('ceSummaryBar').style.display = 'flex';
+        CE.setResultBanner(false, '');
+        CE.addLog('info', '启动多 Agent 闭环：Planner → 执行 → Verifier');
+
+        if (CE.plan.stages) {
+            CE.plan.stages.forEach(function(stage, idx) {
+                CE.updateStageStatus(CE.stageKey(stage, idx), 'running');
+            });
+        }
+
+        var body = {
+            plan: CE.plan,
+            description: CE.plan.scenario || CE.plan.name || ''
+        };
+        if (CE.projectId) body.project_id = CE.projectId;
+
+        fetch('/api/ai/agent-teams/runs', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        })
+        .then(function(r) {
+            return r.json().then(function(data) {
+                return { httpStatus: r.status, data: data };
+            });
+        })
+        .then(function(pack) {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-users"></i> 多 Agent 执行';
+            }
+            if (execBtn) execBtn.disabled = false;
+            var data = pack.data || {};
+            var state = data.state || {};
+            var report = data.report || state.report || {};
+            var exec = state.execution || {};
+
+            CE.renderAgentTeamState(state, report, {
+                user_hint: data.user_hint,
+                agents_seen: state.agents_seen
+            });
+
+            // 同步阶段卡片状态（来自共享状态）
+            if (state.stage_results && state.stage_results.length) {
+                CE.renderExecutionResult({
+                    stage_results: state.stage_results,
+                    success: data.passed === true
+                });
+            }
+
+            var passed = data.passed === true || state.status === 'success';
+            var hint = data.user_hint || report.reason || '';
+            if (passed) {
+                CE.setResultBanner(true, '多 Agent 验证通过', hint || 'Verifier 已确认执行与证据');
+                CE.addLog('ok', '多 Agent 完成: ' + (state.run_id || '') + ' · ' + (hint || '通过'));
+            } else {
+                CE.setResultBanner(false, '多 Agent 验证未通过', hint || data.error || '请查看时间线与 Verifier 报告');
+                CE.addLog('err', hint || data.error || '多 Agent 未通过');
+                if ((!state.stage_results || !state.stage_results.length) && CE.plan.stages) {
+                    CE.plan.stages.forEach(function(stage, idx) {
+                        CE.updateStageStatus(CE.stageKey(stage, idx), 'failed', {
+                            error: hint || data.error,
+                            error_code: exec.error_code
+                        });
+                    });
+                }
+            }
+            if (data.run_history_id) {
+                CE.lastRunHistoryId = data.run_history_id;
+                CE.addLog('info', '运行历史 #' + data.run_history_id);
+            }
+            if (state.run_id) CE.lastAgentRunId = state.run_id;
+            var trBtn2 = document.getElementById('ceTraceBtn');
+            if (trBtn2) trBtn2.disabled = false;
+
+
+            var passedN = 0, failedN = 0, skippedN = 0;
+            (state.stage_results || []).forEach(function(sr) {
+                if (sr.skipped_failure || sr.recovery_action === 'skip') skippedN++;
+                else if (sr.cleanup && sr.ok_assert === false) skippedN++;
+                else if (sr.ok_assert === false) failedN++;
+                else passedN++;
+            });
+            document.getElementById('ceSummaryPassed').textContent = passedN;
+            document.getElementById('ceSummaryFailed').textContent = failedN;
+            document.getElementById('ceSummarySkipped').textContent = skippedN;
+        })
+        .catch(function(err) {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-users"></i> 多 Agent 执行';
+            }
+            if (execBtn) execBtn.disabled = false;
+            CE.setResultBanner(false, '多 Agent 请求失败', err.message || String(err));
+            CE.addLog('err', '多 Agent 请求失败: ' + err.message);
+        });
+    };
+
+    CE.exportTrace = function() {
+        var params = [];
+        if (CE.lastAgentRunId) params.push('agent_run_id=' + encodeURIComponent(CE.lastAgentRunId));
+        else if (CE.lastAuditId) params.push('audit_id=' + encodeURIComponent(CE.lastAuditId));
+        else if (CE.lastRunHistoryId) params.push('run_history_id=' + encodeURIComponent(CE.lastRunHistoryId));
+        else {
+            CE.addLog('warn', '请先执行跨端或「多 Agent 执行」，再导出证据包');
+            return;
+        }
+        params.push('format=zip');
+        var url = '/api/ai/trace-packs/export?' + params.join('&');
+        CE.addLog('info', '正在导出 Trace 证据包...');
+        // 用隐藏 iframe / 新窗口触发下载（带登录 cookie）
+        var a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        CE.addLog('ok', '已请求下载证据包 ZIP（若失败请查看登录态或权限）');
     };
 
     CE.saveScenario = function() {
@@ -842,6 +1746,9 @@
             project_id: CE.projectId,
             plan: CE.plan
         };
+        if (CE.currentScenarioId) {
+            payload.scenario_id = CE.currentScenarioId;
+        }
 
         fetch('/api/ai/cross-end/scenario', {
             method: 'POST',
@@ -851,7 +1758,11 @@
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.ok) {
-                CE.addLog('ok', '场景已保存: ' + name);
+                CE.currentScenarioId = data.scenario_id || data.id || CE.currentScenarioId;
+                CE.addLog('ok', '场景已保存: ' + name + ' (' + (CE.currentScenarioId || '') + ')');
+                if (data.store && data.store.hint) {
+                    CE.addLog('info', data.store.hint + (data.store.path ? (' 路径: ' + data.store.path) : ''));
+                }
                 CE.loadSavedScenarios();
             } else {
                 CE.addLog('err', '保存失败: ' + (data.error || '未知错误'));
@@ -864,33 +1775,69 @@
         fetch('/api/ai/cross-end/scenario?project_id=' + CE.projectId)
             .then(function(r) { return r.json(); })
             .then(function(data) {
+                var container = document.getElementById('ceSavedScenarios');
+                var list = document.getElementById('ceSavedList');
+                if (!container || !list) return;
+
+                var storeHint = '';
+                if (data.store && data.store.hint) {
+                    storeHint = '<div class="ce-store-hint">' + CE.escapeHtml(data.store.hint) +
+                        (data.store.path ? ('<br>文件: ' + CE.escapeHtml(data.store.path)) : '') +
+                        '</div>';
+                }
+
                 if (data.ok && data.scenarios && data.scenarios.length) {
-                    var container = document.getElementById('ceSavedScenarios');
                     container.style.display = 'block';
-                    var list = document.getElementById('ceSavedList');
                     list.innerHTML = data.scenarios.map(function(s) {
-                        var name = s.name || '场景 ' + s.id;
-                        var meta = (s.stages ? s.stages.length : 0) + ' 阶段 | ' + (s.created_at || '');
-                        return '<div class="ce-scenario-row" onclick="CE.loadSavedPlan(' + s.id + ')">' +
+                        var sid = s.scenario_id || s.id || '';
+                        var name = s.name || (s.plan && (s.plan.scenario || s.plan.name)) || ('场景 ' + sid);
+                        var stageCount = (typeof s.stage_count === 'number')
+                            ? s.stage_count
+                            : ((s.plan && s.plan.stages) ? s.plan.stages.length : (s.stages ? s.stages.length : 0));
+                        var meta = stageCount + ' 阶段 | ' + (s.updated_at || s.created_at || '');
+                        return '<div class="ce-scenario-row" onclick=\'CE.loadSavedPlan(' + JSON.stringify(String(sid)) + ')\'>' +
                             '<span class="ce-scenario-row__name">' + CE.escapeHtml(name) + '</span>' +
                             '<span class="ce-scenario-row__meta">' + CE.escapeHtml(meta) + '</span>' +
                             '<i class="fas fa-chevron-right" style="color:#94a3b8;"></i>' +
                         '</div>';
-                    }).join('');
+                    }).join('') + storeHint;
+                } else if (storeHint) {
+                    container.style.display = 'block';
+                    list.innerHTML = '<div class="ce-empty" style="padding:12px;"><p style="font-size:12px;">暂无已保存场景</p></div>' + storeHint;
                 }
             });
     };
 
     CE.loadSavedPlan = function(scenarioId) {
-        fetch('/api/ai/cross-end/scenario/' + scenarioId)
+        var sid = String(scenarioId || '').trim();
+        if (!sid) return;
+        fetch('/api/ai/cross-end/scenario/' + encodeURIComponent(sid))
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.ok && data.scenario) {
-                    CE.plan = data.scenario.plan_json ? JSON.parse(data.scenario.plan_json) : data.scenario;
+                    var sc = data.scenario;
+                    CE.currentScenarioId = sc.scenario_id || sc.id || sid;
+                    if (sc.plan && typeof sc.plan === 'object') {
+                        CE.plan = sc.plan;
+                    } else if (sc.plan_json) {
+                        try {
+                            CE.plan = JSON.parse(sc.plan_json);
+                        } catch (e) {
+                            CE.plan = sc;
+                        }
+                    } else {
+                        CE.plan = sc;
+                    }
                     CE.renderPlan(CE.plan);
-                    CE.addLog('info', '加载场景: ' + (CE.plan.name || '场景 ' + scenarioId));
+                    CE.addLog('info', '加载场景: ' + (sc.name || CE.plan.name || CE.plan.scenario || ('场景 ' + sid)));
                     document.getElementById('ceExecuteBtn').disabled = false;
+                    var atBtn2 = document.getElementById('ceAgentTeamBtn');
+                    if (atBtn2) atBtn2.disabled = false;
                     document.getElementById('ceSummaryBar').style.display = 'flex';
+                    var ap2 = document.getElementById('ceAgentPanel');
+                    if (ap2) ap2.classList.add('is-visible');
+                } else {
+                    CE.addLog('err', '加载失败: ' + ((data && data.error) || '场景不存在'));
                 }
             });
     };

@@ -1,19 +1,24 @@
 # -*- coding: utf-8 -*-
-"""桌面用例逐步执行时的跨步骤上下文（launch → attach → verify 贯通）。"""
+"""桌面用例逐步执行时的跨步骤上下文（launch → attach → verify 贯通）。
+
+注意：``sync_desktop_execute_step`` 在独立 Worker 线程执行，而 prepare/enrich
+在调用线程。上下文必须为**进程级**（非 threading.local），否则 attach 看不到
+launch 写入的 hwnd，主路径会假失败。
+"""
 
 from __future__ import annotations
 
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 
 _LAUNCH_WINDOW_HINTS: Dict[str, List[str]] = {
     "control": ["控制面板", "Control Panel", "All Control Panel Items"],
     "control.exe": ["控制面板", "Control Panel"],
-    "notepad": ["记事本", "Notepad", "无标题 - 记事本"],
-    "notepad.exe": ["记事本", "Notepad"],
+    "notepad": ["Notepad", "记事本", "无标题 - Notepad", "无标题 - 记事本"],
+    "notepad.exe": ["Notepad", "记事本", "无标题 - Notepad", "无标题 - 记事本"],
     "calc": ["计算器", "Calculator"],
     "calc.exe": ["计算器", "Calculator"],
     "mspaint": ["画图", "Paint"],
@@ -34,6 +39,7 @@ class DesktopRunContext:
         self.last_launch_value = (launch_value or "").strip()
         self.last_action = "launch_app"
         hints = window_hints_for_launch(self.last_launch_value)
+        # 优先用 launch 实测标题；否则用多语言 hints 第一项（Notepad 优先英文）
         self.last_window_title_hint = (title_hint or (hints[0] if hints else "")).strip()
         if hwnd:
             self.attached_hwnd = int(hwnd)
@@ -46,19 +52,19 @@ class DesktopRunContext:
             self.last_window_title_hint = title.strip()
 
 
-_local = threading.local()
+_ctx_lock = threading.Lock()
+_shared_ctx = DesktopRunContext()
 
 
 def get_desktop_run_context() -> DesktopRunContext:
-    ctx = getattr(_local, "ctx", None)
-    if ctx is None:
-        ctx = DesktopRunContext()
-        _local.ctx = ctx
-    return ctx
+    """进程共享上下文（跨调用线程与 DesktopWorker 线程）。"""
+    return _shared_ctx
 
 
 def reset_desktop_run_context() -> None:
-    _local.ctx = DesktopRunContext()
+    global _shared_ctx
+    with _ctx_lock:
+        _shared_ctx = DesktopRunContext()
 
 
 def window_hints_for_launch(launch_value: str) -> List[str]:
@@ -80,6 +86,7 @@ def spec_has_window_target(spec: Optional[Dict[str, Any]]) -> bool:
         or s.get("window_title_re")
         or s.get("title_contains")
         or s.get("title")
+        or s.get("title_re")
         or s.get("process")
         or s.get("path")
     )
@@ -91,8 +98,7 @@ def guess_window_title_from_description(desc: str) -> str:
         return ""
     if "控制面板" in d:
         return "控制面板"
-    if "记事本" in d:
-        return "记事本"
+    # 不写死「记事本」：Win11 常见标题为 Notepad；留给 window_title_re / launch hints
     if "计算器" in d:
         return "计算器"
     if "资源管理器" in d or "文件管理" in d:
@@ -124,6 +130,10 @@ def enrich_desktop_step_with_run_context(
     else:
         spec = {}
 
+    # 兼容 title_re → window_title_re
+    if spec.get("title_re") and not spec.get("window_title_re"):
+        spec["window_title_re"] = str(spec.get("title_re"))
+
     c = ctx or get_desktop_run_context()
     title = (
         (s.get("selector_value") or "").strip()
@@ -132,13 +142,16 @@ def enrich_desktop_step_with_run_context(
         or c.last_window_title_hint
     )
     if title and title.lower() in ("exist", "visible", "clickable", "auto"):
-        title = c.last_window_title_hint or guess_window_title_from_description(s.get("description") or "")
+        title = c.last_window_title_hint or guess_window_title_from_description(
+            s.get("description") or ""
+        )
 
     if not spec_has_window_target(spec) and title:
         spec["title_contains"] = title
         spec["window_title_re"] = f".*{re.escape(title)}.*"
 
-    if action == "attach_window" and not spec_has_window_target(spec) and c.attached_hwnd:
+    # 始终注入已附着 hwnd（Worker 线程读同一进程上下文）
+    if action == "attach_window" and c.attached_hwnd and not spec.get("hwnd"):
         spec["hwnd"] = int(c.attached_hwnd)
 
     if spec:
@@ -166,8 +179,11 @@ def update_context_from_step_result(
             hints = window_hints_for_launch(launch_val)
             if hints:
                 title = hints[0]
-        c.remember_launch(launch_val, hwnd=hwnd, title_hint=title)
+        with _ctx_lock:
+            c.remember_launch(launch_val, hwnd=hwnd, title_hint=title)
     elif action == "attach_window" and hwnd:
-        c.remember_attach(hwnd, title=title)
+        with _ctx_lock:
+            c.remember_attach(hwnd, title=title)
     elif hwnd:
-        c.attached_hwnd = hwnd
+        with _ctx_lock:
+            c.attached_hwnd = hwnd

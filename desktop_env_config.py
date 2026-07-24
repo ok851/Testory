@@ -4,7 +4,8 @@
 
 DESKTOP_DEFAULT_LAUNCH_PATH   默认启动 exe（launch_app 步骤 input 为空时使用）
 DESKTOP_DEFAULT_ATTACH_TITLE_RE  默认附着窗口标题正则（attach_window / 空 spec）
-DESKTOP_APP_ALIASES           JSON，如 {"erp":"C:\\\\ERP\\\\client.exe","default":"notepad.exe"}
+DESKTOP_APP_ALIASES           JSON。字符串形式：{"erp":"C:\\\\ERP\\\\client.exe"}；
+                              对象形式（可带启动参数）：{"erp":{"path":"...","args":["..."],"window_title_re":".*"}}
 DESKTOP_DEFAULT_BACKEND       uia | win32，默认 uia
 DESKTOP_STEP_RETRY            桌面指针步骤失败后的额外重试次数（默认 1）
 DESKTOP_FAILURE_SCREENSHOT    指针失败时保存虚拟桌面截图（默认 1）
@@ -98,13 +99,51 @@ def desktop_default_backend() -> str:
     return be if be in ("uia", "win32") else "uia"
 
 
-def load_app_aliases() -> Dict[str, str]:
-    """.env 别名 + 本机开始菜单自动目录（目录项可被 .env 覆盖）。"""
-    merged: Dict[str, str] = {}
+def _normalize_alias_entry(key: str, value: Any) -> Optional[Dict[str, Any]]:
+    """将别名值规范为 {path, args?, window_title_re?, alias}。"""
+    name = (key or "").strip().lower()
+    if not name:
+        return None
+    if isinstance(value, str):
+        path = value.strip()
+        if not path:
+            return None
+        return {"alias": name, "path": path, "args": [], "window_title_re": ""}
+    if isinstance(value, dict):
+        path = str(value.get("path") or value.get("exe") or value.get("launch") or "").strip()
+        if not path:
+            return None
+        raw_args = value.get("args") or value.get("arguments") or []
+        args: list = []
+        if isinstance(raw_args, (list, tuple)):
+            args = [str(a) for a in raw_args]
+        elif isinstance(raw_args, str) and raw_args.strip():
+            args = [raw_args.strip()]
+        title_re = str(
+            value.get("window_title_re")
+            or value.get("title_re")
+            or value.get("window_title")
+            or ""
+        ).strip()
+        return {
+            "alias": name,
+            "path": path,
+            "args": args,
+            "window_title_re": title_re,
+        }
+    return None
+
+
+def load_app_alias_specs() -> Dict[str, Dict[str, Any]]:
+    """.env / 目录别名 → 规范化规格（含可选 args / window_title_re）。"""
+    merged: Dict[str, Dict[str, Any]] = {}
     try:
         from desktop_app_catalog import catalog_aliases_map
 
-        merged.update(catalog_aliases_map())
+        for k, v in (catalog_aliases_map() or {}).items():
+            entry = _normalize_alias_entry(str(k), v)
+            if entry:
+                merged[entry["alias"]] = entry
     except Exception:
         pass
     raw = (os.environ.get("DESKTOP_APP_ALIASES") or "").strip()
@@ -113,19 +152,68 @@ def load_app_aliases() -> Dict[str, str]:
             data = json.loads(raw)
             if isinstance(data, dict):
                 for k, v in data.items():
-                    if v:
-                        merged[str(k).strip().lower()] = str(v).strip()
+                    entry = _normalize_alias_entry(str(k), v)
+                    if entry:
+                        merged[entry["alias"]] = entry
         except json.JSONDecodeError:
             pass
     return merged
 
 
-def default_launch_path() -> str:
-    return (os.environ.get("DESKTOP_DEFAULT_LAUNCH_PATH") or "").strip()
+def load_app_aliases() -> Dict[str, str]:
+    """.env 别名 + 本机开始菜单自动目录（目录项可被 .env 覆盖）；仅返回 path 字符串。"""
+    return {k: str(v.get("path") or "") for k, v in load_app_alias_specs().items() if v.get("path")}
 
 
-def default_attach_title_re() -> str:
-    return (os.environ.get("DESKTOP_DEFAULT_ATTACH_TITLE_RE") or "").strip()
+def substitute_alias_tokens(text: str, variables: Optional[Dict[str, Any]] = None) -> str:
+    """替换别名 args / 标题中的 {order_id} / {{order_id}}。"""
+    s = str(text or "")
+    if not s:
+        return s
+    vars_map = {str(k): "" if v is None else str(v) for k, v in (variables or {}).items()}
+    for k, v in vars_map.items():
+        s = s.replace("{{" + k + "}}", v).replace("{" + k + "}", v)
+    return s
+
+
+def resolve_launch_spec(
+    value: str,
+    *,
+    variables: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """解析 launch 输入：别名 erp/@erp → {path, args, window_title_re, alias}；非别名返回 None。"""
+    v = (value or "").strip()
+    if not v:
+        return None
+    key = v[1:].strip().lower() if v.startswith("@") else v.lower()
+    # 仅纯别名键（无路径分隔符）才查表，避免把 C:\\erp\\a.exe 当别名
+    if "/" in key or "\\" in key or key.endswith(".exe") or key.endswith(".bat"):
+        return None
+    m = _ALIAS_RE.match(key if not key.startswith("@") else key[1:])
+    if not m and _ALIAS_RE.match(v.lstrip("@")):
+        m = _ALIAS_RE.match(v.lstrip("@"))
+    if not m:
+        # 允许 key 直接命中别名表（如 erp）
+        specs = load_app_alias_specs()
+        if key not in specs:
+            return None
+        entry = dict(specs[key])
+    else:
+        specs = load_app_alias_specs()
+        alias_key = m.group(1).lower()
+        if alias_key not in specs:
+            return None
+        entry = dict(specs[alias_key])
+    vars_map = dict(variables or {})
+    entry["path"] = substitute_alias_tokens(entry.get("path") or "", vars_map)
+    entry["args"] = [
+        substitute_alias_tokens(a, vars_map) for a in (entry.get("args") or [])
+    ]
+    if entry.get("window_title_re"):
+        entry["window_title_re"] = substitute_alias_tokens(
+            entry.get("window_title_re") or "", vars_map
+        )
+    return entry
 
 
 def resolve_path_or_alias(value: str) -> str:
@@ -133,6 +221,9 @@ def resolve_path_or_alias(value: str) -> str:
     v = (value or "").strip()
     if not v:
         return ""
+    launch = resolve_launch_spec(v)
+    if launch and launch.get("path"):
+        return str(launch["path"])
     m = _ALIAS_RE.match(v)
     if m:
         key = m.group(1).lower()
@@ -143,6 +234,14 @@ def resolve_path_or_alias(value: str) -> str:
     if v.lower() in aliases:
         return aliases[v.lower()]
     return v
+
+
+def default_launch_path() -> str:
+    return (os.environ.get("DESKTOP_DEFAULT_LAUNCH_PATH") or "").strip()
+
+
+def default_attach_title_re() -> str:
+    return (os.environ.get("DESKTOP_DEFAULT_ATTACH_TITLE_RE") or "").strip()
 
 
 def auto_attach_default_title() -> bool:
@@ -183,6 +282,9 @@ def prepare_desktop_step(step: Dict[str, Any]) -> Dict[str, Any]:
     tc = (spec.get("title_contains") or spec.get("title") or "").strip()
     if tc and not spec.get("window_title_re") and not spec.get("window_title"):
         spec["window_title_re"] = f".*{re.escape(tc)}.*"
+    # 兼容 AI/模板常用 title_re
+    if spec.get("title_re") and not spec.get("window_title_re"):
+        spec["window_title_re"] = str(spec.get("title_re")).strip()
 
     action = (s.get("action") or "").strip()
     iv = (s.get("input_value") or "").strip()
@@ -193,11 +295,30 @@ def prepare_desktop_step(step: Dict[str, Any]) -> Dict[str, Any]:
         s["input_value"] = iv
 
     if action == "launch_app":
-        path = (
-            resolve_path_or_alias(iv)
-            or (spec.get("path") or spec.get("exe") or "").strip()
-            or default_launch_path()
-        )
+        has_args = bool(spec.get("args") or s.get("args"))
+        alias_key = (spec.get("alias") or "").strip() or iv
+        launch = resolve_launch_spec(alias_key) if alias_key else None
+        if launch and not has_args and launch.get("args"):
+            # 别名对象带 args：写入 spec，避免把整段命令行当 exe
+            spec["path"] = launch["path"]
+            spec["args"] = list(launch["args"])
+            spec["alias"] = launch.get("alias") or alias_key.lstrip("@")
+            if launch.get("window_title_re") and not spec.get("window_title_re"):
+                spec["window_title_re"] = launch["window_title_re"]
+            has_args = True
+            path = launch["path"]
+            s["input_value"] = f"@{launch.get('alias') or alias_key.lstrip('@')}"
+        elif has_args and (spec.get("path") or spec.get("exe")):
+            # 带参数启动：path 为解释器/主程序，勿把整段命令行当 exe 解析
+            path = (spec.get("path") or spec.get("exe") or "").strip()
+            if launch and not path:
+                path = str(launch.get("path") or "")
+        else:
+            path = (
+                resolve_path_or_alias(iv)
+                or (spec.get("path") or spec.get("exe") or "").strip()
+                or default_launch_path()
+            )
         # 仅当步骤或 .env 显式写了 default / @default 时才走别名 default，避免空步骤总打开记事本
         if not path and iv.lower() in ("default", "@default"):
             path = resolve_path_or_alias("default")
@@ -206,7 +327,8 @@ def prepare_desktop_step(step: Dict[str, Any]) -> Dict[str, Any]:
             if fb and discovery_available():
                 path = smart_resolve_launch_path(fb)
         if path:
-            path = smart_resolve_launch_path(path)
+            if not has_args:
+                path = smart_resolve_launch_path(path)
             spec["path"] = path
             if not (s.get("input_value") or "").strip():
                 s["input_value"] = path
@@ -281,6 +403,14 @@ def public_config() -> Dict[str, Any]:
         "default_launch_path": default_launch_path(),
         "default_attach_title_re": default_attach_title_re() or ".*",
         "app_aliases": load_app_aliases(),
+        "app_alias_specs": {
+            k: {
+                "path": v.get("path"),
+                "has_args": bool(v.get("args")),
+                "window_title_re": v.get("window_title_re") or "",
+            }
+            for k, v in load_app_alias_specs().items()
+        },
         "default_backend": desktop_default_backend(),
         "auto_start_gateway": desktop_auto_start_gateway(),
         "gateway_url": (os.environ.get("DESKTOP_AGENT_GATEWAY_URL") or "").strip(),
@@ -320,15 +450,22 @@ def validate_launch_app_ready(step: Dict[str, Any]) -> Optional[str]:
     spec = s.get("desktop_spec") if isinstance(s.get("desktop_spec"), dict) else {}
     if not isinstance(spec, dict):
         spec = {}
-    path = (
-        resolve_path_or_alias((s.get("input_value") or "").strip())
-        or (spec.get("path") or spec.get("exe") or "").strip()
-    )
+    has_args = bool(spec.get("args") or s.get("args"))
+    if has_args and (spec.get("path") or spec.get("exe")):
+        path = (spec.get("path") or spec.get("exe") or "").strip()
+    else:
+        path = (
+            resolve_path_or_alias((s.get("input_value") or "").strip())
+            or (spec.get("path") or spec.get("exe") or "").strip()
+        )
     if not path:
         return (
             "launch_app 未填写程序名。请在步骤「输入值」填写 calc.exe 等，"
             "或改用「附着窗口」+「选择当前窗口」。"
         )
+    # 带 args 时 path 常为已存在的 python.exe / 绝对路径
+    if has_args and os.path.isfile(path):
+        return None
     meta = resolve_executable_with_meta(path)
     if meta.found:
         return None

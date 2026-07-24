@@ -952,6 +952,7 @@
         });
     </script>
     <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui10" defer></script>
+    <script src="{{ url_for('static', filename='js/license_feature_gate.js') }}?v=2" defer></script>
     {% if is_tauri %}
     <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=3"></script>
     {% elif is_client %}

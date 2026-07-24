@@ -120,42 +120,51 @@ def _build_hermes_instruction(
 
 
 def _parse_hermes_result(raw_response: str) -> Dict[str, Any]:
+    """解析 Hermes 回复。默认失败：仅显式 ok / [RESULT] ok 才通过。"""
     result: Dict[str, Any] = {
-        "ok_assert": True,
+        "ok_assert": False,
         "error": None,
         "raw": raw_response,
     }
 
     if not raw_response:
-        result["ok_assert"] = False
         result["error"] = "Hermes 返回为空"
         return result
 
     try:
         data = json.loads(raw_response)
         if isinstance(data, dict):
-            if data.get("ok") is False:
+            if data.get("ok") is True or data.get("ok_assert") is True:
+                result["ok_assert"] = True
+            elif data.get("ok") is False or data.get("ok_assert") is False:
                 result["ok_assert"] = False
                 result["error"] = data.get("error", "Hermes 返回失败")
+            else:
+                result["error"] = data.get("error") or "Hermes JSON 未声明 ok/ok_assert，默认失败"
             if data.get("result"):
                 result["result"] = data["result"]
+            result["summary"] = raw_response.strip()[:600]
             return result
     except (json.JSONDecodeError, ValueError):
         pass
 
     lst = raw_response.strip().lower()
-    if "[result] fail" in lst or "[result]failed" in lst:
+    if "[result] fail" in lst or "[result]failed" in lst or "[result] fail" in lst:
         result["ok_assert"] = False
         idx = lst.rfind("[result]")
         if idx >= 0:
             result["error"] = raw_response[idx:].strip()[:500]
         else:
-            for marker in ("error:", "fail:", "失败", "failed"):
-                midx = lst.rfind(marker)
-                if midx >= 0:
-                    result["error"] = raw_response[midx:].strip()[:500]
-                    break
+            result["error"] = "Hermes [RESULT] fail"
+        result["summary"] = raw_response.strip()[:600]
+        return result
 
+    if "[result] ok" in lst or "[result]ok" in lst or "[result] pass" in lst:
+        result["ok_assert"] = True
+        result["summary"] = raw_response.strip()[:600]
+        return result
+
+    result["error"] = "Hermes 回复未包含 [RESULT] ok，默认失败（防假绿）"
     result["summary"] = raw_response.strip()[:600]
     return result
 
@@ -174,7 +183,7 @@ def hermes_execute_stage(
     sys_prompt = _DEFAULT_SYSTEM_PROMPTS.get(plat, "")
 
     result: Dict[str, Any] = {
-        "ok_assert": True,
+        "ok_assert": False,
         "error": None,
         "elapsed_ms": 0,
         "stage_id": stage_id,
@@ -195,10 +204,12 @@ def hermes_execute_stage(
         try:
             raw = client.execute_user_instruction(instruction, session_id=stage_id)
             parsed = _parse_hermes_result(raw)
-            result["ok_assert"] = parsed.get("ok_assert", True)
+            result["ok_assert"] = bool(parsed.get("ok_assert"))
             if parsed.get("error"):
                 result["error"] = parsed["error"]
-            result["summary"] = parsed.get("summary", raw[:600])
+            elif not result["ok_assert"]:
+                result["error"] = "Hermes 未明确成功"
+            result["summary"] = parsed.get("summary", (raw or "")[:600])
             result["raw_response"] = parsed.get("raw", raw)
         finally:
             if old_sys:

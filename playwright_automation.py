@@ -13,6 +13,22 @@ import importlib
 from logger import uat_logger
 from execution_context import ExecutionContext
 import threading
+
+
+def _expected_text_with_ci(execution_context, expected_text: str = "") -> str:
+    """批量/CI 执行时把 build_id / ci_run_id 写入 expected_text。"""
+    try:
+        from ai_modules.execute.history_ops_summary import (
+            ci_meta_from_execution_context,
+            merge_ci_meta_into_expected,
+        )
+
+        meta = ci_meta_from_execution_context(execution_context)
+        if not meta:
+            return expected_text or ""
+        return merge_ci_meta_into_expected(expected_text or "", **meta)
+    except Exception:
+        return expected_text or ""
 if sys.platform == 'win32':
     import ctypes  # 仅 Windows：获取屏幕尺寸（Linux 无 ctypes.windll）
 import re
@@ -9387,6 +9403,16 @@ class PlaywrightAutomation:
                 
                 if action == "navigate":
                     url = step.get("url")
+                    from auth_batch_helpers import step_allows_skip
+
+                    if url in (None, "", "__SKIP_URL__") or str(url).strip() == "__SKIP_URL__":
+                        if step_allows_skip(step):
+                            uat_logger.warning("导航步骤URL为空/占位符，已按 allow_skip 跳过")
+                            results.append({"status": "skipped", "step": step})
+                            continue
+                        raise Exception("导航步骤URL为空或为跳过占位符，未设置 allow_skip，不得假绿")
+                    if url == "__INVALID_URL__":
+                        raise Exception(step.get("url_error", "导航URL无效"))
                     # 检查当前页面是否已经在目标URL上,避免重复导航
                     if target_page and target_page.url != url:
                         await self.navigate_to(url, page=target_page)
@@ -10049,24 +10075,29 @@ class PlaywrightAutomation:
                 elif action == "assert":
                     selector = (step.get("selector") or "").strip()
                     expected = (step.get("input_value") or step.get("text") or "").strip()
-                    from auth_batch_helpers import normalize_assert_compare_type
+                    from auth_batch_helpers import assert_empty_expected_error, normalize_assert_compare_type
 
                     ctype = normalize_assert_compare_type(
                         step.get("compare_type"),
                         selector_value=selector,
                         input_value=expected,
                     )
+                    empty_err = assert_empty_expected_error(ctype, expected)
+                    if empty_err:
+                        raise Exception(empty_err)
                     uat_logger.info(f"🔍 [ASSERT_DEBUG] assert 步骤 type={ctype} selector={selector!r} expected={expected[:120]!r}")
                     if ctype in ("url_equals", "url_contains"):
                         url = target_page.url if target_page else ""
                         if ctype == "url_equals" and not _url_assert_matches_pa(url, expected, "url_equals"):
                             raise Exception(f"URL 断言失败: 实际 {url!r} 预期 {expected!r}")
-                        if ctype == "url_contains" and expected and not _url_assert_matches_pa(url, expected, "url_contains"):
+                        if ctype == "url_contains" and not _url_assert_matches_pa(url, expected, "url_contains"):
                             raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
                     elif ctype in ("page_text_contains", "page_text_equals", "page_text_regex"):
                         await self._assert_page_visible_text(target_page, ctype, expected)
                     elif ctype == "vision_contains":
                         cond = (step.get("description") or expected or "").strip()
+                        if not cond:
+                            raise Exception("vision_contains 断言缺少描述/预期")
                         await self._assert_vision_condition(target_page, cond)
                     elif selector:
                         actual = await self.extract_element_text(
@@ -10078,10 +10109,10 @@ class PlaywrightAutomation:
                         actual = (actual or "").strip()
                         if ctype == "text_equals" and actual != expected:
                             raise Exception(f"文本断言失败: 实际 {actual[:200]!r} 预期 {expected!r}")
-                        if ctype == "text_contains" and expected and expected not in actual:
+                        if ctype == "text_contains" and expected not in actual:
                             raise Exception(f"文本断言失败: 实际文本未包含预期 {expected!r}")
                         if ctype == "text_regex":
-                            if not expected or not re.search(expected, actual):
+                            if not re.search(expected, actual):
                                 raise Exception(f"正则断言失败: pattern={expected!r} actual={actual[:200]!r}")
                         if ctype == "element_exists":
                             await self.wait_for_selector(
@@ -10356,6 +10387,9 @@ class PlaywrightAutomation:
                     )
                 if step.get("description"):
                     exec_step["description"] = step["description"]
+                for _skip_key in ("allow_skip", "optional", "skip_ok"):
+                    if step.get(_skip_key) is not None:
+                        exec_step[_skip_key] = step.get(_skip_key)
                 from step_executor import enrich_execution_step
 
                 enriched = enrich_execution_step(step)
@@ -10368,7 +10402,11 @@ class PlaywrightAutomation:
             return execution_steps
         
         def process_case_result(result, case_id):
-            """统一处理单个用例结果并写入 all_results"""
+            """统一处理单个用例结果并写入 all_results。
+
+            门禁：仅 status==success 计入 successful_cases；
+            warning/stopped/error/其它一律计入 failed_cases（企业流水线不得把 warning 当绿）。
+            """
             if isinstance(result, Exception):
                 all_results["case_results"].append({
                     "case_id": case_id,
@@ -10377,11 +10415,9 @@ class PlaywrightAutomation:
                     "error": str(result)
                 })
                 all_results["failed_cases"] += 1
-            elif result.get("status") == "success":
+            elif (result or {}).get("status") == "success":
                 all_results["case_results"].append(result)
                 all_results["successful_cases"] += 1
-            elif result.get("status") == "warning":
-                all_results["case_results"].append(result)
             else:
                 all_results["case_results"].append(result)
                 all_results["failed_cases"] += 1
@@ -10397,17 +10433,28 @@ class PlaywrightAutomation:
         ) -> Optional[int]:
             run_history_id = None
             try:
+                from ai_modules.execute.history_ops_summary import (
+                    ci_meta_from_execution_context,
+                    merge_ci_meta_into_expected,
+                )
+
+                _ci = ci_meta_from_execution_context(getattr(self, "_execution_context", None))
+                _exp = merge_ci_meta_into_expected("", **_ci) if _ci else ""
+            except Exception:
+                _exp = ""
+            try:
                 run_history_id = db.create_run_history(
                     case_id,
                     status,
                     round(max(0.0, duration), 2),
                     error_msg or "",
                     "",
-                    "",
+                    _exp,
                 )
             except Exception as db_error:
                 uat_logger.error(f"❌ [MULTI_CASE] 保存用例 {case_id} 运行历史失败: {db_error}")
-            if invoke_failure and status in ("error", "stopped"):
+            # warning 亦触发失败回调：门禁下非 success 均不得当绿
+            if invoke_failure and status in ("error", "stopped", "warning"):
                 self._invoke_on_case_failure({
                     "case_id": case_id,
                     "case_name": case_name,
@@ -10647,7 +10694,12 @@ class PlaywrightAutomation:
                     run_history_id = None
                     try:
                         run_history_id = db.create_run_history(
-                            case_id, "warning", warn_dur, "测试用例没有步骤", "", ""
+                            case_id,
+                            "warning",
+                            warn_dur,
+                            "测试用例没有步骤",
+                            "",
+                            _expected_text_with_ci(getattr(self, "_execution_context", None), ""),
                         )
                     except Exception as db_error:
                         uat_logger.error(f"❌ [MULTI_CASE] 保存空步骤用例历史失败: {db_error}")
@@ -10755,18 +10807,18 @@ class PlaywrightAutomation:
                         round(case_duration, 2),
                         history_error,
                         extracted_text,
-                        "",
+                        _expected_text_with_ci(getattr(self, "_execution_context", None), ""),
                     )
                 except Exception as db_error:
                     uat_logger.error(f"❌ [MULTI_CASE] 保存测试结果到数据库失败: {db_error}")
                 stopped_run = case_status == "stopped"
-                if case_status == "error" and not stopped_run:
+                if case_status in ("error", "warning") and not stopped_run:
                     self._invoke_on_case_failure({
                         "case_id": case_id,
                         "case_name": case_name,
                         "project_id": case_info.get("project_id"),
                         "status": case_status,
-                        "error": history_error or "用例执行失败",
+                        "error": history_error or "用例执行未通过门禁",
                         "run_history_id": run_history_id,
                         "step_results": case_results,
                         "execution_time": round(case_duration, 2),
@@ -11003,19 +11055,29 @@ class PlaywrightAutomation:
         try:
             if action == "navigate":
                 url = step.get("url", "")
+                from auth_batch_helpers import step_allows_skip
+
                 # 处理构建阶段标注的占位符
                 if url == "__INVALID_URL__":
                     raise Exception(step.get("url_error", "导航URL无效"))
                 if url == "__SKIP_URL__":
-                    uat_logger.warning("导航步骤URL为占位符，跳过")
-                    results.append({"status": "skipped", "step": step})
+                    if step_allows_skip(step):
+                        uat_logger.warning("导航步骤URL为占位符，已按 allow_skip 跳过")
+                        results.append({"status": "skipped", "step": step})
+                    else:
+                        raise Exception("导航步骤URL为空或为跳过占位符，未设置 allow_skip，不得假绿")
                 else:
                     fixed_url, url_err = _pa_validate_url(url)
                     if url_err:
                         raise Exception(url_err)
                     elif fixed_url is None:
-                        uat_logger.warning(f"导航步骤URL为空或占位符，跳过: {url}")
-                        results.append({"status": "skipped", "step": step})
+                        if step_allows_skip(step):
+                            uat_logger.warning(f"导航步骤URL为空或占位符，已按 allow_skip 跳过: {url}")
+                            results.append({"status": "skipped", "step": step})
+                        else:
+                            raise Exception(
+                                f"导航步骤URL为空或占位符，未设置 allow_skip，不得假绿: {url!r}"
+                            )
                     else:
                         await self.navigate_to(fixed_url, page=target_page)
                         results.append({"status": "success", "step": step})
@@ -11287,25 +11349,30 @@ class PlaywrightAutomation:
             elif action == "assert":
                 selector = (step.get("selector") or "").strip()
                 expected = (step.get("input_value") or step.get("text") or "").strip()
-                from auth_batch_helpers import normalize_assert_compare_type
+                from auth_batch_helpers import assert_empty_expected_error, normalize_assert_compare_type
 
                 ctype = normalize_assert_compare_type(
                     step.get("compare_type"),
                     selector_value=selector,
                     input_value=expected,
                 )
+                empty_err = assert_empty_expected_error(ctype, expected)
+                if empty_err:
+                    raise Exception(empty_err)
                 selector_type = step.get("selector_type", "css")
                 iframe_selector = step.get("iframe_selector", "")
                 if ctype in ("url_equals", "url_contains"):
                     url = target_page.url if target_page else ""
                     if ctype == "url_equals" and not _url_assert_matches_pa(url, expected, "url_equals"):
                         raise Exception(f"URL 断言失败: 实际 {url!r} 预期 {expected!r}")
-                    if ctype == "url_contains" and expected and not _url_assert_matches_pa(url, expected, "url_contains"):
+                    if ctype == "url_contains" and not _url_assert_matches_pa(url, expected, "url_contains"):
                         raise Exception(f"URL 断言失败: 实际 {url!r} 不包含 {expected!r}")
                 elif ctype in ("page_text_contains", "page_text_equals", "page_text_regex"):
                     await self._assert_page_visible_text(target_page, ctype, expected)
                 elif ctype == "vision_contains":
                     cond = (step.get("description") or expected or "").strip()
+                    if not cond:
+                        raise Exception("vision_contains 断言缺少描述/预期")
                     await self._assert_vision_condition(target_page, cond)
                 elif selector:
                     actual = await self.extract_element_text(
@@ -11314,10 +11381,10 @@ class PlaywrightAutomation:
                     actual = (actual or "").strip()
                     if ctype == "text_equals" and actual != expected:
                         raise Exception(f"文本断言失败: 实际 {actual[:200]!r} 预期 {expected!r}")
-                    if ctype == "text_contains" and expected and expected not in actual:
+                    if ctype == "text_contains" and expected not in actual:
                         raise Exception(f"文本断言失败: 实际文本未包含预期 {expected!r}")
                     if ctype == "text_regex":
-                        if not expected or not re.search(expected, actual):
+                        if not re.search(expected, actual):
                             raise Exception(f"正则断言失败: pattern={expected!r} actual={actual[:200]!r}")
                     if ctype == "element_exists":
                         await self.wait_for_selector(selector, 5000, selector_type, iframe_selector, page=target_page)
@@ -13150,7 +13217,12 @@ def sync_run_api_case_for_batch(
                 case_results, total_steps=len(steps or []), steps_completed=len(case_results)
             )
             run_history_id = db.create_run_history(
-                case_id, case_status, dur, err_s, extracted_text, ""
+                case_id,
+                case_status,
+                dur,
+                err_s,
+                extracted_text,
+                _expected_text_with_ci(getattr(automation, "_execution_context", None), ""),
             )
         except Exception as db_e:
             uat_logger.error("sync_run_api_case_for_batch: 保存运行历史失败: %s", db_e)

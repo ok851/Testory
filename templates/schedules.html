@@ -365,9 +365,24 @@
         // 加载定时任务列表
         async function loadSchedules() {
             try {
-                const response = await fetch('/api/schedules');
-                const result = await response.json();
-                if (result.success) {
+                const response = await fetch('/api/schedules', {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const result = await response.json().catch(function () { return null; });
+                if (response.status === 403 && result && window.TestoryLicenseGate &&
+                    window.TestoryLicenseGate.isFeatureGatePayload(result)) {
+                    window.TestoryLicenseGate.showPageBanner(result);
+                    const tbody = document.getElementById('scheduleList');
+                    if (tbody) {
+                        tbody.innerHTML = window.TestoryLicenseGate.tableGateRowHtml(result, 6);
+                    }
+                    const emptyState = document.getElementById('emptyState');
+                    if (emptyState) emptyState.classList.add('hidden');
+                    window.TestoryLicenseGate.handleResponse(response, result, { notify: false });
+                    return;
+                }
+                if (result && result.success) {
                     schedules = result.schedules;
                     renderSchedules();
                 }

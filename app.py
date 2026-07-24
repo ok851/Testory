@@ -110,7 +110,7 @@ import secrets
 import uuid
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import functools
 import threading
 import io
@@ -1279,17 +1279,62 @@ def audit_log(action: str, target_type: str):
     return decorator
 
 
+def _wants_license_gate_html_redirect() -> bool:
+    """浏览器直接打开页面（非 /api、非 XHR/fetch JSON）时跳转 License 页。"""
+    if request.path.startswith('/api/'):
+        return False
+    if request.method not in ('GET', 'HEAD'):
+        return False
+    # fetch / XHR
+    if (request.headers.get('X-Requested-With') or '').lower() == 'xmlhttprequest':
+        return False
+    mode = (request.headers.get('Sec-Fetch-Mode') or '').lower()
+    if mode in ('cors', 'same-origin', 'no-cors'):
+        return False
+    if mode == 'navigate':
+        return True
+    accept = (request.headers.get('Accept') or 'text/html').lower()
+    # 明确只要 JSON
+    if accept.startswith('application/json'):
+        return False
+    return 'text/html' in accept
+
+
 def feature_required(feature_name: str):
-    """功能可用性检查装饰器 - 检查某功能是否在当前 License 中可用"""
+    """功能可用性检查装饰器 - 检查某功能是否在当前 License 中可用。
+
+    - ``/api/*`` 与 XHR/fetch：返回 JSON 403（``error_code=LICENSE_FEATURE_REQUIRED``）
+    - 浏览器打开页面（如 /audit-logs、/sso-settings）：重定向到 ``/license?gate=...&denied=1``
+    """
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             if not license_manager.check_feature_available(feature_name):
+                gate = license_manager.describe_feature_gate(feature_name)
                 limits = license_manager.get_limits()
-                license_type = limits.get('license_type', 'personal')
+                license_type = limits.get('license_type', 'free')
+                display = limits.get('product_display_name') or license_type
+                min_tier = gate.get('min_tier') or 'enterprise'
+                title = gate.get('title') or feature_name
+                error = (
+                    f'功能「{title}」需要 {min_tier} 及以上授权。'
+                    f'当前：{display}（{license_type}）。'
+                    f'商业部署可设置 LICENSE_ENFORCE_FEATURES=1；'
+                    f'本机开源 standalone 默认解锁试用。'
+                )
+                upgrade_url = '/license?gate=' + str(feature_name) + '&denied=1'
+                if _wants_license_gate_html_redirect():
+                    from flask import redirect
+
+                    return redirect(upgrade_url)
                 return jsonify({
                     'success': False,
-                    'error': f'此功能需要企业版 License。当前版本: {license_type}'
+                    'ok': False,
+                    'error': error,
+                    'error_code': 'LICENSE_FEATURE_REQUIRED',
+                    'feature': feature_name,
+                    'gate': gate,
+                    'upgrade_url': upgrade_url,
                 }), 403
             return func(*args, **kwargs)
         return wrapper
@@ -1565,6 +1610,19 @@ def api_register_local():
     _db.update_user_last_login(user_id)
 
     uat_logger.info("本地简易注册: %s (role=%s)", username, role)
+    try:
+        from auth_audit import ACTION_REGISTER, record_auth_audit
+
+        record_auth_audit(
+            action=ACTION_REGISTER,
+            username=username,
+            user_id=user_id,
+            ip_address=request.remote_addr,
+            details={'method': 'local_simple', 'role': role},
+            db=_db,
+        )
+    except Exception:
+        pass
     return jsonify({
         'success': True,
         'message': '注册成功',
@@ -1613,6 +1671,19 @@ def api_forgot_password_recovery_reset():
         return jsonify({'success': False, 'error': '重置失败，请稍后重试'}), 500
 
     uat_logger.info("用户 %s 已通过找回密钥重置密码", username)
+    try:
+        from auth_audit import ACTION_PASSWORD_RESET, record_auth_audit
+
+        record_auth_audit(
+            action=ACTION_PASSWORD_RESET,
+            username=username,
+            user_id=user_data['id'],
+            ip_address=request.remote_addr,
+            details={'method': 'recovery_key'},
+            db=_db,
+        )
+    except Exception:
+        pass
     return jsonify({
         'success': True,
         'message': '密码已重置，请使用新密码登录，并妥善保存新的找回密钥',
@@ -1860,8 +1931,34 @@ def api_login():
     user_data = _db.get_user_by_username(username)
     if not user_data or not check_password_hash(user_data['password_hash'], password):
         _login_record_failure(ip)
+        try:
+            from auth_audit import ACTION_LOGIN_FAILURE, record_auth_audit
+
+            record_auth_audit(
+                action=ACTION_LOGIN_FAILURE,
+                username=username,
+                user_id=0,
+                ip_address=ip,
+                details={'method': 'password', 'reason': 'bad_credentials'},
+                db=_db,
+            )
+        except Exception:
+            pass
         return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
     if not user_data.get('is_active', 1):
+        try:
+            from auth_audit import ACTION_LOGIN_FAILURE, record_auth_audit
+
+            record_auth_audit(
+                action=ACTION_LOGIN_FAILURE,
+                username=username,
+                user_id=user_data.get('id'),
+                ip_address=ip,
+                details={'method': 'password', 'reason': 'disabled'},
+                db=_db,
+            )
+        except Exception:
+            pass
         return jsonify({'success': False, 'error': '账号已被禁用'}), 403
     _login_clear_failures(ip)
     user = UserModel(user_data)
@@ -1871,6 +1968,19 @@ def api_login():
     login_user(user, remember=remember)
     _db.update_user_last_login(user_data['id'])
     uat_logger.info(f"用户 {username} 登录成功")
+    try:
+        from auth_audit import ACTION_LOGIN_SUCCESS, record_auth_audit
+
+        record_auth_audit(
+            action=ACTION_LOGIN_SUCCESS,
+            username=username,
+            user_id=user_data['id'],
+            ip_address=ip,
+            details={'method': 'password', 'remember': bool(remember)},
+            db=_db,
+        )
+    except Exception:
+        pass
     try:
         from client_config_store import get_team_server_url
         from deployment_config import is_client_mode
@@ -1891,6 +2001,19 @@ def api_login():
 @login_required
 def api_logout():
     username = current_user.username
+    uid = getattr(current_user, 'id', None)
+    try:
+        from auth_audit import ACTION_LOGOUT, record_auth_audit
+
+        record_auth_audit(
+            action=ACTION_LOGOUT,
+            username=username,
+            user_id=uid,
+            ip_address=request.remote_addr,
+            details={'method': 'session'},
+        )
+    except Exception:
+        pass
     logout_user()
     uat_logger.info(f"用户 {username} 已注销")
     return jsonify({'success': True})
@@ -2351,7 +2474,11 @@ def api_ai_hub_cross_platform_execute():
         return jsonify({'success': False, 'error': 'scenario_id 必填'}), 400
     from ai_modules.execute.orchestrator import execute_cross_platform_scenario
 
-    out = execute_cross_platform_scenario(sid)
+    out = execute_cross_platform_scenario(sid, user_id=str(current_user.id))
+    if out.get('lock') == 'busy':
+        return jsonify(out), 409
+    if out.get('lock') == 'unavailable':
+        return jsonify(out), 503
     code = 501 if out.get('status') == 'not_implemented' else (200 if out.get('success') else 400)
     return jsonify(out), code
 
@@ -5187,13 +5314,106 @@ def api_ai_cross_end_decompose():
         return jsonify({'ok': False, 'error': str(exc)}), 500
 
 
+@app.route('/api/ai/desktop/preflight', methods=['GET'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_ai_desktop_preflight():
+    """Desktop 主路径预检：不可用返回 ok=false + DESKTOP_NO_SESSION（不假绿）。"""
+    from ai_modules.execute.desktop_preflight import check_desktop_preflight
+
+    pre = check_desktop_preflight()
+    status = 200 if pre.get('ok') else 503
+    return jsonify({'ok': bool(pre.get('ok')), 'preflight': pre}), status
+
+
+@app.route('/api/ai/cross-end/desktop-mainpath-plan', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_cross_end_desktop_mainpath_plan():
+    """返回 Windows 记事本桌面主路径标准计划（可直接 execute）。"""
+    from ai_modules.execute.desktop_preflight import (
+        build_notepad_mainpath_plan,
+        check_desktop_preflight,
+    )
+
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id') or request.args.get('project_id')
+    plan = build_notepad_mainpath_plan(project_id=project_id)
+    pre = check_desktop_preflight()
+    return jsonify({
+        'ok': True,
+        'plan': plan,
+        'preflight': pre,
+        'ready_to_run': bool(pre.get('ok')),
+        'hint': (
+            None
+            if pre.get('ok')
+            else (pre.get('error') or '桌面会话不可用，执行将诚实失败 DESKTOP_NO_SESSION')
+        ),
+    })
+
+
+@app.route('/api/ai/cross-end/erp-desktop-plan', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_cross_end_erp_desktop_plan():
+    """ERP 桌面样例计划：Fake ERP 或 DESKTOP_APP_ALIASES（@erp）↔ API 种子订单号断言。"""
+    from ai_modules.execute.desktop_preflight import check_desktop_preflight
+    from ai_modules.execute.erp_desktop_sample import build_erp_desktop_sample_plan
+
+    data = request.get_json(silent=True) or {}
+    q = request.args
+    project_id = data.get('project_id') or q.get('project_id')
+    order_id = data.get('order_id') or q.get('order_id') or 'ORD-DEMO-404'
+    launch_mode = (
+        data.get('launch_mode')
+        or data.get('mode')
+        or q.get('launch_mode')
+        or q.get('mode')
+        or 'fake'
+    )
+    alias = data.get('alias') or q.get('alias') or 'erp'
+    window_title_re = data.get('window_title_re') or q.get('window_title_re')
+    plan = build_erp_desktop_sample_plan(
+        order_id=order_id,
+        project_id=project_id,
+        launch_mode=str(launch_mode),
+        alias=str(alias),
+        window_title_re=window_title_re,
+    )
+    pre = check_desktop_preflight()
+    alias_err = (plan.get('meta') or {}).get('alias_error')
+    ready = bool(pre.get('ok')) and not alias_err
+    hint = None
+    if alias_err:
+        hint = alias_err
+    elif not pre.get('ok'):
+        hint = pre.get('error') or '桌面会话不可用，执行将诚实失败 DESKTOP_NO_SESSION'
+    return jsonify({
+        'ok': True,
+        'plan': plan,
+        'preflight': pre,
+        'ready_to_run': ready,
+        'alias_error': alias_err,
+        'hint': hint,
+    })
+
+
 @app.route('/api/ai/cross-end/execute', methods=['POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
 def api_ai_cross_end_execute():
-    """执行跨端计划。"""
+    """执行跨端计划。
+
+    body.async=true 时立即返回 run_id，后台执行（企业运营：HITL 等待时可同页 resume）。
+    """
     from ai_modules.execute.orchestrator import execute_cross_end_plan
 
     data = request.get_json(silent=True) or {}
@@ -5203,13 +5423,150 @@ def api_ai_cross_end_execute():
     if not plan.get('stages'):
         return jsonify({'ok': False, 'error': 'plan.stages 不能为空'}), 400
     project_id = data.get('project_id')
+    want_async = bool(
+        data.get('async')
+        or data.get('async_mode')
+        or str(request.args.get('async') or '').lower() in ('1', 'true', 'yes')
+    )
+
+    if want_async:
+        from ai_modules.execute.cross_end_async import create_run, start_run_thread
+
+        rec = create_run(
+            plan,
+            user_id=str(current_user.id),
+            project_id=project_id,
+            trigger_source='ui-async',
+        )
+        start_run_thread(
+            rec['run_id'],
+            plan,
+            user_id=str(current_user.id),
+            project_id=project_id,
+            trigger_source='ui-async',
+        )
+        return jsonify({
+            'ok': True,
+            'async': True,
+            'run_id': rec['run_id'],
+            'status': rec['status'],
+            'message': '已异步启动；请轮询 /api/ai/cross-end/runs/<run_id>，HITL/审批见运营面板',
+        })
 
     try:
-        result = execute_cross_end_plan(plan)
-        return jsonify({'ok': True, 'result': result})
+        result = execute_cross_end_plan(
+            plan,
+            user_id=str(current_user.id),
+            project_id=project_id,
+            trigger_source='ui',
+        )
+        try:
+            from ai_modules.plan.user_facing_errors import enrich_result_with_user_hint
+            enrich_result_with_user_hint(result)
+        except Exception:
+            pass
+        if result.get('lock') == 'busy':
+            return jsonify({
+                'ok': False,
+                'error': result.get('error') or '本机已有自动化任务在执行',
+                'user_hint': result.get('user_hint'),
+                'lock': 'busy',
+                'error_code': result.get('error_code'),
+                'result': result,
+            }), 409
+        if result.get('lock') == 'unavailable':
+            return jsonify({
+                'ok': False,
+                'error': result.get('error') or 'execution_lock 不可用',
+                'user_hint': result.get('user_hint'),
+                'lock': 'unavailable',
+                'error_code': result.get('error_code'),
+                'result': result,
+            }), 503
+        # 业务失败仍返回 200 + result，由前端根据 success/user_hint 展示
+        return jsonify({
+            'ok': True,
+            'result': result,
+            'user_hint': result.get('user_hint'),
+            'error_code': result.get('error_code'),
+        })
     except Exception as exc:
         uat_logger.exception('cross-end execute failed')
         return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/ai/cross-end/runs/<run_id>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_cross_end_run_get(run_id):
+    """查询异步跨端执行状态。"""
+    from ai_modules.execute.cross_end_async import get_run
+
+    rec = get_run(run_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    return jsonify({'ok': True, **rec})
+
+
+@app.route('/api/ai/ops/gates', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_ops_gates():
+    """运营门禁：HITL waiting + RiskGuard pending。"""
+    from ai_modules.execute.cross_end_async import list_ops_gates
+
+    blob = list_ops_gates(user_id=str(current_user.id))
+    return jsonify({'ok': True, **blob})
+
+
+@app.route('/api/ai/risk/approve', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_risk_approve():
+    """批准 L2 审批；返回 token，可写入 plan.approvals 后重试。"""
+    from ai_modules.security.risk_guard import approve_risk
+
+    data = request.get_json(silent=True) or {}
+    aid = str(data.get('approval_id') or '').strip()
+    if not aid:
+        return jsonify({'ok': False, 'error': 'approval_id 必填'}), 400
+    ok, token_or_err = approve_risk(
+        aid,
+        token=str(data.get('token') or '').strip(),
+        approver=str(getattr(current_user, 'username', None) or current_user.id),
+    )
+    if not ok:
+        return jsonify({'ok': False, 'error': token_or_err or '批准失败'}), 400
+    return jsonify({
+        'ok': True,
+        'approval_id': aid,
+        'token': token_or_err,
+        'message': '已批准；请将 token 写入 plan.approvals[stage_id] 后重新执行',
+    })
+
+
+@app.route('/api/ai/risk/deny', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_risk_deny():
+    from ai_modules.security.risk_guard import deny_risk
+
+    data = request.get_json(silent=True) or {}
+    aid = str(data.get('approval_id') or '').strip()
+    if not aid:
+        return jsonify({'ok': False, 'error': 'approval_id 必填'}), 400
+    ok = deny_risk(
+        aid,
+        reason=str(data.get('reason') or '运营拒绝'),
+        denier=str(getattr(current_user, 'username', None) or current_user.id),
+    )
+    if not ok:
+        return jsonify({'ok': False, 'error': '审批记录不存在'}), 404
+    return jsonify({'ok': True, 'approval_id': aid, 'message': '已拒绝'})
 
 
 @app.route('/api/ai/cross-end/scenario', methods=['GET', 'POST'])
@@ -5217,15 +5574,26 @@ def api_ai_cross_end_execute():
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 def api_ai_cross_end_scenarios():
-    """列出或保存跨端场景。"""
-    from ai_modules.execute.orchestrator import list_cross_platform_scenarios, save_cross_platform_scenario
+    """列出或保存跨端场景（scenario_id 为字符串 UUID）。"""
+    from ai_modules.execute.orchestrator import (
+        list_cross_platform_scenarios,
+        save_cross_platform_scenario,
+        scenario_store_info,
+    )
 
     if request.method == 'GET':
         project_id = request.args.get('project_id', type=int)
         all_scenarios = list_cross_platform_scenarios()
-        if project_id:
-            all_scenarios = [s for s in all_scenarios if s.get('project_id') == project_id]
-        return jsonify({'ok': True, 'scenarios': all_scenarios})
+        if project_id is not None:
+            all_scenarios = [
+                s for s in all_scenarios
+                if s.get('project_id') == project_id or str(s.get('project_id') or '') == str(project_id)
+            ]
+        return jsonify({
+            'ok': True,
+            'scenarios': all_scenarios,
+            'store': scenario_store_info(),
+        })
 
     data = request.get_json(silent=True) or {}
     project_id = data.get('project_id')
@@ -5233,29 +5601,249 @@ def api_ai_cross_end_scenarios():
         return jsonify({'ok': False, 'error': 'project_id 不能为空'}), 400
     payload = dict(data)
     payload.setdefault('project_id', project_id)
-    name_val = payload.pop('name', None)
-    if name_val and 'plan' in payload and isinstance(payload['plan'], dict):
-        payload['plan']['name'] = name_val
+    # name 保留在顶层；save 内会同步到 plan
     result = save_cross_platform_scenario(payload)
-    return jsonify({'ok': result.get('success', False), 'id': result.get('scenario', {}).get('scenario_id')})
+    if not result.get('success'):
+        return jsonify({'ok': False, 'error': result.get('error') or '保存失败'}), 400
+    sc = result.get('scenario') or {}
+    sid = result.get('scenario_id') or sc.get('scenario_id')
+    return jsonify({
+        'ok': True,
+        'scenario_id': sid,
+        'id': sid,
+        'scenario': sc,
+        'store': scenario_store_info(),
+    })
 
 
-@app.route('/api/ai/cross-end/scenario/<int:scenario_id>', methods=['GET', 'DELETE'])
+@app.route('/api/ai/cross-end/scenario/<scenario_id>', methods=['GET', 'DELETE'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 def api_ai_cross_end_scenario(scenario_id):
-    """获取或删除单个跨端场景。"""
+    """获取或删除单个跨端场景（字符串 scenario_id，兼容历史数字字符串）。"""
     from ai_modules.execute.orchestrator import get_cross_platform_scenario, delete_cross_platform_scenario
 
+    sid = (scenario_id or '').strip()
+    if not sid:
+        return jsonify({'ok': False, 'error': 'scenario_id 不能为空'}), 400
+
     if request.method == 'GET':
-        scenario = get_cross_platform_scenario(str(scenario_id))
+        scenario = get_cross_platform_scenario(sid)
         if not scenario:
             return jsonify({'ok': False, 'error': '场景不存在'}), 404
-        return jsonify({'ok': True, 'scenario': scenario})
+        return jsonify({'ok': True, 'scenario': scenario, 'scenario_id': sid})
 
-    result = delete_cross_platform_scenario(str(scenario_id))
-    return jsonify({'ok': result.get('success', False)})
+    result = delete_cross_platform_scenario(sid)
+    if not result.get('success'):
+        return jsonify({'ok': False, 'error': result.get('error') or '删除失败'}), 404
+    return jsonify({'ok': True, 'scenario_id': result.get('scenario_id') or sid})
+
+
+# ----------------------------------------------------------------------
+# Agent Teams（Phase A：TestRunState + Planner/Executor/Verifier）
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/agent-teams/spec', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_agent_teams_spec():
+    """加载 testory-cross-end-qa-team Spec（本地控制面，可映射 AgentTeams）。"""
+    from ai_modules.agent_teams import load_team_spec
+
+    return jsonify({'ok': True, 'spec': load_team_spec()})
+
+
+@app.route('/api/ai/agent-teams/runs', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_agent_teams_runs():
+    """GET 列出近期 run；POST 启动三角色闭环（同步）。"""
+    from ai_modules.agent_teams import load_team_spec, run_cross_end_qa_team
+    from ai_modules.agent_teams.test_run_state import list_run_ids, load_run
+
+    if request.method == 'GET':
+        ids = list_run_ids(limit=int(request.args.get('limit') or 50))
+        runs = []
+        for rid in ids:
+            st = load_run(rid)
+            if st:
+                runs.append({
+                    'run_id': st.run_id,
+                    'status': st.status,
+                    'goal': st.goal,
+                    'created_at': st.created_at,
+                    'finished_at': st.finished_at,
+                    'agents_seen': st.agent_kinds_seen(),
+                })
+        return jsonify({'ok': True, 'runs': runs, 'spec': load_team_spec()})
+
+    data = request.get_json(silent=True) or {}
+    description = _ai_str(data.get('description') or data.get('goal') or data.get('desc') or '')
+    plan = data.get('plan') if isinstance(data.get('plan'), dict) else None
+    if not description and not (plan and plan.get('stages')):
+        return jsonify({
+            'ok': False,
+            'error': '请提供 description 或带 stages 的 plan',
+            'user_hint': '多 Agent 闭环需要自然语言目标，或直接传入已分解的跨端 plan。',
+        }), 400
+
+    try:
+        state = run_cross_end_qa_team(
+            description=description,
+            plan=plan,
+            user_id=str(current_user.id),
+            idempotency_key=_ai_str(data.get('idempotency_key') or ''),
+            run_id=_ai_str(data.get('run_id') or ''),
+            project_id=data.get('project_id'),
+        )
+    except Exception as exc:
+        uat_logger.exception('agent-teams run failed')
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+    passed = state.status == 'success'
+    hist_ev = None
+    for e in reversed(state.events or []):
+        if (e or {}).get('message') == '已写入运行历史':
+            hist_ev = e
+            break
+    return jsonify({
+        'ok': True,
+        'passed': passed,
+        'run_id': state.run_id,
+        'status': state.status,
+        'report': state.report,
+        'state': state.to_dict(),
+        'run_history_id': ((hist_ev or {}).get('payload') or {}).get('run_history_id'),
+        'user_hint': (
+            '多 Agent 验证通过'
+            if passed
+            else (
+                (state.report or {}).get('reason')
+                or (state.errors[-1] if state.errors else '验证未通过')
+            )
+        ),
+    })
+
+
+@app.route('/api/ai/agent-teams/runs/<run_id>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_agent_teams_run(run_id):
+    """读取 TestRunState。"""
+    from ai_modules.agent_teams.test_run_state import load_run
+
+    rid = (run_id or '').strip()
+    if not rid:
+        return jsonify({'ok': False, 'error': 'run_id 不能为空'}), 400
+    st = load_run(rid)
+    if not st:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    return jsonify({'ok': True, 'run_id': rid, 'state': st.to_dict(), 'report': st.report})
+
+
+@app.route('/api/ai/agent-teams/runs/<run_id>/report', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_agent_teams_report(run_id):
+    """Verifier 报告（report.json 语义）。"""
+    from ai_modules.agent_teams.test_run_state import load_run
+
+    rid = (run_id or '').strip()
+    st = load_run(rid)
+    if not st:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    if not st.report:
+        return jsonify({'ok': False, 'error': '报告尚未生成'}), 404
+    return jsonify({'ok': True, 'run_id': rid, 'report': st.report, 'status': st.status})
+
+
+@app.route('/api/ai/agent-teams/runs/<run_id>/trace', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_agent_teams_trace(run_id):
+    """导出多 Agent 运行 Trace 证据包（JSON 元数据或 ZIP）。"""
+    from ai_modules.execute.trace_pack import export_trace_pack
+    from flask import send_file
+
+    rid = (run_id or '').strip()
+    if not rid:
+        return jsonify({'ok': False, 'error': 'run_id 不能为空'}), 400
+    fmt = (request.args.get('format') or 'json').strip().lower()
+    want_zip = fmt in ('zip', 'download')
+    exported = export_trace_pack(agent_run_id=rid, make_zip=want_zip)
+    if want_zip:
+        zp = exported.get('zip_path')
+        if not zp or not os.path.isfile(zp):
+            return jsonify({
+                'ok': False,
+                'error': exported.get('error') or 'ZIP 生成失败',
+                'error_code': exported.get('error_code'),
+                'manifest': exported.get('manifest'),
+            }), 404 if exported.get('error_code') == 'TRACE_INCOMPLETE' else 500
+        return send_file(
+            zp,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=exported.get('download_name') or f'{rid}.zip',
+        )
+    code = 200 if exported.get('ok') else (404 if exported.get('error_code') == 'TRACE_INCOMPLETE' else 400)
+    return jsonify(exported), code
+
+
+@app.route('/api/ai/trace-packs/export', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_trace_pack_export():
+    """通用 Trace 证据包导出：audit_id / run_history_id / agent_run_id 三选一。"""
+    from ai_modules.execute.trace_pack import export_trace_pack
+    from flask import send_file
+
+    data = request.get_json(silent=True) or {}
+    q = request.args
+    audit_id = _ai_str(data.get('audit_id') or q.get('audit_id') or '')
+    agent_run_id = _ai_str(data.get('agent_run_id') or q.get('agent_run_id') or '')
+    rh_raw = data.get('run_history_id') if data.get('run_history_id') is not None else q.get('run_history_id')
+    run_history_id = None
+    if rh_raw is not None and str(rh_raw).strip() != '':
+        try:
+            run_history_id = int(rh_raw)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'error': 'run_history_id 必须是整数'}), 400
+    fmt = _ai_str(data.get('format') or q.get('format') or 'json').lower()
+    want_zip = fmt in ('zip', 'download')
+    exported = export_trace_pack(
+        audit_id=audit_id,
+        run_history_id=run_history_id,
+        agent_run_id=agent_run_id,
+        make_zip=want_zip,
+    )
+    if want_zip:
+        zp = exported.get('zip_path')
+        if not zp or not os.path.isfile(zp):
+            return jsonify({
+                'ok': False,
+                'error': exported.get('error') or 'ZIP 生成失败',
+                'error_code': exported.get('error_code'),
+                'manifest': exported.get('manifest'),
+            }), 400
+        return send_file(
+            zp,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=exported.get('download_name') or 'trace_pack.zip',
+        )
+    code = 200 if exported.get('ok') else 400
+    return jsonify(exported), code
 
 
 # ----------------------------------------------------------------------
@@ -5292,6 +5880,24 @@ def api_ai_dialog_test():
 # ----------------------------------------------------------------------
 # 自愈批量扫描与验证 API
 # ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/heal/capabilities', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_heal_capabilities():
+    """Self-heal Hub 能力矩阵（诚实：Desktop 无运行时自愈）。"""
+    from ai_modules.optimize.self_heal import heal_capability_matrix, summarize_heal_claim
+
+    layer = (request.args.get('layer') or '').strip() or None
+    matrix = heal_capability_matrix()
+    claim = summarize_heal_claim(layer=layer) if layer else None
+    return jsonify({
+        'ok': True,
+        'matrix': matrix,
+        'claim': claim,
+        'marketing_claim_allowed': False,
+    })
 
 
 @app.route('/api/ai/heal/batch-scan', methods=['POST'])
@@ -7605,25 +8211,111 @@ def api_ai_agent_capabilities():
 @login_required
 @api_error_handler
 def api_ai_agent_hitl_resume():
-    """用户完成验证码/登录后继续同一会话。"""
-    from agent_hitl import mark_user_resumed, clear_user_action, get_pending
+    """用户完成验证码/登录后继续同一会话。
+
+    支持：
+    - 原 AI Agent 路径：按 user_id pending resume
+    - 跨端阻塞门禁：按 gate_id / session_id 调用 resume_hitl_gate（不立即清 gate，由 waiter 消费）
+    """
+    from agent_hitl import (
+        mark_user_resumed,
+        clear_user_action,
+        get_pending,
+        resume_hitl_gate,
+        get_hitl_gate,
+    )
     from agent_task_context import get_task_context
 
     data = request.get_json(silent=True) or {}
     user_id = str(current_user.id)
     pending = get_pending(user_id)
-    mark_user_resumed(user_id)
-    sid = (data.get('session_id') or (pending or {}).get('session_id') or '').strip()
+    gate_id = (
+        (data.get('gate_id') or data.get('session_id') or '')
+        or ((pending or {}).get('gate_id') or (pending or {}).get('session_id') or '')
+    )
+    gate_id = str(gate_id or '').strip()
+
+    gate_ok = False
+    if gate_id:
+        gate_ok = bool(resume_hitl_gate(gate_id))
+
+    user_ok = mark_user_resumed(user_id)
+    sid = (data.get('session_id') or (pending or {}).get('session_id') or gate_id or '').strip()
     ctx = get_task_context(sid) if sid else None
     if ctx:
         ctx.clear_hitl()
         ctx.set_var('hitl_resumed_at', __import__('time').time())
+        if gate_id:
+            ctx.set_var('hitl_gate_id', gate_id)
+
+    # UI pending 可清；gate 由 wait_hitl_gate 消费后再清，避免竞态丢 resume
     clear_user_action(user_id)
+
+    gate_snapshot = get_hitl_gate(gate_id) if gate_id else None
     return jsonify({
         'success': True,
         'session_id': sid,
-        'message': '已确认人工步骤，可继续发送任务',
+        'gate_id': gate_id or None,
+        'gate_resumed': gate_ok,
+        'user_pending_resumed': user_ok,
+        'gate_status': (gate_snapshot or {}).get('status') if gate_snapshot else (
+            'consumed_or_missing' if gate_ok else None
+        ),
+        'message': '已确认人工步骤，可继续发送任务或等待跨端编排恢复',
         'context': ctx.to_public_dict() if ctx else None,
+    })
+
+
+@app.route('/api/ai/agent/hitl/status', methods=['GET'])
+@login_required
+@api_error_handler
+def api_ai_agent_hitl_status():
+    """查询用户 pending 或指定 gate 状态（跨端轮询/调试）。"""
+    from agent_hitl import get_pending, get_hitl_gate, list_hitl_gates
+
+    user_id = str(current_user.id)
+    gate_id = (request.args.get('gate_id') or request.args.get('session_id') or '').strip()
+    pending = get_pending(user_id)
+    gate = get_hitl_gate(gate_id) if gate_id else None
+    if gate is None and pending:
+        gate = get_hitl_gate(
+            str(pending.get('gate_id') or pending.get('session_id') or '')
+        )
+    waiting = list_hitl_gates(status='waiting')
+    return jsonify({
+        'success': True,
+        'pending': pending,
+        'gate': gate,
+        'waiting': waiting,
+    })
+
+
+@app.route('/api/ai/agent/hitl/cancel', methods=['POST'])
+@login_required
+@api_error_handler
+def api_ai_agent_hitl_cancel():
+    """取消 HITL 门禁（跨端等待将失败，不会假绿）。"""
+    from agent_hitl import cancel_hitl_gate, get_pending, clear_user_action
+
+    data = request.get_json(silent=True) or {}
+    user_id = str(current_user.id)
+    pending = get_pending(user_id)
+    gate_id = str(
+        data.get('gate_id')
+        or data.get('session_id')
+        or (pending or {}).get('gate_id')
+        or (pending or {}).get('session_id')
+        or ''
+    ).strip()
+    if not gate_id:
+        return jsonify({'success': False, 'error': 'gate_id 必填'}), 400
+    ok = bool(cancel_hitl_gate(gate_id))
+    clear_user_action(user_id)
+    return jsonify({
+        'success': True,
+        'gate_id': gate_id,
+        'cancelled': ok,
+        'message': '已取消人工确认' if ok else '门禁不存在或已结束',
     })
 
 
@@ -10635,7 +11327,7 @@ def _run_assert_automation_step(
     iframe_sel,
 ):
     """执行断言步骤（与单用例运行一致）。文本类断言返回应写入 extracted 的片段，否则返回 None。"""
-    from auth_batch_helpers import normalize_assert_compare_type
+    from auth_batch_helpers import assert_empty_expected_error, normalize_assert_compare_type
 
     assert_type = normalize_assert_compare_type(
         step.get('compare_type', 'text_equals'),
@@ -10643,6 +11335,13 @@ def _run_assert_automation_step(
         input_value=input_value or "",
     )
     expected_value = input_value
+    empty_err = assert_empty_expected_error(assert_type, expected_value)
+    if empty_err:
+        raise Exception(empty_err)
+    if assert_type == "vision_contains":
+        cond = (step.get("description") or expected_value or "").strip()
+        if not cond:
+            raise Exception("vision_contains 断言缺少描述/预期")
     uat_logger.info(
         f"执行断言操作: 类型={assert_type}, 选择器={selector_value}, 预期={expected_value}"
     )
@@ -10660,7 +11359,7 @@ def _run_assert_automation_step(
             elif assert_type == 'page_text_contains':
                 from ai_page_probe import page_text_matches_assert_expected
 
-                if expected_value and not page_text_matches_assert_expected(
+                if not page_text_matches_assert_expected(
                     actual_text, expected_value, 'page_text_contains'
                 ):
                     raise Exception(
@@ -12438,7 +13137,13 @@ def get_run_history():
         db = Database()
         history = db.get_all_run_history(page, page_size, case_id, search_text, project_id, status_filter=status_filter)
         total = db.get_run_history_count(case_id, search_text, project_id, status_filter=status_filter)
-        
+        try:
+            from ai_modules.execute.history_ops_summary import enrich_run_history_record
+
+            history = [enrich_run_history_record(h) for h in (history or [])]
+        except Exception:
+            pass
+
         return jsonify({
             'success': True,
             'history': history,
@@ -12501,11 +13206,17 @@ def delete_all_run_history():
 
 @app.route('/api/run-history/<int:record_id>', methods=['GET'])
 def get_run_history_detail(record_id):
-    """获取运行历史记录详情"""
+    """获取运行历史记录详情（含门禁摘要 / 证据包与 CI 链接）。"""
     try:
         db = Database()
         record = db.get_run_history_detail(record_id)
         if record:
+            try:
+                from ai_modules.execute.history_ops_summary import enrich_run_history_record
+
+                record = enrich_run_history_record(record)
+            except Exception:
+                pass
             return jsonify({
                 'success': True,
                 'record': record
@@ -12577,6 +13288,97 @@ def api_get_report_overview():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/report/ops-summary', methods=['GET'])
+@api_error_handler
+@log_api_request
+def api_get_report_ops_summary():
+    """治理看板：HITL/Risk/证据/CI（含无 case 的跨端历史）。"""
+    try:
+        project_id = request.args.get('project_id')
+        if project_id is not None and str(project_id).strip() != '':
+            project_id = int(project_id)
+        else:
+            project_id = None
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        case_category = request.args.get('case_category')
+        report_generator = TestReportGenerator()
+        data = report_generator.get_ops_governance_summary(
+            project_id, start_date, end_date, case_category
+        )
+        return jsonify({'success': True, 'data': data})
+    except Exception as e:
+        uat_logger.error(f"获取治理看板失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/report/customer-audit-pack', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@feature_required('customer_audit_export')
+@api_error_handler
+@log_api_request
+def api_report_customer_audit_pack():
+    """客户向审计交付包 ZIP：索引 + 治理摘要 + 关键失败/门禁 Trace（不美化）。"""
+    from ai_modules.execute.customer_audit_pack import build_customer_audit_pack
+    from flask import send_file
+
+    data = request.get_json(silent=True) or {}
+    q = request.args
+
+    def _pick(key, default=None):
+        if data.get(key) is not None and str(data.get(key)).strip() != '':
+            return data.get(key)
+        if q.get(key) is not None and str(q.get(key)).strip() != '':
+            return q.get(key)
+        return default
+
+    project_id = _pick('project_id')
+    if project_id is not None:
+        try:
+            project_id = int(project_id)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'project_id 必须是整数'}), 400
+    start_date = _pick('start_date')
+    end_date = _pick('end_date')
+    case_category = _pick('case_category')
+    try:
+        scan_limit = int(_pick('scan_limit', 500) or 500)
+    except (TypeError, ValueError):
+        scan_limit = 500
+    try:
+        embed_limit = int(_pick('embed_limit', 15) or 15)
+    except (TypeError, ValueError):
+        embed_limit = 15
+    fmt = str(_pick('format', 'zip') or 'zip').lower()
+    want_zip = fmt in ('zip', 'download', '')
+
+    exported = build_customer_audit_pack(
+        project_id=project_id,
+        start_date=start_date,
+        end_date=end_date,
+        case_category=case_category,
+        scan_limit=scan_limit,
+        embed_limit=embed_limit,
+        make_zip=want_zip,
+    )
+    if want_zip:
+        zp = exported.get('zip_path')
+        if not zp or not os.path.isfile(zp):
+            return jsonify({
+                'success': False,
+                'error': exported.get('error') or '审计包 ZIP 生成失败',
+                'data': exported,
+            }), 500
+        return send_file(
+            zp,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=exported.get('download_name') or 'customer_audit_pack.zip',
+        )
+    return jsonify({'success': True, 'data': exported})
 
 # API: 获取状态分布
 @app.route('/api/report/status-distribution', methods=['GET'])
@@ -13000,15 +13802,365 @@ def api_revoke_token(token_id):
 
 # ==================== Webhook/CI 触发接口 ====================
 
+def _ci_resolve_case_ids(data: dict, _db) -> Tuple[list, Optional[str]]:
+    """从请求体解析 case_ids；返回 (ids, error)。"""
+    case_ids = data.get("case_ids") or data.get("caseIds") or []
+    if isinstance(case_ids, str):
+        case_ids = [x.strip() for x in case_ids.split(",") if x.strip()]
+    if case_ids:
+        out = []
+        for x in case_ids:
+            try:
+                out.append(int(x))
+            except (TypeError, ValueError):
+                return [], f"无效 case_id: {x}"
+        return out, None
+
+    project_id = data.get("project_id")
+    if project_id is not None:
+        try:
+            project_id = int(project_id)
+        except (TypeError, ValueError):
+            return [], "project_id 无效"
+        cases = _db.get_project_cases(project_id, case_type="ui") or []
+        ids = [c["id"] for c in cases if isinstance(c, dict) and c.get("id") is not None]
+        if not ids:
+            return [], "项目没有测试用例"
+        return ids, None
+
+    suite_id = data.get("suite_id") or data.get("suiteId")
+    if suite_id is not None:
+        return [], "suite_id 尚未接入，请改用 project_id 或 case_ids"
+
+    return [], "请提供 case_ids 或 project_id"
+
+
+def _ci_want_async(data: dict) -> bool:
+    """async=true / sync=false / mode=async → 异步。默认同步（兼容 0c-1）。"""
+    if data.get("async") is True:
+        return True
+    if data.get("sync") is False:
+        return True
+    mode = str(data.get("mode") or "").strip().lower()
+    return mode in ("async", "background", "queue")
+
+
+def _ci_run_batch_and_finalize(
+    *,
+    run_id: str,
+    case_ids: list,
+    project_id,
+    trigger_source: str,
+    build_id: str,
+    git_sha: str,
+    branch: str,
+    suite_name: str,
+    user_id,
+    tenant_id,
+    sync_mode: bool,
+):
+    """执行批量用例并写入 run 终态；可选投递 callback。"""
+    from auth_batch_helpers import count_batch_gate_failures
+    from ci_adapter import (
+        build_run_record_from_batch,
+        deliver_run_callback,
+        finalize_run_from_batch,
+        mark_run_running,
+    )
+
+    if not sync_mode:
+        mark_run_running(run_id)
+
+    _db = Database()
+    _exec_ctx = ExecutionContext(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        trigger="ci",
+        on_case_failure=_on_case_execution_failure,
+        extra={
+            "project_id": project_id,
+            "build_id": build_id,
+            "git_sha": git_sha,
+            "trigger_source": trigger_source,
+            "ci_run_id": run_id,
+        },
+    )
+    try:
+        results = sync_execute_multiple_test_cases(case_ids, _db, execution_context=_exec_ctx)
+    except Exception as e:
+        uat_logger.error(f"CI run 执行失败 run_id={run_id}: {e}")
+        results = {
+            "total_cases": len(case_ids),
+            "successful_cases": 0,
+            "failed_cases": len(case_ids),
+            "case_results": [
+                {
+                    "case_id": cid,
+                    "case_name": str(cid),
+                    "status": "error",
+                    "error": str(e),
+                }
+                for cid in case_ids
+            ],
+            "error": str(e),
+        }
+    finally:
+        try:
+            sync_close_browser()
+        except Exception:
+            pass
+
+    if not isinstance(results, dict):
+        results = {"case_results": [], "error": "执行返回无效"}
+
+    try:
+        gate_fails = count_batch_gate_failures(results.get("case_results") or [])
+        if gate_fails and int(results.get("failed_cases") or 0) < gate_fails:
+            results["failed_cases"] = gate_fails
+            results["successful_cases"] = max(
+                0, int(results.get("total_cases") or len(case_ids)) - gate_fails
+            )
+    except Exception:
+        pass
+
+    if sync_mode:
+        record = build_run_record_from_batch(
+            results,
+            run_id=run_id,
+            project_id=project_id,
+            case_ids=case_ids,
+            trigger_source=trigger_source,
+            build_id=build_id,
+            git_sha=git_sha,
+            branch=branch,
+            suite_name=suite_name,
+        )
+    else:
+        record = finalize_run_from_batch(run_id, results, suite_name=suite_name)
+
+    try:
+        deliver_run_callback(run_id)
+    except Exception as cb_err:
+        uat_logger.warning(f"CI callback 投递异常 run_id={run_id}: {cb_err}")
+    from ci_adapter import get_run
+
+    return get_run(run_id) or record
+
+
+@app.route('/api/ci/runs', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_runs_create():
+    """CI 触发执行。默认同步；async=true 时立即返回 queued（202），可轮询 + webhook。"""
+    from ci_adapter import create_queued_run, new_run_id, public_run_view
+
+    data = request.get_json(silent=True) or {}
+    _db = Database()
+    case_ids, err = _ci_resolve_case_ids(data, _db)
+    if err:
+        return jsonify({"ok": False, "success": False, "error": err, "status": "failed"}), 400
+
+    trigger_source = str(data.get("trigger_source") or data.get("source") or "ci").strip() or "ci"
+    build_id = str(data.get("build_id") or data.get("pipeline_id") or "").strip()
+    git_sha = str(data.get("git_sha") or data.get("commit") or "").strip()
+    branch = str(data.get("branch") or "").strip()
+    project_id = data.get("project_id")
+    suite_name = str(data.get("suite_name") or f"Testory-project-{project_id or 'adhoc'}").strip()
+    callback_url = str(
+        data.get("callback_url") or data.get("webhook_url") or data.get("callback") or ""
+    ).strip()
+    want_async = _ci_want_async(data)
+
+    uid = current_user.id if current_user.is_authenticated else None
+    tid = None
+    if uid is not None:
+        try:
+            tid = _db.get_user_tenant_id(int(uid))
+        except Exception:
+            tid = None
+
+    if want_async:
+        queued = create_queued_run(
+            project_id=project_id,
+            case_ids=case_ids,
+            trigger_source=trigger_source,
+            build_id=build_id,
+            git_sha=git_sha,
+            branch=branch,
+            suite_name=suite_name,
+            callback_url=callback_url,
+        )
+        run_id = queued["run_id"]
+
+        def _worker():
+            try:
+                _ci_run_batch_and_finalize(
+                    run_id=run_id,
+                    case_ids=case_ids,
+                    project_id=project_id,
+                    trigger_source=trigger_source,
+                    build_id=build_id,
+                    git_sha=git_sha,
+                    branch=branch,
+                    suite_name=suite_name,
+                    user_id=uid,
+                    tenant_id=tid,
+                    sync_mode=False,
+                )
+            except Exception as e:
+                uat_logger.error(f"CI async worker 失败 run_id={run_id}: {e}")
+                try:
+                    from ci_adapter import deliver_run_callback, update_run_fields
+
+                    update_run_fields(
+                        run_id,
+                        status="failed",
+                        gate_passed=False,
+                        success=False,
+                        batch_error=str(e)[:300],
+                        finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    )
+                    deliver_run_callback(run_id)
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_worker, name=f"ci-run-{run_id}", daemon=True)
+        t.start()
+        view = public_run_view(queued)
+        return jsonify({
+            "ok": True,
+            "accepted": True,
+            "async": True,
+            "run_id": run_id,
+            "job_id": run_id,
+            "status": "queued",
+            "success": False,
+            "gate_passed": False,
+            "poll_url": queued.get("poll_url"),
+            "junit_url": queued.get("junit_url"),
+            "report_url": queued.get("report_url"),
+            "build_id": build_id or None,
+            "callback_url": callback_url or None,
+            "result": view,
+            "message": "已入队，请轮询 poll_url 直至 status 为 success/failed",
+        }), 202
+
+    # 同步路径
+    run_id = new_run_id()
+    if callback_url:
+        from ci_adapter import save_run
+
+        save_run({
+            "run_id": run_id,
+            "status": "running",
+            "callback_url": callback_url,
+            "case_ids": case_ids,
+            "project_id": project_id,
+            "trigger_source": trigger_source,
+            "build_id": build_id,
+            "git_sha": git_sha,
+            "branch": branch,
+            "suite_name": suite_name,
+            "poll_url": f"/api/ci/runs/{run_id}",
+            "junit_url": f"/api/ci/runs/{run_id}/junit.xml",
+            "report_url": f"/api/ci/runs/{run_id}",
+            "async": False,
+        })
+
+    record = _ci_run_batch_and_finalize(
+        run_id=run_id,
+        case_ids=case_ids,
+        project_id=project_id,
+        trigger_source=trigger_source,
+        build_id=build_id,
+        git_sha=git_sha,
+        branch=branch,
+        suite_name=suite_name,
+        user_id=uid,
+        tenant_id=tid,
+        sync_mode=True,
+    )
+
+    view = public_run_view(record or {})
+    return jsonify({
+        "ok": True,
+        "accepted": True,
+        "async": False,
+        "run_id": (record or {}).get("run_id") or run_id,
+        "job_id": (record or {}).get("run_id") or run_id,
+        "status": (record or {}).get("status"),
+        "success": bool((record or {}).get("gate_passed")),
+        "gate_passed": bool((record or {}).get("gate_passed")),
+        "passed": (record or {}).get("passed"),
+        "failed": (record or {}).get("failed"),
+        "total": (record or {}).get("total"),
+        "poll_url": (record or {}).get("poll_url"),
+        "junit_url": (record or {}).get("junit_url"),
+        "report_url": (record or {}).get("report_url"),
+        "build_id": build_id or None,
+        "callback_status": (record or {}).get("callback_status"),
+        "result": view,
+    }), 200
+
+
+@app.route('/api/ci/runs/<run_id>', methods=['GET'])
+@token_or_login_required
+def api_ci_runs_get(run_id):
+    from ci_adapter import get_run, is_terminal_status, public_run_view
+
+    record = get_run(run_id)
+    if not record:
+        return jsonify({"ok": False, "error": "CI run 不存在", "success": False}), 404
+    view = public_run_view(record)
+    terminal = is_terminal_status(record.get("status"))
+    return jsonify({
+        "ok": True,
+        "run_id": record["run_id"],
+        "status": record.get("status"),
+        "terminal": terminal,
+        "success": bool(record.get("gate_passed")) if terminal else False,
+        "gate_passed": bool(record.get("gate_passed")) if terminal else False,
+        "passed": record.get("passed"),
+        "failed": record.get("failed"),
+        "total": record.get("total"),
+        "poll_url": record.get("poll_url"),
+        "junit_url": record.get("junit_url"),
+        "report_url": record.get("report_url"),
+        "callback_status": record.get("callback_status"),
+        "result": view,
+    })
+
+
+@app.route('/api/ci/runs/<run_id>/junit.xml', methods=['GET'])
+@token_or_login_required
+def api_ci_runs_junit(run_id):
+    from ci_adapter import get_run
+
+    record = get_run(run_id)
+    if not record:
+        return jsonify({"ok": False, "error": "CI run 不存在"}), 404
+    xml_text = record.get("junit_xml") or ""
+    return Response(
+        xml_text,
+        mimetype="application/xml",
+        headers={
+            "Content-Disposition": f'attachment; filename="testory-{run_id}-junit.xml"',
+        },
+    )
+
+
 @app.route('/api/trigger/<int:project_id>', methods=['POST'])
 @token_or_login_required
 def api_trigger_project(project_id):
-    """CI/CD 触发指定项目的所有用例执行"""
+    """CI/CD 触发指定项目的所有用例执行（兼容旧路径；推荐 /api/ci/runs）。"""
+    from auth_batch_helpers import count_batch_gate_failures
+    from ci_adapter import build_run_record_from_batch, public_run_view
+
     try:
         _db = Database()
         cases = _db.get_project_cases(project_id, case_type="ui")
         if not cases:
-            return jsonify({'success': False, 'error': '项目没有测试用例'}), 400
+            return jsonify({'success': False, 'ok': False, 'error': '项目没有测试用例', 'status': 'failed'}), 400
         case_ids = [c['id'] for c in cases]
         uat_logger.info(f"CI/CD 触发项目 #{project_id} 执行，共 {len(case_ids)} 个用例")
         uid = current_user.id if current_user.is_authenticated else None
@@ -13018,32 +14170,60 @@ def api_trigger_project(project_id):
                 tid = _db.get_user_tenant_id(int(uid))
             except Exception:
                 tid = None
+        data = request.get_json(silent=True) or {}
         _exec_ctx = ExecutionContext(
             user_id=uid,
             tenant_id=tid,
             trigger="ci",
             on_case_failure=_on_case_execution_failure,
-            extra={"project_id": project_id},
+            extra={"project_id": project_id, "build_id": data.get("build_id")},
         )
         results = sync_execute_multiple_test_cases(case_ids, _db, execution_context=_exec_ctx)
         try:
             sync_close_browser()
         except Exception:
             pass
-        return jsonify({'success': True, 'results': results})
+        if not isinstance(results, dict):
+            results = {"case_results": [], "error": "执行返回无效"}
+        record = build_run_record_from_batch(
+            results,
+            project_id=project_id,
+            case_ids=case_ids,
+            trigger_source=str(data.get("trigger_source") or "ci"),
+            build_id=str(data.get("build_id") or ""),
+            git_sha=str(data.get("git_sha") or ""),
+            suite_name=f"Testory-project-{project_id}",
+        )
+        gate_ok = bool(record.get("gate_passed"))
+        return jsonify({
+            'ok': True,
+            'success': gate_ok,
+            'gate_passed': gate_ok,
+            'status': record.get('status'),
+            'run_id': record['run_id'],
+            'execution_id': record['run_id'],  # 兼容旧 GitLab 脚本字段名
+            'junit_url': record.get('junit_url'),
+            'poll_url': record.get('poll_url'),
+            'results': results,
+            'result': public_run_view(record),
+            'failed_cases': count_batch_gate_failures(results.get('case_results') or []),
+        })
     except Exception as e:
         uat_logger.error(f"CI 触发执行失败: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'ok': False, 'error': str(e), 'status': 'failed'}), 500
 
 @app.route('/api/trigger/cases', methods=['POST'])
 @token_or_login_required
 def api_trigger_cases():
-    """CI/CD 触发指定用例列表执行"""
+    """CI/CD 触发指定用例列表执行（兼容旧路径；推荐 /api/ci/runs）。"""
+    from auth_batch_helpers import count_batch_gate_failures
+    from ci_adapter import build_run_record_from_batch, public_run_view
+
     try:
         data = request.get_json(silent=True) or {}
         case_ids = data.get('case_ids', [])
         if not case_ids:
-            return jsonify({'success': False, 'error': '缺少 case_ids 参数'}), 400
+            return jsonify({'success': False, 'ok': False, 'error': '缺少 case_ids 参数', 'status': 'failed'}), 400
         _db = Database()
         uat_logger.info(f"CI/CD 触发用例列表执行: {case_ids}")
         uid = current_user.id if current_user.is_authenticated else None
@@ -13064,10 +14244,32 @@ def api_trigger_cases():
             sync_close_browser()
         except Exception:
             pass
-        return jsonify({'success': True, 'results': results})
+        if not isinstance(results, dict):
+            results = {"case_results": [], "error": "执行返回无效"}
+        record = build_run_record_from_batch(
+            results,
+            case_ids=case_ids,
+            trigger_source=str(data.get("trigger_source") or "ci"),
+            build_id=str(data.get("build_id") or ""),
+            git_sha=str(data.get("git_sha") or ""),
+        )
+        gate_ok = bool(record.get("gate_passed"))
+        return jsonify({
+            'ok': True,
+            'success': gate_ok,
+            'gate_passed': gate_ok,
+            'status': record.get('status'),
+            'run_id': record['run_id'],
+            'execution_id': record['run_id'],
+            'junit_url': record.get('junit_url'),
+            'poll_url': record.get('poll_url'),
+            'results': results,
+            'result': public_run_view(record),
+            'failed_cases': count_batch_gate_failures(results.get('case_results') or []),
+        })
     except Exception as e:
         uat_logger.error(f"CI 触发执行失败: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'ok': False, 'error': str(e), 'status': 'failed'}), 500
 
 # ==================== 数据驱动测试接口 ====================
 
@@ -13870,6 +15072,20 @@ try:
         start_time = time.time()
         uat_logger.info(f"⏰ 定时任务 #{schedule_id} 开始执行（第{retry_count + 1}次尝试），用例: {case_ids}")
 
+        if not case_ids:
+            _db.update_schedule_history(history_id, 'failed', '调度未配置任何用例')
+            uat_logger.error(f"⏰ 定时任务 #{schedule_id} 无用例，记失败")
+            notify('schedule_failed', {
+                'schedule_name': schedule_name,
+                'retry_count': retry_count,
+                'success_count': 0,
+                'failed_count': 0,
+                'total_count': 0,
+                'error': '调度未配置任何用例',
+                'executed_at': beijing_now_iso()
+            })
+            return
+
         machine_lock_acquired = False
         try:
             from execution_lock import acquire as acquire_machine_lock
@@ -13903,29 +15119,37 @@ try:
             successful = results.get('successful_cases', 0)
             failed = results.get('failed_cases', 0)
             duration = time.time() - start_time
+            case_results = results.get('case_results', []) or []
+
+            # 门禁：仅全部 success 才记调度成功（warning/stopped 等不得当绿）
+            try:
+                from auth_batch_helpers import count_batch_gate_failures, is_execution_gate_success
+                gate_failures = count_batch_gate_failures(case_results)
+            except ImportError:
+                gate_failures = failed
+                is_execution_gate_success = lambda s: (s or "") == "success"  # noqa: E731
 
             # 为每个用例发送单独的通知（case_success 或 case_failed）
-            case_results = results.get('case_results', [])
             for case_result in case_results:
                 case_name = case_result.get('case_name', '未知用例')
                 case_status = case_result.get('status', 'unknown')
                 case_duration = case_result.get('execution_time', 0)
                 case_error = case_result.get('error', '')
                 
-                if case_status == 'success':
+                if is_execution_gate_success(case_status):
                     notify('case_success', {
                         'case_name': case_name,
                         'duration': case_duration,
                         'executed_at': beijing_now_iso()
                     })
-                elif case_status in ('error', 'failed'):
+                else:
                     notify('case_failed', {
                         'case_name': case_name,
-                        'error': case_error or '执行失败',
+                        'error': case_error or f'执行未通过（status={case_status}）',
                         'executed_at': beijing_now_iso()
                     })
 
-            if failed == 0:
+            if gate_failures == 0 and len(case_results) == len(case_ids) and failed == 0:
                 # 全部成功
                 _db.update_schedule_history(history_id, 'success')
                 uat_logger.info(f"⏰ 定时任务 #{schedule_id} 完成，全部成功")
@@ -13939,24 +15163,26 @@ try:
                 })
             elif retry_count < max_retries:
                 # 有失败且还可以重跑
-                uat_logger.warning(f"⏰ 定时任务 #{schedule_id} 部分失败，{failed}个用例失败，将在{retry_interval}分钟后重试（{retry_count + 1}/{max_retries}）")
-                _db.update_schedule_history(history_id, 'retrying', f'{failed}个用例失败，准备重试')
+                _fail_n = max(int(failed or 0), int(gate_failures or 0))
+                uat_logger.warning(f"⏰ 定时任务 #{schedule_id} 部分失败，{_fail_n}个用例未通过门禁，将在{retry_interval}分钟后重试（{retry_count + 1}/{max_retries}）")
+                _db.update_schedule_history(history_id, 'retrying', f'{_fail_n}个用例未通过门禁，准备重试')
 
                 # 等待后重跑
                 time.sleep(retry_interval * 60)
                 _run_scheduled_cases(schedule_id, case_ids, retry_count + 1)
             else:
                 # 达到最大重跑次数，最终失败
-                _db.update_schedule_history(history_id, 'failed', f'达到最大重试次数，{failed}个用例失败')
+                _fail_n = max(int(failed or 0), int(gate_failures or 0))
+                _db.update_schedule_history(history_id, 'failed', f'达到最大重试次数，{_fail_n}个用例未通过门禁')
                 uat_logger.error(f"⏰ 定时任务 #{schedule_id} 达到最大重试次数，执行失败")
                 # 发送失败通知（成功和失败都需要发送对应通知）
                 notify('schedule_failed', {
                     'schedule_name': schedule_name,
                     'retry_count': retry_count,
                     'success_count': successful,
-                    'failed_count': failed,
-                    'total_count': successful + failed,
-                    'error': f'{failed}个用例失败，达到最大重试次数',
+                    'failed_count': _fail_n,
+                    'total_count': max(successful + failed, len(case_results)),
+                    'error': f'{_fail_n}个用例未通过门禁，达到最大重试次数',
                     'executed_at': beijing_now_iso()
                 })
 
@@ -14125,7 +15351,9 @@ def api_get_user_license_info():
                 'issued_to': license_info.issued_to,
                 'issued_at': license_info.issued_at,
                 'expires_at': license_info.expires_at,
-                'features': license_info.features
+                'features': license_info.features,
+                'effective_features': limits.get('effective_features'),
+                'open_core_features_unlocked': limits.get('open_core_features_unlocked'),
             },
             'limits': limits,
             'usage': {
@@ -14480,6 +15708,7 @@ def stream_runtime_logs():
 @app.route('/api/audit-logs', methods=['GET'])
 @login_required
 @role_required('admin')
+@feature_required('audit_log')
 def api_get_audit_logs():
     """获取审计日志（仅管理员）。指定 format=csv 或 format=xlsx 时导出文件（与列表筛选一致）。"""
     fmt = (request.args.get('format') or '').strip().lower()
@@ -14515,6 +15744,7 @@ def api_get_audit_logs():
 @app.route('/api/audit-logs/export', methods=['GET'])
 @login_required
 @role_required('admin')
+@feature_required('audit_log')
 def api_export_audit_logs():
     """兼容旧版前端路径：等同于 format=csv。"""
     return _audit_logs_export_response('csv')
@@ -14876,6 +16106,7 @@ def api_get_assertion_types():
 @app.route('/sso-settings')
 @login_required
 @role_required('admin')
+@feature_required('sso')
 def sso_settings_page():
     """返回 SSO 设置页面"""
     return render_template('sso_settings.html')
@@ -14884,6 +16115,7 @@ def sso_settings_page():
 @app.route('/api/sso/configs', methods=['GET'])
 @login_required
 @role_required('admin')
+@feature_required('sso')
 def api_get_sso_configs():
     """获取 SSO 配置列表"""
     try:
@@ -14897,6 +16129,7 @@ def api_get_sso_configs():
 @app.route('/api/sso/configs', methods=['POST'])
 @login_required
 @role_required('admin')
+@feature_required('sso')
 @audit_log('CREATE_SSO_CONFIG', 'sso_config')
 def api_create_sso_config():
     """创建 SSO 配置"""
@@ -14918,6 +16151,7 @@ def api_create_sso_config():
 @app.route('/api/sso/configs/<int:config_id>', methods=['GET'])
 @login_required
 @role_required('admin')
+@feature_required('sso')
 def api_get_sso_config_detail(config_id):
     """获取单个 SSO 配置详情（用于编辑）"""
     try:
@@ -14933,6 +16167,7 @@ def api_get_sso_config_detail(config_id):
 @app.route('/api/sso/configs/<int:config_id>', methods=['PUT'])
 @login_required
 @role_required('admin')
+@feature_required('sso')
 @audit_log('UPDATE_SSO_CONFIG', 'sso_config')
 def api_update_sso_config(config_id):
     """更新 SSO 配置"""
@@ -14948,6 +16183,7 @@ def api_update_sso_config(config_id):
 @app.route('/api/sso/configs/<int:config_id>', methods=['DELETE'])
 @login_required
 @role_required('admin')
+@feature_required('sso')
 @audit_log('DELETE_SSO_CONFIG', 'sso_config')
 def api_delete_sso_config(config_id):
     """删除 SSO 配置"""
@@ -15021,6 +16257,23 @@ def api_sso_callback(config_id):
 
         if not success:
             uat_logger.error(f"SSO 登录失败: {message}")
+            try:
+                from auth_audit import ACTION_SSO_LOGIN_FAILURE, record_auth_audit
+
+                record_auth_audit(
+                    action=ACTION_SSO_LOGIN_FAILURE,
+                    username=str((user_info or {}).get('username') or ''),
+                    user_id=0,
+                    ip_address=request.remote_addr,
+                    details={
+                        'method': 'sso',
+                        'provider': getattr(config, 'provider_type', None),
+                        'config_id': config_id,
+                        'reason': (message or '')[:300],
+                    },
+                )
+            except Exception:
+                pass
             return _err_redirect(message or 'SSO登录失败')
 
         # 获取或创建用户
@@ -15038,6 +16291,23 @@ def api_sso_callback(config_id):
             login_user(user, remember=True)
             _db.update_user_last_login(user_id)
             uat_logger.info(f"SSO 用户 {user_info.get('username')} 登录成功")
+            try:
+                from auth_audit import ACTION_SSO_LOGIN_SUCCESS, record_auth_audit
+
+                record_auth_audit(
+                    action=ACTION_SSO_LOGIN_SUCCESS,
+                    username=user_data.get('username') or user_info.get('username') or '',
+                    user_id=user_id,
+                    ip_address=request.remote_addr,
+                    details={
+                        'method': 'sso',
+                        'provider': getattr(config, 'provider_type', None),
+                        'config_id': config_id,
+                    },
+                    db=_db,
+                )
+            except Exception:
+                pass
             return redirect('/')
         
         return redirect('/login?error=user_not_found')
@@ -15066,6 +16336,22 @@ def api_sso_ldap_login():
         )
         
         if not success:
+            try:
+                from auth_audit import ACTION_LDAP_LOGIN_FAILURE, record_auth_audit
+
+                record_auth_audit(
+                    action=ACTION_LDAP_LOGIN_FAILURE,
+                    username=username,
+                    user_id=0,
+                    ip_address=request.remote_addr,
+                    details={
+                        'method': 'ldap',
+                        'config_id': config_id,
+                        'reason': (message or '')[:300],
+                    },
+                )
+            except Exception:
+                pass
             return jsonify({'success': False, 'error': message}), 401
         
         # 获取或创建用户
@@ -15084,6 +16370,19 @@ def api_sso_ldap_login():
             login_user(user, remember=True)
             _db.update_user_last_login(user_id)
             uat_logger.info(f"LDAP 用户 {username} 登录成功")
+            try:
+                from auth_audit import ACTION_LDAP_LOGIN_SUCCESS, record_auth_audit
+
+                record_auth_audit(
+                    action=ACTION_LDAP_LOGIN_SUCCESS,
+                    username=user_data.get('username') or username,
+                    user_id=user_id,
+                    ip_address=request.remote_addr,
+                    details={'method': 'ldap', 'config_id': config_id},
+                    db=_db,
+                )
+            except Exception:
+                pass
             return jsonify({'success': True, 'user': {'id': user_id, 'username': user_data['username']}})
         
         return jsonify({'success': False, 'error': '用户创建失败'}), 500
@@ -15335,6 +16634,7 @@ def payment_orders_page():
 @app.route('/audit-logs')
 @login_required
 @role_required('admin')
+@feature_required('audit_log')
 def audit_logs_page():
     """审计日志页面"""
     return render_template('audit_logs.html')

@@ -1,0 +1,71 @@
+// Testory CI 对接示例（Jenkins Declarative Pipeline）
+// 依赖：HTTP Request Plugin、Pipeline Utility Steps（readJSON）
+// 凭证：TESTORY_URL / TESTORY_TOKEN（或凭据绑定）
+
+pipeline {
+  agent any
+  environment {
+    TESTORY_URL = "${TESTORY_URL}"
+    // 建议用 credentials；此处示意
+    // TESTORY_TOKEN = credentials('testory-api-token')
+  }
+  stages {
+    stage('Testory Regression') {
+      steps {
+        script {
+          def payload = """
+          {
+            "project_id": ${params.PROJECT_ID ?: 1},
+            "async": true,
+            "trigger_source": "jenkins",
+            "build_id": "${env.BUILD_ID}",
+            "git_sha": "${env.GIT_COMMIT ?: ''}",
+            "branch": "${env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''}"
+          }
+          """
+          def r = httpRequest(
+            httpMode: 'POST',
+            url: "${TESTORY_URL}/api/ci/runs",
+            customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
+            contentType: 'APPLICATION_JSON',
+            requestBody: payload,
+            validResponseCodes: '200:599'
+          )
+          def job = readJSON text: r.content
+          def runId = job.run_id
+          echo "Testory queued run_id=${runId}"
+
+          def terminal = false
+          def finalJob = job
+          for (int i = 0; i < 120; i++) {
+            sleep 10
+            def st = httpRequest(
+              url: "${TESTORY_URL}/api/ci/runs/${runId}",
+              customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]]
+            )
+            finalJob = readJSON text: st.content
+            echo "poll status=${finalJob.status} terminal=${finalJob.terminal}"
+            if (finalJob.terminal == true || finalJob.status in ['success', 'failed']) {
+              terminal = true
+              break
+            }
+          }
+          if (!terminal) {
+            error("Testory 轮询超时 run_id=${runId}")
+          }
+
+          httpRequest(
+            url: "${TESTORY_URL}${finalJob.junit_url}",
+            customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
+            outputFile: 'testory-junit.xml'
+          )
+          junit allowEmptyResults: false, testResults: 'testory-junit.xml'
+
+          if (finalJob.gate_passed != true && finalJob.success != true) {
+            error("Testory 门禁未通过：status=${finalJob.status} failed=${finalJob.failed}")
+          }
+        }
+      }
+    }
+  }
+}

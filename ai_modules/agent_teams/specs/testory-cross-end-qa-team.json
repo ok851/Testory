@@ -1,0 +1,48 @@
+{
+  "team_id": "testory-cross-end-qa-team",
+  "name": "Testory Cross-End QA Team",
+  "version": "0.1.0",
+  "schema_version": "1.0",
+  "control_plane": "local",
+  "description": "最小三角色：Planner 拆解 → WebApiExecutor 执行 → Verifier 证据报告。可后续映射到 AgentTeams SDK。",
+  "roles": [
+    {
+      "id": "Planner",
+      "responsibility": "NL → CrossEndPlan",
+      "wraps": "ai_modules.plan.plan_decomposer.CrossEndPlanDecomposer",
+      "skill": "CrossEndDecompose",
+      "inputs": ["description", "optional_plan"],
+      "outputs": ["plan"]
+    },
+    {
+      "id": "WebApiExecutor",
+      "responsibility": "执行 stages（API/Web；Desktop/Mobile 由编排层分派）",
+      "wraps": "ai_modules.execute.orchestrator.execute_cross_end_plan",
+      "skill": "WebBrowse+ApiHttp",
+      "inputs": ["plan", "TestRunState.vars"],
+      "outputs": ["stage_results", "vars", "evidence"]
+    },
+    {
+      "id": "Verifier",
+      "responsibility": "断言聚合 + 证据强弱 + 终态 success/failed",
+      "wraps": "cross_end_assertions + gate",
+      "skill": "CrossEndAssert+Evidence",
+      "inputs": ["execution", "stage_results", "evidence"],
+      "outputs": ["report.json", "status"]
+    }
+  ],
+  "shared_state": {
+    "type": "TestRunState",
+    "fields": ["vars", "stage_results", "evidence", "events", "idempotency_key", "report"]
+  },
+  "honesty": {
+    "no_false_green": true,
+    "success_requires": ["execution.success", "verifier.passed"],
+    "note": "不得把单 Hermes 对话成功表述为多 Agent 完成"
+  },
+  "agentteams_mapping": {
+    "status": "spec_ready",
+    "sdk": "optional_later",
+    "events": ["dispatch", "complete", "fail"]
+  }
+}

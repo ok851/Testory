@@ -626,6 +626,13 @@ def ensure_hermes_home(*, force_env: bool = False) -> Path:
     except Exception:
         pass
     _sync_hermes_env_to_process(env_path)
+    # 同步仓库 bundled Skills（附录 B / manifest）；失败不阻断启动
+    try:
+        from hermes_skill_bootstrap import sync_bundled_skills_to_hermes
+
+        sync_bundled_skills_to_hermes(force=False)
+    except Exception:
+        pass
     return home
 
 

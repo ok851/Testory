@@ -1,0 +1,337 @@
+{
+  "run_id": "run-e1b442314fb5",
+  "team_id": "testory-cross-end-qa-team",
+  "schema_version": "1.0",
+  "status": "success",
+  "goal": "验证订单 ORD-DEMO-404 在 API 为 failed，且下单页展示「下单失败」文案，两端一致。",
+  "plan": {
+    "plan_id": "goai-order-fail-demo",
+    "scenario": "下单失败一致性（合成 Demo）",
+    "schema_version": "1.0",
+    "stages": [
+      {
+        "id": "stage-api-order",
+        "layer": "api",
+        "label": "ApiHttp：查询订单状态",
+        "skill": "testory-api-test",
+        "depends_on": [],
+        "timeout_seconds": 30,
+        "request": {
+          "method": "GET",
+          "url": "https://demo.testory.local/api/orders/ORD-DEMO-404"
+        },
+        "assert": {
+          "status_in": [
+            200
+          ]
+        },
+        "vars_to_store": [
+          {
+            "name": "order_id",
+            "from": "body.order_id"
+          },
+          {
+            "name": "order_status",
+            "from": "body.status"
+          }
+        ],
+        "sync_point": "order_loaded"
+      },
+      {
+        "id": "stage-web-order",
+        "layer": "web",
+        "label": "WebBrowse：核对下单失败文案",
+        "skill": "testory-web-browser",
+        "depends_on": [
+          "stage-api-order"
+        ],
+        "timeout_seconds": 60,
+        "actions": [
+          {
+            "type": "navigate",
+            "url": "https://demo.testory.local/orders/ORD-DEMO-404"
+          },
+          {
+            "type": "assert_text",
+            "selector": ".order-status",
+            "contains": "下单失败"
+          }
+        ],
+        "vars_to_store": [
+          {
+            "name": "ui_status_text",
+            "from": "selector:.order-status"
+          }
+        ],
+        "sync_point": "ui_checked"
+      }
+    ],
+    "cross_end_assertions": [
+      {
+        "name": "order_id_present",
+        "left": {
+          "var": "order_id"
+        },
+        "op": "eq",
+        "right": {
+          "value": "ORD-DEMO-404"
+        }
+      },
+      {
+        "name": "api_status_is_failed",
+        "left": {
+          "var": "order_status"
+        },
+        "op": "eq",
+        "right": {
+          "value": "failed"
+        }
+      },
+      {
+        "name": "ui_shows_fail_copy",
+        "left": {
+          "var": "ui_status_text"
+        },
+        "op": "contains",
+        "right": {
+          "value": "下单失败"
+        }
+      }
+    ]
+  },
+  "vars": {
+    "order_id": "ORD-DEMO-404",
+    "order_status": "failed",
+    "ui_status_text": "下单失败"
+  },
+  "stage_results": [
+    {
+      "stage_id": "stage-api-order",
+      "layer": "api",
+      "ok_assert": true,
+      "elapsed_ms": 12,
+      "risk_level": "L0",
+      "risk_decision": "allow",
+      "extracted": {
+        "order_id": "ORD-DEMO-404",
+        "order_status": "failed"
+      },
+      "error_message": null,
+      "error_code": null,
+      "warnings": [],
+      "evidence": [],
+      "schema": "testory.stage_result/v1"
+    },
+    {
+      "stage_id": "stage-web-order",
+      "layer": "web",
+      "ok_assert": true,
+      "elapsed_ms": 45,
+      "error": null,
+      "error_code": null,
+      "risk_level": "L1",
+      "risk_decision": "allow",
+      "extracted": {
+        "ui_status_text": "下单失败"
+      },
+      "screenshot_path": "artifacts/screenshots/ORD-DEMO-404-web.png",
+      "error_message": null,
+      "warnings": [],
+      "evidence": [
+        {
+          "type": "screenshot",
+          "path": "artifacts/screenshots/ORD-DEMO-404-web.png"
+        }
+      ],
+      "schema": "testory.stage_result/v1"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "risk",
+      "stage_id": "stage-api-order",
+      "level": "L0",
+      "decision": "allow",
+      "approval_id": null,
+      "events": []
+    },
+    {
+      "kind": "screenshot",
+      "stage_id": "stage-web-order",
+      "path": "artifacts/screenshots/ORD-DEMO-404-web.png"
+    },
+    {
+      "kind": "risk",
+      "stage_id": "stage-web-order",
+      "level": "L1",
+      "decision": "allow",
+      "approval_id": null,
+      "events": []
+    },
+    {
+      "kind": "assertion",
+      "passed": true,
+      "detail": {
+        "name": "order_id_present",
+        "passed": true
+      }
+    },
+    {
+      "kind": "assertion",
+      "passed": true,
+      "detail": {
+        "name": "api_status_is_failed",
+        "passed": true
+      }
+    },
+    {
+      "kind": "assertion",
+      "passed": true,
+      "detail": {
+        "name": "ui_shows_fail_copy",
+        "passed": true
+      }
+    }
+  ],
+  "report": {
+    "passed": true,
+    "reason": "全部阶段与断言通过",
+    "evidence_level": "strong",
+    "evidence_counts": {
+      "strong": 3,
+      "weak": 3,
+      "missing": 0
+    },
+    "stages_total": 2,
+    "stages_failed": 0,
+    "assertion_passed": 3,
+    "assertion_failed": 0,
+    "agents_seen": [
+      "system",
+      "Planner",
+      "WebApiExecutor",
+      "Verifier"
+    ],
+    "run_id": "run-e1b442314fb5"
+  },
+  "events": [
+    {
+      "event_id": "ev-bb236aef94",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T09:54:28.701511+00:00",
+      "message": "TestRunState created",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-7f504a4d34",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T09:54:28.701511+00:00",
+      "message": "启动 Agent 团队闭环",
+      "payload": {
+        "team_id": "testory-cross-end-qa-team",
+        "roles": [
+          "Planner",
+          "WebApiExecutor",
+          "Verifier"
+        ]
+      }
+    },
+    {
+      "event_id": "ev-8bfb3a882e",
+      "agent": "Planner",
+      "kind": "dispatch",
+      "at": "2026-07-24T09:54:28.701511+00:00",
+      "message": "规划跨端任务图",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-6e5909a309",
+      "agent": "Planner",
+      "kind": "complete",
+      "at": "2026-07-24T09:54:28.701511+00:00",
+      "message": "使用调用方提供的 plan（跳过 LLM）",
+      "payload": {
+        "plan_id": "goai-order-fail-demo",
+        "stages": 2
+      }
+    },
+    {
+      "event_id": "ev-d50384cecf",
+      "agent": "WebApiExecutor",
+      "kind": "dispatch",
+      "at": "2026-07-24T09:54:28.702507+00:00",
+      "message": "执行跨端阶段",
+      "payload": {
+        "plan_id": "goai-order-fail-demo",
+        "stages": 2
+      }
+    },
+    {
+      "event_id": "ev-bb1472e6c1",
+      "agent": "WebApiExecutor",
+      "kind": "complete",
+      "at": "2026-07-24T09:54:28.702507+00:00",
+      "message": "阶段执行完成",
+      "payload": {
+        "stages": 2,
+        "success": true
+      }
+    },
+    {
+      "event_id": "ev-241bb85ba9",
+      "agent": "Verifier",
+      "kind": "dispatch",
+      "at": "2026-07-24T09:54:28.703643+00:00",
+      "message": "聚合断言与证据",
+      "payload": {}
+    },
+    {
+      "event_id": "ev-6731f28be7",
+      "agent": "Verifier",
+      "kind": "complete",
+      "at": "2026-07-24T09:54:28.703643+00:00",
+      "message": "验证通过: 全部阶段与断言通过",
+      "payload": {
+        "passed": true,
+        "evidence_level": "strong"
+      }
+    },
+    {
+      "event_id": "ev-b7fd60cc09",
+      "agent": "system",
+      "kind": "note",
+      "at": "2026-07-24T09:54:28.750391+00:00",
+      "message": "已写入运行历史",
+      "payload": {
+        "run_history_id": 1179,
+        "audit_id": "cea-a5442582f826",
+        "status": "success"
+      }
+    }
+  ],
+  "errors": [],
+  "idempotency_key": "goai-demo-order-consistent-20260724T095428Z",
+  "user_id": "goai-demo",
+  "created_at": "2026-07-24T09:54:28.701511+00:00",
+  "updated_at": "2026-07-24T09:54:28.750391+00:00",
+  "finished_at": "2026-07-24T09:54:28.703643+00:00",
+  "execution": {
+    "success": true,
+    "error": null,
+    "error_code": null,
+    "gate_passed": true,
+    "assertion_passed": 3,
+    "assertion_failed": 0,
+    "user_hint": null,
+    "lock": null,
+    "run_history_id": null
+  },
+  "agents_seen": [
+    "system",
+    "Planner",
+    "WebApiExecutor",
+    "Verifier"
+  ]
+}

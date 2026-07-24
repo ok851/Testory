@@ -23,6 +23,8 @@ static/plugin_bundles/*.zip
 agent-tools/
 node_modules/
 .npm-cache/
+# Demo / 评审运行产物（样例保留在 demos/*/samples/）
+artifacts/
 static/vendor/tauri/
 src-tauri/target/
 src-tauri/gen/

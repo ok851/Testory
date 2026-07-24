@@ -30,17 +30,34 @@ def list_skills() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     if not root.is_dir():
         return out
+    bundled_ids = set()
+    try:
+        from hermes_skill_bootstrap import load_manifest
+
+        for e in load_manifest().get("skills") or []:
+            if isinstance(e, dict) and e.get("id"):
+                bundled_ids.add(str(e["id"]))
+    except Exception:
+        bundled_ids = set()
     for skill_md in sorted(root.rglob("SKILL.md")):
         rel = skill_md.relative_to(root)
         module = str(rel.parent).replace("\\", "/")
         meta = _parse_skill_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
         versions = list_skill_versions(module)
+        fm_source = str(meta.get("source") or "").strip()
+        if fm_source == "user-edited":
+            source = "user-edited"
+        elif fm_source in ("testory-bundled", "bundled") or module in bundled_ids:
+            source = "bundled"
+        else:
+            source = fm_source or "local"
         out.append(
             {
                 "id": module,
                 "path": str(skill_md),
                 "name": meta.get("name") or module,
                 "description": meta.get("description") or "",
+                "source": source,
                 "updated": datetime.fromtimestamp(skill_md.stat().st_mtime).isoformat(),
                 "version": len(versions) + 1,
                 "version_count": len(versions),

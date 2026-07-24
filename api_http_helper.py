@@ -25,11 +25,21 @@ API_SPEC_META_KEYS = frozenset(
 
 
 def get_json_path_value(data: Any, json_path: str) -> Any:
-    """点分路径，如 data.user.name 或 list.0.id；空路径表示根对象。"""
+    """点分路径，如 data.user.name 或 list.0.id；空路径表示根对象。
+
+    兼容 JSONPath 常见前缀 ``$.id`` / ``$``。
+    """
     if json_path is None or not str(json_path).strip():
         return data
+    path = str(json_path).strip()
+    if path == "$":
+        return data
+    if path.startswith("$."):
+        path = path[2:]
+    elif path.startswith("$"):
+        path = path[1:].lstrip(".")
     actual: Any = data
-    for key in str(json_path).split("."):
+    for key in path.split("."):
         if not key:
             continue
         if isinstance(actual, dict):

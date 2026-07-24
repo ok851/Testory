@@ -344,10 +344,24 @@
     }
 
     async function loadDatasets() {
-        const res = await fetch('/api/datasets');
-        const data = await res.json();
+        const res = await fetch('/api/datasets', {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' },
+        });
+        const data = await res.json().catch(function () { return null; });
         const list = document.getElementById('datasetList');
-        if (!data.datasets || data.datasets.length === 0) {
+        if (res.status === 403 && data && window.TestoryLicenseGate &&
+            window.TestoryLicenseGate.isFeatureGatePayload(data)) {
+            window.TestoryLicenseGate.showPageBanner(data);
+            list.innerHTML =
+                '<p class="text-sm text-amber-700 dark:text-amber-300 text-center py-4">' +
+                (data.error || '需要数据驱动授权') +
+                ' <a class="underline" href="' + (data.upgrade_url || '/license?gate=data_driven&denied=1') +
+                '">License</a></p>';
+            window.TestoryLicenseGate.handleResponse(res, data, { notify: false });
+            return;
+        }
+        if (!data || !data.datasets || data.datasets.length === 0) {
             ddDatasetCache = [];
             var pg0 = document.getElementById('datasetListPager');
             if (pg0) pg0.style.display = 'none';

@@ -97,7 +97,7 @@ TIER_OFFERING_SUMMARY: Dict[LicenseType, str] = {
 class LicenseManager:
     """License 管理器"""
 
-    # 功能定义
+    # 功能定义（颗粒度供 check_feature_available / 升级页）
     FEATURES = {
         'basic': ['project_management', 'case_management', 'test_execution', 'basic_report'],
         'free': ['project_management', 'case_management', 'test_execution', 'basic_report'],
@@ -107,6 +107,7 @@ class LicenseManager:
             'export_pdf', 'export_excel', 'webhook', 'email_notification',
             'defect_management',
             'team_collaboration',  # 团队版（SaaS）协作能力
+            'cross_end',  # 跨端编排（不含企业治理导出）
         ],
         'enterprise': [
             'project_management', 'case_management', 'test_execution',
@@ -114,9 +115,73 @@ class LicenseManager:
             'parallel_execution', 'audit_log', 'export_pdf', 'export_excel',
             'email_notification', 'api_access', 'team_collaboration',
             'defect_management', 'sso', 'custom_integration',
+            'cross_end',
+            'ci_integration',  # CI 触发 / JUnit 门禁深度对接
+            'customer_audit_export',  # 客户向审计包 ZIP
             # 商业位：可用于 UI/运维区分「可签私有化合同」的租户（具体交付仍由商务与部署方式决定）
             'private_deployment', 'dedicated_support',
         ]
+    }
+
+    # 能力目录：最低档位（叙事）与说明；执行诚实相关能力不得锁死开源核心
+    FEATURE_CATALOG: Dict[str, Dict[str, str]] = {
+        'test_execution': {
+            'min_tier': 'free',
+            'title': '用例执行',
+            'note': '开源核心；须遵守执行诚实标准',
+        },
+        'basic_report': {
+            'min_tier': 'free',
+            'title': '基础报告',
+            'note': '运行历史与基础统计',
+        },
+        'cross_end': {
+            'min_tier': 'professional',
+            'title': '跨端编排',
+            'note': '多端计划执行；standalone 开源默认可试用',
+        },
+        'advanced_report': {
+            'min_tier': 'professional',
+            'title': '高级报告',
+            'note': '趋势/导出等',
+        },
+        'schedule': {'min_tier': 'professional', 'title': '定时任务', 'note': ''},
+        'data_driven': {'min_tier': 'professional', 'title': '数据驱动', 'note': ''},
+        'defect_management': {'min_tier': 'professional', 'title': '缺陷管理', 'note': ''},
+        'team_collaboration': {'min_tier': 'professional', 'title': '团队协作', 'note': ''},
+        'sso': {
+            'min_tier': 'enterprise',
+            'title': 'SSO / LDAP',
+            'note': '企业单点登录配置与回调',
+        },
+        'audit_log': {
+            'min_tier': 'enterprise',
+            'title': '审计日志',
+            'note': '操作审计与登录审计查询/导出',
+        },
+        'customer_audit_export': {
+            'min_tier': 'enterprise',
+            'title': '客户审计包',
+            'note': '批量证据 ZIP（含 auth_events）',
+        },
+        'ci_integration': {
+            'min_tier': 'enterprise',
+            'title': 'CI 深度集成',
+            'note': '触发运行 / JUnit / build 关联',
+        },
+        'api_access': {'min_tier': 'enterprise', 'title': '开放 API', 'note': ''},
+        'parallel_execution': {'min_tier': 'enterprise', 'title': '并行执行', 'note': ''},
+        'private_deployment': {
+            'min_tier': 'enterprise',
+            'title': '私有化权益',
+            'note': '商务交付标识，非运行时锁',
+        },
+        'dedicated_support': {
+            'min_tier': 'enterprise',
+            'title': '专属支持',
+            'note': '商务交付标识',
+        },
+        'custom_integration': {'min_tier': 'enterprise', 'title': '定制集成', 'note': ''},
     }
 
     # 各版本限制 - 按照截图中的版本对比表配置
@@ -365,10 +430,66 @@ class LicenseManager:
 
         return self._create_default_free_license()
 
+    def features_unlocked_for_open_core(self) -> bool:
+        """开源/本机 standalone 默认可试用企业能力；商业强制门禁用 LICENSE_ENFORCE_FEATURES=1。"""
+        raw = (os.environ.get("LICENSE_ENFORCE_FEATURES") or "").strip().lower()
+        if raw in ("1", "true", "yes", "on"):
+            return False
+        if (os.environ.get("UAT_OPEN_FEATURES") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            return True
+        try:
+            from deployment_config import is_standalone_mode
+
+            return bool(is_standalone_mode())
+        except Exception:
+            return False
+
     def check_feature_available(self, feature_name: str) -> bool:
-        """检查某功能是否可用"""
+        """检查某功能是否可用。
+
+        - ``test_execution`` / ``basic_report`` / ``project_management`` / ``case_management``
+          始终可用（开源核心，不因档位假锁执行）。
+        - 其余：当前 License.features；standalone 开源默认解锁（可 LICENSE_ENFORCE_FEATURES=1 关闭）。
+        """
+        name = (feature_name or "").strip()
+        if not name:
+            return False
+        # 开源核心：不得因免费档锁死基础执行/用例/项目
+        if name in (
+            "project_management",
+            "case_management",
+            "test_execution",
+            "basic_report",
+        ):
+            return True
+        if self.features_unlocked_for_open_core():
+            return True
         license_info = self.get_current_license()
-        return feature_name in license_info.features
+        return name in (license_info.features or [])
+
+    def describe_feature_gate(self, feature_name: str) -> Dict[str, Any]:
+        """供 API/前端：是否可用、最低档、升级文案。"""
+        name = (feature_name or "").strip()
+        meta = dict(self.FEATURE_CATALOG.get(name) or {})
+        ok = self.check_feature_available(name)
+        limits = self.get_limits()
+        return {
+            "feature": name,
+            "available": ok,
+            "min_tier": meta.get("min_tier") or "",
+            "title": meta.get("title") or name,
+            "note": meta.get("note") or "",
+            "license_type": limits.get("license_type"),
+            "product_display_name": limits.get("product_display_name"),
+            "open_core_unlocked": self.features_unlocked_for_open_core(),
+            "enforce": (os.environ.get("LICENSE_ENFORCE_FEATURES") or "").strip().lower()
+            in ("1", "true", "yes", "on"),
+        }
 
     def get_limits(self) -> Dict[str, Any]:
         """获取当前 License 的限制与产品档位元数据（供 API / 前端展示）。"""
@@ -378,6 +499,16 @@ class LicenseManager:
             enum_t = LicenseType(lt)
         except ValueError:
             enum_t = LicenseType.FREE
+        features = list(license_info.features or [])
+        if self.features_unlocked_for_open_core():
+            # 展示层标明「开源本机已解锁试用」；证书 features 仍保留原档
+            unlocked = sorted(
+                set(features)
+                | set(self.FEATURES.get("enterprise") or [])
+                | set(self.FEATURES.get("professional") or [])
+            )
+        else:
+            unlocked = features
         return {
             'max_users': license_info.max_users,
             'max_projects': license_info.max_projects,
@@ -385,11 +516,14 @@ class LicenseManager:
             'max_executions_per_day': license_info.max_executions_per_day,
             'license_type': license_info.license_type,
             'expires_at': license_info.expires_at,
-            'features': license_info.features,
+            'features': features,
+            'effective_features': unlocked,
             'product_display_name': TIER_DISPLAY_NAME.get(enum_t, lt),
             'offering_summary': TIER_OFFERING_SUMMARY.get(enum_t, ''),
             # 企业版：商务上可交付私有化；是否已实施由部署环境决定
             'private_deployment_eligible': enum_t == LicenseType.ENTERPRISE,
+            'open_core_features_unlocked': self.features_unlocked_for_open_core(),
+            'feature_catalog': self.FEATURE_CATALOG,
         }
 
     def check_limit(self, limit_type: str, current_value: int) -> Dict[str, Any]:

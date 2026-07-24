@@ -1,0 +1,136 @@
+{
+  "story_id": "guards-hitl-desktop-l2",
+  "title": "门禁故事：验证码 HITL + Desktop 核对 + L2 清数审批",
+  "description": "离线可复现。验证码暂停/恢复走真实 HitlGate；Desktop 阶段用与生产相同的 validate_desktop_step_result 闸门（模拟步骤结果，不启动真机）；L2 清数走 RiskGuard 审批令牌。不得假绿。",
+  "goal": "演示 HITL 事件、Desktop 诚实门禁与 L2 审批记录进入 Trace。",
+  "plan": {
+    "plan_id": "goai-guards-demo",
+    "scenario": "HITL + Desktop + RiskGuard（合成 Demo）",
+    "schema_version": "1.0",
+    "stages": [
+      {
+        "id": "stage-api-order",
+        "layer": "api",
+        "label": "ApiHttp：查询订单（L0 只读）",
+        "skill": "testory-api-test",
+        "risk_level": "L0",
+        "depends_on": [],
+        "timeout_seconds": 30,
+        "request": {
+          "method": "GET",
+          "url": "https://demo.testory.local/api/orders/ORD-DEMO-404"
+        },
+        "assert": {"status_in": [200]},
+        "vars_to_store": [
+          {"name": "order_id", "from": "body.order_id"},
+          {"name": "order_status", "from": "body.status"}
+        ],
+        "sync_point": "order_loaded"
+      },
+      {
+        "id": "stage-hitl-captcha",
+        "layer": "hitl",
+        "label": "HitlGate：登录/验证码人工确认",
+        "risk_level": "L1",
+        "depends_on": ["stage-api-order"],
+        "gate_id": "goai-demo-captcha",
+        "prompt": "请在浏览器完成验证码后继续",
+        "hint": "Demo 会自动 resume；超时变体验证失败诚实",
+        "timeout_s": 5,
+        "poll_interval_s": 0.05,
+        "sync_point": "captcha_ok"
+      },
+      {
+        "id": "stage-web-order",
+        "layer": "web",
+        "label": "WebBrowse：核对失败文案",
+        "skill": "testory-web-browser",
+        "risk_level": "L1",
+        "depends_on": ["stage-hitl-captcha"],
+        "timeout_seconds": 60,
+        "actions": [
+          {"type": "navigate", "url": "https://demo.testory.local/orders/ORD-DEMO-404"},
+          {"type": "assert_text", "selector": ".order-status", "contains": "下单失败"}
+        ],
+        "vars_to_store": [
+          {"name": "ui_status_text", "from": "selector:.order-status"}
+        ],
+        "sync_point": "ui_checked"
+      },
+      {
+        "id": "stage-desktop-erp",
+        "layer": "desktop",
+        "label": "WindowsDesktop：ERP 订单号核对（模拟）",
+        "skill": "testory-windows-desktop",
+        "risk_level": "L1",
+        "depends_on": ["stage-web-order"],
+        "actions": [
+          {"action": "get_text", "store_as": "erp_order_id"}
+        ],
+        "vars_to_store": [
+          {"name": "erp_order_id", "from": "step:erp_order_id"}
+        ],
+        "sync_point": "desktop_checked"
+      },
+      {
+        "id": "stage-l2-clear",
+        "layer": "api",
+        "label": "RiskGuard L2：清理演示订单数据",
+        "skill": "testory-api-test",
+        "risk_level": "L2",
+        "risk_action": "clear_data",
+        "risk_reason": "会删除演示环境订单缓存",
+        "depends_on": ["stage-desktop-erp"],
+        "request": {
+          "method": "POST",
+          "url": "https://demo.testory.local/admin/clear_data"
+        },
+        "sync_point": "cleared"
+      }
+    ],
+    "cross_end_assertions": [
+      {
+        "name": "order_id_present",
+        "left": {"var": "order_id"},
+        "op": "eq",
+        "right": {"value": "ORD-DEMO-404"}
+      },
+      {
+        "name": "api_status_is_failed",
+        "left": {"var": "order_status"},
+        "op": "eq",
+        "right": {"value": "failed"}
+      },
+      {
+        "name": "ui_shows_fail_copy",
+        "left": {"var": "ui_status_text"},
+        "op": "contains",
+        "right": {"value": "下单失败"}
+      },
+      {
+        "name": "erp_matches_order",
+        "left": {"var": "erp_order_id"},
+        "op": "eq",
+        "right": {"value": "ORD-DEMO-404"}
+      }
+    ]
+  },
+  "simulate": {
+    "pass": {
+      "note": "HITL resume + Desktop 通过 + L2 已审批 → success",
+      "expect_run_status": "success"
+    },
+    "hitl_timeout": {
+      "note": "验证码超时 → failed，HITL 事件入 Trace",
+      "expect_run_status": "failed"
+    },
+    "l2_denied": {
+      "note": "无 L2 审批 → failed，RiskGuard 事件入 Trace",
+      "expect_run_status": "failed"
+    },
+    "desktop_softfail": {
+      "note": "Desktop warning/未校验 → failed（不得假绿）",
+      "expect_run_status": "failed"
+    }
+  }
+}

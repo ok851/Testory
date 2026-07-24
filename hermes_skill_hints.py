@@ -11,6 +11,8 @@ BUNDLED_SKILL_BY_PLATFORM: Dict[str, str] = {
     "api": "testory-api-http",
     "ui": "testory-ui-design",
     "cross": "testory-cross-end",
+    "security": "testory-risk-guard",
+    "risk": "testory-risk-guard",
     "explore": "testory-ai-explore",
     "dialog": "testory-ai-dialog",
 }
@@ -68,6 +70,10 @@ def skills_from_registry(platform: str = "auto") -> List[str]:
                         if s not in inter:
                             inter.append(s)
             return inter
+        # 显式平台（如 mobile）在能力表无交集时仍用 base，禁止被桌面/API skill 顶替
+        p = (platform or "").strip().lower()
+        if p and p not in ("auto", "all"):
+            return base
         return [s for s in available if s.startswith("testory-")][:6] or base
     except Exception:
         return base

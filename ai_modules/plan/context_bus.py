@@ -83,19 +83,27 @@ class CrossEndContext:
         result: Dict[str, Any],
         extracted: Optional[Dict[str, Any]] = None,
     ) -> None:
+        ok = result.get("ok_assert") is True
+        skipped_failure = bool(result.get("skipped_failure") or result.get("recovery_action") == "skip")
         self._stage_results[stage_id] = {
             "status_code": result.get("status_code"),
-            "ok": result.get("ok_assert", True),
+            "ok": ok,
             "error": result.get("error"),
             "elapsed_ms": result.get("elapsed_ms", 0),
             "extracted": extracted or {},
+            "skipped_failure": skipped_failure,
+            "recovery_action": result.get("recovery_action"),
+            "cleanup": bool(result.get("cleanup")),
         }
         if extracted:
             self.merge_stage_extraction(stage_id, extracted)
-        if not result.get("ok_assert", True):
+        # 重试后以最新结论为准：先清掉该阶段旧错误
+        self._errors = [e for e in self._errors if e.get("stage_id") != stage_id]
+        if not ok:
             self._errors.append({
                 "stage_id": stage_id,
                 "error": result.get("error") or result.get("assert_message", "Unknown error"),
+                "skipped_failure": skipped_failure,
             })
 
     def add_assertion(
@@ -113,11 +121,29 @@ class CrossEndContext:
 
     @property
     def all_passed(self) -> bool:
-        if self._errors:
+        return self.evaluate_pass(ignore_skipped_failures=False, ignore_cleanup_failures=False)
+
+    def evaluate_pass(
+        self,
+        *,
+        ignore_skipped_failures: bool = False,
+        ignore_cleanup_failures: bool = True,
+    ) -> bool:
+        """评估是否通过。默认：跳过的失败仍算未通过；cleanup 失败默认可忽略。"""
+        if not self._stage_results:
             return False
         for a in self._assertions:
             if not a["passed"]:
                 return False
+        for sid, sdata in self._stage_results.items():
+            sdata = sdata or {}
+            if sdata.get("ok"):
+                continue
+            if ignore_cleanup_failures and sdata.get("cleanup"):
+                continue
+            if ignore_skipped_failures and sdata.get("skipped_failure"):
+                continue
+            return False
         return True
 
     @property

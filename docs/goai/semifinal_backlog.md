@@ -27,17 +27,23 @@
 | R06 | 端到端 Demo 脚本：合成「下单失败」故事 + 样例输入输出 | `demos/goai-agentteams/` | R02–R05 |
 | R07 | 运行证据：日志、阶段时间线、截图索引；打包为评审目录 | `artifacts/` | R06 |
 
+> **Phase A-1：** R01 Spec（JSON）+ R02–R05 本地控制面；入口 `ai_modules/agent_teams/` 与 `/api/ai/agent-teams/*`（官方 AgentTeams SDK 仍属后续）。  
+> **Phase A-2（R06）：** `demos/goai-agentteams/run_demo.py` 离线 simulate（`consistent`/`mismatch`）+ `samples/output/`；产物目录 `artifacts/goai-agentteams/`（部分满足 R07）。  
+> **Phase B-2（R07/Z2）：** `ai_modules/execute/trace_pack.py` 标准化证据包（目录+ZIP）；`GET /api/ai/trace-packs/export`、`.../agent-teams/runs/<id>/trace`；Demo 自动写入 `trace_pack/`。  
+> **Phase B-3（R09 工程半）：** HITL 事件入阶段/`trace_pack`/`meta.hitl`（`agent_hitl` 事件日志 + `tests/test_hitl_trace.py`）。  
+> **R08+R09+R10 Demo：** `demos/goai-agentteams --suite guards`（Desktop 闸门模拟 + 真实 HitlGate + RiskGuard L2）；`ai_modules/security/risk_guard.py`；编排 L2 门禁。
+
 ### P1 — 显著加分 / 对齐企业级
 
 | ID | 任务 | 产出 |
 |----|------|------|
-| R08 | 接入 **DesktopExecutor** 或 **MobileExecutor**（至少一端进主 Demo） | 真·多端联动视频 |
-| R09 | **HitlGate** 演示：登录/验证码暂停与恢复 | HITL 事件入 Trace |
-| R10 | **RiskGuard** L0/L1/L2 + 一次 L2 审批演示 | 审批记录 |
-| R11 | Skill 包按附录 B 补齐 Schema/失败处理/安全章节 | 开源 Skill 质量 |
-| R12 | MCP 或等价契约文档 + 1 个适配器样例（Desktop 或 CDP） | 工具连接层证据 |
-| R13 | Trace 看板或导出（OTel/AgentLoop/自研 JSON Trace 三选一） | 可观测材料 |
-| R14 | Apache-2.0 LICENSE + NOTICE + 根 README 复现步骤 | 开源合规 |
+| R08 | ~~Desktop 进主 Demo（模拟+生产闸门）~~ **已关（guards suite）**；~~记事本主路径+预检~~ **已关（enterprise desk-mp）** | `desktop_preflight` + `desktop-mainpath-plan` + 跨端一键模板 |
+| R09 | ~~HITL 事件入 Trace + HitlGate 演示~~ **已关（B-3 + guards）** | `hitl_events` / `--variant hitl_timeout\|pass` |
+| R10 | ~~RiskGuard L0/L1/L2 + L2 审批演示~~ **已关** | `risk_guard` + 编排门禁 + `--variant l2_denied\|pass` |
+| R11 | ~~Skill 包按附录 B 补齐 Schema/失败处理/安全章节~~ **已关** | [SKILL_APPENDIX_B.md](./SKILL_APPENDIX_B.md) + `skills/skill_quality` |
+| R12 | ~~MCP 或等价契约 + Desktop 适配器样例~~ **已关** | [MCP_CONTRACT.md](./MCP_CONTRACT.md) + `demos/goai-mcp-adapter/` |
+| R13 | ~~Trace 看板或导出~~ **已关（B-2 + 客户审计包）** | 单次 `trace_pack` + 批量 `customer_audit_pack` ZIP |
+| R14 | ~~Apache-2.0 LICENSE + NOTICE + 根 README~~ **已关** | 根目录 `LICENSE` / `NOTICE` / `README.md` |
 
 ### P2 — 有余力再做
 
@@ -63,13 +69,13 @@
 
 ## Demo 验收清单（复赛自测）
 
-- [ ] 从样例输入启动，无需口播改代码  
-- [ ] 日志中可见 ≥3 个 Agent 的派单/完成事件  
-- [ ] 至少一次跨 Skill 工具调用成功  
-- [ ] 输出明确 pass/fail 与证据文件  
-- [ ] 演示一次 HITL 或 L2 审批  
-- [ ] 演示 cleanup 或失败分支之一  
-- [ ] README 按步骤外人可复现（或视频完整展示）  
+- [x] 从样例输入启动，无需口播改代码  
+- [x] 日志中可见 ≥3 个 Agent 的派单/完成事件  
+- [x] 至少一次跨 Skill 工具调用成功（API+Web；guards 另含 Desktop 闸门模拟）  
+- [x] 输出明确 pass/fail 与证据文件  
+- [x] 演示一次 HITL 或 L2 审批（`--suite guards`）  
+- [x] 演示 cleanup 或失败分支之一（`mismatch` / `hitl_timeout` / `l2_denied` / `desktop_softfail`）  
+- [x] README 按步骤外人可复现（根 README + demos README）  
 
 ---
 

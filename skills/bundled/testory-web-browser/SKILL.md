@@ -7,6 +7,7 @@ format: agentskills.io/v1
 metadata:
   testory:
     platform: web
+    risk_default: L1
     tags: [cdp, local-browser, edge, chrome, hermes, captcha, human-in-loop]
 ---
 
@@ -23,6 +24,46 @@ metadata:
 7. **DOM 优先**：用页面可交互控件/DOM 结构定位；`browser_snapshot` 是无障碍树/DOM ref（不是视觉截图），仅难定位时兜底一次；视觉截图仅最终兜底。
 8. 浏览器以 `--start-maximized` 启动，并尽量 CDP/Win32 最大化窗口。
 9. Hermes API Server 工具集须为 `platform_toolsets.api_server: [browser, web, memory]`（**不含** skills/terminal，否则会 skill_view 死循环）。
+
+## 输入 / 输出 Schema
+
+### 阶段输入（跨端 `layer=web`）
+
+| 字段 | 说明 |
+|------|------|
+| `actions[]` | `navigate` / `click` / `fill` / `assert_text` 等 |
+| `vars_to_store` | 从 selector/DOM 抽取写入上下文 |
+| `hitl` / 预门禁 | 验证码等可先走 HitlGate |
+
+### 阶段输出
+
+| 字段 | 说明 |
+|------|------|
+| `ok_assert` | 仅步骤与断言真实通过时为 true |
+| `error_code` | 如 `EMPTY_SELECTOR`、`NO_BROWSER_PAGE`、`ASSERT_TEXT_MISMATCH` |
+| `extracted` | 变量字典 |
+| `screenshot_path` | 可选证据 |
+
+MCP / Agent 侧优先 `testory_mcp.web` 或平台 CDP attach；契约见 `docs/goai/MCP_CONTRACT.md`。
+
+## 失败处理（诚实）
+
+| 情况 | 结果 |
+|------|------|
+| 无 browser page / CDP 断开 | 阶段失败，不得 warning 后当绿 |
+| 空 selector | `EMPTY_SELECTOR`，忽略 allow_skip |
+| 断言文案不匹配 | `ASSERT_TEXT_MISMATCH`，挡总成功 |
+| HITL 超时/取消 | `HITL_TIMEOUT` / `HITL_CANCELLED` |
+| 超时未找到元素 | 失败并保留截图（若有） |
+
+禁止：用散文「看起来成功了」或 Hermes 无 `[RESULT] ok` 默认成功。
+
+## 安全边界
+
+- 默认 **L1**；涉及清 Cookie/改生产配置等应升 **L2** 并走 RiskGuard。  
+- 验证码/登录必须 **HITL**，禁止自动撞库或绕过。  
+- 截图与 DOM 可能含 PII：报告/Trace 按平台脱敏策略处理。  
+- 不在 Skill 内硬编码账号密码；使用密钥或人工输入。
 
 ## Testory 架构
 

@@ -229,7 +229,8 @@
         font-size: 12px;
         white-space: nowrap;
         writing-mode: horizontal-tb;
-        width: 50px;
+        width: auto;
+        min-width: 50px;
     }
     
     .action-buttons button:hover {
@@ -664,18 +665,27 @@
             const st = item.status || '';
             const statusClass = (st === 'passed' || st === 'success') ? 'status-passed' : 'status-failed';
             const statusText = (st === 'passed' || st === 'success') ? t('history_status_done_pass') : t('history_status_done_fail');
-            const rawOut = item.extracted_text != null && item.extracted_text !== '' ? String(item.extracted_text) : '';
+            const rawOut = item.output_preview
+                || (item.extracted_text != null && item.extracted_text !== '' ? String(item.extracted_text) : '');
             const rawErr = item.error != null && item.error !== '' ? String(item.error) : '';
             const outputPreview = rawOut ? (rawOut.length > 100 ? rawOut.substring(0, 100) + '...' : rawOut) : '-';
             const errorShort = rawErr ? (rawErr.length > 100 ? rawErr.substring(0, 100) + '...' : rawErr) : '-';
-            const popoverOut = rawOut || '-';
+            const popoverOut = (item.extracted_text != null && item.extracted_text !== '' ? String(item.extracted_text) : rawOut) || '-';
             const popoverErr = rawErr || '-';
             const executedAt = item.created_at || '-';
+            const links = item.links || {};
+            const canTrace = !!(links.trace_export_url || item.id);
+            const typeBadge = (item.test_type && item.test_type !== 'web')
+                ? `<span class="status-badge" style="margin-left:6px;background:#eef2ff;color:#4338ca;border-color:#c7d2fe;">${escapeHtml(item.test_type)}</span>`
+                : '';
+            const buildBadge = links.build_id
+                ? `<span class="status-badge" style="margin-left:6px;background:#ecfeff;color:#0e7490;border-color:#a5f3fc;">build ${escapeHtml(links.build_id)}</span>`
+                : '';
             
             html += `
                 <tr>
                     <td>${item.id}</td>
-                    <td>${escapeHtml(item.case_name || '-')}</td>
+                    <td>${escapeHtml(item.case_name || '-')}${typeBadge}${buildBadge}</td>
                     <td>${escapeHtml(item.case_id != null ? String(item.case_id) : '-')}</td>
                     <td><span class="status-badge ${statusClass}">${escapeHtml(statusText)}</span></td>
                     <td>${escapeHtml(executedAt)}</td>
@@ -690,6 +700,7 @@
                     <td>
                         <div class="action-buttons">
                             <button class="detail-btn" onclick="showDetail(${item.id})">` + escapeHtml(t('history_btn_detail')) + `</button>
+                            ${canTrace ? `<button type="button" onclick="exportEvidence(${item.id})" title="导出证据包">证据</button>` : ''}
                             <button class="delete-btn" onclick="deleteHistory(${item.id})">` + escapeHtml(t('history_btn_delete')) + `</button>
                         </div>
                     </td>
@@ -744,8 +755,44 @@
             .then(data => {
                 if (data.success) {
                     const item = data.record;
+                    const ops = item.ops_summary || {};
+                    const links = item.links || {};
                     const outTxt = item.extracted_text != null && item.extracted_text !== '' ? item.extracted_text : t('history_no_output');
                     const errTxt = item.error != null && item.error !== '' ? item.error : t('history_no_error');
+                    let gateHtml = '';
+                    if ((ops.hitl_count || 0) > 0 || (ops.risk_count || 0) > 0 || ops.error_code) {
+                        gateHtml = `
+                        <div class="detail-section">
+                            <span class="detail-label">门禁摘要（HITL / Risk）</span>
+                            <div class="detail-value detail-value--wrap">
+                                类型: ${escapeHtml(ops.test_type || '-')} · error_code: ${escapeHtml(ops.error_code || '-')}
+                                · HITL ${ops.hitl_count || 0} · Risk ${ops.risk_count || 0}
+                                ${ops.hitl && ops.hitl.length ? '<br>HITL: ' + escapeHtml(JSON.stringify(ops.hitl)) : ''}
+                                ${ops.risk && ops.risk.length ? '<br>Risk: ' + escapeHtml(JSON.stringify(ops.risk)) : ''}
+                            </div>
+                        </div>`;
+                    }
+                    let linkHtml = '';
+                    if (links.audit_id || links.ci_run_id || links.build_id || links.trace_export_url) {
+                        linkHtml = `
+                        <div class="detail-section">
+                            <span class="detail-label">证据与 CI</span>
+                            <div class="detail-value">
+                                ${links.audit_id ? ('audit: ' + escapeHtml(links.audit_id) + '<br>') : ''}
+                                ${links.build_id ? ('build: ' + escapeHtml(links.build_id) + '<br>') : ''}
+                                ${links.ci_run_id ? ('CI run: <a href="' + escapeHtml(links.ci_run_url || ('/api/ci/runs/' + links.ci_run_id)) + '" target="_blank">' + escapeHtml(links.ci_run_id) + '</a><br>') : ''}
+                                <button type="button" class="detail-btn" style="width:auto;padding:6px 12px;margin-top:8px;" onclick="exportEvidence(${item.id})">导出证据包 ZIP</button>
+                            </div>
+                        </div>`;
+                    } else {
+                        linkHtml = `
+                        <div class="detail-section">
+                            <span class="detail-label">证据包</span>
+                            <div class="detail-value">
+                                <button type="button" class="detail-btn" style="width:auto;padding:6px 12px;" onclick="exportEvidence(${item.id})">按本条历史导出 Trace ZIP</button>
+                            </div>
+                        </div>`;
+                    }
                     content.innerHTML = `
                         <div class="detail-section">
                             <span class="detail-label">` + escapeHtml(t('history_detail_id')) + `</span>
@@ -761,12 +808,14 @@
                         </div>
                         <div class="detail-section">
                             <span class="detail-label">` + escapeHtml(t('history_detail_status')) + `</span>
-                            <span class="detail-value">${escapeHtml(item.status || '')}</span>
+                            <span class="detail-value">${escapeHtml(item.status || '')} · ${escapeHtml(item.test_type || 'web')}</span>
                         </div>
                         <div class="detail-section">
                             <span class="detail-label">` + escapeHtml(t('history_detail_time')) + `</span>
                             <span class="detail-value">${escapeHtml(item.created_at || '-')}</span>
                         </div>
+                        ${gateHtml}
+                        ${linkHtml}
                         <div class="detail-section">
                             <span class="detail-label">` + escapeHtml(t('history_detail_output')) + `</span>
                             <div class="detail-value"><pre>${escapeHtml(outTxt)}</pre></div>
@@ -782,6 +831,24 @@
             })
             .catch(() => {
                 content.innerHTML = '<p>' + escapeHtml(t('history_detail_fail')) + '</p>';
+            });
+    }
+
+    function exportEvidence(id) {
+        fetch('/api/run-history/' + id)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success || !data.record) {
+                    alert('无法加载历史记录');
+                    return;
+                }
+                var links = data.record.links || {};
+                var url = links.trace_export_url
+                    || ('/api/ai/trace-packs/export?format=zip&run_history_id=' + encodeURIComponent(id));
+                window.location.href = url;
+            })
+            .catch(function() {
+                window.location.href = '/api/ai/trace-packs/export?format=zip&run_history_id=' + encodeURIComponent(id);
             });
     }
     

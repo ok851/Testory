@@ -1,0 +1,61 @@
+# GitLab CI — 触发 Testory 执行节点并门禁（Phase 0c）
+# 变量：UAT_PLATFORM_URL、UAT_API_TOKEN、PROJECT_ID
+
+stages:
+  - test
+
+variables:
+  PROJECT_ID: "1"
+
+testory-regression:
+  stage: test
+  image: curlimages/curl:8.5.0
+  script:
+    - |
+      set -e
+      echo "触发 Testory /api/ci/runs ..."
+      RESPONSE=$(curl -sS -X POST "${UAT_PLATFORM_URL}/api/ci/runs" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"project_id\":${PROJECT_ID},\"async\":true,\"trigger_source\":\"gitlab\",\"build_id\":\"${CI_PIPELINE_ID}\",\"git_sha\":\"${CI_COMMIT_SHA}\",\"branch\":\"${CI_COMMIT_REF_NAME}\"}")
+      echo "$RESPONSE"
+      echo "$RESPONSE" > ci-run.json
+
+      RUN_ID=$(echo "$RESPONSE" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+      echo "run_id=$RUN_ID"
+      if [ -z "$RUN_ID" ]; then
+        echo "未返回 run_id"
+        exit 1
+      fi
+
+      MAX=90
+      N=0
+      while [ $N -lt $MAX ]; do
+        N=$((N + 1))
+        sleep 10
+        STATUS_JSON=$(curl -sS "${UAT_PLATFORM_URL}/api/ci/runs/${RUN_ID}" \
+          -H "Authorization: Bearer ${UAT_API_TOKEN}")
+        echo "poll $N: $STATUS_JSON"
+        STATUS=$(echo "$STATUS_JSON" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        GATE=$(echo "$STATUS_JSON" | sed -n 's/.*"gate_passed"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)
+        if [ "$STATUS" = "success" ] || [ "$STATUS" = "failed" ]; then
+          break
+        fi
+      done
+
+      curl -sS "${UAT_PLATFORM_URL}/api/ci/runs/${RUN_ID}/junit.xml" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -o testory-junit.xml
+
+      if [ "$GATE" != "true" ] && [ "$STATUS" != "success" ]; then
+        echo "Testory 门禁失败 status=$STATUS"
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths:
+      - testory-junit.xml
+      - ci-run.json
+    reports:
+      junit: testory-junit.xml
+    expire_in: 30 days

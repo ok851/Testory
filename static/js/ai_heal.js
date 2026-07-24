@@ -366,7 +366,58 @@
     });
   }
 
+  function statusLabel(st) {
+    if (st === 'supported') return '✓ 可用';
+    if (st === 'partial') return '△ 部分';
+    if (st === 'scan_only') return '○ 仅扫描';
+    return '—';
+  }
+
+  async function loadHealCapabilities() {
+    var disc = document.getElementById('aiHealCapabilityDisclaimer');
+    var layersEl = document.getElementById('aiHealCapabilityLayers');
+    if (!disc || !layersEl) return;
+    try {
+      var res = await fetch('/api/ai/heal/capabilities', {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      });
+      var data = await res.json();
+      if (!data || !data.ok || !data.matrix) {
+        disc.textContent = '能力矩阵加载失败';
+        return;
+      }
+      disc.textContent = data.matrix.disclaimer || '禁止宣传未接入的自愈能力。';
+      var layers = data.matrix.layers || {};
+      layersEl.innerHTML = '';
+      Object.keys(layers).forEach(function (key) {
+        var L = layers[key] || {};
+        var row = document.createElement('div');
+        row.style.cssText =
+          'display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;padding:6px 0;border-bottom:1px solid rgba(226,232,240,0.5);';
+        var badgeColor =
+          L.status === 'supported' ? '#16a34a' : L.status === 'partial' ? '#ca8a04' : '#64748b';
+        row.innerHTML =
+          '<strong style="min-width:72px;text-transform:uppercase;">' +
+          key +
+          '</strong>' +
+          '<span style="color:' +
+          badgeColor +
+          ';font-weight:600;">' +
+          statusLabel(L.status) +
+          '</span>' +
+          '<span style="color:#64748b;flex:1;">' +
+          (L.note || '') +
+          '</span>';
+        layersEl.appendChild(row);
+      });
+    } catch (e) {
+      disc.textContent = '能力矩阵加载失败：' + String(e && e.message ? e.message : e);
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
+    loadHealCapabilities();
     loadProjects();
     document.getElementById('aiHealProject').addEventListener('change', function () {
       loadCases(this.value);

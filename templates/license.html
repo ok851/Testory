@@ -130,6 +130,25 @@
             </div>
         </div>
 
+        <!-- 能力门禁 / 有效功能 -->
+        <div class="card mb-8 hidden" id="featureGateCard">
+            <div id="gateDeniedBanner" class="hidden mb-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg p-4 text-sm text-amber-900 dark:text-amber-100"></div>
+            <div class="card-header">
+                <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                    <i class="fas fa-shield-alt text-blue-600 dark:text-blue-400 mr-2"></i>
+                    能力门禁（有效功能）
+                </h3>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    开源核心执行不锁死；企业能力在商业部署可用 <code class="text-xs">LICENSE_ENFORCE_FEATURES=1</code> 按档拦截。
+                </p>
+            </div>
+            <div class="mb-3 flex flex-wrap gap-2 items-center">
+                <span id="openCoreBadge" class="badge badge-gray">—</span>
+                <span id="enforceBadge" class="badge badge-gray">—</span>
+            </div>
+            <div id="featureGateList" class="flex flex-wrap gap-2 text-sm"></div>
+        </div>
+
         <!-- 今日使用配额 -->
         <div class="card mb-8" id="dailyQuotaCard">
             <div class="card-header">
@@ -431,6 +450,56 @@
                     document.getElementById('projectLimit').textContent = maxProjects === -1 ? un : maxProjects;
                     document.getElementById('caseLimit').textContent = maxCases === -1 ? un : maxCases;
                     document.getElementById('executionLimit').textContent = maxExecutions === -1 ? un : maxExecutions;
+
+                    // 能力门禁卡片
+                    (function renderFeatureGates() {
+                        var gateCard = document.getElementById('featureGateCard');
+                        var listEl = document.getElementById('featureGateList');
+                        if (!gateCard || !listEl) return;
+                        gateCard.classList.remove('hidden');
+                        var unlocked = !!limits.open_core_features_unlocked;
+                        var enforce = !unlocked;
+                        var openBadge = document.getElementById('openCoreBadge');
+                        var enfBadge = document.getElementById('enforceBadge');
+                        if (openBadge) {
+                            openBadge.textContent = unlocked ? '本机开源：企业能力可试用' : '按证书 features 生效';
+                            openBadge.className = 'badge ' + (unlocked ? 'badge-success' : 'badge-info');
+                        }
+                        if (enfBadge) {
+                            enfBadge.textContent = enforce
+                                ? '强制门禁（LICENSE_ENFORCE_FEATURES）'
+                                : '未强制门禁';
+                            enfBadge.className = 'badge ' + (enforce ? 'badge-warning' : 'badge-gray');
+                        }
+                        var catalog = limits.feature_catalog || {};
+                        var effective = limits.effective_features || info.effective_features || [];
+                        var effSet = {};
+                        (effective || []).forEach(function(f) { effSet[f] = true; });
+                        var highlight = [
+                            'test_execution', 'cross_end', 'sso', 'audit_log',
+                            'customer_audit_export', 'ci_integration', 'schedule'
+                        ];
+                        listEl.innerHTML = '';
+                        highlight.forEach(function(key) {
+                            var meta = catalog[key] || {};
+                            var ok = false;
+                            if (key === 'test_execution' || key === 'basic_report') {
+                                ok = true;
+                            } else if (unlocked) {
+                                ok = true;
+                            } else {
+                                ok = !!effSet[key];
+                            }
+                            var title = meta.title || key;
+                            var minTier = meta.min_tier || '';
+                            var span = document.createElement('span');
+                            span.className = 'badge ' + (ok ? 'badge-success' : 'badge-gray');
+                            span.title = (meta.note || '') + (minTier ? (' · 最低档 ' + minTier) : '');
+                            span.textContent = (ok ? '✓ ' : '✗ ') + title + (minTier ? ' (' + minTier + ')' : '');
+                            listEl.appendChild(span);
+                        });
+                        showGateDeniedBanner(limits);
+                    })();
                     
                     // 更新今日配额
                     const used = usage.today_executions || 0;
@@ -627,6 +696,27 @@
                 confirmButtonText: typeof t === 'function' ? t('pricing_sales_ok') : 'OK'
             });
             {% endif %}
+        }
+
+        function showGateDeniedBanner(limits) {
+            var banner = document.getElementById('gateDeniedBanner');
+            if (!banner) return;
+            var params = new URLSearchParams(window.location.search || '');
+            if (params.get('denied') !== '1' && !params.get('gate')) {
+                banner.classList.add('hidden');
+                return;
+            }
+            var feat = params.get('gate') || '';
+            var catalog = (limits && limits.feature_catalog) || {};
+            var meta = catalog[feat] || {};
+            var title = meta.title || feat || '企业功能';
+            var minTier = meta.min_tier || 'enterprise';
+            banner.textContent =
+                '刚才访问的功能「' + title + '」需要 ' + minTier +
+                ' 及以上授权。请升级 License，或在本机 standalone 下试用（勿对开源核心执行误锁）。';
+            banner.classList.remove('hidden');
+            var gateCard = document.getElementById('featureGateCard');
+            if (gateCard) gateCard.classList.remove('hidden');
         }
 
         function initLicensePage() {

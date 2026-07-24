@@ -331,6 +331,9 @@ def summarize_batch_case_error(
     steps_completed: int = 0,
 ) -> str:
     """从步骤结果中提取可读的失败原因（写入 run_history.error）。"""
+    if int(total_steps or 0) <= 0:
+        return "用例无有效步骤（空用例不得判定为成功）"
+
     if not case_results:
         if total_steps > 0 and steps_completed < total_steps:
             return (
@@ -342,21 +345,32 @@ def summarize_batch_case_error(
     for r in case_results:
         if not isinstance(r, dict):
             continue
-        st = (r.get("status") or "").strip().lower()
-        if st not in ("error", "stopped", "failed"):
+        st = _norm_exec_status(r.get("status"))
+        if st not in ("error", "stopped", "failed", "fail", "skipped", "warning"):
             continue
         step = r.get("step") if isinstance(r.get("step"), dict) else {}
+        if st == "skipped" and _step_allows_skip(step, r):
+            continue
         action = step.get("action") or r.get("step") or "unknown"
         desc = (step.get("description") or "").strip()
         err = (r.get("error") or st).strip()
         parts = [f"步骤动作: {action}"]
         if desc:
             parts.append(f"描述: {desc}")
-        parts.append(f"错误: {err}")
+        if st == "skipped":
+            parts.append(f"结果: 已跳过（未允许 skip，按失败计）: {err}")
+        elif st == "warning":
+            parts.append(f"结果: 警告（门禁不通过）: {err}")
+        else:
+            parts.append(f"错误: {err}")
         return " | ".join(parts)
 
     if total_steps > 0 and steps_completed < total_steps:
-        ok = sum(1 for r in case_results if isinstance(r, dict) and r.get("status") == "success")
+        ok = sum(
+            1
+            for r in case_results
+            if isinstance(r, dict) and _norm_exec_status(r.get("status")) == "success"
+        )
         return (
             f"用例提前结束：成功步骤 {ok} 个，计划 {total_steps} 个，"
             f"实际执行 {steps_completed} 个（可能被并发任务打断）"
@@ -478,20 +492,122 @@ def build_batch_lock_fail_results(
     }
 
 
+def _norm_exec_status(value: Any) -> str:
+    return (str(value or "")).strip().lower()
+
+
+def _step_allows_skip(step: Dict[str, Any], result_row: Optional[Dict[str, Any]] = None) -> bool:
+    """显式允许跳过的步骤不计入门禁失败（allow_skip / optional / skip_ok）。"""
+    for src in (step, result_row):
+        if not isinstance(src, dict):
+            continue
+        for key in ("allow_skip", "optional", "skip_ok"):
+            val = src.get(key)
+            if val is True or str(val).strip().lower() in ("1", "true", "yes", "y"):
+                return True
+    return False
+
+
+def step_allows_skip(step: Dict[str, Any], result_row: Optional[Dict[str, Any]] = None) -> bool:
+    """公开别名：步骤是否显式允许跳过。"""
+    return _step_allows_skip(step, result_row)
+
+
+# 需要非空期望值的断言类型（element_exists / element_visible / vision 用 description 除外）
+_ASSERT_TYPES_REQUIRE_EXPECTED = frozenset(
+    {
+        "url_equals",
+        "url_contains",
+        "text_equals",
+        "text_contains",
+        "text_regex",
+        "page_text_equals",
+        "page_text_contains",
+        "page_text_regex",
+    }
+)
+
+
+def assert_empty_expected_error(compare_type: Any, expected: Any) -> Optional[str]:
+    """空期望不得假绿：返回错误文案；不需要期望或期望非空则返回 None。"""
+    ctype = (str(compare_type or "")).strip().lower()
+    if ctype not in _ASSERT_TYPES_REQUIRE_EXPECTED:
+        return None
+    if (str(expected or "")).strip():
+        return None
+    return f"assert 步骤缺少预期值（compare_type={ctype}）"
+
+
+def is_execution_gate_success(status: Any) -> bool:
+    """CI/调度门禁：仅 success 为通过（见 docs/EXECUTION_RELIABILITY_STANDARD.md）。"""
+    return _norm_exec_status(status) == "success"
+
+
+def count_batch_gate_failures(case_results: List[Dict[str, Any]]) -> int:
+    """批次用例结果中未通过门禁的数量（含 warning/stopped/error/skipped 等）。"""
+    n = 0
+    for r in case_results or []:
+        if not isinstance(r, dict) or not is_execution_gate_success(r.get("status")):
+            n += 1
+    return n
+
+
 def evaluate_batch_case_status(
     case_results: List[Dict[str, Any]],
     *,
     total_steps: int,
     steps_completed: int,
 ) -> str:
-    """判定批量单用例最终状态：success / error / stopped。"""
-    if any(isinstance(r, dict) and r.get("status") == "stopped" for r in case_results):
-        return "stopped"
+    """判定批量单用例最终状态：success / error / stopped / warning。
+
+    企业流水线门禁：
+    - 仅 ``success`` 视为通过；
+    - ``stopped`` 保留；
+    - 硬失败 / 未允许的 ``skipped`` / 未知状态 → ``error``；
+    - 仅有 ``warning``、无硬失败 → ``warning``（展示用；调度/CI 仍不得当成功）；
+    - ``total_steps <= 0`` → ``error``（空用例不得绿灯）。
+    """
+    if int(total_steps or 0) <= 0:
+        return "error"
+
+    # 声称有步骤却无任何结果行 → 不可信，不得绿灯
+    if not case_results:
+        return "error"
+
     if any(
-        isinstance(r, dict) and (r.get("status") or "").strip().lower() in ("error", "failed")
+        isinstance(r, dict) and _norm_exec_status(r.get("status")) == "stopped"
         for r in case_results
     ):
+        return "stopped"
+
+    hard_fail = False
+    soft_warn = False
+    for r in case_results:
+        if not isinstance(r, dict):
+            hard_fail = True
+            continue
+        st = _norm_exec_status(r.get("status"))
+        if st in ("error", "failed", "fail"):
+            hard_fail = True
+            continue
+        if st == "warning":
+            soft_warn = True
+            continue
+        if st == "skipped":
+            step = r.get("step") if isinstance(r.get("step"), dict) else {}
+            if _step_allows_skip(step, r):
+                continue
+            hard_fail = True
+            continue
+        if st in ("success", "ok", "passed"):
+            continue
+        # 空 status 或未知状态：保守失败，避免假绿
+        hard_fail = True
+
+    if hard_fail:
         return "error"
-    if total_steps > 0 and steps_completed < total_steps:
+    if int(steps_completed or 0) < int(total_steps or 0):
         return "error"
+    if soft_warn:
+        return "warning"
     return "success"

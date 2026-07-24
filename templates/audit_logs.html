@@ -44,6 +44,8 @@
                         <option value="schedule">定时任务</option>
                         <option value="notification">通知配置</option>
                         <option value="sso_config">SSO配置</option>
+                        <option value="auth">登录/SSO认证</option>
+                        <option value="ai_plan">AI计划</option>
                         <option value="order">订单</option>
                         <option value="defect">缺陷</option>
                     </select>
@@ -181,7 +183,16 @@
             'DELETE_DEFECT': '删除缺陷',
             'UPDATE_DEFECT_STATUS': '更新缺陷状态',
             'CREATE_DEFECT_FROM_FAILURE': '从失败创建缺陷',
-            'IMPORT_CASES': '导入用例'
+            'IMPORT_CASES': '导入用例',
+            'LOGIN_SUCCESS': '登录成功',
+            'LOGIN_FAILURE': '登录失败',
+            'LOGOUT': '注销',
+            'REGISTER': '注册',
+            'SSO_LOGIN_SUCCESS': 'SSO登录成功',
+            'SSO_LOGIN_FAILURE': 'SSO登录失败',
+            'LDAP_LOGIN_SUCCESS': 'LDAP登录成功',
+            'LDAP_LOGIN_FAILURE': 'LDAP登录失败',
+            'PASSWORD_RESET': '密码重置'
         };
 
         // 目标类型映射
@@ -193,6 +204,8 @@
             'schedule': '定时任务',
             'notification': '通知配置',
             'sso_config': 'SSO配置',
+            'auth': '登录/SSO认证',
+            'ai_plan': 'AI计划',
             'order': '订单',
             'defect': '缺陷'
         };
@@ -225,7 +238,21 @@
 
                 if (response.status === 403) {
                     auditLogsPageRows = [];
-                    document.getElementById('logsTableBody').innerHTML = '<tr><td colspan="7" class="text-center py-8 text-red-600">无权限查看审计日志（需要管理员）</td></tr>';
+                    var gateMsg = '无权限查看审计日志';
+                    if (result && result.error_code === 'LICENSE_FEATURE_REQUIRED') {
+                        gateMsg = (result.error || '需要企业版审计能力') + ' — 请打开 License 管理升级';
+                        if (window.TestoryLicenseGate) {
+                            window.TestoryLicenseGate.handleResponse(response, result);
+                        }
+                    } else if (result && result.error) {
+                        gateMsg = result.error;
+                    } else {
+                        gateMsg = '无权限查看审计日志（需要管理员或企业审计授权）';
+                    }
+                    document.getElementById('logsTableBody').innerHTML =
+                        '<tr><td colspan="7" class="text-center py-8 text-amber-700 dark:text-amber-300">' +
+                        gateMsg +
+                        ' <a class="underline text-blue-600" href="/license?gate=audit_log&denied=1">去 License</a></td></tr>';
                     return;
                 }
 

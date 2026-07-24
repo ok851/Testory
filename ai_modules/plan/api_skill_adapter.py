@@ -188,7 +188,12 @@ def execute_api_stage(
 
     result["elapsed_ms"] = elapsed
 
-    extract_config = stage.get("extract")
+    extract_config = resolved_stage.get("extract")
+    if not isinstance(extract_config, dict) or not extract_config:
+        extract_config = resolved_stage.get("vars_to_store")
+    if not isinstance(extract_config, dict):
+        extract_config = {}
+
     extracted = _extract_from_response(
         result.get("response_json"),
         result.get("response_text") or "",
@@ -196,6 +201,33 @@ def execute_api_stage(
         extract_config,
     )
 
+    # 脱敏 + 必选校验（与 UI vars_to_store 对齐）
+    try:
+        from ai_modules.plan.var_extraction import (
+            apply_value_policy,
+            collect_extraction_rules,
+            validate_required_extractions,
+        )
+
+        rules = collect_extraction_rules(
+            {"extract": extract_config, "vars_to_store": resolved_stage.get("vars_to_store")}
+        )
+        for name in list(extracted.keys()):
+            rule = rules.get(name) or {"name": name}
+            extracted[name] = apply_value_policy(name, extracted[name], rule)
+        missing = validate_required_extractions(rules, extracted)
+        if missing:
+            result["ok_assert"] = False
+            result["error"] = f"API 变量抽取失败（必选缺失或为空）: {', '.join(missing)}"
+            result["error_code"] = "VAR_EXTRACT_MISSING"
+    except Exception:
+        # 抽取策略模块异常时，至少保证 None 不静默当成功
+        missing_simple = [k for k, v in extracted.items() if v is None]
+        if missing_simple and result.get("ok_assert", True):
+            result["ok_assert"] = False
+            result["error"] = f"API 变量抽取失败: {', '.join(missing_simple)}"
+
+    result["extracted"] = dict(extracted)
     return result, extracted
 
 

@@ -7,10 +7,68 @@ format: agentskills.io/v1
 metadata:
   testory:
     platform: desktop
+    risk_default: L1
     tags: [windows, gui, uia, rpa, desktop-gateway]
 ---
 
 # Testory Windows 桌面自动化
+
+## 输入 / 输出 Schema
+
+### 步骤输入（`run-steps` / 跨端 `layer=desktop`）
+
+| 字段 | 说明 |
+|------|------|
+| `action` | `launch_app` / `click` / `input` / `get_text` / `hotkey` / `wait` / … |
+| `desktop_spec` / 定位 | UIA name、automation_id 或视觉描述 |
+| `store_as` | 抽取文本写入变量 |
+
+### 步骤输出（须经 `validate_desktop_step_result`）
+
+| 字段 | 说明 |
+|------|------|
+| `status` | 仅 `success`/`ok`/`passed` 可在跨端当绿；**`warning` 不得绿** |
+| `verified` / `pointer_executed` | 指针类动作必填校验 |
+| `error` / `warning` | 失败原因 |
+| `extracted_text` | 可选 |
+
+离线闸门 Demo：`python demos/goai-agentteams/run_demo.py --suite guards --variant desktop_softfail`
+
+### 企业主路径（真机）
+
+跨端页一键「桌面主路径（记事本）」或：
+
+```http
+GET /api/ai/desktop/preflight
+GET /api/ai/cross-end/desktop-mainpath-plan
+```
+
+编排在 desktop 阶段前预检；Gateway/非 Windows 不可用 → `DESKTOP_NO_SESSION`（不假绿）。单测可设 `DESKTOP_PREFLIGHT=0`。
+
+真机验收：
+
+```bash
+python demos/desktop_notepad_mainpath_accept.py
+```
+
+退出码 0=通过；1=诚实失败；2=预检未通过。
+
+## 失败处理（诚实）
+
+| 情况 | 结果 |
+|------|------|
+| 返回非 dict / status 失败 | 校验/阶段失败 |
+| 指针步骤缺 `verified` 或 `pointer_executed` | 不得报成功 |
+| `status=warning`（跨端） | 编排显式失败 |
+| Gateway 401 / 空流 | **不要** tight-loop 重试同一请求 |
+| 无桌面会话 | 诚实失败，禁止假装点过 |
+
+## 安全边界
+
+- 默认 **L1**；卸载软件、改系统配置、清用户数据 → **L2** + RiskGuard。  
+- 不抢焦点：`DESKTOP_NO_FOCUS_STEAL` / `DESKTOP_PHYSICAL_MOUSE`。  
+- 截图/OCR 可能含隐私；证据包按平台策略保存。  
+- 禁止在核心代码写死某 App 热键宏；差异留在本 Skill 配方。
 
 ## 与官方 Hermes computer_use 的关系
 
