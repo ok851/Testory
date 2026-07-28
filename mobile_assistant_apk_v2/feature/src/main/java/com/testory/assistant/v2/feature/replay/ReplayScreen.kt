@@ -141,8 +141,11 @@ fun ReplayScreen(
                                     uiState.currentStep.toFloat() / uiState.totalSteps
                                 else 0f
                             },
-                            modifier = Modifier.fillMaxWidth(),
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 

@@ -1554,23 +1554,19 @@ class LocalAIService:
                 f"{page_snapshot.strip()}\n\n"
             )
         return (
-            "You are generating an Android native UI test case for Appium / UiAutomator2.\n"
-            "Each step MUST include:\n"
-            '  "automation_layer": "android",\n'
-            '  "strategy": "accessibility_id|id|xpath|class_name|android_uiautomator",\n'
-            '  "selector_type": same as strategy,\n'
-            '  "selector_value": "<locator>",\n'
-            '  "description": "<Chinese step description>"\n\n'
-            "Allowed actions: open_app, close_app, tap, input_text, swipe, wait, assert_text, assert_element, screenshot, tap_image, wait_image, assert_image.\n"
-            "Use open_app as first step when launching an app (put appPackage in input_value or mobile_spec).\n"
-            "Use tap not click; input_text not input.\n"
-            "Prefer accessibility_id from content-desc; avoid brittle xpath.\n"
-            "Do NOT use navigate, url, or CSS selectors.\n"
+            "You generate Android UI test steps for Testory phone Assistant "
+            "(AccessibilityService replay on device — NOT Appium).\n"
+            "Allowed actions only: tap, input, swipe, wait, back, home, assert.\n"
+            "Do NOT use open_app / close_app / Appium strategies. Opening an app is a tap "
+            "on the launcher icon (selector_value = app display name).\n"
+            "Prefer short Chinese descriptions. Prefer selector_value as visible text or "
+            "content-desc; resource-id when known. Keep 3–8 steps.\n"
+            "Map: tap→tap, typing→input (put typed text in input_value), swipe→swipe.\n"
             f"Project: {project_name or 'unknown'}\n"
             f"Goal: {goal}\n"
             f"{mem_block}"
             f"{snap_block}"
-            "Output strict JSON with this schema:\n"
+            "Output ONE JSON object only (no markdown):\n"
             "{\n"
             '  "case_name": "string",\n'
             '  "case_url": "",\n'
@@ -1579,20 +1575,17 @@ class LocalAIService:
             '  "expected_result": "string",\n'
             '  "steps": [\n'
             "    {\n"
-            '      "action": "open_app|close_app|tap|input_text|swipe|wait|assert_text|assert_element|screenshot|tap_image|wait_image|assert_image",\n'
+            '      "action": "tap|input|swipe|wait|back|home|assert",\n'
             '      "automation_layer": "android",\n'
-            '      "strategy": "accessibility_id|id|xpath|class_name|android_uiautomator",\n'
-            '      "selector_type": "accessibility_id|id|xpath|class_name|android_uiautomator",\n'
+            '      "strategy": "",\n'
+            '      "selector_type": "text|content_desc|resource_id|",\n'
             '      "selector_value": "string",\n'
             '      "input_value": "string",\n'
-            '      "description": "string",\n'
-            '      "compare_type": "text_contains|text_equals (assert_text only)",\n'
-            '      "mobile_spec": {"appPackage": "com.example.app", "appActivity": ".MainActivity"}\n'
+            '      "description": "string"\n'
             "    }\n"
             "  ]\n"
             "}\n"
-            "Usually 3–8 steps. Never omit JSON keys; use \"\" where empty is allowed.\n"
-            "OUTPUT FORMAT: respond with that single JSON object only—no markdown, no prose."
+            "Never invent Appium xpath. Empty strings are fine when unknown."
         )
 
     @staticmethod

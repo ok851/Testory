@@ -52,8 +52,8 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            // ── 权限设置 ──
-            SettingsSection(title = "权限设置") {
+            // ── 本机权限（录制 / 执行） ──
+            SettingsSection(title = "本机权限（录制 / 执行）") {
                 SettingsItem(
                     icon = Icons.Filled.Accessibility,
                     title = "无障碍服务",
@@ -78,13 +78,13 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
-            // ── PC 连接 ──
-            SettingsSection(title = "PC 连接") {
+            // ── 连接 PC（同步与 AI，非遥控） ──
+            SettingsSection(title = "连接 PC（同步 / AI）") {
                 val connSubtitle = when (uiState.connectionStatus) {
-                    ConnectionStatus.CONNECTED -> "已连接到 ${uiState.pcAddress}:${uiState.pcPort}"
+                    ConnectionStatus.CONNECTED -> "已连接到 ${uiState.pcAddress}:${uiState.pcPort} · 录跑仍在本机"
                     ConnectionStatus.CONNECTING -> "正在连接…"
                     ConnectionStatus.ERROR -> "连接失败，请检查 IP/端口/配对码"
-                    ConnectionStatus.DISCONNECTED -> "未连接，点击配置 PC 地址"
+                    ConnectionStatus.DISCONNECTED -> "未连接 · 配对后可同步用例并用 PC 大模型"
                 }
                 SettingsItem(
                     icon = Icons.Filled.Computer,
@@ -95,7 +95,7 @@ fun SettingsScreen(
                 SettingsItem(
                     icon = Icons.Filled.Sync,
                     title = "手动同步",
-                    subtitle = "选择用例同步到 PC 端或从 PC 端拉取",
+                    subtitle = "推送到 PC 或从 PC 拉取用例（不遥控录制）",
                     onClick = { onNavigateToSync() }
                 )
             }

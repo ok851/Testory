@@ -117,8 +117,19 @@ class FloatingControlService : Service() {
                 updateReplayComplete(result)
             }
             else -> {
-                showFloatingView()
-                updateStepCount(stepCount)
+                if (mode == "replaying") {
+                    if (windowManager == null) {
+                        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+                    }
+                    removeFloatingViewKeepProgress()
+                    showProgressView()
+                    val current = intent?.getIntExtra(EXTRA_CURRENT_STEP, 0) ?: 0
+                    val total = intent?.getIntExtra(EXTRA_TOTAL_STEPS, 0) ?: 0
+                    updateReplayProgress(current, total)
+                } else {
+                    showFloatingView()
+                    updateStepCount(stepCount)
+                }
             }
         }
 
@@ -220,7 +231,10 @@ class FloatingControlService : Service() {
     }
 
     private fun showProgressView() {
-        if (progressView != null || windowManager == null) return
+        if (progressView != null) return
+        if (windowManager == null) {
+            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        }
 
         val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
         progressView = inflater.inflate(
@@ -252,6 +266,17 @@ class FloatingControlService : Service() {
         try {
             windowManager?.addView(progressView, params)
         } catch (_: Exception) { }
+    }
+
+    /** 回放模式去掉录制悬浮条，保留进度条容器状态 */
+    private fun removeFloatingViewKeepProgress() {
+        try {
+            floatingView?.let { windowManager?.removeView(it) }
+        } catch (_: Exception) { }
+        floatingView = null
+        btnPause = null
+        btnStop = null
+        tvStepCount = null
     }
 
     private fun removeProgressView() {

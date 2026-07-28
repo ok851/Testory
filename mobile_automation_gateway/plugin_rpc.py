@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""插件 JSON-RPC 客户端（经 adb forward 访问设备本地 HTTP 服务）。v4增强版。"""
+"""插件 JSON-RPC 客户端（经 adb forward 访问设备本地 HTTP 服务）。
+
+产品定位（正式路径）：
+  - 安装助手、连通性探测、getPageSource / 截图巡检、调试手势
+  - **不是** 正式录制引擎，也 **不是** 正式回放/跨端执行引擎
+  - 录制与执行在手机 APK 本机完成；业务同步走 Flask /api/mobile/sync/*
+"""
 from __future__ import annotations
 
 import base64

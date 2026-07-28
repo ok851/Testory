@@ -155,6 +155,48 @@ def _connect_response(udid, agent_result):
     }
 
 
+def _adb_local_connect_fallback(udid: str, *, gateway_error: str = "") -> Dict[str, Any]:
+    """仅用 adb 选中设备，便于安装助手。正式录制/回放在手机 App，不依赖 Gateway。"""
+    udid = (udid or "").strip()
+    if not udid:
+        return {"success": False, "error": "缺少 udid"}
+    devices = list_usb_devices() or []
+    match = next((d for d in devices if (d.get("udid") or "") == udid), None)
+    if not match:
+        # 模拟器列表也查一下
+        for d in (list_emulators() or []):
+            if (d.get("udid") or "") == udid:
+                match = d
+                break
+    if not match:
+        return {
+            "success": False,
+            "error": f"adb 未找到设备 {udid}",
+        }
+    set_connected_udid(udid)
+    info = get_device_info(udid) or {}
+    try:
+        from mobile_assistant_bundles import assistant_installed_on_device
+
+        installed = bool(assistant_installed_on_device(udid))
+    except Exception:
+        installed = False
+    # gateway_error 保留参数兼容旧调用，但不再写入用户可见文案
+    _ = gateway_error
+    return {
+        "success": True,
+        "udid": udid,
+        "session_id": "",
+        "device_width": info.get("width") or 1080,
+        "device_height": info.get("height") or 1920,
+        "assistant_installed": installed,
+        "assistant_connected": False,
+        "appium_connected": False,
+        "device_info": info,
+        "warning": "",
+    }
+
+
 def _gateway_diagnostics() -> dict:
     import json as _json
     import urllib.request as _ur
@@ -382,6 +424,11 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
     @api_error_handler
     @log_api_request
     def api_mobile_connect():
+        """选中 USB/模拟器设备以便安装助手。
+
+        正式录制/执行在手机 App；本接口以 adb 选中为主，Gateway 插件隧道为可选增强。
+        Gateway 未启动时不得阻断「连接设备」。
+        """
         blocked = _require_mobile_enabled()
         if blocked:
             return blocked
@@ -390,20 +437,19 @@ def register_mobile_routes(app, *, api_error_handler, log_api_request, role_requ
         if not udid:
             dev = pick_default_device()
             udid = (dev or {}).get("udid") or ""
-        diag = _gateway_diagnostics()
-        if not diag.get("gateway_ok"):
+        if not udid:
+            return jsonify({"success": False, "error": "请先选择设备"}), 400
+
+        # 主路径：adb 选中设备（安装助手足够；录制/回放在手机 App）
+        fallback = _adb_local_connect_fallback(udid)
+        if not fallback.get("success"):
             return jsonify({
                 "success": False,
-                "error": diag.get("gateway_error") or "Mobile Agent Gateway 未就绪",
-                "detail": diag,
+                "error": fallback.get("error") or f"adb 未找到设备 {udid}",
+                "hint": "请确认 USB 调试已授权；录制也可仅用右侧配对码在手机完成",
             }), 503
-        result = agent_connect_device(udid=udid)
-        if not result.get("success"):
-            diag2 = _gateway_diagnostics()
-            result["_gateway_diagnostic"] = diag2
-            return jsonify(result), 503
-        set_connected_udid(result.get("udid") or udid)
-        return jsonify(_connect_response(udid, result))
+
+        return jsonify(fallback)
 
     @app.route("/api/mobile/disconnect", methods=["POST"])
     @login_required

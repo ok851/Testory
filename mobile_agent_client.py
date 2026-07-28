@@ -128,17 +128,31 @@ _gateway_restart_attempted = False
 def agent_connect_device(**kwargs: Any) -> Dict[str, Any]:
     payload, err = mobile_agent_json("POST", "/internal/devices/connect", body=kwargs)
     if err and not payload:
-        if "鉴权失败" in str(err):
+        need_restart = (
+            "鉴权失败" in str(err)
+            or "无法连接" in str(err)
+            or "积极拒绝" in str(err)
+            or "10061" in str(err)
+            or "Connection refused" in str(err)
+        )
+        if need_restart:
             global _gateway_restart_attempted
-            if not _gateway_restart_attempted:
+            # 连接拒绝时允许反复尝试拉起（进程可能已退出）
+            try_restart = ("鉴权失败" not in str(err)) or (not _gateway_restart_attempted)
+            if "鉴权失败" in str(err):
                 _gateway_restart_attempted = True
+            if try_restart:
                 try:
-                    from mobile_service_bootstrap import stop_mobile_gateway, bootstrap_mobile_services
-                    stop_mobile_gateway()
-                    result = bootstrap_mobile_services(force=True)
-                    if result.get("gateway_started"):
-                        time.sleep(0.5)
-                        payload, err = mobile_agent_json("POST", "/internal/devices/connect", body=kwargs)
+                    from mobile_service_bootstrap import ensure_mobile_gateway_ready
+
+                    boot = ensure_mobile_gateway_ready(force_restart=True)
+                    if boot.get("ok"):
+                        time.sleep(0.4)
+                        payload, err = mobile_agent_json(
+                            "POST", "/internal/devices/connect", body=kwargs
+                        )
+                        if not err:
+                            return payload or {"success": True}
                 except Exception:
                     pass
         return {"success": False, "error": err}

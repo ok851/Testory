@@ -1,0 +1,77 @@
+{
+  "id": "demo-desktop-mobile-otp",
+  "name": "桌面注册-手机取验证码-回填",
+  "description": "多端联动验收剧本：Agent 大脑 + 桌面/手机双手。变量 sms_otp 由 mobile stage 写入。",
+  "scenario": "pc_desktop_register_with_sms_otp",
+  "stages": [
+    {
+      "id": "desktop_fill_phone",
+      "layer": "desktop",
+      "name": "桌面输入手机号并发送验证码",
+      "steps": [
+        {
+          "action": "launch_app",
+          "description": "打开目标桌面应用（请按实际应用名改写）",
+          "input_value": "{{app_name}}"
+        },
+        {
+          "action": "input",
+          "description": "输入手机号",
+          "selector_value": "手机号",
+          "input_value": "{{phone_number}}",
+          "store_as": "phone_number"
+        },
+        {
+          "action": "click",
+          "description": "点击发送验证码",
+          "selector_value": "发送验证码"
+        }
+      ]
+    },
+    {
+      "id": "mobile_extract_otp",
+      "layer": "mobile",
+      "skill": "extract_otp",
+      "name": "手机本机提取短信验证码",
+      "await_device_run": true,
+      "await_timeout_sec": 120,
+      "extract": {
+        "sms_otp": {"required": true}
+      },
+      "steps": [
+        {
+          "action": "extract_otp",
+          "description": "从通知/短信提取验证码",
+          "store_as": "sms_otp",
+          "automation_layer": "android"
+        }
+      ]
+    },
+    {
+      "id": "desktop_submit_otp",
+      "layer": "desktop",
+      "name": "桌面填入验证码并提交",
+      "steps": [
+        {
+          "action": "input",
+          "description": "输入短信验证码",
+          "selector_value": "验证码",
+          "input_value": "{{sms_otp}}"
+        },
+        {
+          "action": "click",
+          "description": "点击提交/注册",
+          "selector_value": "提交"
+        }
+      ]
+    }
+  ],
+  "variables_defaults": {
+    "app_name": "示例桌面应用",
+    "phone_number": "13800138000"
+  },
+  "notes": [
+    "正式执行：手机须已配对；或设 MOBILE_OTP_MOCK 做 CI",
+    "Agent 工具等价路径：desktop_input → desktop_click → mobile_extract_otp → desktop_input({{sms_otp}})"
+  ]
+}

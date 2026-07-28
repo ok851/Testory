@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""录制会话管理与 WebSocket 事件广播。"""
+"""录制会话管理与 WebSocket 事件广播。
+
+Legacy / 调试用途。正式产品路径为手机 APK 本机录制 + Flask sync；
+Gateway `/internal/recording/*` 已标记废弃，请勿作为 PC Live Recording 主路径。
+"""
 from __future__ import annotations
 
 import asyncio

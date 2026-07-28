@@ -133,7 +133,7 @@ def _start_gateway_process() -> None:
 
 
 def stop_mobile_gateway() -> None:
-    global _GATEWAY_PROC, _BOOTED
+    global _GATEWAY_PROC
     if _GATEWAY_PROC is not None:
         try:
             if _GATEWAY_PROC.poll() is None:
@@ -145,7 +145,24 @@ def stop_mobile_gateway() -> None:
         except Exception:
             pass
     _GATEWAY_PROC = None
-    _BOOTED = False
+
+
+def ensure_mobile_gateway_ready(*, force_restart: bool = False) -> dict:
+    """连接设备前调用：Gateway 已健康则直接返回；否则自动拉起。"""
+    _ensure_mobile_env_defaults()
+    url = (os.environ.get("MOBILE_AGENT_GATEWAY_URL") or "http://127.0.0.1:8777").rstrip("/")
+    out: dict = {"ok": False, "gateway_url": url, "started": False}
+    if not force_restart and _verify_gateway_health(url):
+        out["ok"] = True
+        return out
+    boot = bootstrap_mobile_services(force=True)
+    out.update({k: v for k, v in boot.items() if k != "skipped"})
+    if boot.get("gateway_started") or _verify_gateway_health(url):
+        out["ok"] = True
+        out["started"] = bool(boot.get("gateway_started"))
+        return out
+    out["error"] = boot.get("error") or boot.get("gateway_error") or "Gateway 未能启动"
+    return out
 
 
 def bootstrap_mobile_services(*, force: bool = False) -> dict:
@@ -156,8 +173,12 @@ def bootstrap_mobile_services(*, force: bool = False) -> dict:
     if not mobile_enabled():
         return {"skipped": True, "reason": "mobile_disabled"}
     if _BOOTED and not force:
-        return {"skipped": True}
-    _BOOTED = True
+        # 已引导过：若进程仍存活且健康，跳过；否则强制重启
+        url = (os.environ.get("MOBILE_AGENT_GATEWAY_URL") or "").strip()
+        proc_alive = _GATEWAY_PROC is not None and _GATEWAY_PROC.poll() is None
+        if proc_alive and url and _verify_gateway_health(url):
+            return {"skipped": True, "gateway_started": False, "gateway_url": url}
+        force = True
 
     _ensure_mobile_env_defaults()
     out = {
@@ -165,6 +186,7 @@ def bootstrap_mobile_services(*, force: bool = False) -> dict:
         "gateway_url": os.environ.get("MOBILE_AGENT_GATEWAY_URL", ""),
     }
     if not mobile_auto_start_gateway():
+        _BOOTED = True
         return out
 
     parsed = urlparse(out["gateway_url"])
@@ -176,6 +198,7 @@ def bootstrap_mobile_services(*, force: bool = False) -> dict:
     if not port_freed:
         out["gateway_error"] = f"端口 {port} 被占用，无法释放。请手动执行: netstat -ano | findstr :{port}"
         out["port_blocked"] = True
+        _BOOTED = True
         return out
 
     try:
@@ -199,6 +222,7 @@ def bootstrap_mobile_services(*, force: bool = False) -> dict:
     except Exception as e:
         out["error"] = str(e)
         _gateway_stderr_snippet(out)
+    _BOOTED = True
     return out
 
 

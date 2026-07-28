@@ -1,92 +1,79 @@
 ---
 name: testory-android-mobile
-description: Testory Android 移动端自动化：scrcpy 预览 + Mobile Agent + Recorder Plugin 双通道，Playground 四 Tab，adb forward 结构化 dump/tap/scroll/录制。
-version: 2.1.0
+description: Testory Android 移动端自动化：录制与执行在手机 APK 内完成；PC 负责配对/用例库/AI 代理（已绑定大模型）与跨端等待；adb JSON-RPC 仅安装与巡检。
+version: 3.0.0
 source: testory-bundled
 format: agentskills.io/v1
 metadata:
   testory:
     platform: mobile
-    tags: [android, adb, accessibility, plugin, agent, scrcpy, playground]
+    tags: [android, adb, accessibility, plugin, sync, phone-only]
 ---
 
 # Testory Android 移动端自动化
 
-## 双通道架构
+## 硬约束
+
+- **录制、执行只在手机端**（AccessibilityService + 本机回放 + 悬浮条）
+- PC **不参与**录制/回放过程（无 Live Recording、无逐步遥控正式路径）
+- PC 角色：配对与用例库、**AI 推理代理**、结果归档、跨端 **await 手机本机跑完**
+
+## 双通道
 
 ```
-预览（看）          执行（做）
-scrcpy_ws ─────┐    Agent Gateway 8777 ──► Plugin APK (JSON-RPC)
-H.264 WebSocket│    录制 / 回放 / 控件树 / VLM tap
-8767           │    Playground ──► MobileVisionActionPort
-               └──► 同一 adb 设备
+预览/巡检（可选）              业务主路径
+adb → Gateway 8777 ──┐         手机 App ── LAN ──► Flask :5000
+PluginHttpServer     │         录制/回放/AI意图      sync + AI profile
+安装 / pageSource    │
+（非正式执行引擎）    ┘
 ```
-
-- **预览**：scrcpy 高帧画布（`mobile_scrcpy_bridge` + `static/js/mobile_scrcpy_mirror.js`）
-- **录制**：手机端物理操作 → AccessibilityService → Agent WebSocket 推送步骤
-- **Playground**：右侧智能操作（点一下/检查一下/读一下/帮我做）→ `/api/mobile/playground/*`
-- **禁止**在主 UI 暴露 JSON/CLI/MCP；CLI/MCP 仅 Hermes / 开发者
 
 ## 启动
 
 ```powershell
-python -m mobile_automation_gateway    # 8777 执行/录制
-python -m mobile_scrcpy_bridge         # 8767 投屏（连接设备时可自动拉起）
+python app.py                          # Flask sync/AI（手机默认连此）
+python -m mobile_automation_gateway    # 8777 安装/巡检（可选）
 ```
 
-环境变量：`MOBILE_AGENT_GATEWAY_URL`、`MOBILE_AGENT_GATEWAY_SECRET`、`MOBILE_SCRCPY_BRIDGE_PORT=8767`
-
-## Agent API
+## Sync / AI API
 
 | 端点 | 说明 |
 |------|------|
-| `POST /internal/devices/connect` | 连接设备 |
-| `POST /internal/plugin/install` | 安装 Recorder Plugin |
-| `POST /internal/recording/start` \| `stop` | 录制 |
-| `WS /internal/events` | 实时 step / screenshot |
-| `POST /internal/replay/run` | 回放（含 `ai_tap` / `assert_vision` / `wait_vision` / `extract_vision`） |
-| `POST /internal/inspect/page-source` | 控件树 |
-| `POST /internal/inspect/screenshot` | 截图 |
+| `POST /api/mobile/sync/pair/*` | 配对 |
+| `POST /api/mobile/sync/cases/push` | 手机推送用例 |
+| `GET /api/mobile/sync/ai/status` | PC 绑定模型就绪态（无密钥） |
+| `POST /api/mobile/sync/ai/generate` | 用 **active LLM profile** 生成 Android 步骤 |
+| `GET /api/mobile/sync/run/pending` | 手机拉取待办（本机执行） |
+| `POST /api/mobile/sync/run/<job_id>/events` | 本机跑完上报 |
 
-## Flask `/api/mobile/*`
+## Gateway（adb，调试用）
 
-| 路由 | 说明 |
+| 端点 | 说明 |
 |------|------|
-| `POST /api/mobile/connect` | 返回 `mirror_ws_url`、`mirror_stream_url` |
-| `POST /api/mobile/mirror/start` \| `stop` \| `GET status` | 投屏生命周期 |
-| `POST /api/mobile/arm` \| `disarm` | 录制 |
-| `POST /api/mobile/run` | 运行用例 |
-| `POST /api/mobile/playground/{tap,assert,query,act}` | Playground |
-| `POST /api/mobile/playground/save-steps` | 回放保存到用例（含 unit_id） |
+| `POST /internal/devices/connect` | 连接 + 可选插件隧道 |
+| `POST /internal/plugin/install` | 安装 APK |
+| `POST /internal/inspect/page-source` | 控件树巡检 |
+| `POST /internal/recording/*` | **已废弃**（phone-only） |
+| `POST /internal/replay/*` | **已废弃**（phone-only） |
 
-## 插件 JSON-RPC（adb forward）
+## 跨端
 
-`startRecording` / `stopRecording` / `pollSteps` / `getPageSource` / `takeScreenshot` / `tap` / `swipe` / `input`
+mobile / android stage → 入队 sync run job → **等待**手机本机执行与 `stage_result` 上报 → 继续后续阶段。  
+正式路径**不是** Gateway 逐步 `tap`。
 
-## 视觉默认参数
+### Agent 口径（大脑 / 双手）
 
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `MOBILE_WAIT_AFTER_ACTION_MS` | 300 | Tap/Act 后等待 |
-| `MOBILE_SCREENSHOT_SHRINK_FACTOR` | 2 | VLM 截图缩小 |
-| `MOBILE_PLAYGROUND_ACT_LIMIT` | 8 | Act 最大步数 |
-| `VISION_STEP_REPORT_ENABLE` | 1 | HTML 回放 |
+- **Agent（大脑）**在 PC：选工具、读写 `sms_otp` 等变量  
+- **手机 APK（双手）**本机执行：`mobile_extract_otp` / `mobile_run_steps`  
+- **桌面 UIA（双手）**：`desktop_*` / `windows_*`  
+- 一会话可交替操作 PC 与手机；禁止把 adb 逐步点当作正式引擎  
 
-## 内部 CLI / MCP
-
-```powershell
-python -m testory_cli mobile tap --udid emulator-5554 --locate "登录"
-python -m testory_cli mobile query --prompt "当前页面标题"
-TESTORY_MCP_UDID=emulator-5554 python -m testory_mcp.mobile
-```
-
-MCP：`android_screenshot` / `android_tap` / `android_input` / `android_assert` / `android_query` / `android_run_steps`
+详见 [`docs/cross_end_agent_tools.md`](../../../docs/cross_end_agent_tools.md)。
 
 ## 排错
 
-- **画布黑屏**：检查 scrcpy 桥 8767、SCRCPY_PATH；降级 screencap
-- **插件未就绪**：开启 Testory Assistant 无障碍
-- **Agent 未启动**：`MOBILE_AGENT_GATEWAY_URL` 可达性
-- **VLM 失败**：Ollama 视觉模型、`LOCATOR_TIER_VLM_ENABLE=1`
+- **配对失败**：同网、Flask 端口、配对码 TTL
+- **AI 失败**：PC 激活 LLM profile；查 `/api/mobile/sync/ai/status`
+- **插件未就绪**：仅影响 adb 巡检；录跑仍在手机本地
 
 文档：[`README_MOBILE.md`](../../../README_MOBILE.md)

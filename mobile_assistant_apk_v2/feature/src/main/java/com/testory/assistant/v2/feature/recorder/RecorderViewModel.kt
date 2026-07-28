@@ -31,7 +31,13 @@ class RecorderViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             eventPipeline.stepFlow.collect { step ->
-                val newSteps = _uiState.value.steps + step
+                val existing = _uiState.value.steps
+                val idx = existing.indexOfFirst { it.id == step.id }
+                val newSteps = if (idx >= 0) {
+                    existing.toMutableList().also { it[idx] = step }
+                } else {
+                    existing + step
+                }
                 _uiState.update { it.copy(steps = newSteps) }
                 accessibilityService?.updateFloatingStepCount(newSteps.size)
             }

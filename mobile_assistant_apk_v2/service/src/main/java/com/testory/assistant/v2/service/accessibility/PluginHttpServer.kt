@@ -178,10 +178,11 @@ class PluginHttpServer(
             }
 
             "pollSteps" -> {
-                // v2 以手机本地录制 + sync 为主；RPC poll 返回空列表保持兼容
+                // 正式路径：手机本地录制 + LAN sync；RPC poll 恒为空（非正式录制引擎）
                 JSONObject()
                     .put("steps", JSONArray())
                     .put("recording_active", svc?.sessionState?.value?.isRecording == true)
+                    .put("note", "phone_local_recording_only")
             }
 
             "getPageSource" -> {

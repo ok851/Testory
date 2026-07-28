@@ -1,6 +1,6 @@
 /**
- * Testory 移动端同步 — PC 仅负责配对与已同步用例/步骤管理。
- * 录制、回放、运行均在手机 Testory 助手 App 内完成。
+ * Testory 移动端同步 — PC 仅负责配对、已同步用例管理与 AI 推理代理。
+ * 录制、回放、运行均在手机 Testory 助手 App 内完成；adb 插件隧道仅安装/巡检。
  */
 (function (global) {
     'use strict';
@@ -95,17 +95,22 @@
         var sel = $('msDeviceSelect');
         var udid = sel ? sel.value : '';
         if (!udid) { setStatus('请先选择设备', 'warn'); return; }
-        setStatus('正在连接…', 'warn');
+        setStatus('正在连接设备…', 'warn');
         try {
             var data = await apiJson('/api/mobile/connect', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ udid: udid }),
             });
-            state.connected = true; state.udid = udid;
+            state.connected = true; state.udid = data.udid || udid;
             state.assistantInstalled = !!data.assistant_installed;
             state.assistantConnected = !!data.assistant_connected;
             updateConnectBadge(); updateAssistantBadge(); refreshAllButtons();
-            setStatus('设备已连接，可安装助手 APK', 'ok');
+            setStatus(
+                data.assistant_installed
+                    ? '设备已连接，可推送/更新助手；录制请用右侧配对码在手机完成'
+                    : '设备已连接，可安装助手 APK；录制请用右侧配对码在手机完成',
+                'ok'
+            );
         } catch (e) {
             state.connected = false; updateConnectBadge(); refreshAllButtons();
             setStatus('连接失败: ' + e.message, 'err');

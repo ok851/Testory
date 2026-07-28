@@ -113,6 +113,8 @@ def test_mobile_checks_return_values():
     stage = {
         "id": "m1",
         "layer": "mobile",
+        "executor": "appium",
+        "await_device_run": False,
         "steps": [{"action": "tap", "selector": "#x"}],
     }
     mock_ex = MagicMock()
@@ -131,6 +133,8 @@ def test_mobile_partial_steps_fail():
     stage = {
         "id": "m2",
         "layer": "mobile",
+        "executor": "appium",
+        "await_device_run": False,
         "steps": [{"action": "tap"}, {"action": "tap"}],
     }
     mock_ex = MagicMock()

@@ -42,6 +42,14 @@ class OkHttpPcSyncClient @Inject constructor(
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    /** AI：慢因在 PC 推理链路；客户端 90s 上限，寒暄/精简 prompt 后通常远低于此 */
+    private val aiClient = client.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(100, TimeUnit.SECONDS)
+        .build()
+
     private val _state = MutableStateFlow(PcConnectionState.DISCONNECTED)
     override val state: StateFlow<PcConnectionState> = _state.asStateFlow()
 
@@ -452,7 +460,7 @@ class OkHttpPcSyncClient @Inject constructor(
         return parseXY(parts[0]) to parseXY(parts[1])
     }
 
-    override suspend fun aiGenerateSteps(message: String): AiGenerateResult {
+    override suspend fun aiGenerateSteps(message: String, mode: String): AiGenerateResult {
         if (baseUrl.isEmpty()) {
             return AiGenerateResult(success = false, error = "未连接 PC 端")
         }
@@ -460,13 +468,13 @@ class OkHttpPcSyncClient @Inject constructor(
             try {
                 val body = json.encodeToString(
                     AiGenerateRequest.serializer(),
-                    AiGenerateRequest(message = message)
+                    AiGenerateRequest(message = message, mode = mode)
                 )
                 val requestBody = body.toRequestBody(JSON_MEDIA)
                 val request = buildRequest("$baseUrl/api/mobile/sync/ai/generate") {
                     post(requestBody)
                 }
-                val response = client.newCall(request).execute()
+                val response = aiClient.newCall(request).execute()
                 if (response.isSuccessful) {
                     val respBody = response.body?.string() ?: ""
                     val aiResp = json.decodeFromString(AiGenerateResponse.serializer(), respBody)
@@ -497,7 +505,9 @@ class OkHttpPcSyncClient @Inject constructor(
                             caseName = aiResp.case_name ?: "AI生成用例",
                             description = aiResp.description ?: "",
                             expectedResult = aiResp.expected_result ?: "",
-                            steps = coreSteps
+                            steps = coreSteps,
+                            provider = aiResp.ai_status?.provider ?: "",
+                            model = aiResp.ai_status?.model ?: ""
                         )
                     } else {
                         AiGenerateResult(
@@ -512,10 +522,91 @@ class OkHttpPcSyncClient @Inject constructor(
                         error = "服务器错误 (${response.code}): $errBody"
                     )
                 }
+            } catch (e: java.net.SocketTimeoutException) {
+                AiGenerateResult(
+                    success = false,
+                    error = "PC 大模型推理超时。请检查 custom_openai 接口是否可达、模型是否过慢；可在 PC 端 AI 配置中换更快模型后重试"
+                )
             } catch (e: IOException) {
                 AiGenerateResult(success = false, error = "网络错误: ${e.message}")
             } catch (e: Exception) {
                 AiGenerateResult(success = false, error = "请求失败: ${e.message}")
+            }
+        }
+    }
+
+    override suspend fun fetchAiStatus(): AiStatusResult {
+        if (baseUrl.isEmpty()) {
+            return AiStatusResult(success = false, error = "未连接 PC 端")
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = buildRequest("$baseUrl/api/mobile/sync/ai/status") { get() }
+                val response = client.newCall(request).execute()
+                val respBody = response.body?.string() ?: ""
+                if (!response.isSuccessful) {
+                    return@withContext AiStatusResult(
+                        success = false,
+                        error = "服务器错误 (${response.code})"
+                    )
+                }
+                val st = json.decodeFromString(AiStatusResponse.serializer(), respBody)
+                AiStatusResult(
+                    success = st.success,
+                    ready = st.ready,
+                    provider = st.provider,
+                    model = st.model,
+                    message = st.message,
+                    error = st.error
+                )
+            } catch (e: Exception) {
+                AiStatusResult(success = false, error = e.message)
+            }
+        }
+    }
+
+    override suspend fun fetchPendingRunJob(): PendingRunJob? {
+        if (baseUrl.isEmpty() || deviceToken.isEmpty()) return null
+        return withContext(Dispatchers.IO) {
+            try {
+                // 仅拉取 extract_otp，避免误吞 run_steps（跨端 await 用例回放）
+                val request = buildRequest(
+                    "$baseUrl/api/mobile/sync/run/pending?job_kind=extract_otp"
+                ) { get() }
+                val response = client.newCall(request).execute()
+                val body = response.body?.string() ?: return@withContext null
+                if (!response.isSuccessful) return@withContext null
+                val parsed = json.decodeFromString(PendingRunJobResponse.serializer(), body)
+                if (!parsed.success || !parsed.has_job || parsed.job_id.isBlank()) return@withContext null
+                PendingRunJob(
+                    jobId = parsed.job_id,
+                    caseId = parsed.case_id,
+                    jobKind = parsed.job_kind.ifBlank { "extract_otp" },
+                    steps = parsed.steps
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
+    override suspend fun reportJobResult(jobId: String, payloadJson: String): SyncResult {
+        if (baseUrl.isEmpty() || jobId.isBlank()) {
+            return SyncResult.Error("未连接或缺少 jobId")
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                val requestBody = payloadJson.toRequestBody(JSON_MEDIA)
+                val request = buildRequest("$baseUrl/api/mobile/sync/run/$jobId/events") {
+                    post(requestBody)
+                }
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) SyncResult.Success
+                else SyncResult.Error("上报失败 (${response.code})")
+            } catch (e: IOException) {
+                SyncResult.NetworkUnavailable
+            } catch (e: Exception) {
+                SyncResult.Error(e.message ?: "上报失败")
             }
         }
     }

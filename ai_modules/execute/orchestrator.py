@@ -445,47 +445,216 @@ def _execute_ui_stage(
                         result["ok_assert"] = True
 
         elif layer in ("mobile", "android"):
-            from mobile_executor import get_mobile_executor
             from mobile_automation import validate_mobile_step_result
 
-            executor = get_mobile_executor()
-            step_results = executor.execute_steps(steps)
-            if not isinstance(step_results, list):
-                result["error"] = "移动端 execute_steps 返回无效结果"
-            elif not step_results and steps:
-                result["error"] = "移动端未执行任何步骤"
-            else:
-                for i, step_res in enumerate(step_results):
-                    executed += 1
-                    action = ""
-                    if i < len(steps) and isinstance(steps[i], dict):
-                        action = str(steps[i].get("action") or "")
-                    try:
-                        validate_mobile_step_result(step_res, action or (step_res or {}).get("action") or "")
-                    except Exception as ve:
-                        result["error"] = str(ve)
-                        result["failed_action"] = action
+            skill = str(
+                resolved_stage.get("skill")
+                or resolved_stage.get("mobile_skill")
+                or ""
+            ).strip().lower()
+            if not skill:
+                for st0 in steps:
+                    if isinstance(st0, dict) and str(st0.get("action") or "").lower() in (
+                        "extract_otp", "mobile_extract_otp"
+                    ):
+                        skill = "extract_otp"
                         break
-                else:
-                    if len(step_results) < len(steps):
-                        last = step_results[-1] if step_results else {}
-                        result["error"] = (last or {}).get("error") or (
-                            f"移动端仅完成 {len(step_results)}/{len(steps)} 步"
-                        )
+            # 专用技能：手机本机提取验证码 → 写入 sms_otp
+            if skill in ("extract_otp", "mobile_extract_otp", "otp"):
+                from mobile_cross_end_tools import mobile_extract_otp
+
+                timeout_sec = float(
+                    resolved_stage.get("await_timeout_sec")
+                    or os.environ.get("MOBILE_DEVICE_AWAIT_TIMEOUT_SEC")
+                    or 120
+                )
+                device_id = str(
+                    resolved_stage.get("device_id")
+                    or context.get_variable("mobile_device_id")
+                    or ""
+                ).strip()
+                user_id = int(
+                    resolved_stage.get("user_id")
+                    or (plan or {}).get("user_id")
+                    or context.get_variable("user_id")
+                    or 0
+                )
+                meta_hint = {}
+                for st0 in steps:
+                    if isinstance(st0, dict) and (
+                        str(st0.get("action") or "").lower() == "extract_otp"
+                    ):
+                        meta_hint["sender_hint"] = str(st0.get("selector_value") or "")
+                        meta_hint["pattern"] = str(st0.get("input_value") or "")
+                        break
+                otp_out = mobile_extract_otp(
+                    timeout_sec=timeout_sec,
+                    sender_hint=str(meta_hint.get("sender_hint") or ""),
+                    pattern=str(meta_hint.get("pattern") or ""),
+                    user_id=user_id,
+                    device_id=device_id,
+                )
+                result["executor"] = "mobile_extract_otp"
+                result["mobile_job_id"] = otp_out.get("job_id") or ""
+                result.setdefault("evidence", [])
+                if isinstance(result["evidence"], list):
+                    result["evidence"].extend(list(otp_out.get("evidence") or []))
+                if otp_out.get("success") and otp_out.get("sms_otp"):
+                    extracted["sms_otp"] = otp_out["sms_otp"]
+                    if isinstance(otp_out.get("variables"), dict):
+                        extracted.update(otp_out["variables"])
+                    if rules:
+                        missing = validate_required_extractions(rules, extracted)
+                        if missing:
+                            result["error"] = (
+                                f"移动端变量抽取失败（必选缺失）: {', '.join(missing)}"
+                            )
+                            result["error_code"] = "VAR_EXTRACT_MISSING"
+                        else:
+                            result["ok_assert"] = True
                     else:
-                        extracted.update(merge_step_extractions(step_results, steps))
+                        result["ok_assert"] = True
+                    executed = 1
+                else:
+                    result["error"] = otp_out.get("error") or "手机提取验证码失败"
+                    result["error_code"] = otp_out.get("error_code") or "MOBILE_OTP_EXTRACT_FAILED"
+
+            else:
+                # 默认：手机本机执行 + PC 等待上报（正式联动路径）
+                # 显式 executor=appium / await_device_run=false 时保留经典 Appium 路径（调试/兼容）
+                exe_mode = str(
+                    resolved_stage.get("executor")
+                    or resolved_stage.get("mobile_executor")
+                    or ""
+                ).strip().lower()
+                await_flag = resolved_stage.get("await_device_run")
+                if await_flag is None:
+                    use_device_await = exe_mode not in (
+                        "appium", "classic", "classic_appium", "hermes"
+                    )
+                else:
+                    use_device_await = bool(await_flag)
+
+                if use_device_await:
+                    from mobile_sync_store import (
+                        enqueue_run_job,
+                        wait_for_run_job,
+                    )
+
+                    timeout_sec = float(
+                        resolved_stage.get("await_timeout_sec")
+                        or os.environ.get("MOBILE_DEVICE_AWAIT_TIMEOUT_SEC")
+                        or 600
+                    )
+                    device_id = str(
+                        resolved_stage.get("device_id")
+                        or context.get_variable("mobile_device_id")
+                        or ""
+                    ).strip()
+                    user_id = int(
+                        resolved_stage.get("user_id")
+                        or (plan or {}).get("user_id")
+                        or context.get_variable("user_id")
+                        or 0
+                    )
+                    case_id = int(
+                        resolved_stage.get("case_id")
+                        or context.get_variable("mobile_case_id")
+                        or 0
+                    )
+                    job_id = enqueue_run_job(
+                        case_id=case_id,
+                        steps=list(steps),
+                        user_id=user_id,
+                        device_id=device_id,
+                        source="cross_end_await",
+                    )
+                    result["executor"] = "await_device_run"
+                    result["mobile_job_id"] = job_id
+                    result.setdefault("evidence", [])
+                    if isinstance(result["evidence"], list):
+                        result["evidence"].append({
+                            "type": "mobile_await_device",
+                            "job_id": job_id,
+                            "hint": "请在已配对手机上完成本机回放；PC 不遥控录制/执行",
+                        })
+                    job = wait_for_run_job(job_id, timeout_sec=timeout_sec)
+                    payload = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
+                    st = str(job.get("status") or "").strip().lower()
+                    step_results = payload.get("results") if isinstance(payload.get("results"), list) else []
+                    if not isinstance(step_results, list):
+                        step_results = []
+                    executed = len(step_results) if step_results else (len(steps) if st == "success" else 0)
+                    if st == "success" or (
+                        payload.get("success") is True
+                        or str(payload.get("status") or "").lower() in ("success", "ok")
+                    ):
+                        extracted.update(merge_step_extractions(step_results, steps) if step_results else {})
                         if rules:
                             missing = validate_required_extractions(rules, extracted)
                             if missing:
                                 result["error"] = (
-                                    f"移动端变量抽取失败（必选缺失，需步骤 store_as 或可抽取结果）: "
-                                    f"{', '.join(missing)}"
+                                    f"移动端变量抽取失败（必选缺失）: {', '.join(missing)}"
                                 )
                                 result["error_code"] = "VAR_EXTRACT_MISSING"
                             else:
                                 result["ok_assert"] = True
                         else:
                             result["ok_assert"] = True
+                    else:
+                        result["error"] = (
+                            job.get("error")
+                            or payload.get("error")
+                            or "手机本机执行未成功完成"
+                        )
+                        result["error_code"] = (
+                            job.get("error_code")
+                            or payload.get("error_code")
+                            or "MOBILE_DEVICE_RUN_FAILED"
+                        )
+                else:
+                    from mobile_executor import get_mobile_executor
+
+                    executor = get_mobile_executor()
+                    step_results = executor.execute_steps(steps)
+                    if not isinstance(step_results, list):
+                        result["error"] = "移动端 execute_steps 返回无效结果"
+                    elif not step_results and steps:
+                        result["error"] = "移动端未执行任何步骤"
+                    else:
+                        for i, step_res in enumerate(step_results):
+                            executed += 1
+                            action = ""
+                            if i < len(steps) and isinstance(steps[i], dict):
+                                action = str(steps[i].get("action") or "")
+                            try:
+                                validate_mobile_step_result(
+                                    step_res, action or (step_res or {}).get("action") or ""
+                                )
+                            except Exception as ve:
+                                result["error"] = str(ve)
+                                result["failed_action"] = action
+                                break
+                        else:
+                            if len(step_results) < len(steps):
+                                last = step_results[-1] if step_results else {}
+                                result["error"] = (last or {}).get("error") or (
+                                    f"移动端仅完成 {len(step_results)}/{len(steps)} 步"
+                                )
+                            else:
+                                extracted.update(merge_step_extractions(step_results, steps))
+                                if rules:
+                                    missing = validate_required_extractions(rules, extracted)
+                                    if missing:
+                                        result["error"] = (
+                                            f"移动端变量抽取失败（必选缺失，需步骤 store_as 或可抽取结果）: "
+                                            f"{', '.join(missing)}"
+                                        )
+                                        result["error_code"] = "VAR_EXTRACT_MISSING"
+                                    else:
+                                        result["ok_assert"] = True
+                                else:
+                                    result["ok_assert"] = True
 
         elif layer == "desktop":
             from step_executor import validate_desktop_step_result

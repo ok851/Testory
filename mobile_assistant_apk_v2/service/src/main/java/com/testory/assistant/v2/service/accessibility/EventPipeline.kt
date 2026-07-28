@@ -45,14 +45,10 @@ class EventPipeline @Inject constructor(
     private var classifyJob: Job? = null
     private val classifyDebounceMs = 100L
 
-    private val launcherPkgs = setOf(
-        "com.android.launcher", "com.android.launcher3",
-        "com.google.android.apps.nexuslauncher",
-        "com.miui.home", "com.huawei.android.launcher",
-        "com.coloros.launcher", "com.oppo.launcher",
-        "com.vivo.launcher", "com.bbk.launcher2",
-        "com.samsung.android.app.spage", "com.sec.android.app.launcher"
-    )
+    /** 输入框逐字 TEXT_CHANGED：合并为一次输入，停顿后再落步 */
+    private var pendingTextInput: GestureInfo.TextInput? = null
+    private var textInputJob: Job? = null
+    private val textInputDebounceMs = 800L
 
     private var scope: CoroutineScope? = null
 
@@ -68,6 +64,9 @@ class EventPipeline @Inject constructor(
         lastScrollX = 0
         lastScrollY = 0
         pendingSwipe = null
+        pendingTextInput = null
+        textInputJob?.cancel()
+        textInputJob = null
         eventBuffer.clear()
 
         scope?.launch {
@@ -99,11 +98,17 @@ class EventPipeline @Inject constructor(
     suspend fun stop(): List<Step> {
         classifyJob?.cancel()
         classifyJob = null
+        textInputJob?.cancel()
+        textInputJob = null
+        flushPendingTextInput()
         // 冲刷未分类缓冲
         if (eventBuffer.isNotEmpty()) {
             val gesture = classifyGesture()
             if (gesture is GestureInfo.Swipe) {
                 handleSwipeGesture(gesture)
+            } else if (gesture is GestureInfo.TextInput) {
+                handleTextInputGesture(gesture)
+                flushPendingTextInput()
             } else if (gesture != null) {
                 flushPendingSwipe()
                 val step = generateStep(gesture)
@@ -121,6 +126,7 @@ class EventPipeline @Inject constructor(
         eventBuffer.clear()
         lastScrollX = 0
         lastScrollY = 0
+        pendingTextInput = null
         _recordingState.value = RecordingState.IDLE
         return remaining
     }
@@ -137,6 +143,35 @@ class EventPipeline @Inject constructor(
     private fun processEvent(event: RecordedEvent) {
         if (!filterEvent(event)) return
 
+        val isTextEvent = event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                || event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+
+        if (isTextEvent) {
+            // 先落盘未决的 click/swipe，再合并输入
+            classifyJob?.cancel()
+            if (eventBuffer.isNotEmpty()) {
+                val gesture = classifyGesture()
+                if (gesture is GestureInfo.Swipe) {
+                    handleSwipeGesture(gesture)
+                } else if (gesture != null && gesture !is GestureInfo.TextInput) {
+                    flushPendingSwipe()
+                    val step = generateStep(gesture)
+                    if (step != null) {
+                        pendingSteps.add(step)
+                        _stepFlow.tryEmit(step)
+                    }
+                }
+            }
+            flushPendingSwipe()
+            handleTextInputGesture(
+                GestureInfo.TextInput(text = event.text, sourceNode = event.sourceNode)
+            )
+            return
+        }
+
+        // 非输入事件：先冲刷合并中的输入
+        flushPendingTextInput()
+
         eventBuffer.add(event)
         // 短窗口合并 click/scroll，避免一次点击被拆成 tap+swipe
         classifyJob?.cancel()
@@ -145,6 +180,8 @@ class EventPipeline @Inject constructor(
             val gesture = classifyGesture()
             if (gesture is GestureInfo.Swipe) {
                 handleSwipeGesture(gesture)
+            } else if (gesture is GestureInfo.TextInput) {
+                handleTextInputGesture(gesture)
             } else if (gesture != null) {
                 flushPendingSwipe()
                 val step = generateStep(gesture)
@@ -154,6 +191,62 @@ class EventPipeline @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun handleTextInputGesture(input: GestureInfo.TextInput) {
+        // 保留最新累计文本（系统 TEXT_CHANGED 已是全文）
+        if (input.text.isEmpty() && pendingTextInput == null) return
+        pendingTextInput = GestureInfo.TextInput(
+            text = input.text.ifEmpty { pendingTextInput?.text.orEmpty() },
+            sourceNode = input.sourceNode ?: pendingTextInput?.sourceNode
+        )
+        textInputJob?.cancel()
+        textInputJob = scope?.launch {
+            delay(textInputDebounceMs)
+            flushPendingTextInput()
+        }
+    }
+
+    private fun flushPendingTextInput() {
+        textInputJob?.cancel()
+        textInputJob = null
+        val input = pendingTextInput ?: return
+        pendingTextInput = null
+        if (input.text.isEmpty()) return
+
+        val last = pendingSteps.lastOrNull()
+        if (last != null && last.action == ActionType.INPUT && isSameInputField(last, input)) {
+            val updated = last.copy(
+                description = "输入: ${input.text.take(40)}",
+                inputText = input.text,
+                targetNode = input.sourceNode ?: last.targetNode,
+                locator = buildLocator(input.sourceNode).takeUnless { it.isEmpty } ?: last.locator,
+                screenCoordinate = input.sourceNode?.bounds?.let {
+                    ScreenCoordinate(it.centerX, it.centerY)
+                } ?: last.screenCoordinate
+            )
+            pendingSteps[pendingSteps.lastIndex] = updated
+            _stepFlow.tryEmit(updated)
+            return
+        }
+
+        val step = generateStep(input) ?: return
+        pendingSteps.add(step)
+        _stepFlow.tryEmit(step)
+    }
+
+    private fun isSameInputField(last: Step, input: GestureInfo.TextInput): Boolean {
+        val a = last.targetNode
+        val b = input.sourceNode ?: return true
+        if (a == null) return true
+        if (a.resourceId.isNotBlank() && a.resourceId == b.resourceId) return true
+        if (a.bounds.isValid && b.bounds.isValid) {
+            val dx = kotlin.math.abs(a.bounds.centerX - b.bounds.centerX)
+            val dy = kotlin.math.abs(a.bounds.centerY - b.bounds.centerY)
+            if (dx < 40 && dy < 40) return true
+        }
+        // 连续输入且无定位信息时，默认合并
+        return a.resourceId.isBlank() && b.resourceId.isBlank()
     }
 
     private fun handleSwipeGesture(swipe: GestureInfo.Swipe) {
@@ -202,9 +295,7 @@ class EventPipeline @Inject constructor(
         // Filter system UI
         if (pkg == "com.android.systemui") return false
 
-        // Filter launcher clicks (handled by open_app detection in service)
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED
-            && launcherPkgs.any { pkg == it || pkg.startsWith(it) }) return false
+        // 桌面图标点击按普通 TAP 录制（与 PC 一致），不再过滤后改写成 OPEN_APP
 
         // Filter non-interactive event types
         when (event.eventType) {

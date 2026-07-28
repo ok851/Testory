@@ -57,8 +57,18 @@ interface PcSyncClient {
         results: List<StepResult>
     ): SyncResult
 
-    /** AI 生成测试步骤 */
-    suspend fun aiGenerateSteps(message: String): AiGenerateResult
+    /** AI 生成测试步骤（经 PC 已绑定大模型） */
+    /** AI：mode=chat 自由对话；mode=generate 生成可回放步骤 */
+    suspend fun aiGenerateSteps(message: String, mode: String = "chat"): AiGenerateResult
+
+    /** 查询 PC 端 AI 模型就绪态（无密钥） */
+    suspend fun fetchAiStatus(): AiStatusResult
+
+    /** 拉取 PC 下发的本机执行 job（跨端 await / extract_otp） */
+    suspend fun fetchPendingRunJob(): PendingRunJob?
+
+    /** 上报 job 完成事件（含 variables.sms_otp） */
+    suspend fun reportJobResult(jobId: String, payloadJson: String): SyncResult
 
     /** 获取设备信息 */
     suspend fun getDeviceInfo(): DeviceInfo
@@ -133,7 +143,10 @@ data class RunStepEvent(
 // ── AI Generate DTOs ──
 
 @Serializable
-data class AiGenerateRequest(val message: String)
+data class AiGenerateRequest(
+    val message: String,
+    val mode: String = "chat"
+)
 
 @Serializable
 data class AiGenerateResponse(
@@ -142,7 +155,8 @@ data class AiGenerateResponse(
     val case_name: String? = null,
     val description: String? = null,
     val expected_result: String? = null,
-    val steps: List<AiStepDto> = emptyList()
+    val steps: List<AiStepDto> = emptyList(),
+    val ai_status: AiStatusDto? = null
 )
 
 @Serializable
@@ -155,11 +169,60 @@ data class AiStepDto(
     val automation_layer: String = "android"
 )
 
+@Serializable
+data class AiStatusDto(
+    val ready: Boolean = false,
+    val provider: String = "",
+    val model: String = "",
+    val profile_id: String = "",
+    val message: String = ""
+)
+
+@Serializable
+data class AiStatusResponse(
+    val success: Boolean = false,
+    val connected: Boolean = false,
+    val ready: Boolean = false,
+    val provider: String = "",
+    val model: String = "",
+    val profile_id: String = "",
+    val message: String = "",
+    val error: String? = null
+)
+
 data class AiGenerateResult(
     val success: Boolean,
     val error: String? = null,
     val caseName: String = "",
     val description: String = "",
     val expectedResult: String = "",
-    val steps: List<com.testory.assistant.v2.core.model.Step> = emptyList()
+    val steps: List<com.testory.assistant.v2.core.model.Step> = emptyList(),
+    val provider: String = "",
+    val model: String = ""
+)
+
+data class AiStatusResult(
+    val success: Boolean,
+    val ready: Boolean = false,
+    val provider: String = "",
+    val model: String = "",
+    val message: String = "",
+    val error: String? = null
+)
+
+@Serializable
+data class PendingRunJobResponse(
+    val success: Boolean = false,
+    val has_job: Boolean = false,
+    val job_id: String = "",
+    val case_id: Int = 0,
+    val job_kind: String = "run_steps",
+    val steps: List<AiStepDto> = emptyList()
+)
+
+data class PendingRunJob(
+    val jobId: String,
+    val caseId: Int = 0,
+    val jobKind: String = "run_steps",
+    val steps: List<AiStepDto> = emptyList()
 )

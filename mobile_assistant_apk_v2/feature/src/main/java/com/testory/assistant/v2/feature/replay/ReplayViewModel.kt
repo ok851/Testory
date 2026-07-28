@@ -72,7 +72,7 @@ class ReplayViewModel @Inject constructor(
                 )
             }
 
-            // Start foreground notification
+            // Start foreground notification + floating progress
             try {
                 val notiIntent = Intent(application, RecorderForegroundService::class.java).apply {
                     putExtra(RecorderForegroundService.EXTRA_MODE, "replaying")
@@ -80,8 +80,11 @@ class ReplayViewModel @Inject constructor(
                 application.startForegroundService(notiIntent)
                 val floatIntent = Intent(application, FloatingControlService::class.java).apply {
                     putExtra(FloatingControlService.EXTRA_MODE, "replaying")
+                    putExtra(FloatingControlService.EXTRA_TOTAL_STEPS, steps.size)
+                    putExtra(FloatingControlService.EXTRA_CURRENT_STEP, 0)
                 }
                 application.startForegroundService(floatIntent)
+                sendReplayProgress(0, steps.size)
             } catch (_: Exception) { }
 
             // Get accessibility service
@@ -103,26 +106,35 @@ class ReplayViewModel @Inject constructor(
 
             // Go to home screen first so replay context matches recording context
             service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
-            kotlinx.coroutines.delay(500)
+            delay(1200)
 
             for ((index, step) in steps.withIndex()) {
                 // Check if cancelled
                 if (_uiState.value.replayState == ReplayState.CANCELLED) break
 
-                // Wait before step
-                if (step.preWaitMs > 0) {
-                    delay(step.preWaitMs)
+                _uiState.update {
+                    it.copy(
+                        currentStep = index + 1,
+                        elapsedMs = System.currentTimeMillis() - startTime
+                    )
                 }
+                sendReplayProgress(index + 1, steps.size)
+
+                // Wait before step（默认 500ms，避免上一步手势未落稳）
+                val preWait = if (step.preWaitMs > 0) step.preWaitMs else 500L
+                delay(preWait)
 
                 // Enrich step with coordinate fallback if needed
                 val enrichedStep = enrichStep(step)
 
-                // Execute step via accessibility service
+                // Execute step via accessibility service（内部已同步等待手势）
                 val result = service.executeStep(enrichedStep)
                 results.add(result)
 
                 if (result.success) {
                     passed++
+                    // 步间等待：给目标 App 反应时间，并避免连续 gesture 互相取消
+                    delay(400)
                 } else {
                     failed++
                     // Stop on failure unless step is optional
@@ -138,6 +150,7 @@ class ReplayViewModel @Inject constructor(
                                 errorMessage = result.errorMessage
                             )
                         }
+                        sendReplayProgress(index + 1, steps.size)
                         // Stop foreground
                         stopForegroundServices()
                         return@launch
@@ -153,7 +166,6 @@ class ReplayViewModel @Inject constructor(
                         stepResults = results.toList()
                     )
                 }
-                sendReplayProgress(index + 1, steps.size)
             }
 
             val elapsed = System.currentTimeMillis() - startTime

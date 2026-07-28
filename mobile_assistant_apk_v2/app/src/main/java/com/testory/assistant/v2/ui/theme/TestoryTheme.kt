@@ -16,117 +16,87 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.IntOffset
 import androidx.core.view.WindowCompat
 
-// ============================================================
-// Brand Colors
-// ============================================================
-private val BrandBlue = Color(0xFF1565C0)
-private val BrandBlueLight = Color(0xFF42A5F5)
-private val BrandBlueDark = Color(0xFF0D47A1)
-val BrandAccent = Color(0xFFFF6F00)
-private val BrandSurface = Color(0xFFF8F9FA)
+// Testory 品牌：石板青 + 琥珀点缀（对齐桌面壳，避免默认紫堆砌）
+private val BrandPrimary = Color(0xFF0F766E)
+private val BrandPrimaryLight = Color(0xFF2DD4BF)
+private val BrandPrimaryDark = Color(0xFF115E59)
+val BrandAccent = Color(0xFFEA580C)
+private val BrandSurface = Color(0xFFF8FAFC)
+private val BrandInk = Color(0xFF0F172A)
 
-// Semantic status colors
-val StatusSuccess = Color(0xFF2E7D32)
-val StatusWarning = Color(0xFFF57F17)
-val StatusError = Color(0xFFDC3545)
-val StatusRecording = Color(0xFFE53935)
-val StatusReplaying = Color(0xFF1565C0)
-val StatusIdle = Color(0xFF757575)
+val StatusSuccess = Color(0xFF15803D)
+val StatusWarning = Color(0xFFCA8A04)
+val StatusError = Color(0xFFDC2626)
+val StatusRecording = Color(0xFFDC2626)
+val StatusReplaying = Color(0xFF0F766E)
+val StatusIdle = Color(0xFF64748B)
 
-// ============================================================
-// Light Color Scheme
-// ============================================================
 private val LightColorScheme = lightColorScheme(
-    primary = BrandBlue,
+    primary = BrandPrimary,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFD1E4FF),
-    onPrimaryContainer = BrandBlueDark,
-    inversePrimary = BrandBlueLight,
+    primaryContainer = Color(0xFFCCFBF1),
+    onPrimaryContainer = BrandPrimaryDark,
+    inversePrimary = BrandPrimaryLight,
     secondary = BrandAccent,
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFFFDCC2),
-    onSecondaryContainer = Color(0xFF331200),
-    tertiary = Color(0xFF00897B),
+    secondaryContainer = Color(0xFFFFEDD5),
+    onSecondaryContainer = Color(0xFF7C2D12),
+    tertiary = Color(0xFF0369A1),
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFA7FFEB),
-    onTertiaryContainer = Color(0xFF002019),
+    tertiaryContainer = Color(0xFFE0F2FE),
+    onTertiaryContainer = Color(0xFF0C4A6E),
     error = StatusError,
     onError = Color.White,
-    errorContainer = Color(0xFFF9DEDC),
-    onErrorContainer = Color(0xFF410E0B),
+    errorContainer = Color(0xFFFEE2E2),
+    onErrorContainer = Color(0xFF7F1D1D),
     background = BrandSurface,
-    onBackground = Color(0xFF1C1B1F),
+    onBackground = BrandInk,
     surface = Color.White,
-    onSurface = Color(0xFF1C1B1F),
-    surfaceVariant = Color(0xFFE7E0EC),
-    onSurfaceVariant = Color(0xFF49454F),
-    surfaceTint = BrandBlue,
-    inverseSurface = Color(0xFF313033),
-    inverseOnSurface = Color(0xFFF4EFF4),
-    outline = Color(0xFF79747E),
-    outlineVariant = Color(0xFFCAC4D0),
+    onSurface = BrandInk,
+    surfaceVariant = Color(0xFFE2E8F0),
+    onSurfaceVariant = Color(0xFF475569),
+    surfaceTint = BrandPrimary,
+    inverseSurface = Color(0xFF1E293B),
+    inverseOnSurface = Color(0xFFF1F5F9),
+    outline = Color(0xFF94A3B8),
+    outlineVariant = Color(0xFFCBD5E1),
     scrim = Color.Black
 )
 
-// ============================================================
-// Dark Color Scheme
-// ============================================================
 private val DarkColorScheme = darkColorScheme(
-    primary = BrandBlueLight,
-    onPrimary = Color(0xFF003258),
-    primaryContainer = BrandBlueDark,
-    onPrimaryContainer = Color(0xFFD1E4FF),
-    inversePrimary = BrandBlue,
-    secondary = Color(0xFFFFB74D),
-    onSecondary = Color(0xFF472A00),
-    secondaryContainer = Color(0xFF663F00),
-    onSecondaryContainer = Color(0xFFFFDCC2),
-    tertiary = Color(0xFF4DB6AC),
-    onTertiary = Color(0xFF003733),
-    tertiaryContainer = Color(0xFF005048),
-    onTertiaryContainer = Color(0xFFA7FFEB),
-    error = Color(0xFFF2B8B5),
-    onError = Color(0xFF601410),
-    errorContainer = Color(0xFF8C1D18),
-    onErrorContainer = Color(0xFFF9DEDC),
-    background = Color(0xFF1C1B1F),
-    onBackground = Color(0xFFE6E1E5),
-    surface = Color(0xFF1C1B1F),
-    onSurface = Color(0xFFE6E1E5),
-    surfaceVariant = Color(0xFF49454F),
-    onSurfaceVariant = Color(0xFFCAC4D0),
-    surfaceTint = BrandBlueLight,
-    inverseSurface = Color(0xFFE6E1E5),
-    inverseOnSurface = Color(0xFF313033),
-    outline = Color(0xFF938F99),
-    outlineVariant = Color(0xFF49454F),
+    primary = BrandPrimaryLight,
+    onPrimary = Color(0xFF134E4A),
+    primaryContainer = BrandPrimaryDark,
+    onPrimaryContainer = Color(0xFFCCFBF1),
+    inversePrimary = BrandPrimary,
+    secondary = Color(0xFFFB923C),
+    onSecondary = Color(0xFF7C2D12),
+    secondaryContainer = Color(0xFF9A3412),
+    onSecondaryContainer = Color(0xFFFFEDD5),
+    tertiary = Color(0xFF38BDF8),
+    onTertiary = Color(0xFF0C4A6E),
+    tertiaryContainer = Color(0xFF075985),
+    onTertiaryContainer = Color(0xFFE0F2FE),
+    error = Color(0xFFFCA5A5),
+    onError = Color(0xFF7F1D1D),
+    errorContainer = Color(0xFF991B1B),
+    onErrorContainer = Color(0xFFFEE2E2),
+    background = Color(0xFF0B1220),
+    onBackground = Color(0xFFE2E8F0),
+    surface = Color(0xFF0F172A),
+    onSurface = Color(0xFFE2E8F0),
+    surfaceVariant = Color(0xFF1E293B),
+    onSurfaceVariant = Color(0xFFCBD5E1),
+    surfaceTint = BrandPrimaryLight,
+    inverseSurface = Color(0xFFE2E8F0),
+    inverseOnSurface = Color(0xFF0F172A),
+    outline = Color(0xFF64748B),
+    outlineVariant = Color(0xFF334155),
     scrim = Color.Black
 )
 
-// ============================================================
-// Typography (Material 3 customized)
-// ============================================================
-val TestoryTypography = Typography(
-    displayLarge = Typography().displayLarge,
-    displayMedium = Typography().displayMedium,
-    displaySmall = Typography().displaySmall,
-    headlineLarge = Typography().headlineLarge,
-    headlineMedium = Typography().headlineMedium,
-    headlineSmall = Typography().headlineSmall,
-    titleLarge = Typography().titleLarge,
-    titleMedium = Typography().titleMedium,
-    titleSmall = Typography().titleSmall,
-    bodyLarge = Typography().bodyLarge,
-    bodyMedium = Typography().bodyMedium,
-    bodySmall = Typography().bodySmall,
-    labelLarge = Typography().labelLarge,
-    labelMedium = Typography().labelMedium,
-    labelSmall = Typography().labelSmall
-)
+val TestoryTypography = Typography()
 
-// ============================================================
-// Animation constants
-// ============================================================
 object AnimationDefaults {
     const val SHORT_DURATION = 200
     const val MEDIUM_DURATION = 400
@@ -138,7 +108,6 @@ object AnimationDefaults {
     val defaultSlideTween = tween<IntOffset>(MEDIUM_DURATION)
 }
 
-// Standard navigation transition
 fun AnimatedContentTransitionScope<*>.navTransition() =
     fadeIn(animationSpec = AnimationDefaults.defaultTween) +
         slideIntoContainer(
@@ -153,13 +122,10 @@ fun AnimatedContentTransitionScope<*>.navPopTransition() =
             animationSpec = AnimationDefaults.defaultSlideTween
         )
 
-// ============================================================
-// Theme Composable
-// ============================================================
 @Composable
 fun TestoryTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true, // Material You on Android 12+
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -170,20 +136,14 @@ fun TestoryTheme(
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
-
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = android.graphics.Color.TRANSPARENT
-            window.navigationBarColor = android.graphics.Color.TRANSPARENT
-            WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = !darkTheme
-                isAppearanceLightNavigationBars = !darkTheme
-            }
+            window.statusBarColor = colorScheme.surface.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }
-
     MaterialTheme(
         colorScheme = colorScheme,
         typography = TestoryTypography,

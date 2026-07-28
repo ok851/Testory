@@ -204,7 +204,10 @@ async def plugin_install(request: Request) -> Dict[str, Any]:
     return result
 
 
-_PHONE_ONLY_MSG = "该功能已移至手机 Testory 助手，PC 端仅支持配对与步骤同步管理"
+_PHONE_ONLY_MSG = (
+    "录制与执行仅在手机 Testory 助手本机完成；"
+    "PC/Gateway 不提供正式录制或回放。adb JSON-RPC 仅用于安装与巡检调试。"
+)
 
 
 def _deprecated_phone_only() -> Dict[str, Any]:

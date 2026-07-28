@@ -1344,6 +1344,13 @@ def chat_tool_schemas(
             schemas.extend(_screen_observation_tool_schemas())
     elif allow_screen_tools:
         schemas.extend(_screen_observation_tool_schemas())
+    # 统一多端工具面：desktop_* 别名 + mobile_*（本机 await）
+    try:
+        from mobile_cross_end_tools import cross_end_tool_schemas
+
+        schemas.extend(cross_end_tool_schemas())
+    except Exception:
+        pass
     if allow and not (desktop_slim and plat == "desktop"):
         schemas.append(_agent_execute_tool_schema())
     if allow_refine_test_plan and not (desktop_slim and plat == "desktop"):
@@ -1391,6 +1398,23 @@ def _dispatch_desktop_or_screen_tool(name: str, args: Dict[str, Any]) -> str:
     return json.dumps({"success": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 
 
+def _is_cross_end_agent_tool(name: str) -> bool:
+    try:
+        from mobile_cross_end_tools import DESKTOP_ALIAS_TOOL_NAMES, MOBILE_TOOL_NAMES
+
+        n = (name or "").strip()
+        return n in MOBILE_TOOL_NAMES or n in DESKTOP_ALIAS_TOOL_NAMES
+    except Exception:
+        return False
+
+
+def _dispatch_cross_end_agent_tool(name: str, args: Dict[str, Any]) -> str:
+    from mobile_cross_end_tools import dispatch_cross_end_tool
+
+    result = dispatch_cross_end_tool(name, args or {})
+    return json.dumps(result, ensure_ascii=False, default=str)
+
+
 def _build_system_prompt(
     *,
     project_name: str,
@@ -1423,10 +1447,13 @@ def _build_system_prompt(
         "请先判断用户输入的意图：",
         "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。",
         "- 如果用户要求执行具体的浏览器测试操作 → 可调用 hermes_execute（同一任务只调用一次）。",
-        "- 如果是 Windows 桌面 GUI 操作（打开应用、点击、输入等）→ **直接调用 windows_***"
-        "（launch/focus → 新建用 Ctrl+N → type_text；「编辑内容为X」勿点菜单编辑），逐步执行；"
-        "每步根据工具返回再决定下一步。"
-        "禁止只调用 hermes_execute 后空等；禁止臆造「已输入/已发送」。",
+            "- 如果是 Windows 桌面 GUI 操作（打开应用、点击、输入等）→ **直接调用 windows_***"
+            "或 desktop_*（launch/focus → 新建用 Ctrl+N → type_text）；"
+            "「编辑内容为X」勿点菜单编辑），逐步执行；"
+            "每步根据工具返回再决定下一步。"
+            "禁止只调用 hermes_execute 后空等；禁止臆造「已输入/已发送」。",
+        "- 多端联动（桌面发验证码→手机取码→回填）：用 desktop_* + mobile_extract_otp；"
+        "手机侧是本机 await，禁止臆造 sms_otp。",
         (
             "- 开启「执行后生成用例」时：操作成功后只需简短中文汇报；"
             "平台会从动作轨迹自动规范化生成用例，禁止 refine_test_plan，禁止手写大段用例 JSON。"
@@ -2670,6 +2697,22 @@ def run_ai_chat_with_tools(
                     result_text = _dispatch_desktop_or_screen_tool(name, call_args)
                     meta["tools_used"].append(name)
                     _record_succeeded_desktop_action(meta, name, call_args, result_text)
+            elif _is_cross_end_agent_tool(name):
+                call_args = dict(args or {})
+                if getattr(params, "user_id", None) and not call_args.get("user_id"):
+                    call_args["user_id"] = int(params.user_id)
+                result_text = _dispatch_cross_end_agent_tool(name, call_args)
+                meta["tools_used"].append(name)
+                if name.startswith("mobile_") and isinstance(meta.get("cross_end_vars"), dict) is False:
+                    meta["cross_end_vars"] = {}
+                try:
+                    parsed_ce = json.loads(result_text)
+                    if isinstance(parsed_ce, dict) and isinstance(parsed_ce.get("variables"), dict):
+                        meta.setdefault("cross_end_vars", {}).update(parsed_ce["variables"])
+                        if parsed_ce.get("sms_otp"):
+                            meta.setdefault("cross_end_vars", {})["sms_otp"] = parsed_ce["sms_otp"]
+                except Exception:
+                    pass
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 
@@ -3460,6 +3503,27 @@ def run_ai_chat_with_tools_stream(
                         )
                     except Exception:
                         pass
+            elif _is_cross_end_agent_tool(name):
+                call_args = dict(args or {})
+                if getattr(params, "user_id", None) and not call_args.get("user_id"):
+                    try:
+                        call_args["user_id"] = int(params.user_id)
+                    except Exception:
+                        pass
+                result_text = _dispatch_cross_end_agent_tool(name, call_args)
+                meta["tools_used"].append(name)
+                try:
+                    parsed_ce = json.loads(result_text)
+                    if isinstance(parsed_ce, dict):
+                        if isinstance(parsed_ce.get("variables"), dict):
+                            meta.setdefault("cross_end_vars", {}).update(parsed_ce["variables"])
+                        if parsed_ce.get("sms_otp"):
+                            meta.setdefault("cross_end_vars", {})["sms_otp"] = parsed_ce["sms_otp"]
+                        preview = parsed_ce.get("sms_otp") or parsed_ce.get("error") or ""
+                        if preview:
+                            yield ("vision_result", {"text": f"cross_end:{name} {preview}"[:300]})
+                except Exception:
+                    pass
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 

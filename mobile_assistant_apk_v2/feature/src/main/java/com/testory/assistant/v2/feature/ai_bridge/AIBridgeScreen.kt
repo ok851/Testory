@@ -21,9 +21,8 @@ import com.testory.assistant.v2.core.model.Step
 import kotlinx.coroutines.launch
 
 /**
- * AI 桥接对话面板 — 移动端快捷入口，透传 PC 端 Ollama 推理。
- *
- * 用户用自然语言描述需求 → 发送到 PC 端 AI → 接收步骤预览 → 保存用例。
+ * AI 桥接对话面板 — 自然语言意图发往 PC，使用 PC 已绑定大模型推理；
+ * 步骤保存与执行在手机本机完成。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,7 +35,8 @@ fun AIBridgeScreen(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
-    // Auto-scroll to bottom on new messages
+    LaunchedEffect(Unit) { viewModel.refreshAiStatus() }
+
     LaunchedEffect(uiState.messages.size) {
         if (uiState.messages.isNotEmpty()) {
             coroutineScope.launch {
@@ -48,17 +48,31 @@ fun AIBridgeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("AI 测试助手") },
+                title = {
+                    Column {
+                        Text("AI 测试助手")
+                        val sub = when {
+                            uiState.pcConnectionState != PcConnectionState.CONNECTED -> "未配对 PC"
+                            uiState.aiModelLabel.isNotBlank() -> "使用 PC · ${uiState.aiModelLabel}"
+                            uiState.aiReady -> "使用 PC 已绑定大模型"
+                            else -> "PC 已连 · 请绑定大模型"
+                        }
+                        Text(
+                            sub,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                    containerColor = MaterialTheme.colorScheme.surface
                 ),
                 actions = {
-                    // PC connection indicator
                     if (uiState.pcConnectionState != PcConnectionState.CONNECTED) {
                         Surface(
                             color = MaterialTheme.colorScheme.errorContainer,
@@ -81,39 +95,76 @@ fun AIBridgeScreen(
             Surface(
                 shadowElevation = 8.dp
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .navigationBarsPadding()
                         .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .navigationBarsPadding(),
-                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("描述你的测试需求...") },
-                        maxLines = 3,
-                        enabled = uiState.pcConnectionState == PcConnectionState.CONNECTED
-                                && !uiState.isGenerating
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText)
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotBlank()
-                                && uiState.pcConnectionState == PcConnectionState.CONNECTED
-                                && !uiState.isGenerating
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(
-                            if (uiState.isGenerating) Icons.Filled.Stop
-                            else Icons.Filled.Send,
-                            contentDescription = "发送"
+                        FilterChip(
+                            selected = uiState.aiMode == "chat",
+                            onClick = { viewModel.setAiMode("chat") },
+                            label = { Text("对话") },
+                            enabled = !uiState.isGenerating
                         )
+                        FilterChip(
+                            selected = uiState.aiMode == "generate",
+                            onClick = { viewModel.setAiMode("generate") },
+                            label = { Text("生成用例") },
+                            enabled = !uiState.isGenerating
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (uiState.aiMode == "generate") {
+                            "将生成可回放步骤（需等 PC 推理）"
+                        } else {
+                            "自由对话：不会强制生成用例 JSON"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = {
+                                Text(
+                                    if (uiState.aiMode == "generate") "描述要生成的测试场景…"
+                                    else "随便问，或讨论测试思路…"
+                                )
+                            },
+                            maxLines = 3,
+                            enabled = uiState.pcConnectionState == PcConnectionState.CONNECTED
+                                    && !uiState.isGenerating
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            onClick = {
+                                if (inputText.isNotBlank()) {
+                                    viewModel.sendMessage(inputText)
+                                    inputText = ""
+                                }
+                            },
+                            enabled = inputText.isNotBlank()
+                                    && uiState.pcConnectionState == PcConnectionState.CONNECTED
+                                    && !uiState.isGenerating
+                        ) {
+                            Icon(
+                                if (uiState.isGenerating) Icons.Filled.Stop
+                                else Icons.Filled.Send,
+                                contentDescription = "发送"
+                            )
+                        }
                     }
                 }
             }
@@ -385,5 +436,10 @@ sealed class ChatMessage {
 data class AIBridgeUiState(
     val messages: List<ChatMessage> = emptyList(),
     val pcConnectionState: PcConnectionState = PcConnectionState.DISCONNECTED,
-    val isGenerating: Boolean = false
+    val isGenerating: Boolean = false,
+    val aiReady: Boolean = false,
+    val aiModelLabel: String = "",
+    val aiMessage: String = "",
+    /** chat=自由对话；generate=生成可回放步骤（对齐 PC「是否生成用例」开关） */
+    val aiMode: String = "chat"
 )

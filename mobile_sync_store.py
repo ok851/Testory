@@ -171,6 +171,8 @@ def enqueue_run_job(
     user_id: int,
     device_id: str = "",
     source: str = "pc",
+    job_kind: str = "run_steps",
+    job_meta: Optional[Dict[str, Any]] = None,
 ) -> str:
     job_id = secrets.token_hex(12)
     with _LOCK:
@@ -181,6 +183,8 @@ def enqueue_run_job(
             "user_id": user_id,
             "device_id": device_id,
             "source": source,
+            "job_kind": (job_kind or "run_steps").strip() or "run_steps",
+            "job_meta": dict(job_meta or {}),
             "status": "pending",
             "created_at": time.time(),
         }
@@ -188,8 +192,17 @@ def enqueue_run_job(
     return job_id
 
 
-def pop_pending_run_for_device(device_id: str) -> Optional[Dict[str, Any]]:
+def pop_pending_run_for_device(
+    device_id: str,
+    *,
+    job_kind: str = "",
+) -> Optional[Dict[str, Any]]:
+    """取出一条 pending job 并标为 running。
+
+    job_kind 非空时只匹配该类型（避免 APK 取码轮询误吞 run_steps 任务）。
+    """
     device_id = (device_id or "").strip()
+    want_kind = (job_kind or "").strip().lower()
     with _LOCK:
         for job_id, job in list(_RUN_JOBS.items()):
             if job.get("status") != "pending":
@@ -197,9 +210,26 @@ def pop_pending_run_for_device(device_id: str) -> Optional[Dict[str, Any]]:
             target = (job.get("device_id") or "").strip()
             if target and device_id and target != device_id:
                 continue
+            if want_kind:
+                kind = str(job.get("job_kind") or "run_steps").strip().lower()
+                if kind != want_kind:
+                    continue
             job["status"] = "running"
             return dict(job)
     return None
+
+
+def requeue_run_job(job_id: str) -> bool:
+    """将误取的 running job 退回 pending（未被执行时使用）。"""
+    with _LOCK:
+        job = _RUN_JOBS.get(job_id)
+        if not job:
+            return False
+        if str(job.get("status") or "") != "running":
+            return False
+        job["status"] = "pending"
+        job.pop("finished_at", None)
+        return True
 
 
 def append_run_events(job_id: str, payload: Dict[str, Any]) -> bool:
@@ -208,9 +238,169 @@ def append_run_events(job_id: str, payload: Dict[str, Any]) -> bool:
         if not job:
             return False
         _RUN_EVENTS.setdefault(job_id, []).append(payload)
-        job["status"] = payload.get("status") or job.get("status")
-        job["finished_at"] = time.time()
-    return True
+        status = (payload.get("status") or "").strip().lower()
+        if status in ("success", "error", "failed", "cancelled", "ok"):
+            job["status"] = "success" if status in ("success", "ok") else (
+                "cancelled" if status == "cancelled" else "error"
+            )
+            job["finished_at"] = time.time()
+            job["result_payload"] = dict(payload)
+        elif payload.get("status"):
+            job["status"] = payload.get("status")
+        return True
+
+
+def get_run_job(job_id: str) -> Optional[Dict[str, Any]]:
+    with _LOCK:
+        job = _RUN_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def wait_for_run_job(
+    job_id: str,
+    *,
+    timeout_sec: float = 600.0,
+    poll_interval_sec: float = 1.0,
+) -> Dict[str, Any]:
+    """阻塞等待手机本机跑完并上报事件。返回 job 快照（含 result_payload）。"""
+    deadline = time.time() + max(1.0, float(timeout_sec))
+    terminal = {"success", "error", "failed", "cancelled"}
+    while time.time() < deadline:
+        job = get_run_job(job_id)
+        if not job:
+            return {
+                "job_id": job_id,
+                "status": "error",
+                "error": "run job 不存在",
+            }
+        st = str(job.get("status") or "").strip().lower()
+        if st in terminal:
+            return job
+        time.sleep(max(0.2, float(poll_interval_sec)))
+    job = get_run_job(job_id) or {"job_id": job_id}
+    job = dict(job)
+    job["status"] = "error"
+    job["error"] = job.get("error") or (
+        f"等待手机本机执行超时（{int(timeout_sec)}s）；请在手机上完成该阶段后重试"
+    )
+    job["error_code"] = "MOBILE_DEVICE_AWAIT_TIMEOUT"
+    return job
+
+
+def _safe_llm_status_payload(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(profile, dict) or not profile:
+        return {
+            "ready": False,
+            "provider": "",
+            "model": "",
+            "profile_id": "",
+            "message": "PC 未绑定或未激活大模型，请在 PC 端 AI 配置中添加并激活",
+        }
+    provider = str(profile.get("provider") or profile.get("type") or "").strip()
+    model = str(
+        profile.get("model")
+        or profile.get("model_name")
+        or profile.get("default_model")
+        or ""
+    ).strip()
+    pid = str(profile.get("id") or "").strip()
+    ready = bool(provider or model)
+    return {
+        "ready": ready,
+        "provider": provider,
+        "model": model,
+        "profile_id": pid,
+        "message": "就绪" if ready else "配置不完整，请检查 PC 端模型绑定",
+    }
+
+
+def _mobile_ai_chitchat_reply(message: str) -> Optional[Dict[str, Any]]:
+    """短问候不走完整用例生成，避免无意义的长 prompt + LLM 耗时。"""
+    raw = (message or "").strip()
+    if not raw or len(raw) > 24:
+        return None
+    normalized = raw.rstrip("？?！!~～。.! ").strip().lower()
+    greetings = {
+        "你是谁", "你好", "您好", "在吗", "谢谢", "谢谢你",
+        "hi", "hello", "hey", "帮助", "help", "你能做什么", "怎么用",
+    }
+    if normalized not in greetings and raw.strip().rstrip("？?！!") not in greetings:
+        return None
+    return {
+        "case_name": "",
+        "description": (
+            "我是 Testory 手机端 AI 助手：你描述测试场景，我通过 PC 已绑定的大模型生成步骤；"
+            "录制与回放都在手机本机完成。请直接说要测什么，例如：打开设置并开启飞行模式。"
+        ),
+        "expected_result": "",
+        "steps": [],
+    }
+
+
+def _normalize_phone_ai_action(action: str) -> str:
+    a = (action or "tap").strip().lower()
+    mapping = {
+        "click": "tap",
+        "input_text": "input",
+        "type": "input",
+        "open_app": "tap",
+        "close_app": "back",
+        "assert_text": "assert",
+        "assert_element": "assert",
+    }
+    return mapping.get(a, a)
+
+
+def _mobile_ai_free_chat(message: str, profile: Dict[str, Any], status: Dict[str, Any]) -> Dict[str, Any]:
+    """自由对话：不用「强制 JSON 用例」系统提示，避免慢且答非所问。"""
+    from ai_local_inference import local_ai_service
+    from ai_multi_provider import dispatch_chat_completion_messages
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是 Testory 手机端测试助手。用简洁中文回答。"
+                "用户当前在「对话」模式：不要输出 JSON，不要假装已经在手机上点开了应用。"
+                "若用户想生成可回放步骤，提示切换到「生成用例」模式后再描述场景。"
+                "可简要说明建议步骤，但标明需手动切换模式才会生成用例。"
+            ),
+        },
+        {"role": "user", "content": message},
+    ]
+    raw = dispatch_chat_completion_messages(
+        messages,
+        None,
+        profile,
+        local_ai_service,
+        temperature=0.4,
+        timeout=min(90, int(__import__("os").environ.get("LOCAL_LLM_TIMEOUT", "240") or 240)),
+    )
+    text = ""
+    if isinstance(raw, dict):
+        text = str(raw.get("content") or raw.get("text") or "").strip()
+        if not text:
+            # OpenAI-compat shape
+            try:
+                choices = raw.get("choices") or []
+                if choices:
+                    msg = (choices[0] or {}).get("message") or {}
+                    text = str(msg.get("content") or "").strip()
+            except Exception:
+                pass
+    elif isinstance(raw, str):
+        text = raw.strip()
+    if not text:
+        text = "（模型未返回文本）请检查 PC 端 custom_openai 配置，或切换到「生成用例」模式重试。"
+    return {
+        "success": True,
+        "case_name": "",
+        "description": text[:4000],
+        "expected_result": "",
+        "steps": [],
+        "mode": "chat",
+        "ai_status": status,
+    }
 
 
 def list_accessible_projects(db: Any, user_id: int) -> List[Dict[str, Any]]:
@@ -485,7 +675,11 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         meta, err = resolve_device_token()
         if err:
             return err
-        job = pop_pending_run_for_device(meta.get("device_id") or "")
+        job_kind = (request.args.get("job_kind") or "").strip()
+        job = pop_pending_run_for_device(
+            meta.get("device_id") or "",
+            job_kind=job_kind,
+        )
         if not job:
             return jsonify({"success": True, "has_job": False})
         return jsonify({
@@ -494,6 +688,8 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
             "job_id": job["job_id"],
             "case_id": job["case_id"],
             "steps": job.get("steps") or [],
+            "job_kind": job.get("job_kind") or "run_steps",
+            "job_meta": job.get("job_meta") or {},
         })
 
     @app.route("/api/mobile/sync/cases/pull-batch", methods=["POST"])
@@ -590,6 +786,25 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         _persist_run_history(job_id, body, int(meta["user_id"]))
         return jsonify({"success": True})
 
+    @app.route("/api/mobile/sync/ai/status", methods=["GET"])
+    @api_error_handler
+    def api_mobile_sync_ai_status():
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        try:
+            from ai_multi_provider import get_active_llm_profile
+
+            profile = get_active_llm_profile()
+        except Exception:
+            profile = None
+        payload = _safe_llm_status_payload(profile)
+        return jsonify({
+            "success": True,
+            "connected": True,
+            **payload,
+        })
+
     @app.route("/api/mobile/sync/ai/generate", methods=["POST"])
     @api_error_handler
     def api_mobile_sync_ai_generate():
@@ -602,44 +817,102 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         user_message = (body.get("message") or "").strip()
         if not user_message:
             return jsonify({"success": False, "error": "请输入测试需求描述"}), 400
+        # chat=自由对话（默认）；generate=生成可回放步骤（用户显式选择）
+        mode = (body.get("mode") or body.get("intent") or "chat").strip().lower()
+        if mode in ("case", "steps", "plan", "generate_case"):
+            mode = "generate"
+        if mode not in ("chat", "generate"):
+            mode = "chat"
 
         user_id = int(meta["user_id"])
         user_data = Database().get_user_by_id(user_id)
         project_name = (user_data.get("project_name") or user_data.get("username") or "") if user_data else ""
 
         try:
+            from ai_multi_provider import get_active_llm_profile
+
+            profile = get_active_llm_profile()
+        except Exception:
+            profile = None
+        status = _safe_llm_status_payload(profile)
+        if not status.get("ready"):
+            return jsonify({
+                "success": False,
+                "error": status.get("message") or "PC 未绑定大模型",
+                "ai_status": status,
+            }), 400
+
+        # 寒暄：本地即时回复
+        chitchat = _mobile_ai_chitchat_reply(user_message)
+        if chitchat is not None:
+            return jsonify({
+                "success": True,
+                **chitchat,
+                "mode": mode,
+                "ai_status": status,
+            })
+
+        # 对话模式：短回复，不强制生成用例 JSON
+        if mode == "chat":
+            try:
+                return jsonify(_mobile_ai_free_chat(user_message, profile, status))
+            except ValueError as e:
+                return jsonify({"success": False, "error": str(e), "ai_status": status}), 500
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception("移动端AI对话失败")
+                return jsonify({
+                    "success": False,
+                    "error": f"AI对话失败: {str(e)}",
+                    "ai_status": status,
+                }), 500
+
+        try:
             from ai_local_inference import local_ai_service
+
             result = local_ai_service.generate_case_and_steps(
                 goal=user_message,
                 project_name=project_name,
+                profile=profile,
                 platform_type="android",
             )
             steps = result.get("steps") or []
             android_steps = []
             for s in steps:
                 android_steps.append({
-                    "action": s.get("action", "tap"),
+                    "action": _normalize_phone_ai_action(s.get("action", "tap")),
                     "selector_type": s.get("selector_type", ""),
                     "selector_value": s.get("selector_value", ""),
                     "input_value": s.get("input_value", ""),
                     "description": s.get("description", ""),
                     "automation_layer": s.get("automation_layer", "android"),
                 })
+            meta_out = result.get("meta") if isinstance(result.get("meta"), dict) else {}
             return jsonify({
                 "success": True,
+                "mode": "generate",
                 "case_name": result.get("case_name", "AI生成用例"),
                 "description": result.get("description", ""),
                 "expected_result": result.get("expected_result", ""),
                 "steps": android_steps,
+                "ai_status": {
+                    **status,
+                    "provider": meta_out.get("provider") or status.get("provider"),
+                    "model": meta_out.get("model") or status.get("model"),
+                },
             })
         except ValueError as e:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": str(e), "ai_status": status}), 500
         except Exception as e:
             import logging
             logging.getLogger(__name__).exception("移动端AI生成失败")
-            return jsonify({"success": False, "error": f"AI生成失败: {str(e)}"}), 500
+            return jsonify({
+                "success": False,
+                "error": f"AI生成失败: {str(e)}",
+                "ai_status": status,
+            }), 500
 
-    # Vision probe route removed ? mobile mirror/vision feature retired
+    # Vision probe route removed — mobile mirror/vision feature retired
 
 
 def _persist_run_history(job_id: str, payload: Dict[str, Any], user_id: int) -> None:
