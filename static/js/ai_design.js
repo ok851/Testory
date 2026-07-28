@@ -6,7 +6,16 @@
     projectName: '',
     platform: 'web',
     busy: false,
-    drafts: []
+    drafts: [],
+    inputKind: 'requirements_doc'
+  };
+
+  var ENTRY_META = {
+    web: { placeholder: '目标 URL（可选）', type: 'url' },
+    api: { placeholder: 'API Base（可选）如 https://api.example.com', type: 'text' },
+    android: { placeholder: 'App 包名/入口（可选）', type: 'text' },
+    desktop: { placeholder: '桌面应用入口（可选）@erp / 路径 / 窗口标题', type: 'text' },
+    os: { placeholder: '系统入口（可选）服务名 / 进程 / 路径', type: 'text' }
   };
 
   var ROLE_LABELS = {
@@ -96,8 +105,11 @@
     if (state.projectId) fd.append('project_id', state.projectId);
     if (state.projectName) fd.append('project_name', state.projectName);
     fd.append('platform_type', state.platform === 'android' ? 'android' : state.platform);
-    var baseUrl = (document.getElementById('aiDesignBaseUrl') && document.getElementById('aiDesignBaseUrl').value || '').trim();
-    if (baseUrl) fd.append('base_url', baseUrl);
+    var entry = (document.getElementById('aiDesignBaseUrl') && document.getElementById('aiDesignBaseUrl').value || '').trim();
+    if (entry) {
+      fd.append('entry_target', entry);
+      if (state.platform === 'web') fd.append('base_url', entry);
+    }
     if (ext.model) fd.append('model', ext.model);
     var text = (document.getElementById('aiDesignReqText') && document.getElementById('aiDesignReqText').value || '').trim();
     if (text) fd.append('requirements_text', text);
@@ -108,14 +120,17 @@
 
   function buildJsonBody(extra) {
     var text = (document.getElementById('aiDesignReqText') && document.getElementById('aiDesignReqText').value || '').trim();
-    return {
+    var entry = (document.getElementById('aiDesignBaseUrl') && document.getElementById('aiDesignBaseUrl').value || '').trim();
+    var body = {
       project_id: state.projectId,
       project_name: state.projectName,
       platform_type: state.platform === 'android' ? 'android' : state.platform,
       requirements_text: text,
-      base_url: (document.getElementById('aiDesignBaseUrl') && document.getElementById('aiDesignBaseUrl').value || '').trim(),
+      entry_target: entry,
       model: (extra && extra.model) || ''
     };
+    if (state.platform === 'web' && entry) body.base_url = entry;
+    return body;
   }
 
   async function postDesignPreview(extra) {
@@ -266,6 +281,12 @@
     document.querySelectorAll('.ai-design-platform-btn').forEach(function (btn) {
       btn.classList.toggle('ai-design-platform-btn--active', btn.getAttribute('data-platform') === state.platform);
     });
+    var meta = ENTRY_META[state.platform] || ENTRY_META.web;
+    var input = document.getElementById('aiDesignBaseUrl');
+    if (input) {
+      input.placeholder = meta.placeholder;
+      try { input.type = meta.type || 'text'; } catch (e) { input.type = 'text'; }
+    }
   }
 
   function setBusy(busy) {
@@ -277,11 +298,11 @@
   }
 
   var DESIGN_THINKING_CHAIN = [
-    { id: 'parse', text: '正在解析测试需求…', icon: '📝' },
-    { id: 'probe', text: '正在探测目标页面元素…', icon: '🔍' },
-    { id: 'analyze', text: '正在分析业务场景…', icon: '🧩' },
+    { id: 'parse', text: '正在解析输入（需求/源码）…', icon: '📝' },
+    { id: 'probe', text: '正在按平台整理入口与定位策略…', icon: '🔍' },
+    { id: 'analyze', text: '正在分析业务/组件场景…', icon: '🧩' },
     { id: 'generate', text: '正在生成测试用例…', icon: '✨' },
-    { id: 'validate', text: '正在验证步骤可行性…', icon: '🔒' }
+    { id: 'validate', text: '正在校验步骤与平台约定…', icon: '🔒' }
   ];
 
   function showDesignThinking() {
@@ -368,12 +389,21 @@
         throw new Error(err);
       }
       state.drafts = data.drafts || [];
+      state.inputKind = data.input_kind || 'requirements_doc';
+      if (data.platform_type) {
+        // 前端源码路径会强制 web；与返回保持一致
+        setPlatform(data.platform_type);
+      }
       updateDesignThinkingStep('probe', 'done');
       updateDesignThinkingStep('analyze', 'done');
       updateDesignThinkingStep('generate', 'done');
       updateDesignThinkingStep('validate', 'done');
       renderDraftList();
       var msg = '已生成 ' + (data.draft_count || state.drafts.length) + ' 条草案（尚未写入项目）。请勾选后点击「保存到当前项目」。';
+      if (data.input_kind === 'frontend_source') {
+        msg = '已识别前端源码并生成 ' + (data.draft_count || state.drafts.length) + ' 条草案（组件分析在后台完成）。请勾选后保存；源码草案默认待审核。';
+      }
+      if (data.message) msg = data.message + '\n\n' + msg;
       if (data.warnings && data.warnings.length) {
         msg += '\n\n提示：\n' + data.warnings.join('\n');
       }
@@ -412,6 +442,7 @@
         body: JSON.stringify({
           project_id: state.projectId,
           platform_type: state.platform === 'android' ? 'android' : state.platform,
+          input_kind: state.inputKind || 'requirements_doc',
           drafts: selected
         })
       });
@@ -460,6 +491,8 @@
     });
     document.querySelectorAll('.ai-chip').forEach(function (chip) {
       chip.addEventListener('click', function () {
+        var plat = chip.getAttribute('data-platform');
+        if (plat) setPlatform(plat);
         var text = chip.getAttribute('data-example') || '';
         var ta = document.getElementById('aiDesignReqText');
         if (ta) { ta.value = text; ta.focus(); }

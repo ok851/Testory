@@ -1,22 +1,38 @@
 {
   "team_id": "testory-cross-end-qa-team",
   "name": "Testory Cross-End QA Team",
-  "version": "0.1.0",
-  "schema_version": "1.0",
+  "version": "0.2.0",
+  "schema_version": "1.1",
   "control_plane": "local",
-  "description": "最小三角色：Planner 拆解 → WebApiExecutor 执行 → Verifier 证据报告。可后续映射到 AgentTeams SDK。",
+  "description": "≥5 角色：Planner → RiskAdvisor → DesktopExecutor → WebApiExecutor → Verifier。可映射官方 AgentTeams SDK。",
   "roles": [
     {
       "id": "Planner",
-      "responsibility": "NL → CrossEndPlan",
+      "responsibility": "NL → CrossEndPlan；失败重规划",
       "wraps": "ai_modules.plan.plan_decomposer.CrossEndPlanDecomposer",
       "skill": "CrossEndDecompose",
-      "inputs": ["description", "optional_plan"],
+      "inputs": ["description", "optional_plan", "replan_feedback"],
       "outputs": ["plan"]
     },
     {
+      "id": "RiskAdvisor",
+      "responsibility": "HITL/Risk 扫描 + IncidentMemory 建议（不判绿）",
+      "wraps": "risk_guard + incident_memory",
+      "skill": "RiskGuard+IncidentMemory",
+      "inputs": ["plan", "failure_context"],
+      "outputs": ["gate_flags", "suggestions"]
+    },
+    {
+      "id": "DesktopExecutor",
+      "responsibility": "Desktop 预检与桌面阶段可发现性",
+      "wraps": "desktop_preflight",
+      "skill": "DesktopPreflight+UIA",
+      "inputs": ["plan"],
+      "outputs": ["desktop_preflight_evidence"]
+    },
+    {
       "id": "WebApiExecutor",
-      "responsibility": "执行 stages（API/Web；Desktop/Mobile 由编排层分派）",
+      "responsibility": "执行 stages（API/Web/Desktop 由编排层分派）",
       "wraps": "ai_modules.execute.orchestrator.execute_cross_end_plan",
       "skill": "WebBrowse+ApiHttp",
       "inputs": ["plan", "TestRunState.vars"],
@@ -33,16 +49,34 @@
   ],
   "shared_state": {
     "type": "TestRunState",
-    "fields": ["vars", "stage_results", "evidence", "events", "idempotency_key", "report"]
+    "fields": ["vars", "stage_results", "evidence", "events", "idempotency_key", "report", "replan_count"]
   },
   "honesty": {
     "no_false_green": true,
     "success_requires": ["execution.success", "verifier.passed"],
-    "note": "不得把单 Hermes 对话成功表述为多 Agent 完成"
+    "replan_must_reverify": true,
+    "note": "不得把单 Hermes 对话成功表述为多 Agent 完成；IncidentMemory 建议不判绿"
   },
+  "features": {
+    "replan": true,
+    "incident_memory": true,
+    "five_roles": true,
+    "max_replan_default": 1
+  },
+  "loops": [
+    {
+      "id": "R16",
+      "from": "Verifier",
+      "to": "Planner",
+      "via": "RiskAdvisor",
+      "when": "verifier.failed && replan_count < max_replan",
+      "note": "重规划后必须重新执行并验证"
+    }
+  ],
   "agentteams_mapping": {
-    "status": "spec_ready",
-    "sdk": "optional_later",
-    "events": ["dispatch", "complete", "fail"]
+    "status": "local_five_roles_plus_sdk_bridge",
+    "sdk": "optional",
+    "bridge": "ai_modules.agent_teams.sdk_bridge",
+    "events": ["dispatch", "complete", "fail", "replan", "note"]
   }
 }

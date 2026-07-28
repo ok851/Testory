@@ -216,8 +216,16 @@ def _try_uia_core_locate(step: Dict[str, Any], off_x: int, off_y: int, tw: int, 
     return None
 
 
-def _try_ocr_locate(step: Dict[str, Any], off_x: int, off_y: int, tw: int, th: int) -> Optional[DesktopResolveResult]:
-    """使用OCR文本定位作为回退方案。"""
+def _try_ocr_locate(
+    step: Dict[str, Any],
+    off_x: int,
+    off_y: int,
+    tw: int,
+    th: int,
+    anchor_x: int = 0,
+    anchor_y: int = 0,
+) -> Optional[DesktopResolveResult]:
+    """使用OCR文本定位作为回退方案（围绕录制锚点搜索，而非当前光标）。"""
     try:
         from desktop_ocr_locate import locate_element_via_ocr
 
@@ -225,12 +233,28 @@ def _try_ocr_locate(step: Dict[str, Any], off_x: int, off_y: int, tw: int, th: i
         if not kw:
             return None
 
-        from desktop_input import get_cursor_pos
+        ax, ay = int(anchor_x or 0), int(anchor_y or 0)
+        if not (ax or ay):
+            snap = element_snapshot_for_step(step) or {}
+            center = snap.get("screen_center") or snap.get("center")
+            if isinstance(center, (list, tuple)) and len(center) >= 2:
+                ax, ay = int(center[0]), int(center[1])
+        if not (ax or ay):
+            # 最后兜底：当前光标（仅用于无锚点的旧步骤）
+            try:
+                from desktop_input import get_cursor_pos
 
-        cursor_x, cursor_y = get_cursor_pos()
-        ocr_result = locate_element_via_ocr(cursor_x, cursor_y, search_radius=150)
-        if ocr_result and ocr_result.get('rect'):
-            rect = ocr_result['rect']
+                ax, ay = get_cursor_pos()
+            except Exception:
+                return None
+
+        ocr_result = locate_element_via_ocr(ax, ay, search_radius=200)
+        if ocr_result and ocr_result.get("rect"):
+            text = (ocr_result.get("text") or "").strip()
+            # 有关键词时优先要求 OCR 文本相关，减少误点
+            if text and kw and kw.lower() not in text.lower() and text.lower() not in kw.lower():
+                return None
+            rect = ocr_result["rect"]
             cx = (rect[0] + rect[2]) // 2
             cy = (rect[1] + rect[3]) // 2
             click_x, click_y = _uia_click_from_center(cx, cy, off_x, off_y, tw, th)
@@ -319,6 +343,25 @@ def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
         except ImportError:
             pass
 
+        # 嵌入式 Chromium DOM 回放
+        try:
+            from desktop_embed_cdp import resolve_embed_click_point
+
+            embed = resolve_embed_click_point(snap)
+            if embed and embed.get("ok"):
+                cx, cy = int(embed["x"]), int(embed["y"])
+                click_x, click_y = _uia_click_from_center(cx, cy, off_x, off_y, tw, th)
+                click_x, click_y = _try_dpi_calibration(click_x, click_y)
+                return DesktopResolveResult(
+                    x=click_x,
+                    y=click_y,
+                    score=0.92,
+                    resolved_via="embed_cdp",
+                    updated_anchor=(cx, cy),
+                )
+        except Exception:
+            pass
+
     if snap:
         sel = snap.get("selector") or {}
         if sel.get("resolved_via") == "win32":
@@ -353,8 +396,8 @@ def resolve_desktop_click_point(step: Dict[str, Any]) -> DesktopResolveResult:
     if uia_core_result:
         return uia_core_result
 
-    # OCR文本定位作为回退方案
-    ocr_result = _try_ocr_locate(step, off_x, off_y, tw, th)
+    # OCR文本定位作为回退方案（围绕录制锚点）
+    ocr_result = _try_ocr_locate(step, off_x, off_y, tw, th, use_ax or 0, use_ay or 0)
     if ocr_result:
         return ocr_result
 

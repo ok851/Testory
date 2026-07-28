@@ -22,7 +22,8 @@
 ```
 
 **不推荐作为主路径：** 把平台用例导出成脚本，交给 Jenkins「自己跑 UI」。会丢失桌面会话、HITL、多端网关与统一报告，也与北极星冲突。  
-**可选补充：** 纯 Web 团队可额外导出 Playwright 供 CI 容器跑；**主路径仍是 CI 触发平台。**
+**可选补充：** 纯 Web 团队可额外导出 Playwright 供 CI 容器跑；**主路径仍是 CI 触发平台。**  
+**存量 Jenkins Job：** 可用本平台 **反向触发** Jenkins（见 §2.5）；触发成功 ≠ Job 通过。
 
 ---
 
@@ -58,7 +59,7 @@
 | `poll_url` | `GET /api/ci/runs/<id>` |
 | `junit_url` | `GET /api/ci/runs/<id>/junit.xml`（终态后才有完整 XML） |
 
-**平台内查看：** `/run-history` 列表可显示 `build …` 徽章；详情含 CI run 链接与「导出证据包」。CI 触发写入的 `build_id` / `ci_run_id` 进入该条历史的 `expected_text` 信封。
+**平台内查看：** 顶栏 **「CI/CD」**（`/cicd`）可手动触发、查看近期运行与 curl 示例；`/run-history` 列表可显示 `build …` 徽章；详情含 CI run 链接与「导出证据包」。CI 触发写入的 `build_id` / `ci_run_id` 进入该条历史的 `expected_text` 信封。
 
 异步轮询伪代码：
 
@@ -100,6 +101,94 @@ curl "$URL/api/ci/runs/$RUN_ID" -H "Authorization: Bearer $TOKEN"
 | 标签机 | 专用 Windows runner 注册为执行节点（远期） |
 
 CI Agent 所在机器 **不等于** UI 执行机器——除非明确同机部署。
+
+### 2.5 本平台 → Jenkins（反向触发，已落地）
+
+适用：企业大量**存量用例/Job 仍在 Jenkins**，需要从 Testory 页面或 API 发起构建。
+
+| 项 | 说明 |
+|----|------|
+| 环境变量 | `JENKINS_URL`、`JENKINS_USER`、`JENKINS_API_TOKEN` |
+| 状态 | `GET /api/ci/jenkins/status` |
+| 触发 | `POST /api/ci/jenkins/trigger` body: `{ "job_name": "folder/job", "parameters": {...} }` |
+| UI | `/cicd` →「从本平台触发 Jenkins Job」 |
+
+**诚实边界：** HTTP 201/队列 URL 仅表示 Jenkins **已受理构建**；`jenkins_build_claimed_pass` / `case_pass_claimed` 恒为 false。  
+统一门禁与两侧结果同步见 **§2.6**。
+
+推荐组合：
+
+```text
+# 存量 API/脚本类 Job + 统一门禁
+Testory → POST /api/ci/sync（jenkins_job + 可选 testory_run_id）
+       → Jenkins 受理 → 平台轮询 result / Job 回写
+       → unified_gate_passed
+
+# 新增 Web/Desktop/跨端回归（主路径）
+Jenkins 流水线 → POST /api/ci/runs → Testory 执行 → JUnit 回 Jenkins
+              → 可选 POST /api/ci/sync 绑定两侧
+```
+
+### 2.6 统一门禁同步（Testory ↔ Jenkins，已落地）
+
+| 项 | 说明 |
+|----|------|
+| 创建 | `POST /api/ci/sync`：`{ testory_run_id?, jenkins_job?, parameters?, policy }` |
+| 查询 | `GET /api/ci/sync/<sync_id>`（默认 `refresh=1` 刷新两侧） |
+| 列表 | `GET /api/ci/sync` |
+| Jenkins 回写 | `POST /api/ci/sync/<id>/jenkins`：`{ result, build_url?, build_number? }` |
+| 触发时纳入 | `POST /api/ci/jenkins/trigger` 带 `create_sync: true` |
+| UI | `/cicd` →「统一门禁」 |
+| 策略 | 默认 `both_must_pass`；可选 `either_pass` |
+| 持久化 | `data/ci_sync/<sync_id>.json` |
+
+**同步行为：**
+
+1. **Jenkins 受理**：`jenkins_job` 存在时调用 Remote API 触发；成功仅表示入队（`queue_url`）。
+2. **Jenkins → Testory**：后台轮询 queue→build→`result`；或 Job 主动 `POST .../jenkins`。
+3. **Testory → Jenkins**：CI run 终态后钩子刷新 sync；可选向 build `submitDescription` 写入摘要（**不改写** Jenkins `result`）。
+4. **`unified_gate_passed`**：仅在策略要求的两侧均终态后才可能为 true；任一侧失败为 false；进行中绝不假绿。
+
+```bash
+# 绑定已有 run 并让 Jenkins 受理构建
+curl -X POST "$URL/api/ci/sync" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"testory_run_id":"run-xxx","jenkins_job":"folder/job","policy":"both_must_pass"}'
+
+# 轮询统一门禁
+curl "$URL/api/ci/sync/$SYNC_ID" -H "Authorization: Bearer $TOKEN"
+
+# Jenkinsfile 末尾回写（可选，与轮询二选一或互补）
+curl -X POST "$URL/api/ci/sync/$SYNC_ID/jenkins" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"result\":\"${currentBuild.result}\",\"build_url\":\"${env.BUILD_URL}\",\"build_number\":${env.BUILD_NUMBER}}"
+```
+
+### 2.7 代码变更感知（影响分析 → 推荐回归）
+
+> CI **已 checkout** 后把 `changed_files` / `diff` / **`file_snippets`**（前端源码内容）传给平台；**不要求**平台再克隆私有仓。有 `file_snippets` 时会跑前端组件识别并增强匹配信号。自动生成用例默认 **待审核**，不进绿灯门禁。
+
+| 项 | 说明 |
+|----|------|
+| 分析入队 | `POST /api/ci/code-change`（默认 202 异步） |
+| **file_snippets** | `{ "src/Login.tsx": "<源码>" }`；推荐用 `docs/examples/pack_code_change_payload.py`（可拷到业务仓 `ci/`）或平台侧 `scripts/build_code_change_payload.py` |
+| 查询 | `GET /api/ci/code-change/<task_id>`；列表 `GET /api/ci/code-change`；结果可含 `impact.frontend_components` |
+| 触发推荐回归 | `POST /api/ci/code-change/<task_id>/trigger-run` → 内部走 `/api/ci/runs` |
+| 生成草稿 | `POST /api/ci/code-change/<task_id>/generate-drafts`（描述含 `[review_status:pending]`） |
+| 手工分析 | Hub：`/ai-design` 上传 `.tsx/.vue` 等源码（后台自动识别组件并生成）；API：`POST /api/ai/hub/design/preview`（`input_kind=frontend_source`）或 `POST /api/ai/hub/analyze/frontend-code` |
+| 自愈提案 | 推荐跑失败后自动钩子回写；亦可 `GET ...?refresh_heal=1`；`POST .../heal-proposals/<id>/ack` 仅确认人工处理，**不自动改步骤假绿** |
+| 仓库映射 | `GET/POST/DELETE /api/ci/repo-map`：`{repo, project_id, default_branch?}`；webhook/分析可按 repo 自动解析 project |
+| 待审核用例 | `GET /api/ci/cases/pending?project_id=`；`POST /api/ci/cases/<id>/review` `{status:active\|rejected}`；**CI 默认排除 pending/rejected**（`include_pending_review=true` 可覆盖） |
+| 指标/清理 | `GET /api/ci/code-change/metrics`；`POST /api/ci/code-change/cleanup`（TTL，默认 `CODE_INTEL_TASK_TTL_DAYS=30`） |
+| SCM Webhook（可选） | `POST /api/ci/webhooks/github`（`X-Hub-Signature-256` + `TESTORY_GITHUB_WEBHOOK_SECRET`）；`POST /api/ci/webhooks/gitlab`（`X-Gitlab-Token` + `TESTORY_GITLAB_WEBHOOK_SECRET`）；可选 `CODE_INTEL_WEBHOOK_IP_ALLOWLIST` |
+| UI | `/cicd` →「代码变更感知」；`/ai-design` → 需求/源码生成（多平台） |
+| 持久化 | `data/ci_code_change/<task_id>.json`；同 `git_sha`/`mr_key` 时间窗幂等（`CODE_INTEL_DEDUP_WINDOW_MIN`） |
+
+环境变量（节选）：`CODE_INTEL_USE_LLM`、`CODE_INTEL_LLM_TIMEOUT_S`、`CODE_INTEL_MAX_DIFF_CHARS`、`CODE_INTEL_RATE_LIMIT_PER_MIN`、`CODE_INTEL_TASK_TTL_DAYS`、`LOCAL_MEMORY_ENABLE`（embedding 匹配加权）。
+
+**诚实边界：** 影响分析是风险建议而非精确破坏证明；草稿用例须人工审核激活后才进门禁；自愈提案不得宣称「已因代码变更自动修复并通过」。
+
+**GitLab/Jenkins 样例：** `docs/examples/gitlab-ci.testory.yml`、`docs/examples/Jenkinsfile.testory`（analyze 阶段先跑 pack 脚本再 `POST`）。
 
 ---
 
@@ -180,6 +269,7 @@ GitLab CI 同理：`script` 里 curl 触发 + `artifacts:reports:junit`。
 |------|------|
 | 「有 Jenkins 就不用 Testory」 | Jenkins 管编排；UI/桌面/真机仍要执行引擎 |
 | 「有 Testory 就不用 CI」 | 企业仍需构建门禁与发布编排 |
+| 「平台触发了 Jenkins 就等于用例过了」 | 仅发出构建请求；结果仍在 Jenkins，除非再回调本平台 |
 | 「导出脚本进 CI 更标准」 | 对纯 Web 单测可以；混合流/桌面主路径不成立 |
 | 「CI 绿了就代表断言都过」 | 若平台假绿，CI 只是放大假绿——故 0c 依赖 0a |
 
@@ -193,3 +283,6 @@ GitLab CI 同理：`script` 里 curl 触发 + `artifacts:reports:junit`。
 | 2026-07-24 | **0c-1**：落地 `POST/GET /api/ci/runs` + JUnit；旧 trigger 诚实 `success`；样例 Jenkins/GitLab |
 | 2026-07-24 | **0c-2**：`async` 入队（202/queued/running）+ `callback_url` 终态回调；样例改为轮询 |
 | 2026-07-24 | **Phase 0c MVP Done**：触发 API + `build_id`/`git_sha` 关联 + 状态查询 + JUnit + webhook；Jenkins/GitLab 样例可复现；门禁与执行标准一致（仅 `success` 绿灯） |
+| 2026-07-27 | **代码变更感知**：`POST/GET /api/ci/code-change` 影响分析+推荐回归；可选草稿生成/SCM webhook；自愈提案不假绿；见 §2.7 |
+| 2026-07-27 | **前端 UI Agent**：`POST /api/ai/hub/analyze/frontend-code` 组件识别；`POST /api/ai/hub/generate/from-frontend-code` 按稳定定位知识生成待审用例 |
+| 2026-07-27 | **file_snippets 闭环**：CI 样例用 `pack_code_change_payload.py` 上传源码；pipeline 融合组件清单；源码生成并入 `/ai-design`（按文件类型分流，无独立分析页） |

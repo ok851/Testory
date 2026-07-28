@@ -79,6 +79,58 @@ class PlannerAgent:
         )
         return state
 
+    def replan(
+        self,
+        state: TestRunState,
+        *,
+        feedback: Optional[Dict[str, Any]] = None,
+        suggestions: Optional[List[Dict[str, Any]]] = None,
+    ) -> TestRunState:
+        """Verifier 失败后回边：修订 plan（确定性策略 + Incident 建议）。"""
+        from .replan import build_replan_feedback, propose_replan
+
+        state.set_status("planning")
+        state.emit(self.role, "dispatch", "失败重规划（Verifier→Planner）")
+        fb = feedback or build_replan_feedback(
+            report=state.report if isinstance(state.report, dict) else {},
+            execution=state.execution if isinstance(state.execution, dict) else {},
+            stage_results=state.stage_results,
+            errors=state.errors,
+        )
+        plan = state.plan if isinstance(state.plan, dict) else {}
+        new_plan, meta = propose_replan(plan, fb, suggestions=suggestions or [])
+        if not new_plan:
+            state.emit(
+                self.role,
+                "fail",
+                "无可用重规划增量",
+                {"reason": meta.get("reason"), "feedback": fb},
+            )
+            # 保持 failed，交由 runner 终止
+            state.set_status("failed")
+            return state
+
+        state.plan = new_plan
+        state.replan_count = int(getattr(state, "replan_count", 0) or 0) + 1
+        state.replan_meta = list(getattr(state, "replan_meta", None) or [])
+        state.replan_meta.append(meta)
+        # 清空上一轮执行痕迹，强制重跑验证
+        state.execution = None
+        state.stage_results = []
+        state.evidence = []
+        state.report = None
+        state.emit(
+            self.role,
+            "complete",
+            "已生成重规划 plan",
+            {
+                "replan_count": state.replan_count,
+                "strategies": meta.get("strategies") or [],
+                "plan_id": new_plan.get("plan_id"),
+            },
+        )
+        return state
+
 
 class WebApiExecutorAgent:
     """执行 plan（包装 execute_cross_end_plan），结果写回共享状态。"""
@@ -361,3 +413,182 @@ class VerifierAgent:
             "agents_seen": state.agent_kinds_seen(),
             "run_id": state.run_id,
         }
+
+
+def _plan_layers(plan: Optional[Dict[str, Any]]) -> List[str]:
+    layers: List[str] = []
+    if not isinstance(plan, dict):
+        return layers
+    for st in plan.get("stages") or []:
+        if not isinstance(st, dict):
+            continue
+        ly = str(st.get("layer") or st.get("automation_layer") or "").strip().lower()
+        if ly and ly not in layers:
+            layers.append(ly)
+    return layers
+
+
+def _stage_needs_risk(st: Dict[str, Any]) -> bool:
+    if st.get("hitl") or st.get("risk") or st.get("risk_level"):
+        return True
+    skill = str(st.get("skill") or "").lower()
+    return "risk" in skill or "hitl" in skill
+
+
+class RiskAdvisorAgent:
+    """治理顾问：执行前扫描 HITL/Risk；失败后检索 IncidentMemory（不判绿）。"""
+
+    role = "RiskAdvisor"
+
+    def preflight(self, state: TestRunState) -> TestRunState:
+        state.emit(self.role, "dispatch", "扫描计划风险与人机门禁")
+        plan = state.plan if isinstance(state.plan, dict) else {}
+        flags = []
+        for st in plan.get("stages") or []:
+            if isinstance(st, dict) and _stage_needs_risk(st):
+                flags.append({
+                    "stage_id": st.get("id") or st.get("stage_id"),
+                    "hitl": bool(st.get("hitl")),
+                    "risk": st.get("risk_level") or st.get("risk") or True,
+                })
+        tips = []
+        try:
+            from ai_modules.memory.incident_memory import search_runbooks
+
+            for ly in _plan_layers(plan):
+                tips.extend(search_runbooks(ly, limit=1))
+        except Exception:
+            pass
+        state.emit(
+            self.role,
+            "complete",
+            f"风险扫描完成（门禁点 {len(flags)}）",
+            {
+                "gate_flags": flags,
+                "layers": _plan_layers(plan),
+                "runbook_tips": [t.get("id") for t in tips[:3]],
+            },
+        )
+        # 仅标注，不改变 success
+        meta = plan.get("meta") if isinstance(plan.get("meta"), dict) else {}
+        if flags or tips:
+            meta = dict(meta)
+            if flags:
+                meta["risk_advisor_flags"] = flags
+            if tips:
+                meta["risk_advisor_tips"] = [
+                    {"id": t.get("id"), "title": t.get("title")} for t in tips[:3]
+                ]
+            plan = dict(plan)
+            plan["meta"] = meta
+            state.plan = plan
+        return state
+
+    def advise_failure(self, state: TestRunState) -> List[Dict[str, Any]]:
+        """失败后写入/检索 Incident；返回建议列表。"""
+        state.emit(self.role, "dispatch", "失败治理建议（IncidentMemory）")
+        suggestions: List[Dict[str, Any]] = []
+        try:
+            from ai_modules.memory.incident_memory import (
+                remember_verifier_failure,
+                suggest_for_failure,
+            )
+            from .replan import build_replan_feedback
+
+            remember_verifier_failure(state)
+            fb = build_replan_feedback(
+                report=state.report if isinstance(state.report, dict) else {},
+                execution=state.execution if isinstance(state.execution, dict) else {},
+                stage_results=state.stage_results,
+                errors=state.errors,
+            )
+            code = (fb.get("error_codes") or [""])[0] if fb.get("error_codes") else ""
+            suggestions = suggest_for_failure(
+                error_code=str(code or ""),
+                error_message=str(fb.get("reason") or ""),
+                layer="cross_end",
+                limit=3,
+            )
+        except Exception as exc:
+            state.emit(self.role, "fail", f"IncidentMemory 不可用: {exc}")
+            return []
+        state.emit(
+            self.role,
+            "complete",
+            f"已给出 {len(suggestions)} 条建议（不判绿）",
+            {"ids": [s.get("id") for s in suggestions]},
+        )
+        return suggestions
+
+
+class DesktopExecutorAgent:
+    """桌面执行顾问：有 Desktop 阶段时做预检并写入证据；不单独假绿。"""
+
+    role = "DesktopExecutor"
+
+    def preflight(self, state: TestRunState) -> TestRunState:
+        plan = state.plan if isinstance(state.plan, dict) else {}
+        layers = _plan_layers(plan)
+        has_desktop = any(ly in ("desktop", "win", "windows", "uia") for ly in layers)
+        # 也扫 steps
+        if not has_desktop:
+            for st in plan.get("stages") or []:
+                if not isinstance(st, dict):
+                    continue
+                for step in st.get("steps") or []:
+                    if isinstance(step, dict) and str(step.get("automation_layer") or "").lower() in (
+                        "desktop",
+                        "win",
+                        "windows",
+                    ):
+                        has_desktop = True
+                        break
+        if not has_desktop:
+            state.emit(self.role, "note", "计划无 Desktop 阶段，跳过桌面预检")
+            return state
+
+        state.emit(self.role, "dispatch", "Desktop 预检（Gateway/本机会话）")
+        try:
+            from ai_modules.execute.desktop_preflight import check_desktop_preflight
+
+            pre = check_desktop_preflight()
+        except Exception as exc:
+            pre = {"ok": False, "error": str(exc), "error_code": "DESKTOP_PREFLIGHT_ERROR"}
+
+        state.evidence.append({
+            "kind": "desktop_preflight",
+            "ok": bool(pre.get("ok")),
+            "detail": pre.get("detail") or pre.get("mode"),
+            "error_code": pre.get("error_code"),
+        })
+        if pre.get("ok"):
+            state.emit(
+                self.role,
+                "complete",
+                "Desktop 预检通过",
+                {"mode": pre.get("mode"), "detail": pre.get("detail")},
+            )
+        else:
+            # 不在此 set failed：交给执行与 Verifier 诚实失败
+            state.emit(
+                self.role,
+                "complete",
+                f"Desktop 预检未通过: {pre.get('error') or pre.get('error_code')}",
+                {
+                    "ok": False,
+                    "error_code": pre.get("error_code"),
+                    "error": pre.get("error"),
+                },
+            )
+            meta = plan.get("meta") if isinstance(plan.get("meta"), dict) else {}
+            meta = dict(meta)
+            meta["desktop_preflight"] = {
+                "ok": False,
+                "error_code": pre.get("error_code"),
+                "error": pre.get("error"),
+            }
+            plan = dict(plan)
+            plan["meta"] = meta
+            state.plan = plan
+        return state
+

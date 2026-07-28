@@ -21,8 +21,13 @@ def locate_element_via_ocr(
 
         from PIL import Image
         from io import BytesIO
+        import base64
 
-        img = Image.open(BytesIO(preview)).convert("RGB")
+        if isinstance(preview, str):
+            raw = base64.b64decode(preview)
+        else:
+            raw = preview
+        img = Image.open(BytesIO(raw)).convert("RGB")
         arr = np.array(img)
 
         ocr_results = _run_ocr(arr)

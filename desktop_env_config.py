@@ -9,6 +9,8 @@ DESKTOP_APP_ALIASES           JSON。字符串形式：{"erp":"C:\\\\ERP\\\\clie
 DESKTOP_DEFAULT_BACKEND       uia | win32，默认 uia
 DESKTOP_STEP_RETRY            桌面指针步骤失败后的额外重试次数（默认 1）
 DESKTOP_FAILURE_SCREENSHOT    指针失败时保存虚拟桌面截图（默认 1）
+DESKTOP_EMBED_HOOKS           可选：启动 exe 时注入 Chromium/WebView2 参数（默认 0；捕获不依赖此项）
+DESKTOP_EMBED_CDP_PORT        固定嵌入式调试端口（仅 hooks=1 时有意义）
 无人值守：本地版用 DESKTOP_EXECUTION_MODE=inprocess + desktop_automation_gateway；
 企业多机用 DEPLOYMENT_PROFILE=enterprise + DESKTOP_EXECUTION_MODE=remote。
 """
@@ -19,6 +21,7 @@ import json
 import os
 import re
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 try:
@@ -135,7 +138,10 @@ def _normalize_alias_entry(key: str, value: Any) -> Optional[Dict[str, Any]]:
 
 
 def load_app_alias_specs() -> Dict[str, Dict[str, Any]]:
-    """.env / 目录别名 → 规范化规格（含可选 args / window_title_re）。"""
+    """.env / 用户文件 / 目录别名 → 规范化规格（含可选 args / window_title_re）。
+
+    优先级（后写覆盖前）：catalog < 用户 ``desktop_aliases.json`` < ``DESKTOP_APP_ALIASES``。
+    """
     merged: Dict[str, Dict[str, Any]] = {}
     try:
         from desktop_app_catalog import catalog_aliases_map
@@ -146,6 +152,12 @@ def load_app_alias_specs() -> Dict[str, Dict[str, Any]]:
                 merged[entry["alias"]] = entry
     except Exception:
         pass
+    # 用户持久化别名（真实客户 ERP 等）
+    for k, entry in (load_user_alias_specs() or {}).items():
+        if isinstance(entry, dict) and entry.get("path"):
+            e = dict(entry)
+            e["alias"] = str(k).lower()
+            merged[e["alias"]] = e
     raw = (os.environ.get("DESKTOP_APP_ALIASES") or "").strip()
     if raw:
         try:
@@ -158,6 +170,105 @@ def load_app_alias_specs() -> Dict[str, Dict[str, Any]]:
         except json.JSONDecodeError:
             pass
     return merged
+
+
+def _uat_data_root() -> Path:
+    env = (os.environ.get("UAT_DATA_DIR") or "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return Path(__file__).resolve().parent / "data"
+
+
+def user_aliases_path() -> Path:
+    d = _uat_data_root()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "desktop_aliases.json"
+
+
+def load_user_alias_specs() -> Dict[str, Dict[str, Any]]:
+    """读取 ``data/desktop_aliases.json``（真实客户 ERP 配置）。"""
+    path = user_aliases_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for k, v in data.items():
+        entry = _normalize_alias_entry(str(k), v)
+        if entry:
+            out[entry["alias"]] = entry
+    return out
+
+
+def save_user_alias(
+    alias: str,
+    *,
+    path: str,
+    args: Optional[list] = None,
+    window_title_re: str = "",
+) -> Dict[str, Any]:
+    """持久化用户别名（不改 .env）；供真实客户 ERP 配置。"""
+    key = (alias or "").strip().lstrip("@").lower()
+    entry = _normalize_alias_entry(
+        key,
+        {
+            "path": path,
+            "args": list(args or []),
+            "window_title_re": window_title_re or "",
+        },
+    )
+    if not entry:
+        raise ValueError("别名 path 不能为空")
+    with_file = load_user_alias_specs()
+    with_file[entry["alias"]] = {
+        "path": entry["path"],
+        "args": list(entry.get("args") or []),
+        "window_title_re": entry.get("window_title_re") or "",
+    }
+    fp = user_aliases_path()
+    fp.write_text(json.dumps(with_file, ensure_ascii=False, indent=2), encoding="utf-8")
+    return dict(entry)
+
+
+def probe_app_alias(
+    alias: str,
+    *,
+    order_id: str = "",
+) -> Dict[str, Any]:
+    """探测别名是否可解析、path 是否存在（不启动进程）。"""
+    key = (alias or "erp").strip().lstrip("@").lower() or "erp"
+    launch = resolve_launch_spec(f"@{key}", variables={"order_id": order_id or ""})
+    if not launch:
+        return {
+            "ok": False,
+            "alias": key,
+            "error_code": "DESKTOP_ALIAS_MISSING",
+            "error": f"未配置别名「{key}」（.env DESKTOP_APP_ALIASES 或 data/desktop_aliases.json）",
+        }
+    p = str(launch.get("path") or "")
+    exists = False
+    try:
+        exists = bool(p) and (Path(p).is_file() or Path(p).exists())
+    except OSError:
+        exists = False
+    # python.exe + script 场景：path 是解释器也算存在
+    return {
+        "ok": bool(p) and exists,
+        "alias": key,
+        "path": p,
+        "args": list(launch.get("args") or []),
+        "window_title_re": launch.get("window_title_re") or "",
+        "path_exists": exists,
+        "error_code": None if (p and exists) else "DESKTOP_ALIAS_PATH_MISSING",
+        "error": None
+        if (p and exists)
+        else (f"别名 path 不存在: {p}" if p else "path 为空"),
+        "source_hint": "user_file_or_env",
+    }
 
 
 def load_app_aliases() -> Dict[str, str]:

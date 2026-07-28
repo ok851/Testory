@@ -1311,17 +1311,7 @@ def feature_required(feature_name: str):
         def wrapper(*args, **kwargs):
             if not license_manager.check_feature_available(feature_name):
                 gate = license_manager.describe_feature_gate(feature_name)
-                limits = license_manager.get_limits()
-                license_type = limits.get('license_type', 'free')
-                display = limits.get('product_display_name') or license_type
-                min_tier = gate.get('min_tier') or 'enterprise'
-                title = gate.get('title') or feature_name
-                error = (
-                    f'功能「{title}」需要 {min_tier} 及以上授权。'
-                    f'当前：{display}（{license_type}）。'
-                    f'商业部署可设置 LICENSE_ENFORCE_FEATURES=1；'
-                    f'本机开源 standalone 默认解锁试用。'
-                )
+                error = license_manager.build_feature_denied_message(feature_name)
                 upgrade_url = '/license?gate=' + str(feature_name) + '&denied=1'
                 if _wants_license_gate_html_redirect():
                     from flask import redirect
@@ -2043,7 +2033,10 @@ def api_me():
         },
         'license': {
             'type': license_info.license_type,
-            'features': limits['features'],  # 使用 get_limits 返回的 features
+            # 导航门控用 effective_features（含档位目录合并 / 开源试用解锁）
+            'features': limits.get('effective_features') or limits.get('features') or [],
+            'certificate_features': limits.get('features') or [],
+            'effective_features': limits.get('effective_features') or [],
             'limits': {
                 'max_projects': limits['max_projects'],
                 'max_cases_per_project': limits['max_cases_per_project'],
@@ -2323,6 +2316,103 @@ def api_ai_hub_design_save():
             request.remote_addr,
         )
     return jsonify(out), code
+
+
+@app.route('/api/ai/hub/analyze/frontend-code', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_hub_analyze_frontend_code():
+    """解析前端源码：识别复杂 UI 组件/标签与稳定定位线索（不落库）。"""
+    from ai_modules.code_intel.ui_agent import analyze_frontend_ui
+
+    data = request.get_json(silent=True) or {}
+    snippets = data.get('file_snippets') or data.get('files') or {}
+    if isinstance(snippets, list):
+        # [{path, content}, ...]
+        mapped = {}
+        for item in snippets:
+            if isinstance(item, dict) and item.get('path'):
+                mapped[str(item['path'])] = item.get('content') or item.get('code') or ''
+        snippets = mapped
+    if not isinstance(snippets, dict):
+        return jsonify({'ok': False, 'success': False, 'error': 'file_snippets 须为 {path: code}'}), 400
+    if not snippets and not data.get('diff'):
+        return jsonify({'ok': False, 'success': False, 'error': '请提供 file_snippets 或 diff'}), 400
+    out = analyze_frontend_ui(file_snippets=snippets, diff=_ai_str(data.get('diff')))
+    return jsonify({'ok': True, 'success': True, **out})
+
+
+@app.route('/api/ai/hub/generate/from-frontend-code', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_hub_generate_from_frontend_code():
+    """从前端代码精准识别 UI 组件，按自动化测试知识生成可靠用例草案。
+
+    Body: project_id, file_snippets{path:code}, diff?, base_url?, git_sha?,
+          extra_requirements?, save(bool), use_llm(bool)
+    """
+    from ai_modules.code_intel.ui_agent import generate_and_optionally_save
+    from ai_modules.code_intel.policy import resolve_use_llm
+
+    data = request.get_json(silent=True) or {}
+    project_id = data.get('project_id')
+    if project_id is None:
+        return jsonify({'ok': False, 'success': False, 'error': 'project_id 必填'}), 400
+    try:
+        project_id = int(project_id)
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'success': False, 'error': 'project_id 无效'}), 400
+
+    _db = Database()
+    try:
+        if not _db.check_project_access(current_user.id, project_id):
+            return jsonify({'ok': False, 'success': False, 'error': '无权访问项目'}), 403
+    except Exception:
+        pass
+
+    snippets = data.get('file_snippets') or data.get('files') or {}
+    if isinstance(snippets, list):
+        mapped = {}
+        for item in snippets:
+            if isinstance(item, dict) and item.get('path'):
+                mapped[str(item['path'])] = item.get('content') or item.get('code') or ''
+        snippets = mapped
+    if not isinstance(snippets, dict):
+        snippets = {}
+    if not snippets and not data.get('diff'):
+        return jsonify({'ok': False, 'success': False, 'error': '请提供 file_snippets 或 diff'}), 400
+
+    out = generate_and_optionally_save(
+        _db,
+        project_id=project_id,
+        file_snippets=snippets,
+        diff=data.get('diff') or '',
+        base_url=_ai_str(data.get('base_url')),
+        git_sha=_ai_str(data.get('git_sha') or data.get('commit')),
+        extra_requirements=_ai_str(data.get('extra_requirements') or data.get('requirements')),
+        use_llm=resolve_use_llm(data.get('use_llm')),
+        save=bool(data.get('save') or data.get('persist')),
+        user_id=int(current_user.id or 0),
+    )
+    if out.get('created_case_ids'):
+        try:
+            log_ai_plan_to_audit(
+                current_user.id,
+                current_user.username,
+                'AI_FRONTEND_CODE_GEN',
+                {
+                    'project_id': project_id,
+                    'count': out.get('count'),
+                    'created_case_ids': out.get('created_case_ids'),
+                    'meta': out.get('meta'),
+                },
+                request.remote_addr,
+            )
+        except Exception:
+            pass
+    return jsonify(out)
 
 
 @app.route('/api/ai/hub/generate/cases-from-requirements', methods=['POST'])
@@ -5209,6 +5299,67 @@ def api_ai_skills_export_from_plan():
     return jsonify({'success': True, 'skill': summary, 'path': str(path)})
 
 
+@app.route('/api/ai/skills/promote-from-run', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_skills_promote_from_run():
+    """Phase B：从成功的 AgentTeams / 跨端 plan 沉淀 Skill 草稿（失败默认拒绝）。"""
+    from ai_modules.skills.promote_from_run import (
+        list_promoted_skills,
+        promote_agent_run,
+        promote_plan_to_skill_draft,
+    )
+
+    data = request.get_json(silent=True) or {}
+    if request.args.get('list') in ('1', 'true') or data.get('list'):
+        return jsonify({'ok': True, 'skills': list_promoted_skills(limit=int(data.get('limit') or 50))})
+
+    force = bool(data.get('force'))
+    skill_name = _ai_str(data.get('skill_name'))
+    agent_run_id = _ai_str(data.get('agent_run_id') or data.get('run_id'))
+    if agent_run_id:
+        from ai_modules.agent_teams.test_run_state import load_run
+
+        st = load_run(agent_run_id)
+        if not st:
+            return jsonify({'ok': False, 'error': 'agent run 不存在'}), 404
+        path, meta = promote_agent_run(st, skill_name=skill_name, force=force)
+        code = 200 if meta.get('ok') else 400
+        return jsonify(meta if meta.get('ok') else {**meta, 'ok': False}), code
+
+    plan = data.get('plan') if isinstance(data.get('plan'), dict) else {}
+    success = data.get('success')
+    if success is None:
+        success = True
+    path, meta = promote_plan_to_skill_draft(
+        plan,
+        skill_name=skill_name,
+        source=_ai_str(data.get('source')) or 'api',
+        run_id=_ai_str(data.get('history_run_id')),
+        evidence_level=_ai_str(data.get('evidence_level')),
+        force=force,
+        success=bool(success),
+    )
+    code = 200 if meta.get('ok') else 400
+    return jsonify(meta), code
+
+
+@app.route('/api/ai/skills/promoted', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_skills_promoted_list():
+    from ai_modules.skills.promote_from_run import list_promoted_skills
+
+    try:
+        limit = int(request.args.get('limit') or 50)
+    except (TypeError, ValueError):
+        limit = 50
+    return jsonify({'ok': True, 'skills': list_promoted_skills(limit=limit)})
+
+
 @app.route('/api/ai/skills/apply-to-case', methods=['POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
@@ -5402,6 +5553,73 @@ def api_ai_cross_end_erp_desktop_plan():
         'alias_error': alias_err,
         'hint': hint,
     })
+
+
+@app.route('/api/desktop/aliases', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_aliases_list():
+    """列出桌面应用别名（catalog + 用户文件 + env）。"""
+    from desktop_env_config import load_app_alias_specs, load_user_alias_specs, user_aliases_path
+
+    specs = load_app_alias_specs()
+    user = load_user_alias_specs()
+    return jsonify({
+        'ok': True,
+        'aliases': specs,
+        'user_aliases': user,
+        'user_file': str(user_aliases_path()),
+        'hint': '真实客户 ERP 请 PUT /api/desktop/aliases/<alias> 持久化 path/args/window_title_re',
+    })
+
+
+@app.route('/api/desktop/aliases/<alias>', methods=['PUT', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_alias_upsert(alias):
+    """保存客户 ERP 等别名到 data/desktop_aliases.json（不改 .env）。"""
+    from desktop_env_config import probe_app_alias, save_user_alias
+
+    data = request.get_json(silent=True) or {}
+    path = _ai_str(data.get('path') or data.get('exe') or '')
+    if not path:
+        return jsonify({'ok': False, 'error': 'path 不能为空', 'error_code': 'ALIAS_PATH_REQUIRED'}), 400
+    raw_args = data.get('args') or data.get('arguments') or []
+    if isinstance(raw_args, str):
+        args = [raw_args] if raw_args.strip() else []
+    elif isinstance(raw_args, list):
+        args = [str(a) for a in raw_args]
+    else:
+        args = []
+    title_re = _ai_str(data.get('window_title_re') or data.get('title_re') or '')
+    try:
+        entry = save_user_alias(alias, path=path, args=args, window_title_re=title_re)
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    probe = probe_app_alias(alias, order_id=_ai_str(data.get('order_id') or ''))
+    return jsonify({'ok': True, 'alias': entry, 'probe': probe})
+
+
+@app.route('/api/desktop/aliases/<alias>/probe', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_desktop_alias_probe(alias):
+    """探测别名 path 是否存在（不启动）。"""
+    from desktop_env_config import probe_app_alias
+
+    data = request.get_json(silent=True) or {}
+    order_id = _ai_str(data.get('order_id') or request.args.get('order_id') or '')
+    probe = probe_app_alias(alias, order_id=order_id)
+    code = 200 if probe.get('ok') else 404
+    return jsonify({'ok': bool(probe.get('ok')), **probe}), code
+
+
+# ----------------------------------------------------------------------
+# 对话测试 API（保留原区块分隔由后续路由承接）
+# ----------------------------------------------------------------------
 
 
 @app.route('/api/ai/cross-end/execute', methods=['POST'])
@@ -5762,6 +5980,357 @@ def api_ai_agent_teams_report(run_id):
     if not st.report:
         return jsonify({'ok': False, 'error': '报告尚未生成'}), 404
     return jsonify({'ok': True, 'run_id': rid, 'report': st.report, 'status': st.status})
+
+
+@app.route('/api/ai/agent-teams/runs/<run_id>/promote-skill', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_agent_teams_promote_skill(run_id):
+    """成功 AgentTeams 运行 → Skill 草稿。"""
+    from ai_modules.agent_teams.test_run_state import load_run
+    from ai_modules.skills.promote_from_run import promote_agent_run
+
+    st = load_run((run_id or '').strip())
+    if not st:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    data = request.get_json(silent=True) or {}
+    _path, meta = promote_agent_run(
+        st,
+        skill_name=_ai_str(data.get('skill_name')),
+        force=bool(data.get('force')),
+    )
+    return jsonify(meta), (200 if meta.get('ok') else 400)
+
+
+@app.route('/api/enterprise/farm/nodes', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_nodes():
+    """执行农场节点列表 / 登记。"""
+    from ai_modules.enterprise.execution_farm import farm_summary, register_node
+
+    if request.method == 'GET':
+        return jsonify({'ok': True, **farm_summary()})
+    data = request.get_json(silent=True) or {}
+    try:
+        node = register_node(
+            name=_ai_str(data.get('name')),
+            base_url=_ai_str(data.get('base_url') or data.get('url')),
+            capabilities=data.get('capabilities') if isinstance(data.get('capabilities'), list) else None,
+            node_id=_ai_str(data.get('node_id')),
+        )
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    return jsonify({'ok': True, 'node': node})
+
+
+@app.route('/api/enterprise/farm/nodes/<node_id>/probe', methods=['POST', 'GET'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_probe(node_id):
+    from ai_modules.enterprise.execution_farm import probe_node
+
+    result = probe_node(node_id)
+    if result.get('error_code') == 'NODE_NOT_FOUND':
+        return jsonify(result), 404
+    # 不可达返回 200 + ok=False，避免与「节点不存在」混淆
+    return jsonify(result), 200
+
+
+@app.route('/api/enterprise/farm/nodes/<node_id>', methods=['DELETE'])
+@login_required
+@role_required('admin', 'project_manager')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_remove(node_id):
+    from ai_modules.enterprise.execution_farm import remove_node
+
+    ok = remove_node(node_id)
+    return jsonify({'ok': ok}), (200 if ok else 404)
+
+
+@app.route('/api/enterprise/farm/dispatch-readiness', methods=['GET'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_dispatch_readiness():
+    """调度就绪检查：前置齐备 ≠ 并行用例已通过。"""
+    from ai_modules.enterprise.execution_farm import dispatch_readiness
+
+    return jsonify(dispatch_readiness())
+
+
+@app.route('/api/enterprise/farm/dispatch-hint', methods=['POST', 'GET'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_dispatch_hint():
+    """输出 remote 环境建议；不自动改 .env。"""
+    from ai_modules.enterprise.execution_farm import dispatch_hint
+
+    data = request.get_json(silent=True) or {}
+    node_id = _ai_str(data.get('node_id') or request.args.get('node_id'))
+    capability = _ai_str(data.get('capability') or request.args.get('capability') or 'desktop')
+    result = dispatch_hint(node_id=node_id, capability=capability)
+    code = 200 if result.get('ok') else (404 if result.get('error_code') == 'NODE_NOT_FOUND' else 400)
+    return jsonify(result), code
+
+
+@app.route('/api/enterprise/farm/resolve-gateway', methods=['GET'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_resolve_gateway():
+    """解析 Gateway URL（env 优先；DESKTOP_FARM_GATEWAY=1 时可用农场节点）。"""
+    from ai_modules.enterprise.gateway_resolve import resolve_desktop_gateway
+
+    return jsonify(resolve_desktop_gateway())
+
+
+@app.route('/api/enterprise/gateway/live-probe', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_gateway_live_probe():
+    """MCP/农场：探活 Gateway；可选 wait 一步。health 成功 ≠ 用例通过。"""
+    from testory_mcp.gateway_live import mcp_live_demo
+
+    data = request.get_json(silent=True) or {}
+    try_step = bool(data.get('try_step') or request.args.get('try_step') in ('1', 'true', 'yes'))
+    return jsonify(mcp_live_demo(try_step=try_step))
+
+
+@app.route('/api/enterprise/farm/jobs', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_jobs():
+    """农场任务队列：入队 ≠ 业务用例通过。"""
+    from ai_modules.enterprise.farm_jobs import enqueue_job, jobs_summary, list_jobs
+
+    if request.method == 'GET':
+        try:
+            limit = int(request.args.get('limit') or 50)
+        except (TypeError, ValueError):
+            limit = 50
+        return jsonify({'ok': True, **jobs_summary(), 'jobs': list_jobs(limit=limit)})
+    data = request.get_json(silent=True) or {}
+    result = enqueue_job(
+        job_type=_ai_str(data.get('job_type') or data.get('type')),
+        node_id=_ai_str(data.get('node_id')),
+        payload=data.get('payload') if isinstance(data.get('payload'), dict) else None,
+        auto_run=bool(data.get('auto_run')),
+    )
+    code = 200 if result.get('ok') or result.get('job') else 400
+    if result.get('error_code') in ('JOB_TYPE_REQUIRED', 'JOB_TYPE_UNSUPPORTED'):
+        code = 400
+    return jsonify(result), code
+
+
+@app.route('/api/enterprise/farm/jobs/<job_id>/run', methods=['POST'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_job_run(job_id):
+    from ai_modules.enterprise.farm_jobs import run_job
+
+    result = run_job(job_id)
+    code = 200
+    if result.get('error_code') == 'JOB_NOT_FOUND':
+        code = 404
+    return jsonify(result), code
+
+
+@app.route('/api/enterprise/farm/jobs/<job_id>', methods=['GET', 'DELETE'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_job_one(job_id):
+    from ai_modules.enterprise.farm_jobs import cancel_job, get_job
+
+    if request.method == 'GET':
+        job = get_job(job_id)
+        if not job:
+            return jsonify({'ok': False, 'error': '任务不存在'}), 404
+        return jsonify({'ok': True, 'job': job, 'case_pass_claimed': False})
+    result = cancel_job(job_id)
+    code = 200 if result.get('ok') else (404 if result.get('error_code') == 'JOB_NOT_FOUND' else 400)
+    return jsonify(result), code
+
+
+@app.route('/api/enterprise/farm/fanout-probe', methods=['POST'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_fanout_probe():
+    """多节点 probe fan-out；all_nodes_reachable ≠ 并行用例通过。"""
+    from ai_modules.enterprise.farm_batch import run_probe_fanout
+
+    data = request.get_json(silent=True) or {}
+    auto_run = data.get('auto_run')
+    if auto_run is None:
+        auto_run = True
+    result = run_probe_fanout(auto_run=bool(auto_run))
+    code = 400 if result.get('error_code') == 'NO_NODES' else 200
+    return jsonify(result), code
+
+
+@app.route('/api/enterprise/farm/jobs/drain', methods=['POST'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@feature_required('parallel_execution')
+@api_error_handler
+def api_enterprise_farm_jobs_drain():
+    """消化 queued 农场作业（Worker 一批）；不宣称用例通过。"""
+    from ai_modules.enterprise.farm_worker import drain_queued_jobs
+
+    data = request.get_json(silent=True) or {}
+    try:
+        limit = int(data.get('limit') or request.args.get('limit') or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    return jsonify(drain_queued_jobs(limit=limit))
+
+
+@app.route('/api/enterprise/sla-evidence', methods=['GET'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@api_error_handler
+def api_enterprise_sla_evidence():
+    """SLA 证据样本摘要；sla_claim 恒 false。"""
+    from ai_modules.enterprise.sla_evidence import summarize_sla_evidence
+
+    try:
+        limit = int(request.args.get('limit') or 200)
+    except (TypeError, ValueError):
+        limit = 200
+    return jsonify(summarize_sla_evidence(limit=limit))
+
+
+@app.route('/api/enterprise/sla-alerts', methods=['GET'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@api_error_handler
+def api_enterprise_sla_alerts():
+    """SLA 阈值告警（运维提示）；sla_met 恒 false。"""
+    from ai_modules.enterprise.sla_alerts import evaluate_sla_alerts
+
+    try:
+        limit = int(request.args.get('limit') or 200)
+    except (TypeError, ValueError):
+        limit = 200
+    return jsonify(evaluate_sla_alerts(limit=limit))
+
+
+@app.route('/api/enterprise/sla-alerts/webhook', methods=['POST'])
+@login_required
+@role_required('admin', 'project_manager')
+@api_error_handler
+def api_enterprise_sla_alerts_webhook():
+    """可选推送 SLA 告警到 SLA_ALERT_WEBHOOK_URL；不构成达标判定。"""
+    from ai_modules.enterprise.sla_webhook import maybe_post_sla_webhook
+
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get('force') or request.args.get('force') in ('1', 'true', 'yes'))
+    return jsonify(maybe_post_sla_webhook(force=force))
+
+
+@app.route('/api/ai/agent-teams/sdk-runtime/probe', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_agent_teams_sdk_runtime_probe():
+    """官方 SDK 运行时探测；未安装返回 SDK_NOT_INSTALLED。"""
+    from ai_modules.agent_teams.sdk_runtime import try_official_sdk_runtime
+    from ai_modules.agent_teams.test_run_state import load_run
+
+    data = request.get_json(silent=True) or {}
+    run_id = _ai_str(data.get('run_id') or request.args.get('run_id'))
+    st = load_run(run_id) if run_id else None
+    result = try_official_sdk_runtime(st)
+    return jsonify(result), 200
+
+
+@app.route('/api/enterprise/ops-readiness', methods=['GET'])
+@login_required
+@role_required('admin', 'project_manager', 'test_lead')
+@api_error_handler
+def api_enterprise_ops_readiness():
+    """企业运营就绪清单（非 SLA 达标证明）。"""
+    from ai_modules.enterprise.readiness import enterprise_ops_readiness
+
+    return jsonify(enterprise_ops_readiness())
+
+
+@app.route('/api/ai/agent-teams/runs/<run_id>/sdk-events', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_agent_teams_sdk_events(run_id):
+    """将本地 TestRunState 映射为 SDK 风格事件（官方 SDK 可选）。"""
+    from ai_modules.agent_teams.sdk_bridge import adapt_local_run_to_sdk_events
+    from ai_modules.agent_teams.test_run_state import load_run
+
+    st = load_run((run_id or '').strip())
+    if not st:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    payload = adapt_local_run_to_sdk_events(st)
+    return jsonify({'ok': True, **payload})
+
+
+@app.route('/api/config-registry/info', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_config_registry_info():
+    """R19：本地 Spec/Skill 配置注册中心（Nacos 叙事轻量替代）。"""
+    from ai_modules.config_registry import registry_info, seed_from_builtin_team_spec
+
+    if request.args.get('seed') in ('1', 'true', 'yes'):
+        seed_from_builtin_team_spec()
+    return jsonify({'ok': True, **registry_info()})
+
+
+@app.route('/api/ai/incident-memory/search', methods=['GET', 'POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ai_incident_memory_search():
+    """R15：IncidentMemory / Runbook 轻量检索（建议不判绿）。"""
+    from ai_modules.memory.incident_memory import search_incidents, search_runbooks
+
+    data = request.get_json(silent=True) or {}
+    q = _ai_str(data.get('q') or data.get('query') or request.args.get('q') or request.args.get('query') or '')
+    kind = _ai_str(data.get('kind') or request.args.get('kind') or '')
+    try:
+        limit = int(data.get('limit') or request.args.get('limit') or 5)
+    except (TypeError, ValueError):
+        limit = 5
+    if kind == 'runbook':
+        hits = search_runbooks(q, limit=limit)
+    else:
+        hits = search_incidents(q, limit=limit, kind=kind or None)
+    return jsonify({
+        'ok': True,
+        'query': q,
+        'kind': kind or 'all',
+        'hits': hits,
+        'count': len(hits),
+        'disclaimer': '检索命中仅为排障建议，不得据此自动判绿',
+    })
 
 
 @app.route('/api/ai/agent-teams/runs/<run_id>/trace', methods=['GET'])
@@ -8781,17 +9350,54 @@ def api_desktop_verify_element():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/desktop/relaunch-with-embed-hooks', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_desktop_relaunch_with_embed_hooks():
+    """
+    无需源码：结束当前前台应用（或指定 exe）并用 Testory 挂钩重启，
+    自动注入 --force-renderer-accessibility 与 WebView2 调试参数，便于捕获内部元素。
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        from desktop_embed_launch import (
+            relaunch_foreground_with_embed_hooks,
+            relaunch_path_with_embed_hooks,
+        )
+
+        path = (data.get('path') or data.get('exe') or '').strip()
+        kill = bool(data.get('kill', True))
+        if path:
+            result = relaunch_path_with_embed_hooks(path, terminate_pids=None)
+        else:
+            result = relaunch_foreground_with_embed_hooks(kill=kill)
+        status = 200 if result.get('ok') else 400
+        return jsonify({'success': bool(result.get('ok')), **result}), status
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_relaunch_with_embed_hooks', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/desktop/inspect', methods=['POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
 @api_error_handler
 @log_api_request
 def api_desktop_inspect():
-    """UIA 探测已移除，请使用 visual 框选录制。"""
-    return jsonify({
-        'success': False,
-        'error': '桌面 UIA 探测已移除，请使用框选录制',
-    }), 410
+    """导出前台窗口 UIA 控件树（调试用）。"""
+    data = request.get_json(silent=True) or {}
+    max_depth = int(data.get('max_depth') or 4)
+    max_nodes = int(data.get('max_nodes') or 120)
+    try:
+        from desktop_automation import sync_desktop_inspect
+
+        nodes = sync_desktop_inspect(max_depth=max_depth, max_nodes=max_nodes)
+        return jsonify({'success': True, 'nodes': nodes, 'count': len(nodes)})
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_inspect', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/desktop/pick', methods=['POST'])
@@ -8800,17 +9406,21 @@ def api_desktop_inspect():
 @api_error_handler
 @log_api_request
 def api_desktop_pick():
-    """根据屏幕坐标反查控件（兼容旧接口；推荐使用 /api/desktop/picker/* 悬浮拾取）。"""
+    """根据屏幕坐标捕获元素（UIA/Win32/嵌入式 CDP/OCR 混合）。"""
     data = request.get_json(silent=True) or {}
     try:
         x = int(data.get('x'))
         y = int(data.get('y'))
     except (TypeError, ValueError):
         return jsonify({'success': False, 'error': '请提供整数坐标 x, y'}), 400
-    return jsonify({
-        'success': False,
-        'error': '坐标/UIA 拾取已废弃，请使用框选录制（/api/desktop/picker/start）',
-    }), 410
+    try:
+        from desktop_visual_picker import build_pick_from_smart_click
+
+        pick = build_pick_from_smart_click(x, y, action=str(data.get('action') or 'click'))
+        return jsonify({'success': True, 'pick': pick})
+    except Exception as e:
+        uat_logger.log_exception('api_desktop_pick', e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 def _parse_desktop_spec_body(data: dict) -> tuple:
@@ -13259,6 +13869,27 @@ def get_case_run_history(case_id):
 def test_report():
     return render_template('test_report.html')
 
+
+@app.route('/cicd')
+@login_required
+def cicd_page():
+    """CI/CD 集成入口页（可发现触发与近期运行）。"""
+    return render_template('cicd.html')
+
+
+@app.route('/trace-hub')
+@login_required
+def trace_hub_page():
+    """证据中心：门禁摘要、证据导出、Skill 沉淀入口。"""
+    return render_template('trace_hub.html')
+
+
+@app.route('/execution-farm')
+@login_required
+def execution_farm_page():
+    """执行节点页：登记远程执行机 / Desktop Gateway。"""
+    return render_template('execution_farm.html')
+
 # API: 获取测试统计概览
 @app.route('/api/report/overview', methods=['GET'])
 @api_error_handler
@@ -13592,6 +14223,79 @@ def api_export_report():
         }), 500
 
 
+@app.route('/api/report/export/download', methods=['GET', 'POST'])
+@login_required
+@api_error_handler
+@log_api_request
+def api_export_report_download():
+    """导出报告并以附件下载，由浏览器/系统对话框选择保存位置。"""
+    from flask import send_file
+
+    try:
+        data = request.get_json(silent=True) or {}
+        if request.method == 'GET':
+            data = {
+                'format': request.args.get('format', 'html'),
+                'project_id': request.args.get('project_id'),
+                'start_date': request.args.get('start_date'),
+                'end_date': request.args.get('end_date'),
+                'case_category': request.args.get('case_category'),
+                'filename': request.args.get('filename'),
+            }
+        format_type = (data.get('format') or 'html').strip().lower()
+        project_id = data.get('project_id')
+        if project_id is not None and str(project_id).strip() != '':
+            project_id = int(project_id)
+        else:
+            project_id = None
+        start_date = data.get('start_date') or None
+        end_date = data.get('end_date') or None
+        case_category = data.get('case_category') or None
+        filename = data.get('filename')
+
+        report_generator = TestReportGenerator()
+        report_data = {
+            'overview': report_generator.get_statistics_overview(
+                project_id, start_date, end_date, case_category
+            ),
+            'status_distribution': report_generator.get_status_distribution(
+                project_id, start_date, end_date, case_category
+            ),
+            'duration_distribution': report_generator.get_duration_distribution(
+                project_id, start_date, end_date, case_category
+            ),
+            'case_statistics': report_generator.get_case_statistics(
+                project_id, start_date, end_date, case_category
+            ),
+            'project_statistics': report_generator.get_project_statistics(
+                project_id, start_date, end_date, case_category
+            ),
+        }
+        exporter = ReportExporter()
+        if format_type == 'html':
+            filepath = exporter.export_to_html(report_data, filename)
+            mime = 'text/html; charset=utf-8'
+        elif format_type == 'excel':
+            filepath = exporter.export_to_excel(report_data, filename)
+            mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        elif format_type == 'pdf':
+            filepath = exporter.export_to_pdf(report_data, filename)
+            mime = 'application/pdf'
+        else:
+            return jsonify({'success': False, 'error': f'不支持的导出格式: {format_type}'}), 400
+        if not filepath or not os.path.isfile(filepath):
+            return jsonify({'success': False, 'error': '导出文件未生成'}), 500
+        return send_file(
+            filepath,
+            mimetype=mime,
+            as_attachment=True,
+            download_name=os.path.basename(filepath),
+        )
+    except Exception as e:
+        uat_logger.error(f"导出报告下载失败: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ==================== 变量管理API ====================
 
 @app.route('/api/variables', methods=['GET'])
@@ -13803,7 +14507,12 @@ def api_revoke_token(token_id):
 # ==================== Webhook/CI 触发接口 ====================
 
 def _ci_resolve_case_ids(data: dict, _db) -> Tuple[list, Optional[str]]:
-    """从请求体解析 case_ids；返回 (ids, error)。"""
+    """从请求体解析 case_ids；返回 (ids, error)。默认排除 review_status=pending/rejected。"""
+    include_pending = bool(
+        data.get("include_pending_review")
+        or data.get("include_pending")
+        or data.get("allow_pending")
+    )
     case_ids = data.get("case_ids") or data.get("caseIds") or []
     if isinstance(case_ids, str):
         case_ids = [x.strip() for x in case_ids.split(",") if x.strip()]
@@ -13814,7 +14523,17 @@ def _ci_resolve_case_ids(data: dict, _db) -> Tuple[list, Optional[str]]:
                 out.append(int(x))
             except (TypeError, ValueError):
                 return [], f"无效 case_id: {x}"
-        return out, None
+        try:
+            from ai_modules.code_intel.review import filter_ci_case_ids
+
+            filtered = filter_ci_case_ids(_db, out, include_pending=include_pending)
+            kept = filtered.get("kept") or []
+            if not kept:
+                skipped = filtered.get("skipped") or []
+                return [], f"无可用用例（均未激活或不可用）: {skipped[:5]}"
+            return kept, None
+        except Exception:
+            return out, None
 
     project_id = data.get("project_id")
     if project_id is not None:
@@ -13823,9 +14542,20 @@ def _ci_resolve_case_ids(data: dict, _db) -> Tuple[list, Optional[str]]:
         except (TypeError, ValueError):
             return [], "project_id 无效"
         cases = _db.get_project_cases(project_id, case_type="ui") or []
-        ids = [c["id"] for c in cases if isinstance(c, dict) and c.get("id") is not None]
+        try:
+            from ai_modules.code_intel.review import case_is_ci_eligible
+
+            ids = [
+                c["id"]
+                for c in cases
+                if isinstance(c, dict)
+                and c.get("id") is not None
+                and case_is_ci_eligible(c, include_pending=include_pending)
+            ]
+        except Exception:
+            ids = [c["id"] for c in cases if isinstance(c, dict) and c.get("id") is not None]
         if not ids:
-            return [], "项目没有测试用例"
+            return [], "项目没有可执行用例（或均为待审核）"
         return ids, None
 
     suite_id = data.get("suite_id") or data.get("suiteId")
@@ -13942,9 +14672,181 @@ def _ci_run_batch_and_finalize(
         deliver_run_callback(run_id)
     except Exception as cb_err:
         uat_logger.warning(f"CI callback 投递异常 run_id={run_id}: {cb_err}")
+    try:
+        from ai_modules.enterprise.ci_unified_sync import on_testory_run_finished
+
+        on_testory_run_finished(run_id)
+    except Exception as sync_err:
+        uat_logger.warning(f"CI sync 刷新异常 run_id={run_id}: {sync_err}")
+    try:
+        from ai_modules.code_intel.pipeline import on_ci_run_finished
+
+        on_ci_run_finished(run_id, db_factory=lambda: Database())
+    except Exception as heal_err:
+        uat_logger.warning(f"code-change heal 钩子异常 run_id={run_id}: {heal_err}")
     from ci_adapter import get_run
 
     return get_run(run_id) or record
+
+
+@app.route('/api/ci/runs', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_runs_list():
+    """列出近期 CI 运行（供 CI/CD 页展示）。"""
+    from ci_adapter import list_runs
+
+    try:
+        limit = int(request.args.get('limit') or 30)
+    except (TypeError, ValueError):
+        limit = 30
+    runs = list_runs(limit=limit)
+    return jsonify({'success': True, 'ok': True, 'runs': runs, 'count': len(runs)})
+
+
+@app.route('/api/ci/sync', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+@api_error_handler
+def api_ci_sync_list():
+    """列出统一门禁同步会话。"""
+    from ai_modules.enterprise.ci_unified_sync import list_syncs
+
+    try:
+        limit = int(request.args.get('limit') or 30)
+    except (TypeError, ValueError):
+        limit = 30
+    rows = list_syncs(limit=limit)
+    return jsonify({'ok': True, 'success': True, 'syncs': rows, 'count': len(rows)})
+
+
+@app.route('/api/ci/sync', methods=['POST'])
+@token_or_login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@feature_required('ci_integration')
+@api_error_handler
+def api_ci_sync_create():
+    """创建统一门禁：绑定 Testory run 并/或触发 Jenkins 受理构建，两侧结果同步。"""
+    from ai_modules.enterprise.ci_unified_sync import start_unified_sync
+
+    data = request.get_json(silent=True) or {}
+    params = data.get('parameters') if isinstance(data.get('parameters'), dict) else {}
+    if not params and isinstance(data.get('params'), dict):
+        params = data.get('params')
+    policy = _ai_str(data.get('policy') or 'both_must_pass') or 'both_must_pass'
+    out = start_unified_sync(
+        policy=policy,
+        testory_run_id=_ai_str(data.get('testory_run_id') or data.get('run_id')),
+        jenkins_job=_ai_str(data.get('jenkins_job') or data.get('job_name') or data.get('job')),
+        jenkins_parameters=params,
+        label=_ai_str(data.get('label')),
+        auto_poll=bool(data.get('auto_poll', True)),
+    )
+    code = 200 if out.get('ok') else 400
+    return jsonify(out), code
+
+
+@app.route('/api/ci/sync/<sync_id>', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+@api_error_handler
+def api_ci_sync_get(sync_id):
+    """查询统一门禁；默认刷新两侧状态。"""
+    from ai_modules.enterprise.ci_unified_sync import get_sync, refresh_sync
+
+    refresh = str(request.args.get('refresh') or '1').strip().lower() not in ('0', 'false', 'no')
+    rec = refresh_sync(sync_id) if refresh else get_sync(sync_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': 'sync_not_found', 'sync_id': sync_id}), 404
+    return jsonify({'ok': True, 'success': True, 'sync': rec})
+
+
+@app.route('/api/ci/sync/<sync_id>/jenkins', methods=['POST'])
+@token_or_login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@feature_required('ci_integration')
+@api_error_handler
+def api_ci_sync_jenkins_report(sync_id):
+    """Jenkins 流水线主动回写构建结果（与轮询同步）。"""
+    from ai_modules.enterprise.ci_unified_sync import apply_jenkins_result
+
+    data = request.get_json(silent=True) or {}
+    result = _ai_str(data.get('result') or data.get('status'))
+    if not result:
+        return jsonify({'ok': False, 'error': 'result_required'}), 400
+    rec = apply_jenkins_result(
+        sync_id,
+        result=result,
+        build_url=_ai_str(data.get('build_url') or data.get('url')),
+        build_number=data.get('build_number') or data.get('number'),
+        building=bool(data.get('building', False)),
+    )
+    if not rec:
+        return jsonify({'ok': False, 'error': 'sync_not_found'}), 404
+    return jsonify({'ok': True, 'success': True, 'sync': rec})
+
+
+@app.route('/api/ci/jenkins/status', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+@api_error_handler
+def api_ci_jenkins_status():
+    """Jenkins 反向触发配置是否就绪（不暴露 token）。"""
+    from ai_modules.enterprise.jenkins_trigger import jenkins_config_from_env, jenkins_configured
+
+    cfg = jenkins_config_from_env()
+    return jsonify({
+        'ok': True,
+        'configured': jenkins_configured(),
+        'base_url': cfg.get('base_url') or '',
+        'user': cfg.get('user') or '',
+        'token_set': bool(cfg.get('token')),
+        'disclaimer': (
+            '配置 JENKINS_URL / JENKINS_USER / JENKINS_API_TOKEN 后，'
+            '可从本平台触发 Jenkins Job；触发成功（受理）≠ Job 已通过。'
+            '统一门禁请用 POST /api/ci/sync。'
+        ),
+    })
+
+
+@app.route('/api/ci/jenkins/trigger', methods=['POST'])
+@token_or_login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@feature_required('ci_integration')
+@api_error_handler
+def api_ci_jenkins_trigger():
+    """从 Testory 触发 Jenkins Job；可选 create_sync 纳入统一门禁。"""
+    from ai_modules.enterprise.jenkins_trigger import trigger_jenkins_job
+
+    data = request.get_json(silent=True) or {}
+    params = data.get('parameters') if isinstance(data.get('parameters'), dict) else {}
+    if not params and isinstance(data.get('params'), dict):
+        params = data.get('params')
+    job_name = _ai_str(data.get('job_name') or data.get('job'))
+    want_sync = bool(data.get('create_sync') or data.get('unified_gate') or data.get('sync'))
+    if want_sync:
+        from ai_modules.enterprise.ci_unified_sync import start_unified_sync
+
+        out = start_unified_sync(
+            policy=_ai_str(data.get('policy') or 'both_must_pass') or 'both_must_pass',
+            testory_run_id=_ai_str(data.get('testory_run_id') or data.get('run_id')),
+            jenkins_job=job_name,
+            jenkins_parameters=params,
+            label=_ai_str(data.get('label')),
+            auto_poll=bool(data.get('auto_poll', True)),
+        )
+        code = 200 if out.get('ok') else 400
+        return jsonify(out), code
+
+    result = trigger_jenkins_job(
+        job_name=job_name,
+        parameters=params,
+        base_url=_ai_str(data.get('base_url') or data.get('jenkins_url')),
+        user=_ai_str(data.get('user')),
+        token=_ai_str(data.get('token') or data.get('api_token')),
+    )
+    code = 200 if result.get('ok') else 400
+    return jsonify(result), code
 
 
 @app.route('/api/ci/runs', methods=['POST'])
@@ -14021,6 +14923,12 @@ def api_ci_runs_create():
                         finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     )
                     deliver_run_callback(run_id)
+                    try:
+                        from ai_modules.enterprise.ci_unified_sync import on_testory_run_finished
+
+                        on_testory_run_finished(run_id)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -14147,6 +15055,592 @@ def api_ci_runs_junit(run_id):
             "Content-Disposition": f'attachment; filename="testory-{run_id}-junit.xml"',
         },
     )
+
+
+def _ci_code_change_run_trigger(
+    *,
+    case_ids,
+    project_id=None,
+    build_id="",
+    git_sha="",
+    branch="",
+    trigger_source="code_change",
+):
+    """供 code-change 流水线异步触发 /api/ci/runs 等价逻辑，返回 run_id。"""
+    from ci_adapter import create_queued_run
+
+    if not case_ids:
+        return None
+    suite_name = f"Testory-code-change-{project_id or 'adhoc'}"
+    queued = create_queued_run(
+        project_id=project_id,
+        case_ids=list(case_ids),
+        trigger_source=trigger_source or "code_change",
+        build_id=build_id or "",
+        git_sha=git_sha or "",
+        branch=branch or "",
+        suite_name=suite_name,
+        callback_url="",
+    )
+    run_id = queued["run_id"]
+    uid = current_user.id if current_user.is_authenticated else None
+    tid = None
+    _db = Database()
+    if uid is not None:
+        try:
+            tid = _db.get_user_tenant_id(int(uid))
+        except Exception:
+            tid = None
+
+    def _worker():
+        try:
+            _ci_run_batch_and_finalize(
+                run_id=run_id,
+                case_ids=list(case_ids),
+                project_id=project_id,
+                trigger_source=trigger_source or "code_change",
+                build_id=build_id or "",
+                git_sha=git_sha or "",
+                branch=branch or "",
+                suite_name=suite_name,
+                user_id=uid,
+                tenant_id=tid,
+                sync_mode=False,
+            )
+        except Exception as e:
+            uat_logger.error(f"code-change CI worker 失败 run_id={run_id}: {e}")
+            try:
+                from ci_adapter import deliver_run_callback, update_run_fields
+
+                update_run_fields(
+                    run_id,
+                    status="failed",
+                    gate_passed=False,
+                    success=False,
+                    batch_error=str(e)[:300],
+                    finished_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                )
+                deliver_run_callback(run_id)
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, name=f"cc-ci-{run_id}", daemon=True).start()
+    return run_id
+
+
+@app.route('/api/ci/code-change', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_list():
+    """列出近期代码变更分析任务。"""
+    from ai_modules.code_intel.task_store import list_tasks
+    from ai_modules.code_intel.pipeline import public_task_view
+
+    try:
+        limit = int(request.args.get('limit') or 30)
+    except (TypeError, ValueError):
+        limit = 30
+    rows = [public_task_view(r) for r in list_tasks(limit=limit)]
+    return jsonify({'ok': True, 'success': True, 'tasks': rows, 'count': len(rows)})
+
+
+@app.route('/api/ci/code-change', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_create():
+    """异步代码变更分析：CI 传 changed_files/diff → ChangeImpactReport + 推荐用例。
+
+    Body：project_id, git_sha, branch, repo, changed_files[], diff, mr_description,
+    file_snippets{}, analyze_only(默认 true), trigger_run, generate_drafts, callback_url, use_llm。
+    """
+    from ai_modules.code_intel.pipeline import enqueue_code_change, public_task_view
+    from ai_modules.code_intel.policy import check_rate_limit, resolve_use_llm
+
+    data = request.get_json(silent=True) or {}
+    ok_rl, rl_err = check_rate_limit(f"code-change:{request.remote_addr or 'na'}")
+    if not ok_rl:
+        return jsonify({'ok': False, 'success': False, 'error': rl_err}), 429
+
+    files = data.get('changed_files') or data.get('files') or []
+    if isinstance(files, str):
+        files = [x.strip() for x in files.replace(';', '\n').splitlines() if x.strip()]
+
+    uid = current_user.id if current_user.is_authenticated else None
+    tid = None
+    if uid is not None:
+        try:
+            tid = Database().get_user_tenant_id(int(uid))
+        except Exception:
+            tid = None
+
+    payload = {
+        'project_id': data.get('project_id'),
+        'tenant_id': data.get('tenant_id') if data.get('tenant_id') is not None else tid,
+        'repo': _ai_str(data.get('repo')),
+        'branch': _ai_str(data.get('branch')),
+        'git_sha': _ai_str(data.get('git_sha') or data.get('commit') or data.get('sha')),
+        'mr_key': _ai_str(data.get('mr_key') or data.get('pr_url') or data.get('mr_url')),
+        'mr_description': _ai_str(
+            data.get('mr_description') or data.get('description') or data.get('message')
+        ),
+        'build_id': _ai_str(data.get('build_id') or data.get('pipeline_id')),
+        'trigger_source': _ai_str(data.get('trigger_source') or data.get('source') or 'ci') or 'ci',
+        'changed_files': files,
+        'diff': data.get('diff') or data.get('patch') or '',
+        'file_snippets': data.get('file_snippets') if isinstance(data.get('file_snippets'), dict) else {},
+        'analyze_only': bool(data.get('analyze_only', True)),
+        'generate_drafts': bool(data.get('generate_drafts') or data.get('generate_cases')),
+        'trigger_run': bool(data.get('trigger_run') or data.get('run_recommended')),
+        'callback_url': _ai_str(data.get('callback_url') or data.get('webhook_url')),
+        'pr_url': _ai_str(data.get('pr_url') or data.get('mr_url')),
+    }
+    if payload['trigger_run']:
+        payload['analyze_only'] = False
+    if not payload['changed_files'] and not payload['diff'] and not payload['mr_description']:
+        return jsonify({
+            'ok': False, 'success': False,
+            'error': '请提供 changed_files、diff 或 mr_description 之一',
+        }), 400
+
+    use_llm = resolve_use_llm(data.get('use_llm'))
+    sync_mode = bool(data.get('sync')) and not bool(data.get('async', True))
+
+    view = enqueue_code_change(
+        payload,
+        db_factory=lambda: Database(),
+        run_trigger=_ci_code_change_run_trigger if payload['trigger_run'] else None,
+        profile=None,
+        use_llm=bool(use_llm),
+        background=not sync_mode,
+    )
+    tid_task = view.get('task_id')
+    status_code = 200 if sync_mode else 202
+    return jsonify({
+        'ok': True,
+        'success': True,
+        'accepted': True,
+        'async': not sync_mode,
+        'task_id': tid_task,
+        'status': view.get('status'),
+        'poll_url': view.get('poll_url') or (f'/api/ci/code-change/{tid_task}' if tid_task else None),
+        'idempotent_hit': bool(view.get('idempotent_hit')),
+        'result': public_task_view(view),
+        'message': '分析已入队，请轮询 poll_url' if not sync_mode else '分析已完成',
+    }), status_code
+
+
+@app.route('/api/ci/code-change/metrics', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_metrics():
+    from ai_modules.code_intel.metrics import collect_metrics
+    try:
+        limit = int(request.args.get('limit') or 200)
+    except (TypeError, ValueError):
+        limit = 200
+    return jsonify({'ok': True, 'success': True, 'metrics': collect_metrics(limit=limit)})
+
+
+@app.route('/api/ci/code-change/cleanup', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_cleanup():
+    from ai_modules.code_intel.task_store import cleanup_expired_tasks
+    data = request.get_json(silent=True) or {}
+    ttl = data.get('ttl_days')
+    try:
+        ttl_i = int(ttl) if ttl is not None else None
+    except (TypeError, ValueError):
+        ttl_i = None
+    result = cleanup_expired_tasks(ttl_days=ttl_i)
+    return jsonify({'ok': True, 'success': True, **result})
+
+
+@app.route('/api/ci/code-change/<task_id>', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_get(task_id):
+    from ai_modules.code_intel.task_store import get_task
+    from ai_modules.code_intel.pipeline import public_task_view, attach_heal_proposals_for_run
+
+    rec = get_task(task_id)
+    if not rec:
+        return jsonify({'ok': False, 'success': False, 'error': '任务不存在'}), 404
+
+    refresh_heal = str(request.args.get('refresh_heal') or '').strip() in ('1', 'true', 'yes')
+    if refresh_heal:
+        try:
+            attach_heal_proposals_for_run(task_id, db_factory=lambda: Database())
+            rec = get_task(task_id) or rec
+        except Exception as e:
+            uat_logger.warning(f"refresh_heal failed: {e}")
+
+    view = public_task_view(rec)
+    terminal = str(rec.get('status') or '') in ('done', 'failed')
+    impact = rec.get('impact') if isinstance(rec.get('impact'), dict) else {}
+    return jsonify({
+        'ok': True,
+        'success': True,
+        'task_id': rec.get('task_id'),
+        'status': rec.get('status'),
+        'terminal': terminal,
+        'impact': impact,
+        'impact_summary': impact.get('summary'),
+        'recommended_case_ids': rec.get('recommended_case_ids') or [],
+        'at_risk_case_ids': rec.get('at_risk_case_ids') or [],
+        'draft_case_ids': rec.get('draft_case_ids') or [],
+        'draft_preview': rec.get('draft_preview') or [],
+        'ci_run_id': rec.get('ci_run_id'),
+        'heal_proposals': rec.get('heal_proposals') or [],
+        'warnings': rec.get('warnings') or [],
+        'poll_url': rec.get('poll_url'),
+        'result': view,
+    })
+
+
+@app.route('/api/ci/code-change/<task_id>/trigger-run', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_trigger_run(task_id):
+    """对已完成分析的任务，用 recommended_case_ids 触发 CI run。"""
+    from ai_modules.code_intel.task_store import get_task, update_task
+
+    rec = get_task(task_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': '任务不存在'}), 404
+    case_ids = list(rec.get('recommended_case_ids') or [])
+    data = request.get_json(silent=True) or {}
+    if data.get('case_ids'):
+        try:
+            case_ids = [int(x) for x in data['case_ids']]
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'error': 'case_ids 无效'}), 400
+    if not case_ids:
+        return jsonify({'ok': False, 'error': '无推荐用例可执行'}), 400
+
+    try:
+        from ai_modules.code_intel.review import filter_ci_case_ids
+        filtered = filter_ci_case_ids(Database(), case_ids, include_pending=False)
+        case_ids = filtered.get('kept') or []
+        if not case_ids:
+            return jsonify({
+                'ok': False,
+                'error': '推荐用例均未激活（pending/rejected），请先 POST /api/ci/cases/<id>/review',
+                'skipped': filtered.get('skipped'),
+            }), 400
+    except Exception:
+        pass
+
+    run_id = _ci_code_change_run_trigger(
+        case_ids=case_ids,
+        project_id=rec.get('project_id'),
+        build_id=str(data.get('build_id') or rec.get('build_id') or ''),
+        git_sha=str(rec.get('git_sha') or ''),
+        branch=str(rec.get('branch') or ''),
+        trigger_source='code_change',
+    )
+    update_task(task_id, ci_run_id=run_id, trigger_run=True, analyze_only=False)
+    return jsonify({
+        'ok': True,
+        'success': True,
+        'task_id': task_id,
+        'ci_run_id': run_id,
+        'case_ids': case_ids,
+        'poll_url': f'/api/ci/runs/{run_id}',
+        'message': '已触发推荐回归；终态后可 GET ...?refresh_heal=1 获取自愈提案',
+    }), 202
+
+
+@app.route('/api/ci/code-change/<task_id>/generate-drafts', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_generate_drafts(task_id):
+    """基于已有分析结果生成并落库「待审核」草稿用例。"""
+    from ai_modules.code_intel.task_store import get_task, update_task
+    from ai_modules.code_intel.generate_from_code import (
+        generate_cases_from_code,
+        save_code_drafts_pending,
+    )
+    from ai_modules.code_intel.match_cases import load_project_cases_for_match
+
+    rec = get_task(task_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': '任务不存在'}), 404
+    impact = rec.get('impact') if isinstance(rec.get('impact'), dict) else None
+    signals = rec.get('signals') if isinstance(rec.get('signals'), dict) else None
+    if not impact or not signals:
+        return jsonify({'ok': False, 'error': '任务尚未完成影响分析'}), 400
+    if impact.get('is_rollback'):
+        return jsonify({'ok': False, 'error': '回滚变更不生成新用例'}), 400
+    project_id = rec.get('project_id')
+    if project_id is None:
+        return jsonify({'ok': False, 'error': '需要 project_id'}), 400
+
+    _db = Database()
+    blobs = []
+    try:
+        for c in load_project_cases_for_match(_db, int(project_id)):
+            blobs.append(f"{c.get('name','')} {c.get('description','')}")
+    except Exception:
+        pass
+
+    use_llm = True
+    data = request.get_json(silent=True) or {}
+    if data.get('use_llm') is False:
+        use_llm = False
+
+    drafts, warns = generate_cases_from_code(
+        signals=signals,
+        impact=impact,
+        diff=str(rec.get('diff') or ''),
+        git_sha=str(rec.get('git_sha') or ''),
+        use_llm=use_llm,
+        existing_case_blobs=blobs,
+        file_snippets=rec.get('file_snippets') if isinstance(rec.get('file_snippets'), dict) else {},
+    )
+    if not drafts:
+        return jsonify({
+            'ok': True, 'success': True, 'created_case_ids': [], 'warnings': warns, 'count': 0,
+        })
+
+    uid = current_user.id if current_user.is_authenticated else 0
+    saved = save_code_drafts_pending(
+        _db,
+        project_id=int(project_id),
+        drafts=drafts,
+        user_id=int(uid or 0),
+        git_sha=str(rec.get('git_sha') or ''),
+    )
+    ids = list(saved.get('created_case_ids') or [])
+    prev = list(rec.get('draft_case_ids') or [])
+    update_task(
+        task_id,
+        draft_case_ids=prev + ids,
+        generate_drafts=True,
+        warnings=list(rec.get('warnings') or []) + warns + list(saved.get('warnings') or []),
+    )
+    return jsonify({
+        'ok': True,
+        'success': True,
+        'created_case_ids': ids,
+        'count': len(ids),
+        'warnings': warns + list(saved.get('warnings') or []),
+        'message': '草稿已写入，描述含 [review_status:pending]，默认不进 CI 绿灯',
+    })
+
+
+@app.route('/api/ci/code-change/<task_id>/heal-proposals/<proposal_id>/ack', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_code_change_heal_ack(task_id, proposal_id):
+    """确认自愈提案需人工处理（不自动改步骤/不假绿）。"""
+    from ai_modules.code_intel.task_store import get_task, update_task
+    from ai_modules.code_intel.heal_bridge import apply_heal_proposal_noop
+
+    rec = get_task(task_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': '任务不存在'}), 404
+    proposals = list(rec.get('heal_proposals') or [])
+    found = None
+    for p in proposals:
+        if isinstance(p, dict) and str(p.get('proposal_id')) == str(proposal_id):
+            found = p
+            break
+    if not found:
+        return jsonify({'ok': False, 'error': '提案不存在'}), 404
+    out = apply_heal_proposal_noop(found)
+    found['status'] = 'acked_manual'
+    found['acked_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    update_task(task_id, heal_proposals=proposals)
+    return jsonify({'ok': True, 'success': True, **out, 'proposal': found})
+
+
+@app.route('/api/ci/webhooks/github', methods=['POST'])
+def api_ci_webhook_github():
+    """GitHub push/PR webhook → 入队 code-change（需 TESTORY_GITHUB_WEBHOOK_SECRET）。"""
+    from ai_modules.code_intel.webhooks import parse_webhook
+    from ai_modules.code_intel.pipeline import enqueue_code_change
+    from ai_modules.code_intel.policy import check_ip_allowed, check_rate_limit
+
+    ok_ip, ip_err = check_ip_allowed(request.remote_addr or "")
+    if not ok_ip:
+        return jsonify({'ok': False, 'error': ip_err}), 403
+    ok_rl, rl_err = check_rate_limit(f"wh-github:{request.remote_addr or 'na'}")
+    if not ok_rl:
+        return jsonify({'ok': False, 'error': rl_err}), 429
+
+    body = request.get_data(cache=False, as_text=False) or b''
+    headers = {k: v for k, v in request.headers.items()}
+    norm, err, code = parse_webhook(provider='github', headers=headers, body=body)
+    if err and code != 202:
+        return jsonify({'ok': False, 'error': err}), code
+    if not norm:
+        return jsonify({'ok': True, 'ignored': True, 'message': err or 'ignored'}), 202
+
+    data = request.get_json(silent=True) or {}
+    project_id = request.args.get('project_id') or data.get('project_id')
+    try:
+        project_id = int(project_id) if project_id is not None else None
+    except (TypeError, ValueError):
+        project_id = None
+
+    payload = dict(norm)
+    payload['project_id'] = project_id
+    payload['mr_key'] = str(norm.get('pr_url') or '')
+    payload['analyze_only'] = True
+    payload['generate_drafts'] = False
+    payload['trigger_run'] = False
+
+    view = enqueue_code_change(
+        payload,
+        db_factory=lambda: Database(),
+        run_trigger=None,
+        use_llm=True,
+        background=True,
+    )
+    return jsonify({
+        'ok': True,
+        'accepted': True,
+        'task_id': view.get('task_id'),
+        'poll_url': view.get('poll_url'),
+        'status': view.get('status'),
+        'project_id': view.get('project_id') or project_id,
+    }), 202
+
+
+@app.route('/api/ci/webhooks/gitlab', methods=['POST'])
+def api_ci_webhook_gitlab():
+    """GitLab push/MR webhook → 入队 code-change（需 TESTORY_GITLAB_WEBHOOK_SECRET）。"""
+    from ai_modules.code_intel.webhooks import parse_webhook
+    from ai_modules.code_intel.pipeline import enqueue_code_change
+    from ai_modules.code_intel.policy import check_ip_allowed, check_rate_limit
+
+    ok_ip, ip_err = check_ip_allowed(request.remote_addr or "")
+    if not ok_ip:
+        return jsonify({'ok': False, 'error': ip_err}), 403
+    ok_rl, rl_err = check_rate_limit(f"wh-gitlab:{request.remote_addr or 'na'}")
+    if not ok_rl:
+        return jsonify({'ok': False, 'error': rl_err}), 429
+
+    body = request.get_data(cache=False, as_text=False) or b''
+    headers = {k: v for k, v in request.headers.items()}
+    norm, err, code = parse_webhook(provider='gitlab', headers=headers, body=body)
+    if err and code != 202:
+        return jsonify({'ok': False, 'error': err}), code
+    if not norm:
+        return jsonify({'ok': True, 'ignored': True, 'message': err or 'ignored'}), 202
+
+    project_id = request.args.get('project_id')
+    try:
+        project_id = int(project_id) if project_id is not None else None
+    except (TypeError, ValueError):
+        project_id = None
+
+    payload = dict(norm)
+    payload['project_id'] = project_id
+    payload['mr_key'] = str(norm.get('pr_url') or '')
+    payload['analyze_only'] = True
+
+    view = enqueue_code_change(
+        payload,
+        db_factory=lambda: Database(),
+        run_trigger=None,
+        use_llm=True,
+        background=True,
+    )
+    return jsonify({
+        'ok': True,
+        'accepted': True,
+        'task_id': view.get('task_id'),
+        'poll_url': view.get('poll_url'),
+        'status': view.get('status'),
+        'project_id': view.get('project_id') or project_id,
+    }), 202
+
+
+@app.route('/api/ci/repo-map', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_repo_map_list():
+    from ai_modules.code_intel.repo_map import list_mappings
+    rows = list_mappings()
+    return jsonify({'ok': True, 'success': True, 'mappings': rows, 'count': len(rows)})
+
+
+@app.route('/api/ci/repo-map', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_repo_map_upsert():
+    from ai_modules.code_intel.repo_map import upsert_mapping
+    data = request.get_json(silent=True) or {}
+    try:
+        entry = upsert_mapping(
+            repo=_ai_str(data.get('repo')),
+            project_id=int(data.get('project_id')),
+            tenant_id=data.get('tenant_id'),
+            label=_ai_str(data.get('label')),
+            default_branch=_ai_str(data.get('default_branch') or data.get('branch')),
+        )
+    except (TypeError, ValueError) as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    return jsonify({'ok': True, 'success': True, 'mapping': entry})
+
+
+@app.route('/api/ci/repo-map', methods=['DELETE'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_repo_map_delete():
+    from ai_modules.code_intel.repo_map import delete_mapping
+    data = request.get_json(silent=True) or {}
+    repo = _ai_str(data.get('repo') or request.args.get('repo'))
+    if not repo:
+        return jsonify({'ok': False, 'error': 'repo 必填'}), 400
+    ok = delete_mapping(repo)
+    return jsonify({'ok': ok, 'success': ok, 'deleted': ok})
+
+
+@app.route('/api/ci/cases/pending', methods=['GET'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_cases_pending():
+    from ai_modules.code_intel.review import list_pending_cases
+    project_id = request.args.get('project_id')
+    if project_id is None:
+        return jsonify({'ok': False, 'error': 'project_id 必填'}), 400
+    try:
+        pid = int(project_id)
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': 'project_id 无效'}), 400
+    rows = list_pending_cases(Database(), pid)
+    return jsonify({'ok': True, 'success': True, 'cases': rows, 'count': len(rows)})
+
+
+@app.route('/api/ci/cases/<int:case_id>/review', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_case_review(case_id):
+    """激活/拒绝待审核用例。body: {status: active|rejected|pending}"""
+    data = request.get_json(silent=True) or {}
+    status = _ai_str(data.get('status') or data.get('review_status')).lower()
+    if status not in ('pending', 'active', 'rejected'):
+        return jsonify({'ok': False, 'error': 'status 须为 pending|active|rejected'}), 400
+    _db = Database()
+    ok = _db.set_case_review_status(
+        int(case_id),
+        status,
+        git_sha=_ai_str(data.get('git_sha') or data.get('source_commit')),
+    )
+    if not ok:
+        return jsonify({'ok': False, 'error': '更新失败（用例不存在或库未迁移）'}), 400
+    case = _db.get_test_case_v2(int(case_id))
+    return jsonify({
+        'ok': True,
+        'success': True,
+        'case_id': case_id,
+        'review_status': status,
+        'case': case,
+        'message': '已激活，可进入 CI 门禁' if status == 'active' else f'已标记为 {status}',
+    })
 
 
 @app.route('/api/trigger/<int:project_id>', methods=['POST'])

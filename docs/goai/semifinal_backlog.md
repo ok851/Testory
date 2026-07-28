@@ -27,7 +27,8 @@
 | R06 | 端到端 Demo 脚本：合成「下单失败」故事 + 样例输入输出 | `demos/goai-agentteams/` | R02–R05 |
 | R07 | 运行证据：日志、阶段时间线、截图索引；打包为评审目录 | `artifacts/` | R06 |
 
-> **Phase A-1：** R01 Spec（JSON）+ R02–R05 本地控制面；入口 `ai_modules/agent_teams/` 与 `/api/ai/agent-teams/*`（官方 AgentTeams SDK 仍属后续）。  
+> **Phase A-1：** R01 Spec（JSON）+ R02–R05 本地控制面；入口 `ai_modules/agent_teams/` 与 `/api/ai/agent-teams/*`。  
+> **R01 官方 SDK：** 以 `sdk_bridge` + `sdk_runtime` 探测闭环（未安装 → `SDK_NOT_INSTALLED`）；**完整厂商 runtime 非阻塞延期**，不挡复赛/售前。
 > **Phase A-2（R06）：** `demos/goai-agentteams/run_demo.py` 离线 simulate（`consistent`/`mismatch`）+ `samples/output/`；产物目录 `artifacts/goai-agentteams/`（部分满足 R07）。  
 > **Phase B-2（R07/Z2）：** `ai_modules/execute/trace_pack.py` 标准化证据包（目录+ZIP）；`GET /api/ai/trace-packs/export`、`.../agent-teams/runs/<id>/trace`；Demo 自动写入 `trace_pack/`。  
 > **Phase B-3（R09 工程半）：** HITL 事件入阶段/`trace_pack`/`meta.hitl`（`agent_hitl` 事件日志 + `tests/test_hitl_trace.py`）。  
@@ -49,11 +50,13 @@
 
 | ID | 任务 | 产出 |
 |----|------|------|
-| R15 | RunbookRag / IncidentMemory（向量或轻量检索） | RAG 2 项中再落 1 项 |
-| R16 | 失败重规划：Verifier → Planner 回边 | 异常分支 |
-| R17 | Golden 案例集（3–5 条）与简单回归脚本 | 评测证据 |
-| R18 | 阿里云用云 Skills 择 1 个非关键路径演示（可选） | 生态对齐说明 |
-| R19 | Nacos 仅作 Spec/Skill 配置托管（可选，勿堆料） | 治理叙事 |
+| R15 | ~~RunbookRag / IncidentMemory~~ **已关（轻量检索）** | `ai_modules/memory/incident_memory.py`；`GET/POST /api/ai/incident-memory/search`；建议不判绿 |
+| R16 | ~~失败重规划：Verifier → Planner 回边~~ **已关** | `ai_modules/agent_teams/replan.py` + `team_runner` 循环；默认最多 1 次；须重新验证 |
+| R17 | ~~Golden 案例集（3–5 条）与简单回归脚本~~ **已关（离线诚实门禁）** | `demos/golden/run_golden.py`（G1–G18） |
+| R18 | ~~阿里云用云 Skills 择 1 个非关键路径演示（可选）~~ **已关（说明文档）** | [CLOUD_SKILLS_ALIGN.md](./CLOUD_SKILLS_ALIGN.md) |
+| R19 | ~~Nacos 仅作 Spec/Skill 配置托管（可选，勿堆料）~~ **已关（本地注册中心）** | [NACOS_CONFIG_REGISTRY.md](./NACOS_CONFIG_REGISTRY.md) + `ai_modules/config_registry` + `/api/config-registry/info` |
+
+> **Phase B/C 收口：** 见 [../PHASE_BC_COMPLETE.md](../PHASE_BC_COMPLETE.md)。工程项 R08–R19 已关；默认停止继续堆农场/SLA 微特性。
 
 ---
 

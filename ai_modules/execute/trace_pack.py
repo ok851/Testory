@@ -604,6 +604,7 @@ def export_trace_pack(
             "pack_id": (doc.get("manifest") or {}).get("pack_id"),
             "pack_dir": str(pack_dir),
             "zip_path": str(zip_p) if zip_p else None,
+            "download_name": f"{(doc.get('manifest') or {}).get('pack_id') or 'trace_pack'}.zip",
             "manifest": doc["manifest"],
         }
 

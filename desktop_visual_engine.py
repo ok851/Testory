@@ -322,15 +322,39 @@ def build_visual_step_payload(
     *,
     match_threshold: float = 0.72,
     element_snapshot: Optional[Dict[str, Any]] = None,
+    template_image_b64: str = "",
+    preserve_full_template: bool = False,
 ) -> VisualStepPayload:
-    png = capture_region_png(left, top, right, bottom, padding=0)
+    """
+    从屏幕矩形生成视觉步骤载荷。
+    若传入 template_image_b64（点击瞬间冻结图），则不再二次截屏。
+    preserve_full_template=True 时不做角点裁切，保证与绿框所见一致。
+    """
+    frozen = (template_image_b64 or "").strip()
+    if frozen:
+        try:
+            png = base64.b64decode(frozen)
+        except Exception as exc:
+            raise ValueError(f"冻结模板 base64 无效: {exc}") from exc
+        if not png:
+            raise ValueError("冻结模板为空")
+    else:
+        png = capture_region_png(left, top, right, bottom, padding=0)
     bgr = _bgr_from_png(png)
-    refined, ox, oy = refine_template_by_corners(bgr)
-    refined = shrink_template_bgr(refined)
+    ox = oy = 0
+    if preserve_full_template or frozen:
+        # 冻结/完整模板：禁止角点裁切（否则会截掉「账密登录」的「账」）
+        refined = bgr
+        ox, oy = 0, 0
+        refined = shrink_template_bgr(refined, max_side=320)
+    else:
+        refined, ox, oy = refine_template_by_corners(bgr)
+        refined = shrink_template_bgr(refined)
     rh, rw = refined.shape[:2]
     b64 = base64.b64encode(encode_png_bgr(refined)).decode("ascii")
     rel_x = int(click_x - min(left, right)) - ox
     rel_y = int(click_y - min(top, bottom)) - oy
+    # 冻结图可能含 padding：按模板尺寸钳制点击偏移
     rel_x = max(0, min(max(rw - 1, 0), rel_x))
     rel_y = max(0, min(max(rh - 1, 0), rel_y))
     vl, vt = virtual_screen_origin()

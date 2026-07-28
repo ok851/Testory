@@ -77,6 +77,16 @@ python demos/goai-mcp-adapter/run_sample.py --list
 - MCP HTTP 若挂在主应用后，沿用平台登录 / 内网策略  
 - 适配器**不得**绕过 RiskGuard：高风险动作仍应在编排层持令牌  
 
+### 4.1 实连接探活（可选）
+
+| 入口 | 说明 |
+|------|------|
+| `testory_mcp.gateway_live` | `probe_gateway_health` / `live_gateway_wait_step` |
+| `python demos/goai-mcp-adapter/run_sample.py --live-gateway` | 不可达 → `health.ok=false` |
+| `DESKTOP_FARM_GATEWAY=1` | 允许用农场在线节点补全 Gateway URL（仍需 SECRET） |
+
+**诚实：** health 可达 / 单步 wait 成功 ≠ 业务用例通过。
+
 ---
 
 ## 5. 与 Skill / 编排关系
@@ -95,3 +105,4 @@ Agent / Hermes
 | 日期 | 说明 |
 |------|------|
 | 2026-07-24 | 首版契约；Desktop 离线样例与 pytest |
+| 2026-07-27 | 实连接探活 + 农场 URL 回退（opt-in） |

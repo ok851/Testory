@@ -202,6 +202,41 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def list_runs(limit: int = 30) -> List[Dict[str, Any]]:
+    """列出近期 CI run（内存 + 落盘），按更新时间倒序。"""
+    lim = max(1, min(int(limit or 30), 200))
+    by_id: Dict[str, Dict[str, Any]] = {}
+    with _LOCK:
+        for rid, rec in _RUNS.items():
+            if isinstance(rec, dict) and rid:
+                by_id[str(rid)] = dict(rec)
+    try:
+        for path in _data_dir().glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            rid = str(data.get("run_id") or path.stem or "").strip()
+            if not rid:
+                continue
+            by_id[rid] = data
+    except OSError:
+        pass
+
+    def _sort_key(rec: Dict[str, Any]) -> str:
+        return str(
+            rec.get("updated_at")
+            or rec.get("finished_at")
+            or rec.get("created_at")
+            or ""
+        )
+
+    rows = sorted(by_id.values(), key=_sort_key, reverse=True)
+    return [public_run_view(r) for r in rows[:lim]]
+
+
 def build_run_record_from_batch(
     batch_results: Dict[str, Any],
     *,
@@ -381,7 +416,7 @@ def finalize_run_from_batch(
 
 def build_callback_payload(record: Dict[str, Any]) -> Dict[str, Any]:
     """标准化 CI 结束回调体（不含 Token / junit 全文）。"""
-    return {
+    payload = {
         "run_id": record.get("run_id"),
         "status": record.get("status"),
         "success": bool(record.get("gate_passed")),
@@ -398,6 +433,11 @@ def build_callback_payload(record: Dict[str, Any]) -> Dict[str, Any]:
         "report_url": record.get("report_url"),
         "finished_at": record.get("finished_at"),
     }
+    sid = str(record.get("sync_id") or "").strip()
+    if sid:
+        payload["sync_id"] = sid
+        payload["sync_poll_url"] = record.get("sync_poll_url") or f"/api/ci/sync/{sid}"
+    return payload
 
 
 def post_ci_webhook(

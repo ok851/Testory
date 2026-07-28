@@ -34,17 +34,14 @@ _LIST_ITEM = "listitem"
 _SYS_LISTVIEW = "syslistview32"
 
 _PSEUDO_CONTAINER_PATTERNS = (
-    "chrome",
+    "chrome_renderwidgethosthwnd",
+    "chrome_widgetwin",
     "renderwidget",
     "legacy window",
-    "widgetwin",
     "corewindow",
-    "webview",
-    "directui",
-    "cef",
-    "electron",
-    "chromium",
-    "tabwindowclass",
+    "webview2",
+    "cefclient",
+    "cefrender",
 )
 
 _INTERACTIVE_TYPES = frozenset({
@@ -92,6 +89,7 @@ class ElementPeekResult:
     bounding_rect: Optional[Tuple[int, int, int, int]] = None
     element_label: str = ""
     control_type: str = ""
+    class_name: str = ""
     error_code: str = ""
 
 
@@ -427,6 +425,27 @@ def sanitize_selector(el: Any, parent_chain: List[Dict[str, Any]]) -> Dict[str, 
 
 
 def _capture_impl(x: int, y: int) -> SnapshotCaptureResult:
+    uia_result = SnapshotCaptureResult(ok=False, error_code="no_element", message="未命中控件")
+
+    # 桌面图标：ListView HitTest 精确到单个 ListItem（避免 FolderView 整壳）
+    try:
+        from desktop_shell_listview import capture_desktop_icon_snapshot_at_point
+
+        icon = capture_desktop_icon_snapshot_at_point(int(x), int(y))
+        if icon and icon.get("ok") and icon.get("bounding_rect"):
+            return SnapshotCaptureResult(
+                ok=True,
+                element_snapshot=icon.get("element_snapshot"),
+                screen_center=tuple(icon["screen_center"]) if icon.get("screen_center") else (int(x), int(y)),
+                bounding_rect=tuple(icon["bounding_rect"]),
+                element_label=icon.get("element_label") or "",
+                control_type=icon.get("control_type") or "ListItem",
+                window_title="桌面",
+                process_name="explorer.exe",
+            )
+    except Exception:
+        pass
+
     try:
         from desktop_uia_core import capture_element_at_point
 
@@ -435,104 +454,176 @@ def _capture_impl(x: int, y: int) -> SnapshotCaptureResult:
             rect = core_result.get("bounding_rect")
             label = core_result.get("element_label", "")
             ct = core_result.get("control_type", "")
-            selector = core_result.get("selector", {})
+            cls = core_result.get("class_name", "")
+            selector = core_result.get("selector", {}) or {}
 
-            # 检查 rect 是否有效
-            if rect and len(rect) == 4 and (rect[2] - rect[0]) >= 1 and (rect[3] - rect[1]) >= 1:
-                center = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
-                return SnapshotCaptureResult(
-                    ok=True,
-                    element_snapshot={"selector": selector},
-                    screen_center=center,
-                    bounding_rect=rect,
+            # 桌面根 / 伪容器不得作为成功结果提前返回，继续走 dialog/Win32
+            combined = f"{label} {cls} {ct}".lower()
+            is_pseudo = any(p in combined for p in _PSEUDO_CONTAINER_PATTERNS)
+            if _is_desktop_root_name(label):
+                uia_result = SnapshotCaptureResult(
+                    ok=False,
+                    error_code="desktop_root",
+                    message=f"命中桌面根节点「{label}」，非应用元素",
+                    bounding_rect=rect if isinstance(rect, (list, tuple)) else None,
+                    element_label="",
+                    control_type=ct,
+                )
+            elif is_pseudo:
+                uia_result = SnapshotCaptureResult(
+                    ok=False,
+                    error_code="fake_container",
+                    message="UIA仅命中渲染容器，无法识别内部元素",
+                    bounding_rect=rect if isinstance(rect, (list, tuple)) else None,
                     element_label=label,
                     control_type=ct,
                 )
-            # rect 无效，回退到 pywinauto
+            elif rect and len(rect) == 4 and (rect[2] - rect[0]) >= 1 and (rect[3] - rect[1]) >= 1:
+                # 过大宿主（整窗/整屏）通常不是可点控件，优先交给 Win32 deepest child
+                rw = int(rect[2]) - int(rect[0])
+                rh = int(rect[3]) - int(rect[1])
+                if rw >= 900 or rh >= 700:
+                    uia_result = SnapshotCaptureResult(
+                        ok=False,
+                        error_code="oversized_host",
+                        message="UIA命中过大宿主控件，继续深层兜底",
+                        bounding_rect=tuple(int(v) for v in rect),
+                        element_label=label,
+                        control_type=ct,
+                    )
+                else:
+                    center = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+                    snap = {"selector": selector}
+                    if cls:
+                        snap["class_name"] = cls
+                    return SnapshotCaptureResult(
+                        ok=True,
+                        element_snapshot=snap,
+                        screen_center=center,
+                        bounding_rect=rect,
+                        element_label=label,
+                        control_type=ct,
+                    )
+            # rect 无效或伪容器，回退到 pywinauto / dialog / Win32
+        elif core_result.get("error") == "fake_container":
+            rect = core_result.get("bounding_rect")
+            uia_result = SnapshotCaptureResult(
+                ok=False,
+                error_code="fake_container",
+                message="UIA仅命中渲染容器，无法识别内部元素",
+                bounding_rect=rect if isinstance(rect, (list, tuple)) else None,
+                element_label=core_result.get("element_label") or "",
+                control_type=core_result.get("control_type") or "",
+            )
     except Exception:
         pass
 
     try:
         import pythoncom  # type: ignore
-    except ImportError:
-        return SnapshotCaptureResult(
-            ok=False, error_code="no_pythoncom", message="缺少 pythoncom"
-        )
 
-    pythoncom.CoInitialize()
-    try:
-        from pywinauto import Desktop  # type: ignore
+        pythoncom.CoInitialize()
+        try:
+            from pywinauto import Desktop  # type: ignore
 
-        desktop = Desktop(backend="uia")
-        raw = desktop.from_point(int(x), int(y))
-        el = _normalize_desktop_hit(raw)
+            desktop = Desktop(backend="uia")
+            raw = desktop.from_point(int(x), int(y))
+            el = _normalize_desktop_hit(raw)
 
-        if el is None:
-            uia_result = SnapshotCaptureResult(
-                ok=False, error_code="no_element", message="未命中控件"
-            )
-        else:
-            if _is_pseudo_container(el):
-                el = _find_deepest_interactive_element(el)
-
-            center = _element_rect_center(el)
-            bounds = _element_rect(el)
-            chain = _build_parent_chain(el)
-            selector = sanitize_selector(el, chain)
-            label = _extract_filename_label(_element_name(el))
-            ct = _element_control_type(el)
-            clean_label = (label or "").strip()
-            is_desktop_root = _is_desktop_root_name(clean_label)
-            if is_desktop_root:
+            if el is None:
                 uia_result = SnapshotCaptureResult(
-                    ok=False,
-                    error_code="desktop_root",
-                    message=f"命中桌面根节点「{clean_label}」，非应用元素",
-                    screen_center=center,
-                    bounding_rect=bounds,
-                    element_label="",
-                    control_type=ct,
-                )
-            elif not selector.get("key_candidates"):
-                label = label or ct or ""
-                if label and not _is_volatile_name(label):
-                    selector["key_candidates"] = [
-                        {"property": "uia-name", "value": label, "match": "equals"}
-                    ]
-                    selector["resolved_via"] = "uia_window"
-            if not selector.get("key_candidates"):
-                uia_result = SnapshotCaptureResult(
-                    ok=False,
-                    error_code="no_stable_key",
-                    message="未提取到稳定定位属性",
-                    screen_center=center,
-                    bounding_rect=bounds,
-                    element_label=label,
-                    control_type=ct,
+                    ok=False, error_code="no_element", message="未命中控件"
                 )
             else:
-                return SnapshotCaptureResult(
-                    ok=True,
-                    element_snapshot={"selector": selector},
-                    screen_center=center,
-                    bounding_rect=bounds,
-                    element_label=label,
-                    control_type=ct,
-                )
-    except Exception as exc:
-        err_name = type(exc).__name__
-        msg = str(exc) or err_name
-        code = "uia_error"
-        if "pywintypes" in err_name.lower() or "com" in err_name.lower():
-            code = "access_denied"
-        if "timeout" in msg.lower():
-            code = "timeout"
-        uia_result = SnapshotCaptureResult(ok=False, error_code=code, message=msg)
-    finally:
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
+                if _is_pseudo_container(el):
+                    el = _find_deepest_interactive_element(el)
+
+                center = _element_rect_center(el)
+                bounds = _element_rect(el)
+                chain = _build_parent_chain(el)
+                selector = sanitize_selector(el, chain)
+                label = _extract_filename_label(_element_name(el))
+                ct = _element_control_type(el)
+                clean_label = (label or "").strip()
+                is_desktop_root = _is_desktop_root_name(clean_label)
+                if is_desktop_root:
+                    # 必须立即失败并继续 dialog/Win32，避免 key_candidates=「桌面」被当成成功
+                    uia_result = SnapshotCaptureResult(
+                        ok=False,
+                        error_code="desktop_root",
+                        message=f"命中桌面根节点「{clean_label}」，非应用元素",
+                        screen_center=center,
+                        bounding_rect=bounds,
+                        element_label="",
+                        control_type=ct,
+                    )
+                else:
+                    if not selector.get("key_candidates"):
+                        label = label or ct or ""
+                        if label and not _is_volatile_name(label):
+                            selector["key_candidates"] = [
+                                {"property": "uia-name", "value": label, "match": "equals"}
+                            ]
+                            selector["resolved_via"] = "uia_window"
+                    if not selector.get("key_candidates"):
+                        uia_result = SnapshotCaptureResult(
+                            ok=False,
+                            error_code="no_stable_key",
+                            message="未提取到稳定定位属性",
+                            screen_center=center,
+                            bounding_rect=bounds,
+                            element_label=label,
+                            control_type=ct,
+                        )
+                    else:
+                        return SnapshotCaptureResult(
+                            ok=True,
+                            element_snapshot={"selector": selector},
+                            screen_center=center,
+                            bounding_rect=bounds,
+                            element_label=label,
+                            control_type=ct,
+                        )
+        except Exception as exc:
+            err_name = type(exc).__name__
+            msg = str(exc) or err_name
+            code = "uia_error"
+            if "pywintypes" in err_name.lower() or "com" in err_name.lower():
+                code = "access_denied"
+            if "timeout" in msg.lower():
+                code = "timeout"
+            uia_result = SnapshotCaptureResult(ok=False, error_code=code, message=msg)
+        finally:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+    except ImportError:
+        # 无 pythoncom 时仍继续 dialog / Win32 捕获
+        if uia_result.error_code in ("", "no_element"):
+            uia_result = SnapshotCaptureResult(
+                ok=False, error_code="no_pythoncom", message="缺少 pythoncom，使用 Win32 兜底"
+            )
+
+    # dialog / Win32 之前：嵌入式 CDP（CEF/Electron/WebView2）
+    try:
+        from desktop_embed_cdp import capture_embed_element_at_point
+
+        embed = capture_embed_element_at_point(int(x), int(y))
+        if embed and embed.get("ok") and embed.get("element_snapshot"):
+            rect = embed.get("bounding_rect")
+            center = embed.get("screen_center") or (int(x), int(y))
+            return SnapshotCaptureResult(
+                ok=True,
+                element_snapshot=embed.get("element_snapshot"),
+                screen_center=tuple(center) if isinstance(center, (list, tuple)) else (int(x), int(y)),
+                bounding_rect=tuple(rect) if rect and len(rect) == 4 else None,
+                element_label=embed.get("element_label") or "",
+                control_type=embed.get("control_type") or "Element",
+                window_title=embed.get("window_title") or "",
+                process_name=embed.get("process_name") or "",
+            )
+    except Exception:
+        pass
 
     try:
         from desktop_dialog_handler import capture_dialog_element_at_point
@@ -587,7 +678,39 @@ def _capture_impl(x: int, y: int) -> SnapshotCaptureResult:
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="uia-snap")
 
 
-def _peek_impl(x: int, y: int) -> ElementPeekResult:
+def _peek_impl(x: int, y: int, *, wake_app: bool = True) -> ElementPeekResult:
+    try:
+        from desktop_shell_listview import peek_desktop_icon_at_point
+
+        icon = peek_desktop_icon_at_point(int(x), int(y))
+        if icon and icon.screen_rect:
+            return ElementPeekResult(
+                ok=True,
+                bounding_rect=icon.screen_rect,
+                element_label=icon.icon_name or "",
+                control_type="ListItem",
+                class_name="SysListView32",
+            )
+    except Exception:
+        pass
+
+    # 应用窗内：先唤醒无障碍树，再深层 ElementFromPoint（QQ/CEF/Electron）
+    if wake_app:
+        try:
+            from desktop_win32_snapshot import get_window_class, window_from_point
+
+            hwnd = window_from_point(int(x), int(y))
+            cls = (get_window_class(hwnd) if hwnd else "") or ""
+            low = cls.lower()
+            if hwnd and not any(
+                k in low for k in ("progman", "workerw", "shell_traywnd", "syslistview32")
+            ):
+                from desktop_uia_core import wake_accessibility_around_point
+
+                wake_accessibility_around_point(int(x), int(y), max_children=48)
+        except Exception:
+            pass
+
     try:
         from desktop_uia_core import capture_element_at_point
 
@@ -596,19 +719,65 @@ def _peek_impl(x: int, y: int) -> ElementPeekResult:
             rect = core_result.get("bounding_rect")
             label = core_result.get("element_label", "")
             ct = core_result.get("control_type", "")
+            cname = core_result.get("class_name", "") or ""
 
-            # 检查 rect 是否有效（非空且宽高大于0）
             if not rect or len(rect) != 4 or (rect[2] - rect[0]) < 1 or (rect[3] - rect[1]) < 1:
-                pass  # 回退到 pywinauto
+                pass
             elif _is_desktop_root_name(label):
                 return ElementPeekResult(ok=False, error_code="desktop_root")
             else:
-                return ElementPeekResult(
-                    ok=True,
-                    bounding_rect=rect,
-                    element_label=label,
-                    control_type=ct,
+                rw = int(rect[2]) - int(rect[0])
+                rh = int(rect[3]) - int(rect[1])
+                low = (label or "").lower()
+                try:
+                    from desktop_highlight_win32 import rect_is_near_fullscreen
+
+                    near_full = rect_is_near_fullscreen(rect)
+                except Exception:
+                    near_full = rw > 1600 and rh > 900
+                if "folderview" in low or near_full:
+                    pass
+                else:
+                    return ElementPeekResult(
+                        ok=True,
+                        bounding_rect=rect,
+                        element_label=label,
+                        control_type=ct,
+                        class_name=cname,
+                    )
+        elif core_result.get("error") == "fake_container":
+            # 唤醒后再试一次
+            try:
+                from desktop_uia_core import (
+                    capture_element_at_point as _cap2,
+                    wake_accessibility_around_point,
                 )
+
+                wake_accessibility_around_point(int(x), int(y), max_children=80)
+                again = _cap2(int(x), int(y))
+                if again.get("ok") and again.get("bounding_rect"):
+                    rect = again["bounding_rect"]
+                    try:
+                        from desktop_highlight_win32 import rect_is_near_fullscreen
+
+                        if not rect_is_near_fullscreen(rect):
+                            return ElementPeekResult(
+                                ok=True,
+                                bounding_rect=rect,
+                                element_label=again.get("element_label") or "",
+                                control_type=again.get("control_type") or "",
+                                class_name=again.get("class_name") or "",
+                            )
+                    except Exception:
+                        return ElementPeekResult(
+                            ok=True,
+                            bounding_rect=rect,
+                            element_label=again.get("element_label") or "",
+                            control_type=again.get("control_type") or "",
+                            class_name=again.get("class_name") or "",
+                        )
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -634,13 +803,29 @@ def _peek_impl(x: int, y: int) -> ElementPeekResult:
             return ElementPeekResult(ok=False, error_code="no_rect")
         label = _extract_filename_label(_element_name(el))
         ct = _element_control_type(el)
+        cname = _element_class_name(el)
         if _is_desktop_root_name(label):
             return ElementPeekResult(ok=False, error_code="desktop_root")
+        low = (label or "").lower()
+        bw = bounds[2] - bounds[0]
+        bh = bounds[3] - bounds[1]
+        if "folderview" in low or (
+            _SYS_LISTVIEW in (cname or "").lower() and (bw > 400 or bh > 400)
+        ):
+            return ElementPeekResult(ok=False, error_code="desktop_shell")
+        try:
+            from desktop_highlight_win32 import rect_is_near_fullscreen
+
+            if rect_is_near_fullscreen(bounds):
+                return ElementPeekResult(ok=False, error_code="near_fullscreen")
+        except Exception:
+            pass
         return ElementPeekResult(
             ok=True,
             bounding_rect=bounds,
             element_label=label,
             control_type=ct,
+            class_name=cname or "",
         )
     except Exception as exc:
         code = "access_denied" if "com" in type(exc).__name__.lower() else "peek_error"
@@ -652,10 +837,12 @@ def _peek_impl(x: int, y: int) -> ElementPeekResult:
             pass
 
 
-def peek_element_at_point(x: int, y: int, *, timeout_sec: float = 0.4) -> ElementPeekResult:
+def peek_element_at_point(
+    x: int, y: int, *, timeout_sec: float = 0.4, wake_app: bool = True
+) -> ElementPeekResult:
     """悬停高亮：仅取控件矩形，不构建完整快照。"""
     try:
-        fut = _executor.submit(_peek_impl, int(x), int(y))
+        fut = _executor.submit(_peek_impl, int(x), int(y), wake_app=bool(wake_app))
         return fut.result(timeout=float(timeout_sec))
     except FuturesTimeout:
         return ElementPeekResult(ok=False, error_code="timeout")

@@ -45,51 +45,67 @@ class NodeAnalyzer @Inject constructor() {
      * 查找最小面积的最深可操作节点。
      * 借鉴 SoloPi PositionLocator: 在坐标位置下找到最小的可点击叶子节点。
      *
-     * @param root 根节点
-     * @param x 屏幕 X 坐标
-     * @param y 屏幕 Y 坐标
-     * @return 最佳操作节点 (纯数据)
+     * 修复：旧实现在面积未改善时 `continue` 跳过子节点遍历，导致只能命中大容器。
      */
     fun findBestNode(root: AccessibilityNodeInfo, x: Int, y: Int): NodeInfo? {
-        var bestNode: AccessibilityNodeInfo? = null
+        var bestSnapshot: NodeInfo? = null
         var bestArea = Int.MAX_VALUE
-
         val rect = Rect()
-        val stack = ArrayDeque<AccessibilityNodeInfo>()
-        stack.addLast(root)
+        val obtained = mutableListOf<AccessibilityNodeInfo>()
 
-        while (stack.isNotEmpty()) {
-            val node = stack.removeFirst()
+        fun identityBoost(node: AccessibilityNodeInfo): Int {
+            var score = 0
+            if (node.isClickable || node.isEditable || node.isCheckable) score += 3
+            if (!node.text.isNullOrBlank()) score += 2
+            if (!node.contentDescription.isNullOrBlank()) score += 2
+            if (!node.viewIdResourceName.isNullOrBlank()) score += 3
+            return score
+        }
 
+        fun visit(node: AccessibilityNodeInfo) {
             node.getBoundsInScreen(rect)
-            if (!rect.contains(x, y)) {
-                continue
-            }
+            if (!rect.contains(x, y)) return
 
             val area = (rect.right - rect.left) * (rect.bottom - rect.top)
-            if (area > 0 && area < bestArea) {
-                bestArea = area
-                bestNode?.recycle()
-                bestNode = node
-            } else {
-                // Don't need this node anymore if it's not the best
-                // but don't recycle nodes we're still traversing
-                if (bestNode != node) {
-                    node.recycle()
+            if (area > 0) {
+                val boost = identityBoost(node)
+                val betterArea = area < bestArea
+                val sameAreaRicher = area == bestArea && boost > 0 &&
+                    (bestSnapshot == null || boost > identityBoostScore(bestSnapshot))
+                // 叶子或有身份信息的节点才更新 best，避免停在巨大 WebView/DecorView
+                val meaningful = boost > 0 || node.childCount == 0
+                if (meaningful && (betterArea || sameAreaRicher)) {
+                    bestArea = area
+                    bestSnapshot = extractNodeInfo(node)
                 }
-                continue
             }
 
-            // Traverse children (put children in stack, skip this node for recycling)
+            // 始终深入包含该点的子节点
             for (i in 0 until node.childCount) {
                 val child = node.getChild(i) ?: continue
-                if (child !== node) {
-                    stack.addLast(child)
-                }
+                obtained.add(child)
+                visit(child)
             }
         }
 
-        return bestNode?.let { extractNodeInfo(it).also { bestNode.recycle() } }
+        try {
+            visit(root)
+        } finally {
+            for (n in obtained) {
+                try { n.recycle() } catch (_: Exception) {}
+            }
+        }
+        return bestSnapshot
+    }
+
+    private fun identityBoostScore(info: NodeInfo?): Int {
+        if (info == null) return 0
+        var score = 0
+        if (info.isClickable || info.isEditable) score += 3
+        if (info.text.isNotBlank()) score += 2
+        if (info.contentDescription.isNotBlank()) score += 2
+        if (info.resourceId.isNotBlank()) score += 3
+        return score
     }
 
     /**

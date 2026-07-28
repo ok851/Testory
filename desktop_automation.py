@@ -223,16 +223,20 @@ class DesktopAutomation:
         from desktop_input import _enum_visible_windows
 
         spec = parse_desktop_spec(step.get("desktop_spec"))
-        verify_effect = action in _POINTER_ACTIONS and should_verify_desktop_effect(spec)
+        verify_effect = action in _POINTER_ACTIONS and should_verify_desktop_effect(
+            spec, action=action
+        )
         titles_before = {t for _h, t, _c in _enum_visible_windows() if t} if verify_effect else set()
         hwnds_before = {h for h, _t, _c in _enum_visible_windows()} if verify_effect else set()
 
+        pointer_executed = False
         if result.resolved_via == "shell_com":
             from desktop_shell_application import execute_shell_application_action
 
             com_target = execute_shell_application_action(
                 step, action, target=result.shell_com_target
             )
+            pointer_executed = True
             uat_logger.info(
                 "桌面 Shell COM: action=%s icon=%s matched=%s",
                 action,
@@ -246,6 +250,7 @@ class DesktopAutomation:
                 step, action, target=result.shell_target
             )
             x, y = target.screen_x, target.screen_y
+            pointer_executed = True
             uat_logger.info(
                 "桌面 ListView 后台消息: action=%s icon=%s index=%s @ client(%s,%s) screen(%s,%s)",
                 action,
@@ -274,8 +279,19 @@ class DesktopAutomation:
                 result.resolved_via,
             )
 
+        # 定位命中且指针已发出 → 成功；低分未命中 → 失败（不能标成功）
+        if not pointer_executed:
+            raise RuntimeError(
+                f"点击操作未成功执行，定位方式={result.resolved_via} score={score:.3f} @ ({x},{y})"
+            )
+        if not verified and result.resolved_via not in ("shell_com", "shell_listview"):
+            raise RuntimeError(
+                f"未准确定位到目标元素（score={score:.3f}，定位方式={result.resolved_via}）。"
+                "请重新捕获目标元素确保定位准确"
+            )
+
         out: Dict[str, Any] = {
-            "status": "success" if (verified and pointer_executed) else "warning",
+            "status": "success",
             "action": action,
             "verified": verified,
             "pointer_executed": pointer_executed,
@@ -285,19 +301,14 @@ class DesktopAutomation:
             "resolved_via": result.resolved_via,
         }
 
-        if not verified:
-            out["warning"] = f"匹配分数过低 ({score:.3f})，可能未准确命中目标元素"
-        if not pointer_executed:
-            out["error"] = "点击操作未成功执行"
-
         if verify_effect:
             keyword = _effect_keyword_from_step(step) or infer_effect_keyword(
                 spec, (step.get("description") or "")
             )
-            desktop_shell = bool(
-                spec.get("desktop_shell")
-                or keyword
-                or "listitem" in (step.get("description") or "").lower()
+            # 仅显式 desktop_shell / 双击桌面图标类才走资源管理器启发式
+            desktop_shell = bool(spec.get("desktop_shell")) or action in (
+                "double_click",
+                "doubleclick",
             )
             timeout = float(spec.get("effect_timeout") or 8.0)
             if not wait_for_desktop_effect(
@@ -361,11 +372,27 @@ class DesktopAutomation:
                 break
 
         if args:
-            subprocess.Popen([path] + args, shell=False)
+            try:
+                from desktop_embed_launch import popen_with_embed_hooks
+
+                _, prep = popen_with_embed_hooks(path, args)
+                embed_meta = prep
+            except Exception:
+                subprocess.Popen([path] + args, shell=False)
+                embed_meta = {}
         elif sys.platform == "win32":
-            os.startfile(path)  # type: ignore[attr-defined]
+            # 不用 os.startfile：无法注入 WebView2/Chromium 无障碍参数
+            try:
+                from desktop_embed_launch import popen_with_embed_hooks
+
+                _, prep = popen_with_embed_hooks(path, [])
+                embed_meta = prep
+            except Exception:
+                os.startfile(path)  # type: ignore[attr-defined]
+                embed_meta = {}
         else:
             subprocess.Popen([path], shell=False)
+            embed_meta = {}
 
         hwnd, win_title = self._find_hwnd_after_launch(title_hint or path)
         if hwnd:
@@ -383,6 +410,9 @@ class DesktopAutomation:
             out["window_title"] = win_title
         elif title_hint:
             out["window_title"] = title_hint
+        if embed_meta.get("cdp_port"):
+            out["embed_cdp_port"] = int(embed_meta["cdp_port"])
+            out["embed_hooks"] = True
         return out
 
     def _find_hwnd_after_launch(self, launch_value: str, timeout: float = 10.0) -> tuple:
@@ -864,7 +894,15 @@ class DesktopAutomation:
         return None
 
     def inspect_uia_tree(self, max_depth: int = 4, max_nodes: int = 120) -> List[Dict[str, Any]]:
-        raise RuntimeError("UIA 探测已移除，请使用 visual 框选录制")
+        try:
+            from desktop_uia_core import dump_foreground_uia_tree
+
+            return dump_foreground_uia_tree(
+                max_depth=max(1, int(max_depth or 4)),
+                max_nodes=max(10, int(max_nodes or 120)),
+            )
+        except Exception as exc:
+            raise RuntimeError(f"UIA 探测失败: {exc}") from exc
 
 
 class DesktopWorker:
@@ -1002,7 +1040,16 @@ def sync_desktop_execute_step(step: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def sync_desktop_inspect(max_depth: int = 4, max_nodes: int = 120) -> List[Dict[str, Any]]:
-    return []
+    """导出前台窗口 UIA 树（调试/控件探测）。"""
+    try:
+        from desktop_uia_core import dump_foreground_uia_tree
+
+        return dump_foreground_uia_tree(
+            max_depth=max(1, int(max_depth or 4)),
+            max_nodes=max(10, int(max_nodes or 120)),
+        )
+    except Exception:
+        return []
 
 
 def sync_desktop_verify_element(

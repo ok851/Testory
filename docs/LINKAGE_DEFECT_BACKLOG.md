@@ -20,7 +20,7 @@
 | L6 | 场景保存→列表→加载→再执行 | ID/字段一致，可运营 |
 | L7 | 跨端总结 success 仅当所有必选阶段通过且无未处理失败 | `RECOVERY_SKIP` 须显式策略并在报告披露 |
 
-**状态（2026-07-24）：L1–L7 已满足**（对应 X1–X8、Y1–Y4、Y6 关闭）。Y5：Hub 矩阵 + Desktop **有限**运行时自愈（非通用 UIA）；禁止宣传「已自愈」。Z1–Z3 已关闭。
+**状态（2026-07-27）：L1–L7 已满足**（对应 X1–X8、Y1–Y6、Z1–Z3 关闭）。Y5：**已关闭（Done=有限自愈）**——Hub 矩阵 + Desktop 运行时自愈（标题/别名/有限 UIA）；**禁止宣传「通用已自愈」**。
 
 ---
 
@@ -47,7 +47,7 @@
 | Y2 | ~~`RECOVERY_SKIP` 可跳过失败且不影响 success~~ **已关闭（0b-Y2）** | Skip 写入 `skipped_failure_stages` / recovery_log；默认挡总成功；`allow_skipped_failures` 显式放行 |
 | Y3 | ~~跨端 Web runner 无自愈、空选择器软跳过~~ **已关闭（0b-Y3）** | 空 selector 一律失败（`EMPTY_SELECTOR`，ignore allow_skip）；全跳过需阶段 `allow_skip`；`user_hint` + 前端可读提示 |
 | Y4 | ~~场景 JSON `_store_path` 可能落到仓库外目录~~ **已关闭（0b-Y4）** | 修正 `parents[2]`；`scenario_store_info` + 前端备份提示 |
-| Y5 | Self-heal Hub：能力矩阵 + **Desktop 有限运行时自愈**（标题放宽/别名重解析） | `GET /api/ai/heal/capabilities`；`desktop_runtime_heal`；**禁止宣传通用 UIA/Desktop 已自愈**；失败不假绿 |
+| Y5 | ~~Self-heal Hub + Desktop 有限运行时自愈~~ **已关闭（2026-07-27）** | Hub 矩阵；attach/launch/有限 UIA；**禁宣传通用已自愈**；失败不假绿 |
 | Y6 | ~~跨端断言主要吃 API extract，UI 无源~~ **已关闭（0b-Y6）** | 变量/`{{var}}`/UI selector 解析；缺源失败；断言失败挡总成功 |
 
 ### P2 — 工程与体验
@@ -103,5 +103,7 @@
 | 2026-07-24 | **B-2 / Z2 / R07**：`trace_pack` 证据包（manifest/trace/report/screenshots index + ZIP）；API 与跨端页导出；Demo 同步产出；`tests/test_trace_pack.py`。 |
 | 2026-07-24 | **Y5（半）**：Self-heal Hub 能力矩阵 API/页；Desktop 仅静态扫描、明确无运行时自愈；禁营销完成态。 |
 | 2026-07-24 | **Y5（续）**：Desktop 有限运行时自愈（attach 标题放宽 / launch 别名重解析）；orchestrator 接线；失败不假绿；`tests/test_desktop_runtime_heal.py`。 |
+| 2026-07-27 | **Y5（UIA 有限）**：click/input 等有限 UIA 放宽（去 automation_id、name contains、清 parent_chain、缩短 path）；仍非通用自愈；`demos/golden` R17。 |
+| 2026-07-27 | **Y5 关闭**：Done=Hub+有限 Desktop 自愈；`y5.closed=true`；禁营销「通用已自愈」。 |
 | 2026-07-24 | **Z3**：跨端阶段/总结果 Schema 归一（Mock simulate ↔ live）；`ai_modules/execute/result_schema.py`；Demo/orchestrator 接线；`tests/test_cross_end_result_schema.py`。 |
 | 2026-07-24 | **R08+R09+R10+R14**：`risk_guard` L2 编排门禁；guards Demo（真实 HITL/Risk + Desktop 生产闸门模拟）；根 `LICENSE`/`NOTICE`/`README.md`；`tests/test_risk_guard.py` + `test_goai_guards_demo.py`。 |

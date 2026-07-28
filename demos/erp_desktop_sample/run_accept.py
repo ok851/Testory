@@ -67,7 +67,46 @@ def main() -> int:
         action="store_true",
         help="种子订单与窗口订单故意不一致，应诚实失败",
     )
+    ap.add_argument(
+        "--customer-exe",
+        default="",
+        help="真实客户 ERP 可执行文件路径；将写入 data/desktop_aliases.json 并走 alias 模式",
+    )
+    ap.add_argument(
+        "--window-title-re",
+        default="",
+        help="客户窗口标题正则（可用 {order_id}）；配合 --customer-exe",
+    )
+    ap.add_argument(
+        "--customer-args",
+        default="",
+        help="客户启动参数，逗号分隔；可用 {order_id}",
+    )
     args = ap.parse_args()
+
+    if args.customer_exe:
+        args.mode = "alias"
+        from desktop_env_config import probe_app_alias, save_user_alias
+
+        cargs = [a.strip() for a in (args.customer_args or "").split(",") if a.strip()]
+        tre = (args.window_title_re or "").strip() or f"(?i).*{args.order_id}.*"
+        entry = save_user_alias(
+            args.alias or "erp",
+            path=args.customer_exe.strip(),
+            args=cargs,
+            window_title_re=tre,
+        )
+        probe = probe_app_alias(args.alias or "erp", order_id=args.order_id)
+        print(
+            json.dumps(
+                {"saved_user_alias": entry, "probe": probe},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        if not probe.get("ok"):
+            print("ACCEPT: FAIL customer exe probe", flush=True)
+            return 3
 
     if args.expect_missing and args.mode != "alias":
         print("ACCEPT: FAIL --expect-missing 仅适用于 --mode alias", flush=True)

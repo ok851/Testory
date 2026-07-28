@@ -19,6 +19,10 @@ python demos/goai-agentteams/run_demo.py --suite guards --variant pass
 python demos/goai-agentteams/run_demo.py --suite guards --variant hitl_timeout
 python demos/goai-agentteams/run_demo.py --suite guards --variant l2_denied
 python demos/goai-agentteams/run_demo.py --suite guards --variant desktop_softfail
+
+# SDK 事件导出（官方 SDK 可选；不宣称用例绿）
+python demos/goai-agentteams/export_sdk_events.py
+python demos/goai-agentteams/export_sdk_events.py --from-sample
 ```
 
 | suite / variant | 期望 status | 要点 |

@@ -81,6 +81,7 @@ _CWP_ALL = 0x0000
 
 
 def child_window_from_point(parent_hwnd: int, x: int, y: int) -> Optional[int]:
+    """x/y 为屏幕坐标；内部转换为父窗口客户区坐标（ChildWindowFromPointEx 要求）。"""
     import ctypes
     from ctypes import wintypes
 
@@ -88,8 +89,11 @@ def child_window_from_point(parent_hwnd: int, x: int, y: int) -> Optional[int]:
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
     pt = POINT(int(x), int(y))
+    u32 = _ctypes_user32()
+    if not u32.ScreenToClient(int(parent_hwnd), ctypes.byref(pt)):
+        return None
     hwnd = int(
-        _ctypes_user32().ChildWindowFromPointEx(
+        u32.ChildWindowFromPointEx(
             int(parent_hwnd),
             pt,
             _CWP_SKIPINVISIBLE | _CWP_SKIPTRANSPARENT,
@@ -100,11 +104,12 @@ def child_window_from_point(parent_hwnd: int, x: int, y: int) -> Optional[int]:
 
 
 def deepest_child_at_point(x: int, y: int) -> Optional[int]:
+    """RPA 常用：WindowFromPoint 后向下钻到最深子控件。"""
     top = window_from_point(int(x), int(y))
     if not top:
         return None
     current = top
-    for _ in range(8):
+    for _ in range(12):
         child = child_window_from_point(current, int(x), int(y))
         if not child or child == current:
             break
@@ -141,6 +146,10 @@ def get_window_class_name(hwnd: int) -> str:
     buf = ctypes.create_unicode_buffer(256)
     _ctypes_user32().GetClassNameW(int(hwnd), buf, 256)
     return (buf.value or "").strip()
+
+
+# 兼容别名
+get_window_class = get_window_class_name
 
 
 def get_top_level_window(hwnd: int) -> int:

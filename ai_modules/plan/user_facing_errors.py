@@ -117,6 +117,12 @@ _HINTS: Dict[str, tuple[str, str]] = {
         "桌面会话不可用",
         "请先启动智能体或 Desktop Gateway，再执行 desktop 阶段。",
     ),
+    "FARM_DISPATCH_NOT_READY": (
+        "远程农场调度未就绪",
+        "remote 模式下请登记并探测在线节点、配置 DESKTOP_AGENT_GATEWAY_SECRET；"
+        "或设置 DESKTOP_FARM_DISPATCH_GATE=0 跳过农场门禁（仍须 Gateway 可达）。"
+        "详见 /execution-farm 调度就绪检查。",
+    ),
     "SYNC_UNKNOWN_TYPE": (
         "未知同步类型",
         "支持：data_sync、api_state_sync、state_sync、time_sync、human_sync。",

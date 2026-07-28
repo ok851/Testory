@@ -462,7 +462,7 @@
         </div>
     </nav>
 
-    <div id="globalRunBanner" class="hidden fixed bottom-4 right-4 z-[9999] max-w-md w-[calc(100%-2rem)] bg-white dark:bg-gray-900 border border-blue-200 dark:border-gray-700 rounded-lg shadow-lg p-3">
+    <div id="globalRunBanner" class="hidden fixed z-[9999] max-w-md w-[calc(100%-2rem)] bg-white dark:bg-gray-900 border border-blue-200 dark:border-gray-700 rounded-lg shadow-lg p-3" style="right:1rem; bottom:5.75rem;">
         <div class="flex items-start gap-2">
             <i class="fas fa-play-circle text-blue-500 mt-1"></i>
             <div class="min-w-0 flex-1">
@@ -952,9 +952,10 @@
         });
     </script>
     <script src="{{ url_for('static', filename='js/testory-shell.js') }}?v=webui10" defer></script>
-    <script src="{{ url_for('static', filename='js/license_feature_gate.js') }}?v=2" defer></script>
+    <script src="{{ url_for('static', filename='js/license_feature_gate.js') }}?v=3" defer></script>
+    <script src="{{ url_for('static', filename='js/save_as.js') }}?v=1" defer></script>
     {% if is_tauri %}
-    <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=3"></script>
+    <script type="module" src="{{ url_for('static', filename='js/tauri-polyfill.js') }}?v=4"></script>
     {% elif is_client %}
     <script src="{{ url_for('static', filename='js/testory-desktop-chrome.js') }}?v=5" defer></script>
     {% endif %}

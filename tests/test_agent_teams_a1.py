@@ -38,8 +38,11 @@ def test_team_spec_loads():
     assert spec.get("team_id") == "testory-cross-end-qa-team"
     roles = [r.get("id") for r in spec.get("roles") or []]
     assert "Planner" in roles
+    assert "RiskAdvisor" in roles
+    assert "DesktopExecutor" in roles
     assert "WebApiExecutor" in roles
     assert "Verifier" in roles
+    assert len(roles) >= 5
 
 
 def test_test_run_state_persist_roundtrip(tmp_path, monkeypatch):

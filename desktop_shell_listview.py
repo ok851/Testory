@@ -23,7 +23,15 @@ if sys.platform != "win32":
 LVM_GETITEMCOUNT = 0x1004
 LVM_GETITEMTEXTW = 0x1073
 LVM_GETITEMRECT = 0x100E
+LVM_HITTEST = 0x1012
+LVM_SUBITEMHITTEST = 0x1039
 LVIR_BOUNDS = 0
+LVIR_ICON = 1
+LVIR_LABEL = 2
+LVHT_ONITEMICON = 0x0002
+LVHT_ONITEMLABEL = 0x0004
+LVHT_ONITEMSTATEICON = 0x0008
+LVHT_ONITEM = LVHT_ONITEMICON | LVHT_ONITEMLABEL | LVHT_ONITEMSTATEICON
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
@@ -47,12 +55,325 @@ class ShellIconTarget:
     client_y: int
     screen_x: int
     screen_y: int
+    screen_rect: Optional[Tuple[int, int, int, int]] = None
+    control_type: str = "ListItem"
 
 
 def _user32():
     import ctypes
 
     return ctypes.windll.user32
+
+
+def _kernel32():
+    import ctypes
+
+    return ctypes.windll.kernel32
+
+
+def _window_pid(hwnd: int) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    pid = wintypes.DWORD(0)
+    _user32().GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    return int(pid.value or 0)
+
+
+class _RemoteBuffer:
+    """
+    跨进程 ListView 消息缓冲。
+
+    绝不能把本进程指针直接 SendMessage 给 explorer 的 SysListView32：
+    否则 explorer 在错误地址读写，会卡死桌面（黑屏），恢复时常伴随音量 OSD。
+    """
+
+    def __init__(self, hwnd: int, size: int):
+        import ctypes
+
+        self._k32 = _kernel32()
+        self._hwnd = int(hwnd)
+        self._size = int(size)
+        self._hprocess = 0
+        self.remote = 0
+        pid = _window_pid(hwnd)
+        if not pid:
+            raise OSError("无法获取 ListView 进程 PID")
+        access = 0x0008 | 0x0010 | 0x0020 | 0x0400  # VM_OP|VM_READ|VM_WRITE|QUERY
+        self._hprocess = int(self._k32.OpenProcess(access, False, pid) or 0)
+        if not self._hprocess:
+            raise OSError(f"OpenProcess 失败 pid={pid}")
+        self.remote = int(
+            self._k32.VirtualAllocEx(
+                self._hprocess, None, self._size, 0x1000 | 0x2000, 0x04
+            )
+            or 0
+        )
+        if not self.remote:
+            self.close()
+            raise OSError("VirtualAllocEx 失败")
+
+    def write(self, local_ptr, size: Optional[int] = None) -> None:
+        import ctypes
+
+        n = int(size if size is not None else self._size)
+        written = ctypes.c_size_t(0)
+        ok = self._k32.WriteProcessMemory(
+            self._hprocess, self.remote, local_ptr, n, ctypes.byref(written)
+        )
+        if not ok:
+            raise OSError("WriteProcessMemory 失败")
+
+    def read(self, local_ptr, size: Optional[int] = None) -> None:
+        import ctypes
+
+        n = int(size if size is not None else self._size)
+        readn = ctypes.c_size_t(0)
+        ok = self._k32.ReadProcessMemory(
+            self._hprocess, self.remote, local_ptr, n, ctypes.byref(readn)
+        )
+        if not ok:
+            raise OSError("ReadProcessMemory 失败")
+
+    def close(self) -> None:
+        if self.remote and self._hprocess:
+            try:
+                self._k32.VirtualFreeEx(self._hprocess, self.remote, 0, 0x8000)
+            except Exception:
+                pass
+            self.remote = 0
+        if self._hprocess:
+            try:
+                self._k32.CloseHandle(self._hprocess)
+            except Exception:
+                pass
+            self._hprocess = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def _send_listview_struct(hwnd: int, msg: int, wparam: int, struct_obj) -> bool:
+    """将结构体放到目标进程再 SendMessageTimeout，避免卡死 explorer。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+    size = ctypes.sizeof(struct_obj)
+    # 64 位下结果缓冲必须是指针宽度
+    result = ctypes.c_size_t(0)
+    try:
+        user32.SendMessageTimeoutW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            wintypes.UINT,
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        user32.SendMessageTimeoutW.restype = wintypes.BOOL
+    except Exception:
+        pass
+    with _RemoteBuffer(hwnd, size) as remote:
+        remote.write(ctypes.byref(struct_obj), size)
+        ok = user32.SendMessageTimeoutW(
+            int(hwnd),
+            int(msg),
+            int(wparam),
+            remote.remote,
+            0x0002,  # SMTO_ABORTIFHUNG
+            180,
+            ctypes.byref(result),
+        )
+        if not ok:
+            return False
+        remote.read(ctypes.byref(struct_obj), size)
+        return True
+
+
+def _get_listview_item_rect(
+    listview_hwnd: int, index: int, *, code: int = LVIR_BOUNDS
+) -> Optional[Tuple[int, int, int, int]]:
+    """返回客户区矩形 (l,t,r,b)。"""
+    import ctypes
+
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", ctypes.c_long),
+            ("top", ctypes.c_long),
+            ("right", ctypes.c_long),
+            ("bottom", ctypes.c_long),
+        ]
+
+    rect = RECT()
+    rect.left = int(code)
+    try:
+        if not _send_listview_struct(int(listview_hwnd), LVM_GETITEMRECT, int(index), rect):
+            return None
+    except OSError as exc:
+        logger.debug("shell_listview GETITEMRECT 跨进程失败: %s", exc)
+        return None
+    if rect.right <= rect.left or rect.bottom <= rect.top:
+        return None
+    return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+
+
+def _client_rect_to_screen(
+    hwnd: int, crect: Tuple[int, int, int, int]
+) -> Tuple[int, int, int, int]:
+    l, t = _client_to_screen(hwnd, crect[0], crect[1])
+    r, b = _client_to_screen(hwnd, crect[2], crect[3])
+    return int(l), int(t), int(r), int(b)
+
+
+def hit_test_listview_item(
+    listview_hwnd: int, screen_x: int, screen_y: int
+) -> Optional[Tuple[int, Tuple[int, int, int, int], str]]:
+    """
+    LVM_HITTEST（跨进程安全）：返回 (index, screen_rect, icon_name)。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    cx, cy = _screen_to_client(int(listview_hwnd), int(screen_x), int(screen_y))
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    class LVHITTESTINFO(ctypes.Structure):
+        _fields_ = [
+            ("pt", POINT),
+            ("flags", wintypes.UINT),
+            ("iItem", ctypes.c_int),
+            ("iSubItem", ctypes.c_int),
+        ]
+
+    info = LVHITTESTINFO()
+    info.pt.x = int(cx)
+    info.pt.y = int(cy)
+    try:
+        if not _send_listview_struct(int(listview_hwnd), LVM_SUBITEMHITTEST, 0, info):
+            info = LVHITTESTINFO()
+            info.pt.x = int(cx)
+            info.pt.y = int(cy)
+            if not _send_listview_struct(int(listview_hwnd), LVM_HITTEST, 0, info):
+                return None
+    except OSError as exc:
+        logger.debug("shell_listview HITTEST 失败: %s", exc)
+        return None
+
+    item = int(info.iItem)
+    if item < 0:
+        return None
+
+    flags = int(info.flags or 0)
+    if flags and not (flags & LVHT_ONITEM) and item < 0:
+        return None
+
+    crect = _get_listview_item_rect(listview_hwnd, item, code=LVIR_BOUNDS)
+    if not crect:
+        icon_r = _get_listview_item_rect(listview_hwnd, item, code=LVIR_ICON)
+        label_r = _get_listview_item_rect(listview_hwnd, item, code=LVIR_LABEL)
+        parts = [p for p in (icon_r, label_r) if p]
+        if not parts:
+            return None
+        crect = (
+            min(p[0] for p in parts),
+            min(p[1] for p in parts),
+            max(p[2] for p in parts),
+            max(p[3] for p in parts),
+        )
+    srect = _client_rect_to_screen(int(listview_hwnd), crect)
+    name = _get_listview_item_text(listview_hwnd, item)
+    return item, srect, name
+
+
+def peek_desktop_icon_at_point(
+    screen_x: int, screen_y: int, *, allow_ocr: bool = False
+) -> Optional[ShellIconTarget]:
+    """悬停/捕获：点在桌面图标上时返回紧贴图标的边界与名称。悬停勿开 OCR。"""
+    lv = get_desktop_listview_hwnd()
+    if not lv:
+        return None
+    lv_rect = None
+    try:
+        from desktop_win32_snapshot import get_window_rect
+
+        lv_rect = get_window_rect(lv)
+    except Exception:
+        lv_rect = None
+    if lv_rect:
+        if not (lv_rect[0] <= int(screen_x) <= lv_rect[2] and lv_rect[1] <= int(screen_y) <= lv_rect[3]):
+            return None
+
+    hit = hit_test_listview_item(lv, int(screen_x), int(screen_y))
+    if not hit:
+        return None
+    idx, srect, name = hit
+    # 悬停路径禁止 OCR（会 DXGI 截屏 + 推理，易卡死）
+    if allow_ocr and not name and srect:
+        try:
+            from desktop_ocr_locate import locate_element_via_ocr
+
+            cx = (srect[0] + srect[2]) // 2
+            cy = (srect[1] + srect[3]) // 2
+            ocr = locate_element_via_ocr(
+                cx, cy, search_radius=max(48, (srect[3] - srect[1]) // 2 + 24)
+            )
+            if ocr and (ocr.get("text") or "").strip():
+                t = str(ocr["text"]).strip()
+                low = t.lower()
+                if t and low not in ("folderview", "desktop", "桌面") and "listview" not in low:
+                    name = t
+        except Exception:
+            pass
+
+    cx = (srect[0] + srect[2]) // 2
+    cy = (srect[1] + srect[3]) // 2
+    cl_x, cl_y = _screen_to_client(lv, cx, cy)
+    return ShellIconTarget(
+        listview_hwnd=lv,
+        index=idx,
+        icon_name=name or f"桌面图标#{idx + 1}",
+        client_x=cl_x,
+        client_y=cl_y,
+        screen_x=cx,
+        screen_y=cy,
+        screen_rect=srect,
+        control_type="ListItem",
+    )
+
+
+def capture_desktop_icon_snapshot_at_point(screen_x: int, screen_y: int) -> Optional[dict]:
+    """供 capture/peek 使用的结构化桌面图标快照。"""
+    target = peek_desktop_icon_at_point(int(screen_x), int(screen_y), allow_ocr=True)
+    if not target or not target.screen_rect:
+        return None
+    name = (target.icon_name or "").strip()
+    selector = {
+        "anchor_props": "ListItem",
+        "key_candidates": [
+            {"property": "uia-name", "value": name, "match": "equals"},
+        ],
+        "parent_chain": [
+            {"control_type": "List", "class_name": "SysListView32", "name": "FolderView"},
+        ],
+        "resolved_via": "shell_listview",
+    }
+    return {
+        "ok": True,
+        "element_label": name,
+        "control_type": "ListItem",
+        "bounding_rect": target.screen_rect,
+        "screen_center": (target.screen_x, target.screen_y),
+        "element_snapshot": {"selector": selector, "class_name": "ListItem"},
+        "index": target.index,
+        "listview_hwnd": target.listview_hwnd,
+    }
 
 
 def _match_icon_name(actual: str, expected: str) -> bool:
@@ -171,11 +492,12 @@ def get_desktop_listview_hwnd() -> int:
 
 
 def _get_listview_item_text(listview_hwnd: int, index: int) -> str:
+    """跨进程安全读取 ListView 项文本。"""
     import ctypes
     from ctypes import wintypes
 
-    user32 = _user32()
-    text_buf = ctypes.create_unicode_buffer(512)
+    text_chars = 512
+    text_bytes = text_chars * 2
 
     class LVITEMW(ctypes.Structure):
         _fields_ = [
@@ -187,39 +509,70 @@ def _get_listview_item_text(listview_hwnd: int, index: int) -> str:
             ("pszText", ctypes.c_void_p),
             ("cchTextMax", ctypes.c_int),
             ("iImage", ctypes.c_int),
-            ("lParam", ctypes.c_longlong),
+            ("lParam", ctypes.c_ssize_t),
             ("iIndent", ctypes.c_int),
         ]
 
-    item = LVITEMW()
-    item.mask = 0x0001  # LVIF_TEXT
-    item.iItem = int(index)
-    item.iSubItem = 0
-    item.pszText = ctypes.cast(text_buf, ctypes.c_void_p)
-    item.cchTextMax = 511
-    user32.SendMessageW(int(listview_hwnd), LVM_GETITEMTEXTW, int(index), ctypes.byref(item))
-    return (text_buf.value or "").strip()
+    try:
+        with _RemoteBuffer(int(listview_hwnd), ctypes.sizeof(LVITEMW) + text_bytes) as buf:
+            # 布局：[LVITEMW][wchar text...]
+            remote_item = int(buf.remote)
+            remote_text = remote_item + ctypes.sizeof(LVITEMW)
+            item = LVITEMW()
+            item.mask = 0x0001  # LVIF_TEXT
+            item.iItem = int(index)
+            item.iSubItem = 0
+            item.pszText = remote_text
+            item.cchTextMax = text_chars - 1
+            # 先写 LVITEM，文本区清零
+            import ctypes as ct
+
+            raw = (ct.c_ubyte * (ctypes.sizeof(LVITEMW) + text_bytes))()
+            ct.memmove(raw, ct.byref(item), ctypes.sizeof(LVITEMW))
+            buf.write(raw, ctypes.sizeof(LVITEMW) + text_bytes)
+
+            user32 = _user32()
+            result = ctypes.c_size_t(0)
+            try:
+                user32.SendMessageTimeoutW.argtypes = [
+                    wintypes.HWND,
+                    wintypes.UINT,
+                    ctypes.c_size_t,
+                    ctypes.c_void_p,
+                    wintypes.UINT,
+                    wintypes.UINT,
+                    ctypes.POINTER(ctypes.c_size_t),
+                ]
+                user32.SendMessageTimeoutW.restype = wintypes.BOOL
+            except Exception:
+                pass
+            ok = user32.SendMessageTimeoutW(
+                int(listview_hwnd),
+                LVM_GETITEMTEXTW,
+                int(index),
+                remote_item,
+                0x0002,
+                180,
+                ct.byref(result),
+            )
+            if not ok:
+                return ""
+            out = (ct.c_ubyte * (ctypes.sizeof(LVITEMW) + text_bytes))()
+            buf.read(out, ctypes.sizeof(LVITEMW) + text_bytes)
+            text_buf = ct.create_unicode_buffer(text_chars)
+            ct.memmove(text_buf, ct.byref(out, ctypes.sizeof(LVITEMW)), text_bytes)
+            return (text_buf.value or "").strip()
+    except OSError as exc:
+        logger.debug("shell_listview GETITEMTEXT 跨进程失败: %s", exc)
+        return ""
 
 
 def _get_listview_item_center(listview_hwnd: int, index: int) -> Tuple[int, int]:
-    import ctypes
-
-    user32 = _user32()
-
-    class RECT(ctypes.Structure):
-        _fields_ = [
-            ("left", ctypes.c_long),
-            ("top", ctypes.c_long),
-            ("right", ctypes.c_long),
-            ("bottom", ctypes.c_long),
-        ]
-
-    rect = RECT()
-    rect.left = LVIR_BOUNDS
-    if not user32.SendMessageW(int(listview_hwnd), LVM_GETITEMRECT, int(index), ctypes.byref(rect)):
+    crect = _get_listview_item_rect(listview_hwnd, index, code=LVIR_BOUNDS)
+    if not crect:
         raise RuntimeError(f"无法获取 ListView 项 #{index} 的矩形")
-    cx = int((rect.left + rect.right) // 2)
-    cy = int((rect.top + rect.bottom) // 2)
+    cx = int((crect[0] + crect[2]) // 2)
+    cy = int((crect[1] + crect[3]) // 2)
     return cx, cy
 
 

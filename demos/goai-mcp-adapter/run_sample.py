@@ -98,18 +98,35 @@ def demo_calls() -> List[Dict[str, Any]]:
     return rows
 
 
-def run(*, out_dir: Path | None = None, do_list: bool = True, do_call: bool = True) -> Dict[str, Any]:
+def live_gateway_calls(*, try_step: bool = False) -> Dict[str, Any]:
+    """实连接 Gateway：health 探活；不可达时 ok=false，不假绿。"""
+    from testory_mcp.gateway_live import mcp_live_demo
+
+    return mcp_live_demo(try_step=try_step)
+
+
+def run(
+    *,
+    out_dir: Path | None = None,
+    do_list: bool = True,
+    do_call: bool = True,
+    do_live: bool = False,
+    live_try_step: bool = False,
+) -> Dict[str, Any]:
     tools = list_tools() if do_list else []
     calls = demo_calls() if do_call else []
+    live = live_gateway_calls(try_step=live_try_step) if do_live else None
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "contract": "docs/goai/MCP_CONTRACT.md",
         "tool_count": len(tools),
         "tools": tools,
         "demo_calls": calls,
+        "live_gateway": live,
         "honesty": {
             "unknown_tool_ok": False,
             "no_desktop_ok": False,
+            "health_ok_means_case_pass": False,
         },
     }
     paths: Dict[str, str] = {}
@@ -120,6 +137,13 @@ def run(*, out_dir: Path | None = None, do_list: bool = True, do_call: bool = Tr
         summary = out_dir / "SUMMARY.md"
         tools_path.write_text(json.dumps(tools, ensure_ascii=False, indent=2), encoding="utf-8")
         calls_path.write_text(json.dumps(calls, ensure_ascii=False, indent=2), encoding="utf-8")
+        live_line = ""
+        if live is not None:
+            live_path = out_dir / "live_gateway.json"
+            live_path.write_text(json.dumps(live, ensure_ascii=False, indent=2), encoding="utf-8")
+            paths["live_gateway"] = str(live_path)
+            health_ok = bool((live.get("health") or {}).get("ok"))
+            live_line = f"- live health ok: **{health_ok}** (≠ case pass)\n"
         summary.write_text(
             "\n".join(
                 [
@@ -128,39 +152,53 @@ def run(*, out_dir: Path | None = None, do_list: bool = True, do_call: bool = Tr
                     f"- tools: **{len(tools)}**",
                     f"- demo_calls: **{len(calls)}**",
                     "- honesty: unknown tool / no desktop → not ok",
+                    live_line.rstrip(),
                     "",
                 ]
             ),
             encoding="utf-8",
         )
-        paths = {
+        paths.update({
             "tools": str(tools_path),
             "demo_calls": str(calls_path),
             "summary": str(summary),
-        }
-    return {"ok": True, "tool_count": len(tools), "demo_calls": len(calls), "paths": paths, "payload": payload}
+        })
+    return {
+        "ok": True,
+        "tool_count": len(tools),
+        "demo_calls": len(calls),
+        "paths": paths,
+        "payload": payload,
+        "live_gateway": live,
+    }
 
 
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="GOAI Desktop MCP adapter sample")
     p.add_argument("--list", action="store_true", help="打印工具 Schema")
     p.add_argument("--demo-call", action="store_true", help="假端口调用演示")
+    p.add_argument("--live-gateway", action="store_true", help="探活真实 Desktop Gateway（不可达不假绿）")
+    p.add_argument("--live-step", action="store_true", help="health 通过后尝试 wait 一步")
     p.add_argument("--out", type=Path, default=None)
     args = p.parse_args(argv)
 
-    do_list = args.list or (not args.list and not args.demo_call) or args.out is not None
-    do_call = args.demo_call or args.out is not None or (not args.list and not args.demo_call)
-    # 默认两者都做
-    if not args.list and not args.demo_call:
+    do_list = args.list or (not args.list and not args.demo_call and not args.live_gateway) or args.out is not None
+    do_call = args.demo_call or args.out is not None or (not args.list and not args.demo_call and not args.live_gateway)
+    do_live = bool(args.live_gateway or args.live_step)
+    if not args.list and not args.demo_call and not args.live_gateway:
         do_list = do_call = True
 
     out = args.out
-    if out is None and (args.list or args.demo_call):
-        out = None
-    if args.out is None and not args.list and not args.demo_call:
+    if args.out is None and not args.list and not args.demo_call and not args.live_gateway:
         out = _ROOT / "artifacts" / "goai-mcp-adapter"
 
-    result = run(out_dir=out, do_list=do_list, do_call=do_call)
+    result = run(
+        out_dir=out,
+        do_list=do_list,
+        do_call=do_call,
+        do_live=do_live,
+        live_try_step=bool(args.live_step),
+    )
     printable = {
         "ok": result["ok"],
         "tool_count": result["tool_count"],
@@ -171,6 +209,8 @@ def main(argv: List[str] | None = None) -> int:
         printable["tools"] = result["payload"]["tools"]
     if args.demo_call and not args.out:
         printable["calls"] = result["payload"]["demo_calls"]
+    if do_live:
+        printable["live_gateway"] = result.get("live_gateway")
     print(json.dumps(printable, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 1
 

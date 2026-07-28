@@ -1,71 +1,138 @@
-// Testory CI 对接示例（Jenkins Declarative Pipeline）
-// 依赖：HTTP Request Plugin、Pipeline Utility Steps（readJSON）
-// 凭证：TESTORY_URL / TESTORY_TOKEN（或凭据绑定）
+// Testory CI：变更分析（含 file_snippets）→ 推荐回归 → JUnit 门禁
+// 插件：HTTP Request、Pipeline Utility Steps
+// 变量：TESTORY_URL / TESTORY_TOKEN / PROJECT_ID
+// 前置：业务仓放置 ci/pack_code_change_payload.py（拷自 docs/examples/）
 
 pipeline {
   agent any
-  environment {
-    TESTORY_URL = "${TESTORY_URL}"
-    // 建议用 credentials；此处示意
-    // TESTORY_TOKEN = credentials('testory-api-token')
+  parameters {
+    string(name: 'PROJECT_ID', defaultValue: '1', description: 'Testory project_id')
   }
   stages {
-    stage('Testory Regression') {
+    stage('Code Change Analyze') {
       steps {
         script {
-          def payload = """
-          {
-            "project_id": ${params.PROJECT_ID ?: 1},
-            "async": true,
-            "trigger_source": "jenkins",
-            "build_id": "${env.BUILD_ID}",
-            "git_sha": "${env.GIT_COMMIT ?: ''}",
-            "branch": "${env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''}"
-          }
+          def before = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: 'HEAD~1'
+          def after = env.GIT_COMMIT ?: 'HEAD'
+          // 打包前端源码内容，避免平台只靠路径猜测
+          sh """
+            python ci/pack_code_change_payload.py \\
+              --project-id ${params.PROJECT_ID} \\
+              --git-sha '${env.GIT_COMMIT ?: ''}' \\
+              --branch '${env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''}' \\
+              --before '${before}' \\
+              --after '${after}' \\
+              --out code-change-payload.json \\
+            || python docs/examples/pack_code_change_payload.py \\
+              --project-id ${params.PROJECT_ID} \\
+              --git-sha '${env.GIT_COMMIT ?: ''}' \\
+              --branch '${env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''}' \\
+              --before '${before}' \\
+              --after '${after}' \\
+              --out code-change-payload.json
           """
-          def r = httpRequest(
+          // trigger_source 覆盖为 jenkins
+          def payload = readJSON file: 'code-change-payload.json'
+          payload.trigger_source = 'jenkins'
+          payload.build_id = env.BUILD_ID
+          writeJSON file: 'code-change-payload.json', json: payload
+          def body = readFile('code-change-payload.json')
+          def ar = httpRequest(
             httpMode: 'POST',
-            url: "${TESTORY_URL}/api/ci/runs",
+            url: "${TESTORY_URL}/api/ci/code-change",
             customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
             contentType: 'APPLICATION_JSON',
-            requestBody: payload,
+            requestBody: body,
             validResponseCodes: '200:599'
           )
-          def job = readJSON text: r.content
-          def runId = job.run_id
-          echo "Testory queued run_id=${runId}"
-
-          def terminal = false
-          def finalJob = job
+          def atask = readJSON text: ar.content
+          def taskId = atask.task_id
+          echo "code-change task_id=${taskId}"
+          def done = null
+          for (int i = 0; i < 36; i++) {
+            sleep 5
+            def pr = httpRequest(
+              url: "${TESTORY_URL}/api/ci/code-change/${taskId}",
+              customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
+              validResponseCodes: '200:599'
+            )
+            done = readJSON text: pr.content
+            if (done.terminal == true || done.status == 'done' || done.status == 'failed') break
+          }
+          writeFile file: 'code-change-final.json', text: groovy.json.JsonOutput.toJson(done)
+          env.TESTORY_TASK_ID = taskId
+        }
+      }
+    }
+    stage('Recommended Regression') {
+      steps {
+        script {
+          def taskId = env.TESTORY_TASK_ID
+          def trig = httpRequest(
+            httpMode: 'POST',
+            url: "${TESTORY_URL}/api/ci/code-change/${taskId}/trigger-run",
+            customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
+            contentType: 'APPLICATION_JSON',
+            requestBody: """{"build_id":"${env.BUILD_ID}"}""",
+            validResponseCodes: '200:599'
+          )
+          def t = readJSON text: trig.content
+          def runId = t.ci_run_id
+          if (!runId) {
+            // 回退：整项目 active 用例
+            def payload = """
+            {
+              "project_id": ${params.PROJECT_ID},
+              "async": true,
+              "trigger_source": "jenkins",
+              "build_id": "${env.BUILD_ID}",
+              "git_sha": "${env.GIT_COMMIT ?: ''}"
+            }
+            """
+            def r = httpRequest(
+              httpMode: 'POST',
+              url: "${TESTORY_URL}/api/ci/runs",
+              customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
+              contentType: 'APPLICATION_JSON',
+              requestBody: payload,
+              validResponseCodes: '200:599'
+            )
+            runId = readJSON(text: r.content).run_id
+          }
+          echo "Testory run_id=${runId}"
+          def finalJob = null
           for (int i = 0; i < 120; i++) {
             sleep 10
-            def st = httpRequest(
+            def pr = httpRequest(
               url: "${TESTORY_URL}/api/ci/runs/${runId}",
-              customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]]
+              customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
+              validResponseCodes: '200:599'
             )
-            finalJob = readJSON text: st.content
-            echo "poll status=${finalJob.status} terminal=${finalJob.terminal}"
-            if (finalJob.terminal == true || finalJob.status in ['success', 'failed']) {
-              terminal = true
-              break
-            }
+            finalJob = readJSON text: pr.content
+            if (finalJob.terminal == true || finalJob.status == 'success' || finalJob.status == 'failed') break
           }
-          if (!terminal) {
-            error("Testory 轮询超时 run_id=${runId}")
-          }
-
           httpRequest(
-            url: "${TESTORY_URL}${finalJob.junit_url}",
+            url: "${TESTORY_URL}/api/ci/code-change/${taskId}?refresh_heal=1",
             customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
-            outputFile: 'testory-junit.xml'
+            validResponseCodes: '200:599'
           )
-          junit allowEmptyResults: false, testResults: 'testory-junit.xml'
-
-          if (finalJob.gate_passed != true && finalJob.success != true) {
-            error("Testory 门禁未通过：status=${finalJob.status} failed=${finalJob.failed}")
+          httpRequest(
+            url: "${TESTORY_URL}/api/ci/runs/${runId}/junit.xml",
+            customHeaders: [[name: 'Authorization', value: "Bearer ${TESTORY_TOKEN}"]],
+            outputFile: 'testory-junit.xml',
+            validResponseCodes: '200:599'
+          )
+          junit 'testory-junit.xml'
+          if (!(finalJob?.gate_passed == true || finalJob?.status == 'success')) {
+            error("Testory gate failed: ${finalJob?.status}")
           }
         }
       }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'testory-junit.xml,code-change-final.json,code-change-payload.json', allowEmptyArchive: true
     }
   }
 }

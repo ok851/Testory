@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}证据中心 - Testory{% endblock %}
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 py-8">
+    <h1 class="text-2xl font-bold mb-2"><i class="fas fa-stream text-cyan-700 mr-2"></i>证据中心</h1>
+    <p class="text-sm text-gray-500 mb-2">汇总「跑过什么、卡在哪、证据在哪」——给测试主管 / 交付 / 审计看，不是再开一个执行入口。</p>
+    <p class="text-sm text-gray-500 mb-6">例如：HITL/Risk 门禁阻断、可导出证据、关联 CI、把<strong>成功</strong>运行沉淀为 Skill 草稿。门禁阻断不会美化成通过。</p>
+
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-8" id="opsCards">
+        <div class="bg-white dark:bg-gray-900 border rounded-lg p-3"><p class="text-xs text-gray-500">跨端运行</p><p class="text-xl font-semibold" id="opsCrossEnd">—</p></div>
+        <div class="bg-white dark:bg-gray-900 border rounded-lg p-3"><p class="text-xs text-gray-500">含 HITL</p><p class="text-xl font-semibold" id="opsHitl">—</p></div>
+        <div class="bg-white dark:bg-gray-900 border rounded-lg p-3"><p class="text-xs text-gray-500">含 Risk</p><p class="text-xl font-semibold" id="opsRisk">—</p></div>
+        <div class="bg-white dark:bg-gray-900 border rounded-lg p-3"><p class="text-xs text-gray-500">门禁阻断</p><p class="text-xl font-semibold text-amber-700" id="opsGate">—</p></div>
+        <div class="bg-white dark:bg-gray-900 border rounded-lg p-3"><p class="text-xs text-gray-500">可导出证据</p><p class="text-xl font-semibold" id="opsEvidence">—</p></div>
+        <div class="bg-white dark:bg-gray-900 border rounded-lg p-3"><p class="text-xs text-gray-500">关联 CI</p><p class="text-xl font-semibold" id="opsCi">—</p></div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div class="bg-white dark:bg-gray-900 border rounded-xl p-5">
+            <h2 class="font-semibold mb-3">近期门禁事件</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead><tr class="text-left text-gray-500"><th class="py-1">名称</th><th>错误码</th><th>操作</th></tr></thead>
+                    <tbody id="opsGateTable"><tr><td colspan="3" class="py-4 text-gray-400">加载中…</td></tr></tbody>
+                </table>
+            </div>
+            <p class="text-xs text-gray-400 mt-3"><a class="underline" href="/run-history">打开运行历史</a> · <a class="underline" href="/test_report">测试报告</a></p>
+        </div>
+        <div class="bg-white dark:bg-gray-900 border rounded-xl p-5">
+            <h2 class="font-semibold mb-3">Skill 沉淀（成功运行）</h2>
+            <p class="text-sm text-gray-500 mb-3">仅 success 的 AgentTeams run 可沉淀为草稿；失败默认拒绝。</p>
+            <div class="flex gap-2 mb-3">
+                <input id="promoteRunId" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-950" placeholder="agent run_id" />
+                <button type="button" class="px-3 py-2 rounded-lg bg-cyan-700 text-white text-sm" onclick="promoteSkill()">沉淀</button>
+            </div>
+            <pre id="promoteOut" class="text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg max-h-40 overflow-auto hidden"></pre>
+            <h3 class="text-sm font-medium mt-4 mb-2">已沉淀草稿</h3>
+            <ul id="promotedList" class="text-sm space-y-1 text-gray-600 dark:text-gray-300"><li class="text-gray-400">加载中…</li></ul>
+        </div>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 border rounded-xl p-5 mb-8">
+        <h2 class="font-semibold mb-2">企业运营就绪（非 SLA）</h2>
+        <p class="text-sm text-gray-500 mb-3">可核查项清单；不宣称 SLA 达标。远程执行机见 <a class="underline" href="/execution-farm">执行节点</a>。</p>
+        <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="loadReadiness()">刷新就绪</button>
+        <p id="readyCounts" class="text-sm mt-2 text-gray-600"></p>
+        <ul id="readyList" class="text-xs mt-2 space-y-1 max-h-40 overflow-auto"></ul>
+        <p class="text-xs text-amber-700 mt-2" id="readyDisc"></p>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 border rounded-xl p-5">
+        <h2 class="font-semibold mb-2">配置注册中心（R19）</h2>
+        <p class="text-sm text-gray-500 mb-3">本地托管 Spec/Skill 索引；可镜像到 Nacos，默认不依赖中间件。</p>
+        <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="seedRegistry()">种子发布内置 Team Spec</button>
+        <pre id="registryOut" class="text-xs mt-3 bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto max-h-40"></pre>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 border rounded-xl p-5 mt-6">
+        <h2 class="font-semibold mb-2">AgentTeams SDK 事件导出</h2>
+        <p class="text-sm text-gray-500 mb-3">本地控制面事件映射为 SDK 风格；官方 SDK 未安装时仍可导出对齐。</p>
+        <div class="flex gap-2 mb-3">
+            <input id="sdkRunId" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-950" placeholder="agent run_id" />
+            <button type="button" class="px-3 py-2 rounded-lg bg-slate-700 text-white text-sm" onclick="exportSdk()">导出</button>
+            <button type="button" class="px-3 py-2 rounded-lg border text-sm" onclick="probeSdk()">SDK Runtime 探测</button>
+        </div>
+        <pre id="sdkOut" class="text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg max-h-40 overflow-auto hidden"></pre>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+async function loadOps(){
+    try{
+        const r=await fetch('/api/report/ops-summary');
+        const j=await r.json();
+        const d=(j&&j.data)||{};
+        document.getElementById('opsCrossEnd').textContent=String((d.cross_end_runs||0)+(d.agent_teams_runs||0));
+        document.getElementById('opsHitl').textContent=d.with_hitl||0;
+        document.getElementById('opsRisk').textContent=d.with_risk||0;
+        document.getElementById('opsGate').textContent=d.gate_blocked||0;
+        document.getElementById('opsEvidence').textContent=d.with_evidence||0;
+        document.getElementById('opsCi').textContent=d.with_ci||0;
+        const tb=document.getElementById('opsGateTable');
+        const rows=d.recent_gate_events||[];
+        tb.innerHTML=rows.length?rows.map(function(row){
+            return '<tr class="border-t"><td class="py-2">'+esc(row.case_name||row.test_type||('#'+row.id))+'</td><td><code class="text-xs">'+esc(row.error_code||'—')+'</code></td><td><a class="text-cyan-700 underline" href="'+(row.history_url||'/run-history')+'">历史</a></td></tr>';
+        }).join(''):'<tr><td colspan="3" class="py-4 text-gray-400">近期无门禁阻断</td></tr>';
+    }catch(e){
+        document.getElementById('opsGateTable').innerHTML='<tr><td colspan="3" class="text-red-500">加载失败</td></tr>';
+    }
+}
+async function loadPromoted(){
+    const ul=document.getElementById('promotedList');
+    try{
+        const r=await fetch('/api/ai/skills/promoted?limit=20');
+        const j=await r.json();
+        const skills=j.skills||[];
+        ul.innerHTML=skills.length?skills.map(function(s){
+            return '<li><code class="text-xs">'+esc(s.slug||s.skill_name)+'</code> · '+esc(s.path||'')+'</li>';
+        }).join(''):'<li class="text-gray-400">暂无</li>';
+    }catch(e){ul.innerHTML='<li class="text-red-500">加载失败</li>';}
+}
+async function promoteSkill(){
+    const rid=document.getElementById('promoteRunId').value.trim();
+    const out=document.getElementById('promoteOut');
+    out.classList.remove('hidden');
+    if(!rid){out.textContent='请填写 run_id';return;}
+    const r=await fetch('/api/ai/agent-teams/runs/'+encodeURIComponent(rid)+'/promote-skill',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const j=await r.json();
+    out.textContent=JSON.stringify(j,null,2);
+    loadPromoted();
+}
+async function seedRegistry(){
+    const r=await fetch('/api/config-registry/info?seed=1');
+    const j=await r.json();
+    document.getElementById('registryOut').textContent=JSON.stringify(j,null,2);
+}
+async function loadReadiness(){
+    try{
+        const r=await fetch('/api/enterprise/ops-readiness');
+        const j=await r.json();
+        const c=j.counts||{};
+        document.getElementById('readyCounts').textContent='ok='+(c.ok||0)+' · warn='+(c.warn||0)+' · fail='+(c.fail||0)+' · sla_claim='+String(j.sla_claim);
+        document.getElementById('readyDisc').textContent=j.disclaimer||'';
+        document.getElementById('readyList').innerHTML=(j.checks||[]).slice(0,40).map(function(x){
+            return '<li>'+(x.ok?'✓':'✗')+' ['+esc(x.severity)+'] <code>'+esc(x.id)+'</code> '+esc(x.detail)+'</li>';
+        }).join('');
+    }catch(e){
+        document.getElementById('readyCounts').textContent='加载失败';
+    }
+}
+async function exportSdk(){
+    const rid=document.getElementById('sdkRunId').value.trim();
+    const out=document.getElementById('sdkOut');
+    out.classList.remove('hidden');
+    if(!rid){out.textContent='请填写 run_id';return;}
+    const r=await fetch('/api/ai/agent-teams/runs/'+encodeURIComponent(rid)+'/sdk-events');
+    out.textContent=JSON.stringify(await r.json(),null,2);
+}
+async function probeSdk(){
+    const rid=document.getElementById('sdkRunId').value.trim();
+    const out=document.getElementById('sdkOut');
+    out.classList.remove('hidden');
+    const r=await fetch('/api/ai/agent-teams/sdk-runtime/probe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:rid||undefined})});
+    out.textContent=JSON.stringify(await r.json(),null,2);
+}
+document.addEventListener('DOMContentLoaded',function(){loadOps();loadPromoted();seedRegistry();loadReadiness();});
+</script>
+{% endblock %}

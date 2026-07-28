@@ -17,19 +17,21 @@ DESIGN_SCHEMA_HINT = """{
       "case_name": "string",
       "case_role": "login_feature|business|auth_fixture",
       "design_method": "string (e.g. 等价类划分, 边界值, 场景法, 错误推测)",
-      "case_url": "string",
+      "case_url": "string (Web 可选；Desktop/Android/OS 可留空)",
       "description": "string",
       "precondition": "string",
       "expected_result": "string",
       "steps": [
         {
-          "action": "navigate|click|input|wait|verify|assert|extract_text|api_request|open_app|tap|input_text",
-          "selector_type": "css|xpath|text|accessibility_id|id|...",
+          "action": "navigate|click|input|wait|verify|assert|extract_text|api_request|open_app|tap|input_text|launch_app|type_keys",
+          "selector_type": "css|xpath|text|accessibility_id|id|name|automation_id|...",
           "selector_value": "string",
           "input_value": "string",
           "description": "string",
           "compare_type": "string (assert only)",
-          "automation_layer": "web|android (optional)",
+          "automation_layer": "web|android|desktop (optional)",
+          "desktop_spec": { "path": "", "alias": "", "args": [] },
+          "mobile_spec": { "package": "", "activity": "" },
           "api_spec": { "method": "GET", "url": "", "headers": {}, "body": null, "assertions": [] }
         }
       ]
@@ -60,12 +62,14 @@ def build_design_preview_prompt(
     base_url: str = "",
     project_name: str = "",
     extra_context: str = "",
+    entry_target: str = "",
 ) -> str:
-    platform = (platform_type or "web").strip().lower()
-    if platform in ("mobile",):
-        platform = "android"
+    from ai_modules.generate.input_classify import normalize_platform
+
+    platform = normalize_platform(platform_type)
     max_cases = design_max_cases()
-    bu = (base_url or "").strip()
+    # entry_target 优先；兼容旧字段 base_url
+    entry = (entry_target or base_url or "").strip()
     body = (requirements_text or "").strip()
     cap = design_requirements_max_chars()
     if len(body) > cap:
@@ -73,30 +77,69 @@ def build_design_preview_prompt(
 
     platform_rules = {
         "web": (
-            "平台：Web UI 自动化。步骤 action 使用 navigate/click/input/wait/assert 等。\n"
-            "login_feature：完整登录流程与断言。\n"
-            "business：前置说明已登录；步骤从登录后业务操作开始，不要重复 navigate 到登录页再填账号密码；"
-            "接口相关可在 description 注明使用 {{auth_token}}。\n"
-            "auth_fixture（可选 0-1 条）：仅登录成功并进入系统，用于批量前置，步骤尽量短。\n"
+            "平台：Web UI 自动化。步骤 automation_layer=web；action 使用 navigate/click/input/wait/assert。\n"
+            "入口：仅当用户提供了目标 URL / 路由时才写 navigate；**不要编造 URL**；无 URL 时从业务操作步骤开始，"
+            "在 precondition 写明「已打开目标页」。\n"
+            "定位优先 data-testid / role+name / aria-label，禁止脆弱 XPath 与随机 class。\n"
+            "login_feature：完整登录；business：从已登录后业务开始；auth_fixture：短登录前置。\n"
         ),
         "api": (
             "平台：接口测试。每条用例 steps 仅含 action=api_request，api_spec 含 method/url/headers/body/assertions。\n"
-            "login_feature：登录接口及错误凭据场景。\n"
-            "business：业务接口，headers 使用 Authorization: Bearer {{auth_token}} 等占位符，不要写死 token。\n"
+            "若用户给了 API Base，相对路径可拼接；**禁止编造未出现的域名**。\n"
+            "login_feature：登录接口；business：业务接口用 {{auth_token}} 占位。\n"
         ),
         "android": (
-            "平台：Android。步骤含 automation_layer=android，action 使用 open_app/tap/input_text 等。\n"
+            "平台：Android / 移动端。步骤 automation_layer=android；action 使用 open_app/tap/input_text/wait/assert。\n"
+            "**不要使用 Web 的 navigate/URL**。入口用 open_app + mobile_spec.package（若用户提供了包名）。\n"
+            "定位优先 accessibility_id / resource-id / content-desc / 可见文案；禁止臆造控件 id。\n"
             "login_feature 保留完整登录；business 从已登录状态开始。\n"
+        ),
+        "desktop": (
+            "平台：Windows 桌面应用（UIA）。步骤 automation_layer=desktop；\n"
+            "action 优先：launch_app（可带 desktop_spec.path 或 alias）、click、input/type_keys、wait、assert。\n"
+            "**禁止 Web navigate / 浏览器 URL**。入口用用户提供的应用别名/路径/窗口标题；未提供则在 precondition 写「应用已启动」。\n"
+            "定位优先 Name / AutomationId / ControlType；禁止屏幕坐标作为主路径。\n"
+        ),
+        "os": (
+            "平台：操作系统级场景（Windows）。步骤仍走 automation_layer=desktop（系统窗口/设置/进程相关 UI），\n"
+            "或描述可验证的系统状态断言（服务、进程、文件路径出现在 description/expected_result）。\n"
+            "**禁止编造 URL**。若涉及桌面设置/控制面板窗口，用 UIA 定位；不要生成纯 Web 步骤。\n"
+            "每条用例职责单一：如「启动服务并验证窗口」「打开系统设置某页并断言」。\n"
         ),
     }
     rules = platform_rules.get(platform, platform_rules["web"])
 
-    url_block = ""
-    if bu and platform == "web":
-        url_block = (
-            f"\n强制基础 URL（用户指定，禁止改用其他域名）：{bu}\n"
-            "所有 navigate 的 input_value 必须使用该 URL 或其同主机路径；case_url 同步。\n"
-            "禁止 example.com、admin.sanatorium.com 等未在需求或基础 URL 中出现的域名。\n"
+    entry_block = ""
+    if entry:
+        if platform == "web":
+            entry_block = (
+                f"\n用户指定的 Web 入口 URL：{entry}\n"
+                "所有 navigate 必须使用该 URL 或其同主机路径；case_url 同步。禁止改用其他域名。\n"
+            )
+        elif platform == "api":
+            entry_block = (
+                f"\n用户指定的 API Base：{entry}\n"
+                "api_spec.url 若为相对路径则拼接该 Base；禁止换成未给出的主机。\n"
+            )
+        elif platform == "android":
+            entry_block = (
+                f"\n用户指定的 App 入口：{entry}\n"
+                "open_app / mobile_spec 使用该包名或 Activity；不要编造其他包名。\n"
+            )
+        elif platform == "desktop":
+            entry_block = (
+                f"\n用户指定的桌面应用入口：{entry}\n"
+                "launch_app 的 desktop_spec.alias 或 path / 窗口标题使用该值；不要编造路径。\n"
+            )
+        elif platform == "os":
+            entry_block = (
+                f"\n用户指定的系统场景入口：{entry}\n"
+                "步骤与断言围绕该入口（服务/进程/路径/窗口）；不要引入无关系统区域。\n"
+            )
+    else:
+        entry_block = (
+            "\n用户未提供入口（URL/包名/应用路径均可空）。"
+            "不要编造入口；在 precondition 说明前置环境即可。\n"
         )
 
     return (
@@ -104,8 +147,8 @@ def build_design_preview_prompt(
         "方法包括但不限于：等价类划分、边界值分析、判断表法、场景法、错误推测法。\n"
         f"产出 {max_cases} 条左右 cases（可略少，但至少 3 条），每条标注 design_method 与 case_role。\n"
         f"{rules}"
-        f"{url_block}"
-        "数据规则：账号、密码、URL 仅使用需求正文中明确给出的值，禁止编造。\n"
+        f"{entry_block}"
+        "数据规则：账号、密码、入口标识仅使用需求正文或用户指定入口中明确给出的值，禁止编造。\n"
         "输出：ONLY 一个 JSON 对象，不要 markdown，结构：\n"
         + DESIGN_SCHEMA_HINT
         + f"\n\n项目：{project_name or 'unknown'}\n\n需求正文：\n"
@@ -157,10 +200,16 @@ def _normalize_case_role(raw: Any) -> str:
     return "business"
 
 
-def _normalize_draft(raw: Dict[str, Any], platform_type: str, base_url: str) -> Dict[str, Any]:
-    platform = (platform_type or "web").strip().lower()
-    if platform == "mobile":
-        platform = "android"
+def _normalize_draft(
+    raw: Dict[str, Any],
+    platform_type: str,
+    base_url: str,
+    entry_target: str = "",
+) -> Dict[str, Any]:
+    from ai_modules.generate.input_classify import normalize_platform
+
+    platform = normalize_platform(platform_type)
+    entry = (entry_target or base_url or "").strip()
     steps_in = raw.get("steps") if isinstance(raw.get("steps"), list) else []
     steps: List[Dict[str, Any]] = []
     for st in steps_in:
@@ -169,8 +218,13 @@ def _normalize_draft(raw: Dict[str, Any], platform_type: str, base_url: str) -> 
         action = (st.get("action") or "").strip().lower()
         if platform == "api" and action != "api_request":
             continue
+        # 非 Web：丢掉误生成的 navigate 到 http URL
+        if platform in ("desktop", "os", "android") and action == "navigate":
+            iv = str(st.get("input_value") or "")
+            if iv.startswith("http://") or iv.startswith("https://"):
+                continue
         row = {
-            "action": action or "navigate",
+            "action": action or ("launch_app" if platform in ("desktop", "os") else "navigate"),
             "selector_type": str(st.get("selector_type") or ""),
             "selector_value": str(st.get("selector_value") or ""),
             "input_value": str(st.get("input_value") or ""),
@@ -178,10 +232,21 @@ def _normalize_draft(raw: Dict[str, Any], platform_type: str, base_url: str) -> 
         }
         if st.get("compare_type"):
             row["compare_type"] = str(st.get("compare_type"))
-        if st.get("automation_layer"):
-            row["automation_layer"] = str(st.get("automation_layer"))
+        layer = str(st.get("automation_layer") or "").strip().lower()
+        if platform == "android":
+            layer = "android"
+        elif platform in ("desktop", "os"):
+            layer = "desktop"
+        elif platform == "web" and not layer:
+            layer = "web"
+        if layer:
+            row["automation_layer"] = layer
         if st.get("api_spec") is not None:
             row["api_spec"] = st.get("api_spec")
+        if st.get("desktop_spec") is not None:
+            row["desktop_spec"] = st.get("desktop_spec")
+        if st.get("mobile_spec") is not None:
+            row["mobile_spec"] = st.get("mobile_spec")
         steps.append(row)
 
     draft = {
@@ -194,9 +259,69 @@ def _normalize_draft(raw: Dict[str, Any], platform_type: str, base_url: str) -> 
         "expected_result": str(raw.get("expected_result") or "")[:2000],
         "steps": steps,
     }
-    if platform == "web" and base_url:
-        enforce_base_url_on_draft(draft, base_url)
+    if platform == "web" and entry:
+        enforce_base_url_on_draft(draft, entry)
+    elif platform != "web":
+        # 非 Web 不强制 case_url
+        if (draft.get("case_url") or "").startswith(("http://", "https://")) and platform != "api":
+            draft["case_url"] = ""
+        if platform == "desktop" and entry and steps:
+            _ensure_desktop_launch(draft, entry)
+        if platform == "android" and entry and steps:
+            _ensure_android_open(draft, entry)
     return draft
+
+
+def _ensure_desktop_launch(draft: Dict[str, Any], entry: str) -> None:
+    steps = draft.get("steps") if isinstance(draft.get("steps"), list) else []
+    if not steps:
+        return
+    first = steps[0] if isinstance(steps[0], dict) else {}
+    if (first.get("action") or "").lower() == "launch_app":
+        return
+    spec: Dict[str, Any] = {}
+    e = (entry or "").strip()
+    if e.startswith("@"):
+        spec["alias"] = e
+    elif e.lower().endswith((".exe", ".bat", ".cmd")) or "\\" in e or "/" in e:
+        spec["path"] = e
+    else:
+        spec["alias"] = e if e.startswith("@") else e
+    steps.insert(
+        0,
+        {
+            "action": "launch_app",
+            "selector_type": "",
+            "selector_value": "",
+            "input_value": e,
+            "description": f"启动应用 {e}",
+            "automation_layer": "desktop",
+            "desktop_spec": spec,
+        },
+    )
+    draft["steps"] = steps
+
+
+def _ensure_android_open(draft: Dict[str, Any], entry: str) -> None:
+    steps = draft.get("steps") if isinstance(draft.get("steps"), list) else []
+    if not steps:
+        return
+    first = steps[0] if isinstance(steps[0], dict) else {}
+    if (first.get("action") or "").lower() in ("open_app", "launch_app"):
+        return
+    steps.insert(
+        0,
+        {
+            "action": "open_app",
+            "selector_type": "",
+            "selector_value": "",
+            "input_value": entry,
+            "description": f"打开应用 {entry}",
+            "automation_layer": "android",
+            "mobile_spec": {"package": entry},
+        },
+    )
+    draft["steps"] = steps
 
 
 def generate_design_drafts(
@@ -207,18 +332,27 @@ def generate_design_drafts(
     base_url: str = "",
     project_name: str = "",
     extra_context: str = "",
+    entry_target: str = "",
 ) -> Tuple[List[Dict[str, Any]], List[str], Optional[str]]:
     """
     返回 (drafts, warnings, error_message)。
     error_message 非空表示失败。
     """
+    from ai_modules.generate.input_classify import normalize_platform
+
     warns: List[str] = []
     text = (requirements_text or "").strip()
     if not text:
         return [], warns, "requirements_text 为空"
 
+    entry = (entry_target or base_url or "").strip()
     prompt = build_design_preview_prompt(
-        text, platform_type, base_url, project_name, extra_context
+        text,
+        platform_type,
+        base_url=entry,
+        project_name=project_name,
+        extra_context=extra_context,
+        entry_target=entry,
     )
     from ai_selector_recovery import _extract_json_obj
     from ai_local_inference import local_ai_service
@@ -238,16 +372,13 @@ def generate_design_drafts(
     if not isinstance(cases_raw, list) or not cases_raw:
         return [], warns, "模型未返回 cases 数组或为空，请补充更具体的需求"
 
-    platform = (platform_type or "web").strip().lower()
-    if platform == "mobile":
-        platform = "android"
-    bu = (base_url or "").strip()
+    platform = normalize_platform(platform_type)
 
     drafts: List[Dict[str, Any]] = []
     for item in cases_raw[: design_max_cases() + 5]:
         if not isinstance(item, dict):
             continue
-        drafts.append(_normalize_draft(item, platform, bu))
+        drafts.append(_normalize_draft(item, platform, entry, entry_target=entry))
 
     if not drafts:
         return [], warns, "未能解析出有效用例草案"
@@ -269,11 +400,10 @@ def save_design_drafts_to_project(
     batch_id: str = "",
 ) -> Dict[str, Any]:
     """将选中的草案写入项目，返回 count / created_case_ids / warnings。"""
+    from ai_modules.generate.input_classify import normalize_platform
     from license_manager import license_manager, LicenseType
 
-    platform = (platform_type or "web").strip().lower()
-    if platform == "mobile":
-        platform = "android"
+    platform = normalize_platform(platform_type)
     case_type = "api" if platform == "api" else "ui"
 
     license_info = license_manager.get_current_license()
@@ -307,6 +437,8 @@ def save_design_drafts_to_project(
             case_type=case_type,
             case_role=role,
             generated_by_ai=True,
+            review_status=str(draft.get("review_status") or "active"),
+            source_commit=str(draft.get("source_commit") or "")[:64],
         )
         steps = draft.get("steps") or []
         for idx, step in enumerate(steps, start=1):
@@ -370,6 +502,8 @@ def _draft_step_to_db_kwargs(
     layer = str(step.get("automation_layer") or "").lower()
     if platform == "android":
         layer = "android"
+    elif platform in ("desktop", "os"):
+        layer = "desktop"
     elif not layer:
         layer = "web"
     kwargs: Dict[str, Any] = {
@@ -385,4 +519,18 @@ def _draft_step_to_db_kwargs(
     }
     if action == "assert" and step.get("compare_type"):
         kwargs["compare_type"] = str(step.get("compare_type"))
+    if step.get("desktop_spec") is not None:
+        import json as _json
+
+        ds = step.get("desktop_spec")
+        kwargs["desktop_spec"] = (
+            _json.dumps(ds, ensure_ascii=False) if isinstance(ds, dict) else str(ds or "")
+        )
+    if step.get("mobile_spec") is not None:
+        import json as _json
+
+        ms = step.get("mobile_spec")
+        kwargs["mobile_spec"] = (
+            _json.dumps(ms, ensure_ascii=False) if isinstance(ms, dict) else str(ms or "")
+        )
     return kwargs

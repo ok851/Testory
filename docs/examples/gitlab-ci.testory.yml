@@ -1,32 +1,104 @@
-# GitLab CI — 触发 Testory 执行节点并门禁（Phase 0c）
+# GitLab CI — 变更分析（含 file_snippets）→ 推荐回归 → JUnit 门禁
 # 变量：UAT_PLATFORM_URL、UAT_API_TOKEN、PROJECT_ID
+# 可选：先 POST /api/ci/repo-map 绑定仓库，则可不传 project_id
+#
+# 前置：把本目录 pack_code_change_payload.py 拷到业务仓（如 ci/pack_code_change_payload.py）
+# 有 file_snippets 时平台会跑前端 UI Agent 组件识别，匹配更准。
 
 stages:
+  - analyze
   - test
 
 variables:
   PROJECT_ID: "1"
 
-testory-regression:
-  stage: test
-  image: curlimages/curl:8.5.0
+testory-code-change:
+  stage: analyze
+  image: python:3.11-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl git >/dev/null
   script:
     - |
       set -e
-      echo "触发 Testory /api/ci/runs ..."
-      RESPONSE=$(curl -sS -X POST "${UAT_PLATFORM_URL}/api/ci/runs" \
+      BEFORE="${CI_COMMIT_BEFORE_SHA:-HEAD~1}"
+      # 打包 changed_files + 前端源码内容（file_snippets）
+      python ci/pack_code_change_payload.py \
+        --project-id "${PROJECT_ID}" \
+        --git-sha "${CI_COMMIT_SHA}" \
+        --branch "${CI_COMMIT_REF_NAME}" \
+        --repo "${CI_PROJECT_PATH}" \
+        --before "${BEFORE}" \
+        --after "${CI_COMMIT_SHA}" \
+        --out code-change-payload.json \
+        || python docs/examples/pack_code_change_payload.py \
+        --project-id "${PROJECT_ID}" \
+        --git-sha "${CI_COMMIT_SHA}" \
+        --branch "${CI_COMMIT_REF_NAME}" \
+        --repo "${CI_PROJECT_PATH}" \
+        --before "${BEFORE}" \
+        --after "${CI_COMMIT_SHA}" \
+        --out code-change-payload.json
+      RESP=$(curl -sS -X POST "${UAT_PLATFORM_URL}/api/ci/code-change" \
         -H "Authorization: Bearer ${UAT_API_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d "{\"project_id\":${PROJECT_ID},\"async\":true,\"trigger_source\":\"gitlab\",\"build_id\":\"${CI_PIPELINE_ID}\",\"git_sha\":\"${CI_COMMIT_SHA}\",\"branch\":\"${CI_COMMIT_REF_NAME}\"}")
-      echo "$RESPONSE"
-      echo "$RESPONSE" > ci-run.json
+        -d @code-change-payload.json)
+      echo "$RESP"
+      echo "$RESP" > code-change.json
+      TASK_ID=$(echo "$RESP" | sed -n 's/.*"task_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+      echo "task_id=$TASK_ID"
+      if [ -z "$TASK_ID" ]; then echo "no task_id"; exit 1; fi
+      N=0
+      while [ $N -lt 36 ]; do
+        N=$((N+1))
+        sleep 5
+        ST=$(curl -sS "${UAT_PLATFORM_URL}/api/ci/code-change/${TASK_ID}" -H "Authorization: Bearer ${UAT_API_TOKEN}")
+        echo "poll $N: $ST" | head -c 500
+        TERM=$(echo "$ST" | sed -n 's/.*"terminal"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)
+        STATUS=$(echo "$ST" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        if [ "$TERM" = "true" ] || [ "$STATUS" = "done" ] || [ "$STATUS" = "failed" ]; then
+          echo "$ST" > code-change-final.json
+          break
+        fi
+      done
+  artifacts:
+    when: always
+    paths:
+      - code-change-payload.json
+      - code-change.json
+      - code-change-final.json
+    expire_in: 14 days
 
-      RUN_ID=$(echo "$RESPONSE" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-      echo "run_id=$RUN_ID"
+testory-recommended-regression:
+  stage: test
+  image: curlimages/curl:8.5.0
+  needs:
+    - job: testory-code-change
+      artifacts: true
+  script:
+    - |
+      set -e
+      TASK_ID=$(sed -n 's/.*"task_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' code-change.json | head -1)
+      if [ -z "$TASK_ID" ]; then echo "missing task"; exit 1; fi
+
+      # 触发推荐子集（仅 active 用例；pending 草稿不会进门禁）
+      TRIG=$(curl -sS -X POST "${UAT_PLATFORM_URL}/api/ci/code-change/${TASK_ID}/trigger-run" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"build_id\":\"${CI_PIPELINE_ID}\"}")
+      echo "$TRIG"
+      RUN_ID=$(echo "$TRIG" | sed -n 's/.*"ci_run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+
+      # 若无推荐用例，回退整仓（仍排除 pending）
       if [ -z "$RUN_ID" ]; then
-        echo "未返回 run_id"
-        exit 1
+        echo "无推荐用例或均未激活，回退 project 全量 active 用例"
+        RESPONSE=$(curl -sS -X POST "${UAT_PLATFORM_URL}/api/ci/runs" \
+          -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "{\"project_id\":${PROJECT_ID},\"async\":true,\"trigger_source\":\"gitlab\",\"build_id\":\"${CI_PIPELINE_ID}\",\"git_sha\":\"${CI_COMMIT_SHA}\",\"branch\":\"${CI_COMMIT_REF_NAME}\"}")
+        RUN_ID=$(echo "$RESPONSE" | sed -n 's/.*"run_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
       fi
+      echo "run_id=$RUN_ID"
+      if [ -z "$RUN_ID" ]; then echo "未返回 run_id"; exit 1; fi
 
       MAX=90
       N=0
@@ -35,13 +107,16 @@ testory-regression:
         sleep 10
         STATUS_JSON=$(curl -sS "${UAT_PLATFORM_URL}/api/ci/runs/${RUN_ID}" \
           -H "Authorization: Bearer ${UAT_API_TOKEN}")
-        echo "poll $N: $STATUS_JSON"
         STATUS=$(echo "$STATUS_JSON" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
         GATE=$(echo "$STATUS_JSON" | sed -n 's/.*"gate_passed"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)
         if [ "$STATUS" = "success" ] || [ "$STATUS" = "failed" ]; then
           break
         fi
       done
+
+      # 终态后刷新自愈提案（不假绿）
+      curl -sS "${UAT_PLATFORM_URL}/api/ci/code-change/${TASK_ID}?refresh_heal=1" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" > heal-proposals.json || true
 
       curl -sS "${UAT_PLATFORM_URL}/api/ci/runs/${RUN_ID}/junit.xml" \
         -H "Authorization: Bearer ${UAT_API_TOKEN}" \
@@ -55,7 +130,7 @@ testory-regression:
     when: always
     paths:
       - testory-junit.xml
-      - ci-run.json
+      - heal-proposals.json
     reports:
       junit: testory-junit.xml
     expire_in: 30 days

@@ -79,45 +79,49 @@
             <a href="/ai-hub" class="ai-hub-back" title="返回 AI 中心"><i class="fas fa-arrow-left"></i></a>
             <div>
                 <h1 data-i18n="aidesign_title">AI 用例设计</h1>
-                <p data-i18n="aidesign_subtitle_v2">上传或粘贴需求，按多种测试方法生成 6–10 条草案，确认后再保存到项目。</p>
+                <p>粘贴需求或上传文档/前端源码；按 Web、桌面、移动、系统、接口场景生成草案。入口（URL/包名/应用路径）均为可选。</p>
             </div>
         </header>
 
         <!-- AI 助手气泡 -->
         <div class="ai-chat-bubble" style="margin-bottom:20px;">
             <strong style="display:block;margin-bottom:6px;font-size:15px;">你好！我是 Testory AI 助手。</strong>
-            告诉我你的测试需求，我会自动生成完整的测试用例。
+            描述测试意图，或直接上传需求文档 / React·Vue 源码；我会按所选平台生成可执行草案。
             <div class="ai-chip-row">
-                <button type="button" class="ai-chip" data-example="测试电商网站的登录功能，包括正常登录、密码错误、账号锁定等场景">🛒 电商登录测试</button>
-                <button type="button" class="ai-chip" data-example="测试支付接口的安全性，包括参数校验、签名验证、重复支付防护">💳 支付安全测试</button>
-                <button type="button" class="ai-chip" data-example="测试 APP 的注册流程，包括手机号注册、验证码校验、密码强度检查">📱 APP 注册测试</button>
-                <button type="button" class="ai-chip" data-example="测试 API 的异常情况处理，包括参数缺失、类型错误、越权访问">🔌 API 异常测试</button>
+                <button type="button" class="ai-chip" data-example="测试电商网站的登录功能，包括正常登录、密码错误、账号锁定等场景" data-platform="web">🛒 电商登录（Web）</button>
+                <button type="button" class="ai-chip" data-example="测试 Windows ERP 客户端：用 @erp 启动后按订单号查询并断言结果窗口" data-platform="desktop">🖥️ ERP 桌面</button>
+                <button type="button" class="ai-chip" data-example="测试 APP 的注册流程，包括手机号注册、验证码校验、密码强度检查" data-platform="android">📱 APP 注册</button>
+                <button type="button" class="ai-chip" data-example="验证 Windows 服务 MySvc 已启动，并打开对应系统设置页确认状态" data-platform="os">⚙️ 系统服务</button>
+                <button type="button" class="ai-chip" data-example="测试支付接口的安全性，包括参数校验、签名验证、重复支付防护" data-platform="api">💳 支付接口</button>
             </div>
         </div>
 
         <!-- 平台切换 -->
         <div class="ai-design-platform-bar">
-            <button type="button" class="ai-design-platform-btn ai-design-platform-btn--active" data-platform="web" id="aiDesignPlatformWeb">🌐 Web UI</button>
-            <button type="button" class="ai-design-platform-btn" data-platform="api" id="aiDesignPlatformApi">🔌 接口测试</button>
-            <button type="button" class="ai-design-platform-btn" data-platform="android" id="aiDesignPlatformAndroid">📱 移动端</button>
+            <button type="button" class="ai-design-platform-btn ai-design-platform-btn--active" data-platform="web">🌐 Web</button>
+            <button type="button" class="ai-design-platform-btn" data-platform="desktop">🖥️ 桌面</button>
+            <button type="button" class="ai-design-platform-btn" data-platform="android">📱 移动端</button>
+            <button type="button" class="ai-design-platform-btn" data-platform="os">⚙️ 系统</button>
+            <button type="button" class="ai-design-platform-btn" data-platform="api">🔌 接口</button>
         </div>
 
         <!-- 输入区 -->
         <div class="ai-design-input-wrap">
-            <textarea id="aiDesignReqText" rows="1" placeholder="描述你的测试需求，例如：测试购物车的增删改查功能"></textarea>
+            <textarea id="aiDesignReqText" rows="1" placeholder="描述测试需求，或粘贴前端组件源码…"></textarea>
             <button type="button" class="ai-glow-btn ai-glow-pulse" id="aiDesignGenerateBtn" style="padding:10px 18px;font-size:13px;min-height:40px;">生成用例</button>
         </div>
 
-        <!-- 高级选项：项目选择 + URL + 文件上传 -->
+        <!-- 高级选项：项目 + 平台入口（非强制 URL）+ 文件上传 -->
         <div class="ai-design-advanced-row">
             <select id="aiDesignProject" style="flex:1;" class="ai-design-control"><option value="">请选择项目</option></select>
-            <input type="url" id="aiDesignBaseUrl" style="flex:1;" placeholder="目标 URL（可选）" />
-            <label style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px dashed #c7d2fe;border-radius:8px;cursor:pointer;font-size:13px;color:#4f46e5;">
+            <input type="text" id="aiDesignBaseUrl" style="flex:1;" placeholder="目标 URL（可选，仅 Web）" />
+            <label style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px dashed #c7d2fe;border-radius:8px;cursor:pointer;font-size:13px;color:#4f46e5;white-space:nowrap;">
                 <i class="fas fa-upload"></i>
-                <span>上传文档</span>
-                <input type="file" id="aiDesignReqFile" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json" class="ai-design-file" style="display:none;" />
+                <span id="aiDesignUploadLabel">上传文档/源码</span>
+                <input type="file" id="aiDesignReqFile" accept=".txt,.md,.markdown,.pdf,.docx,.doc,.json,.tsx,.jsx,.vue,.svelte,.html,.htm,.ts,.js" class="ai-design-file" style="display:none;" />
             </label>
         </div>
+        <p id="aiDesignEntryHint" style="margin:8px 0 0;font-size:12px;color:#64748b;">入口字段按平台变化：Web→URL，桌面→应用别名/路径，移动→包名，系统→服务/进程，接口→API Base；均可留空。</p>
         <div class="ai-design-hidden">
             <select id="aiDesignModelSelect"><option value="">加载中…</option></select>
         </div>
@@ -144,5 +148,5 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/ai_design.js') }}?v=5"></script>
+<script src="{{ url_for('static', filename='js/ai_design.js') }}?v=6"></script>
 {% endblock %}

@@ -14,7 +14,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from mobile_env_config import adb_path
 
-_PACKAGE = "com.testory.assistant"
+# v2 正式包名；保留 v1 作为端口探测回退
+_PACKAGE = "com.testory.assistant.v2"
+_PACKAGE_FALLBACKS = ("com.testory.assistant.v2", "com.testory.assistant")
 _RPC_ID = 0
 _RPC_LOCK = threading.Lock()
 
@@ -23,6 +25,10 @@ uat_logger = logging.getLogger("testory.automation")
 # udid -> { host_port, device_port, last_ping }
 _forward_state: Dict[str, Dict[str, Any]] = {}
 _forward_lock = threading.Lock()
+
+
+def _candidate_packages() -> Tuple[str, ...]:
+    return _PACKAGE_FALLBACKS
 
 
 def _next_id() -> int:
@@ -96,32 +102,36 @@ def get_forward_port(udid: str) -> Optional[int]:
 
 def discover_plugin_port(udid: str) -> Tuple[Optional[int], str]:
     """读取插件 HTTP 端口（external files / shared_prefs / getPort RPC）。"""
-    for shell_cmd in (
-        f"cat /sdcard/Android/data/{_PACKAGE}/files/plugin_port.txt 2>/dev/null",
-        f"cat /storage/emulated/0/Android/data/{_PACKAGE}/files/plugin_port.txt 2>/dev/null",
-    ):
-        rc, out, _ = _run_adb(_adb_cmd(udid) + ["shell", shell_cmd], timeout=10)
-        if rc == 0 and out.strip().isdigit():
-            return int(out.strip()), ""
-    rc, out, err = _run_adb(
-        _adb_cmd(udid)
-        + [
-            "shell",
-            "run-as",
-            _PACKAGE,
-            "cat",
-            "shared_prefs/plugin_server.xml",
-        ],
-        timeout=15,
-    )
-    if rc == 0 and out:
-        import re
+    last_err = ""
+    for pkg in _candidate_packages():
+        for shell_cmd in (
+            f"cat /sdcard/Android/data/{pkg}/files/plugin_port.txt 2>/dev/null",
+            f"cat /storage/emulated/0/Android/data/{pkg}/files/plugin_port.txt 2>/dev/null",
+        ):
+            rc, out, err = _run_adb(_adb_cmd(udid) + ["shell", shell_cmd], timeout=10)
+            if rc == 0 and out.strip().isdigit():
+                return int(out.strip()), ""
+            last_err = err or last_err
+        rc, out, err = _run_adb(
+            _adb_cmd(udid)
+            + [
+                "shell",
+                "run-as",
+                pkg,
+                "cat",
+                "shared_prefs/plugin_server.xml",
+            ],
+            timeout=15,
+        )
+        if rc == 0 and out:
+            import re
 
-        m = re.search(r'name="port"[^>]*value="(\d+)"', out)
-        if not m:
-            m = re.search(r'value="(\d+)"[^>]*name="port"', out)
-        if m:
-            return int(m.group(1)), ""
+            m = re.search(r'name="port"[^>]*value="(\d+)"', out)
+            if not m:
+                m = re.search(r'value="(\d+)"[^>]*name="port"', out)
+            if m:
+                return int(m.group(1)), ""
+        last_err = err or last_err
     hp = get_forward_port(udid)
     if hp:
         try:
@@ -131,7 +141,7 @@ def discover_plugin_port(udid: str) -> Tuple[Optional[int], str]:
                 return port, ""
         except Exception:
             pass
-    return None, err or "无法读取插件端口，请确认已开启无障碍服务"
+    return None, last_err or "无法读取插件端口，请确认已开启无障碍服务"
 
 
 def ensure_plugin_tunnel(udid: str) -> Tuple[bool, str]:
@@ -255,7 +265,48 @@ def poll_steps(udid: str, *, limit: int = 20) -> Dict[str, Any]:
 
 
 def get_page_source(udid: str) -> Dict[str, Any]:
-    return _rpc_call(udid, "getPageSource", {}, timeout=10.0)
+    try:
+        res = _rpc_call(udid, "getPageSource", {}, timeout=10.0)
+        # 统一暴露 xml / page_source 字段
+        if isinstance(res, dict):
+            xml = res.get("xml") or res.get("page_source") or ""
+            if xml and not res.get("page_source"):
+                res = dict(res)
+                res["page_source"] = xml
+        return res
+    except Exception as exc:
+        # RPC 不可用时降级 uiautomator dump，保证至少能拿到应用内控件树
+        dump_path = "/sdcard/testory_uidump.xml"
+        rc, out, err = _run_adb(
+            _adb_cmd(udid) + ["shell", "uiautomator", "dump", dump_path],
+            timeout=20,
+        )
+        if rc != 0:
+            raise RuntimeError(f"getPageSource 失败: {exc}; uiautomator dump 失败: {err or out}") from exc
+        rc2, xml, err2 = _run_adb(
+            _adb_cmd(udid) + ["shell", "cat", dump_path],
+            timeout=15,
+        )
+        if rc2 != 0 or not (xml or "").strip():
+            raise RuntimeError(f"getPageSource 失败: {exc}; 读取 dump 失败: {err2}") from exc
+        return {
+            "ok": True,
+            "source": "uiautomator_dump",
+            "xml": xml,
+            "page_source": xml,
+            "node_count": xml.count("<node"),
+            "fallback_error": str(exc),
+        }
+
+
+def pick_at_point(udid: str, x: int, y: int) -> Dict[str, Any]:
+    """设备端坐标命中最优无障碍节点。"""
+    return _rpc_call(
+        udid,
+        "pickAtPoint",
+        {"x": int(x), "y": int(y)},
+        timeout=8.0,
+    )
 
 
 def take_screenshot(udid: str) -> Tuple[bytes, Dict[str, Any]]:
@@ -322,17 +373,24 @@ def plugin_input(
 
 def restart_plugin_service(udid: str) -> Tuple[bool, str]:
     """尝试唤醒插件 HTTP 隧道；绝不启动 MainActivity，避免连接/安装后自动弹出 App。"""
-    _run_adb(
-        _adb_cmd(udid)
-        + [
-            "shell",
-            "am",
-            "startservice",
-            "-n",
-            f"{_PACKAGE}/.PluginForegroundService",
-        ],
-        timeout=15,
-    )
+    # v2：无障碍服务内嵌 JSON-RPC；广播/settings 不会直接拉起，优先探测已写端口
+    for pkg in _candidate_packages():
+        for component in (
+            f"{pkg}/com.testory.assistant.v2.service.accessibility.AssistantAccessibilityService",
+            f"{pkg}/.PluginForegroundService",
+            f"{pkg}/com.testory.assistant.PluginForegroundService",
+        ):
+            _run_adb(
+                _adb_cmd(udid)
+                + [
+                    "shell",
+                    "am",
+                    "startservice",
+                    "-n",
+                    component,
+                ],
+                timeout=15,
+            )
     time.sleep(0.5)
     return ensure_plugin_tunnel(udid)
 

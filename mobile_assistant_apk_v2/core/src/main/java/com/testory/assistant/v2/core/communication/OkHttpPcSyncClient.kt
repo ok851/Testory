@@ -175,24 +175,63 @@ class OkHttpPcSyncClient @Inject constructor(
 
     override suspend fun pushCase(testCase: TestCase): SyncResult {
         val stepsPayload = testCase.steps.mapIndexed { idx, s ->
+            val hasText = s.locator.text.isNotBlank()
+            val hasId = s.locator.resourceId.isNotBlank()
+            val hasDesc = s.locator.contentDesc.isNotBlank()
+            val hasClass = s.locator.className.isNotBlank()
+            val coord = s.screenCoordinate
+            val hasCoord = coord != null && coord.isValid
+
+            val selectorType = when {
+                hasText -> "text"
+                hasId -> "resource_id"
+                hasDesc -> "content_desc"
+                hasClass -> "class_name"
+                hasCoord -> "coordinate"
+                else -> "text"
+            }
+            val selectorValue = when (selectorType) {
+                "text" -> s.locator.text
+                "resource_id" -> s.locator.resourceId
+                "content_desc" -> s.locator.contentDesc
+                "class_name" -> s.locator.className
+                "coordinate" -> "${coord!!.x},${coord.y}"
+                else -> s.locator.text
+            }
+
+            val bounds = s.targetNode?.bounds
+            val (parsedFrom, parsedTo) = parseSwipeCoords(s.description).let { pair ->
+                if (pair.first != null) pair
+                else parseSwipePipe(s.inputText)
+            }
+            val mobileSpec = MobileSpecDto(
+                viewportCoord = if (hasCoord) listOf(coord!!.x, coord.y) else null,
+                bounds = if (bounds != null && bounds.isValid) {
+                    listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)
+                } else null,
+                resourceId = s.locator.resourceId.takeIf { it.isNotBlank() },
+                packageName = s.locator.packageName.takeIf { it.isNotBlank() }
+                    ?: s.targetNode?.packageName?.takeIf { it.isNotBlank() },
+                contentDesc = s.locator.contentDesc.takeIf { it.isNotBlank() },
+                className = s.locator.className.takeIf { it.isNotBlank() },
+                text = s.locator.text.takeIf { it.isNotBlank() },
+                locationSource = s.locationSource.name.lowercase(),
+                isWebView = s.locator.isWebView,
+                swipeFrom = parsedFrom,
+                swipeTo = parsedTo ?: if (s.action == ActionType.SWIPE && hasCoord) {
+                    listOf(coord!!.x, coord.y)
+                } else null
+            )
+
             PushStepDto(
                 stepOrder = idx + 1,
                 action = s.action.name.lowercase(),
-                selectorType = when {
-                    s.locator.text.isNotBlank() -> "text"
-                    s.locator.resourceId.isNotBlank() -> "resource_id"
-                    s.locator.contentDesc.isNotBlank() -> "content_desc"
-                    s.locator.className.isNotBlank() -> "class_name"
-                    else -> "text"
-                },
-                selectorValue = s.locator.text.ifBlank {
-                    s.locator.resourceId.ifBlank {
-                        s.locator.contentDesc.ifBlank { s.locator.className }
-                    }
-                },
+                selectorType = selectorType,
+                selectorValue = selectorValue,
                 inputValue = s.inputText,
                 description = s.description,
-                automationLayer = "android"
+                automationLayer = "android",
+                mobileSpec = mobileSpec
             )
         }
         val pushBody = PushCaseRequest(
@@ -392,6 +431,27 @@ class OkHttpPcSyncClient @Inject constructor(
 
     override suspend fun getDeviceInfo(): DeviceInfo = deviceInfo
 
+    private fun parseSwipeCoords(description: String): Pair<List<Int>?, List<Int>?> {
+        val re = Regex("""\((\d+),\s*(\d+)\)\s*→\s*\((\d+),\s*(\d+)\)""")
+        val m = re.find(description) ?: return null to null
+        return listOf(m.groupValues[1].toInt(), m.groupValues[2].toInt()) to
+            listOf(m.groupValues[3].toInt(), m.groupValues[4].toInt())
+    }
+
+    private fun parseSwipePipe(input: String): Pair<List<Int>?, List<Int>?> {
+        // 格式: "x1,y1|x2,y2"
+        val parts = input.split("|")
+        if (parts.size != 2) return null to null
+        fun parseXY(s: String): List<Int>? {
+            val xy = s.split(",")
+            if (xy.size != 2) return null
+            val x = xy[0].trim().toIntOrNull() ?: return null
+            val y = xy[1].trim().toIntOrNull() ?: return null
+            return listOf(x, y)
+        }
+        return parseXY(parts[0]) to parseXY(parts[1])
+    }
+
     override suspend fun aiGenerateSteps(message: String): AiGenerateResult {
         if (baseUrl.isEmpty()) {
             return AiGenerateResult(success = false, error = "未连接 PC 端")
@@ -558,5 +618,21 @@ data class PushStepDto(
     @kotlinx.serialization.SerialName("selector_value") val selectorValue: String = "",
     @kotlinx.serialization.SerialName("input_value") val inputValue: String = "",
     @kotlinx.serialization.SerialName("description") val description: String = "",
-    @kotlinx.serialization.SerialName("automation_layer") val automationLayer: String = "android"
+    @kotlinx.serialization.SerialName("automation_layer") val automationLayer: String = "android",
+    @kotlinx.serialization.SerialName("mobile_spec") val mobileSpec: MobileSpecDto? = null
+)
+
+@kotlinx.serialization.Serializable
+data class MobileSpecDto(
+    @kotlinx.serialization.SerialName("viewport_coord") val viewportCoord: List<Int>? = null,
+    @kotlinx.serialization.SerialName("bounds") val bounds: List<Int>? = null,
+    @kotlinx.serialization.SerialName("resource_id") val resourceId: String? = null,
+    @kotlinx.serialization.SerialName("package") val packageName: String? = null,
+    @kotlinx.serialization.SerialName("content_desc") val contentDesc: String? = null,
+    @kotlinx.serialization.SerialName("class_name") val className: String? = null,
+    @kotlinx.serialization.SerialName("text") val text: String? = null,
+    @kotlinx.serialization.SerialName("location_source") val locationSource: String? = null,
+    @kotlinx.serialization.SerialName("is_webview") val isWebView: Boolean = false,
+    @kotlinx.serialization.SerialName("swipe_from") val swipeFrom: List<Int>? = null,
+    @kotlinx.serialization.SerialName("swipe_to") val swipeTo: List<Int>? = null
 )

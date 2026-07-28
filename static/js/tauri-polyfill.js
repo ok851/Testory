@@ -15,6 +15,7 @@ function initDesktopGuards() {
   });
   document.addEventListener('selectstart', (e) => {
     const t = e.target;
+    // 不要把 .step-item 列入放行：桌面壳下选区手势会抢走步骤排序拖拽
     if (t && (t.closest('input, textarea, [contenteditable="true"], .allow-text-select, .testory-vscroll-viewport'))) {
       return;
     }

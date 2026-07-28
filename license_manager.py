@@ -14,7 +14,7 @@ import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
 
@@ -170,7 +170,7 @@ class LicenseManager:
             'note': '触发运行 / JUnit / build 关联',
         },
         'api_access': {'min_tier': 'enterprise', 'title': '开放 API', 'note': ''},
-        'parallel_execution': {'min_tier': 'enterprise', 'title': '并行执行', 'note': ''},
+        'parallel_execution': {'min_tier': 'enterprise', 'title': '执行节点', 'note': '远程执行机登记与探测'},
         'private_deployment': {
             'min_tier': 'enterprise',
             'title': '私有化权益',
@@ -449,12 +449,39 @@ class LicenseManager:
         except Exception:
             return False
 
+    def _normalize_license_type(self, license_type: Any) -> str:
+        lt = str(license_type or LicenseType.FREE.value).strip().lower()
+        if lt in ("pro", "team", "professional"):
+            return LicenseType.PROFESSIONAL.value
+        if lt in ("ent", "enterprise"):
+            return LicenseType.ENTERPRISE.value
+        if lt in ("basic", "free"):
+            return LicenseType.FREE.value
+        return lt
+
+    def entitled_features_for_license(self, license_info: Optional[LicenseInfo] = None) -> List[str]:
+        """当前证书档位应得能力（合并证书内 features 与产品目录，避免旧企业证缺新键）。"""
+        info = license_info or self.get_current_license()
+        lt = self._normalize_license_type(info.license_type)
+        entitled = set(info.features or [])
+        entitled |= set(self.FEATURES.get(lt) or self.FEATURES.get("free") or [])
+        if lt == LicenseType.ENTERPRISE.value:
+            entitled |= set(self.FEATURES.get("professional") or [])
+            entitled |= set(self.FEATURES.get("enterprise") or [])
+        elif lt == LicenseType.PROFESSIONAL.value:
+            entitled |= set(self.FEATURES.get("professional") or [])
+            entitled |= set(self.FEATURES.get("free") or [])
+        else:
+            entitled |= set(self.FEATURES.get("free") or [])
+        return sorted(entitled)
+
     def check_feature_available(self, feature_name: str) -> bool:
         """检查某功能是否可用。
 
         - ``test_execution`` / ``basic_report`` / ``project_management`` / ``case_management``
           始终可用（开源核心，不因档位假锁执行）。
-        - 其余：当前 License.features；standalone 开源默认解锁（可 LICENSE_ENFORCE_FEATURES=1 关闭）。
+        - 其余：当前档位目录能力；standalone 开源默认解锁（可 LICENSE_ENFORCE_FEATURES=1 关闭）。
+        - **企业版包含企业档全部能力**（含后续新增键，不因旧证书 features 列表滞后而误拦）。
         """
         name = (feature_name or "").strip()
         if not name:
@@ -470,7 +497,16 @@ class LicenseManager:
         if self.features_unlocked_for_open_core():
             return True
         license_info = self.get_current_license()
-        return name in (license_info.features or [])
+        return name in set(self.entitled_features_for_license(license_info))
+
+    def build_feature_denied_message(self, feature_name: str) -> str:
+        """面向用户的门禁说明（不含环境变量等运维术语）。"""
+        gate = self.describe_feature_gate(feature_name)
+        msg = (gate.get("user_message") or "").strip()
+        if msg:
+            return msg
+        title = gate.get("title") or feature_name or "该功能"
+        return f"「{title}」当前不可用，请升级授权或联系管理员。"
 
     def describe_feature_gate(self, feature_name: str) -> Dict[str, Any]:
         """供 API/前端：是否可用、最低档、升级文案。"""
@@ -478,15 +514,44 @@ class LicenseManager:
         meta = dict(self.FEATURE_CATALOG.get(name) or {})
         ok = self.check_feature_available(name)
         limits = self.get_limits()
+        title = meta.get("title") or name
+        user_message = ""
+        if not ok:
+            # 避免递归：内联友好文案
+            display = limits.get("product_display_name") or limits.get("license_type") or "当前版本"
+            min_tier = str(meta.get("min_tier") or "enterprise").strip().lower()
+            need_map = {
+                "free": "免费版",
+                "professional": "团队版",
+                "enterprise": "企业版",
+            }
+            need = need_map.get(min_tier, min_tier)
+            lt = self._normalize_license_type(limits.get("license_type"))
+            tier_rank = {
+                LicenseType.FREE.value: 0,
+                LicenseType.PROFESSIONAL.value: 1,
+                LicenseType.ENTERPRISE.value: 2,
+            }
+            if tier_rank.get(lt, 0) >= tier_rank.get(min_tier, 2):
+                user_message = (
+                    f"「{title}」当前暂时不可用。请到「License」页重新激活授权，"
+                    f"或联系管理员检查授权配置。"
+                )
+            else:
+                user_message = (
+                    f"「{title}」需要{need}及以上授权。"
+                    f"当前为{display}。请升级授权后使用。"
+                )
         return {
             "feature": name,
             "available": ok,
             "min_tier": meta.get("min_tier") or "",
-            "title": meta.get("title") or name,
+            "title": title,
             "note": meta.get("note") or "",
             "license_type": limits.get("license_type"),
             "product_display_name": limits.get("product_display_name"),
             "open_core_unlocked": self.features_unlocked_for_open_core(),
+            "user_message": user_message,
             "enforce": (os.environ.get("LICENSE_ENFORCE_FEATURES") or "").strip().lower()
             in ("1", "true", "yes", "on"),
         }
@@ -508,7 +573,7 @@ class LicenseManager:
                 | set(self.FEATURES.get("professional") or [])
             )
         else:
-            unlocked = features
+            unlocked = self.entitled_features_for_license(license_info)
         return {
             'max_users': license_info.max_users,
             'max_projects': license_info.max_projects,

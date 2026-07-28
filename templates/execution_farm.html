@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}执行节点 - Testory{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-8">
+    <h1 class="text-2xl font-bold mb-2"><i class="fas fa-server mr-2"></i>执行节点</h1>
+    <p class="text-sm text-gray-500 mb-2">登记<strong>远程执行机 / Desktop Gateway</strong>（能跑 Windows 桌面或远程 Agent 的机器），并探测是否可达。</p>
+    <p class="text-sm text-gray-500 mb-6">探测成功只说明「机器在线」，<strong>不等于</strong>业务用例已并行跑通。需企业能力 <code>parallel_execution</code>。</p>
+    <div id="farmGate"></div>
+
+    <div class="bg-white dark:bg-gray-900 border rounded-xl p-5 mb-6">
+        <div class="flex flex-wrap justify-between gap-2 mb-3">
+            <h2 class="font-semibold">调度就绪</h2>
+            <button type="button" class="text-sm underline" onclick="loadReady()">刷新检查</button>
+        </div>
+        <p id="readyBadge" class="text-sm mb-2 text-gray-500">加载中…</p>
+        <ul id="readyChecks" class="text-xs space-y-1 text-gray-600 dark:text-gray-300"></ul>
+        <p class="text-xs text-amber-700 mt-3" id="readyDisclaimer"></p>
+        <button type="button" class="mt-3 px-3 py-1.5 rounded border text-sm" onclick="hintPreferred()">生成环境建议（不改 .env）</button>
+        <button type="button" class="mt-3 px-3 py-1.5 rounded border text-sm" onclick="resolveGw()">解析 Gateway</button>
+        <button type="button" class="mt-3 px-3 py-1.5 rounded border text-sm" onclick="liveProbe()">Live 探活</button>
+        <pre id="farmMsg" class="text-xs mt-3 hidden bg-gray-50 dark:bg-gray-950 p-3 rounded-lg max-h-48 overflow-auto"></pre>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 border rounded-xl p-5 mb-6">
+        <h2 class="font-semibold mb-3">登记节点</h2>
+        <div class="space-y-2">
+            <input id="nodeName" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-950" placeholder="名称" />
+            <input id="nodeUrl" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-950" placeholder="http://host:8766" />
+            <button type="button" class="px-4 py-2 rounded-lg bg-stone-700 text-white text-sm" onclick="addNode()">登记</button>
+        </div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 border rounded-xl p-5 mb-6">
+        <div class="flex justify-between mb-3"><h2 class="font-semibold">节点列表</h2><button type="button" class="text-sm underline" onclick="loadFarm()">刷新</button></div>
+        <ul id="nodeList" class="text-sm space-y-2"><li class="text-gray-400">加载中…</li></ul>
+        <p class="text-xs text-gray-400 mt-4" id="farmDisclaimer"></p>
+    </div>
+
+    <div class="bg-white dark:bg-gray-900 border rounded-xl p-5 mt-6">
+        <div class="flex flex-wrap justify-between gap-2 mb-3">
+            <h2 class="font-semibold">任务队列（雏形）</h2>
+            <button type="button" class="text-sm underline" onclick="loadJobs()">刷新</button>
+        </div>
+        <p class="text-xs text-gray-500 mb-3">入队/探测成功 ≠ 业务用例通过。支持 noop / probe / live_health / dispatch_hint。</p>
+        <div class="flex flex-wrap gap-2 mb-3">
+            <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="enq('noop',true)">入队 noop 并执行</button>
+            <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="enq('probe',true)">入队 probe 并执行</button>
+            <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="enq('live_health',true)">入队 live_health</button>
+            <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="fanout()">Fan-out 全节点探测</button>
+            <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="drainJobs()">Drain 队列</button>
+            <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="slaEv()">SLA 证据</button>
+            <button type="button" class="px-3 py-1.5 rounded border text-sm" onclick="slaAlerts()">SLA 告警</button>
+        </div>
+        <ul id="jobList" class="text-sm space-y-2"><li class="text-gray-400">加载中…</li></ul>
+        <p class="text-xs text-amber-700 mt-3" id="jobDisclaimer"></p>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function showMsg(obj){
+    const el=document.getElementById('farmMsg');
+    el.classList.remove('hidden');
+    el.textContent=typeof obj==='string'?obj:JSON.stringify(obj,null,2);
+}
+async function loadReady(){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/dispatch-readiness')
+        : {gated:false, response: await fetch('/api/enterprise/farm/dispatch-readiness'), data:null};
+    if(packed.gated){
+        document.getElementById('readyBadge').textContent='需要企业并行能力';
+        return;
+    }
+    const resp=packed.response;
+    const data=packed.data||await resp.json();
+    const ready=!!data.dispatch_ready;
+    document.getElementById('readyBadge').textContent=ready?'前置条件齐备（仍非用例已通过）':'前置未齐备';
+    document.getElementById('readyBadge').className='text-sm mb-2 '+(ready?'text-emerald-700':'text-amber-700');
+    document.getElementById('readyDisclaimer').textContent=data.disclaimer||'';
+    document.getElementById('readyChecks').innerHTML=(data.checks||[]).map(function(c){
+        return '<li>'+(c.ok?'✓':'✗')+' <code>'+c.id+'</code> '+String(c.detail||'')+'</li>';
+    }).join('');
+}
+async function hintPreferred(){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/dispatch-hint',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+        : null;
+    if(packed&&packed.gated)return;
+    const resp=packed?packed.response:await fetch('/api/enterprise/farm/dispatch-hint',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    showMsg(packed?packed.data:await resp.json());
+}
+async function resolveGw(){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/resolve-gateway')
+        : {gated:false,response:await fetch('/api/enterprise/farm/resolve-gateway'),data:null};
+    if(packed.gated)return;
+    showMsg(packed.data||await packed.response.json());
+}
+async function liveProbe(){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/gateway/live-probe')
+        : {gated:false,response:await fetch('/api/enterprise/gateway/live-probe'),data:null};
+    if(packed.gated)return;
+    showMsg(packed.data||await packed.response.json());
+}
+async function loadFarm(){
+    const packed = window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/nodes')
+        : {gated:false, response: await fetch('/api/enterprise/farm/nodes'), data:null};
+    if(packed.gated){
+        document.getElementById('nodeList').innerHTML='<li class="text-amber-700">需要企业并行能力</li>';
+        return;
+    }
+    const resp=packed.response;
+    const data=packed.data||await resp.json();
+    if(!resp.ok){
+        document.getElementById('nodeList').innerHTML='<li class="text-red-600">'+(data.error||('HTTP '+resp.status))+'</li>';
+        return;
+    }
+    document.getElementById('farmDisclaimer').textContent=data.disclaimer||'';
+    const nodes=data.nodes||[];
+    document.getElementById('nodeList').innerHTML=nodes.length?nodes.map(function(n){
+        const st=n.last_ok===true?'在线':(n.last_ok===false?'不可达':'未探测');
+        return '<li class="border rounded-lg p-3 flex flex-wrap justify-between gap-2"><span><strong>'+n.name+'</strong> <code class="text-xs">'+n.node_id+'</code><br><span class="text-xs text-gray-500">'+n.base_url+' · '+st+'</span></span><span><button class="underline text-xs" onclick="probe(\''+n.node_id+'\')">探测</button> <button class="underline text-xs" onclick="hintNode(\''+n.node_id+'\')">建议</button> <button class="underline text-xs text-red-600" onclick="rm(\''+n.node_id+'\')">删除</button></span></li>';
+    }).join(''):'<li class="text-gray-400">暂无节点</li>';
+}
+async function loadJobs(){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/jobs?limit=20')
+        : {gated:false,response:await fetch('/api/enterprise/farm/jobs?limit=20'),data:null};
+    if(packed.gated){
+        document.getElementById('jobList').innerHTML='<li class="text-amber-700">需要企业并行能力</li>';
+        return;
+    }
+    const data=packed.data||await packed.response.json();
+    document.getElementById('jobDisclaimer').textContent=data.disclaimer||'';
+    const jobs=data.jobs||data.recent||[];
+    document.getElementById('jobList').innerHTML=jobs.length?jobs.map(function(j){
+        return '<li class="border rounded-lg p-2 flex flex-wrap justify-between gap-2"><span><code class="text-xs">'+j.job_id+'</code> · '+j.job_type+' · <strong>'+j.status+'</strong></span><span>'+(j.status==='queued'?'<button class="underline text-xs" onclick="runJob(\''+j.job_id+'\')">执行</button> ':'')+'</span></li>';
+    }).join(''):'<li class="text-gray-400">暂无任务</li>';
+}
+async function enq(type, autoRun){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_type:type,auto_run:!!autoRun})})
+        : null;
+    if(packed&&packed.gated)return;
+    const resp=packed?packed.response:await fetch('/api/enterprise/farm/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_type:type,auto_run:!!autoRun})});
+    showMsg(packed?packed.data:await resp.json());
+    loadJobs();
+}
+async function fanout(){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/fanout-probe',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+        : null;
+    if(packed&&packed.gated)return;
+    const resp=packed?packed.response:await fetch('/api/enterprise/farm/fanout-probe',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    showMsg(packed?packed.data:await resp.json());
+    loadJobs();loadFarm();loadReady();
+}
+async function drainJobs(){
+    const packed=window.TestoryLicenseGate
+        ? await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/jobs/drain',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:20})})
+        : null;
+    if(packed&&packed.gated)return;
+    const resp=packed?packed.response:await fetch('/api/enterprise/farm/jobs/drain',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:20})});
+    showMsg(packed?packed.data:await resp.json());
+    loadJobs();
+}
+async function slaEv(){
+    const r=await fetch('/api/enterprise/sla-evidence?limit=50');
+    showMsg(await r.json());
+}
+async function slaAlerts(){
+    const r=await fetch('/api/enterprise/sla-alerts?limit=100');
+    showMsg(await r.json());
+}
+async function runJob(id){
+    const r=await fetch('/api/enterprise/farm/jobs/'+encodeURIComponent(id)+'/run',{method:'POST'});
+    showMsg(await r.json());
+    loadJobs();
+}
+async function hintNode(id){
+    const r=await fetch('/api/enterprise/farm/dispatch-hint',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node_id:id})});
+    showMsg(await r.json());
+}
+async function addNode(){
+    const body={name:document.getElementById('nodeName').value, base_url:document.getElementById('nodeUrl').value};
+    const packed=window.TestoryLicenseGate?await window.TestoryLicenseGate.fetchJson('/api/enterprise/farm/nodes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}):null;
+    if(packed&&packed.gated)return;
+    const resp=packed?packed.response:await fetch('/api/enterprise/farm/nodes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    showMsg(packed?packed.data:await resp.json());
+    loadFarm();loadReady();
+}
+async function probe(id){
+    const r=await fetch('/api/enterprise/farm/nodes/'+encodeURIComponent(id)+'/probe',{method:'POST'});
+    showMsg(await r.json());
+    loadFarm();loadReady();
+}
+async function rm(id){
+    if(!confirm('删除节点 '+id+'？'))return;
+    await fetch('/api/enterprise/farm/nodes/'+encodeURIComponent(id),{method:'DELETE'});
+    loadFarm();loadReady();
+}
+document.addEventListener('DOMContentLoaded',function(){loadFarm();loadReady();loadJobs();});
+</script>
+{% endblock %}

@@ -1083,7 +1083,13 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
                 import sys
 
                 if sys.platform == "win32":
-                    os.startfile(path)  # type: ignore[attr-defined]
+                    try:
+                        from desktop_embed_launch import popen_with_embed_hooks
+
+                        popen_with_embed_hooks(path, [])
+                        launched_via = "embed_hooks"
+                    except Exception:
+                        os.startfile(path)  # type: ignore[attr-defined]
                 else:
                     import subprocess
 
@@ -1092,7 +1098,13 @@ def _windows_launch_app_impl(app_name: str) -> Dict[str, Any]:
             import sys
 
             if sys.platform == "win32":
-                os.startfile(path)  # type: ignore[attr-defined]
+                try:
+                    from desktop_embed_launch import popen_with_embed_hooks
+
+                    popen_with_embed_hooks(path, [])
+                    launched_via = "embed_hooks"
+                except Exception:
+                    os.startfile(path)  # type: ignore[attr-defined]
             else:
                 import subprocess
 

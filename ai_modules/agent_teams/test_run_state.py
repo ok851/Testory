@@ -77,6 +77,9 @@ class TestRunState:
     finished_at: str = ""
     # 透传执行摘要（诚实字段，不另造成功）
     execution: Optional[Dict[str, Any]] = None
+    # R16：Verifier→Planner 重规划次数
+    replan_count: int = 0
+    replan_meta: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.created_at:
@@ -143,6 +146,8 @@ class TestRunState:
             "updated_at": self.updated_at,
             "finished_at": self.finished_at,
             "execution": self.execution,
+            "replan_count": int(self.replan_count or 0),
+            "replan_meta": list(self.replan_meta or []),
             "agents_seen": self.agent_kinds_seen(),
         }
 
@@ -167,6 +172,8 @@ class TestRunState:
             "updated_at",
             "finished_at",
             "execution",
+            "replan_count",
+            "replan_meta",
         }
         kwargs = {k: data[k] for k in known if k in data}
         if "run_id" not in kwargs:

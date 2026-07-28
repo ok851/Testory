@@ -17,9 +17,10 @@ if sys.platform != "win32":
     raise RuntimeError("desktop_visual_picker 仅支持 Windows")
 
 VISUAL_SELECTOR_TYPE = "visual"
-_TRANSPARENT_KEY = "#010101"
-_HOVER_PEEK_INTERVAL_SEC = 0.28
-_HOVER_MOVE_MIN_PX = 8
+# 捕获 UI 引擎版本：便于确认子进程已加载新代码（非全屏遮罩）
+CAPTURE_UI_ENGINE = "border-v11-click-shield"
+_HOVER_PEEK_INTERVAL_SEC = 0.45
+_HOVER_MOVE_MIN_PX = 12
 CAPTURE_MODE_SMART = "smart"
 CAPTURE_MODE_REGION = "region"
 
@@ -51,6 +52,7 @@ _THEME = {
 }
 
 
+# 与 desktop_uia_core / desktop_uia_snapshot 的伪容器列表对齐
 _FAKE_CONTAINER_PATTERNS = (
     "chrome",
     "renderwidget",
@@ -58,6 +60,14 @@ _FAKE_CONTAINER_PATTERNS = (
     "widgetwin",
     "corewindow",
     "webview",
+    "directui",
+    "cef",
+    "electron",
+    "chromium",
+    "tabwindowclass",
+    "chrome_widgetwin",
+    "chrome_renderwidgethosthwnd",
+    "cefbrowserwindow",
 )
 
 
@@ -66,115 +76,361 @@ def _is_fake_container(name: str, class_name: str = "") -> bool:
     return any(p in combined for p in _FAKE_CONTAINER_PATTERNS)
 
 
-def _layered_locate(x: int, y: int) -> Dict:
-    from typing import Dict, Optional, Tuple
-
+def _layered_locate(x: int, y: int, *, allow_ocr: bool = True) -> Dict:
     candidates = []
 
-    win32_result = _locate_via_win32(x, y)
-    if win32_result and win32_result.get('rect'):
-        rw = win32_result['rect'][2] - win32_result['rect'][0]
-        rh = win32_result['rect'][3] - win32_result['rect'][1]
-        score = 0
-        if 20 <= rw <= 500 and 20 <= rh <= 500:
-            score += 30
-        if win32_result.get('label'):
-            score += 20
-        candidates.append({
-            'rect': win32_result['rect'],
-            'label': win32_result.get('label', ''),
-            'score': score,
-            'source': 'win32',
-        })
-
-    uia_result = _locate_via_uia(x, y)
-    if uia_result and uia_result.get('rect'):
-        rw = uia_result['rect'][2] - uia_result['rect'][0]
-        rh = uia_result['rect'][3] - uia_result['rect'][1]
-        score = 40
-        if 15 <= rw <= 400 and 15 <= rh <= 400:
-            score += 30
-        if uia_result.get('label'):
-            score += 20
-        candidates.append({
-            'rect': uia_result['rect'],
-            'label': uia_result.get('label', ''),
-            'score': score,
-            'source': 'uia',
-        })
-
+    # 桌面图标：ListView HitTest 优先（避免整块 FolderView）
     try:
-        from desktop_ocr_locate import locate_element_via_ocr
-        ocr_result = locate_element_via_ocr(x, y)
-        if ocr_result and ocr_result.get('rect'):
-            rw = ocr_result['rect'][2] - ocr_result['rect'][0]
-            rh = ocr_result['rect'][3] - ocr_result['rect'][1]
-            score = 25
-            if 20 <= rw <= 300 and 15 <= rh <= 100:
-                score += 25
-            if ocr_result.get('text'):
+        from desktop_shell_listview import peek_desktop_icon_at_point
+
+        icon = peek_desktop_icon_at_point(int(x), int(y))
+        if icon and icon.screen_rect:
+            rw = icon.screen_rect[2] - icon.screen_rect[0]
+            rh = icon.screen_rect[3] - icon.screen_rect[1]
+            score = 120
+            if 24 <= rw <= 200 and 24 <= rh <= 220:
+                score += 40
+            if icon.icon_name and not _is_shell_noise_label(icon.icon_name):
                 score += 30
             candidates.append({
-                'rect': ocr_result['rect'],
-                'label': ocr_result.get('text', ''),
-                'score': score,
-                'source': 'ocr',
+                "rect": icon.screen_rect,
+                "label": icon.icon_name or "桌面图标",
+                "score": score,
+                "source": "shell_listview",
+                "control_type": "ListItem",
             })
     except Exception:
         pass
 
-    if candidates:
-        best = max(candidates, key=lambda c: c['score'])
-        return {
-            'rect': best['rect'],
-            'label': best['label'],
-            'source': best['source'],
-        }
+    win32_result = _locate_via_win32(x, y)
+    if win32_result and win32_result.get("rect"):
+        rw = win32_result["rect"][2] - win32_result["rect"][0]
+        rh = win32_result["rect"][3] - win32_result["rect"][1]
+        label = win32_result.get("label", "") or ""
+        score = 10
+        try:
+            from desktop_highlight_win32 import rect_is_near_fullscreen
 
+            near_full = rect_is_near_fullscreen(win32_result["rect"])
+        except Exception:
+            near_full = rw > 1600 and rh > 900
+        if _is_shell_noise_label(label) or near_full:
+            score -= 40
+        # 越小越像真实控件
+        area = max(1, rw * rh)
+        if area < 80_000:
+            score += 25
+        elif area < 250_000:
+            score += 10
+        if 12 <= rw <= 900 and 10 <= rh <= 700:
+            score += 15
+        if label and not _is_shell_noise_label(label):
+            score += 15
+        candidates.append({
+            "rect": win32_result["rect"],
+            "label": label,
+            "score": score,
+            "source": "win32",
+            "control_type": win32_result.get("control_type") or "Window",
+            "class_name": win32_result.get("class_name") or "",
+        })
+
+    uia_result = _locate_via_uia(x, y)
+    if uia_result and uia_result.get("rect"):
+        rw = uia_result["rect"][2] - uia_result["rect"][0]
+        rh = uia_result["rect"][3] - uia_result["rect"][1]
+        label = uia_result.get("label", "") or ""
+        score = 55  # UIA 优先于 Win32 顶层窗
+        try:
+            from desktop_highlight_win32 import rect_is_near_fullscreen
+
+            near_full = rect_is_near_fullscreen(uia_result["rect"])
+        except Exception:
+            near_full = rw > 1600 and rh > 900
+        if _is_shell_noise_label(label) or near_full:
+            score -= 50
+        area = max(1, rw * rh)
+        if area < 80_000:
+            score += 30
+        elif area < 250_000:
+            score += 12
+        if label and not _is_shell_noise_label(label):
+            score += 20
+        ct = (uia_result.get("control_type") or "").lower()
+        if ct in (
+            "listitem",
+            "button",
+            "edit",
+            "menuitem",
+            "checkbox",
+            "radiobutton",
+            "hyperlink",
+            "tabitem",
+            "combobox",
+            "treeitem",
+        ):
+            score += 35
+        elif ct in ("text", "image"):
+            score += 15
+        candidates.append({
+            "rect": uia_result["rect"],
+            "label": label,
+            "score": score,
+            "source": "uia",
+            "control_type": uia_result.get("control_type") or "",
+            "class_name": uia_result.get("class_name") or "",
+        })
+
+    # OCR 很重，悬停禁止；仅在最终点选时允许
+    if allow_ocr:
+        try:
+            from desktop_ocr_locate import locate_element_via_ocr
+
+            ocr_result = locate_element_via_ocr(x, y)
+            if ocr_result and ocr_result.get("rect"):
+                rw = ocr_result["rect"][2] - ocr_result["rect"][0]
+                rh = ocr_result["rect"][3] - ocr_result["rect"][1]
+                score = 25
+                if 20 <= rw <= 300 and 15 <= rh <= 120:
+                    score += 35
+                if ocr_result.get("text"):
+                    score += 30
+                candidates.append({
+                    "rect": ocr_result["rect"],
+                    "label": ocr_result.get("text", ""),
+                    "score": score,
+                    "source": "ocr",
+                })
+        except Exception:
+            pass
+
+    if candidates:
+        best = max(candidates, key=lambda c: c["score"])
+        rect = best["rect"]
+        label = best.get("label") or ""
+        try:
+            from desktop_highlight_win32 import rect_is_near_fullscreen
+
+            near_full = rect_is_near_fullscreen(rect)
+        except Exception:
+            rw = rect[2] - rect[0]
+            rh = rect[3] - rect[1]
+            near_full = rw > 1600 and rh > 900
+        # 仅在近乎整屏 / 壳层噪声时放弃，不再退化成「跟着鼠标的小框」
+        if best["score"] < 10 or near_full or _is_shell_noise_label(label) or _is_shell_noise_class(
+            str(best.get("class_name") or "")
+        ):
+            ocr_cands = [c for c in candidates if c["source"] == "ocr" and c["score"] >= 40]
+            if ocr_cands:
+                best = max(ocr_cands, key=lambda c: c["score"])
+            elif best["source"] == "shell_listview" and not near_full:
+                pass  # 保留桌面图标
+            else:
+                return _empty_locate()
+        out = {
+            "rect": best["rect"],
+            "label": best.get("label") or "",
+            "source": best["source"],
+            "control_type": best.get("control_type") or "",
+            "class_name": best.get("class_name") or "",
+            "ok": True,
+        }
+        return out
+
+    return _empty_locate()
+
+
+def _hover_locate(x: int, y: int) -> Dict:
+    """悬停专用：禁止 OCR；禁止光标跟随小框。"""
+    hit = _layered_locate(x, y, allow_ocr=False)
+    if _is_reliable_element_hit(hit, x, y):
+        return hit
+    # 应用窗内再加深一次：唤醒无障碍树后重试 UIA（QQ/Electron 常见）
+    try:
+        from desktop_win32_snapshot import get_window_class, window_from_point
+
+        hwnd = window_from_point(int(x), int(y))
+        cls = get_window_class(hwnd) if hwnd else ""
+        if hwnd and not _is_shell_noise_class(cls):
+            from desktop_uia_core import wake_accessibility_around_point
+
+            wake_accessibility_around_point(int(x), int(y), max_children=40)
+            uia2 = _locate_via_uia(x, y, timeout_sec=1.2, wake=False)
+            if uia2 and uia2.get("rect"):
+                cand = {
+                    **uia2,
+                    "source": "uia",
+                    "score": 80,
+                    "ok": True,
+                }
+                if _is_reliable_element_hit(cand, x, y):
+                    return cand
+    except Exception:
+        pass
+    return _empty_locate()
+
+
+def _is_shell_noise_label(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if not n:
+        return False  # 空名称≠壳噪声（很多按钮无 Name）
+    noise = (
+        "folderview",
+        "syslistview32",
+        "desktop",
+        "桌面",
+        "workerw",
+        "progman",
+        "shell_traywnd",
+        "chrome_renderwidgethosthwnd",
+        "legacy window",
+        "shelldll_defview",
+    )
+    return any(k == n or k in n for k in noise)
+
+
+def _is_shell_noise_class(class_name: str) -> bool:
+    c = (class_name or "").strip().lower()
+    if not c:
+        return False
+    return any(
+        k in c
+        for k in (
+            "progman",
+            "workerw",
+            "shelldll_defview",
+            "syslistview32",
+            "shell_traywnd",
+            "traynotifywnd",
+        )
+    )
+
+
+def _rect_area(rect: Tuple[int, int, int, int]) -> int:
+    return max(0, int(rect[2]) - int(rect[0])) * max(0, int(rect[3]) - int(rect[1]))
+
+
+def _is_reliable_element_hit(result: Dict, x: int, y: int) -> bool:
+    """
+    是否为「真实控件命中」——仅此时才画悬停绿框。
+    禁止：fallback 光标小框、整屏桌面壳、不包含鼠标的框。
+    """
+    if not result:
+        return False
+    source = (result.get("source") or "").strip().lower()
+    if source in ("", "fallback", "none"):
+        return False
+    rect = result.get("rect")
+    if not rect or len(rect) != 4:
+        return False
+    if not _rect_contains(rect, int(x), int(y)):
+        return False
+    try:
+        from desktop_highlight_win32 import rect_is_near_fullscreen
+
+        if rect_is_near_fullscreen(rect):
+            return False
+    except Exception:
+        if _rect_area(rect) > 1920 * 1080 * 0.7:
+            return False
+    label = (result.get("label") or "").strip()
+    cls = (result.get("class_name") or "").strip()
+    if _is_shell_noise_label(label) or _is_shell_noise_class(cls):
+        return False
+    # Win32 顶层大窗不够「元素级」：面积过大且无交互类型则拒绝
+    if source == "win32":
+        area = _rect_area(rect)
+        if area > 220_000 and (result.get("control_type") or "").lower() in ("", "window", "pane"):
+            return False
+    return True
+
+
+def _empty_locate() -> Dict:
     return {
-        'rect': (x - 48, y - 48, x + 48, y + 48),
-        'label': '',
-        'source': 'fallback',
+        "rect": None,
+        "label": "",
+        "source": "none",
+        "control_type": "",
+        "class_name": "",
+        "ok": False,
     }
 
 
 def _locate_via_win32(x: int, y: int) -> Dict:
-    from typing import Dict, Optional, Tuple
-
     try:
-        from desktop_win32_snapshot import window_from_point, get_window_rect, get_window_text, get_window_class
+        from desktop_win32_snapshot import (
+            deepest_child_at_point,
+            get_window_class,
+            get_window_rect,
+            get_window_text,
+            window_from_point,
+        )
 
-        hwnd = window_from_point(x, y)
+        hwnd = deepest_child_at_point(x, y) or window_from_point(x, y)
         if not hwnd:
+            return {}
+
+        cls = get_window_class(hwnd)
+        if _is_shell_noise_class(cls):
             return {}
 
         rect = get_window_rect(hwnd)
         if not rect:
             return {}
+        try:
+            from desktop_highlight_win32 import rect_is_near_fullscreen
+
+            if rect_is_near_fullscreen(rect):
+                return {}
+        except Exception:
+            pass
 
         text = get_window_text(hwnd)
-        cls = get_window_class(hwnd)
-
         return {
-            'rect': rect,
-            'label': text or cls or '',
+            "rect": rect,
+            "label": text or "",
+            "control_type": "Window",
+            "class_name": cls or "",
+            "source": "win32",
         }
     except Exception:
         return {}
 
 
-def _locate_via_uia(x: int, y: int) -> Dict:
-    from typing import Dict, Optional, Tuple
-
+def _locate_via_uia(
+    x: int, y: int, *, timeout_sec: float = 0.95, wake: bool = True
+) -> Dict:
+    """
+    悬停/点选 UIA 入口：必须走 peek 的 COM 线程池，禁止在任意线程直接调 UIA。
+    """
     try:
         from desktop_uia_snapshot import peek_element_at_point
 
-        res = peek_element_at_point(x, y, timeout_sec=0.32)
+        res = peek_element_at_point(
+            x, y, timeout_sec=float(timeout_sec), wake_app=bool(wake)
+        )
         if res.ok and res.bounding_rect:
             return {
-                'rect': res.bounding_rect,
-                'label': res.element_label or '',
+                "rect": res.bounding_rect,
+                "label": res.element_label or "",
+                "control_type": res.control_type or "",
+                "class_name": getattr(res, "class_name", "") or "",
             }
+    except TypeError:
+        # 旧签名兼容
+        try:
+            from desktop_uia_snapshot import peek_element_at_point
+
+            res = peek_element_at_point(x, y, timeout_sec=float(timeout_sec))
+            if res.ok and res.bounding_rect:
+                return {
+                    "rect": res.bounding_rect,
+                    "label": res.element_label or "",
+                    "control_type": res.control_type or "",
+                    "class_name": "",
+                }
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -210,6 +466,12 @@ def _f2_pressed() -> bool:
     return bool(ctypes.windll.user32.GetAsyncKeyState(0x71) & 0x8000)
 
 
+def _f3_pressed() -> bool:
+    import ctypes
+
+    return bool(ctypes.windll.user32.GetAsyncKeyState(0x72) & 0x8000)
+
+
 def _rect_contains(rect: Tuple[int, int, int, int], x: int, y: int) -> bool:
     return rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
 
@@ -232,12 +494,66 @@ def _is_over_toolstrip(tk_root: Any, x: int, y: int) -> bool:
     return b is not None and _rect_contains(b, x, y)
 
 
+def _patch_snapshot_text(
+    snapshot: Optional[Dict[str, Any]], text: str
+) -> Optional[Dict[str, Any]]:
+    """让 element_snapshot 关键属性与展示名同源，避免详情页被旧 UIA 名覆盖。"""
+    if not isinstance(snapshot, dict) or not (text or "").strip():
+        return snapshot
+    import copy
+
+    out = copy.deepcopy(snapshot)
+    sel = out.get("selector") if isinstance(out.get("selector"), dict) else {}
+    sel = dict(sel or {})
+    kc = list(sel.get("key_candidates") or [])
+    patched = False
+    for row in kc:
+        if not isinstance(row, dict):
+            continue
+        prop = str(row.get("property") or "").lower()
+        if prop in ("uia-name", "name", "ocr-text", "text", "legacy-text"):
+            row["value"] = text
+            patched = True
+    if not patched:
+        kc.insert(0, {"property": "uia-name", "value": text, "match": "equals"})
+    sel["key_candidates"] = kc
+    out["selector"] = sel
+    return out
+
+
+def _canonical_element_label(
+    *,
+    element_label: str,
+    control_type_label: str,
+    act: str,
+    cx: int,
+    cy: int,
+) -> Tuple[str, str]:
+    """返回 (display_label, plain_text)。"""
+    plain = (element_label or "").strip()
+    ct = (control_type_label or "").lower()
+    if plain:
+        if "list" in ct:
+            display = f"ListItem_{plain}"
+        elif control_type_label and control_type_label != "Control":
+            display = f"{control_type_label}_{plain}"
+        else:
+            display = plain
+    else:
+        display = f"未命名元素_{act}@{cx},{cy}"
+        plain = display
+    return display, plain
+
+
 def build_pick_from_smart_click(
     click_x: int,
     click_y: int,
     *,
     action: str = "click",
     match_threshold: float = 0.72,
+    frozen_preview_b64: str = "",
+    frozen_rect: Optional[Tuple[int, int, int, int]] = None,
+    frozen_label: str = "",
 ) -> Dict[str, Any]:
     from desktop_uia_snapshot import (
         capture_element_snapshot_at_point,
@@ -246,10 +562,25 @@ def build_pick_from_smart_click(
     from desktop_visual_engine import build_visual_step_payload
 
     act = (action or "click").strip().lower()
+    # 若点击瞬间已冻结预览/矩形，优先采用，避免 UI 已切换后重截不一致
+    frozen_preview_b64 = (frozen_preview_b64 or "").strip()
+    if frozen_rect and len(frozen_rect) == 4:
+        fl, ft, fr, fb = (
+            int(frozen_rect[0]),
+            int(frozen_rect[1]),
+            int(frozen_rect[2]),
+            int(frozen_rect[3]),
+        )
+        if fr > fl and fb > ft:
+            # 后面几何计算会再覆盖；此处先占位
+            pass
     snap = capture_element_snapshot_at_point(click_x, click_y, timeout_sec=2.5)
-    is_fake = _is_fake_container(
-        snap.element_label or "",
-        (snap.element_snapshot or {}).get("class_name") or "",
+    snap_cls = ""
+    if isinstance(snap.element_snapshot, dict):
+        snap_cls = str(snap.element_snapshot.get("class_name") or "")
+    is_fake = (
+        (snap.error_code or "") == "fake_container"
+        or _is_fake_container(snap.element_label or "", snap_cls)
     )
 
     cx, cy = click_x, click_y
@@ -257,20 +588,84 @@ def build_pick_from_smart_click(
         cx, cy = snap.screen_center
 
     if is_fake:
+        # 对已打开窗口：先唤醒无障碍树再捕一次（打开应用=点击，无需特殊启动）
+        try:
+            from desktop_uia_core import wake_accessibility_around_point
+            from desktop_uia_snapshot import capture_element_snapshot_at_point as _recap
+
+            wake_accessibility_around_point(click_x, click_y)
+            again = _recap(click_x, click_y, timeout_sec=2.0)
+            again_cls = ""
+            if isinstance(again.element_snapshot, dict):
+                again_cls = str(again.element_snapshot.get("class_name") or "")
+            still_fake = (
+                (again.error_code or "") == "fake_container"
+                or _is_fake_container(again.element_label or "", again_cls)
+            )
+            if again.ok and not still_fake:
+                snap = again
+                is_fake = False
+                if snap.screen_center:
+                    cx, cy = snap.screen_center
+        except Exception:
+            pass
+
+    if is_fake:
         snap = snap._replace(
             element_label="",
             control_type="",
             ok=False,
             error_code="fake_container",
-            message="UIA仅命中渲染容器，无法识别内部元素",
+            message="渲染层控件，改用视觉/OCR 捕获内部元素",
         )
+        # 若进程碰巧开着调试口则用 DOM；否则走视觉——应用已打开即可，不必重启
+        try:
+            from desktop_embed_cdp import capture_embed_element_at_point
+
+            embed = capture_embed_element_at_point(click_x, click_y)
+            if embed and embed.get("ok") and embed.get("element_snapshot"):
+                rect = embed.get("bounding_rect")
+                center = embed.get("screen_center") or (click_x, click_y)
+                snap = snap._replace(
+                    ok=True,
+                    error_code="",
+                    message=embed.get("message") or "embed_cdp",
+                    element_snapshot=embed.get("element_snapshot"),
+                    screen_center=tuple(center) if center else (click_x, click_y),
+                    bounding_rect=tuple(rect) if rect and len(rect) == 4 else None,
+                    element_label=embed.get("element_label") or "",
+                    control_type=embed.get("control_type") or "Element",
+                    window_title=embed.get("window_title") or snap.window_title,
+                    process_name=embed.get("process_name") or snap.process_name,
+                )
+                is_fake = False
+                cx, cy = int(center[0]), int(center[1])
+        except Exception:
+            pass
 
     layered_result = _layered_locate(click_x, click_y)
     layered_rect = layered_result.get('rect')
     layered_label = layered_result.get('label', '')
+    layered_source = layered_result.get('source', '')
 
     pad = 48
-    if layered_rect:
+    # 结构化捕获成功时优先用控件边界，避免 layered OCR/Win32 覆盖成错误宿主
+    prefer_snap_geom = bool(
+        snap.ok and snap.bounding_rect and len(snap.bounding_rect) == 4 and not is_fake
+    )
+    if prefer_snap_geom:
+        l, t, r, b = snap.bounding_rect
+        bg_w = r - l
+        bg_h = b - t
+        if bg_w > 400 or bg_h > 300:
+            # 过大控件仍用点击附近小框做视觉模板
+            l, t, r, b = click_x - 64, click_y - 64, click_x + 64, click_y + 64
+            cx, cy = click_x, click_y
+        else:
+            cx, cy = (l + r) // 2, (t + b) // 2
+            if snap.screen_center:
+                cx, cy = snap.screen_center
+    elif layered_rect:
         l, t, r, b = layered_rect
         bg_w = r - l
         bg_h = b - t
@@ -299,24 +694,55 @@ def build_pick_from_smart_click(
     if snap.element_snapshot:
         payload = payload.merge_element_snapshot(snap.element_snapshot)
 
-    element_label = layered_label or snap.element_label or ""
+    if snap.ok and (snap.element_label or "").strip() and not is_fake:
+        element_label = (snap.element_label or "").strip()
+    elif layered_label and layered_source in ("uia", "win32", "ocr"):
+        element_label = layered_label
+    else:
+        element_label = layered_label or snap.element_label or ""
 
     sel = (snap.element_snapshot or {}).get("selector") or {}
     resolved_via = sel.get("resolved_via") or ""
-    need_ocr = not element_label or resolved_via == "uia_window"
-    if not need_ocr and snap.bounding_rect:
+    resolved_method_force = ""
+    ocr_hit = None
+    # 应用已打开时：假容器优先用点击附近 OCR 框成可回放视觉步骤（正式路径）
+    need_ocr = (
+        is_fake
+        or not element_label
+        or resolved_via == "uia_window"
+    )
+    if not need_ocr and snap.bounding_rect and not prefer_snap_geom:
         rect_w = snap.bounding_rect[2] - snap.bounding_rect[0]
         rect_h = snap.bounding_rect[3] - snap.bounding_rect[1]
         if rect_w > 300 or rect_h > 300:
             need_ocr = True
+    # 已有点击瞬间冻结图时，禁止再走 OCR 重截（否则易与冻结名/图打架）
+    if frozen_preview_b64:
+        need_ocr = False
     if need_ocr:
         try:
             from desktop_ocr import extract_primary_text
+            from desktop_ocr_locate import locate_element_via_ocr
             from desktop_precise_locator import capture_rect_preview_b64
+
+            ocr_hit = locate_element_via_ocr(click_x, click_y, search_radius=160)
+            if ocr_hit and ocr_hit.get("rect"):
+                ol, ot, oright, ob = ocr_hit["rect"]
+                ow, oh = oright - ol, ob - ot
+                if 8 <= ow <= 600 and 8 <= oh <= 200:
+                    l, t, r, b = ol, ot, oright, ob
+                    cx, cy = (l + r) // 2, (t + b) // 2
+                    if ocr_hit.get("text"):
+                        element_label = str(ocr_hit["text"]).strip() or element_label
+                    payload = build_visual_step_payload(
+                        l, t, r, b, click_x, click_y, match_threshold=match_threshold
+                    )
+                    if snap.element_snapshot:
+                        payload = payload.merge_element_snapshot(snap.element_snapshot)
 
             preview = capture_rect_preview_b64(l, t, r, b, padding=4)
             if preview:
-                ocr_text = extract_primary_text(preview)
+                ocr_text = element_label or extract_primary_text(preview)
                 if ocr_text:
                     element_label = ocr_text
                     ocr_snapshot = {
@@ -330,7 +756,22 @@ def build_pick_from_smart_click(
                         }
                     }
                     payload = payload.merge_element_snapshot(ocr_snapshot)
+                    if is_fake or not snap.ok:
+                        snap = snap._replace(
+                            ok=True,
+                            error_code="",
+                            message="视觉/OCR 捕获应用内部元素",
+                            element_label=ocr_text,
+                            control_type=(ocr_hit or {}).get("control_type") or "Control",
+                            element_snapshot=ocr_snapshot,
+                            bounding_rect=(l, t, r, b),
+                            screen_center=(cx, cy),
+                        )
+                        is_fake = False
+                        resolved_method_force = "ocr"
         except ImportError:
+            pass
+        except Exception:
             pass
 
     window_rect = None
@@ -352,7 +793,6 @@ def build_pick_from_smart_click(
     if not app_window_title:
         try:
             from desktop_win32_snapshot import (
-                get_parent_window_rect,
                 get_top_level_window,
                 get_window_text,
                 get_process_name_from_hwnd,
@@ -369,65 +809,113 @@ def build_pick_from_smart_click(
     resolved_method = "uia" if snap.ok else (
         "win32" if snap.element_label and not snap.ok else "visual"
     )
+    if resolved_method_force:
+        resolved_method = resolved_method_force
     ct = (snap.control_type or "").lower()
     if "list" in ct and element_label:
         resolved_method = snap.error_code or resolved_method
     elif snap.ok and snap.element_snapshot:
         resolved_method = (
             snap.element_snapshot.get("selector") or {}
-        ).get("resolved_via") or "uia"
+        ).get("resolved_via") or resolved_method
 
     control_type_label = snap.control_type or "Control"
     if not snap.ok:
         control_type_label = "Control"
 
-    label = ""
-    if element_label:
-        if "list" in ct:
-            label = f"ListItem_{element_label}"
-        elif control_type_label and control_type_label != "Control":
-            label = f"{control_type_label}_{element_label}"
+    preview_b64 = (frozen_preview_b64 or "").strip()
+    # 冻结矩形：名称/几何一律对齐绿框所见，避免事后结构矩形把模板裁偏
+    if frozen_rect and len(frozen_rect) == 4:
+        fl, ft, fr, fb = [int(v) for v in frozen_rect]
+        if fr - fl >= 4 and fb - ft >= 4:
+            l, t, r, b = fl, ft, fr, fb
+            cx, cy = (l + r) // 2, (t + b) // 2
+        if (frozen_label or "").strip():
+            element_label = frozen_label.strip()
+
+    if preview_b64:
+        payload = build_visual_step_payload(
+            l,
+            t,
+            r,
+            b,
+            click_x,
+            click_y,
+            match_threshold=match_threshold,
+            template_image_b64=preview_b64,
+            preserve_full_template=True,
+        )
+        preview_b64 = payload.template_image_base64
+    else:
+        try:
+            from desktop_precise_locator import capture_rect_preview_b64
+
+            preview_b64 = capture_rect_preview_b64(l, t, r, b, padding=0) or ""
+        except Exception:
+            preview_b64 = ""
+        if preview_b64:
+            payload = build_visual_step_payload(
+                l,
+                t,
+                r,
+                b,
+                click_x,
+                click_y,
+                match_threshold=match_threshold,
+                template_image_b64=preview_b64,
+                preserve_full_template=True,
+            )
+            preview_b64 = payload.template_image_base64
         else:
-            label = element_label
-    if not label:
-        label = f"未命名元素_{act}@{cx},{cy}"
+            payload = build_visual_step_payload(
+                l, t, r, b, click_x, click_y, match_threshold=match_threshold
+            )
+            preview_b64 = payload.template_image_base64
 
-    replacement_label = element_label or label
-
+    display_label, plain_text = _canonical_element_label(
+        element_label=element_label,
+        control_type_label=control_type_label,
+        act=act,
+        cx=cx,
+        cy=cy,
+    )
     structure_info = {
         "app_window_title": app_window_title,
         "app_process_name": app_process_name,
-        "element_text": element_label,
+        "element_text": plain_text,
         "element_type": control_type_label,
         "resolved_method": resolved_method,
     }
 
-    preview_b64 = ""
-    try:
-        from desktop_precise_locator import capture_rect_preview_b64
-
-        preview_b64 = capture_rect_preview_b64(l, t, r, b, padding=4)
-    except Exception:
-        pass
+    snap_out = snap.element_snapshot
+    if plain_text:
+        snap_out = _patch_snapshot_text(snap_out, plain_text)
+    if snap_out:
+        payload = payload.merge_element_snapshot(snap_out)
 
     pick: Dict[str, Any] = {
         "selector_type": VISUAL_SELECTOR_TYPE,
         "selector_value": payload.to_json(),
         "pick_point": {"x": cx, "y": cy},
         "preview_image_b64": preview_b64,
-        "label": replacement_label,
-        "name": replacement_label,
+        "label": display_label,
+        "name": plain_text,
         "capture_mode": CAPTURE_MODE_SMART,
         "rectangle": {"left": l, "top": t, "right": r, "bottom": b},
         "structure_info": structure_info,
+        "preview_frozen": bool(frozen_preview_b64),
     }
-    if snap.element_snapshot:
-        pick["element_snapshot"] = snap.element_snapshot
+    if snap_out:
+        pick["element_snapshot"] = snap_out
     if not snap.ok:
         hint = snap.message or snap.error_code or "结构信息不可用"
-        if element_label:
-            hint = f"已用OCR提取文本「{element_label}」，{hint}"
+        if plain_text:
+            hint = f"已用视觉/OCR 捕获「{plain_text}」，可直接用于回放"
+        else:
+            hint = "已按点击位置生成视觉模板，可直接用于回放（打开应用即点即捕，无需特殊启动）"
         pick["uia_hint"] = hint
+    elif resolved_method in ("ocr", "visual", "embed_cdp"):
+        pick["uia_hint"] = f"已捕获应用内部元素（{resolved_method}）"
     if window_rect:
         pick["window_rect"] = {
             "left": window_rect[0],
@@ -458,8 +946,12 @@ class VisualRegionPickerOverlay:
         self._on_armed_change = on_armed_change
         self._default_action = (default_action or "click").strip().lower()
         self._root = None
+        # 无全屏 overlay；仅 Win32 非分层细绿框
         self._overlay = None
         self._canvas = None
+        self._hl_hover = None
+        self._hl_region = None
+        self._capture_badge = None
         self._action_var = None
         self._status_var = None
         self._mode_var = None
@@ -471,6 +963,7 @@ class VisualRegionPickerOverlay:
         self._pending_drag = False
         self._prev_lbutton = False
         self._prev_f2 = False
+        self._prev_f3 = False
         self._prev_escape = False
         self._stop = False
         self._sw = 1920
@@ -489,6 +982,11 @@ class VisualRegionPickerOverlay:
         self._locked_pick: Optional[Dict[str, Any]] = None
         self._locked_rect: Optional[Tuple[int, int, int, int]] = None
         self._element_panel: Optional[ElementInfoPanel] = None
+        self._click_guard = None
+        self._frozen_preview_b64 = ""
+        self._frozen_rect: Optional[Tuple[int, int, int, int]] = None
+        self._frozen_label = ""
+        self._hook_capture_clicks = True  # SetCapture 截获，非全局钩子
 
     def run(self) -> None:
         import tkinter as tk
@@ -698,11 +1196,16 @@ class VisualRegionPickerOverlay:
         ).pack(anchor="w", pady=(2, 0))
 
         self._build_overlay()
-        self._on_message("捕获器已就绪（待命）；点「开始捕获」后再点目标元素")
+        self._init_click_guard()
+        self._on_message(
+            f"捕获器已就绪 [{CAPTURE_UI_ENGINE}]：点「开始捕获」后指向目标，单击或按 F3"
+            "（透明挡板拦截点击，预览与名称同源）"
+        )
         self._refresh_arm_ui()
         self._root.bind("<Escape>", lambda _e: self._request_close())
         self._poll_input()
         self._root.mainloop()
+        self._teardown_click_guard()
 
     def _on_mode_change(self) -> None:
         self._capture_mode = (self._mode_var.get() if self._mode_var else CAPTURE_MODE_SMART)
@@ -714,136 +1217,61 @@ class VisualRegionPickerOverlay:
             self._set_status("已选区域框选：开始捕获后拖拽框选（仅视觉补充）")
 
     def _build_overlay(self) -> None:
-        import tkinter as tk
-
-        _OVERLAY_KEY = "#010203"
-
-        self._overlay = tk.Toplevel(self._root)
-        self._overlay.withdraw()
-        self._overlay.overrideredirect(True)
-        self._overlay.geometry(f"{self._sw}x{self._sh}+0+0")
-        self._overlay.configure(bg=_OVERLAY_KEY)
+        """初始化非分层绿框高亮（不创建任何全屏/Layered 窗口）。"""
         try:
-            self._overlay.attributes("-topmost", True)
-            self._overlay.attributes("-transparentcolor", _OVERLAY_KEY)
-        except Exception:
-            pass
-        self._canvas = tk.Canvas(
-            self._overlay,
-            width=self._sw,
-            height=self._sh,
-            highlightthickness=0,
-            bg=_OVERLAY_KEY,
-        )
-        self._canvas.pack(fill="both", expand=True)
-        self._canvas.bind("<Button-1>", lambda _e: None)
-        self._canvas.bind("<ButtonRelease-1>", lambda _e: None)
-        self._overlay_key = _OVERLAY_KEY
+            from desktop_highlight_win32 import Win32HighlightBorder
 
-        self._overlay.update_idletasks()
-        try:
-            import ctypes
-            hwnd = int(self._overlay.frame(), 16)
-            GWL_EXSTYLE = -20
-            WS_EX_LAYERED = 0x00080000
-            WS_EX_NOACTIVATE = 0x08000000
-            u32 = ctypes.windll.user32
-            cur_ex = u32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            u32.SetWindowLongW(hwnd, GWL_EXSTYLE, cur_ex | WS_EX_LAYERED | WS_EX_NOACTIVATE)
-            user32 = ctypes.windll.user32
-            LWA_COLORKEY = 0x00000001
-            # _OVERLAY_KEY = "#010203" -> R=0x01, G=0x02, B=0x03
-            # COLORREF format: 0x00BBGGRR
-            key_color = (0x03 << 16) | (0x02 << 8) | 0x01
-            user32.SetLayeredWindowAttributes(hwnd, key_color, 0, LWA_COLORKEY)
-        except Exception:
-            pass
+            green = (34, 197, 94)
+            self._hl_hover = Win32HighlightBorder(thickness=3, color_rgb=green)
+            self._hl_region = Win32HighlightBorder(thickness=3, color_rgb=green)
+            self._capture_badge = None
+        except Exception as exc:
+            self._hl_hover = None
+            self._hl_region = None
+            self._capture_badge = None
+            self._on_error(f"高亮层初始化失败（捕获仍可用）：{exc}")
+
+    def _destroy_highlights(self) -> None:
+        for obj in (self._hl_hover, self._hl_region):
+            if obj is None:
+                continue
+            try:
+                obj.destroy()
+            except Exception:
+                pass
+        self._hl_hover = None
+        self._hl_region = None
+        self._capture_badge = None
 
     def _show_capture_overlay(self) -> None:
-        if not self._overlay or not self._canvas:
-            return
-        self._canvas.delete("all")
-
-        bw = 4
-        self._canvas.create_rectangle(
-            bw, bw, self._sw - bw, self._sh - bw,
-            outline="#22c55e", width=bw,
-        )
-        self._canvas.create_rectangle(
-            bw + 2, bw + 2, self._sw - bw - 2, self._sh - bw - 2,
-            outline="#86efac", width=1,
-        )
-
-        label_text = "桌面捕获模式"
-        self._canvas.create_text(
-            self._sw // 2, 48,
-            text=label_text,
-            fill="#22c55e",
-            font=("Microsoft YaHei", 16, "bold"),
-            anchor="center",
-        )
-
-        sub_text = "单击目标元素 · Esc 退出 · F2 暂停"
-        self._canvas.create_text(
-            self._sw // 2, 72,
-            text=sub_text,
-            fill=_THEME["text_light"],
-            font=("Microsoft YaHei", 11),
-            anchor="center",
-        )
-
-        corner_size = 24
-        corners = [
-            (bw, bw, bw + corner_size, bw + corner_size),
-            (self._sw - bw - corner_size, bw, self._sw - bw, bw + corner_size),
-            (bw, self._sh - bw - corner_size, bw + corner_size, self._sh - bw),
-            (self._sw - bw - corner_size, self._sh - bw - corner_size, self._sw - bw, self._sh - bw),
-        ]
-        for x0, y0, x1, y1 in corners:
-            self._canvas.create_line(x0, y0, x1, y0, fill="#22c55e", width=3)
-            self._canvas.create_line(x0, y0, x0, y1, fill="#22c55e", width=3)
-
-        try:
-            self._overlay.deiconify()
-            self._overlay.lift()
-        except Exception:
-            pass
+        # 故意不创建任何屏幕覆盖层；状态只显示在工具条
+        return
 
     def _hide_capture_overlay(self) -> None:
-        if self._overlay:
+        self._hide_hover_borders()
+        if self._hl_region:
             try:
-                self._overlay.withdraw()
+                self._hl_region.hide()
             except Exception:
                 pass
-        if self._canvas:
-            self._canvas.delete("all")
-        self._hover_rect_id = None
-        self._hover_rect = None
 
     def _show_overlay(self) -> None:
-        if not self._overlay or not self._canvas:
-            return
-        self._canvas.delete("all")
-        try:
-            self._overlay.deiconify()
-            self._overlay.lift()
-        except Exception:
-            pass
+        return
 
     def _hide_overlay(self) -> None:
-        if self._overlay:
+        if self._hl_region:
             try:
-                self._overlay.withdraw()
+                self._hl_region.hide()
             except Exception:
                 pass
-        if self._canvas:
-            self._canvas.delete("all")
-        self._hover_rect_id = None
-        self._hover_rect = None
+        self._hide_hover_borders()
 
     def _hide_hover_borders(self) -> None:
-        if self._canvas:
-            self._canvas.delete("hover")
+        if self._hl_hover:
+            try:
+                self._hl_hover.hide()
+            except Exception:
+                pass
         self._hover_rect_id = None
         self._hover_rect = None
 
@@ -853,39 +1281,27 @@ class VisualRegionPickerOverlay:
             return
 
     def _show_hover_borders(self, rect: Tuple[int, int, int, int]) -> None:
-        l, t, r, b = rect
-        pad = 2
-        x0 = min(l, r) - pad
-        y0 = min(t, b) - pad
-        x1 = max(l, r) + pad
-        y1 = max(t, b) + pad
-        framed = (x0, y0, x1, y1)
-        if self._hover_rect == framed:
+        if self._hover_rect == rect:
             return
-        self._hide_hover_borders()
-        if self._canvas and self._overlay:
-            self._canvas.create_rectangle(
-                x0 - 2, y0 - 2, x1 + 2, y1 + 2,
-                outline="#fee2e2", width=2,
-                tags="hover",
-            )
-            self._hover_rect_id = self._canvas.create_rectangle(
-                x0, y0, x1, y1,
-                outline="#ef4444", width=2,
-                tags="hover",
-            )
+        try:
+            from desktop_highlight_win32 import rect_is_near_fullscreen
 
-            corner_size = 12
-            corners = [
-                (x0, y0, x0 + corner_size, y0 + corner_size),
-                (x1 - corner_size, y0, x1, y0 + corner_size),
-                (x0, y1 - corner_size, x0 + corner_size, y1),
-                (x1 - corner_size, y1 - corner_size, x1, y1),
-            ]
-            for cx0, cy0, cx1, cy1 in corners:
-                self._canvas.create_line(cx0, cy0, cx1, cy0, fill="#ef4444", width=2, tags="hover")
-                self._canvas.create_line(cx0, cy0, cx0, cy1, fill="#ef4444", width=2, tags="hover")
-        self._hover_rect = framed
+            if rect_is_near_fullscreen(rect):
+                self._hide_hover_borders()
+                return
+        except Exception:
+            pass
+        self._hover_rect = rect
+        if self._hl_region:
+            try:
+                self._hl_region.hide()
+            except Exception:
+                pass
+        if self._hl_hover:
+            try:
+                self._hl_hover.show(rect)
+            except Exception:
+                pass
 
     def _set_status(self, msg: str) -> None:
         if self._status_var:
@@ -896,7 +1312,7 @@ class VisualRegionPickerOverlay:
         if self._state_lbl:
             if self._armed:
                 self._state_lbl.configure(
-                    text="● 捕获中（点击目标将录制）",
+                    text="● 捕获中（挡板拦截 · 单击/F3）",
                     fg=_THEME["highlight"],
                     bg="#dcfce7",
                 )
@@ -928,11 +1344,14 @@ class VisualRegionPickerOverlay:
     def _pause_after_record(self) -> None:
         """单次捕获后自动回到待命，避免连点误录。"""
         self._armed = False
+        self._set_click_guard_enabled(False)
         self._consume_click_guard = False
         self._phase = "free"
         self._pending_drag = False
         self._drag_start = None
         self._drag_rect = None
+        self._clear_frozen_capture()
+        self._hide_capture_overlay()
         self._hide_overlay()
         self._hide_hover_borders()
         self._last_hover_xy = None
@@ -948,6 +1367,128 @@ class VisualRegionPickerOverlay:
         self._prev_lbutton = _lbutton_down()
         self._pick_enabled_after = time.time() + 0.2
 
+    def _is_over_picker_ui(self, x: int, y: int) -> bool:
+        if _is_over_toolstrip(self._root, x, y):
+            return True
+        panel = self._element_panel
+        if panel is not None:
+            try:
+                win = getattr(panel, "_window", None) or getattr(panel, "_root", None)
+                if win is not None:
+                    rx, ry = int(win.winfo_rootx()), int(win.winfo_rooty())
+                    rw, rh = int(win.winfo_width()), int(win.winfo_height())
+                    if rw > 0 and rh > 0 and _rect_contains((rx, ry, rx + rw, ry + rh), x, y):
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def _picker_hwnd(self) -> int:
+        if not self._root:
+            return 0
+        try:
+            return int(self._root.winfo_id())
+        except Exception:
+            return 0
+
+    def _collect_exclude_rects(self) -> list:
+        rects = []
+        tsb = _get_toolstrip_bounds(self._root)
+        if tsb:
+            rects.append(tsb)
+        return rects
+
+    def _init_click_guard(self) -> None:
+        try:
+            from desktop_capture_click_shield import CaptureClickShield
+
+            self._click_guard = CaptureClickShield()
+            self._hook_capture_clicks = True
+        except Exception as exc:
+            self._click_guard = None
+            self._hook_capture_clicks = False
+            self._on_error(f"点击挡板不可用（请用 F3 捕获）：{exc}")
+
+    def _teardown_click_guard(self) -> None:
+        if self._click_guard is not None:
+            try:
+                self._click_guard.uninstall()
+            except Exception:
+                pass
+            self._click_guard = None
+
+    def _set_click_guard_enabled(self, enabled: bool) -> None:
+        if self._click_guard is None:
+            return
+        try:
+            if enabled:
+                self._click_guard.set_exclude_rects(self._collect_exclude_rects())
+                self._click_guard.show()
+            else:
+                self._click_guard.hide()
+            self._hook_capture_clicks = True
+        except Exception as exc:
+            self._hook_capture_clicks = False
+            try:
+                self._click_guard.hide()
+            except Exception:
+                pass
+            self._on_error(f"点击挡板切换失败（请用 F3 捕获）：{exc}")
+
+    def _refresh_shield_exclude(self) -> None:
+        if self._click_guard is None or not getattr(self._click_guard, "enabled", False):
+            return
+        try:
+            self._click_guard.set_exclude_rects(self._collect_exclude_rects())
+        except Exception:
+            pass
+
+    def _clear_frozen_capture(self) -> None:
+        self._frozen_preview_b64 = ""
+        self._frozen_rect = None
+        self._frozen_label = ""
+
+    def _freeze_capture_at_point(self, x: int, y: int) -> None:
+        """点击瞬间同步冻结：名称/矩形/预览图（与绿框一致，不裁切）。"""
+        self._clear_frozen_capture()
+        rect = self._hover_rect
+        label = (self._hover_label or "").strip()
+        # 挡板可能挡住 UIA：冻结时短暂打穿
+        shield = self._click_guard
+        if shield is not None and getattr(shield, "enabled", False):
+            try:
+                shield.set_click_through(True)
+            except Exception:
+                pass
+        try:
+            if not rect or not _rect_contains(rect, int(x), int(y)):
+                try:
+                    hit = _hover_locate(int(x), int(y))
+                    if _is_reliable_element_hit(hit, int(x), int(y)):
+                        rect = hit.get("rect")
+                        label = (hit.get("label") or "").strip() or label
+                except Exception:
+                    pass
+        finally:
+            if shield is not None and getattr(shield, "enabled", False):
+                try:
+                    shield.set_click_through(False)
+                except Exception:
+                    pass
+        if not rect or len(rect) != 4:
+            rect = (int(x) - 40, int(y) - 24, int(x) + 40, int(y) + 24)
+        self._frozen_rect = tuple(int(v) for v in rect)  # type: ignore[assignment]
+        self._frozen_label = label
+        try:
+            from desktop_precise_locator import capture_rect_preview_b64
+
+            # padding=0：与高亮绿框内容对齐
+            self._frozen_preview_b64 = capture_rect_preview_b64(
+                int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]), padding=0
+            ) or ""
+        except Exception:
+            self._frozen_preview_b64 = ""
+
     def _arm_pick(self) -> None:
         self._capture_mode = (
             self._mode_var.get() if self._mode_var else CAPTURE_MODE_SMART
@@ -956,45 +1497,36 @@ class VisualRegionPickerOverlay:
         self._phase = "free"
         self._drag_start = None
         self._drag_rect = None
+        self._clear_frozen_capture()
         self._begin_click_guard()
         self._hide_hover_borders()
         self._last_hover_xy = None
+        self._set_click_guard_enabled(self._capture_mode == CAPTURE_MODE_SMART)
         if self._capture_mode == CAPTURE_MODE_SMART:
             self._show_capture_overlay()
             self._set_status(
-                "捕获中：移动鼠标可高亮元素边框，在目标上单击一次确认"
+                f"捕获中 [{CAPTURE_UI_ENGINE}]：指向目标后单击或按 F3（挡板拦截，不触发应用）"
             )
         else:
             self._hide_overlay()
-            self._set_status("捕获中：拖拽框选区域，再在框内点击定操作点")
-
-        try:
-            import ctypes
-            hwnd = int(self._overlay.frame(), 16)
-            ctypes.windll.user32.SetCapture(hwnd)
-        except Exception:
-            pass
+            self._set_status("捕获中：拖拽框选区域（区域模式不启用挡板）")
 
         self._refresh_arm_ui()
         self._notify_armed_change()
 
     def _disarm_pick(self) -> None:
         self._armed = False
+        self._set_click_guard_enabled(False)
         self._consume_click_guard = False
         self._phase = "free"
         self._pending_drag = False
         self._drag_start = None
         self._drag_rect = None
+        self._clear_frozen_capture()
         self._hide_capture_overlay()
         self._hide_overlay()
         self._hide_hover_borders()
         self._last_hover_xy = None
-
-        try:
-            import ctypes
-            ctypes.windll.user32.ReleaseCapture()
-        except Exception:
-            pass
 
         getter = getattr(self._status_var, "get", None)
         status_txt = (getter() if callable(getter) else "") or ""
@@ -1011,8 +1543,12 @@ class VisualRegionPickerOverlay:
 
     def _request_close(self) -> None:
         self._stop = True
+        self._set_click_guard_enabled(False)
+        self._teardown_click_guard()
+        self._hide_capture_overlay()
         self._hide_overlay()
         self._hide_hover_borders()
+        self._destroy_highlights()
         self._on_close()
         if self._root:
             try:
@@ -1024,19 +1560,32 @@ class VisualRegionPickerOverlay:
         self,
         label: str,
         rect: Optional[Tuple[int, int, int, int]],
+        *,
+        reliable: bool = False,
+        control_type: str = "",
     ) -> None:
         if not self._armed or self._phase != "free":
             self._clear_hover_highlight()
             return
         if self._capture_mode != CAPTURE_MODE_SMART:
             return
-        if label and not _is_fake_container(label):
-            self._set_status(f"指向：{label} — 单击确认捕获")
-        if rect:
-            if self._hover_rect != rect:
-                self._show_hover_borders(rect)
-        else:
+        # 无真实命中：不画框、不假装已框选（避免绿框跟着鼠标跑）
+        if not reliable or not rect:
             self._clear_hover_highlight()
+            self._hover_label = ""
+            self._set_status("捕获中：将鼠标移到按钮/输入框/图标上，命中后显示绿框")
+            return
+        nice = (label or "").strip()
+        self._hover_label = nice
+        if nice and not _is_fake_container(nice) and not _is_shell_noise_label(nice):
+            ct = (control_type or "").strip()
+            extra = f" [{ct}]" if ct else ""
+            self._set_status(f"目标：{nice}{extra} — 单击确认捕获")
+        else:
+            ct = (control_type or "").strip() or "控件"
+            self._set_status(f"目标：已命中{ct} — 单击确认捕获")
+        if self._hover_rect != rect:
+            self._show_hover_borders(rect)
 
     def _schedule_hover_peek(self, x: int, y: int) -> None:
         if self._hover_busy or self._capture_mode != CAPTURE_MODE_SMART:
@@ -1054,25 +1603,41 @@ class VisualRegionPickerOverlay:
         def _work() -> None:
             label = ""
             rect: Optional[Tuple[int, int, int, int]] = None
+            reliable = False
+            control_type = ""
+            shield = self._click_guard
             try:
-                result = _layered_locate(x, y)
-                rect = result.get('rect')
-                label = result.get('label', '')
+                if shield is not None and getattr(shield, "enabled", False):
+                    try:
+                        shield.set_click_through(True)
+                    except Exception:
+                        pass
+                result = _hover_locate(x, y)
+                reliable = _is_reliable_element_hit(result, x, y)
+                if reliable:
+                    rect = result.get("rect")
+                    label = result.get("label", "") or ""
+                    control_type = result.get("control_type", "") or ""
+                    if _is_shell_noise_label(label):
+                        label = ""
             except Exception:
-                pass
-
-            if rect:
-                rw = rect[2] - rect[0]
-                rh = rect[3] - rect[1]
-                if rw > 150 or rh > 150:
-                    rect = (x - 48, y - 48, x + 48, y + 48)
+                reliable = False
+                rect = None
+            finally:
+                if shield is not None and getattr(shield, "enabled", False):
+                    try:
+                        shield.set_click_through(False)
+                    except Exception:
+                        pass
 
             self._hover_busy = False
 
             if self._root and self._armed and self._phase == "free":
                 self._root.after(
                     0,
-                    lambda: self._apply_hover_peek(label, rect),
+                    lambda lb=label, rc=rect, rel=reliable, ct=control_type: self._apply_hover_peek(
+                        lb, rc, reliable=rel, control_type=ct
+                    ),
                 )
 
         threading.Thread(target=_work, daemon=True, name="uia-hover").start()
@@ -1110,17 +1675,34 @@ class VisualRegionPickerOverlay:
             if not self._armed:
                 self._consume_click_guard = False
                 self._prev_lbutton = _lbutton_down()
+                self._prev_f3 = _f3_pressed()
                 return
+
+            self._refresh_shield_exclude()
 
             x, y = _cursor_pos()
             down = _lbutton_down()
             smart = self._capture_mode == CAPTURE_MODE_SMART
+            f3 = _f3_pressed()
+
+            # 挡板队列：点击被挡板吃掉后由此取点（目标应用收不到）
+            shield_click = None
+            if self._click_guard is not None and getattr(self._click_guard, "enabled", False):
+                try:
+                    while True:
+                        nxt = self._click_guard.pop_click()
+                        if nxt is None:
+                            break
+                        shield_click = nxt
+                except Exception:
+                    shield_click = None
 
             if self._consume_click_guard:
-                if down:
+                if down or shield_click:
                     self._prev_lbutton = True
                     self._pending_drag = False
                     self._drag_start = None
+                    self._prev_f3 = f3
                     return
                 self._consume_click_guard = False
                 self._prev_lbutton = False
@@ -1129,18 +1711,43 @@ class VisualRegionPickerOverlay:
             if smart and self._phase == "free" and not down and not _is_over_toolstrip(self._root, x, y):
                 self._schedule_hover_peek(x, y)
 
+            # F3 或挡板点击：确认捕获
+            confirm_xy = None
+            if smart and self._phase == "free" and f3 and not self._prev_f3:
+                confirm_xy = (x, y)
+            elif smart and self._phase == "free" and shield_click:
+                confirm_xy = shield_click
+            self._prev_f3 = f3
+
+            if confirm_xy is not None:
+                hx, hy = confirm_xy
+                if time.time() >= self._pick_enabled_after and not self._is_over_picker_ui(hx, hy):
+                    if not self._frozen_preview_b64:
+                        self._freeze_capture_at_point(hx, hy)
+                    self._finalize_smart_pick(hx, hy)
+                self._pending_drag = False
+                self._drag_start = None
+                self._prev_lbutton = down
+                return
+
             if self._phase == "free":
                 if down and not self._prev_lbutton:
+                    # 有挡板时点击走 shield_click；此处仅处理工具条/无挡板兜底
+                    if self._click_guard is not None and getattr(self._click_guard, "enabled", False):
+                        self._prev_lbutton = down
+                        return
                     self._hide_hover_borders()
                     self._drag_start = (x, y)
                     self._pending_drag = True
+                    if smart and not self._is_over_picker_ui(x, y):
+                        self._freeze_capture_at_point(x, y)
                 elif self._pending_drag and self._drag_start and down:
                     sx, sy = self._drag_start
                     if abs(x - sx) + abs(y - sy) >= 10:
                         if smart:
                             self._pending_drag = False
                             self._drag_start = None
-                            self._set_status("智能点选请直接单击，无需拖拽")
+                            self._set_status("智能点选请直接单击或按 F3，无需拖拽")
                         else:
                             self._phase = "drag"
                             self._pending_drag = False
@@ -1149,12 +1756,12 @@ class VisualRegionPickerOverlay:
                 elif not down and self._prev_lbutton and self._pending_drag and self._drag_start:
                     if smart:
                         if time.time() < self._pick_enabled_after:
-                            self._pending_drag = False
-                            self._drag_start = None
-                        elif _is_over_toolstrip(self._root, x, y):
-                            self._pending_drag = False
-                            self._drag_start = None
+                            pass
+                        elif self._is_over_picker_ui(x, y):
+                            pass
                         else:
+                            if not self._frozen_preview_b64:
+                                self._freeze_capture_at_point(x, y)
                             self._finalize_smart_pick(x, y)
                         self._pending_drag = False
                         self._drag_start = None
@@ -1180,8 +1787,12 @@ class VisualRegionPickerOverlay:
                         self._phase = "free"
                         self._hide_overlay()
             elif self._phase == "click_offset":
-                if down and not self._prev_lbutton:
-                    self._finalize_region_record(x, y)
+                offset_click = shield_click
+                if offset_click is None and down and not self._prev_lbutton:
+                    offset_click = (x, y)
+                if offset_click is not None:
+                    ox, oy = offset_click
+                    self._finalize_region_record(ox, oy)
                     self._drag_rect = None
                     self._phase = "free"
                     self._hide_overlay()
@@ -1196,58 +1807,66 @@ class VisualRegionPickerOverlay:
                 self._root.after(16, self._poll_input)
 
     def _redraw_region(self) -> None:
-        if not self._canvas or not self._drag_rect:
+        if not self._drag_rect:
             return
         self._hide_hover_borders()
-        self._canvas.delete("all")
-        l, t, r, b = self._drag_rect
-        x0, y0 = min(l, r), min(t, b)
-        x1, y1 = max(l, r), max(t, b)
-        self._canvas.create_rectangle(
-            x0, y0, x1, y1, outline="#22c55e", width=2
-        )
-        self._canvas.create_rectangle(
-            x0 + 1, y0 + 1, x1 - 1, y1 - 1, outline="#86efac", width=1
-        )
-
-    def _flash_rect(self, l: int, t: int, r: int, b: int) -> None:
-        if self._overlay:
+        if self._hl_region:
             try:
-                self._overlay.deiconify()
-                self._overlay.lift()
+                self._hl_region.show(self._drag_rect)
             except Exception:
                 pass
+
+    def _flash_rect(self, l: int, t: int, r: int, b: int) -> None:
         self._show_hover_borders((l, t, r, b))
 
         def _hide() -> None:
             self._hide_hover_borders()
-            if self._overlay:
-                try:
-                    self._overlay.withdraw()
-                except Exception:
-                    pass
 
         if self._root:
             self._root.after(450, _hide)
 
     def _finalize_smart_pick(self, click_x: int, click_y: int) -> None:
         try:
+            self._set_click_guard_enabled(False)
+            if not self._frozen_preview_b64:
+                self._freeze_capture_at_point(click_x, click_y)
+            frozen_preview = self._frozen_preview_b64
+            frozen_rect = self._frozen_rect
+            frozen_label = self._frozen_label
             self._hide_capture_overlay()
             self._freeze_hover_borders()
             self._phase = "locked"
             self._armed = False
             self._pick_enabled_after = time.time() + 9999
-            self._set_status("正在分析元素…")
+            self._set_status("正在分析元素…（预览已冻结）")
 
             import threading
-            thr = threading.Thread(target=self._build_locked_pick, args=(click_x, click_y), daemon=True)
+            thr = threading.Thread(
+                target=self._build_locked_pick,
+                args=(click_x, click_y, frozen_preview, frozen_rect, frozen_label),
+                daemon=True,
+            )
             thr.start()
         except Exception as exc:
             self._on_error(str(exc))
 
-    def _build_locked_pick(self, click_x: int, click_y: int) -> None:
+    def _build_locked_pick(
+        self,
+        click_x: int,
+        click_y: int,
+        frozen_preview: str = "",
+        frozen_rect: Optional[Tuple[int, int, int, int]] = None,
+        frozen_label: str = "",
+    ) -> None:
         try:
-            pick = build_pick_from_smart_click(click_x, click_y, action="click")
+            pick = build_pick_from_smart_click(
+                click_x,
+                click_y,
+                action="click",
+                frozen_preview_b64=frozen_preview or "",
+                frozen_rect=frozen_rect,
+                frozen_label=frozen_label or "",
+            )
             self._locked_pick = pick
             self._locked_rect = pick.get("rectangle")
 
@@ -1690,7 +2309,16 @@ def schedule_uia_snapshot_enrichment(
                 not current_label
                 or current_label.startswith("桌面_")
             )
-            if kc and is_fallback:
+            # 冻结预览时禁止 enrichment 改名，保证与模板一致
+            if pick.get("preview_frozen"):
+                plain = (pick.get("name") or pick.get("structure_info", {}).get("element_text") or "").strip()
+                if plain:
+                    patched = _patch_snapshot_text(res.element_snapshot, plain)
+                    if patched:
+                        pick["element_snapshot"] = patched
+                        merged2 = payload.merge_element_snapshot(patched)
+                        pick["selector_value"] = merged2.to_json()
+            elif kc and is_fallback:
                 kv = kc[0].get("value") or ""
                 if kv:
                     pick["label"] = f"ListItem_{kv}"

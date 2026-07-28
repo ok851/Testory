@@ -3,7 +3,7 @@
 
 诚实约束（Y5）：
 - Web 可做静态扫描 +（有条件的）运行时自愈管线
-- Desktop **仅静态扫描**，不含运行时选择器自愈；禁止对外宣称「Desktop 已自愈」
+- Desktop：静态扫描 + **有限**运行时自愈（标题/别名/UIA 放宽）；禁止对外宣称「Desktop 已自愈」
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ def heal_capability_matrix() -> Dict[str, Any]:
         "hub": "self_heal",
         "marketing_claim_allowed": False,
         "disclaimer": (
-            "本矩阵为工程能力真相源。Desktop 无运行时自愈；"
+            "本矩阵为工程能力真相源。Desktop 仅为有限运行时自愈（非通用 UIA）；"
             "不得宣传「跨端/桌面已自愈」。Web 运行时自愈依赖浏览器会话与开关。"
         ),
         "layers": {
@@ -44,8 +44,9 @@ def heal_capability_matrix() -> Dict[str, Any]:
                 "runtime_heal": "partial",
                 "status": "partial",
                 "note": (
-                    "运行时：attach 标题放宽 / launch 别名重解析（DESKTOP_RUNTIME_HEAL）；"
-                    "非通用 UIA 选择器自愈；失败不假绿"
+                    "运行时：attach 标题放宽 / launch 别名重解析 / "
+                    "click·input 有限 UIA 放宽（DESKTOP_RUNTIME_HEAL）；"
+                    "非通用 UIA 自愈；失败不假绿"
                 ),
             },
             "hitl": {
@@ -57,10 +58,15 @@ def heal_capability_matrix() -> Dict[str, Any]:
         },
         "y5": {
             "id": "Y5",
-            "title": "Self-heal Hub + Desktop 有限运行时自愈",
+            "title": "Self-heal Hub + Desktop 有限运行时自愈（含有限 UIA）",
             "desktop_runtime_heal": "partial",
-            "closed": False,
-            "progress": "hub_matrix_and_partial_desktop_heal",
+            "closed": True,
+            "done_definition": (
+                "Hub 能力矩阵可查询；Desktop 运行时自愈覆盖 attach 标题放宽、"
+                "launch 别名重解析、click/input 有限 UIA 放宽；失败不假绿；"
+                "禁止宣传「通用 UIA/Desktop 已自愈」"
+            ),
+            "progress": "closed_partial_desktop_heal",
         },
     }
 
@@ -139,7 +145,7 @@ def analyze_steps_for_self_heal(steps: List[Dict[str, Any]]) -> Dict[str, Any]:
     if desktop_steps:
         suggestions.append(
             f"本用例含 {desktop_steps} 个 Desktop 步骤：静态扫描 + 有限运行时自愈"
-            "（标题放宽/别名重解析，DESKTOP_RUNTIME_HEAL）；"
+            "（标题放宽/别名重解析/有限 UIA 放宽，DESKTOP_RUNTIME_HEAL）；"
             "非通用 UIA 自愈，失败须诚实失败（禁止宣传 Desktop 已自愈）。"
         )
     if issues:
@@ -225,7 +231,7 @@ def summarize_heal_claim(*, layer: Optional[str] = None) -> Dict[str, Any]:
             "allowed": False,
             "reason": "DESKTOP_HEAL_PARTIAL_ONLY",
             "message": (
-                "Desktop 仅有限运行时自愈（标题放宽/别名重解析），"
+                "Desktop 仅有限运行时自愈（标题放宽/别名重解析/有限 UIA），"
                 "不得宣传「Desktop 已自愈」或通用 UIA 自愈完成"
             ),
             "capabilities": caps["layers"]["desktop"],

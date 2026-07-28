@@ -58,6 +58,34 @@ def check_desktop_preflight(*, timeout_sec: float = 1.5) -> Dict[str, Any]:
                 out["error"] = f"Desktop Gateway 不可达: {err}"
                 out["detail"] = f"gateway_unreachable:{err[:80]}"
                 return out
+
+            # remote：额外农场调度门禁（默认 auto）
+            if mode == "remote":
+                try:
+                    from ai_modules.execute.farm_dispatch_gate import check_farm_dispatch_gate
+
+                    farm_gate = check_farm_dispatch_gate()
+                    out["farm_dispatch"] = {
+                        "ok": bool(farm_gate.get("ok")),
+                        "gate_mode": farm_gate.get("gate_mode"),
+                        "detail": farm_gate.get("detail"),
+                        "failed_checks": farm_gate.get("failed_checks"),
+                        "skipped": bool(farm_gate.get("skipped")),
+                    }
+                    if not farm_gate.get("ok"):
+                        out["ok"] = False
+                        out["error_code"] = farm_gate.get("error_code") or "FARM_DISPATCH_NOT_READY"
+                        out["error"] = farm_gate.get("error") or "农场调度未就绪"
+                        out["detail"] = f"farm_gate:{farm_gate.get('detail') or 'fail'}"
+                        return out
+                except Exception as farm_exc:
+                    out["ok"] = False
+                    out["error_code"] = "FARM_DISPATCH_NOT_READY"
+                    out["error"] = f"农场调度门禁异常: {farm_exc}"
+                    out["detail"] = "farm_gate_exception"
+                    out["farm_dispatch"] = {"ok": False, "error": str(farm_exc)[:120]}
+                    return out
+
             out["ok"] = True
             out["detail"] = "gateway_ok" if not err else f"gateway_probe:{err[:60]}"
             return out

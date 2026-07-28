@@ -349,7 +349,7 @@
       '#hufirst-ai-steps-assistant{position:fixed;z-index:10020;font-family:Segoe UI,system-ui,sans-serif;}',
       '#hufirst-ai-fab{width:56px;height:56px;border-radius:50%;border:none;cursor:pointer;box-shadow:0 4px 20px rgba(79,70,229,.45);',
       'background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-size:22px;position:fixed;right:20px;bottom:24px;z-index:10021;transition:transform .2s;}',
-      '#hufirst-ai-fab:hover{transform:scale(1.05);}',
+      /* 执行悬浮窗在 fab 上方（base.html globalRunBanner bottom:5.75rem），避免重叠 */      '#hufirst-ai-fab:hover{transform:scale(1.05);}',
       '#hufirst-ai-spanel{position:fixed;right:20px;bottom:88px;width:min(420px,96vw);max-height:78vh;overflow:hidden;display:none;flex-direction:column;border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.2);background:#fff;border:1px solid #e2e8f0;z-index:10022;}',
       'html.dark #hufirst-ai-spanel{background:#1e1b4b;border-color:#4338ca;}',
       '#hufirst-ai-spanel.hufirst-ai-open{display:flex;}',

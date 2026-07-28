@@ -544,7 +544,9 @@
                 <button class="ce-quick-cmd" onclick="CE.loadTemplate('mobile_desktop')" title="移动端截图 → 桌面端截图 → 断言两端数据一致">📱💻 移动端与桌面端对比</button>
                 <button class="ce-quick-cmd" onclick="CE.loadDesktopMainpath()" title="标准计划：launch 记事本 → attach → input → verify">💻 桌面主路径（记事本）</button>
                 <button class="ce-quick-cmd" onclick="CE.loadErpDesktopSample()" title="Fake ERP：API 订单号 ↔ 桌面窗口标题断言">🏢 ERP 桌面样例</button>
-                <button class="ce-quick-cmd" onclick="CE.loadErpAliasSample()" title="经 DESKTOP_APP_ALIASES 的 @erp 启动客户客户端">🏢 ERP @erp 别名</button>
+                <button class="ce-quick-cmd" onclick="CE.loadErpAliasSample()" title="经 DESKTOP_APP_ALIASES / 用户别名的 @erp 启动客户客户端">🏢 ERP @erp 别名</button>
+                <button class="ce-quick-cmd" onclick="CE.configureCustomerErp()" title="保存真实客户 ERP 路径与窗口标题正则到平台（无需手改 .env）">⚙ 配置客户 ERP</button>
+                <button class="ce-quick-cmd" onclick="window.open('/trace-hub','_blank')" title="证据中心：门禁摘要与成功运行 Skill 沉淀">📦 证据中心 / Skill 沉淀</button>
             </div>
             <p class="ce-ops-panel__hint" id="ceDesktopPreflightHint" style="margin-top:8px;"></p>
         </div>
@@ -574,7 +576,7 @@
                 <span class="ce-agent-panel__meta" id="ceAgentRunMeta"></span>
             </div>
             <div class="ce-agent-report" id="ceAgentReport">
-                分解场景后，可点「多 Agent 执行」查看 Planner → 执行 → Verifier 时间线与证据报告。
+                分解场景后，可点「多 Agent 执行」查看 Planner → RiskAdvisor → DesktopExecutor → WebApiExecutor → Verifier 时间线与证据报告。
             </div>
             <ul class="ce-agent-timeline" id="ceAgentTimeline"></ul>
         </div>
@@ -955,7 +957,7 @@
     CE.loadErpAliasSample = function() {
         document.getElementById('ceScenarioInput').value =
             '1. 以 API 种子订单号 ORD-DEMO-404 作为上游结果\n' +
-            '2. 经 DESKTOP_APP_ALIASES 别名 @erp 启动客户 ERP\n' +
+            '2. 经客户 ERP 别名 @erp（data/desktop_aliases.json 或 DESKTOP_APP_ALIASES）启动\n' +
             '3. 附着窗口并抽取 erp_order_id（标题正则可配）\n' +
             '4. 断言 api_order_id 与 erp_order_id 一致（不一致不得假绿）';
         var qs = CE.projectId ? ('?project_id=' + encodeURIComponent(CE.projectId)) : '';
@@ -975,11 +977,58 @@
             CE.addLog('info', '已加载 ERP @erp 别名计划');
             if (data.alias_error || !data.ready_to_run) {
                 CE.addLog('warn', data.hint || data.alias_error || '别名未就绪或桌面预检失败（不假绿）');
+                CE.addLog('info', '可点「配置客户 ERP」保存真实客户端路径');
             }
             CE.refreshDesktopPreflight();
         })
         .catch(function(err) {
             CE.addLog('warn', '加载 ERP 别名计划失败: ' + err);
+        });
+    };
+
+    CE.configureCustomerErp = function() {
+        var path = window.prompt('客户 ERP 可执行文件完整路径（例如 C:\\\\ERP\\\\client.exe）', '');
+        if (path == null) return;
+        path = String(path || '').trim();
+        if (!path) {
+            CE.addLog('warn', '已取消：path 为空');
+            return;
+        }
+        var titleRe = window.prompt(
+            '窗口标题正则（可用 {order_id}；留空则默认包含订单号）',
+            '.*{order_id}.*'
+        );
+        if (titleRe == null) return;
+        var argsRaw = window.prompt('启动参数（可选，逗号分隔，可用 {order_id}）', '') || '';
+        var args = String(argsRaw).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+        CE.addLog('info', '正在保存客户 ERP 别名 @erp …');
+        fetch('/api/desktop/aliases/erp', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+            body: JSON.stringify({
+                path: path,
+                args: args,
+                window_title_re: String(titleRe || '').trim(),
+                order_id: 'ORD-DEMO-404'
+            })
+        })
+        .then(function(r) { return r.json().then(function(j) { return {status: r.status, body: j}; }); })
+        .then(function(res) {
+            var data = res.body || {};
+            if (!data.ok) {
+                CE.addLog('warn', data.error || ('保存失败 HTTP ' + res.status));
+                return;
+            }
+            var probe = data.probe || {};
+            if (probe.ok) {
+                CE.addLog('ok', '已保存 @erp → ' + (probe.path || path) + '（path 存在）');
+            } else {
+                CE.addLog('warn', '已保存别名，但探测失败: ' + (probe.error || 'path 不存在') + '（执行将诚实失败）');
+            }
+            CE.loadErpAliasSample();
+        })
+        .catch(function(err) {
+            CE.addLog('warn', '保存客户 ERP 失败: ' + err);
         });
     };
 

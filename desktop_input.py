@@ -1693,15 +1693,36 @@ def _explorer_window_opened(
     return False
 
 
-def should_verify_desktop_effect(spec: Optional[dict]) -> bool:
-    """双击回放默认校验界面变化；仅显式 verify_effect=0 时跳过。"""
+def should_verify_desktop_effect(
+    spec: Optional[dict],
+    *,
+    action: str = "",
+) -> bool:
+    """
+    是否在指针动作后校验「界面效果」。
+
+    - 显式 verify_effect 优先
+    - 双击 / 启动类、或 desktop_spec 声明 expect_window/effect_keyword/desktop_shell 时默认校验
+    - 普通单击/右键（应用内按钮）默认不校验「新窗口标题」——否则 QQ「扫码登录」等
+      会因标题未变而被误判失败
+    """
     s = spec or {}
     raw = s.get("verify_effect")
-    if raw is None:
+    if raw is not None:
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).strip().lower() not in ("0", "false", "no", "off")
+    if (
+        s.get("desktop_shell")
+        or s.get("expect_window")
+        or (s.get("effect_keyword") or "").strip()
+        or (s.get("target_name") or "").strip()
+    ):
         return True
-    if isinstance(raw, bool):
-        return raw
-    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+    act = (action or "").strip().lower()
+    if act in ("double_click", "doubleclick", "launch_app"):
+        return True
+    return False
 
 
 def wait_for_desktop_effect(

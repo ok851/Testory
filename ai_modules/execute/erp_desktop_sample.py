@@ -45,8 +45,8 @@ def resolve_erp_alias(
     if key not in specs:
         return None, (
             f"DESKTOP_ALIAS_MISSING: 未配置别名「{key}」。"
-            f"请在 .env 设置 DESKTOP_APP_ALIASES，例如 "
-            f'{{"{key}":"C:\\\\ERP\\\\client.exe"}} 或带 args 的对象形式。'
+            f"请在平台「客户 ERP 别名」保存，或写入 data/desktop_aliases.json / .env DESKTOP_APP_ALIASES，例如 "
+            f'{{"{key}":{{"path":"C:\\\\ERP\\\\client.exe","window_title_re":".*{{order_id}}.*"}}}}。'
         )
     vars_map = {"order_id": order_id, "api_order_id": order_id}
     launch = resolve_launch_spec(f"@{key}", variables=vars_map)

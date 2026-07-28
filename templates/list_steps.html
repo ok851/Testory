@@ -252,26 +252,60 @@
             flex-shrink: 0;
         }
         
-        /* 拖动相关样式 */
+        /* 拖动相关样式（指针拖拽，兼容桌面壳；勿依赖 HTML5 DnD） */
+        #stepsListContainer,
+        .step-item {
+            -webkit-app-region: no-drag;
+            app-region: no-drag;
+        }
         .step-item {
             user-select: none;
+            -webkit-user-select: none;
             cursor: grab;
-            transition: all 0.2s ease;
+            touch-action: none;
+            transition: box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+        }
+        .step-item img,
+        .step-item a {
+            -webkit-user-drag: none;
+            user-drag: none;
+            pointer-events: none; /* 预览图不抢指针；拖拽整卡 */
+        }
+        .step-item .step-actions,
+        .step-item .step-actions button {
+            pointer-events: auto;
+            touch-action: manipulation;
+            cursor: pointer;
+        }
+        .step-item.dragging {
+            opacity: 0.35;
+            cursor: grabbing;
+        }
+        body.step-pointer-dragging,
+        body.step-pointer-dragging * {
+            cursor: grabbing !important;
+            user-select: none !important;
+        }
+        .step-drag-ghost {
+            position: fixed;
+            z-index: 10050;
+            pointer-events: none;
+            opacity: 0.92;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.22);
+            border: 1px solid #667eea;
+            border-radius: 8px;
+            background: #fff;
+            margin: 0;
+            max-width: min(720px, 92vw);
+        }
+        html.dark .step-drag-ghost {
+            background: #111827;
+            border-color: #818cf8;
         }
 
         .step-item:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
-        }
-
-        .step-item.ging {
-            opacity: 0.8;
-            transform: rotate(1deg) scale(1.02);
-            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
-            cursor: grabbing;
-            background: linear-gradient(135deg, #f8f9ff 0%, #e8eeff 100%);
-            border: 2px solid #667eea;
-            z-index: 1000;
         }
 
         .step-item.cross-page-drag {
@@ -556,6 +590,9 @@
             border: 1px solid #e5e7eb;
             border-radius: 6px;
             background: #f8fafc;
+            -webkit-user-drag: none;
+            user-drag: none;
+            pointer-events: none;
         }
         .visual-step-preview-meta { font-size: 12px; color: #64748b; line-height: 1.5; }
         .visual-selector-preview-wrap {
@@ -1820,6 +1857,20 @@
             if (stopBtn) stopBtn.disabled = true;
         }
 
+        function isLocalCaseRunInFlight() {
+            return !!(window.__uatCaseRunInFlight);
+        }
+
+        function setCaseRunToolbarRunning() {
+            const runBtn = document.getElementById('runCaseBtn');
+            const stopBtn = document.getElementById('stopRunCaseBtn');
+            if (runBtn) {
+                runBtn.disabled = true;
+                runBtn.textContent = t('steps_run_btn_running');
+            }
+            if (stopBtn) stopBtn.disabled = false;
+        }
+
         let draggedElement = null;
         let draggedStepId = null;
         let isDragging = false;
@@ -2113,9 +2164,9 @@
                     stepsList.innerHTML = '<div class="steps-list" id="stepsListContainer"></div>';
                     const stepsListContainer = document.getElementById('stepsListContainer');
                     
-                    // 添加拖放事件监听器到容器
-                    stepsListContainer.addEventListener('dragover', handleDragOver);
-                    stepsListContainer.addEventListener('drop', handleDrop);
+                    // 桌面壳下不依赖 HTML5 DnD；保留 preventDefault 以免浏览器默认行为干扰
+                    stepsListContainer.addEventListener('dragover', function (e) { e.preventDefault(); });
+                    stepsListContainer.addEventListener('drop', function (e) { e.preventDefault(); });
                     
                     data.steps.forEach((step, index) => {
                         // 计算实际步骤编号（考虑分页）
@@ -2189,13 +2240,11 @@
                             </div>
                         `;
                         
-                        // 添加拖动功能
-                        stepItem.draggable = true;
+                        // 桌面壳（Tauri/WebView2/pywebview）下 HTML5 DnD 不可靠，改用 Pointer 拖拽
+                        stepItem.draggable = false;
+                        stepItem.setAttribute('draggable', 'false');
                         stepItem.setAttribute('data-step-id', step.id);
-                        stepItem.addEventListener('dragstart', handleDragStart);
-                        stepItem.addEventListener('dragend', handleDragEnd);
-                        stepItem.addEventListener('dragover', handleDragOver);
-                        stepItem.addEventListener('drop', handleDrop);
+                        bindStepPointerDrag(stepItem);
 
                         stepItem.addEventListener('contextmenu', function (ev) {
                             ev.preventDefault();
@@ -2206,7 +2255,7 @@
                                 window.HuFirstAiStepsPanel.openOptimize(actualStepNumber);
                             }
                         });
-                        stepItem.setAttribute('title', '右键：打开 AI 助手并优化本步；Shift+右键：合并本步与下一步');
+                        stepItem.setAttribute('title', '按住拖动可调整顺序；右键打开 AI 助手');
                         
                         stepsListContainer.appendChild(stepItem);
                     });
@@ -2317,6 +2366,7 @@ function changePage(page) {
         
             // 关键修复：不再保存 draggedElement，只保存 draggedStepId
             const savedDraggedStepId = draggedStepId;
+            const savedPointerId = pointerDragState && pointerDragState.pointerId;
         
             // 切换页面
             currentPage = page;
@@ -2325,6 +2375,17 @@ function changePage(page) {
             // 恢复拖拽状态 - 但不恢复 draggedElement
             draggedStepId = savedDraggedStepId;
             isDragging = true;
+            if (pointerDragState) {
+                pointerDragState.stepId = savedDraggedStepId;
+                // DOM 重建后原元素已脱离；把 capture 挪到 body，保证壳内继续收到 pointermove
+                pointerDragState.el = null;
+                if (savedPointerId != null) {
+                    pointerDragState.pointerId = savedPointerId;
+                    try {
+                        document.body.setPointerCapture(savedPointerId);
+                    } catch (_) {}
+                }
+            }
         
             // 不再高亮任何元素，因为元素不在当前页面 DOM 中
             console.log(`已切换到页面 ${page}，可以继续拖拽放置`);
@@ -3258,7 +3319,14 @@ function changePage(page) {
         function mergeDesktopPickUpdates(basePick, patch) {
             if (!basePick || !patch) return basePick;
             const merged = Object.assign({}, basePick, patch);
-            if (patch.preview_image_b64) {
+            const baseFrozen = !!basePick.preview_frozen;
+            if (baseFrozen) {
+                // 冻结预览不可被后续 last_pick / 二次分析覆盖
+                merged.preview_frozen = true;
+                if (basePick.preview_image_b64) {
+                    merged.preview_image_b64 = basePick.preview_image_b64;
+                }
+            } else if (patch.preview_image_b64) {
                 merged.preview_image_b64 = patch.preview_image_b64;
             } else if (basePick.preview_image_b64) {
                 merged.preview_image_b64 = basePick.preview_image_b64;
@@ -3271,10 +3339,17 @@ function changePage(page) {
             }
             if (patch.selector_value) {
                 try {
-                    const cur = JSON.parse(merged.selector_value || '{}');
+                    const cur = JSON.parse((baseFrozen ? basePick.selector_value : merged.selector_value) || '{}');
                     const inc = JSON.parse(patch.selector_value || '{}');
-                    if (inc.template_image_base64) {
+                    if (!baseFrozen && inc.template_image_base64) {
                         cur.template_image_base64 = inc.template_image_base64;
+                    } else if (baseFrozen && basePick.selector_value) {
+                        try {
+                            const baseSv = JSON.parse(basePick.selector_value || '{}');
+                            if (baseSv.template_image_base64) {
+                                cur.template_image_base64 = baseSv.template_image_base64;
+                            }
+                        } catch (e2) { /* keep cur */ }
                     }
                     if (inc.element_snapshot) {
                         cur.element_snapshot = inc.element_snapshot;
@@ -3284,7 +3359,11 @@ function changePage(page) {
                     }
                     merged.selector_value = JSON.stringify(cur);
                 } catch (e) {
-                    merged.selector_value = patch.selector_value;
+                    if (!baseFrozen) {
+                        merged.selector_value = patch.selector_value;
+                    } else {
+                        merged.selector_value = basePick.selector_value;
+                    }
                 }
             }
             if (patch.locator_candidates) {
@@ -3444,6 +3523,18 @@ function changePage(page) {
         function startStructureSnapshotPoll(pick) {
             stopStructureSnapshotPoll();
             if (!pick) return;
+            // 编辑已保存步骤：禁止用当前捕获会话 last_pick 污染预览/模板
+            if (_desktopCaptureFormMode === 'edit' && (pick.step_id || currentEditingStepId)) {
+                renderDesktopCaptureStructurePanel(pick, false);
+                return;
+            }
+            // 已冻结且已有模板：只补结构，不轮询替换图片
+            if (pick.preview_frozen && pick.preview_image_b64 && pick.selector_value) {
+                renderDesktopCaptureStructurePanel(pick, !pick.element_snapshot);
+                if (pick.element_snapshot) {
+                    return;
+                }
+            }
             const started = Date.now();
             _structureSnapshotPollTimer = setInterval(async function () {
                 if (!isDesktopCaptureResultModalOpen() && !_desktopCaptureAwaitingRecapture) {
@@ -3486,8 +3577,8 @@ function changePage(page) {
                             return JSON.parse(merged.selector_value || '{}').element_snapshot;
                         } catch (e) { return null; }
                     })());
-                    if (!hadPreview && hasPreview || !hadSnap && hasSnap
-                        || merged.selector_value !== prev.selector_value) {
+                    const templateChanged = !prev.preview_frozen && merged.selector_value !== prev.selector_value;
+                    if (!hadPreview && hasPreview || !hadSnap && hasSnap || templateChanged) {
                         _desktopCapturePendingPick = merged;
                         refreshDesktopCaptureResultModalUI(merged);
                     }
@@ -3521,17 +3612,22 @@ function changePage(page) {
             };
             if (data && typeof data === 'object') {
                 if (data.template_image_base64) {
+                    // 列表与详情共用同一张回放模板
                     pick.preview_image_b64 = data.template_image_base64;
                 }
                 if (data.element_snapshot) {
                     pick.element_snapshot = data.element_snapshot;
                     const sel = data.element_snapshot.selector || {};
-                    const kc = sel.key_candidates || [];
-                    if (kc.length && kc[0].value) {
-                        pick.label = 'ListItem_' + kc[0].value;
-                        pick.name = kc[0].value;
-                    }
                     pick.uia_path = formatElementSnapshotAsUiaLines(sel);
+                    // 禁止用快照关键属性覆盖步骤描述（否则会出现「扫码登录」名 vs 「账密登录」图）
+                    // 仅在没有 description 时，才用关键属性补名称
+                    if (!(step.description || '').trim()) {
+                        const kc = sel.key_candidates || [];
+                        if (kc.length && kc[0].value) {
+                            pick.label = String(kc[0].value);
+                            pick.name = String(kc[0].value);
+                        }
+                    }
                 }
                 const anchor = data.search_anchor || {};
                 if (anchor.x != null && anchor.y != null) {
@@ -5655,6 +5751,7 @@ function changePage(page) {
                 runButton.textContent = t('steps_run_btn_running');
             }
             if (stopButton) stopButton.disabled = false;
+            setCaseRunToolbarRunning();
             panel.style.display = 'block';
             bar.style.width = '0%';
             pct.textContent = '0%';
@@ -5695,13 +5792,20 @@ function changePage(page) {
                 if (runCaseStatusTimer) clearInterval(runCaseStatusTimer);
                 runCaseStatusTimer = setInterval(async () => {
                     try {
+                        // 本地仍在跑时保持停止按钮可用（后端可能尚未登记 active）
+                        if (isLocalCaseRunInFlight()) {
+                            setCaseRunToolbarRunning();
+                        }
                         const { ok, pack } = await window.uatFetchCurrentRunsPack();
                         const st = (pack || {}).case || {};
                         if (!ok || !st.success) return;
                         if (!st.active) {
-                            resetRunCaseToolbarIdle();
+                            if (!isLocalCaseRunInFlight()) {
+                                resetRunCaseToolbarIdle();
+                            }
                             return;
                         }
+                        setCaseRunToolbarRunning();
                         const progress = Math.max(0, Math.min(100, st.progress || 0));
                         bar.style.width = `${progress}%`;
                         pct.textContent = `${progress}%`;
@@ -5763,8 +5867,14 @@ function changePage(page) {
 
         async function stopRunCase() {
             const stopBtn = document.getElementById('stopRunCaseBtn');
-            if (stopBtn) stopBtn.disabled = true;
+            // 停止请求发出后仍保持可点状态到 finally，避免「置灰却停不了」的错觉；
+            // 但防止连点：用 stopping 标记
+            if (window.__uatCaseRunStopping) return;
             window.__uatCaseRunStopping = true;
+            if (stopBtn) {
+                stopBtn.disabled = false;
+                stopBtn.textContent = t('steps_run_stop_pending') || '正在停止…';
+            }
             try {
                 const resp = await fetch('/api/cases/current-run/stop', { method: 'POST' });
                 const data = await resp.json();
@@ -5778,17 +5888,18 @@ function changePage(page) {
                 if (pct) pct.textContent = '100%';
                 if (txt) txt.textContent = t('steps_run_stop_pending');
                 showToast(t('steps_toast_stopped'), 'warning');
-                resetRunCaseToolbarIdle();
             } catch (e) {
                 showToast(t('steps_toast_stop_fail').replace('{msg}', e.message), 'error');
+                window.__uatCaseRunStopping = false;
                 if (stopBtn) {
+                    stopBtn.textContent = t('steps_stop') || '⏹ 停止执行';
                     try {
                         const r = await window.uatFetchCurrentRunsPack();
                         const st = (r.pack || {}).case || {};
-                        const still = r.ok && st && st.success && st.active;
+                        const still = (r.ok && st && st.success && st.active) || isLocalCaseRunInFlight();
                         stopBtn.disabled = !still;
                     } catch (_) {
-                        stopBtn.disabled = false;
+                        stopBtn.disabled = !isLocalCaseRunInFlight();
                     }
                 }
             }
@@ -5802,99 +5913,247 @@ function changePage(page) {
             }
         }
         
-        // 处理拖动开始
-        function handleDragStart(e) {
-            if (e.target && e.target.closest && e.target.closest('.step-actions')) {
-                e.preventDefault();
-                return;
-            }
-            draggedElement = this;
-            draggedStepId = parseInt(this.getAttribute('data-step-id'));
-            isDragging = true;
-            this.classList.add('dragging');
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/html', this.innerHTML);
-            
-            // 添加拖动事件监听器，用于处理跨页拖动
-            document.addEventListener('drag', handleDrag);
-            console.log('添加了拖动事件监听器');
+        // ========== Pointer 拖拽（桌面壳 WebView2/Tauri/pywebview；替代 HTML5 DnD）==========
+        // 根因：壳内 HTML5 drag/drop 经常不触发；与步骤是否有预览图无关。
+        let pointerDragState = null;
+        window.__TESTORY_STEP_POINTER_DRAG = 2;
+
+        function bindStepPointerDrag(stepItem) {
+            if (!stepItem || stepItem.dataset.pointerDragBound === '1') return;
+            stepItem.dataset.pointerDragBound = '1';
+            stepItem.addEventListener('pointerdown', onStepPointerDown);
+            stepItem.addEventListener('dragstart', function (e) { e.preventDefault(); });
         }
-        
-        // 处理拖动结束
-        async function handleDragEnd(e) {
-            console.log('handleDragEnd 被调用');
-            
+
+        function onStepPointerDown(e) {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
+            if (e.target && e.target.closest && e.target.closest('.step-actions')) return;
+            const el = e.currentTarget;
+            const sid = parseInt(el.getAttribute('data-step-id'), 10);
+            if (!Number.isFinite(sid)) return;
+
+            pointerDragState = {
+                active: true,
+                started: false,
+                pointerId: e.pointerId,
+                startX: e.clientX,
+                startY: e.clientY,
+                stepId: sid,
+                el: el,
+                ghost: null,
+            };
+
             try {
-                // 关键修复：处理跨页拖动情况
-                const draggedItem = document.querySelector('.dragging');
-                if (window.isCrossPageDrag && !draggedItem) {
-                    console.log('检测到跨页拖动，使用特殊处理逻辑');
-                    
-                    const stepIdToUse = window.crossPageDragStepId || draggedStepId;
-                    
-                    if (!stepIdToUse) {
-                        console.error('错误：没有找到要拖动的步骤 ID');
-                        cleanupDragState();
-                        return;
-                    }
-                    
-                    // 计算放置位置
-                    const container = document.getElementById('stepsListContainer');
-                    const y = e.clientY - container.getBoundingClientRect().top;
-                    const items = Array.from(container.querySelectorAll('.step-item'));
-                    
-                    let targetItem = null;
-                    let insertPosition = 'end';
-                    
-                    if (items.length > 0) {
-                        if (y < 40) {
-                            targetItem = items[0];
-                            insertPosition = 'start';
-                        } else if (y > container.getBoundingClientRect().height - 40) {
-                            targetItem = items[items.length - 1];
-                            insertPosition = 'end';
-                        } else {
-                            for (let item of items) {
-                                const itemRect = item.getBoundingClientRect();
-                                const itemTop = itemRect.top - container.getBoundingClientRect().top;
-                                const itemBottom = itemTop + itemRect.height;
-                                
-                                if (y >= itemTop - 10 && y <= itemBottom + 10) {
-                                    targetItem = item;
-                                    const targetMiddle = itemTop + itemRect.height / 2;
-                                    insertPosition = y < targetMiddle ? 'before' : 'after';
-                                    break;
-                                }
-                            }
+                el.setPointerCapture(e.pointerId);
+            } catch (_) {}
+
+            document.addEventListener('pointermove', onStepPointerMove, true);
+            document.addEventListener('pointerup', onStepPointerUp, true);
+            document.addEventListener('pointercancel', onStepPointerUp, true);
+            // 阻止壳内文本选区手势抢走拖拽
+            e.preventDefault();
+        }
+
+        function beginPointerDragVisual() {
+            const st = pointerDragState;
+            if (!st || !st.el) return;
+            st.started = true;
+            isDragging = true;
+            draggedStepId = st.stepId;
+            draggedElement = st.el;
+            window.isCrossPageDrag = false;
+            window.crossPageDragStepId = null;
+            document.body.classList.add('step-pointer-dragging');
+            st.el.classList.add('dragging');
+            const ghost = st.el.cloneNode(true);
+            ghost.classList.add('step-drag-ghost');
+            ghost.classList.remove('dragging');
+            ghost.removeAttribute('id');
+            ghost.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+            const w = st.el.getBoundingClientRect().width;
+            ghost.style.width = Math.round(w) + 'px';
+            document.body.appendChild(ghost);
+            st.ghost = ghost;
+            movePointerGhost(st.startX, st.startY);
+        }
+
+        function movePointerGhost(x, y) {
+            const st = pointerDragState;
+            if (!st || !st.ghost) return;
+            st.ghost.style.left = Math.round(x + 12) + 'px';
+            st.ghost.style.top = Math.round(y - 16) + 'px';
+        }
+
+        function updatePointerDropIndicators(clientY) {
+            const container = document.getElementById('stepsListContainer');
+            if (!container) return;
+            const items = container.querySelectorAll('.step-item');
+            const draggedItem = pointerDragState && pointerDragState.el;
+            const rect = container.getBoundingClientRect();
+            const y = clientY - rect.top;
+            let targetItem = null;
+            items.forEach(function (item) {
+                item.classList.remove('drag-over', 'drag-before', 'drag-after');
+            });
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item === draggedItem) continue;
+                if (draggedItem && item.getAttribute('data-step-id') === draggedItem.getAttribute('data-step-id')) continue;
+                const itemRect = item.getBoundingClientRect();
+                const itemTop = itemRect.top - rect.top;
+                const itemBottom = itemTop + itemRect.height;
+                if (y >= itemTop && y <= itemBottom) {
+                    targetItem = item;
+                    break;
+                }
+            }
+            if (targetItem) {
+                const targetRect = targetItem.getBoundingClientRect();
+                const targetTop = targetRect.top - rect.top;
+                const targetMiddle = targetTop + targetRect.height / 2;
+                if (y < targetMiddle) targetItem.classList.add('drag-before');
+                else targetItem.classList.add('drag-after');
+            }
+        }
+
+        function resolvePointerDrop(clientY) {
+            const container = document.getElementById('stepsListContainer');
+            if (!container) return { targetItem: null, insertPosition: 'end' };
+            const draggedItem = pointerDragState && pointerDragState.el;
+            const rect = container.getBoundingClientRect();
+            const y = clientY - rect.top;
+            const items = Array.from(container.querySelectorAll('.step-item'));
+            const otherItems = items.filter(function (item) {
+                if (item === draggedItem) return false;
+                if (draggedItem && item.getAttribute('data-step-id') === draggedItem.getAttribute('data-step-id')) return false;
+                return true;
+            });
+            let targetItem = null;
+            let insertPosition = 'end';
+            if (otherItems.length > 0) {
+                if (y < 40) {
+                    targetItem = otherItems[0];
+                    insertPosition = 'start';
+                } else if (y > rect.height - 40) {
+                    targetItem = otherItems[otherItems.length - 1];
+                    insertPosition = 'end';
+                } else {
+                    for (let i = 0; i < otherItems.length; i++) {
+                        const item = otherItems[i];
+                        const itemRect = item.getBoundingClientRect();
+                        const itemTop = itemRect.top - rect.top;
+                        const itemBottom = itemTop + itemRect.height;
+                        if (y >= itemTop - 10 && y <= itemBottom + 10) {
+                            targetItem = item;
+                            const targetMiddle = itemTop + itemRect.height / 2;
+                            insertPosition = y < targetMiddle ? 'before' : 'after';
+                            break;
                         }
                     }
-                    
-                    console.log(`跨页拖动放置：步骤 ${stepIdToUse}, 位置：${insertPosition}`);
-                    
-                    // 调用跨页拖动专用更新函数
+                }
+            }
+            return { targetItem: targetItem, insertPosition: insertPosition };
+        }
+
+        function onStepPointerMove(e) {
+            const st = pointerDragState;
+            if (!st || !st.active) return;
+            if (st.pointerId != null && e.pointerId !== st.pointerId) return;
+            const dx = e.clientX - st.startX;
+            const dy = e.clientY - st.startY;
+            if (!st.started) {
+                if (Math.abs(dx) + Math.abs(dy) < 6) return;
+                beginPointerDragVisual();
+            }
+            movePointerGhost(e.clientX, e.clientY);
+            updatePointerDropIndicators(e.clientY);
+            // 复用跨页边界检测
+            handleDrag({ clientY: e.clientY });
+            if (e.cancelable) e.preventDefault();
+        }
+
+        async function onStepPointerUp(e) {
+            const st = pointerDragState;
+            if (st && st.pointerId != null && e && e.pointerId != null && e.pointerId !== st.pointerId) {
+                return;
+            }
+            document.removeEventListener('pointermove', onStepPointerMove, true);
+            document.removeEventListener('pointerup', onStepPointerUp, true);
+            document.removeEventListener('pointercancel', onStepPointerUp, true);
+            pointerDragState = null;
+            if (!st || !st.active) return;
+
+            try {
+                if (st.el && st.pointerId != null) {
+                    try { st.el.releasePointerCapture(st.pointerId); } catch (_) {}
+                }
+            } catch (_) {}
+
+            if (!st.started) {
+                document.body.classList.remove('step-pointer-dragging');
+                return; // 仅点击，未进入拖拽
+            }
+            try {
+                const stepIdToUse = window.crossPageDragStepId || st.stepId || draggedStepId;
+                const finalPage = currentPage;
+                const drop = resolvePointerDrop(e.clientY);
+                if (window.isCrossPageDrag || (st.el && !document.body.contains(st.el))) {
                     await updateStepOrderAfterCrossPageDrop(
                         stepIdToUse,
-                        targetItem,
-                        insertPosition,
-                        currentPage
+                        drop.targetItem,
+                        drop.insertPosition,
+                        finalPage
                     );
-                    
-                    cleanupDragState();
-                    return;
+                } else {
+                    const container = document.getElementById('stepsListContainer');
+                    const draggedItem = st.el;
+                    if (container && draggedItem && document.body.contains(draggedItem)) {
+                        if (drop.targetItem) {
+                            if (drop.insertPosition === 'start' || drop.insertPosition === 'before') {
+                                container.insertBefore(draggedItem, drop.targetItem);
+                            } else if (drop.insertPosition === 'after') {
+                                container.insertBefore(draggedItem, drop.targetItem.nextSibling);
+                            } else {
+                                container.appendChild(draggedItem);
+                            }
+                        }
+                        await updateStepOrderAfterDrop(
+                            stepIdToUse,
+                            drop.targetItem,
+                            drop.insertPosition,
+                            finalPage
+                        );
+                    }
                 }
-            } catch (error) {
-                console.error('handleDragEnd 处理过程中发生错误:', error);
+            } catch (err) {
+                console.error('指针拖放失败:', err);
+                try { await loadSteps(true); } catch (_) {}
             } finally {
-                // 确保清理拖动状态
+                if (st.ghost && st.ghost.parentNode) st.ghost.parentNode.removeChild(st.ghost);
+                document.body.classList.remove('step-pointer-dragging');
                 cleanupDragState();
             }
         }
+
+        // 以下 HTML5 DnD 句柄保留为空实现，避免旧调用报错；实际走 Pointer 拖拽
+        function handleDragStart(e) {
+            if (e && e.preventDefault) e.preventDefault();
+            return false;
+        }
+        function handleDragEnd() {}
+        function handleDragOver(e) {
+            if (e && e.preventDefault) e.preventDefault();
+        }
+        async function handleDrop(e) {
+            if (e && e.preventDefault) e.preventDefault();
+        }
+        
         // 页面切换防抖计时器
         let pageSwitchDebounceTimer = null;
         let lastPageSwitchDirection = null; // 记录上一次页面切换的方向
         let isNearPageBoundary = false; // 标记是否接近页面边界
         
-        // 处理拖动过程，用于跨页拖动
+        // 处理拖动过程，用于跨页拖动（指针拖拽与旧 HTML5 共用）
         function handleDrag(e) {
             if (!isDragging) {
                 return;
@@ -6007,161 +6266,6 @@ function changePage(page) {
                 container.style.position = 'relative';
                 container.appendChild(indicator);
             }
-        }
-        
-        // 处理拖动过程中鼠标悬停
-        function handleDragOver(e) {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            
-            const container = document.getElementById('stepsListContainer');
-            const items = container.querySelectorAll('.step-item');
-            const draggedItem = document.querySelector('.dragging');
-            
-            if (!draggedItem) return;
-            
-            // 计算鼠标位置
-            const rect = container.getBoundingClientRect();
-            const y = e.clientY - rect.top;
-            
-            // 找到当前鼠标位置对应的步骤
-            let targetItem = null;
-            for (let item of items) {
-                if (item === draggedItem) continue;
-                const itemRect = item.getBoundingClientRect();
-                const itemTop = itemRect.top - rect.top;
-                const itemBottom = itemTop + itemRect.height;
-                
-                if (y >= itemTop && y <= itemBottom) {
-                    targetItem = item;
-                    break;
-                }
-            }
-            
-            // 移除所有放置指示器
-            items.forEach(item => {
-                item.classList.remove('drag-over', 'drag-before', 'drag-after');
-            });
-            
-            // 添加放置指示器
-            if (targetItem) {
-                const targetRect = targetItem.getBoundingClientRect();
-                const targetTop = targetRect.top - rect.top;
-                const targetMiddle = targetTop + targetRect.height / 2;
-                
-                if (y < targetMiddle) {
-                    targetItem.classList.add('drag-before');
-                } else {
-                    targetItem.classList.add('drag-after');
-                }
-            }
-        }
-        
-        // 处理拖放
-        async function handleDrop(e) {
-            e.preventDefault();
-            
-            const container = document.getElementById('stepsListContainer');
-            const draggedItem = document.querySelector('.dragging');
-            
-            if (!draggedItem) return;
-                        
-            // 使用全局变量 draggedStepId
-            draggedStepId = parseInt(draggedItem.getAttribute('data-step-id'));
-                        
-            // 重要：立即保存最终页面信息，因为后续操作可能会改变 currentPage
-            const finalPage = currentPage;
-            
-            // 计算放置位置
-            const rect = container.getBoundingClientRect();
-            const y = e.clientY - rect.top;
-            
-            // 找到放置目标
-            let targetItem = null;
-            let insertPosition = 'end'; // 'before', 'after', 'start', 'end'
-            
-            const items = Array.from(container.querySelectorAll('.step-item'));
-            const otherItems = items.filter(item => item !== draggedItem);
-            
-            // 简化的位置检测逻辑
-            if (otherItems.length > 0) {
-                if (y < 40) {
-                    // 拖到了容器顶部
-                    targetItem = otherItems[0];
-                    insertPosition = 'start';
-                } else if (y > rect.height - 40) {
-                    // 拖到了容器底部
-                    targetItem = otherItems[otherItems.length - 1];
-                    insertPosition = 'end';
-                } else {
-                    // 寻找最合适的目标位置
-                    for (let i = 0; i < otherItems.length; i++) {
-                        const item = otherItems[i];
-                        const itemRect = item.getBoundingClientRect();
-                        const itemTop = itemRect.top - rect.top;
-                        const itemBottom = itemTop + itemRect.height;
-                        
-                        if (y >= itemTop - 10 && y <= itemBottom + 10) {
-                            targetItem = item;
-                            const targetMiddle = itemTop + itemRect.height / 2;
-                            insertPosition = y < targetMiddle ? 'before' : 'after';
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            console.log(`拖放操作: 步骤 ${draggedStepId}, 位置: ${insertPosition}, 目标页面: ${finalPage}`);
-            
-            // 执行DOM操作
-            if (targetItem) {
-                switch (insertPosition) {
-                    case 'start':
-                    case 'before':
-                        container.insertBefore(draggedItem, targetItem);
-                        break;
-                    case 'after':
-                        container.insertBefore(draggedItem, targetItem.nextSibling);
-                        break;
-                    case 'end':
-                        container.appendChild(draggedItem);
-                        break;
-                }
-            } else {
-                container.appendChild(draggedItem);
-            }
-            
-            // 计算新顺序并保存 - 使用保存的最终页面信息
-            await updateStepOrderAfterDrop(draggedStepId, targetItem, insertPosition, finalPage);
-            
-            // 移除拖动状态
-            draggedItem.classList.remove('dragging', 'cross-page-drag');
-            items.forEach(item => {
-                item.classList.remove('drag-over', 'drag-before', 'drag-after', 'cross-page-drag');
-                // 清除内联样式
-                item.style.cursor = '';
-                item.style.transform = '';
-                item.style.boxShadow = '';
-                item.style.zIndex = '';
-                item.style.position = '';
-            });
-            
-            // 重置拖动状态
-            if (pageSwitchTimer) {
-                clearTimeout(pageSwitchTimer);
-                pageSwitchTimer = null;
-            }
-            if (pageSwitchDebounceTimer) {
-                clearTimeout(pageSwitchDebounceTimer);
-                pageSwitchDebounceTimer = null;
-            }
-            
-            draggedElement = null;
-            draggedStepId = null;
-            isDragging = false;
-            
-            // 移除拖动事件监听器
-            document.removeEventListener('drag', handleDrag);
         }
         
         // 处理拖放后的步骤顺序更新 - 终极可靠版本
@@ -6363,24 +6467,35 @@ function changePage(page) {
         function cleanupDragState() {
             window.isCrossPageDrag = false;
             window.crossPageDragStepId = null;
+            try {
+                document.body.classList.remove('step-pointer-dragging');
+            } catch (_) {}
+            try {
+                document.querySelectorAll('.step-drag-ghost').forEach(function (g) {
+                    if (g.parentNode) g.parentNode.removeChild(g);
+                });
+            } catch (_) {}
                     
             const container = document.getElementById('stepsListContainer');
             if (container) {
                 const items = container.querySelectorAll('.step-item');
                 items.forEach(item => {
-                    item.classList.remove('drag-over', 'drag-before', 'drag-after', 'cross-page-drag');
+                    item.classList.remove('drag-over', 'drag-before', 'drag-after', 'cross-page-drag', 'dragging');
                     item.style.cursor = '';
                     item.style.transform = '';
                     item.style.boxShadow = '';
                     item.style.zIndex = '';
                     item.style.position = '';
                 });
+                const ind = container.querySelector('.page-switch-indicator');
+                if (ind) ind.remove();
             }
                     
             isDragging = false;
             draggedElement = null;
             draggedStepId = null;
             isNearPageBoundary = false;
+            pointerDragState = null;
                     
             if (pageSwitchTimer) {
                 clearTimeout(pageSwitchTimer);
@@ -6393,6 +6508,11 @@ function changePage(page) {
             lastPageSwitchDirection = null;
                     
             document.removeEventListener('drag', handleDrag);
+            document.removeEventListener('mousemove', onStepPointerMove, true);
+            document.removeEventListener('mouseup', onStepPointerUp, true);
+            document.removeEventListener('pointermove', onStepPointerMove, true);
+            document.removeEventListener('pointerup', onStepPointerUp, true);
+            document.removeEventListener('pointercancel', onStepPointerUp, true);
             console.log('拖动状态已清理');
         }
         
@@ -6642,6 +6762,11 @@ function changePage(page) {
             const runBtn = document.getElementById('runCaseBtn');
             if (!stopBtn) return;
             try {
+                const local = isLocalCaseRunInFlight();
+                if (local) {
+                    setCaseRunToolbarRunning();
+                    return;
+                }
                 const { ok, pack } = await window.uatFetchCurrentRunsPack();
                 const data = (pack || {}).case || {};
                 const active = !!(ok && data.success && data.active);
@@ -6651,6 +6776,10 @@ function changePage(page) {
                     runBtn.textContent = active ? t('steps_run_btn_running') : t('steps_run');
                 }
             } catch (_) {
+                if (isLocalCaseRunInFlight()) {
+                    setCaseRunToolbarRunning();
+                    return;
+                }
                 stopBtn.disabled = true;
                 if (runBtn) {
                     runBtn.disabled = false;

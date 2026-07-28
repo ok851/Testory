@@ -37,6 +37,29 @@ def test_normalize_draft_web():
     assert d["steps"][0]["input_value"] == "http://192.168.5.77:8088/"
 
 
+def test_normalize_draft_desktop_strips_http_navigate():
+    raw = {
+        "case_name": "ERP查询",
+        "case_role": "business",
+        "steps": [
+            {"action": "navigate", "input_value": "https://evil.example.com"},
+            {"action": "click", "selector_value": "查询", "automation_layer": "desktop"},
+        ],
+    }
+    d = _normalize_draft(raw, "desktop", "", entry_target="@erp")
+    assert all(s.get("action") != "navigate" or not str(s.get("input_value", "")).startswith("http") for s in d["steps"])
+    assert d["steps"][0]["action"] == "launch_app"
+    assert d["steps"][0]["automation_layer"] == "desktop"
+
+
+def test_prompt_mentions_optional_entry_for_android():
+    from ai_modules.generate.design_from_requirements import build_design_preview_prompt
+
+    p = build_design_preview_prompt("测试注册", "android", entry_target="")
+    assert "不要使用 Web 的 navigate/URL" in p or "不要编造入口" in p
+    assert "禁止编造" in p or "不要编造" in p
+
+
 def test_skip_duplicate_login():
     steps = [
         {"action": "navigate", "description": "打开登录页"},

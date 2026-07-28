@@ -99,6 +99,39 @@ def test_enforce_professional_no_sso(lm, monkeypatch):
     assert lm.check_feature_available("ci_integration") is False
 
 
+def test_enforce_enterprise_stale_features_still_allow_new_keys(lm, monkeypatch):
+    """旧企业证 features 列表缺新键时，仍按企业档目录放行。"""
+    monkeypatch.setenv("LICENSE_ENFORCE_FEATURES", "1")
+    monkeypatch.setenv("DEPLOYMENT_MODE", "server")
+    key = lm.generate_license(
+        LicenseType.ENTERPRISE,
+        issued_to="Legacy Ent",
+        expires_days=30,
+        license_id="lic_stale_ent",
+    )
+    result = lm.validate_license(key)
+    assert result["valid"] is True
+    info = result["info"]
+    # 模拟旧证书：去掉后来新增的企业能力键
+    info.features = [
+        f
+        for f in (info.features or [])
+        if f not in ("customer_audit_export", "ci_integration")
+    ]
+    lm._cached_license = info
+    assert "customer_audit_export" not in (info.features or [])
+    assert lm.check_feature_available("customer_audit_export") is True
+    assert lm.check_feature_available("ci_integration") is True
+    gate = lm.describe_feature_gate("customer_audit_export")
+    assert gate["available"] is True
+    msg = lm.build_feature_denied_message("sso")
+    # sso 对企业版应可用；对免费档才有拒绝文案
+    lm._cached_license = lm._create_default_free_license()
+    denied = lm.build_feature_denied_message("customer_audit_export")
+    assert "LICENSE_ENFORCE" not in denied
+    assert "企业版" in denied or "授权" in denied
+
+
 def test_get_limits_exposes_catalog_and_effective(lm, monkeypatch):
     monkeypatch.setenv("DEPLOYMENT_MODE", "standalone")
     monkeypatch.delenv("LICENSE_ENFORCE_FEATURES", raising=False)

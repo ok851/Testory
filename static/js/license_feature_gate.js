@@ -11,12 +11,16 @@
   }
 
   function messageFrom(data) {
-    if (!data) return '当前 License 未包含此功能';
+    if (!data) return '此功能当前不可用，请检查授权或联系管理员。';
+    if (data.gate && data.gate.user_message) return String(data.gate.user_message);
     if (data.error) return String(data.error);
     var gate = data.gate || {};
-    var title = gate.title || data.feature || '企业功能';
+    var title = gate.title || data.feature || '该功能';
+    var display = gate.product_display_name || gate.license_type || '当前版本';
     var minTier = gate.min_tier || 'enterprise';
-    return '功能「' + title + '」需要 ' + minTier + ' 及以上授权';
+    var needMap = { free: '免费版', professional: '团队版', enterprise: '企业版' };
+    var need = needMap[minTier] || minTier;
+    return '「' + title + '」需要' + need + '及以上授权。当前为' + display + '。';
   }
 
   function upgradeUrl(data) {
@@ -49,7 +53,7 @@
       if (typeof global.Swal !== 'undefined' && global.Swal.fire) {
         global.Swal.fire({
           icon: 'info',
-          title: '需要更高授权',
+          title: '功能暂不可用',
           text: msg,
           confirmButtonText: '打开 License',
           showCancelButton: true,

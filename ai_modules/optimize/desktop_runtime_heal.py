@@ -1,23 +1,40 @@
 # -*- coding: utf-8 -*-
-"""Desktop 运行时自愈（Y5 后半）：有限策略、失败不假绿。
+"""Desktop 运行时自愈（Y5）：有限策略、失败不假绿。
 
 当前策略（可扩展）:
 - ``attach_window``：过严 ``^标题$`` → 放宽为 contains / best_match
 - ``launch_app``：别名重解析（``@erp`` / DESKTOP_APP_ALIASES）
+- ``click`` / ``input`` 等：有限 UIA 选择器放宽
+  （去 automation_id 保 name、name equals→contains、清空过严 parent_chain、缩短 uia_path）
 
 环境变量 ``DESKTOP_RUNTIME_HEAL``（默认 1）。关闭则不做运行时尝试。
 成功时在结果写入 ``desktop_heal``；失败仍返回原失败，禁止把 soft-fail 洗成 success。
+**禁止宣传「通用 UIA / Desktop 已自愈」。**
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _ANCHOR_RE = re.compile(r"(?is)^\^(?P<body>.+)\$$")
 _INLINE_FLAGS_RE = re.compile(r"^\(\?[aiLmsux]+\)")
+
+_POINTER_ACTIONS = frozenset({
+    "click",
+    "dblclick",
+    "double_click",
+    "right_click",
+    "hover",
+    "drag",
+    "input",
+    "type",
+    "assert",
+    "verify",
+})
 
 
 def _broaden_exact_title_re(tre: str) -> Optional[str]:
@@ -61,6 +78,195 @@ def _is_desktop_success(result: Any, action: str) -> bool:
     return True
 
 
+def _loads_jsonish(raw: Any) -> Any:
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
+
+
+def _selector_from_step(step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """从 selector_value / locator_candidates 提取 UIA selector 字典。"""
+    sv = _loads_jsonish(step.get("selector_value"))
+    if isinstance(sv, dict):
+        snap = sv.get("element_snapshot") if isinstance(sv.get("element_snapshot"), dict) else sv
+        sel = snap.get("selector") if isinstance(snap, dict) else None
+        if isinstance(sel, dict) and (
+            sel.get("key_candidates") or sel.get("parent_chain") is not None
+        ):
+            return sel
+
+    cands = step.get("locator_candidates")
+    parsed = _loads_jsonish(cands)
+    if parsed is None and isinstance(cands, list):
+        parsed = cands
+    if not isinstance(parsed, list):
+        return None
+    for cand in parsed:
+        if not isinstance(cand, dict):
+            continue
+        st = str(cand.get("selector_type") or "").strip().lower()
+        if st != "uia_path":
+            continue
+        nodes = _loads_jsonish(cand.get("selector_value"))
+        if not isinstance(nodes, list) or not nodes:
+            continue
+        target = nodes[-1] if isinstance(nodes[-1], dict) else {}
+        parent_chain = [dict(n) for n in nodes[:-1] if isinstance(n, dict)]
+        keys: List[Dict[str, str]] = []
+        aid = str(target.get("automation_id") or "").strip()
+        nm = str(target.get("name") or "").strip()
+        if aid:
+            keys.append({"property": "automation_id", "value": aid, "match": "equals"})
+        if nm:
+            keys.append({"property": "uia-name", "value": nm, "match": "equals"})
+        return {
+            "anchor_props": str(target.get("control_type") or "Control").strip() or "Control",
+            "key_candidates": keys,
+            "parent_chain": parent_chain,
+            "_from_uia_path_nodes": [dict(n) for n in nodes if isinstance(n, dict)],
+        }
+    return None
+
+
+def _apply_selector_to_step(step: Dict[str, Any], selector: Dict[str, Any]) -> Dict[str, Any]:
+    """把放宽后的 selector 写回步骤（优先改 selector_value JSON）。"""
+    new_step = copy.deepcopy(step)
+    clean_sel = {
+        "anchor_props": selector.get("anchor_props") or "Control",
+        "key_candidates": list(selector.get("key_candidates") or []),
+        "parent_chain": list(selector.get("parent_chain") or []),
+    }
+    snap = {"selector": clean_sel}
+
+    sv = _loads_jsonish(new_step.get("selector_value"))
+    if isinstance(sv, dict):
+        if "element_snapshot" in sv or "template_image_base64" in sv or "template_path" in sv:
+            sv = dict(sv)
+            sv["element_snapshot"] = snap
+            new_step["selector_value"] = json.dumps(sv, ensure_ascii=False)
+        else:
+            merged = dict(sv)
+            merged["selector"] = clean_sel
+            if "element_snapshot" not in merged:
+                merged["element_snapshot"] = snap
+            new_step["selector_value"] = json.dumps(merged, ensure_ascii=False)
+    else:
+        new_step["selector_value"] = json.dumps({"element_snapshot": snap}, ensure_ascii=False)
+        new_step["selector_type"] = new_step.get("selector_type") or "uia"
+
+    nodes = selector.get("_from_uia_path_nodes")
+    if isinstance(nodes, list) and nodes:
+        cands = _loads_jsonish(new_step.get("locator_candidates"))
+        if cands is None and isinstance(new_step.get("locator_candidates"), list):
+            cands = new_step.get("locator_candidates")
+        if isinstance(cands, list):
+            out_cands = []
+            for cand in cands:
+                if not isinstance(cand, dict):
+                    continue
+                c2 = dict(cand)
+                if str(c2.get("selector_type") or "").strip().lower() == "uia_path":
+                    c2["selector_value"] = json.dumps(nodes, ensure_ascii=False)
+                out_cands.append(c2)
+            new_step["locator_candidates"] = json.dumps(out_cands, ensure_ascii=False)
+
+    new_spec = _spec_of(new_step)
+    new_spec["_heal_uia"] = True
+    new_step["desktop_spec"] = new_spec
+    return new_step
+
+
+def _propose_uia_selector_heal(
+    step: Dict[str, Any],
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """有限 UIA 放宽：至多提出一种策略。"""
+    meta: Dict[str, Any] = {"action": str(step.get("action") or ""), "strategies": []}
+    sel = _selector_from_step(step)
+    if not sel:
+        return None, {**meta, "reason": "no_uia_selector"}
+
+    keys = [dict(k) for k in (sel.get("key_candidates") or []) if isinstance(k, dict)]
+    parent = list(sel.get("parent_chain") or [])
+    nodes = sel.get("_from_uia_path_nodes")
+
+    # 1) 同时有 automation_id + name → 去掉 automation_id，name 改为 contains
+    has_aid = any(
+        str(k.get("property") or "").lower() == "automation_id" and str(k.get("value") or "").strip()
+        for k in keys
+    )
+    name_keys = [
+        k
+        for k in keys
+        if str(k.get("property") or "").lower() in ("uia-name", "name")
+        and str(k.get("value") or "").strip()
+    ]
+    if has_aid and name_keys:
+        new_keys = []
+        for k in keys:
+            prop = str(k.get("property") or "").lower()
+            if prop == "automation_id":
+                continue
+            kk = dict(k)
+            if prop in ("uia-name", "name"):
+                kk["match"] = "contains"
+            new_keys.append(kk)
+        new_sel = dict(sel)
+        new_sel["key_candidates"] = new_keys
+        meta["strategies"].append("drop_automation_id_prefer_name")
+        return _apply_selector_to_step(step, new_sel), meta
+
+    # 2) name equals → contains
+    changed = False
+    new_keys = []
+    for k in keys:
+        kk = dict(k)
+        prop = str(kk.get("property") or "").lower()
+        match = str(kk.get("match") or "equals").lower()
+        if prop in ("uia-name", "name") and match == "equals" and str(kk.get("value") or "").strip():
+            kk["match"] = "contains"
+            changed = True
+        new_keys.append(kk)
+    if changed:
+        new_sel = dict(sel)
+        new_sel["key_candidates"] = new_keys
+        meta["strategies"].append("name_match_contains")
+        return _apply_selector_to_step(step, new_sel), meta
+
+    # 3) 过长 parent_chain → 清空（避免层级漂移导致假失败）
+    if len(parent) >= 2:
+        new_sel = dict(sel)
+        new_sel["parent_chain"] = []
+        meta["strategies"].append("clear_parent_chain")
+        return _apply_selector_to_step(step, new_sel), meta
+
+    # 4) uia_path 节点过多 → 只保留末尾 2 个并重建 key
+    if isinstance(nodes, list) and len(nodes) >= 3:
+        short = [dict(n) for n in nodes[-2:] if isinstance(n, dict)]
+        target = short[-1]
+        keys2: List[Dict[str, str]] = []
+        aid = str(target.get("automation_id") or "").strip()
+        nm = str(target.get("name") or "").strip()
+        if nm:
+            keys2.append({"property": "uia-name", "value": nm, "match": "contains"})
+        elif aid:
+            keys2.append({"property": "automation_id", "value": aid, "match": "equals"})
+        new_sel = {
+            "anchor_props": str(target.get("control_type") or sel.get("anchor_props") or "Control"),
+            "key_candidates": keys2,
+            "parent_chain": [dict(short[0])] if len(short) > 1 else [],
+            "_from_uia_path_nodes": short,
+        }
+        meta["strategies"].append("shorten_uia_path")
+        return _apply_selector_to_step(step, new_sel), meta
+
+    return None, {**meta, "reason": "no_uia_strategy"}
+
+
 def propose_healed_desktop_step(
     step: Dict[str, Any],
     *,
@@ -88,7 +294,6 @@ def propose_healed_desktop_step(
             meta["to_title_re"] = broadened
             return new_step, meta
 
-        # 有精确 window_title 无 re 时补 contains re
         wt = str(spec.get("window_title") or "").strip()
         if wt and not tre:
             new_step = copy.deepcopy(step)
@@ -101,7 +306,6 @@ def propose_healed_desktop_step(
 
         desc = str(step.get("description") or "").strip()
         if desc and not tre and not wt:
-            # 弱策略：从描述猜标题关键词（仅当完全无窗口条件）
             hint = desc[:48]
             new_step = copy.deepcopy(step)
             new_spec = _spec_of(new_step)
@@ -136,15 +340,16 @@ def propose_healed_desktop_step(
                 new_step["input_value"] = f"@{new_spec['alias']}"
                 meta["strategies"].append("reresolve_alias")
                 meta["resolved_path"] = launch["path"]
-                # 仅当 path 相对原步骤有变化才算有效自愈
                 old_path = str(spec.get("path") or spec.get("exe") or "").strip()
                 if old_path and old_path == launch["path"] and not failed_result:
                     return None, {**meta, "reason": "alias_unchanged"}
                 if old_path == launch["path"] and isinstance(failed_result, dict):
-                    # 失败后同 path：仍允许再试一次（进程未起完），标 retry_same_path
                     meta["strategies"].append("retry_same_launch")
                 return new_step, meta
         return None, {**meta, "reason": "no_launch_strategy"}
+
+    if action in _POINTER_ACTIONS:
+        return _propose_uia_selector_heal(step)
 
     return None, {**meta, "reason": "unsupported_action"}
 
@@ -202,11 +407,9 @@ def run_desktop_step_with_optional_heal(
     if ok:
         out = dict(second)
         out["desktop_heal"] = meta
-        # 证据：供 stage evidence 归一化
         out.setdefault("heal_strategy", ",".join(meta["strategies"]))
         return out, meta
 
-    # 自愈仍失败：返回自愈后的失败信息（更贴近最终状态），不洗绿
     out = dict(second)
     out["desktop_heal"] = meta
     if not out.get("error") and first.get("error"):

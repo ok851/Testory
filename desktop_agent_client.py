@@ -11,9 +11,15 @@ from typing import Any, Dict, Optional, Tuple
 
 
 def desktop_agent_config() -> Tuple[str, str]:
-    base = (os.environ.get("DESKTOP_AGENT_GATEWAY_URL") or "").strip().rstrip("/")
-    secret = (os.environ.get("DESKTOP_AGENT_GATEWAY_SECRET") or "").strip()
-    return base, secret
+    """(base_url, secret)；URL 可经 ``DESKTOP_FARM_GATEWAY=1`` 从农场在线节点回退。"""
+    try:
+        from ai_modules.enterprise.gateway_resolve import desktop_agent_config as _resolve
+
+        return _resolve()
+    except Exception:
+        base = (os.environ.get("DESKTOP_AGENT_GATEWAY_URL") or "").strip().rstrip("/")
+        secret = (os.environ.get("DESKTOP_AGENT_GATEWAY_SECRET") or "").strip()
+        return base, secret
 
 
 def desktop_agent_enabled() -> bool:

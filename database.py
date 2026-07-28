@@ -1125,6 +1125,20 @@ class Database:
         except sqlite3.OperationalError:
             pass
 
+        # test_cases 审核状态：pending|active|rejected（代码生成默认 pending）
+        try:
+            cursor.execute(
+                "ALTER TABLE test_cases ADD COLUMN review_status TEXT DEFAULT 'active'"
+            )
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE test_cases ADD COLUMN source_commit TEXT DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass
+
         # run_history 新增引擎信息字段
         try:
             cursor.execute("ALTER TABLE run_history ADD COLUMN engine_type TEXT")
@@ -1726,23 +1740,47 @@ class Database:
             except (TypeError, ValueError):
                 pass
 
-        cursor.execute(
-            f"""
-            SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
-                   tc.precondition, tc.expected_result, COALESCE(tc.case_type, 'ui') AS case_type,
-                   COALESCE(tc.case_role, 'business') AS case_role,
-                   tc.unit_id, COALESCE(tu.name, '') AS unit_name,
-                   COUNT(ts.id) AS step_count
-            FROM test_cases tc
-            LEFT JOIN test_steps ts ON tc.id = ts.case_id
-            LEFT JOIN test_units tu ON tc.unit_id = tu.id
-            WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?{unit_clause}
-            GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
-                     tc.precondition, tc.expected_result, tc.case_type, tc.case_role, tc.unit_id, tu.name
-            ORDER BY tc.created_at DESC
-            """,
-            (project_id, ct_filter, *unit_params),
-        )
+        try:
+            cursor.execute(
+                f"""
+                SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                       tc.precondition, tc.expected_result, COALESCE(tc.case_type, 'ui') AS case_type,
+                       COALESCE(tc.case_role, 'business') AS case_role,
+                       tc.unit_id, COALESCE(tu.name, '') AS unit_name,
+                       COUNT(ts.id) AS step_count,
+                       COALESCE(tc.review_status, 'active') AS review_status,
+                       COALESCE(tc.source_commit, '') AS source_commit
+                FROM test_cases tc
+                LEFT JOIN test_steps ts ON tc.id = ts.case_id
+                LEFT JOIN test_units tu ON tc.unit_id = tu.id
+                WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?{unit_clause}
+                GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                         tc.precondition, tc.expected_result, tc.case_type, tc.case_role, tc.unit_id, tu.name,
+                         tc.review_status, tc.source_commit
+                ORDER BY tc.created_at DESC
+                """,
+                (project_id, ct_filter, *unit_params),
+            )
+            has_review = True
+        except sqlite3.OperationalError:
+            cursor.execute(
+                f"""
+                SELECT tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                       tc.precondition, tc.expected_result, COALESCE(tc.case_type, 'ui') AS case_type,
+                       COALESCE(tc.case_role, 'business') AS case_role,
+                       tc.unit_id, COALESCE(tu.name, '') AS unit_name,
+                       COUNT(ts.id) AS step_count
+                FROM test_cases tc
+                LEFT JOIN test_steps ts ON tc.id = ts.case_id
+                LEFT JOIN test_units tu ON tc.unit_id = tu.id
+                WHERE tc.project_id = ? AND COALESCE(tc.case_type, 'ui') = ?{unit_clause}
+                GROUP BY tc.id, tc.project_id, tc.name, tc.url, tc.description, tc.created_at,
+                         tc.precondition, tc.expected_result, tc.case_type, tc.case_role, tc.unit_id, tu.name
+                ORDER BY tc.created_at DESC
+                """,
+                (project_id, ct_filter, *unit_params),
+            )
+            has_review = False
         rows = cursor.fetchall()
 
         cases = []
@@ -1752,6 +1790,13 @@ class Database:
             unit_name = row[11] or ""
             sc = int(row[12] or 0)
             item = _test_case_row_to_dict(base, step_count=sc, unit_id=uid_val, unit_name=unit_name)
+            if has_review and len(row) > 14:
+                item["review_status"] = row[13] or "active"
+                item["source_commit"] = row[14] or ""
+            else:
+                from ai_modules.code_intel.review import normalize_review_status
+                item["review_status"] = normalize_review_status(None, str(item.get("description") or ""))
+                item["source_commit"] = ""
             cases.append(item)
 
         conn.close()
@@ -1844,6 +1889,8 @@ class Database:
         platform: str = "web",
         unit_id: Optional[int] = None,
         generated_by_ai: bool = False,
+        review_status: str = "active",
+        source_commit: str = "",
     ) -> int:
         """创建测试用例（新版本，关联到项目）"""
         conn = self._sqlite_connect()
@@ -1854,28 +1901,105 @@ class Database:
             role = "business"
         plat = _normalize_platform(platform)
         uid = int(unit_id) if unit_id else None
-        cursor.execute(
-            "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, case_type, case_role, platform, unit_id, generated_by_ai) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (project_id, name, url, description, precondition, expected_result, ct, role, plat, uid, 1 if generated_by_ai else 0),
-        )
+        rev = (review_status or "active").strip().lower()
+        if rev not in ("pending", "active", "rejected"):
+            rev = "active"
+        src = (source_commit or "")[:64]
+        try:
+            cursor.execute(
+                "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, "
+                "case_type, case_role, platform, unit_id, generated_by_ai, review_status, source_commit) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (project_id, name, url, description, precondition, expected_result, ct, role, plat, uid,
+                 1 if generated_by_ai else 0, rev, src),
+            )
+        except sqlite3.OperationalError:
+            # 旧库无新列时回退
+            cursor.execute(
+                "INSERT INTO test_cases (project_id, name, url, description, precondition, expected_result, "
+                "case_type, case_role, platform, unit_id, generated_by_ai) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (project_id, name, url, description, precondition, expected_result, ct, role, plat, uid,
+                 1 if generated_by_ai else 0),
+            )
         case_id = cursor.lastrowid
 
         conn.commit()
         conn.close()
 
         return case_id
-    
+
+    def set_case_review_status(
+        self,
+        case_id: int,
+        review_status: str,
+        *,
+        git_sha: str = "",
+        sync_description: bool = True,
+    ) -> bool:
+        """设置用例审核状态；可选同步 description 中的标记。"""
+        rev = (review_status or "").strip().lower()
+        if rev not in ("pending", "active", "rejected"):
+            return False
+        conn = self._sqlite_connect()
+        cursor = conn.cursor()
+        desc = None
+        if sync_description:
+            cursor.execute("SELECT description FROM test_cases WHERE id = ?", (int(case_id),))
+            row = cursor.fetchone()
+            if row:
+                try:
+                    from ai_modules.code_intel.review import mark_description_status
+                    desc = mark_description_status(str(row[0] or ""), rev)
+                except Exception:
+                    desc = row[0]
+        try:
+            if desc is not None:
+                cursor.execute(
+                    "UPDATE test_cases SET review_status = ?, source_commit = COALESCE(NULLIF(?, ''), source_commit), "
+                    "description = ? WHERE id = ?",
+                    (rev, (git_sha or "")[:64], desc, int(case_id)),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE test_cases SET review_status = ?, source_commit = COALESCE(NULLIF(?, ''), source_commit) "
+                    "WHERE id = ?",
+                    (rev, (git_sha or "")[:64], int(case_id)),
+                )
+        except sqlite3.OperationalError:
+            # 无列时仅更新 description
+            if desc is not None:
+                cursor.execute(
+                    "UPDATE test_cases SET description = ? WHERE id = ?",
+                    (desc, int(case_id)),
+                )
+            else:
+                conn.close()
+                return False
+        ok = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return ok
+
     def get_test_case_v2(self, case_id: int) -> Dict[str, Any]:
         """获取测试用例（新版本）"""
         conn = self._sqlite_connect()
         cursor = conn.cursor()
         
-        cursor.execute(
-            "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, "
-            "COALESCE(case_type, 'ui'), COALESCE(case_role, 'business'), COALESCE(platform, 'web'), unit_id "
-            "FROM test_cases WHERE id = ?",
-            (case_id,),
-        )
+        try:
+            cursor.execute(
+                "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, "
+                "COALESCE(case_type, 'ui'), COALESCE(case_role, 'business'), COALESCE(platform, 'web'), unit_id, "
+                "COALESCE(review_status, 'active'), COALESCE(source_commit, '') "
+                "FROM test_cases WHERE id = ?",
+                (case_id,),
+            )
+        except sqlite3.OperationalError:
+            cursor.execute(
+                "SELECT id, project_id, name, url, description, created_at, precondition, expected_result, "
+                "COALESCE(case_type, 'ui'), COALESCE(case_role, 'business'), COALESCE(platform, 'web'), unit_id "
+                "FROM test_cases WHERE id = ?",
+                (case_id,),
+            )
         row = cursor.fetchone()
 
         if row:
@@ -1892,6 +2016,8 @@ class Database:
                 'case_role': (row[9] or 'business').strip() if len(row) > 9 else 'business',
                 'platform': _normalize_platform(row[10]) if len(row) > 10 else 'web',
                 'unit_id': row[11] if len(row) > 11 else None,
+                'review_status': (row[12] or 'active') if len(row) > 12 else 'active',
+                'source_commit': (row[13] or '') if len(row) > 13 else '',
             }
             conn.close()
             return out

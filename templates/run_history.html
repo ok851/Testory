@@ -73,48 +73,56 @@
     
     .history-table {
         width: 100%;
+        min-width: 1100px;
         border-collapse: collapse;
         table-layout: fixed;
+    }
+
+    .history-table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
     }
     
     .history-table th:nth-child(1),
     .history-table td:nth-child(1) {
-        width: 60px;
+        width: 56px;
     }
     
     .history-table th:nth-child(2),
     .history-table td:nth-child(2) {
-        width: 150px;
+        width: 140px;
     }
     
     .history-table th:nth-child(3),
     .history-table td:nth-child(3) {
-        width: 80px;
+        width: 72px;
     }
     
     .history-table th:nth-child(4),
     .history-table td:nth-child(4) {
-        width: 80px;
+        width: 72px;
     }
     
     .history-table th:nth-child(5),
     .history-table td:nth-child(5) {
-        width: 250px;
+        width: 160px;
     }
     
     .history-table th:nth-child(6),
     .history-table td:nth-child(6) {
-        width: 400px;
+        width: 180px;
     }
     
     .history-table th:nth-child(7),
     .history-table td:nth-child(7) {
-        width: 150px;
+        width: 160px;
     }
     
     .history-table th:nth-child(8),
     .history-table td:nth-child(8) {
-        width: 140px;
+        width: 220px;
+        min-width: 220px;
     }
     
     .history-table th,
@@ -217,11 +225,14 @@
     
     .action-buttons {
         display: flex;
-        gap: 8px;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        max-width: 100%;
     }
     
     .action-buttons button {
-        padding: 4px 12px;
+        padding: 4px 10px;
         border: 1px solid #d9d9d9;
         border-radius: 4px;
         background-color: #f0f0f0;
@@ -230,7 +241,8 @@
         white-space: nowrap;
         writing-mode: horizontal-tb;
         width: auto;
-        min-width: 50px;
+        min-width: 0;
+        flex: 0 0 auto;
     }
     
     .action-buttons button:hover {
@@ -481,6 +493,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/save_as.js') }}?v=1"></script>
 <script>
     let currentPage = 1;
     let totalPages = 1;
@@ -645,6 +658,7 @@
         const container = document.getElementById('historyContainer');
         
         let html = `
+            <div class="history-table-wrap">
             <table class="history-table">
                 <thead>
                     <tr>
@@ -708,7 +722,7 @@
             `;
         });
         
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         
         // 添加分页
         html += renderPagination(total);
@@ -834,22 +848,40 @@
             });
     }
 
-    function exportEvidence(id) {
-        fetch('/api/run-history/' + id)
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (!data.success || !data.record) {
-                    alert('无法加载历史记录');
-                    return;
+    async function exportEvidence(id) {
+        var url = '/api/ai/trace-packs/export?format=zip&run_history_id=' + encodeURIComponent(id);
+        try {
+            var detailResp = await fetch('/api/run-history/' + id, { credentials: 'same-origin' });
+            var detail = await detailResp.json();
+            if (detail && detail.success && detail.record && detail.record.links && detail.record.links.trace_export_url) {
+                url = detail.record.links.trace_export_url;
+                if (url.indexOf('format=') < 0) {
+                    url += (url.indexOf('?') >= 0 ? '&' : '?') + 'format=zip';
                 }
-                var links = data.record.links || {};
-                var url = links.trace_export_url
-                    || ('/api/ai/trace-packs/export?format=zip&run_history_id=' + encodeURIComponent(id));
-                window.location.href = url;
-            })
-            .catch(function() {
-                window.location.href = '/api/ai/trace-packs/export?format=zip&run_history_id=' + encodeURIComponent(id);
-            });
+            }
+        } catch (e) { /* 使用默认 url */ }
+
+        try {
+            if (window.TestorySaveAs && window.TestorySaveAs.fetchAndSave) {
+                var result = await window.TestorySaveAs.fetchAndSave(
+                    url,
+                    {
+                        credentials: 'same-origin',
+                        headers: { 'Accept': 'application/zip, application/json' },
+                    },
+                    'trace-history-' + id + '.zip'
+                );
+                if (result.cancelled || result.gated) return;
+                if (!result.ok) {
+                    alert(result.error || '导出证据包失败。若本次运行为普通用例，包内可能仅含历史摘要。');
+                }
+                return;
+            }
+            // 降级：直接下载
+            window.location.href = url;
+        } catch (err) {
+            alert('导出证据包失败: ' + (err.message || err));
+        }
     }
     
     // 删除历史记录

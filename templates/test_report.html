@@ -156,72 +156,6 @@
         </div>
     </div>
 
-    <div class="card mb-8 border-l-4 border-amber-500 dark:border-amber-400" id="opsGovernanceCard">
-        <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
-            <div>
-                <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-200">
-                    <i class="fas fa-shield-alt text-amber-600 dark:text-amber-400 mr-2"></i>
-                    治理与证据（HITL / Risk / CI）
-                </h3>
-                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                    含无绑定用例的跨端运行；门禁阻断不计入「通过」美化。
-                    <a href="/run-history" class="text-primary underline ml-1">打开运行历史</a>
-                </p>
-            </div>
-            <p class="text-xs text-gray-400 dark:text-gray-500" id="opsScanMeta"></p>
-        </div>
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">跨端运行</p>
-                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsCrossEnd">0</p>
-            </div>
-            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">含 HITL</p>
-                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsHitl">0</p>
-            </div>
-            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">含 Risk</p>
-                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsRisk">0</p>
-            </div>
-            <div class="rounded-md bg-amber-50 dark:bg-amber-950/40 p-3">
-                <p class="text-xs text-amber-700 dark:text-amber-300">门禁阻断</p>
-                <p class="text-xl font-semibold text-amber-800 dark:text-amber-200" id="opsGateBlocked">0</p>
-            </div>
-            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">可导出证据</p>
-                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsEvidence">0</p>
-            </div>
-            <div class="rounded-md bg-gray-50 dark:bg-gray-800/60 p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">关联 CI</p>
-                <p class="text-xl font-semibold text-gray-800 dark:text-gray-100" id="opsCi">0</p>
-            </div>
-        </div>
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div>
-                <h4 class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-2">高频错误码</h4>
-                <ul class="text-sm space-y-1" id="opsErrorCodes">
-                    <li class="text-gray-400">暂无</li>
-                </ul>
-            </div>
-            <div class="lg:col-span-2">
-                <h4 class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-2">近期门禁事件</h4>
-                <div class="overflow-x-auto">
-                    <table class="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-800">
-                        <thead class="bg-gray-50 dark:bg-gray-800">
-                            <tr>
-                                <th class="px-3 py-2 text-left text-xs text-gray-500">名称</th>
-                                <th class="px-3 py-2 text-left text-xs text-gray-500">错误码</th>
-                                <th class="px-3 py-2 text-left text-xs text-gray-500">门禁</th>
-                                <th class="px-3 py-2 text-left text-xs text-gray-500">操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="opsGateTable" class="divide-y divide-gray-200 dark:divide-gray-800"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         <div class="card">
             <h3 class="text-lg font-semibold text-gray-700 mb-4">
@@ -320,19 +254,20 @@
                 <i class="fas fa-file-pdf mr-2"></i>
                 <span data-i18n="rpt_exp_pdf">导出PDF</span>
             </button>
-            <button onclick="exportCustomerAuditPack()" class="btn btn-primary" title="按当前筛选导出客户审计 ZIP（含失败/门禁 Trace，不美化）">
+            <button onclick="exportCustomerAuditPack()" class="btn btn-primary" title="按当前筛选导出客户审计 ZIP">
                 <i class="fas fa-box-open mr-2"></i>
                 导出客户审计包
             </button>
         </div>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">
-            客户审计包含运行索引、HITL/Risk 治理摘要，以及优先嵌入的失败/门禁 Trace；失败不会被改写成通过。
+            导出时将弹出系统「另存为」对话框，由您选择保存位置；若浏览器不支持，则下载到默认下载目录。
         </p>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/save_as.js') }}?v=1"></script>
 <script>
     let statusChart = null;
     let durationChart = null;
@@ -431,12 +366,8 @@
             fetch(`/api/report/project-statistics?${params}`).then(r => {
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 return r.json();
-            }),
-            fetch(`/api/report/ops-summary?${params}`).then(r => {
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                return r.json();
             })
-        ]).then(([overview, statusDist, durationDist, trend, caseStats, projectStats, opsSummary]) => {
+        ]).then(([overview, statusDist, durationDist, trend, caseStats, projectStats]) => {
             // 隐藏加载状态
             hideLoadingState();
             
@@ -451,7 +382,6 @@
             updateTrendChart(trend.data || {});
             updateCaseStatsTable(caseStats.data || []);
             updateProjectStatsTable(projectStats.data || []);
-            updateOpsGovernance((opsSummary && opsSummary.success) ? (opsSummary.data || {}) : {});
         }).catch(error => {
             console.error('加载报告数据失败:', error);
             hideLoadingState();
@@ -518,64 +448,6 @@
             note.textContent = data.includes_orphan_runs
                 ? `统计已含无绑定用例的跨端运行（当前筛选内 ${orphan} 条）；失败计入失败，不假绿。`
                 : '';
-        }
-    }
-
-    function updateOpsGovernance(data) {
-        const d = data || {};
-        const setText = (id, v) => {
-            const el = document.getElementById(id);
-            if (el) el.textContent = v;
-        };
-        setText('opsCrossEnd', (d.cross_end_runs || 0) + (d.agent_teams_runs ? `+${d.agent_teams_runs}` : ''));
-        setText('opsHitl', d.with_hitl || 0);
-        setText('opsRisk', d.with_risk || 0);
-        setText('opsGateBlocked', d.gate_blocked || 0);
-        setText('opsEvidence', d.with_evidence || 0);
-        setText('opsCi', d.with_ci || 0);
-        const meta = document.getElementById('opsScanMeta');
-        if (meta) {
-            const scanned = d.scanned_runs || 0;
-            const lim = d.scan_limit || 2000;
-            meta.textContent = d.truncated
-                ? `扫描最近 ${scanned} 条（已达上限 ${lim}）`
-                : `扫描 ${scanned} 条`;
-        }
-        const codesEl = document.getElementById('opsErrorCodes');
-        if (codesEl) {
-            const codes = d.top_error_codes || [];
-            codesEl.innerHTML = codes.length
-                ? codes.map(c => `<li><code class="text-xs">${escapeHtml(c.code)}</code> · ${c.count}</li>`).join('')
-                : '<li class="text-gray-400">暂无</li>';
-        }
-        const tbody = document.getElementById('opsGateTable');
-        if (tbody) {
-            const rows = d.recent_gate_events || [];
-            if (!rows.length) {
-                tbody.innerHTML = '<tr><td colspan="4" class="px-3 py-3 text-gray-400">近期无门禁阻断</td></tr>';
-            } else {
-                tbody.innerHTML = rows.map(r => {
-                    const name = escapeHtml(r.case_name || r.test_type || `#${r.id}`);
-                    const code = escapeHtml(r.error_code || '—');
-                    const gates = [];
-                    if (r.hitl_count) gates.push(`HITL×${r.hitl_count}`);
-                    if (r.risk_count) gates.push(`Risk×${r.risk_count}`);
-                    if (r.build_id) gates.push(`build=${escapeHtml(String(r.build_id))}`);
-                    const gateTxt = gates.join(' · ') || '—';
-                    const hist = r.history_url || '/run-history';
-                    const evidence = r.trace_export_url
-                        ? `<a class="text-primary underline ml-2" href="${escapeHtml(r.trace_export_url)}">证据</a>`
-                        : '';
-                    return `<tr>
-                        <td class="px-3 py-2">${name}</td>
-                        <td class="px-3 py-2"><code class="text-xs">${code}</code></td>
-                        <td class="px-3 py-2 text-xs">${gateTxt}</td>
-                        <td class="px-3 py-2 whitespace-nowrap">
-                            <a class="text-primary underline" href="${escapeHtml(hist)}">历史</a>${evidence}
-                        </td>
-                    </tr>`;
-                }).join('');
-            }
         }
     }
 
@@ -824,39 +696,47 @@
         });
     }
 
-    function exportReport(format) {
+    async function exportReport(format) {
         const projectId = document.getElementById('projectFilter').value;
         const caseCategory = (document.getElementById('caseCategoryFilter') || {}).value || '';
         const startDate = document.getElementById('startDate').value;
         const endDate = document.getElementById('endDate').value;
-
-        const data = {
+        const ext = format === 'excel' ? 'xlsx' : format;
+        const suggested = 'test_report.' + ext;
+        const body = {
             format: format,
             project_id: projectId ? parseInt(projectId) : null,
             case_category: caseCategory || null,
-            start_date: startDate,
-            end_date: endDate
+            start_date: startDate || null,
+            end_date: endDate || null,
         };
-
-        fetch('/api/report/export', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
-        })
-        .then(response => response.json())
-        .then(result => {
-            if (result.success) {
-                alert((typeof t === 'function' ? t('rpt_exp_ok') : '') + (result.filepath || ''));
-            } else {
-                alert((typeof t === 'function' ? t('rpt_exp_bad') : '') + (result.error || ''));
+        try {
+            if (!window.TestorySaveAs) {
+                alert('导出组件未加载，请刷新页面后重试');
+                return;
             }
-        })
-        .catch(error => {
+            const result = await window.TestorySaveAs.fetchAndSave(
+                '/api/report/export/download',
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': '*/*' },
+                    body: JSON.stringify(body),
+                    credentials: 'same-origin',
+                },
+                suggested
+            );
+            if (result.cancelled) return;
+            if (!result.ok) {
+                alert((typeof t === 'function' ? t('rpt_exp_bad') : '导出失败：') + (result.error || ''));
+                return;
+            }
+            if (result.mode === 'saved') {
+                alert(typeof t === 'function' ? t('rpt_exp_ok') : '已保存');
+            }
+        } catch (error) {
             console.error('导出报告失败:', error);
-            alert(typeof t === 'function' ? t('rpt_exp_retry') : '');
-        });
+            alert(typeof t === 'function' ? t('rpt_exp_retry') : '导出失败，请重试');
+        }
     }
 
     async function exportCustomerAuditPack() {
@@ -872,38 +752,22 @@
         if (endDate) params.set('end_date', endDate);
         const url = '/api/report/customer-audit-pack?' + params.toString();
         try {
-            const resp = await fetch(url, {
-                credentials: 'same-origin',
-                headers: { 'Accept': 'application/zip, application/json' },
-            });
-            const ct = (resp.headers.get('content-type') || '').toLowerCase();
-            if (resp.status === 403 && ct.indexOf('json') >= 0) {
-                const data = await resp.json();
-                if (window.TestoryLicenseGate && window.TestoryLicenseGate.handleResponse(resp, data)) {
-                    return;
-                }
-                alert((data && data.error) || '当前 License 不含客户审计包导出');
+            if (!window.TestorySaveAs) {
+                alert('导出组件未加载，请刷新页面后重试');
                 return;
             }
-            if (!resp.ok) {
-                let msg = '导出失败 HTTP ' + resp.status;
-                if (ct.indexOf('json') >= 0) {
-                    try {
-                        const j = await resp.json();
-                        msg = (j && j.error) || msg;
-                    } catch (e) { /* ignore */ }
-                }
-                alert(msg);
-                return;
+            const result = await window.TestorySaveAs.fetchAndSave(
+                url,
+                {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/zip, application/json' },
+                },
+                'customer-audit-pack.zip'
+            );
+            if (result.cancelled || result.gated) return;
+            if (!result.ok) {
+                alert(result.error || '导出客户审计包失败');
             }
-            const blob = await resp.blob();
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = 'customer-audit-pack.zip';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
         } catch (e) {
             alert('导出客户审计包失败: ' + (e.message || e));
         }

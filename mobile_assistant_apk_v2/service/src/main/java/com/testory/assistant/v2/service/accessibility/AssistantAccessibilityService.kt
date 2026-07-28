@@ -60,6 +60,9 @@ class AssistantAccessibilityService : AccessibilityService() {
     private var lastAppSwitchMs: Long = 0
     private var lastDirectClickMs: Long = 0
 
+    // ── PC JSON-RPC tunnel (adb forward) ──
+    private var pluginHttpServer: PluginHttpServer? = null
+
     // ── Known launcher packages (multi-vendor) ──
     private val launcherPackages = setOf(
         "com.android.launcher", "com.android.launcher3",
@@ -80,6 +83,11 @@ class AssistantAccessibilityService : AccessibilityService() {
         AccessibilityServiceHolder.attach(this)
         scope.launch {
             eventPipeline.start(rawEventFlow, sessionState)
+        }
+        try {
+            pluginHttpServer = PluginHttpServer(applicationContext) { this }.also { it.start() }
+        } catch (e: Exception) {
+            android.util.Log.e("AssistantA11y", "PluginHttpServer start failed", e)
         }
     }
 
@@ -142,16 +150,55 @@ class AssistantAccessibilityService : AccessibilityService() {
 
     /**
      * 提取事件源节点。
-     * 优先使用 event.source；当 source 为 null 时，尝试使用当前窗口的聚焦节点作为回退，
-     * 以补全部分控件不暴露 source 时丢失的坐标信息。
+     * 1) event.source
+     * 2) 点击坐标 hit-test（findBestNode）——修复 WebView/Flutter/自定义 View source 为空或过大容器
+     * 3) 聚焦节点回退
      */
     private fun extractSourceNode(event: AccessibilityEvent): NodeInfo? {
-        // 1. Primary: event.source
+        var fromSource: NodeInfo? = null
+        var sourceBounds: ScreenRect? = null
+
         event.source?.let { node ->
-            return nodeAnalyzer.extractNodeInfo(node).also { node.recycle() }
+            try {
+                fromSource = nodeAnalyzer.extractNodeInfo(node)
+                if (fromSource?.bounds?.isValid == true) {
+                    sourceBounds = fromSource?.bounds
+                }
+            } finally {
+                try { node.recycle() } catch (_: Exception) {}
+            }
         }
 
-        // 2. Fallback: currently focused node in active window
+        val needHitTest = event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_SELECTED ||
+            event.eventType == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START
+
+        if (needHitTest) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                try {
+                    val cx = sourceBounds?.centerX
+                        ?: fromSource?.bounds?.centerX
+                        ?: 0
+                    val cy = sourceBounds?.centerY
+                        ?: fromSource?.bounds?.centerY
+                        ?: 0
+                    if (cx > 0 || cy > 0) {
+                        val best = nodeAnalyzer.findBestNode(root, cx, cy)
+                        if (best != null && nodeIdentityScore(best) >= nodeIdentityScore(fromSource)) {
+                            return best
+                        }
+                    }
+                    // source 缺失时，尝试用窗口中心附近不做盲点；保留 fromSource
+                } finally {
+                    try { root.recycle() } catch (_: Exception) {}
+                }
+            }
+        }
+
+        if (fromSource != null) return fromSource
+
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
             event.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED ||
             event.eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
@@ -161,14 +208,34 @@ class AssistantAccessibilityService : AccessibilityService() {
                 val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                     ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
                 if (focused != null) {
-                    return nodeAnalyzer.extractNodeInfo(focused).also { focused.recycle() }
+                    return nodeAnalyzer.extractNodeInfo(focused).also {
+                        try { focused.recycle() } catch (_: Exception) {}
+                    }
                 }
             } finally {
-                root.recycle()
+                try { root.recycle() } catch (_: Exception) {}
             }
         }
 
         return null
+    }
+
+    private fun nodeIdentityScore(node: NodeInfo?): Int {
+        if (node == null) return -1
+        var score = 0
+        if (node.text.isNotBlank()) score += 40
+        if (node.contentDescription.isNotBlank()) score += 35
+        if (node.resourceId.isNotBlank()) score += 45
+        if (node.isClickable || node.isEditable) score += 15
+        val w = (node.bounds.right - node.bounds.left).coerceAtLeast(0)
+        val h = (node.bounds.bottom - node.bounds.top).coerceAtLeast(0)
+        val area = w * h
+        // 更小的可交互叶子更优
+        if (area in 1..80_000) score += 20
+        if (area > 200_000) score -= 30
+        val cls = node.className.lowercase()
+        if ("webview" in cls || "flutter" in cls || "surfaceview" in cls) score -= 40
+        return score
     }
 
     override fun onInterrupt() {
@@ -177,6 +244,8 @@ class AssistantAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         hideFloatingControl()
+        try { pluginHttpServer?.stop() } catch (_: Exception) {}
+        pluginHttpServer = null
         AccessibilityServiceHolder.detach(this)
         scope.cancel()
         super.onDestroy()
@@ -288,6 +357,18 @@ class AssistantAccessibilityService : AccessibilityService() {
             nodeAnalyzer.buildUiTree(root)
         } finally {
             root.recycle()
+        }
+    }
+
+    /**
+     * 坐标处最优节点（供 PC JSON-RPC pickAtPoint）。
+     */
+    fun pickNodeAt(x: Int, y: Int): NodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        return try {
+            nodeAnalyzer.findBestNode(root, x, y)
+        } finally {
+            try { root.recycle() } catch (_: Exception) {}
         }
     }
 
@@ -499,10 +580,11 @@ class AssistantAccessibilityService : AccessibilityService() {
             if (results.isNotEmpty()) return results[0]
         }
 
-        // Strategy 2: content-description
+        // Strategy 2: content-description（findByText 可能漏，补树遍历）
         if (locator.contentDesc.isNotBlank()) {
             val results = root.findAccessibilityNodeInfosByText(locator.contentDesc)
             if (results.isNotEmpty()) return results[0]
+            findNodeByContentDesc(root, locator.contentDesc)?.let { return it }
         }
 
         // Strategy 3: resource-id
@@ -511,13 +593,36 @@ class AssistantAccessibilityService : AccessibilityService() {
             if (results.isNotEmpty()) return results[0]
         }
 
-        // Strategy 4: coordinate — only as fallback
+        // Strategy 4: coordinate — hit-test 最深叶子
         val coord = step.screenCoordinate
         if (coord != null && coord.isValid) {
+            nodeAnalyzer.findBestNode(root, coord.x, coord.y)?.let { info ->
+                // 回放需要原生节点：按坐标再取一次
+                return findNodeAtCoordinate(root, coord) ?: findNodeAtOrNearCoordinate(root, coord)
+            }
             return findNodeAtOrNearCoordinate(root, coord)
         }
 
         return null
+    }
+
+    private fun findNodeByContentDesc(root: AccessibilityNodeInfo, desc: String): AccessibilityNodeInfo? {
+        val target = desc.trim()
+        if (target.isEmpty()) return null
+        fun walk(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            val cd = node.contentDescription?.toString()?.trim().orEmpty()
+            if (cd.equals(target, ignoreCase = true) || cd.contains(target, ignoreCase = true)) {
+                return AccessibilityNodeInfo.obtain(node)
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                val found = walk(child)
+                child.recycle()
+                if (found != null) return found
+            }
+            return null
+        }
+        return walk(root)
     }
 
     private fun findNodeAtOrNearCoordinate(root: AccessibilityNodeInfo, coord: ScreenCoordinate, tolerance: Int = 30): AccessibilityNodeInfo? {

@@ -34,6 +34,7 @@ _session: Dict[str, Any] = {
     "shutdown_requested": False,
     "message": "",
     "capture_mode": CAPTURE_MODE_VISUAL,
+    "capture_ui_engine": "",
 }
 
 _persist_disk_timer: Optional[threading.Timer] = None
@@ -327,14 +328,19 @@ def _picker_child_main(cfg_path: str) -> None:
             _session.clear()
             _session.update(disk)
     auto_rec = bool(cfg.get("record_mode") or cfg.get("unified_mode"))
+    try:
+        from desktop_visual_picker import CAPTURE_UI_ENGINE
+    except Exception:
+        CAPTURE_UI_ENGINE = "unknown"
     _set_session(
         active=True,
         picker_closed=False,
         starting=False,
-        message="捕获器待命：请点悬浮条「开始捕获」或 F2，再点目标元素",
+        message=f"捕获器待命 [{CAPTURE_UI_ENGINE}]：点「开始捕获」或 F2，再点目标",
         record_mode=bool(cfg.get("record_mode")),
         unified_mode=bool(cfg.get("unified_mode")),
         capture_mode=CAPTURE_MODE_VISUAL,
+        capture_ui_engine=CAPTURE_UI_ENGINE,
         recording=auto_rec,
         armed=False,
         error="",

@@ -500,6 +500,8 @@ def _execute_ui_stage(
                 "mode": pre.get("mode"),
                 "detail": pre.get("detail"),
             }
+            if pre.get("farm_dispatch") is not None:
+                result["desktop_preflight"]["farm_dispatch"] = pre.get("farm_dispatch")
             if not pre.get("ok"):
                 result["error"] = pre.get("error") or "桌面会话不可用"
                 result["error_code"] = pre.get("error_code") or "DESKTOP_NO_SESSION"

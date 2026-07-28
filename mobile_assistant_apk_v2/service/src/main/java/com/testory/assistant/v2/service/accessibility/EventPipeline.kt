@@ -42,6 +42,8 @@ class EventPipeline @Inject constructor(
     private var pendingSteps = mutableListOf<Step>()
 
     private var pendingSwipe: GestureInfo.Swipe? = null
+    private var classifyJob: Job? = null
+    private val classifyDebounceMs = 100L
 
     private val launcherPkgs = setOf(
         "com.android.launcher", "com.android.launcher3",
@@ -95,6 +97,22 @@ class EventPipeline @Inject constructor(
      * 停止管线，返回未保存的步骤。
      */
     suspend fun stop(): List<Step> {
+        classifyJob?.cancel()
+        classifyJob = null
+        // 冲刷未分类缓冲
+        if (eventBuffer.isNotEmpty()) {
+            val gesture = classifyGesture()
+            if (gesture is GestureInfo.Swipe) {
+                handleSwipeGesture(gesture)
+            } else if (gesture != null) {
+                flushPendingSwipe()
+                val step = generateStep(gesture)
+                if (step != null) {
+                    pendingSteps.add(step)
+                    _stepFlow.tryEmit(step)
+                }
+            }
+        }
         flushPendingSwipe()
         scope?.cancel()
         scope = null
@@ -120,16 +138,20 @@ class EventPipeline @Inject constructor(
         if (!filterEvent(event)) return
 
         eventBuffer.add(event)
-        val gesture = classifyGesture()
-
-        if (gesture is GestureInfo.Swipe) {
-            handleSwipeGesture(gesture)
-        } else if (gesture != null) {
-            flushPendingSwipe()
-            val step = generateStep(gesture)
-            if (step != null) {
-                pendingSteps.add(step)
-                _stepFlow.tryEmit(step)
+        // 短窗口合并 click/scroll，避免一次点击被拆成 tap+swipe
+        classifyJob?.cancel()
+        classifyJob = scope?.launch {
+            delay(classifyDebounceMs)
+            val gesture = classifyGesture()
+            if (gesture is GestureInfo.Swipe) {
+                handleSwipeGesture(gesture)
+            } else if (gesture != null) {
+                flushPendingSwipe()
+                val step = generateStep(gesture)
+                if (step != null) {
+                    pendingSteps.add(step)
+                    _stepFlow.tryEmit(step)
+                }
             }
         }
     }
@@ -309,6 +331,8 @@ class EventPipeline @Inject constructor(
                     action = ActionType.SWIPE,
                     description = generateSwipeDescription(
                         gesture.direction, gesture.fromX, gesture.fromY, gesture.toX, gesture.toY),
+                    // 持久化起止坐标，供 PC sync 解析（无需改 Room schema）
+                    inputText = "${gesture.fromX},${gesture.fromY}|${gesture.toX},${gesture.toY}",
                     swipeDirection = gesture.direction,
                     screenCoordinate = screenCoord,
                     locationSource = LocationSource.COORDINATE
@@ -340,12 +364,18 @@ class EventPipeline @Inject constructor(
     private fun buildLocator(node: NodeInfo?): Locator {
         if (node == null) return Locator()
 
+        val cls = node.className
+        val webLike = cls.contains("WebView", ignoreCase = true) ||
+            cls.contains("Flutter", ignoreCase = true) ||
+            cls.contains("SurfaceView", ignoreCase = true)
+
         return Locator(
             text = node.text.takeIf { it.isNotBlank() } ?: "",
             contentDesc = node.contentDescription.takeIf { it.isNotBlank() } ?: "",
             resourceId = node.resourceId.takeIf { it.isNotBlank() } ?: "",
-            className = node.className.takeIf { it.isNotBlank() } ?: "",
-            packageName = node.packageName.takeIf { it.isNotBlank() } ?: ""
+            className = cls.takeIf { it.isNotBlank() } ?: "",
+            packageName = node.packageName.takeIf { it.isNotBlank() } ?: "",
+            isWebView = webLike
         )
     }
 
@@ -399,7 +429,20 @@ class EventPipeline @Inject constructor(
 
     private fun buildClickInfo(events: List<RecordedEvent>, isLongPress: Boolean): GestureInfo.Click {
         val event = events.firstOrNull { it.sourceNode != null } ?: events.first()
-        val node = event.sourceNode
+        var node = event.sourceNode
+
+        // Flutter/Compose 常把可读文本放在 AccessibilityEvent.text，而 source 节点为空文本
+        if (node != null && node.text.isBlank() && event.text.isNotBlank()) {
+            val cleaned = event.text.trim()
+            if (cleaned.isNotBlank()) {
+                node = node.copy(text = cleaned.take(80))
+            }
+        }
+        if (node != null && node.contentDescription.isBlank() && event.text.isNotBlank()
+            && node.text.isBlank()
+        ) {
+            node = node.copy(contentDescription = event.text.trim().take(80))
+        }
 
         val sx = node?.bounds?.centerX ?: event.sourceBounds?.centerX ?: 0
         val sy = node?.bounds?.centerY ?: event.sourceBounds?.centerY ?: 0
@@ -448,13 +491,12 @@ class EventPipeline @Inject constructor(
         if (direction == null) return null
 
         val bounds = (scrollEvent.sourceNode?.bounds ?: scrollEvent.sourceBounds)
-        val sx = bounds?.centerX ?: 0
-        val sy = bounds?.centerY ?: 0
+        // 无 bounds 时用屏幕中部作为滑动起点，避免 RecyclerView/WebView 滚动手势丢失
+        val sx = bounds?.centerX ?: 540
+        val sy = bounds?.centerY ?: 960
 
-        if (bounds == null) return null
-
-        val rectH = bounds.bottom - bounds.top
-        val rectW = bounds.right - bounds.left
+        val rectH = if (bounds != null) (bounds.bottom - bounds.top) else 0
+        val rectW = if (bounds != null) (bounds.right - bounds.left) else 0
         val swipeDistY = if (rectH > 0) (rectH * 0.5).toInt().coerceIn(100, 500) else 200
         val swipeDistX = if (rectW > 0) (rectW * 0.5).toInt().coerceIn(100, 400) else 150
 

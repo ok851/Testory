@@ -1,0 +1,724 @@
+{% extends "base.html" %}
+{% block title %}CI/CD 集成 - Testory{% endblock %}
+{% block head %}
+<style type="text/tailwindcss">
+    @layer utilities {
+        .card {
+            @apply bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-6;
+        }
+        .form-input {
+            @apply w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100;
+        }
+        .btn-primary {
+            @apply px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium;
+        }
+        .btn-ghost {
+            @apply px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-50 dark:hover:bg-gray-800;
+        }
+    }
+</style>
+{% endblock %}
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 py-8">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            <i class="fas fa-sync-alt text-slate-600 mr-2"></i>CI/CD 集成
+        </h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
+            支持<strong>双向</strong>对接与<strong>统一门禁</strong>：Jenkins ↔ Testory 通过/失败可同步到同一 sync 会话。
+            契约：<code class="text-xs">docs/CICD_INTEGRATION.md</code> §2.6。
+        </p>
+    </div>
+
+    <div class="card mb-6 bg-slate-50 dark:bg-slate-900/40">
+        <h2 class="text-base font-semibold mb-2">两种方向怎么选？</h2>
+        <ul class="text-sm text-gray-600 dark:text-gray-300 space-y-2 list-disc pl-5">
+            <li><strong>Jenkins → Testory（推荐主路径）</strong>：流水线调用 <code>POST /api/ci/runs</code>，再 <code>POST /api/ci/sync</code> 绑定，或 Job 末尾 <code>POST /api/ci/sync/&lt;id&gt;/jenkins</code> 回写结果。</li>
+            <li><strong>Testory → Jenkins</strong>：本页「统一门禁」或「触发 Jenkins」让 Jenkins <strong>受理构建</strong>；平台轮询 Job 结果，与 Testory 终态合并为 <code>unified_gate_passed</code>。</li>
+        </ul>
+    </div>
+
+    <div id="cicdGateBanner" class="hidden mb-4"></div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div class="card">
+            <h2 class="text-lg font-semibold mb-4">手动触发本平台执行</h2>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm font-medium mb-1">项目</label>
+                    <select id="ciProject" class="form-input"></select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-1">构建号 build_id（可选）</label>
+                    <input id="ciBuildId" class="form-input" placeholder="例如 Jenkins BUILD_NUMBER" />
+                </div>
+                <div>
+                    <label class="block text-sm font-medium mb-1">触发来源</label>
+                    <select id="ciSource" class="form-input">
+                        <option value="manual">manual（本页）</option>
+                        <option value="jenkins">jenkins</option>
+                        <option value="gitlab">gitlab</option>
+                        <option value="github">github</option>
+                    </select>
+                </div>
+                <label class="inline-flex items-center gap-2 text-sm">
+                    <input type="checkbox" id="ciAsync" />
+                    异步执行（立即返回，可轮询）
+                </label>
+                <div class="pt-2">
+                    <button type="button" class="btn-primary" onclick="triggerCiRun()">
+                        <i class="fas fa-play mr-1"></i>触发执行
+                    </button>
+                    <a href="/run-history" class="btn-ghost ml-2">查看运行历史</a>
+                </div>
+                <pre id="ciResult" class="mt-3 text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto max-h-48 hidden"></pre>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="text-lg font-semibold mb-4">流水线调用示例</h2>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">在 CI 中调用（需 API Token 或登录态）：</p>
+            <pre class="text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto whitespace-pre-wrap">POST /api/ci/runs
+Authorization: Bearer &lt;API_TOKEN&gt;
+Content-Type: application/json
+
+{
+  "project_id": 1,
+  "async": true,
+  "build_id": "$BUILD_NUMBER",
+  "trigger_source": "jenkins",
+  "callback_url": "https://ci.example/hook"
+}
+
+# 轮询
+GET /api/ci/runs/&lt;run_id&gt;
+# JUnit
+GET /api/ci/runs/&lt;run_id&gt;/junit.xml</pre>
+            <p class="text-xs text-gray-500 mt-3">
+                执行结果会写入「运行历史」，并显示 build 徽章；可在历史中导出证据包。
+            </p>
+        </div>
+    </div>
+
+    <div class="card mb-8">
+        <h2 class="text-lg font-semibold mb-2">统一门禁（Testory ↔ Jenkins 同步）</h2>
+        <p class="text-sm text-gray-500 mb-3">
+            默认策略 <code>both_must_pass</code>：两侧都终态后，仅当 Testory <code>gate_passed</code> 且 Jenkins <code>SUCCESS</code> 时统一门禁为绿。
+            Jenkins 受理构建后会轮询结果；Testory 终态会回写同步会话（并可写入 Jenkins build 描述）。
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <div>
+                <label class="block text-sm font-medium mb-1">Testory run_id（可选）</label>
+                <input id="syncRunId" class="form-input" placeholder="已有 CI run，或留空仅触发 Jenkins" />
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1">Jenkins Job（可选）</label>
+                <input id="syncJob" class="form-input" placeholder="folder/my-job" />
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1">策略</label>
+                <select id="syncPolicy" class="form-input">
+                    <option value="both_must_pass">both_must_pass（两侧都过）</option>
+                    <option value="either_pass">either_pass（任一侧过）</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1">Jenkins 参数 JSON（可选）</label>
+                <input id="syncParams" class="form-input" placeholder='{"BRANCH":"main"}' />
+            </div>
+        </div>
+        <button type="button" class="btn-primary" onclick="startUnifiedSync()">
+            <i class="fas fa-link mr-1"></i>创建同步并受理构建
+        </button>
+        <button type="button" class="btn-ghost ml-2" onclick="loadSyncs()">刷新列表</button>
+        <pre id="syncResult" class="mt-3 text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto max-h-40 hidden"></pre>
+        <div class="overflow-x-auto mt-4">
+            <table class="min-w-full text-sm">
+                <thead class="bg-gray-50 dark:bg-gray-800 text-left">
+                    <tr>
+                        <th class="px-3 py-2">Sync ID</th>
+                        <th class="px-3 py-2">统一门禁</th>
+                        <th class="px-3 py-2">Testory</th>
+                        <th class="px-3 py-2">Jenkins</th>
+                        <th class="px-3 py-2">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="syncBody">
+                    <tr><td colspan="5" class="px-3 py-4 text-center text-gray-400">加载中…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card mb-8">
+        <h2 class="text-lg font-semibold mb-2">从本平台触发 Jenkins Job</h2>
+        <p class="text-sm text-gray-500 mb-3" id="jenkinsCfgHint">加载 Jenkins 配置状态…</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <div>
+                <label class="block text-sm font-medium mb-1">Job 名称</label>
+                <input id="jkJob" class="form-input" placeholder="folder/my-job 或 my-job" />
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-sm font-medium mb-1">参数 JSON（可选）</label>
+                <input id="jkParams" class="form-input" placeholder='{"BRANCH":"main"}' />
+            </div>
+        </div>
+        <label class="inline-flex items-center gap-2 text-sm mb-3">
+            <input type="checkbox" id="jkCreateSync" checked />
+            同时纳入统一门禁（推荐）
+        </label>
+        <div>
+            <button type="button" class="btn-primary" onclick="triggerJenkins()">
+                <i class="fas fa-external-link-alt mr-1"></i>触发 Jenkins
+            </button>
+        </div>
+        <pre id="jkResult" class="mt-3 text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto max-h-40 hidden"></pre>
+        <p class="text-xs text-amber-700 mt-3">环境变量：<code>JENKINS_URL</code>、<code>JENKINS_USER</code>、<code>JENKINS_API_TOKEN</code>。受理成功 ≠ Job 通过；统一结论看上方「统一门禁」。</p>
+    </div>
+
+    <div class="card mb-8">
+        <h2 class="text-lg font-semibold mb-2">代码变更感知（DevOps）</h2>
+        <p class="text-sm text-gray-500 mb-3">
+            CI 传入 <code>changed_files</code>/<code>diff</code>/<strong>file_snippets</strong>（前端源码内容）→ 影响分析 + 组件识别 → 推荐回归。
+            默认只分析不执行；草稿用例带 <code>[review_status:pending]</code>，不自动进绿灯门禁。
+            打包脚本：<code>docs/examples/pack_code_change_payload.py</code>；手工可在
+            <a href="/ai-design" class="text-blue-600 underline">AI 用例设计</a>上传前端源码（后台自动识别）。
+            契约见 <code>docs/CICD_INTEGRATION.md</code> §2.7。
+        </p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <div>
+                <label class="block text-sm font-medium mb-1">项目（匹配用例库）</label>
+                <select id="ccProject" class="form-input"></select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1">git_sha（可选，幂等）</label>
+                <input id="ccSha" class="form-input" placeholder="commit sha" />
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-sm font-medium mb-1">变更文件（每行一个路径）</label>
+                <textarea id="ccFiles" class="form-input" rows="3" placeholder="src/pages/Login.tsx&#10;src/components/OrderSubmit.vue"></textarea>
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-sm font-medium mb-1">diff / MR 说明（可选）</label>
+                <textarea id="ccDiff" class="form-input" rows="3" placeholder="paste git diff or MR description…"></textarea>
+            </div>
+        </div>
+        <label class="inline-flex items-center gap-2 text-sm mb-2 mr-4">
+            <input type="checkbox" id="ccGenDrafts" />
+            生成待审核草稿用例（落库）
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm mb-3">
+            <input type="checkbox" id="ccTriggerRun" />
+            分析后触发推荐回归（async CI run）
+        </label>
+        <div>
+            <button type="button" class="btn-primary" onclick="submitCodeChange()">
+                <i class="fas fa-code-branch mr-1"></i>提交变更分析
+            </button>
+            <button type="button" class="btn-ghost ml-2" onclick="loadCodeChanges()">刷新列表</button>
+        </div>
+        <pre id="ccResult" class="mt-3 text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto max-h-48 hidden"></pre>
+        <div class="overflow-x-auto mt-4">
+            <table class="min-w-full text-sm">
+                <thead class="bg-gray-50 dark:bg-gray-800 text-left">
+                    <tr>
+                        <th class="px-3 py-2">Task</th>
+                        <th class="px-3 py-2">状态</th>
+                        <th class="px-3 py-2">风险</th>
+                        <th class="px-3 py-2">推荐/风险用例</th>
+                        <th class="px-3 py-2">摘要</th>
+                        <th class="px-3 py-2">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="ccBody">
+                    <tr><td colspan="6" class="px-3 py-4 text-center text-gray-400">加载中…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <pre class="mt-4 text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto whitespace-pre-wrap"># 推荐：python docs/examples/pack_code_change_payload.py --out payload.json
+POST /api/ci/code-change
+{
+  "project_id": 1,
+  "git_sha": "$CI_COMMIT_SHA",
+  "changed_files": ["src/pages/Login.tsx"],
+  "file_snippets": {"src/pages/Login.tsx": "<源码>"},
+  "diff": "$(git diff HEAD~1)",
+  "analyze_only": true
+}
+# 轮询 GET /api/ci/code-change/&lt;task_id&gt;
+# 映射 POST /api/ci/repo-map  · 指标 GET /api/ci/code-change/metrics
+# 待审 GET /api/ci/cases/pending?project_id=1  · 激活 POST /api/ci/cases/&lt;id&gt;/review</pre>
+        <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <h3 class="text-sm font-semibold mb-2">指标摘要</h3>
+                <pre id="ccMetrics" class="text-xs bg-gray-50 dark:bg-gray-950 p-3 rounded-lg overflow-auto max-h-40">加载中…</pre>
+            </div>
+            <div>
+                <h3 class="text-sm font-semibold mb-2">待审核用例</h3>
+                <button type="button" class="btn-ghost mb-2" onclick="loadPendingCases()">刷新待审</button>
+                <div id="ccPending" class="text-xs text-gray-500">选择上方项目后刷新</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold">近期本平台 CI 运行</h2>
+            <button type="button" class="btn-ghost" onclick="loadCiRuns()">刷新</button>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+                <thead class="bg-gray-50 dark:bg-gray-800 text-left">
+                    <tr>
+                        <th class="px-3 py-2">Run ID</th>
+                        <th class="px-3 py-2">状态</th>
+                        <th class="px-3 py-2">Build</th>
+                        <th class="px-3 py-2">通过/失败</th>
+                        <th class="px-3 py-2">来源</th>
+                        <th class="px-3 py-2">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="ciRunsBody">
+                    <tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">加载中…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async function loadProjects() {
+        const sel = document.getElementById('ciProject');
+        const sel2 = document.getElementById('ccProject');
+        sel.innerHTML = '<option value="">选择项目…</option>';
+        if (sel2) sel2.innerHTML = '<option value="">选择项目…</option>';
+        try {
+            const r = await fetch('/api/projects');
+            const data = await r.json();
+            (data.projects || []).forEach(function (p) {
+                const label = p.name + ' (#' + p.id + ')';
+                const o = document.createElement('option');
+                o.value = p.id;
+                o.textContent = label;
+                sel.appendChild(o);
+                if (sel2) {
+                    const o2 = document.createElement('option');
+                    o2.value = p.id;
+                    o2.textContent = label;
+                    sel2.appendChild(o2);
+                }
+            });
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    window.loadCiRuns = async function () {
+        const body = document.getElementById('ciRunsBody');
+        body.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">加载中…</td></tr>';
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/runs?limit=30')
+                : { gated: false, response: await fetch('/api/ci/runs?limit=30'), data: null };
+            if (packed.gated) {
+                body.innerHTML = window.TestoryLicenseGate.tableGateRowHtml(packed.data, 6);
+                return;
+            }
+            const resp = packed.response;
+            const data = packed.data || await resp.json();
+            if (!resp.ok || !data.success) {
+                body.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-red-500">' +
+                    escapeHtml((data && data.error) || ('加载失败 HTTP ' + resp.status)) + '</td></tr>';
+                return;
+            }
+            const runs = data.runs || [];
+            if (!runs.length) {
+                body.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">暂无 CI 运行记录。可在左侧手动触发，或由流水线调用 API。</td></tr>';
+                return;
+            }
+            body.innerHTML = runs.map(function (r) {
+                const st = r.status || '-';
+                const ok = r.gate_passed || r.success;
+                const badge = ok
+                    ? '<span class="text-green-700 dark:text-green-300">成功</span>'
+                    : '<span class="text-red-600 dark:text-red-300">' + escapeHtml(st) + '</span>';
+                return '<tr class="border-t border-gray-100 dark:border-gray-800">' +
+                    '<td class="px-3 py-2 font-mono text-xs">' + escapeHtml(r.run_id) + '</td>' +
+                    '<td class="px-3 py-2">' + badge + '</td>' +
+                    '<td class="px-3 py-2">' + escapeHtml(r.build_id || '-') + '</td>' +
+                    '<td class="px-3 py-2">' + (r.passed || 0) + ' / ' + (r.failed || 0) + '</td>' +
+                    '<td class="px-3 py-2">' + escapeHtml(r.trigger_source || '-') + '</td>' +
+                    '<td class="px-3 py-2"><a class="text-blue-600 underline" href="' +
+                    escapeHtml(r.poll_url || ('/api/ci/runs/' + r.run_id)) +
+                    '" target="_blank">详情</a>' +
+                    (r.junit_url ? (' · <a class="text-blue-600 underline" href="' + escapeHtml(r.junit_url) + '" target="_blank">JUnit</a>') : '') +
+                    '</td></tr>';
+            }).join('');
+        } catch (e) {
+            body.innerHTML = '<tr><td colspan="6" class="px-3 py-6 text-center text-red-500">加载失败</td></tr>';
+        }
+    };
+
+    window.triggerCiRun = async function () {
+        const projectId = document.getElementById('ciProject').value;
+        if (!projectId) {
+            alert('请先选择项目');
+            return;
+        }
+        const payload = {
+            project_id: parseInt(projectId, 10),
+            build_id: (document.getElementById('ciBuildId').value || '').trim(),
+            trigger_source: document.getElementById('ciSource').value || 'manual',
+            async: !!document.getElementById('ciAsync').checked,
+        };
+        const out = document.getElementById('ciResult');
+        out.classList.remove('hidden');
+        out.textContent = '提交中…';
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/runs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                })
+                : null;
+            if (packed && packed.gated) {
+                out.textContent = (packed.data && packed.data.error) || '当前授权无法使用 CI 集成';
+                return;
+            }
+            const resp = packed ? packed.response : await fetch('/api/ci/runs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = packed ? packed.data : await resp.json();
+            out.textContent = JSON.stringify(data, null, 2);
+            loadCiRuns();
+        } catch (e) {
+            out.textContent = '触发失败: ' + (e.message || e);
+        }
+    };
+
+    async function loadJenkinsStatus() {
+        const el = document.getElementById('jenkinsCfgHint');
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/jenkins/status')
+                : { gated: false, response: await fetch('/api/ci/jenkins/status'), data: null };
+            if (packed.gated) {
+                el.textContent = '当前授权无法使用 CI / Jenkins 反向触发';
+                return;
+            }
+            const data = packed.data || await packed.response.json();
+            if (data.configured) {
+                el.textContent = '已配置：' + (data.base_url || '') + ' · 用户 ' + (data.user || '');
+            } else {
+                el.textContent = '尚未配置 Jenkins（请在服务端设置 JENKINS_URL / JENKINS_USER / JENKINS_API_TOKEN）';
+            }
+        } catch (e) {
+            el.textContent = '无法读取 Jenkins 配置状态';
+        }
+    }
+
+    window.triggerJenkins = async function () {
+        const job = (document.getElementById('jkJob').value || '').trim();
+        if (!job) { alert('请填写 Job 名称'); return; }
+        let parameters = {};
+        const raw = (document.getElementById('jkParams').value || '').trim();
+        if (raw) {
+            try { parameters = JSON.parse(raw); }
+            catch (e) { alert('参数必须是合法 JSON 对象'); return; }
+        }
+        const createSync = !!(document.getElementById('jkCreateSync') && document.getElementById('jkCreateSync').checked);
+        const out = document.getElementById('jkResult');
+        out.classList.remove('hidden');
+        out.textContent = '提交中…';
+        const payload = { job_name: job, parameters: parameters, create_sync: createSync };
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/jenkins/trigger', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                })
+                : null;
+            if (packed && packed.gated) {
+                out.textContent = (packed.data && packed.data.error) || '授权不足';
+                return;
+            }
+            const resp = packed ? packed.response : await fetch('/api/ci/jenkins/trigger', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = packed ? packed.data : await resp.json();
+            out.textContent = JSON.stringify(data, null, 2);
+            if (createSync) loadSyncs();
+        } catch (e) {
+            out.textContent = '触发失败: ' + (e.message || e);
+        }
+    };
+
+    window.loadSyncs = async function () {
+        const body = document.getElementById('syncBody');
+        if (!body) return;
+        body.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-center text-gray-400">加载中…</td></tr>';
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/sync?limit=20')
+                : { gated: false, response: await fetch('/api/ci/sync?limit=20'), data: null };
+            if (packed.gated) {
+                body.innerHTML = window.TestoryLicenseGate.tableGateRowHtml(packed.data, 5);
+                return;
+            }
+            const resp = packed.response;
+            const data = packed.data || await resp.json();
+            const rows = (data && data.syncs) || [];
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-center text-gray-400">暂无同步会话</td></tr>';
+                return;
+            }
+            body.innerHTML = rows.map(function (s) {
+                const ug = s.unified_gate_passed;
+                const st = s.status || '-';
+                const badge = st === 'success'
+                    ? '<span class="text-green-700">通过</span>'
+                    : (st === 'failed' ? '<span class="text-red-600">失败</span>' : '<span class="text-amber-600">进行中</span>');
+                const t = s.testory || {};
+                const j = s.jenkins || {};
+                const tCell = (t.run_id || '-') + ' / ' + (t.status || (t.terminal ? 'done' : '…'));
+                const jCell = (j.result || (j.terminal ? 'done' : (j.queue_url ? 'queued' : '…')));
+                return '<tr class="border-t border-gray-100 dark:border-gray-800">' +
+                    '<td class="px-3 py-2 font-mono text-xs">' + escapeHtml(s.sync_id) + '</td>' +
+                    '<td class="px-3 py-2">' + badge + ' <span class="text-xs text-gray-400">(' + (ug ? 'true' : 'false') + ')</span></td>' +
+                    '<td class="px-3 py-2 text-xs">' + escapeHtml(tCell) + '</td>' +
+                    '<td class="px-3 py-2 text-xs">' + escapeHtml(String(jCell)) + '</td>' +
+                    '<td class="px-3 py-2"><a class="text-blue-600 underline" href="/api/ci/sync/' +
+                    encodeURIComponent(s.sync_id) + '" target="_blank">详情</a></td></tr>';
+            }).join('');
+        } catch (e) {
+            body.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-center text-red-500">加载失败</td></tr>';
+        }
+    };
+
+    window.startUnifiedSync = async function () {
+        const runId = (document.getElementById('syncRunId').value || '').trim();
+        const job = (document.getElementById('syncJob').value || '').trim();
+        if (!runId && !job) { alert('请至少填写 Testory run_id 或 Jenkins Job'); return; }
+        let parameters = {};
+        const raw = (document.getElementById('syncParams').value || '').trim();
+        if (raw) {
+            try { parameters = JSON.parse(raw); }
+            catch (e) { alert('参数必须是合法 JSON'); return; }
+        }
+        const out = document.getElementById('syncResult');
+        out.classList.remove('hidden');
+        out.textContent = '创建中…';
+        const payload = {
+            testory_run_id: runId,
+            jenkins_job: job,
+            parameters: parameters,
+            policy: document.getElementById('syncPolicy').value || 'both_must_pass',
+            auto_poll: true,
+        };
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                })
+                : null;
+            if (packed && packed.gated) {
+                out.textContent = (packed.data && packed.data.error) || '授权不足';
+                return;
+            }
+            const resp = packed ? packed.response : await fetch('/api/ci/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = packed ? packed.data : await resp.json();
+            out.textContent = JSON.stringify(data, null, 2);
+            loadSyncs();
+        } catch (e) {
+            out.textContent = '失败: ' + (e.message || e);
+        }
+    };
+
+    window.loadCodeChanges = async function () {
+        const body = document.getElementById('ccBody');
+        if (!body) return;
+        body.innerHTML = '<tr><td colspan="6" class="px-3 py-4 text-center text-gray-400">加载中…</td></tr>';
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/code-change?limit=20')
+                : { gated: false, response: await fetch('/api/ci/code-change?limit=20'), data: null };
+            if (packed.gated) {
+                body.innerHTML = window.TestoryLicenseGate.tableGateRowHtml(packed.data, 6);
+                return;
+            }
+            const resp = packed.response;
+            const data = packed.data || await resp.json();
+            const rows = (data && data.tasks) || [];
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="6" class="px-3 py-4 text-center text-gray-400">暂无变更分析任务</td></tr>';
+                return;
+            }
+            body.innerHTML = rows.map(function (t) {
+                const impact = t.impact || {};
+                const risk = impact.risk_level || '-';
+                const rec = (t.recommended_case_ids || []).length;
+                const riskN = (t.at_risk_case_ids || []).length;
+                const summary = (impact.summary || t.error || '-').toString().slice(0, 80);
+                return '<tr class="border-t border-gray-100 dark:border-gray-800">' +
+                    '<td class="px-3 py-2 font-mono text-xs">' + escapeHtml(t.task_id) + '</td>' +
+                    '<td class="px-3 py-2">' + escapeHtml(t.status || '-') + '</td>' +
+                    '<td class="px-3 py-2">' + escapeHtml(risk) + '</td>' +
+                    '<td class="px-3 py-2">' + rec + ' / ' + riskN + '</td>' +
+                    '<td class="px-3 py-2 text-xs">' + escapeHtml(summary) + '</td>' +
+                    '<td class="px-3 py-2"><a class="text-blue-600 underline" href="/api/ci/code-change/' +
+                    encodeURIComponent(t.task_id) + '" target="_blank">详情</a></td></tr>';
+            }).join('');
+        } catch (e) {
+            body.innerHTML = '<tr><td colspan="6" class="px-3 py-4 text-center text-red-500">加载失败</td></tr>';
+        }
+    };
+
+    window.submitCodeChange = async function () {
+        const projectId = document.getElementById('ccProject').value;
+        const filesRaw = (document.getElementById('ccFiles').value || '').trim();
+        const diffOrMsg = (document.getElementById('ccDiff').value || '').trim();
+        const files = filesRaw ? filesRaw.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean) : [];
+        if (!files.length && !diffOrMsg) {
+            alert('请填写变更文件或 diff/说明');
+            return;
+        }
+        const payload = {
+            project_id: projectId ? parseInt(projectId, 10) : null,
+            git_sha: (document.getElementById('ccSha').value || '').trim(),
+            changed_files: files,
+            diff: diffOrMsg,
+            mr_description: files.length ? '' : diffOrMsg,
+            analyze_only: true,
+            generate_drafts: !!(document.getElementById('ccGenDrafts') && document.getElementById('ccGenDrafts').checked),
+            trigger_run: !!(document.getElementById('ccTriggerRun') && document.getElementById('ccTriggerRun').checked),
+            use_llm: true,
+            async: true,
+        };
+        if (payload.trigger_run) payload.analyze_only = false;
+        const out = document.getElementById('ccResult');
+        out.classList.remove('hidden');
+        out.textContent = '提交中…';
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/code-change', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                })
+                : null;
+            if (packed && packed.gated) {
+                out.textContent = (packed.data && packed.data.error) || '授权不足';
+                return;
+            }
+            const resp = packed ? packed.response : await fetch('/api/ci/code-change', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = packed ? packed.data : await resp.json();
+            out.textContent = JSON.stringify(data, null, 2);
+            setTimeout(loadCodeChanges, 800);
+            setTimeout(loadCodeChanges, 2500);
+            setTimeout(loadCcMetrics, 1200);
+        } catch (e) {
+            out.textContent = '失败: ' + (e.message || e);
+        }
+    };
+
+    window.loadCcMetrics = async function () {
+        const el = document.getElementById('ccMetrics');
+        if (!el) return;
+        try {
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson('/api/ci/code-change/metrics')
+                : { gated: false, response: await fetch('/api/ci/code-change/metrics'), data: null };
+            if (packed.gated) {
+                el.textContent = (packed.data && packed.data.error) || '授权不足';
+                return;
+            }
+            const data = packed.data || await packed.response.json();
+            el.textContent = JSON.stringify(data.metrics || data, null, 2);
+        } catch (e) {
+            el.textContent = '加载失败';
+        }
+    };
+
+    window.loadPendingCases = async function () {
+        const el = document.getElementById('ccPending');
+        const projectId = document.getElementById('ccProject').value;
+        if (!el) return;
+        if (!projectId) { el.textContent = '请先选择项目'; return; }
+        el.textContent = '加载中…';
+        try {
+            const url = '/api/ci/cases/pending?project_id=' + encodeURIComponent(projectId);
+            const packed = window.TestoryLicenseGate
+                ? await window.TestoryLicenseGate.fetchJson(url)
+                : { gated: false, response: await fetch(url), data: null };
+            if (packed.gated) {
+                el.textContent = (packed.data && packed.data.error) || '授权不足';
+                return;
+            }
+            const data = packed.data || await packed.response.json();
+            const cases = data.cases || [];
+            if (!cases.length) {
+                el.innerHTML = '<span class="text-gray-400">无待审核用例</span>';
+                return;
+            }
+            el.innerHTML = cases.map(function (c) {
+                return '<div class="mb-2 flex items-center gap-2">' +
+                    '<span class="font-mono">#' + escapeHtml(c.id) + '</span> ' +
+                    escapeHtml(c.name || '') +
+                    ' <button type="button" class="btn-ghost" data-cid="' + c.id + '" onclick="activateCase(' + c.id + ')">激活</button>' +
+                    '</div>';
+            }).join('');
+        } catch (e) {
+            el.textContent = '加载失败';
+        }
+    };
+
+    window.activateCase = async function (caseId) {
+        try {
+            const resp = await fetch('/api/ci/cases/' + caseId + '/review', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'active' }),
+            });
+            const data = await resp.json();
+            alert(data.message || JSON.stringify(data));
+            loadPendingCases();
+        } catch (e) {
+            alert('激活失败');
+        }
+    };
+
+    document.addEventListener('DOMContentLoaded', function () {
+        loadProjects();
+        loadCiRuns();
+        loadJenkinsStatus();
+        loadSyncs();
+        loadCodeChanges();
+        loadCcMetrics();
+    });
+})();
+</script>
+{% endblock %}

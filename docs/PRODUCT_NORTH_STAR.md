@@ -93,17 +93,21 @@
 Phase 0a  执行可信（含历史/报告/日志诚实）          ✅ 已落地门禁与回归
     ├─► Phase 0b  跨端联动可信                      ✅ L1–L7 / 见 LINKAGE_DEFECT_BACKLOG
     └─► Phase 0c  CI 最小对接（可与 0b 并行，依赖 0a） ✅ 触发+JUnit+回调 / 见 CICD_INTEGRATION
-         └─► Phase A  多 Agent 最小闭环              ✅ TestRunState+三角色+Demo+跨端页时间线
-              └─► Phase B/C  企业安全、沉淀、开源生态   （进行中：运营门禁面板 + 异步跨端）
+         └─► Phase A  多 Agent 最小闭环              ✅ TestRunState+≥5 角色+Demo+跨端页时间线
+              └─► Phase B/C  企业安全、沉淀、开源生态   ✅ **已收口**（见 [PHASE_BC_COMPLETE.md](./PHASE_BC_COMPLETE.md)）
 ```
 
 **硬原则：** 没有 Phase 0a，不宣称企业级，不把比赛/销售 Demo 建立在假绿之上。  
-**Phase A 说明：** 本地控制面 + Spec 已可跑；官方 AgentTeams SDK 映射仍可后续加深，不得把「单 Hermes 对话成功」表述为多 Agent 完成。  
+**Phase A 说明：** 本地控制面 **≥5 角色** + Spec + SDK bridge/probe；官方 AgentTeams **完整 runtime 非阻塞延期**（未安装 → `SDK_NOT_INSTALLED`）。  
+**Phase B/C 收口：** 企业审计/SSO/Trace/Skill/农场运维雏形/R18·R19 已齐；**默认停止继续堆 L2 运维微特性**，下一优先级是客户业务场景验收。详见 [PHASE_BC_COMPLETE.md](./PHASE_BC_COMPLETE.md)。  
 **企业可运营（2026-07-24）：** 跨端页异步执行 + HITL 继续/取消 + RiskGuard 批准重试（同页可操作，不假绿）。  
-**报告治理看板：** `/test-report` 展示 HITL/Risk/证据/CI 汇总与近期门禁事件；**概览通过率同源纳入无 case 跨端历史**（失败不剔除）。  
-**客户审计包：** `/api/report/customer-audit-pack`（报告页一键导出）— 索引 + 治理摘要 + 失败/门禁 Trace + **登录/SSO 审计**，不美化；企业能力键 `customer_audit_export`。  
-**认证审计：** 本地登录/失败/注销、SSO/LDAP 回调均写入 `audit_logs`（`target_type=auth`），审计页可筛「登录/SSO认证」；企业能力键 `audit_log` / `sso`。  
-**ERP 桌面样例：** Fake ERP（窗口标题=订单号）↔ API 种子变量断言；亦可经 `DESKTOP_APP_ALIASES` 的 `@erp` 启动客户客户端（`mode=alias`，别名缺失诚实失败）。验收：`python demos/erp_desktop_sample/run_accept.py`（含 `--mismatch` 不假绿）。
+**Trace 运营页：** `/trace-hub` — HITL/Risk/证据/CI 汇总、门禁事件、Skill 沉淀与配置注册中心入口。  
+**客户审计包：** `/api/report/customer-audit-pack`；企业能力键 `customer_audit_export`。  
+**认证审计：** `audit_logs`（`target_type=auth`）；企业能力键 `audit_log` / `sso`。  
+**Skill 沉淀：** 成功运行 → 草稿；失败默认拒绝。  
+**执行农场（雏形收口）：** 节点/门禁/队列 drain/fan-out/SLA 证据与可选 Webhook；探测成功 ≠ 用例通过。  
+**R18/R19：** [CLOUD_SKILLS_ALIGN](./goai/CLOUD_SKILLS_ALIGN.md) · [NACOS_CONFIG_REGISTRY](./goai/NACOS_CONFIG_REGISTRY.md)。  
+**ERP 桌面样例：** Fake ERP + `@erp`；`python demos/erp_desktop_sample/run_accept.py`。
 
 ---
 
@@ -145,7 +149,9 @@ Phase 0a  执行可信（含历史/报告/日志诚实）          ✅ 已落地
 | 文档 | 用途 |
 |------|------|
 | 本文 | 北极星与优先级 |
+| [PHASE_BC_COMPLETE.md](./PHASE_BC_COMPLETE.md) | **B/C 收口与业务优先级说明（必读）** |
 | [EXECUTION_RELIABILITY_STANDARD.md](./EXECUTION_RELIABILITY_STANDARD.md) | S1–S4、假绿清单、历史报告规范、门禁 |
 | [CICD_INTEGRATION.md](./CICD_INTEGRATION.md) | Jenkins/GitLab 分工与对接契约 |
+| [ENTERPRISE_OPS_SLA.md](./ENTERPRISE_OPS_SLA.md) | 农场/SLA 证据边界 |
 | [LINKAGE_DEFECT_BACKLOG.md](./LINKAGE_DEFECT_BACKLOG.md) | 跨端缺陷债（Phase 0b） |
 | [goai/](./goai/README.md) | 参赛材料；复赛工程依赖 0a/0b |

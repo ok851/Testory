@@ -59,9 +59,11 @@ _CONTROL_TYPE_MAP = {
 
 _INTERACTIVE_CONTROL_TYPES = {
     50000,  # Button
+    50002,  # CheckBox
     50003,  # ComboBox
     50004,  # Edit
     50005,  # Hyperlink
+    50006,  # Image (often clickable icons)
     50007,  # List
     50008,  # ListItem
     50010,  # MenuBar
@@ -69,9 +71,11 @@ _INTERACTIVE_CONTROL_TYPES = {
     50013,  # RadioButton
     50018,  # Tab
     50019,  # TabItem
+    50020,  # Text (links / labels often hit)
     50021,  # ToolBar
     50023,  # Tree
     50024,  # TreeItem
+    50025,  # Custom (many Qt/CEF expose as Custom)
     50029,  # DataItem
 }
 
@@ -85,18 +89,21 @@ _CONTAINER_CONTROL_TYPES = {
 }
 
 _PSEUDO_CONTAINER_PATTERNS = (
-    "chrome",
+    "chrome_renderwidgethosthwnd",
+    "chrome_widgetwin",  # 仅外壳；内部 Text/Button 类名通常不含此串
     "renderwidget",
     "legacy window",
-    "widgetwin",
     "corewindow",
-    "webview",
-    "directui",
-    "cef",
-    "electron",
-    "chromium",
-    "tabwindowclass",
+    "webview2",
+    "cefclient",
+    "cefrender",
 )
+
+# CUIAutomation / CUIAutomation8（ProgID「UIAutomationCore.UIAutomation」在多数机器上无效）
+_CLSID_CUIAUTOMATION = "{ff48dba4-60ef-4201-aa87-54103eef594e}"
+_CLSID_CUIAUTOMATION8 = "{e22ad333-b25f-460c-83d0-0581107395c9}"
+_uia_singleton: Any = None
+_uia_init_failed = False
 
 
 def _ensure_com_initialized():
@@ -107,12 +114,75 @@ def _ensure_com_initialized():
 
 
 def _get_uia() -> Any:
+    """
+    获取 IUIAutomation 实例。
+
+    历史 bug：CreateObject(\"UIAutomationCore.UIAutomation\") 常报「无效的类字符串」，
+    导致 _get_uia() 恒为 None → 应用内元素全部识别失败；桌面图标因走 Win32 ListView 不受影响。
+    """
+    global _uia_singleton, _uia_init_failed
+    if _uia_singleton is not None:
+        return _uia_singleton
+    if _uia_init_failed:
+        return None
     _ensure_com_initialized()
     try:
         from comtypes import client
-        return client.CreateObject("UIAutomationCore.UIAutomation")
+        from comtypes.gen.UIAutomationClient import IUIAutomation
     except Exception:
+        _uia_init_failed = True
         return None
+
+    errors: list = []
+    for clsid in (_CLSID_CUIAUTOMATION8, _CLSID_CUIAUTOMATION):
+        try:
+            obj = client.CreateObject(clsid, interface=IUIAutomation)
+            if obj is not None:
+                _uia_singleton = obj
+                return _uia_singleton
+        except Exception as exc:
+            errors.append(f"{clsid}:{exc}")
+    # 少数环境仍注册了 ProgID
+    for progid in ("UIAutomationClient.CUIAutomation8", "UIAutomationClient.CUIAutomation"):
+        try:
+            obj = client.CreateObject(progid)
+            if obj is not None:
+                _uia_singleton = obj
+                return _uia_singleton
+        except Exception as exc:
+            errors.append(f"{progid}:{exc}")
+    _uia_init_failed = True
+    return None
+
+
+def _element_from_point(uia: Any, x: int, y: int) -> Any:
+    """调用 IUIAutomation::ElementFromPoint（正确方法名，不是 GetElementFromPoint）。"""
+    if uia is None:
+        return None
+    try:
+        from comtypes.gen.UIAutomationClient import tagPOINT
+
+        pt = tagPOINT(int(x), int(y))
+        if hasattr(uia, "ElementFromPoint"):
+            return uia.ElementFromPoint(pt)
+        if hasattr(uia, "GetElementFromPoint"):
+            return uia.GetElementFromPoint(pt)
+    except Exception:
+        pass
+    try:
+        from ctypes import Structure, c_long
+
+        class POINT(Structure):
+            _fields_ = [("x", c_long), ("y", c_long)]
+
+        pt = POINT(int(x), int(y))
+        if hasattr(uia, "ElementFromPoint"):
+            return uia.ElementFromPoint(pt)
+        if hasattr(uia, "GetElementFromPoint"):
+            return uia.GetElementFromPoint(pt)
+    except Exception:
+        pass
+    return None
 
 
 def _get_tree_walker(uia: Any, walker_type: str = "control") -> Any:
@@ -272,21 +342,17 @@ class UIAElement:
         return path
 
     def find_deepest_interactive(self, max_depth: int = 10, depth: int = 0) -> 'UIAElement':
-        """深度遍历找到最底层可交互元素"""
+        """深度遍历找到最底层可交互元素（会进入容器，不跳过 Pane/Group）。"""
         if depth >= max_depth:
             return self
 
-        if self.is_interactive():
+        if self.is_interactive() and not self.is_container():
             return self
 
         child = self.get_first_child()
         best_result = self
 
         while child:
-            if child.is_container() and not child.is_pseudo_container():
-                child = child.get_next_sibling()
-                continue
-
             try:
                 result = child.find_deepest_interactive(max_depth, depth + 1)
 
@@ -302,6 +368,13 @@ class UIAElement:
                     result_score += 5
                 if result.get_acc_name():
                     result_score += 3
+                # 更小的控件优先（贴近点选目标）
+                rr = result.get_bounding_rect()
+                br = best_result.get_bounding_rect()
+                ra = max(1, (rr[2] - rr[0]) * (rr[3] - rr[1]))
+                ba = max(1, (br[2] - br[0]) * (br[3] - br[1]))
+                if ra < ba:
+                    result_score += 4
 
                 if best_ct in _INTERACTIVE_CONTROL_TYPES:
                     best_score += 10
@@ -318,6 +391,52 @@ class UIAElement:
             child = child.get_next_sibling()
 
         return best_result
+
+    def find_smallest_at_point(self, x: int, y: int, max_depth: int = 14) -> 'UIAElement':
+        """
+        RPA 风格：在命中节点子树中找包含 (x,y) 的最小元素。
+        比单纯 ElementFromPoint 更能落到按钮/输入框而非整窗 Pane。
+        """
+        best = self
+        br0 = self.get_bounding_rect()
+        best_area = max(1, (br0[2] - br0[0]) * (br0[3] - br0[1]))
+        best_interactive = self.is_interactive() and not self.is_container()
+
+        def _walk(el: "UIAElement", depth: int) -> None:
+            nonlocal best, best_area, best_interactive
+            if depth > max_depth:
+                return
+            child = el.get_first_child()
+            while child:
+                try:
+                    r = child.get_bounding_rect()
+                    if r[2] - r[0] < 2 or r[3] - r[1] < 2:
+                        child = child.get_next_sibling()
+                        continue
+                    if not (r[0] <= int(x) <= r[2] and r[1] <= int(y) <= r[3]):
+                        child = child.get_next_sibling()
+                        continue
+                    area = max(1, (r[2] - r[0]) * (r[3] - r[1]))
+                    interactive = child.is_interactive() and not child.is_container()
+                    take = False
+                    if area < best_area:
+                        take = True
+                    elif area <= best_area * 1.15 and interactive and not best_interactive:
+                        take = True
+                    if take and not child.is_pseudo_container():
+                        best = child
+                        best_area = area
+                        best_interactive = interactive
+                    _walk(child, depth + 1)
+                except Exception:
+                    pass
+                child = child.get_next_sibling()
+
+        try:
+            _walk(self, 0)
+        except Exception:
+            pass
+        return best
 
     def find_element_by_acc_name(self, acc_name: str) -> Optional['UIAElement']:
         """通过acc-name查找子元素"""
@@ -352,24 +471,9 @@ def get_element_at_point(x: int, y: int) -> Optional[UIAElement]:
     if not walker:
         return None
 
-    try:
-        from ctypes import Structure, c_long
-        class POINT(Structure):
-            _fields_ = [("x", c_long), ("y", c_long)]
-
-        point = POINT(x, y)
-        com_element = uia.GetElementFromPoint(point)
-
-        if com_element:
-            return UIAElement(com_element, walker)
-    except Exception:
-        try:
-            com_element = uia.GetElementFromPoint(x, y)
-            if com_element:
-                return UIAElement(com_element, walker)
-        except Exception:
-            pass
-
+    com_element = _element_from_point(uia, int(x), int(y))
+    if com_element:
+        return UIAElement(com_element, walker)
     return None
 
 
@@ -431,40 +535,20 @@ def _get_element_at_point_with_walker(x: int, y: int, walker_type: str = "contro
     if not walker:
         return None
 
-    # 优先使用 comtypes 自动生成的 tagPOINT 类型，与接口签名完全匹配
-    try:
-        from comtypes.gen.UIAutomationClient import tagPOINT
-        point = tagPOINT(x, y)
-        com_element = uia.GetElementFromPoint(point)
-        if com_element:
-            return UIAElement(com_element, walker)
-    except Exception:
-        pass
-
-    # 回退：使用 ctypes POINT 结构体（直接传值，不要用 byref）
-    try:
-        from ctypes import Structure, c_long
-        class POINT(Structure):
-            _fields_ = [("x", c_long), ("y", c_long)]
-        point = POINT(x, y)
-        com_element = uia.GetElementFromPoint(point)
-        if com_element:
-            return UIAElement(com_element, walker)
-    except Exception:
-        pass
-
+    com_element = _element_from_point(uia, int(x), int(y))
+    if com_element:
+        return UIAElement(com_element, walker)
     return None
 
 
 def _find_element_through_multiple_views(x: int, y: int) -> Optional[UIAElement]:
-    """通过多个视图查找元素（Control View → Raw View → Content View）"""
+    """通过多个视图查找元素，并钻到包含坐标的最小控件（RPA 常见做法）。"""
     for walker_type in ["control", "raw", "content"]:
         element = _get_element_at_point_with_walker(x, y, walker_type)
         if not element:
             continue
 
         rect = element.get_bounding_rect()
-        # 跳过无效 rect
         if rect[2] - rect[0] < 4 or rect[3] - rect[1] < 4:
             continue
 
@@ -472,39 +556,160 @@ def _find_element_through_multiple_views(x: int, y: int) -> Optional[UIAElement]
         cls_name = element.get_class_name()
         combined = f"{name} {cls_name}".lower()
 
-        # 如果不是伪容器，直接返回
+        try:
+            refined = element.find_smallest_at_point(int(x), int(y))
+            if refined:
+                element = refined
+                rect = element.get_bounding_rect()
+                name = element.get_acc_name()
+                cls_name = element.get_class_name()
+                combined = f"{name} {cls_name}".lower()
+        except Exception:
+            pass
+
         if not any(p in combined for p in _PSEUDO_CONTAINER_PATTERNS):
+            try:
+                deepest = element.find_deepest_interactive(max_depth=12)
+                if deepest and deepest is not element:
+                    dr = deepest.get_bounding_rect()
+                    if (
+                        dr[2] - dr[0] >= 4
+                        and dr[3] - dr[1] >= 4
+                        and dr[0] <= int(x) <= dr[2]
+                        and dr[1] <= int(y) <= dr[3]
+                    ):
+                        dcomb = f"{deepest.get_acc_name()} {deepest.get_class_name()}".lower()
+                        if not any(p in dcomb for p in _PSEUDO_CONTAINER_PATTERNS):
+                            da = (dr[2] - dr[0]) * (dr[3] - dr[1])
+                            ea = max(1, (rect[2] - rect[0]) * (rect[3] - rect[1]))
+                            if da > 0 and da <= ea:
+                                return deepest
+            except Exception:
+                pass
             return element
 
-        # 如果是伪容器，尝试查找最深层可交互元素
-        deepest = element.find_deepest_interactive()
-        if deepest and deepest is not element:
-            deepest_rect = deepest.get_bounding_rect()
-            if deepest_rect[2] - deepest_rect[0] >= 4 and deepest_rect[3] - deepest_rect[1] >= 4:
-                deepest_name = deepest.get_acc_name()
-                deepest_cls = deepest.get_class_name()
-                deepest_combined = f"{deepest_name} {deepest_cls}".lower()
-                if not any(p in deepest_combined for p in _PSEUDO_CONTAINER_PATTERNS):
-                    return deepest
-
-        # 如果当前视图没有有效元素，尝试下一个视图
+        # 伪容器：尝试 deepest / smallest
+        try:
+            deepest = element.find_deepest_interactive()
+            if deepest and deepest is not element:
+                deepest_rect = deepest.get_bounding_rect()
+                if deepest_rect[2] - deepest_rect[0] >= 4 and deepest_rect[3] - deepest_rect[1] >= 4:
+                    deepest_combined = (
+                        f"{deepest.get_acc_name()} {deepest.get_class_name()}".lower()
+                    )
+                    if not any(p in deepest_combined for p in _PSEUDO_CONTAINER_PATTERNS):
+                        return deepest
+        except Exception:
+            pass
         continue
 
     return None
 
 
+def wake_accessibility_around_point(x: int, y: int, *, max_children: int = 80) -> bool:
+    """
+    对已运行的 Chromium/WebView/Electron 进程：主动查询 UIA 属性以唤醒无障碍树。
+
+    Chromium 常在「检测到无障碍客户端」后才暴露内部 Document/控件；
+    用户正常点击打开应用后，本函数让捕获器像 Narrator 一样点亮树，无需重启进程。
+    """
+    _ensure_com_initialized()
+    uia = _get_uia()
+    if not uia:
+        return False
+
+    warmed = False
+    for walker_type in ("raw", "control", "content"):
+        el = _get_element_at_point_with_walker(int(x), int(y), walker_type)
+        if not el:
+            continue
+        try:
+            # 读取关键属性即可触发 Chromium enable accessibility
+            _ = el.get_acc_name()
+            _ = el.get_control_type()
+            _ = el.get_class_name()
+            _ = el.get_bounding_rect()
+            warmed = True
+        except Exception:
+            pass
+
+        # 浅层遍历子树，迫使渲染进程构建 AX tree
+        n = 0
+        try:
+            child = el.get_first_child()
+            while child is not None and n < max_children:
+                try:
+                    _ = child.get_acc_name()
+                    _ = child.get_control_type()
+                    _ = child.get_bounding_rect()
+                    warmed = True
+                    # 再下一层一点
+                    grand = child.get_first_child()
+                    if grand is not None:
+                        _ = grand.get_acc_name()
+                        _ = grand.get_bounding_rect()
+                        n += 1
+                except Exception:
+                    pass
+                n += 1
+                try:
+                    child = child.get_next_sibling()
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+    return warmed
+
+
 def capture_element_at_point(x: int, y: int) -> Dict[str, Any]:
-    """捕获屏幕坐标处的元素信息（支持多视图遍历）"""
+    """捕获屏幕坐标处的元素信息（支持多视图遍历；伪容器时先唤醒无障碍再试）。"""
     element = _find_element_through_multiple_views(x, y)
+
+    # 命中渲染壳：先唤醒再捕一次（已打开的 Electron/WebView2 常见）
+    if element is None or element.is_pseudo_container():
+        try:
+            wake_accessibility_around_point(int(x), int(y))
+        except Exception:
+            pass
+        element = _find_element_through_multiple_views(x, y)
+
     if not element:
         return {
             "ok": False,
             "error": "未找到元素",
         }
 
+    # 仍落在伪容器上：视为未命中内部元素，交给 Win32/OCR/视觉兜底
+    if element.is_pseudo_container():
+        # 再试 deepest interactive（唤醒后可能已有子节点）
+        try:
+            deepest = element.find_deepest_interactive(max_depth=12)
+            if deepest and deepest is not element and not deepest.is_pseudo_container():
+                element = deepest
+            else:
+                return {
+                    "ok": False,
+                    "error": "fake_container",
+                    "bounding_rect": element.get_bounding_rect(),
+                    "element_label": element.get_acc_name(),
+                    "control_type": element.get_control_type(),
+                    "class_name": element.get_class_name(),
+                }
+        except Exception:
+            return {
+                "ok": False,
+                "error": "fake_container",
+                "bounding_rect": element.get_bounding_rect(),
+                "element_label": element.get_acc_name(),
+                "control_type": element.get_control_type(),
+                "class_name": element.get_class_name(),
+            }
+
     rect = element.get_bounding_rect()
     acc_name = element.get_acc_name()
     control_type = element.get_control_type()
+    class_name = element.get_class_name()
     selector = build_selector_from_element(element)
 
     return {
@@ -512,5 +717,97 @@ def capture_element_at_point(x: int, y: int) -> Dict[str, Any]:
         "bounding_rect": rect,
         "element_label": acc_name,
         "control_type": control_type,
+        "class_name": class_name,
         "selector": selector,
+    }
+
+
+def dump_foreground_uia_tree(max_depth: int = 4, max_nodes: int = 120) -> List[Dict[str, Any]]:
+    """导出前台窗口 UIA 树，供 inspect / 调试。"""
+    _ensure_com_initialized()
+    uia = _get_uia()
+    if not uia:
+        return []
+    walker = _get_tree_walker(uia, "control")
+    if not walker:
+        return []
+
+    try:
+        import ctypes
+
+        hwnd = int(ctypes.windll.user32.GetForegroundWindow() or 0)
+        if not hwnd:
+            root_el = UIAElement(uia.GetRootElement(), walker)
+        else:
+            # ElementFromHandle 在 comtypes UIA 上可用
+            try:
+                com_el = uia.ElementFromHandle(hwnd)
+            except Exception:
+                com_el = uia.GetRootElement()
+            root_el = UIAElement(com_el, walker)
+    except Exception:
+        return []
+
+    nodes: List[Dict[str, Any]] = []
+
+    def walk(el: UIAElement, depth: int) -> None:
+        if len(nodes) >= max_nodes or depth > max_depth:
+            return
+        rect = el.get_bounding_rect()
+        nodes.append(
+            {
+                "name": el.get_acc_name(),
+                "control_type": el.get_control_type(),
+                "class_name": el.get_class_name(),
+                "rect": rect,
+                "depth": depth,
+                "interactive": el.is_interactive(),
+            }
+        )
+        if depth >= max_depth:
+            return
+        child = el.get_first_child()
+        while child and len(nodes) < max_nodes:
+            walk(child, depth + 1)
+            child = child.get_next_sibling()
+
+    walk(root_el, 0)
+    return nodes
+
+
+def find_element_by_acc_name(acc_name: str) -> Dict[str, Any]:
+    """从桌面根按 accessibility name 查找元素（供 hybrid locator 回放调用）。"""
+    name = (acc_name or "").strip()
+    if not name:
+        return {"ok": False, "error": "empty_acc_name"}
+
+    _ensure_com_initialized()
+    uia = _get_uia()
+    if not uia:
+        return {"ok": False, "error": "no_uia"}
+
+    walker = _get_tree_walker(uia)
+    if not walker:
+        return {"ok": False, "error": "no_walker"}
+
+    try:
+        root = UIAElement(uia.GetRootElement(), walker)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    found = root.find_element_by_acc_name(name)
+    if not found:
+        return {"ok": False, "error": "not_found"}
+
+    rect = found.get_bounding_rect()
+    if rect[2] - rect[0] < 1 or rect[3] - rect[1] < 1:
+        return {"ok": False, "error": "invalid_rect"}
+
+    return {
+        "ok": True,
+        "bounding_rect": rect,
+        "element_label": found.get_acc_name(),
+        "control_type": found.get_control_type(),
+        "class_name": found.get_class_name(),
+        "selector": build_selector_from_element(found),
     }
