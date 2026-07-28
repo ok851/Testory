@@ -1,7 +1,7 @@
 package com.testory.assistant.v2.service.accessibility
 
 import android.util.Log
-import com.testory.assistant.v2.core.communication.PcConnectionState
+import com.testory.assistant.v2.core.model.PcConnectionState
 import com.testory.assistant.v2.core.communication.PcSyncClient
 import com.testory.assistant.v2.core.communication.PendingRunJob
 import kotlinx.coroutines.CoroutineScope
