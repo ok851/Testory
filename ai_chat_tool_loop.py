@@ -1415,6 +1415,27 @@ def _dispatch_cross_end_agent_tool(name: str, args: Dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+_CROSS_END_VAR_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+
+
+def _resolve_cross_end_vars(obj: Any, vars_map: Optional[Dict[str, Any]]) -> Any:
+    """把工具参数里的 {{sms_otp}} 等替换为 meta.cross_end_vars。"""
+    if not isinstance(vars_map, dict) or not vars_map:
+        return obj
+    if isinstance(obj, str):
+        def _repl(m: re.Match) -> str:
+            key = (m.group(1) or "").strip()
+            if key in vars_map and vars_map[key] is not None:
+                return str(vars_map[key])
+            return m.group(0)
+        return _CROSS_END_VAR_RE.sub(_repl, obj)
+    if isinstance(obj, dict):
+        return {k: _resolve_cross_end_vars(v, vars_map) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_cross_end_vars(v, vars_map) for v in obj]
+    return obj
+
+
 def _build_system_prompt(
     *,
     project_name: str,
@@ -2687,7 +2708,9 @@ def run_ai_chat_with_tools(
                     result_text = skip_json
                     meta["tools_used"].append(f"{name}_skipped_replay")
                 else:
-                    call_args = dict(args or {})
+                    call_args = _resolve_cross_end_vars(
+                        dict(args or {}), meta.get("cross_end_vars")
+                    )
                     if (
                         name == "windows_type_text"
                         and str(meta.get("desktop_phase") or meta.get("wechat_phase") or "")
@@ -2698,7 +2721,9 @@ def run_ai_chat_with_tools(
                     meta["tools_used"].append(name)
                     _record_succeeded_desktop_action(meta, name, call_args, result_text)
             elif _is_cross_end_agent_tool(name):
-                call_args = dict(args or {})
+                call_args = _resolve_cross_end_vars(
+                    dict(args or {}), meta.get("cross_end_vars")
+                )
                 if getattr(params, "user_id", None) and not call_args.get("user_id"):
                     call_args["user_id"] = int(params.user_id)
                 result_text = _dispatch_cross_end_agent_tool(name, call_args)
@@ -3435,7 +3460,9 @@ def run_ai_chat_with_tools_stream(
                     result_text = skip_json
                     meta["tools_used"].append(f"{name}_skipped_replay")
                 else:
-                    call_args = dict(args or {})
+                    call_args = _resolve_cross_end_vars(
+                        dict(args or {}), meta.get("cross_end_vars")
+                    )
                     if (
                         name == "windows_type_text"
                         and str(meta.get("desktop_phase") or meta.get("wechat_phase") or "")
@@ -3504,7 +3531,9 @@ def run_ai_chat_with_tools_stream(
                     except Exception:
                         pass
             elif _is_cross_end_agent_tool(name):
-                call_args = dict(args or {})
+                call_args = _resolve_cross_end_vars(
+                    dict(args or {}), meta.get("cross_end_vars")
+                )
                 if getattr(params, "user_id", None) and not call_args.get("user_id"):
                     try:
                         call_args["user_id"] = int(params.user_id)

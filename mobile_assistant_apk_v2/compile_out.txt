@@ -1,0 +1,13 @@
+﻿.\gradlew.bat : Exception in thread "main" java.lang.RuntimeException: Timeout of 120000 reached waiting for exclusive 
+access to file: C:\Users\zxcyb\AppData\Local\Temp\cursor-sandbox-cache\621a2acbe8bd0364ea1e9e99eefbaab7\gradle\wrapper\
+dists\gradle-8.4-bin\1w5dpkrfk8irigvoxmyhowfim\gradle-8.4-bin.zip
+At C:\Users\zxcyb\AppData\Local\Temp\ps-script-65d0407e-23fe-47cf-906d-2fb0c9cbd25e.ps1:141 char:426
++ ... rt-Sleep 2; .\gradlew.bat :service:compileDebugKotlin :feature:compil ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Exception in th...dle-8.4-bin.zip:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+	at org.gradle.wrapper.ExclusiveFileAccessManager.access(ExclusiveFileAccessManager.java:65)
+	at org.gradle.wrapper.Install.createDist(Install.java:48)
+	at org.gradle.wrapper.WrapperExecutor.execute(WrapperExecutor.java:107)
+	at org.gradle.wrapper.GradleWrapperMain.main(GradleWrapperMain.java:63)

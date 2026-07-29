@@ -1,0 +1,222 @@
+﻿> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :core:preBuild UP-TO-DATE
+> Task :core:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :service:checkKotlinGradlePluginConfigurationErrors
+> Task :app:checkKotlinGradlePluginConfigurationErrors
+> Task :service:preBuild UP-TO-DATE
+> Task :feature:checkKotlinGradlePluginConfigurationErrors
+> Task :service:preDebugBuild UP-TO-DATE
+> Task :feature:preBuild UP-TO-DATE
+> Task :feature:preDebugBuild UP-TO-DATE
+> Task :core:generateDebugResValues
+> Task :core:generateDebugResources
+> Task :feature:generateDebugResValues
+> Task :feature:generateDebugResources
+> Task :service:generateDebugResValues
+> Task :service:generateDebugResources
+> Task :app:generateDebugBuildConfig
+> Task :app:generateDebugResValues
+> Task :app:generateDebugResources
+> Task :core:packageDebugResources
+> Task :feature:packageDebugResources
+> Task :service:packageDebugResources
+> Task :core:checkKotlinGradlePluginConfigurationErrors
+> Task :feature:extractDeepLinksDebug
+> Task :app:packageDebugResources
+> Task :service:writeDebugAarMetadata
+> Task :feature:writeDebugAarMetadata
+> Task :core:writeDebugAarMetadata
+> Task :service:extractDeepLinksDebug
+> Task :core:extractDeepLinksDebug
+> Task :feature:compileDebugLibraryResources
+> Task :service:javaPreCompileDebug
+> Task :core:javaPreCompileDebug
+> Task :core:compileDebugLibraryResources
+> Task :service:compileDebugLibraryResources
+> Task :feature:javaPreCompileDebug
+> Task :feature:parseDebugLocalResources
+> Task :service:parseDebugLocalResources
+> Task :core:parseDebugLocalResources
+> Task :feature:mergeDebugShaders
+> Task :feature:compileDebugShaders NO-SOURCE
+> Task :feature:generateDebugAssets UP-TO-DATE
+> Task :core:mergeDebugShaders
+> Task :core:compileDebugShaders NO-SOURCE
+> Task :core:generateDebugAssets UP-TO-DATE
+> Task :service:mergeDebugShaders
+> Task :service:compileDebugShaders NO-SOURCE
+> Task :service:generateDebugAssets UP-TO-DATE
+> Task :feature:packageDebugAssets
+> Task :service:packageDebugAssets
+> Task :core:packageDebugAssets
+> Task :feature:mergeDebugJniLibFolders
+> Task :feature:mergeDebugNativeLibs NO-SOURCE
+> Task :service:mergeDebugJniLibFolders
+> Task :service:mergeDebugNativeLibs NO-SOURCE
+> Task :core:mergeDebugJniLibFolders
+> Task :core:mergeDebugNativeLibs NO-SOURCE
+> Task :app:mapDebugSourceSetPaths
+> Task :feature:copyDebugJniLibsProjectOnly
+> Task :core:copyDebugJniLibsProjectOnly
+> Task :service:copyDebugJniLibsProjectOnly
+> Task :service:processDebugManifest
+> Task :core:processDebugManifest
+> Task :feature:processDebugManifest
+> Task :app:checkDebugAarMetadata
+> Task :core:generateDebugRFile
+> Task :feature:generateDebugRFile
+> Task :service:generateDebugRFile
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug
+> Task :app:processDebugMainManifest
+> Task :app:processDebugManifest
+> Task :app:javaPreCompileDebug
+> Task :app:mergeDebugShaders
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets
+> Task :app:compressDebugAssets
+> Task :app:desugarDebugFileDependencies
+> Task :app:mergeDebugJniLibFolders
+> Task :app:mergeDebugNativeLibs NO-SOURCE
+> Task :app:stripDebugDebugSymbols NO-SOURCE
+> Task :app:parseDebugLocalResources
+> Task :app:validateSigningDebug
+> Task :app:writeDebugAppMetadata
+> Task :app:checkDebugDuplicateClasses
+> Task :app:writeDebugSigningConfigVersions
+> Task :app:processDebugManifestForPackage
+> Task :app:mergeDebugResources
+> Task :app:processDebugResources
+> Task :core:kspDebugKotlin
+
+> Task :core:compileDebugKotlin
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/core/src/main/java/com/testory/assistant/v2/core/communication/OkHttpPcSyncClient.kt:66:30 'SERIAL: String!' is deprecated. Deprecated in Java
+
+> Task :core:compileDebugJavaWithJavac
+> Task :core:processDebugJavaRes
+> Task :core:transformDebugClassesWithAsm
+> Task :core:bundleLibRuntimeToJarDebug
+> Task :core:bundleLibCompileToJarDebug
+> Task :core:bundleLibRuntimeToDirDebug
+> Task :app:mergeExtDexDebug
+> Task :service:kspDebugKotlin
+
+> Task :service:compileDebugKotlin
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:120:30 Unnecessary safe call on a non-null receiver of type (Mutable)List<CharSequence!>
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:120:50 Elvis operator (?:) always returns the left operand of non-nullable type String
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:142:31 Unnecessary safe call on a non-null receiver of type (Mutable)List<CharSequence!>
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:173:28 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:206:32 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:218:33 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:234:39 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:238:28 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:387:22 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:397:24 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:423:18 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:435:24 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:727:25 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:744:66 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:754:66 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:785:35 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:786:58 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:788:55 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:794:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:799:24 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:806:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:825:66 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:829:58 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:877:32 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:920:46 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:925:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:945:50 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:946:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:965:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:987:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1154:32 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1217:24 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1221:21 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1235:28 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1242:59 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1246:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1261:27 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1262:50 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1269:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1375:30 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1377:72 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1383:26 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1386:47 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1391:32 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1393:50 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1398:29 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1400:38 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1445:18 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1452:18 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1468:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1516:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/NodeAnalyzer.kt:107:25 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/NodeAnalyzer.kt:130:41 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/NodeAnalyzer.kt:161:32 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/PluginHttpServer.kt:90:17 Variable 'requestLine' is never used
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/foreground/FloatingControlService.kt:111:37 Unnecessary safe call on a non-null receiver of type Intent?
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/foreground/FloatingControlService.kt:112:35 Unnecessary safe call on a non-null receiver of type Intent?
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/foreground/FloatingControlService.kt:116:36 Unnecessary safe call on a non-null receiver of type Intent?
+
+> Task :service:compileDebugJavaWithJavac
+> Task :service:processDebugJavaRes
+> Task :service:transformDebugClassesWithAsm
+> Task :service:bundleLibCompileToJarDebug
+> Task :service:bundleLibRuntimeToJarDebug
+> Task :service:bundleLibRuntimeToDirDebug
+> Task :feature:kspDebugKotlin
+
+> Task :feature:compileDebugKotlin
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/ai_bridge/AIBridgeScreen.kt:69:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/ai_bridge/AIBridgeScreen.kt:164:51 'Send: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.Send
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/ai_bridge/AIBridgeScreen.kt:267:54 Parameter 'index' is never used, could be renamed to _
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/ai_bridge/AIBridgeViewModel.kt:188:27 Parameter 'steps' is never used
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/cases/CaseDetailScreen.kt:50:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/cases/CaseListScreen.kt:42:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/cases/CaseListScreen.kt:152:59 'KeyboardArrowRight: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.KeyboardArrowRight
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/history/RunHistoryScreen.kt:44:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/home/HomeScreen.kt:88:5 Parameter 'onStartReplay' is never used
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/home/HomeScreen.kt:89:5 Parameter 'onRefreshConnection' is never used
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/mirror/MirrorViewModel.kt:51:24 Parameter 'activity' is never used
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/recorder/RecorderScreen.kt:56:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/recorder/RecorderScreen.kt:283:37 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/recorder/RecorderScreen.kt:285:41 'OpenInNew: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.OpenInNew
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/replay/ReplayScreen.kt:63:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/replay/ReplayScreen.kt:208:57 Parameter 'index' is never used, could be renamed to _
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/settings/SettingsScreen.kt:50:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/settings/SettingsScreen.kt:224:54 Parameter 'ok' is never used, could be renamed to _
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/sync/SyncScreen.kt:40:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/sync/SyncScreen.kt:184:50 Parameter 'ok' is never used, could be renamed to _
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/sync/SyncScreen.kt:275:55 'KeyboardArrowRight: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.KeyboardArrowRight
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/sync/SyncScreen.kt:360:50 Parameter 'ok' is never used, could be renamed to _
+
+> Task :feature:compileDebugJavaWithJavac
+> Task :feature:processDebugJavaRes
+> Task :feature:transformDebugClassesWithAsm
+> Task :feature:bundleLibRuntimeToJarDebug
+> Task :feature:bundleLibCompileToJarDebug
+> Task :feature:bundleLibRuntimeToDirDebug
+> Task :app:mergeLibDexDebug
+> Task :app:kspDebugKotlin
+> Task :app:compileDebugKotlin
+> Task :app:compileDebugJavaWithJavac
+> Task :app:hiltAggregateDepsDebug
+> Task :app:hiltJavaCompileDebug
+> Task :app:processDebugJavaRes
+> Task :app:transformDebugClassesWithAsm
+> Task :app:dexBuilderDebug
+> Task :app:mergeDebugGlobalSynthetics
+> Task :app:mergeProjectDexDebug
+> Task :app:mergeDebugJavaResource
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+
+BUILD SUCCESSFUL in 43s
+105 actionable tasks: 105 executed

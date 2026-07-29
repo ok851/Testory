@@ -1,0 +1,138 @@
+﻿> Task :app:preBuild UP-TO-DATE
+> Task :feature:preBuild UP-TO-DATE
+> Task :service:preBuild UP-TO-DATE
+> Task :service:preDebugBuild UP-TO-DATE
+> Task :feature:preDebugBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :core:checkKotlinGradlePluginConfigurationErrors
+> Task :core:preBuild UP-TO-DATE
+> Task :core:preDebugBuild UP-TO-DATE
+> Task :feature:writeDebugAarMetadata UP-TO-DATE
+> Task :service:writeDebugAarMetadata UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :core:generateDebugResValues UP-TO-DATE
+> Task :service:generateDebugResValues UP-TO-DATE
+> Task :core:generateDebugResources UP-TO-DATE
+> Task :feature:generateDebugResValues UP-TO-DATE
+> Task :service:generateDebugResources UP-TO-DATE
+> Task :app:checkKotlinGradlePluginConfigurationErrors
+> Task :feature:generateDebugResources UP-TO-DATE
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :core:packageDebugResources UP-TO-DATE
+> Task :feature:packageDebugResources UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :service:packageDebugResources UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :feature:extractDeepLinksDebug UP-TO-DATE
+> Task :service:extractDeepLinksDebug UP-TO-DATE
+> Task :feature:processDebugManifest UP-TO-DATE
+> Task :service:processDebugManifest UP-TO-DATE
+> Task :service:compileDebugLibraryResources UP-TO-DATE
+> Task :feature:compileDebugLibraryResources UP-TO-DATE
+> Task :core:parseDebugLocalResources UP-TO-DATE
+> Task :feature:parseDebugLocalResources UP-TO-DATE
+> Task :core:processDebugManifest UP-TO-DATE
+> Task :service:parseDebugLocalResources UP-TO-DATE
+> Task :feature:generateDebugRFile UP-TO-DATE
+> Task :feature:checkKotlinGradlePluginConfigurationErrors
+> Task :core:generateDebugRFile UP-TO-DATE
+> Task :service:generateDebugRFile UP-TO-DATE
+> Task :service:checkKotlinGradlePluginConfigurationErrors
+> Task :service:javaPreCompileDebug UP-TO-DATE
+> Task :feature:javaPreCompileDebug UP-TO-DATE
+> Task :feature:mergeDebugShaders UP-TO-DATE
+> Task :service:mergeDebugShaders UP-TO-DATE
+> Task :feature:compileDebugShaders NO-SOURCE
+> Task :service:compileDebugShaders NO-SOURCE
+> Task :feature:generateDebugAssets UP-TO-DATE
+> Task :service:generateDebugAssets UP-TO-DATE
+> Task :service:packageDebugAssets UP-TO-DATE
+> Task :feature:packageDebugAssets UP-TO-DATE
+> Task :service:mergeDebugJniLibFolders UP-TO-DATE
+> Task :feature:mergeDebugJniLibFolders UP-TO-DATE
+> Task :service:mergeDebugNativeLibs NO-SOURCE
+> Task :feature:mergeDebugNativeLibs NO-SOURCE
+> Task :feature:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :service:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:mergeDebugShaders UP-TO-DATE
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:desugarDebugFileDependencies UP-TO-DATE
+> Task :app:checkDebugDuplicateClasses UP-TO-DATE
+> Task :app:mergeExtDexDebug UP-TO-DATE
+> Task :app:mergeDebugJniLibFolders UP-TO-DATE
+> Task :app:validateSigningDebug UP-TO-DATE
+> Task :app:writeDebugAppMetadata UP-TO-DATE
+> Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :core:writeDebugAarMetadata UP-TO-DATE
+> Task :core:extractDeepLinksDebug UP-TO-DATE
+> Task :core:compileDebugLibraryResources UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :core:javaPreCompileDebug UP-TO-DATE
+> Task :core:mergeDebugShaders UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :core:compileDebugShaders NO-SOURCE
+> Task :core:generateDebugAssets UP-TO-DATE
+> Task :core:packageDebugAssets UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :core:mergeDebugJniLibFolders UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :core:mergeDebugNativeLibs NO-SOURCE
+> Task :core:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:mergeDebugAssets UP-TO-DATE
+> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:mergeDebugNativeLibs NO-SOURCE
+> Task :app:stripDebugDebugSymbols NO-SOURCE
+> Task :core:kspDebugKotlin
+> Task :core:compileDebugKotlin
+> Task :core:compileDebugJavaWithJavac
+> Task :core:processDebugJavaRes UP-TO-DATE
+> Task :core:transformDebugClassesWithAsm
+> Task :core:bundleLibCompileToJarDebug
+> Task :core:bundleLibRuntimeToJarDebug
+> Task :core:bundleLibRuntimeToDirDebug
+> Task :service:kspDebugKotlin
+> Task :service:compileDebugKotlin
+> Task :service:compileDebugJavaWithJavac
+> Task :service:processDebugJavaRes UP-TO-DATE
+> Task :service:transformDebugClassesWithAsm
+> Task :service:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :service:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :service:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :feature:kspDebugKotlin
+
+> Task :feature:compileDebugKotlin
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/ai_bridge/AIBridgeViewModel.kt:188:27 Parameter 'steps' is never used
+
+> Task :feature:compileDebugJavaWithJavac
+> Task :feature:processDebugJavaRes UP-TO-DATE
+> Task :feature:transformDebugClassesWithAsm
+> Task :feature:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :feature:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :feature:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :app:mergeLibDexDebug
+> Task :app:kspDebugKotlin
+> Task :app:compileDebugKotlin
+> Task :app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:hiltAggregateDepsDebug UP-TO-DATE
+> Task :app:hiltJavaCompileDebug
+> Task :app:processDebugJavaRes
+> Task :app:transformDebugClassesWithAsm
+> Task :app:dexBuilderDebug UP-TO-DATE
+> Task :app:mergeDebugGlobalSynthetics UP-TO-DATE
+> Task :app:mergeProjectDexDebug UP-TO-DATE
+> Task :app:mergeDebugJavaResource
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect UP-TO-DATE
+> Task :app:assembleDebug
+
+BUILD SUCCESSFUL in 17s
+105 actionable tasks: 27 executed, 78 up-to-date

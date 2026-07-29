@@ -33,7 +33,12 @@ data class TestCase(
     /** 项目 ID (与 PC 端对齐) */
     val projectId: String = "",
     /** 项目名称 (与 PC 端对齐) */
-    val projectName: String = ""
+    val projectName: String = "",
+    /**
+     * 数据驱动行：每行是变量 map，回放时外层 foreach。
+     * 空列表表示只跑一遍（无数据驱动）。
+     */
+    val dataRows: List<Map<String, String>> = emptyList()
 )
 
 @Serializable

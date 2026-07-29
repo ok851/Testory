@@ -13,10 +13,15 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.put
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -212,19 +217,13 @@ class OkHttpPcSyncClient @Inject constructor(
                 if (pair.first != null) pair
                 else parseSwipePipe(s.inputText)
             }
-            val mobileSpec = MobileSpecDto(
+            val mobileSpec = StepIrCodec.buildMobileSpec(
+                step = s,
                 viewportCoord = if (hasCoord) listOf(coord!!.x, coord.y) else null,
                 bounds = if (bounds != null && bounds.isValid) {
                     listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)
-                } else null,
-                resourceId = s.locator.resourceId.takeIf { it.isNotBlank() },
-                packageName = s.locator.packageName.takeIf { it.isNotBlank() }
-                    ?: s.targetNode?.packageName?.takeIf { it.isNotBlank() },
-                contentDesc = s.locator.contentDesc.takeIf { it.isNotBlank() },
-                className = s.locator.className.takeIf { it.isNotBlank() },
-                text = s.locator.text.takeIf { it.isNotBlank() },
-                locationSource = s.locationSource.name.lowercase(),
-                isWebView = s.locator.isWebView,
+                } else null
+            ).copy(
                 swipeFrom = parsedFrom,
                 swipeTo = parsedTo ?: if (s.action == ActionType.SWIPE && hasCoord) {
                     listOf(coord!!.x, coord.y)
@@ -233,13 +232,20 @@ class OkHttpPcSyncClient @Inject constructor(
 
             PushStepDto(
                 stepOrder = idx + 1,
-                action = s.action.name.lowercase(),
+                action = s.action.toWire(),
                 selectorType = selectorType,
                 selectorValue = selectorValue,
                 inputValue = s.inputText,
                 description = s.description,
                 automationLayer = "android",
-                mobileSpec = mobileSpec
+                mobileSpec = mobileSpec,
+                assertText = s.assertText,
+                waitDurationMs = s.waitDurationMs,
+                preWaitMs = s.preWaitMs,
+                maxRetries = s.maxRetries,
+                optional = s.optional,
+                assertType = s.extras.assertType,
+                saveAs = s.extras.saveAs
             )
         }
         val pushBody = PushCaseRequest(
@@ -307,41 +313,7 @@ class OkHttpPcSyncClient @Inject constructor(
                 val steps = mutableListOf<Step>()
                 for (j in 0 until stepsArr.size) {
                     val s = stepsArr[j].jsonObject
-                    val actionStr = (s["action"]?.toString()?.trim('"') ?: "tap").lowercase()
-                    val actionType = when (actionStr) {
-                        "tap", "click" -> ActionType.TAP
-                        "input" -> ActionType.INPUT
-                        "swipe" -> ActionType.SWIPE
-                        "wait" -> ActionType.WAIT
-                        "long_press", "longpress" -> ActionType.LONG_PRESS
-                        "open_app" -> ActionType.OPEN_APP
-                        "back" -> ActionType.BACK
-                        "home" -> ActionType.HOME
-                        "assert", "verify" -> ActionType.ASSERT
-                        "screenshot" -> ActionType.SCREENSHOT
-                        else -> ActionType.TAP
-                    }
-                    val selType = (s["selector_type"]?.toString()?.trim('"') ?: "").lowercase()
-                    val selValue = s["selector_value"]?.toString()?.trim('"') ?: ""
-                    val locator = Locator(
-                        text = if (selType == "text") selValue else "",
-                        contentDesc = if (selType == "content_desc") selValue else "",
-                        resourceId = if (selType == "resource_id") selValue else "",
-                        className = if (selType == "class_name") selValue else "",
-                        xpath = if (selType == "xpath") selValue else ""
-                    )
-                    steps.add(
-                        Step(
-                            id = s["id"]?.toString()?.trim('"') ?: "${caseId}_s${j}",
-                            caseId = caseId,
-                            index = (s["step_order"]?.toString()?.trim('"') ?: "${j + 1}").toIntOrNull() ?: (j + 1),
-                            action = actionType,
-                            description = s["description"]?.toString()?.trim('"') ?: "",
-                            locator = locator,
-                            inputText = s["input_value"]?.toString()?.trim('"') ?: "",
-                            locationSource = if (selValue.isNotBlank()) LocationSource.SELECTOR else LocationSource.UNKNOWN
-                        )
-                    )
+                    steps.add(StepIrCodec.parseFromSyncJson(s, caseId, j))
                 }
 
                 val createdAtStr = caseObj["created_at"]?.toString()?.trim('"') ?: ""
@@ -483,13 +455,7 @@ class OkHttpPcSyncClient @Inject constructor(
                             com.testory.assistant.v2.core.model.Step(
                                 id = "",
                                 index = 0,
-                                action = try {
-                                    com.testory.assistant.v2.core.model.ActionType.valueOf(
-                                        dto.action.uppercase()
-                                    )
-                                } catch (_: Exception) {
-                                    com.testory.assistant.v2.core.model.ActionType.TAP
-                                },
+                                action = ActionType.fromWire(dto.action),
                                 description = dto.description,
                                 locator = com.testory.assistant.v2.core.model.Locator(
                                     text = dto.selector_value,
@@ -565,24 +531,115 @@ class OkHttpPcSyncClient @Inject constructor(
         }
     }
 
-    override suspend fun fetchPendingRunJob(): PendingRunJob? {
+    override suspend fun solveCaptcha(
+        imageBase64: String,
+        hint: String,
+        instruction: String
+    ): CaptchaSolveResult {
+        if (baseUrl.isEmpty()) {
+            return CaptchaSolveResult(success = false, error = "未连接 PC 端")
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                val payload = buildJsonObject {
+                    put("image_base64", imageBase64)
+                    put("captcha_hint", hint)
+                    put("instruction", instruction)
+                }.toString()
+                val requestBody = payload.toRequestBody(JSON_MEDIA)
+                val request = buildRequest("$baseUrl/api/mobile/sync/captcha/solve") {
+                    post(requestBody)
+                }
+                val response = aiClient.newCall(request).execute()
+                val respBody = response.body?.string() ?: ""
+                if (!response.isSuccessful) {
+                    return@withContext CaptchaSolveResult(
+                        success = false,
+                        error = "服务器错误 (${response.code}): $respBody"
+                    )
+                }
+                val root = json.parseToJsonElement(respBody).jsonObject
+                val success = root["success"]?.jsonPrimitive?.booleanOrNull == true
+                val solution = root["solution"]?.jsonObject
+                val type = solution?.get("type")?.jsonPrimitive?.contentOrNull.orEmpty()
+                val distance = solution?.get("distance")?.jsonPrimitive?.intOrNull ?: 0
+                val angle = solution?.get("angle")?.jsonPrimitive?.intOrNull ?: 0
+                val points = mutableListOf<Pair<Int, Int>>()
+                solution?.get("points")?.jsonArray?.forEach { p ->
+                    val o = p.jsonObject
+                    val x = o["x"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                    val y = o["y"]?.jsonPrimitive?.intOrNull ?: return@forEach
+                    points.add(x to y)
+                }
+                CaptchaSolveResult(
+                    success = success,
+                    solutionType = type,
+                    distance = distance,
+                    angle = angle,
+                    points = points,
+                    raw = root["raw"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    error = if (success) null else (root["error"]?.jsonPrimitive?.contentOrNull
+                        ?: "验证码未识别")
+                )
+            } catch (e: Exception) {
+                CaptchaSolveResult(success = false, error = e.message)
+            }
+        }
+    }
+
+    override suspend fun fetchPendingRunJob(jobKind: String): PendingRunJob? {
         if (baseUrl.isEmpty() || deviceToken.isEmpty()) return null
         return withContext(Dispatchers.IO) {
             try {
-                // 仅拉取 extract_otp，避免误吞 run_steps（跨端 await 用例回放）
-                val request = buildRequest(
-                    "$baseUrl/api/mobile/sync/run/pending?job_kind=extract_otp"
-                ) { get() }
+                val q = if (jobKind.isNotBlank()) "?job_kind=${jobKind.trim()}" else ""
+                val request = buildRequest("$baseUrl/api/mobile/sync/run/pending$q") { get() }
                 val response = client.newCall(request).execute()
                 val body = response.body?.string() ?: return@withContext null
                 if (!response.isSuccessful) return@withContext null
-                val parsed = json.decodeFromString(PendingRunJobResponse.serializer(), body)
-                if (!parsed.success || !parsed.has_job || parsed.job_id.isBlank()) return@withContext null
+                val root = json.parseToJsonElement(body).jsonObject
+                val success = root["success"]?.jsonPrimitive?.booleanOrNull == true
+                val hasJob = root["has_job"]?.jsonPrimitive?.booleanOrNull == true
+                val jobId = root["job_id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (!success || !hasJob || jobId.isBlank()) return@withContext null
+                val kind = root["job_kind"]?.jsonPrimitive?.contentOrNull
+                    ?.ifBlank { jobKind.ifBlank { "run_steps" } }
+                    ?: jobKind.ifBlank { "run_steps" }
+                val caseId = root["case_id"]?.jsonPrimitive?.intOrNull ?: 0
+                val stepsArr = root["steps"]?.jsonArray
+                val steps = mutableListOf<Step>()
+                if (stepsArr != null) {
+                    for (i in 0 until stepsArr.size) {
+                        val el = stepsArr[i]
+                        val obj = el as? JsonObject ?: continue
+                        // extract_otp：保留 hint/pattern
+                        val actionWire = obj["action"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        if (actionWire.equals("extract_otp", ignoreCase = true)) {
+                            steps.add(
+                                Step(
+                                    id = "otp_$i",
+                                    index = i + 1,
+                                    action = ActionType.EXTRACT_TEXT, // 占位；执行仍看 jobKind
+                                    description = obj["description"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                    locator = Locator(
+                                        text = obj["selector_value"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                    ),
+                                    inputText = obj["input_value"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                    extras = StepExtras(
+                                        saveAs = obj["store_as"]?.jsonPrimitive?.contentOrNull
+                                            ?.ifBlank { "sms_otp" } ?: "sms_otp"
+                                    )
+                                )
+                            )
+                        } else {
+                            steps.add(StepIrCodec.parseFromSyncJson(obj, "job_$jobId", i))
+                        }
+                    }
+                }
                 PendingRunJob(
-                    jobId = parsed.job_id,
-                    caseId = parsed.case_id,
-                    jobKind = parsed.job_kind.ifBlank { "extract_otp" },
-                    steps = parsed.steps
+                    jobId = jobId,
+                    caseId = caseId,
+                    jobKind = kind,
+                    steps = steps
                 )
             } catch (_: Exception) {
                 null
@@ -710,7 +767,14 @@ data class PushStepDto(
     @kotlinx.serialization.SerialName("input_value") val inputValue: String = "",
     @kotlinx.serialization.SerialName("description") val description: String = "",
     @kotlinx.serialization.SerialName("automation_layer") val automationLayer: String = "android",
-    @kotlinx.serialization.SerialName("mobile_spec") val mobileSpec: MobileSpecDto? = null
+    @kotlinx.serialization.SerialName("mobile_spec") val mobileSpec: MobileSpecDto? = null,
+    @kotlinx.serialization.SerialName("assert_text") val assertText: String = "",
+    @kotlinx.serialization.SerialName("wait_duration_ms") val waitDurationMs: Long = 0,
+    @kotlinx.serialization.SerialName("pre_wait_ms") val preWaitMs: Long = 0,
+    @kotlinx.serialization.SerialName("max_retries") val maxRetries: Int = 0,
+    @kotlinx.serialization.SerialName("optional") val optional: Boolean = false,
+    @kotlinx.serialization.SerialName("assert_type") val assertType: String = "",
+    @kotlinx.serialization.SerialName("save_as") val saveAs: String = ""
 )
 
 @kotlinx.serialization.Serializable
@@ -725,5 +789,20 @@ data class MobileSpecDto(
     @kotlinx.serialization.SerialName("location_source") val locationSource: String? = null,
     @kotlinx.serialization.SerialName("is_webview") val isWebView: Boolean = false,
     @kotlinx.serialization.SerialName("swipe_from") val swipeFrom: List<Int>? = null,
-    @kotlinx.serialization.SerialName("swipe_to") val swipeTo: List<Int>? = null
+    @kotlinx.serialization.SerialName("swipe_to") val swipeTo: List<Int>? = null,
+    @kotlinx.serialization.SerialName("swipe_direction") val swipeDirection: String? = null,
+    @kotlinx.serialization.SerialName("assert_text") val assertText: String? = null,
+    @kotlinx.serialization.SerialName("wait_duration_ms") val waitDurationMs: Long? = null,
+    @kotlinx.serialization.SerialName("pre_wait_ms") val preWaitMs: Long? = null,
+    @kotlinx.serialization.SerialName("max_retries") val maxRetries: Int? = null,
+    @kotlinx.serialization.SerialName("optional") val optional: Boolean? = null,
+    @kotlinx.serialization.SerialName("assert_type") val assertType: String? = null,
+    @kotlinx.serialization.SerialName("save_as") val saveAs: String? = null,
+    @kotlinx.serialization.SerialName("key_code") val keyCode: String? = null,
+    @kotlinx.serialization.SerialName("repeat_max") val repeatMax: Int? = null,
+    @kotlinx.serialization.SerialName("until_assert_text") val untilAssertText: String? = null,
+    @kotlinx.serialization.SerialName("captcha_hint") val captchaHint: String? = null,
+    @kotlinx.serialization.SerialName("captcha_fallback") val captchaFallback: String? = null,
+    @kotlinx.serialization.SerialName("roi") val roi: List<Int>? = null,
+    @kotlinx.serialization.SerialName("scroll_amount") val scrollAmount: Int? = null
 )

@@ -85,7 +85,9 @@ class EventPipeline @Inject constructor(
             rawEventFlow
                 .combine(sessionState) { event, state -> Pair(event, state) }
                 .collect { (event, state) ->
-                    if (state.isRecording && !state.isPaused) {
+                    if (PickModeController.isActive()) {
+                        tryHandlePick(event)
+                    } else if (state.isRecording && !state.isPaused) {
                         processEvent(event)
                     }
                 }
@@ -136,6 +138,24 @@ class EventPipeline @Inject constructor(
     fun emitDirect(step: Step) {
         pendingSteps.add(step)
         _stepFlow.tryEmit(step)
+    }
+
+    private fun tryHandlePick(event: RecordedEvent) {
+        if (event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED &&
+            event.eventType != AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
+        ) return
+        val node = event.sourceNode
+        val locator = buildLocator(node)
+        val bounds = event.sourceBounds ?: node?.bounds
+        if (locator.isEmpty && (bounds == null || !bounds.isValid)) return
+        val label = when {
+            locator.text.isNotBlank() -> locator.text
+            locator.contentDesc.isNotBlank() -> locator.contentDesc
+            locator.resourceId.isNotBlank() -> locator.resourceId
+            bounds != null && bounds.isValid -> "点选 (${bounds.centerX},${bounds.centerY})"
+            else -> "点选控件"
+        }
+        PickModeController.submit(PickedElement(locator = locator, label = label))
     }
 
     // ── Pipeline stages ──

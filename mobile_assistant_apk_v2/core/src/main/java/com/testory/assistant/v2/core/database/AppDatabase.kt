@@ -17,7 +17,7 @@ import com.testory.assistant.v2.core.database.entity.StepEntity
         StepEntity::class,
         RunHistoryEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -32,6 +32,13 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE test_cases ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE test_cases ADD COLUMN project_name TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE steps ADD COLUMN extras_json TEXT NOT NULL DEFAULT '{}'")
+                db.execSQL("ALTER TABLE test_cases ADD COLUMN data_rows_json TEXT NOT NULL DEFAULT '[]'")
             }
         }
     }

@@ -589,6 +589,12 @@ def _execute_ui_stage(
                         payload.get("success") is True
                         or str(payload.get("status") or "").lower() in ("success", "ok")
                     ):
+                        # 手机上报顶层 variables（EXTRACT/OTP）；results 行内 store_as 为辅
+                        vars_payload = payload.get("variables")
+                        if isinstance(vars_payload, dict):
+                            for vk, vv in vars_payload.items():
+                                if vk and vv is not None and str(vv).strip() != "":
+                                    extracted[str(vk)] = vv
                         extracted.update(merge_step_extractions(step_results, steps) if step_results else {})
                         if rules:
                             missing = validate_required_extractions(rules, extracted)

@@ -154,3 +154,56 @@ def test_demo_otp_plan_json_loads():
     assert stages[1]["skill"] == "extract_otp"
     assert stages[1]["layer"] == "mobile"
     assert "{{sms_otp}}" in stages[2]["steps"][0]["input_value"]
+
+
+def test_normalize_device_step_expands_mobile_spec_string():
+    from mobile_sync_store import normalize_device_step
+
+    step = {
+        "action": "assert",
+        "mobile_spec": '{"assert_text":"登录成功","save_as":"login_ok","max_retries":2}',
+    }
+    out = normalize_device_step(step)
+    assert isinstance(out["mobile_spec"], dict)
+    assert out["assert_text"] == "登录成功"
+    assert out["save_as"] == "login_ok"
+    assert out["max_retries"] == 2
+
+
+def test_busy_event_requeues_pending():
+    import mobile_sync_store as mss
+    from mobile_sync_store import append_run_events, enqueue_run_job, get_run_job, pop_pending_run_for_device
+
+    with mss._LOCK:
+        mss._RUN_JOBS.clear()
+        mss._RUN_EVENTS.clear()
+
+    jid = enqueue_run_job(
+        case_id=1,
+        steps=[{"action": "tap"}],
+        user_id=1,
+        device_id="dev-busy",
+        job_kind="run_steps",
+    )
+    popped = pop_pending_run_for_device("dev-busy", job_kind="run_steps")
+    assert popped and popped["job_id"] == jid
+    assert get_run_job(jid)["status"] == "running"
+    ok = append_run_events(
+        jid,
+        {"status": "busy", "error_code": "MOBILE_BUSY", "error": "busy"},
+    )
+    assert ok is True
+    assert get_run_job(jid)["status"] == "pending"
+    again = pop_pending_run_for_device("dev-busy", job_kind="run_steps")
+    assert again and again["job_id"] == jid
+
+
+def test_resolve_cross_end_vars_substitutes_sms_otp():
+    from ai_chat_tool_loop import _resolve_cross_end_vars
+
+    out = _resolve_cross_end_vars(
+        {"text": "验证码 {{sms_otp}}", "nested": {"v": "{{sms_otp}}"}},
+        {"sms_otp": "123456"},
+    )
+    assert out["text"] == "验证码 123456"
+    assert out["nested"]["v"] == "123456"

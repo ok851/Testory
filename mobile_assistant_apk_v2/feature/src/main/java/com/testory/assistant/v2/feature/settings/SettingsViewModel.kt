@@ -142,7 +142,10 @@ class SettingsViewModel @Inject constructor(
                     connectionError = errMsg
                 )
             } else {
-                _uiState.value = _uiState.value.copy(connectionError = null)
+                _uiState.value = _uiState.value.copy(
+                    connectionStatus = ConnectionStatus.CONNECTED,
+                    connectionError = null
+                )
             }
         }
     }

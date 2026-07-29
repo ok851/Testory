@@ -41,6 +41,9 @@ dependencies {
     // OkHttp (for HTTP server backward compatibility)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // QR decode (SCAN_QR)
+    implementation("com.google.zxing:core:3.5.3")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.mockk:mockk:1.13.10")

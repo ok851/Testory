@@ -23,6 +23,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.testory.assistant.v2.service.accessibility.AccessibilityServiceHolder
+import com.testory.assistant.v2.service.accessibility.ReplaySessionController
 
 /**
  * 录制悬浮窗控制服务 — 在录制/回放时显示系统级悬浮控制条。
@@ -81,16 +82,26 @@ class FloatingControlService : Service() {
 
         when (intent?.action) {
             ACTION_PAUSE -> {
-                // 直接操作无障碍服务状态，确保即使 Activity 在后台也能暂停
-                AccessibilityServiceHolder.instance?.pauseRecording()
-                sendBroadcast(Intent(BROADCAST_PAUSE))
-                updatePauseButton(false)
-                updateNotificationTitle("录制已暂停")
+                if (mode == "replaying") {
+                    ReplaySessionController.requestPause()
+                    sendBroadcast(Intent(BROADCAST_PAUSE))
+                    updatePauseButton(false)
+                    updateNotificationTitle("回放已暂停")
+                } else {
+                    AccessibilityServiceHolder.instance?.pauseRecording()
+                    sendBroadcast(Intent(BROADCAST_PAUSE))
+                    updatePauseButton(false)
+                    updateNotificationTitle("录制已暂停")
+                }
             }
             ACTION_STOP -> {
-                // 直接停止录制，确保后台不会继续录制
-                AccessibilityServiceHolder.instance?.stopRecording()
-                sendBroadcast(Intent(BROADCAST_STOP))
+                if (mode == "replaying") {
+                    ReplaySessionController.requestResume() // 解除挂起
+                    sendBroadcast(Intent(BROADCAST_STOP))
+                } else {
+                    AccessibilityServiceHolder.instance?.stopRecording()
+                    sendBroadcast(Intent(BROADCAST_STOP))
+                }
                 stopRecorderForegroundService()
                 removeFloatingView()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -98,10 +109,17 @@ class FloatingControlService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_RESUME -> {
-                AccessibilityServiceHolder.instance?.resumeRecording()
-                sendBroadcast(Intent(BROADCAST_RESUME))
-                updatePauseButton(true)
-                updateNotificationTitle("录制中")
+                if (mode == "replaying") {
+                    ReplaySessionController.requestResume()
+                    sendBroadcast(Intent(BROADCAST_RESUME))
+                    updatePauseButton(true)
+                    updateNotificationTitle("回放中")
+                } else {
+                    AccessibilityServiceHolder.instance?.resumeRecording()
+                    sendBroadcast(Intent(BROADCAST_RESUME))
+                    updatePauseButton(true)
+                    updateNotificationTitle("录制中")
+                }
             }
             ACTION_UPDATE_STEP_COUNT -> {
                 updateStepCount(stepCount)
@@ -253,6 +271,7 @@ class FloatingControlService : Service() {
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             layoutType,
+            // NOT_TOUCHABLE：手势必须穿透进度条，否则回放点击全被浮层吃掉
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                     or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN

@@ -79,7 +79,11 @@ data class StepResult(
     /** 实际使用的定位策略 */
     val actualStrategy: String = "",
     /** 实际点击的坐标 */
-    val actualCoordinate: ScreenCoordinate? = null
+    val actualCoordinate: ScreenCoordinate? = null,
+    /** 本步提取/写入的变量 */
+    val variables: Map<String, String> = emptyMap(),
+    /** 证据路径或 base64 摘要（截图等） */
+    val evidence: String = ""
 )
 
 /**

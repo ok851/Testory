@@ -34,6 +34,13 @@ fun SettingsScreen(
     var showClearDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
 
+    // 连接成功后自动关闭填写弹窗
+    LaunchedEffect(uiState.connectionStatus) {
+        if (uiState.connectionStatus == ConnectionStatus.CONNECTED && showPcDialog) {
+            showPcDialog = false
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -246,20 +253,9 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "版本 ${uiState.appVersion}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "移动端智能测试助手，支持录制回放、AI 生成用例、PC 端协同管理。\n\n" +
-                                   "📱 无障碍服务录制回放\n" +
-                                   "🤖 AI 对话创建测试用例\n" +
-                                   "🔗 PC 端协同管理与执行\n" +
-                                   "📊 测试报告自动生成",
+                            text = "录制 / 回放 / PC 配对同步。版本 ${uiState.appVersion}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            lineHeight = MaterialTheme.typography.bodySmall.lineHeight
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },

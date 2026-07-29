@@ -153,6 +153,46 @@ def list_accessible_cases(db: Any, user_id: int) -> List[Dict[str, Any]]:
     return out
 
 
+def normalize_device_step(step: Dict[str, Any]) -> Dict[str, Any]:
+    """DB/API 步骤 → 手机可执行 IR：mobile_spec 字符串展开，IR 字段上提到顶层。"""
+    out = dict(step)
+    ms = out.get("mobile_spec")
+    if isinstance(ms, str) and ms.strip():
+        try:
+            ms = json.loads(ms)
+        except Exception:
+            ms = {}
+    if not isinstance(ms, dict):
+        ms = {}
+    for k in (
+        "assert_text",
+        "wait_duration_ms",
+        "pre_wait_ms",
+        "max_retries",
+        "optional",
+        "assert_type",
+        "save_as",
+        "key_code",
+        "repeat_max",
+        "until_assert_text",
+        "captcha_hint",
+        "captcha_fallback",
+        "roi",
+        "scroll_amount",
+        "swipe_direction",
+    ):
+        if ms.get(k) is not None and out.get(k) is None:
+            out[k] = ms.get(k)
+    out["mobile_spec"] = ms
+    return out
+
+
+def normalize_device_steps(steps: Any) -> List[Dict[str, Any]]:
+    if not isinstance(steps, list):
+        return []
+    return [normalize_device_step(s) for s in steps if isinstance(s, dict)]
+
+
 def case_bundle(db: Any, case_id: int, user_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     case_row = db.get_test_case_v2(case_id)
     if not case_row:
@@ -161,7 +201,7 @@ def case_bundle(db: Any, case_id: int, user_id: int) -> Tuple[Optional[Dict[str,
     if pid and not db.check_project_access(user_id, int(pid), "viewer"):
         return None, "无权限"
     steps = db.get_case_steps(case_id, page=1, page_size=500)
-    return {"case": case_row, "steps": steps}, None
+    return {"case": case_row, "steps": normalize_device_steps(steps)}, None
 
 
 def enqueue_run_job(
@@ -179,7 +219,7 @@ def enqueue_run_job(
         _RUN_JOBS[job_id] = {
             "job_id": job_id,
             "case_id": case_id,
-            "steps": steps,
+            "steps": normalize_device_steps(steps),
             "user_id": user_id,
             "device_id": device_id,
             "source": source,
@@ -239,6 +279,13 @@ def append_run_events(job_id: str, payload: Dict[str, Any]) -> bool:
             return False
         _RUN_EVENTS.setdefault(job_id, []).append(payload)
         status = (payload.get("status") or "").strip().lower()
+        err_code = str(payload.get("error_code") or "").strip().upper()
+        # 本机忙：退回 pending，勿终态失败（Agent await 可继续等到下次 poll）
+        if status == "busy" or err_code == "MOBILE_BUSY":
+            if str(job.get("status") or "") == "running":
+                job["status"] = "pending"
+                job.pop("finished_at", None)
+            return True
         if status in ("success", "error", "failed", "cancelled", "ok"):
             job["status"] = "success" if status in ("success", "ok") else (
                 "cancelled" if status == "cancelled" else "error"
@@ -414,6 +461,37 @@ def list_accessible_projects(db: Any, user_id: int) -> List[Dict[str, Any]]:
     return out
 
 
+def _merge_step_ir_into_mobile_spec(raw: Dict[str, Any]) -> Dict[str, Any]:
+    ms = raw.get("mobile_spec")
+    if isinstance(ms, str) and ms.strip():
+        try:
+            ms = json.loads(ms)
+        except Exception:
+            ms = {}
+    if not isinstance(ms, dict):
+        ms = {}
+    for k in (
+        "assert_text",
+        "wait_duration_ms",
+        "pre_wait_ms",
+        "max_retries",
+        "optional",
+        "assert_type",
+        "save_as",
+        "key_code",
+        "repeat_max",
+        "until_assert_text",
+        "captcha_hint",
+        "captcha_fallback",
+        "roi",
+        "scroll_amount",
+        "swipe_direction",
+    ):
+        if raw.get(k) is not None and k not in ms:
+            ms[k] = raw.get(k)
+    return ms
+
+
 def push_case_to_pc(
     db: Any,
     user_id: int,
@@ -453,6 +531,7 @@ def push_case_to_pc(
     for raw in steps:
         if not isinstance(raw, dict):
             continue
+        ms = _merge_step_ir_into_mobile_spec(raw)
         db.create_test_step(
             case_id=case_id,
             step_order=int(raw.get("step_order") or next_order),
@@ -462,9 +541,7 @@ def push_case_to_pc(
             input_value=(raw.get("input_value") or "").strip(),
             description=(raw.get("description") or "").strip(),
             automation_layer="android",
-            mobile_spec=json.dumps(raw.get("mobile_spec") or {}, ensure_ascii=False)
-            if isinstance(raw.get("mobile_spec"), dict)
-            else (raw.get("mobile_spec") or ""),
+            mobile_spec=json.dumps(ms, ensure_ascii=False),
         )
         next_order += 1
         created += 1
@@ -609,6 +686,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         for raw in steps_in:
             if not isinstance(raw, dict):
                 continue
+            ms = _merge_step_ir_into_mobile_spec(raw)
             db.create_test_step(
                 case_id=case_id,
                 step_order=int(raw.get("step_order") or next_order),
@@ -618,9 +696,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
                 input_value=(raw.get("input_value") or "").strip(),
                 description=(raw.get("description") or "").strip(),
                 automation_layer="android",
-                mobile_spec=json.dumps(raw.get("mobile_spec") or {}, ensure_ascii=False)
-                if isinstance(raw.get("mobile_spec"), dict)
-                else (raw.get("mobile_spec") or ""),
+                mobile_spec=json.dumps(ms, ensure_ascii=False),
             )
             next_order += 1
             created += 1
@@ -687,7 +763,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
             "has_job": True,
             "job_id": job["job_id"],
             "case_id": job["case_id"],
-            "steps": job.get("steps") or [],
+            "steps": normalize_device_steps(job.get("steps") or []),
             "job_kind": job.get("job_kind") or "run_steps",
             "job_meta": job.get("job_meta") or {},
         })
@@ -783,7 +859,10 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         body = request.get_json(silent=True) or {}
         if not append_run_events(job_id, body):
             return jsonify({"success": False, "error": "job 不存在"}), 404
-        _persist_run_history(job_id, body, int(meta["user_id"]))
+        st = str(body.get("status") or "").strip().lower()
+        err_code = str(body.get("error_code") or "").strip().upper()
+        if st != "busy" and err_code != "MOBILE_BUSY":
+            _persist_run_history(job_id, body, int(meta["user_id"]))
         return jsonify({"success": True})
 
     @app.route("/api/mobile/sync/ai/status", methods=["GET"])
@@ -911,6 +990,56 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
                 "error": f"AI生成失败: {str(e)}",
                 "ai_status": status,
             }), 500
+
+    @app.route("/api/mobile/sync/captcha/solve", methods=["POST"])
+    @api_error_handler
+    def api_mobile_sync_captcha_solve():
+        """手机截验证码 ROI → PC VLM → 返回结构化解法供本机手势。"""
+        meta, err = resolve_device_token()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        b64 = (body.get("image_base64") or "").strip()
+        if not b64:
+            return jsonify({"success": False, "error": "缺少 image_base64"}), 400
+        import base64
+
+        try:
+            if "," in b64 and b64.startswith("data:"):
+                b64 = b64.split(",", 1)[1]
+            image_bytes = base64.b64decode(b64)
+        except Exception:
+            return jsonify({"success": False, "error": "image_base64 无效"}), 400
+        hint = (body.get("captcha_hint") or body.get("hint") or "").strip()
+        instruction = (body.get("instruction") or "").strip()
+        try:
+            from ai_vision_local import captcha_vision_solve
+
+            raw = captcha_vision_solve(
+                image_bytes,
+                instruction=instruction,
+                captcha_hint=hint,
+            )
+        except Exception as e:
+            return jsonify({"success": False, "error": f"VLM 调用失败: {e}"}), 500
+        solution = {}
+        if raw:
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.strip("`")
+                if text.lower().startswith("json"):
+                    text = text[4:].strip()
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    solution = parsed
+            except Exception:
+                solution = {"type": "unknown", "raw": text[:500]}
+        return jsonify({
+            "success": bool(solution) and solution.get("type") not in (None, "unknown"),
+            "solution": solution,
+            "raw": (raw or "")[:2000],
+        })
 
     # Vision probe route removed — mobile mirror/vision feature retired
 

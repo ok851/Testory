@@ -1,9 +1,11 @@
 package com.testory.assistant.v2.service.accessibility
 
 import android.graphics.Rect
+import android.os.Build
 import android.view.accessibility.AccessibilityNodeInfo
 import com.testory.assistant.v2.core.model.NodeInfo
 import com.testory.assistant.v2.core.model.ScreenRect
+import java.util.ArrayDeque
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,10 +28,20 @@ class NodeAnalyzer @Inject constructor() {
         val rect = Rect()
         node.getBoundsInScreen(rect)
 
+        val rawText = node.text?.toString()?.trim().orEmpty()
+        // EditText 未输入时，可见文案往往在 hint 上（如「输入手机号码」）
+        val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            node.hintText?.toString()?.trim().orEmpty()
+        } else {
+            ""
+        }
+        val desc = node.contentDescription?.toString()?.trim().orEmpty()
+        val effectiveText = rawText.ifBlank { hint }.ifBlank { desc }
+
         return NodeInfo(
             className = node.className?.toString() ?: "",
-            text = node.text?.toString() ?: "",
-            contentDescription = node.contentDescription?.toString() ?: "",
+            text = effectiveText,
+            contentDescription = desc.ifBlank { hint },
             resourceId = node.viewIdResourceName ?: "",
             packageName = node.packageName?.toString() ?: "",
             bounds = ScreenRect(rect.left, rect.top, rect.right, rect.bottom),
@@ -56,8 +68,9 @@ class NodeAnalyzer @Inject constructor() {
         fun identityBoost(node: AccessibilityNodeInfo): Int {
             var score = 0
             if (node.isClickable || node.isEditable || node.isCheckable) score += 3
-            if (!node.text.isNullOrBlank()) score += 2
-            if (!node.contentDescription.isNullOrBlank()) score += 2
+            // 有可读标签的节点大幅加分，避免桌面图标只录到无字 ImageView
+            if (!node.text.isNullOrBlank()) score += 8
+            if (!node.contentDescription.isNullOrBlank()) score += 6
             if (!node.viewIdResourceName.isNullOrBlank()) score += 3
             return score
         }
@@ -67,14 +80,13 @@ class NodeAnalyzer @Inject constructor() {
             if (!rect.contains(x, y)) return
 
             val area = (rect.right - rect.left) * (rect.bottom - rect.top)
-            if (area > 0) {
+            if (area > 0 && area < 500_000) {
                 val boost = identityBoost(node)
-                val betterArea = area < bestArea
-                val sameAreaRicher = area == bestArea && boost > 0 &&
-                    (bestSnapshot == null || boost > identityBoostScore(bestSnapshot))
-                // 叶子或有身份信息的节点才更新 best，避免停在巨大 WebView/DecorView
+                val score = boost * 80_000 - area
+                val bestScore = (bestSnapshot?.let { identityBoostScore(it) } ?: 0) * 80_000 -
+                    if (bestArea == Int.MAX_VALUE) 0 else bestArea
                 val meaningful = boost > 0 || node.childCount == 0
-                if (meaningful && (betterArea || sameAreaRicher)) {
+                if (meaningful && (bestSnapshot == null || score > bestScore)) {
                     bestArea = area
                     bestSnapshot = extractNodeInfo(node)
                 }
@@ -95,15 +107,95 @@ class NodeAnalyzer @Inject constructor() {
                 try { n.recycle() } catch (_: Exception) {}
             }
         }
-        return bestSnapshot
+        // 桌面图标常点到无文字的 ImageView；补全同组 Text 标签（应用名）
+        return bestSnapshot?.let { enrichWithNearbyLabel(root, it) }
+    }
+
+    /**
+     * 为无文本的节点补全附近/同组标签。
+     * 桌面分页图标：点击命中图标 ImageView，应用名在兄弟 TextView 上。
+     */
+    fun enrichWithNearbyLabel(root: AccessibilityNodeInfo, info: NodeInfo): NodeInfo {
+        if (info.text.isNotBlank() || info.contentDescription.isNotBlank()) return info
+        val cx = info.bounds.centerX
+        val cy = info.bounds.centerY
+        if (cx <= 0 && cy <= 0) return info
+
+        var bestLabel = ""
+        var bestDist = Int.MAX_VALUE
+        val iconW = (info.bounds.right - info.bounds.left).coerceAtLeast(48)
+        val iconH = (info.bounds.bottom - info.bounds.top).coerceAtLeast(48)
+        val rect = Rect()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(AccessibilityNodeInfo.obtain(root))
+        try {
+            while (stack.isNotEmpty()) {
+                val node = stack.removeFirst()
+                try {
+                    node.getBoundsInScreen(rect)
+                    val label = readableLabel(node)
+                    if (label.isNotBlank() && label.length in 1..48 && !looksLikeNoiseLabel(label)) {
+                        val lx = rect.centerX()
+                        val ly = rect.centerY()
+                        val dx = kotlin.math.abs(lx - cx)
+                        val dy = ly - cy
+                        // 放宽：桌面图标标题可能在图标正下方较远，或同 cell 内
+                        val nearHoriz = dx <= iconW + 80
+                        val nearVert = dy in -iconH..(iconH + 280)
+                        val overlaps = rect.contains(cx, cy)
+                        val sameColumn = dx <= iconW / 2 + 24 && dy in 0..(iconH + 320)
+                        if (overlaps || (nearHoriz && nearVert) || sameColumn) {
+                            val dist = dx + kotlin.math.abs(dy)
+                            // 优先正下方短标签（应用名）
+                            val prefer = if (sameColumn && label.length <= 16) dist - 50 else dist
+                            if (prefer < bestDist) {
+                                bestDist = prefer
+                                bestLabel = label
+                            }
+                        }
+                    }
+                    for (i in 0 until node.childCount) {
+                        node.getChild(i)?.let { stack.add(it) }
+                    }
+                } finally {
+                    try { node.recycle() } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) { }
+
+        if (bestLabel.isBlank()) return info
+        return info.copy(
+            text = bestLabel,
+            contentDescription = info.contentDescription.ifBlank { bestLabel }
+        )
+    }
+
+    private fun readableLabel(node: AccessibilityNodeInfo): String {
+        val text = node.text?.toString()?.trim().orEmpty()
+        if (text.isNotBlank()) return text
+        val desc = node.contentDescription?.toString()?.trim().orEmpty()
+        if (desc.isNotBlank()) return desc
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return node.hintText?.toString()?.trim().orEmpty()
+        }
+        return ""
+    }
+
+    private fun looksLikeNoiseLabel(label: String): Boolean {
+        val t = label.trim()
+        if (t.isEmpty()) return true
+        // 过滤纯数字、分页点、系统噪声
+        if (t.all { it.isDigit() || it == '.' || it == '%' }) return true
+        if (t in setOf(".", "…", "搜索", "Search", "文件夹")) return true
+        return false
     }
 
     private fun identityBoostScore(info: NodeInfo?): Int {
         if (info == null) return 0
         var score = 0
         if (info.isClickable || info.isEditable) score += 3
-        if (info.text.isNotBlank()) score += 2
-        if (info.contentDescription.isNotBlank()) score += 2
+        if (info.text.isNotBlank()) score += 8
+        if (info.contentDescription.isNotBlank()) score += 6
         if (info.resourceId.isNotBlank()) score += 3
         return score
     }

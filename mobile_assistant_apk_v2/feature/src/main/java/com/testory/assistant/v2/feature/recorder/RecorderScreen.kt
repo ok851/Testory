@@ -274,24 +274,25 @@ private fun StepCard(index: Int, step: Step) {
 
 @Composable
 private fun getActionIcon(action: ActionType) = when (action) {
-    ActionType.TAP -> Icons.Filled.TouchApp
-    ActionType.LONG_PRESS -> Icons.Filled.TouchApp
+    ActionType.TAP, ActionType.LONG_PRESS -> Icons.Filled.TouchApp
     ActionType.INPUT -> Icons.Filled.Keyboard
-    ActionType.SWIPE -> Icons.Filled.Swipe
-    ActionType.WAIT -> Icons.Filled.Timer
+    ActionType.SWIPE, ActionType.SCROLL, ActionType.SCROLL_UNTIL -> Icons.Filled.Swipe
+    ActionType.WAIT, ActionType.WAIT_UNTIL, ActionType.REPEAT, ActionType.WHILE -> Icons.Filled.Timer
     ActionType.ASSERT -> Icons.Filled.CheckCircle
     ActionType.BACK -> Icons.Filled.ArrowBack
     ActionType.HOME -> Icons.Filled.Home
     ActionType.OPEN_APP -> Icons.Filled.OpenInNew
     ActionType.SCREENSHOT -> Icons.Filled.CameraAlt
+    ActionType.EXTRACT_TEXT, ActionType.SCAN_QR -> Icons.Filled.TextFields
+    ActionType.SOLVE_CAPTCHA, ActionType.HUMAN_GATE -> Icons.Filled.Security
+    ActionType.CLOSE_APP, ActionType.PRESS_KEY -> Icons.Filled.Settings
 }
 
 @Composable
 private fun getActionColor(action: ActionType) = when (action) {
-    ActionType.TAP -> MaterialTheme.colorScheme.primary
-    ActionType.LONG_PRESS -> MaterialTheme.colorScheme.primary
+    ActionType.TAP, ActionType.LONG_PRESS -> MaterialTheme.colorScheme.primary
     ActionType.INPUT -> MaterialTheme.colorScheme.tertiary
-    ActionType.SWIPE -> MaterialTheme.colorScheme.secondary
+    ActionType.SWIPE, ActionType.SCROLL, ActionType.SCROLL_UNTIL -> MaterialTheme.colorScheme.secondary
     ActionType.ASSERT -> MaterialTheme.colorScheme.error
     else -> MaterialTheme.colorScheme.outline
 }

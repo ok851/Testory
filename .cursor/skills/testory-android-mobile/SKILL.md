@@ -61,6 +61,8 @@ python -m mobile_automation_gateway    # 8777 安装/巡检（可选）
 mobile / android stage → 入队 sync run job → **等待**手机本机执行与 `stage_result` 上报 → 继续后续阶段。  
 正式路径**不是** Gateway 逐步 `tap`。
 
+APK `PcRunJobPoller`（无障碍服务启动后）：轮询 `extract_otp` → `run_steps`，本机执行后上报 events。
+
 ### Agent 口径（大脑 / 双手）
 
 - **Agent（大脑）**在 PC：选工具、读写 `sms_otp` 等变量  
@@ -68,6 +70,7 @@ mobile / android stage → 入队 sync run job → **等待**手机本机执行�
 - **桌面 UIA（双手）**：`desktop_*` / `windows_*`  
 - 一会话可交替操作 PC 与手机；禁止把 adb 逐步点当作正式引擎  
 
+统一步骤 IR：[`docs/mobile_step_ir.md`](../../../docs/mobile_step_ir.md)。  
 详见 [`docs/cross_end_agent_tools.md`](../../../docs/cross_end_agent_tools.md)。
 
 ## 排错

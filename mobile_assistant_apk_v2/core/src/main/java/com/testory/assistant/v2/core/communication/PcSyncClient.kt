@@ -64,8 +64,11 @@ interface PcSyncClient {
     /** 查询 PC 端 AI 模型就绪态（无密钥） */
     suspend fun fetchAiStatus(): AiStatusResult
 
-    /** 拉取 PC 下发的本机执行 job（跨端 await / extract_otp） */
-    suspend fun fetchPendingRunJob(): PendingRunJob?
+    /** 手机截图验证码 → PC VLM 解法 */
+    suspend fun solveCaptcha(imageBase64: String, hint: String = "", instruction: String = ""): CaptchaSolveResult
+
+    /** 拉取 PC 下发的本机执行 job；jobKind 为空则取任意 pending */
+    suspend fun fetchPendingRunJob(jobKind: String = ""): PendingRunJob?
 
     /** 上报 job 完成事件（含 variables.sms_otp） */
     suspend fun reportJobResult(jobId: String, payloadJson: String): SyncResult
@@ -210,6 +213,16 @@ data class AiStatusResult(
     val error: String? = null
 )
 
+data class CaptchaSolveResult(
+    val success: Boolean,
+    val solutionType: String = "",
+    val distance: Int = 0,
+    val angle: Int = 0,
+    val points: List<Pair<Int, Int>> = emptyList(),
+    val raw: String = "",
+    val error: String? = null
+)
+
 @Serializable
 data class PendingRunJobResponse(
     val success: Boolean = false,
@@ -224,5 +237,6 @@ data class PendingRunJob(
     val jobId: String,
     val caseId: Int = 0,
     val jobKind: String = "run_steps",
-    val steps: List<AiStepDto> = emptyList()
+    /** 已映射为 Unified Step IR；extract_otp 也可从 locator/inputText 读 hint/pattern */
+    val steps: List<com.testory.assistant.v2.core.model.Step> = emptyList()
 )

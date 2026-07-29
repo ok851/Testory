@@ -105,12 +105,11 @@ class CaseRepository @Inject constructor(
             step.copy(caseId = caseId, index = index + 1).toEntity()
         }
         stepDao.replaceAll(caseId, entities)
-        caseDao.upsert(
-            caseDao.getById(caseId)?.copy(
-                stepCount = steps.size,
-                updatedAt = System.currentTimeMillis(),
-                syncStatus = SyncStatus.MODIFIED.name
-            ) ?: return
+        caseDao.updateStepCount(
+            caseId = caseId,
+            stepCount = steps.size,
+            updatedAt = System.currentTimeMillis(),
+            syncStatus = SyncStatus.MODIFIED.name
         )
     }
 
@@ -136,15 +135,14 @@ class CaseRepository @Inject constructor(
             )
         )
 
-        val entity = caseDao.getById(caseId)
-        if (entity != null) {
-            caseDao.upsert(
-                entity.copy(
-                    lastRunSuccess = run.success,
-                    updatedAt = System.currentTimeMillis()
-                )
-            )
-        }
+        // 只用 UPDATE，避免 REPLACE 级联删除 steps
+        caseDao.updateLastRun(
+            caseId = caseId,
+            success = run.success,
+            runAt = run.runAt,
+            totalSteps = run.totalSteps,
+            updatedAt = System.currentTimeMillis()
+        )
     }
 
     // ── Sync ──
@@ -240,6 +238,12 @@ class CaseRepository @Inject constructor(
             )
         } catch (_: Exception) { }
     }
+
+    suspend fun solveCaptcha(
+        imageBase64: String,
+        hint: String = "",
+        instruction: String = ""
+    ) = pcSyncClient.solveCaptcha(imageBase64, hint, instruction)
 
     fun searchCases(query: String): Flow<List<TestCase>> =
         caseDao.search(query).map { entities ->

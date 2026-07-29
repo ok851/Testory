@@ -1,0 +1,99 @@
+﻿Starting a Gradle Daemon, 2 incompatible and 1 stopped Daemons could not be reused, use --status for details
+> Task :core:preBuild UP-TO-DATE
+> Task :core:preDebugBuild UP-TO-DATE
+> Task :service:checkKotlinGradlePluginConfigurationErrors
+> Task :feature:checkKotlinGradlePluginConfigurationErrors
+> Task :feature:preBuild UP-TO-DATE
+> Task :service:preBuild UP-TO-DATE
+> Task :service:preDebugBuild UP-TO-DATE
+> Task :feature:preDebugBuild UP-TO-DATE
+> Task :core:generateDebugResValues UP-TO-DATE
+> Task :feature:generateDebugResValues UP-TO-DATE
+> Task :service:generateDebugResValues UP-TO-DATE
+> Task :core:generateDebugResources UP-TO-DATE
+> Task :service:generateDebugResources UP-TO-DATE
+> Task :feature:generateDebugResources UP-TO-DATE
+> Task :feature:packageDebugResources UP-TO-DATE
+> Task :core:packageDebugResources UP-TO-DATE
+> Task :service:packageDebugResources UP-TO-DATE
+> Task :service:parseDebugLocalResources UP-TO-DATE
+> Task :core:parseDebugLocalResources UP-TO-DATE
+> Task :feature:parseDebugLocalResources UP-TO-DATE
+> Task :core:processDebugManifest UP-TO-DATE
+> Task :feature:processDebugManifest UP-TO-DATE
+> Task :service:processDebugManifest UP-TO-DATE
+> Task :feature:generateDebugRFile UP-TO-DATE
+> Task :core:generateDebugRFile UP-TO-DATE
+> Task :service:generateDebugRFile UP-TO-DATE
+> Task :core:checkKotlinGradlePluginConfigurationErrors
+> Task :service:javaPreCompileDebug UP-TO-DATE
+> Task :core:kspDebugKotlin UP-TO-DATE
+> Task :core:compileDebugKotlin UP-TO-DATE
+> Task :core:javaPreCompileDebug UP-TO-DATE
+> Task :core:compileDebugJavaWithJavac UP-TO-DATE
+> Task :core:transformDebugClassesWithAsm UP-TO-DATE
+> Task :core:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :core:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :service:kspDebugKotlin
+
+> Task :service:compileDebugKotlin
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:120:30 Unnecessary safe call on a non-null receiver of type (Mutable)List<CharSequence!>
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:120:50 Elvis operator (?:) always returns the left operand of non-nullable type String
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:142:31 Unnecessary safe call on a non-null receiver of type (Mutable)List<CharSequence!>
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:173:28 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:206:32 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:218:33 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:234:39 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:238:28 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:386:22 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:396:24 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:422:18 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:434:24 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:709:66 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:718:66 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:737:58 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:750:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:753:20 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:805:28 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:848:46 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:853:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:873:50 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:874:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:893:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:915:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1115:24 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1119:21 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1133:28 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1140:59 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1144:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1159:27 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1160:50 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1167:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1273:30 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1275:72 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1281:26 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1284:47 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1289:32 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1291:50 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1296:29 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1298:38 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1343:18 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1350:18 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1366:19 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/AssistantAccessibilityService.kt:1414:23 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/NodeAnalyzer.kt:96:25 'recycle(): Unit' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/NodeAnalyzer.kt:117:41 'obtain(AccessibilityNodeInfo!): AccessibilityNodeInfo!' is deprecated. Deprecated in Java
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/service/src/main/java/com/testory/assistant/v2/service/accessibility/NodeAnalyzer.kt:146:32 'recycle(): Unit' is deprecated. Deprecated in Java
+
+> Task :service:compileDebugJavaWithJavac
+> Task :service:transformDebugClassesWithAsm
+> Task :service:bundleLibCompileToJarDebug
+> Task :feature:kspDebugKotlin
+
+> Task :feature:compileDebugKotlin
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/cases/CaseDetailScreen.kt:50:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/settings/SettingsScreen.kt:50:43 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.ArrowBack
+w: file:///D:/mkst_baixiang/Python_Code/NewUITestPlatform/NewUITestPlatform/mobile_assistant_apk_v2/feature/src/main/java/com/testory/assistant/v2/feature/settings/SettingsScreen.kt:224:54 Parameter 'ok' is never used, could be renamed to _
+
+BUILD SUCCESSFUL in 35s
+33 actionable tasks: 10 executed, 23 up-to-date

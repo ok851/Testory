@@ -67,5 +67,11 @@
             android:exported="false"
             android:foregroundServiceType="specialUse" />
 
+        <!-- 元素捕获悬浮窗 -->
+        <service
+            android:name="com.testory.assistant.v2.service.foreground.ElementCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
     </application>
 </manifest>

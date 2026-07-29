@@ -10,8 +10,8 @@ import com.testory.assistant.v2.core.model.Locator
 import com.testory.assistant.v2.core.model.LocationSource
 import com.testory.assistant.v2.core.model.NodeInfo
 import com.testory.assistant.v2.core.model.ScreenCoordinate
-import com.testory.assistant.v2.core.model.ScreenRect
 import com.testory.assistant.v2.core.model.Step
+import com.testory.assistant.v2.core.model.StepExtras
 
 @Entity(
     tableName = "steps",
@@ -42,15 +42,12 @@ data class StepEntity(
     @ColumnInfo(name = "description")
     val description: String = "",
 
-    // ── 定位器字段 ──
     @ColumnInfo(name = "locator_json")
     val locatorJson: String = "{}",
 
-    // ── 节点信息 ──
     @ColumnInfo(name = "target_node_json")
     val targetNodeJson: String? = null,
 
-    // ── 坐标 ──
     @ColumnInfo(name = "screen_x")
     val screenX: Int = 0,
 
@@ -60,7 +57,6 @@ data class StepEntity(
     @ColumnInfo(name = "location_source")
     val locationSource: String = "UNKNOWN",
 
-    // ── 动作参数 ──
     @ColumnInfo(name = "input_text")
     val inputText: String = "",
 
@@ -73,7 +69,6 @@ data class StepEntity(
     @ColumnInfo(name = "assert_text")
     val assertText: String = "",
 
-    // ── 元数据 ──
     @ColumnInfo(name = "pre_wait_ms")
     val preWaitMs: Long = 500,
 
@@ -81,11 +76,13 @@ data class StepEntity(
     val maxRetries: Int = 3,
 
     @ColumnInfo(name = "optional")
-    val optional: Boolean = false
+    val optional: Boolean = false,
+
+    /** Unified Step IR extras JSON */
+    @ColumnInfo(name = "extras_json")
+    val extrasJson: String = "{}"
 )
 
-// ── Common serializer for Locator (inline JSON) ──
-// Uses kotlinx.serialization internally via a simple helper
 private object LocatorSerializer {
     private val json = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true
@@ -103,13 +100,21 @@ private object LocatorSerializer {
     fun fromNodeJson(jsonStr: String): NodeInfo = try {
         json.decodeFromString(NodeInfo.serializer(), jsonStr)
     } catch (_: Exception) { NodeInfo() }
+
+    fun toExtrasJson(extras: StepExtras): String =
+        json.encodeToString(StepExtras.serializer(), extras)
+
+    fun fromExtrasJson(jsonStr: String): StepExtras = try {
+        if (jsonStr.isBlank()) StepExtras()
+        else json.decodeFromString(StepExtras.serializer(), jsonStr)
+    } catch (_: Exception) { StepExtras() }
 }
 
 fun StepEntity.toDomain(): Step = Step(
     id = id,
     caseId = caseId,
     index = index,
-    action = try { ActionType.valueOf(action) } catch (_: Exception) { ActionType.TAP },
+    action = ActionType.fromWire(action),
     description = description,
     locator = LocatorSerializer.fromJson(locatorJson),
     targetNode = targetNodeJson?.let { LocatorSerializer.fromNodeJson(it) },
@@ -121,6 +126,7 @@ fun StepEntity.toDomain(): Step = Step(
     },
     waitDurationMs = waitDurationMs,
     assertText = assertText,
+    extras = LocatorSerializer.fromExtrasJson(extrasJson),
     preWaitMs = preWaitMs,
     maxRetries = maxRetries,
     optional = optional
@@ -143,5 +149,6 @@ fun Step.toEntity(): StepEntity = StepEntity(
     assertText = assertText,
     preWaitMs = preWaitMs,
     maxRetries = maxRetries,
-    optional = optional
+    optional = optional,
+    extrasJson = LocatorSerializer.toExtrasJson(extras)
 )

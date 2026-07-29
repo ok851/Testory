@@ -9,6 +9,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.Display
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -195,6 +196,12 @@ class AssistantAccessibilityService : AccessibilityService() {
                             return best
                         }
                     }
+                    // source 有 bounds 但无标签时，补全桌面图标旁应用名
+                    if (fromSource != null && fromSource!!.text.isBlank()
+                        && fromSource!!.contentDescription.isBlank()
+                    ) {
+                        return nodeAnalyzer.enrichWithNearbyLabel(root, fromSource!!)
+                    }
                     // source 缺失时，尝试用窗口中心附近不做盲点；保留 fromSource
                 } finally {
                     try { root.recycle() } catch (_: Exception) {}
@@ -202,7 +209,18 @@ class AssistantAccessibilityService : AccessibilityService() {
             }
         }
 
-        if (fromSource != null) return fromSource
+        if (fromSource != null) {
+            // 再试一次补全标签（hit-test 未跑或未改善时）
+            val root2 = rootInActiveWindow
+            if (root2 != null && fromSource!!.text.isBlank() && fromSource!!.contentDescription.isBlank()) {
+                try {
+                    return nodeAnalyzer.enrichWithNearbyLabel(root2, fromSource!!)
+                } finally {
+                    try { root2.recycle() } catch (_: Exception) {}
+                }
+            }
+            return fromSource
+        }
 
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
             event.eventType == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED ||
@@ -319,7 +337,27 @@ class AssistantAccessibilityService : AccessibilityService() {
         }
 
         return try {
-            val targetNode = locateTarget(rootNode, step)
+            val rootPkg = rootNode.packageName?.toString().orEmpty()
+            // 若仍停留在 Testory 自身界面，节点定位会命中回放页控件 → 「成功」但目标 App 无操作
+            val isSelf = rootPkg.startsWith("com.testory.assistant")
+            val allowOnSelf = step.action == ActionType.HOME || step.action == ActionType.BACK
+                    || step.action == ActionType.WAIT || step.action == ActionType.OPEN_APP
+                    || step.action == ActionType.SCREENSHOT || step.action == ActionType.HUMAN_GATE
+                    || step.action == ActionType.PRESS_KEY || step.action == ActionType.CLOSE_APP
+                    || step.action == ActionType.WAIT_UNTIL || step.action == ActionType.REPEAT
+                    || step.action == ActionType.WHILE
+            if (isSelf && !allowOnSelf) {
+                return StepResult(
+                    stepIndex = step.index,
+                    stepId = step.id,
+                    success = false,
+                    errorMessage = "回放时仍在 Testory 界面（$rootPkg），已跳过以免误点自身 UI",
+                    actualStrategy = "BLOCKED_ON_SELF_UI",
+                    stepDescription = step.description
+                )
+            }
+
+            val targetNode = locateTargetForAction(rootNode, step)
             if (targetNode == null && needsNodeForAction(step.action, step)) {
                 return StepResult(
                     stepIndex = step.index,
@@ -327,7 +365,8 @@ class AssistantAccessibilityService : AccessibilityService() {
                     success = false,
                     errorMessage = "Element not found: '${step.description}'",
                     actualStrategy = "NODE_LOOKUP_FAILED",
-                    stepDescription = step.description
+                    stepDescription = step.description,
+                    durationMs = System.currentTimeMillis() - startTime
                 )
             }
 
@@ -351,6 +390,30 @@ class AssistantAccessibilityService : AccessibilityService() {
             )
         } finally {
             rootNode.recycle()
+        }
+    }
+
+    /** 当前前台窗口包名（供回放确认已离开 Testory） */
+    fun activeWindowPackage(): String {
+        val root = rootInActiveWindow ?: return ""
+        return try {
+            root.packageName?.toString().orEmpty()
+        } finally {
+            try { root.recycle() } catch (_: Exception) {}
+        }
+    }
+
+    /** 按包名拉起应用（跨应用步骤前确保上下文） */
+    fun launchPackage(targetPackage: String): Boolean {
+        if (targetPackage.isBlank() || targetPackage.startsWith("com.testory.assistant")) return false
+        val intent = packageManager.getLaunchIntentForPackage(targetPackage) ?: return false
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        return try {
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            android.util.Log.w("AssistantA11y", "launchPackage failed: $targetPackage", e)
+            false
         }
     }
 
@@ -386,51 +449,133 @@ class AssistantAccessibilityService : AccessibilityService() {
         durationMs: Long = 300,
         callback: ((Boolean) -> Unit)? = null
     ): Boolean {
-        val ok = performGestureSync(path, durationMs)
-        callback?.invoke(ok)
-        return ok
+        if (callback != null) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+                callback(false)
+                return false
+            }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs.coerceAtLeast(1L)))
+                .build()
+            val start = Runnable {
+                val ok = dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) = callback(true)
+                    override fun onCancelled(gestureDescription: GestureDescription?) = callback(false)
+                }, null)
+                if (!ok) callback(false)
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) start.run()
+            else Handler(Looper.getMainLooper()).post(start)
+            return true
+        }
+        return performGestureSync(path, durationMs)
     }
 
     /**
      * 执行点击手势（同步等待完成）。
      */
     fun performClick(x: Float, y: Float, callback: ((Boolean) -> Unit)? = null): Boolean {
-        val ok = performClickSync(x, y)
-        callback?.invoke(ok)
-        return ok
+        // 带 callback 时走异步派发，避免在主线程上 CountDownLatch 死锁
+        // （PluginHttpServer.runOnMainAwaitGesture 会在主线程调用本方法）
+        if (callback != null) {
+            return dispatchClickAsync(x, y, callback)
+        }
+        return performClickSync(x, y)
     }
 
     fun performClickSync(x: Float, y: Float, timeoutMs: Long = 3000L): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
-        val path = Path().apply { moveTo(x, y) }
-        return performGestureSync(path, durationMs = 50L, timeoutMs = timeoutMs)
+        // 部分 OEM 对「单点 moveTo + 极短 duration」点击识别不稳，补 1px 位移并加长到 100ms
+        val path = Path().apply {
+            moveTo(x, y)
+            lineTo(x + 1f, y + 1f)
+        }
+        return performGestureSync(path, durationMs = 100L, timeoutMs = timeoutMs)
     }
 
+    /**
+     * 同步等待手势完成。必须在非主线程调用。
+     * dispatchGesture 一律 post 到主线程执行（部分机型后台线程直接派发会「回调成功但未注入」）。
+     */
     fun performGestureSync(
         path: Path,
         durationMs: Long = 300,
         timeoutMs: Long = 5000L
     ): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            android.util.Log.e(
+                "AssistantA11y",
+                "performGestureSync called on main thread — would deadlock; refusing"
+            )
+            return false
+        }
         val latch = CountDownLatch(1)
         val completed = AtomicBoolean(false)
+        val accepted = AtomicBoolean(false)
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs.coerceAtLeast(1L)))
             .build()
         val mainHandler = Handler(Looper.getMainLooper())
-        val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                completed.set(true)
+        mainHandler.post {
+            try {
+                val ok = dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        completed.set(true)
+                        latch.countDown()
+                    }
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        completed.set(false)
+                        latch.countDown()
+                    }
+                }, null)
+                accepted.set(ok)
+                if (!ok) {
+                    android.util.Log.w("AssistantA11y", "dispatchGesture rejected by system")
+                    latch.countDown()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AssistantA11y", "dispatchGesture failed", e)
+                accepted.set(false)
                 latch.countDown()
             }
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                completed.set(false)
-                latch.countDown()
-            }
-        }, mainHandler)
-        if (!accepted) return false
+        }
         val waited = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
-        return waited && completed.get()
+        val success = waited && accepted.get() && completed.get()
+        if (!success) {
+            android.util.Log.w(
+                "AssistantA11y",
+                "gesture sync failed waited=$waited accepted=${accepted.get()} completed=${completed.get()}"
+            )
+        }
+        return success
+    }
+
+    private fun dispatchClickAsync(x: Float, y: Float, callback: (Boolean) -> Unit): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            callback(false)
+            return false
+        }
+        val path = Path().apply {
+            moveTo(x, y)
+            lineTo(x + 1f, y + 1f)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 100L))
+            .build()
+        val start = Runnable {
+            val ok = dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) = callback(true)
+                override fun onCancelled(gestureDescription: GestureDescription?) = callback(false)
+            }, null)
+            if (!ok) callback(false)
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            start.run()
+        } else {
+            Handler(Looper.getMainLooper()).post(start)
+        }
+        return true
     }
 
     fun updateFloatingStepCount(count: Int) {
@@ -532,42 +677,243 @@ class AssistantAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 多级定位 — text 优先 + 坐标兜底。
-     * text 是最高级标识（如桌面图标名称），坐标仅在没有可匹配节点时使用。
+     * 多级定位 — text / hint / content-desc / resource-id 优先，坐标仅作无 selector 时的兜底。
+     * 跨页滑动**仅限桌面/Launcher**；应用内只做短等待重试，避免把登录页划走。
      */
-    private fun locateTarget(root: AccessibilityNodeInfo, step: Step): AccessibilityNodeInfo? {
+    private fun locateTargetForAction(
+        root: AccessibilityNodeInfo,
+        step: Step
+    ): AccessibilityNodeInfo? {
+        val hasSelector = step.locator.text.isNotBlank()
+                || step.locator.contentDesc.isNotBlank()
+                || step.locator.resourceId.isNotBlank()
+
+        // 1) 当前页 selector
+        locateBySelector(root, step)?.let { return it }
+
+        if (hasSelector) {
+            val pkg = root.packageName?.toString().orEmpty()
+            if (!isLauncherPackage(pkg)) {
+                // 应用内：页面切换常有延迟，轮询等待（绝不左右翻页）
+                locateBySelectorWithRetry(step, timeoutMs = 2500L)?.let { return it }
+                return null
+            }
+            // 仅桌面：跨页找应用图标
+            locateAcrossPages(step)?.let { return it }
+            return null
+        }
+
+        return locateByCoordinate(root, step)
+    }
+
+    private fun isLauncherPackage(pkg: String): Boolean {
+        val p = pkg.lowercase()
+        if (p.isBlank()) return false
+        return p.contains("launcher")
+                || p.contains("homescreen")
+                || p.contains("leanbacklauncher")
+                || p == "com.android.launcher3"
+                || p.contains("ldmobile")
+                || p.contains("flysilkworm")
+    }
+
+    private fun locateBySelectorWithRetry(step: Step, timeoutMs: Long): AccessibilityNodeInfo? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(250)
+            } catch (_: InterruptedException) {
+                return null
+            }
+            val r = rootInActiveWindow ?: continue
+            try {
+                locateBySelector(r, step)?.let { return it }
+            } finally {
+                try { r.recycle() } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    private fun locateBySelector(root: AccessibilityNodeInfo, step: Step): AccessibilityNodeInfo? {
         val locator = step.locator
 
-        // Strategy 1: text — highest priority (works even for off-screen nodes)
         if (locator.text.isNotBlank()) {
-            val results = root.findAccessibilityNodeInfosByText(locator.text)
-            if (results.isNotEmpty()) return results[0]
+            pickBestTextMatch(root, locator.text)?.let { return it }
+            findNodeByHintOrEditableLabel(root, locator.text)?.let { return it }
         }
-
-        // Strategy 2: content-description（findByText 可能漏，补树遍历）
         if (locator.contentDesc.isNotBlank()) {
             val results = root.findAccessibilityNodeInfosByText(locator.contentDesc)
-            if (results.isNotEmpty()) return results[0]
+            if (results.isNotEmpty()) {
+                val best = pickPreferClickable(results)
+                results.filter { it != best }.forEach { try { it.recycle() } catch (_: Exception) {} }
+                if (best != null) return best
+            }
             findNodeByContentDesc(root, locator.contentDesc)?.let { return it }
+            findNodeByHintOrEditableLabel(root, locator.contentDesc)?.let { return it }
         }
-
-        // Strategy 3: resource-id
         if (locator.resourceId.isNotBlank()) {
             val results = root.findAccessibilityNodeInfosByViewId(locator.resourceId)
-            if (results.isNotEmpty()) return results[0]
+            if (results.isNotEmpty()) {
+                val best = pickPreferClickable(results)
+                results.filter { it != best }.forEach { try { it.recycle() } catch (_: Exception) {} }
+                if (best != null) return best
+            }
+        }
+        return null
+    }
+
+    /** 按 hint / 占位文案查找，优先返回可编辑输入框 */
+    private fun findNodeByHintOrEditableLabel(
+        root: AccessibilityNodeInfo,
+        label: String
+    ): AccessibilityNodeInfo? {
+        val target = label.trim()
+        if (target.isEmpty()) return null
+        var bestEditable: AccessibilityNodeInfo? = null
+        var bestOther: AccessibilityNodeInfo? = null
+
+        fun matchLabel(node: AccessibilityNodeInfo): Boolean {
+            val text = node.text?.toString()?.trim().orEmpty()
+            val desc = node.contentDescription?.toString()?.trim().orEmpty()
+            val hint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                node.hintText?.toString()?.trim().orEmpty()
+            } else ""
+            return text.equals(target, true) || text.contains(target, true)
+                    || desc.equals(target, true) || desc.contains(target, true)
+                    || hint.equals(target, true) || hint.contains(target, true)
         }
 
-        // Strategy 4: coordinate — hit-test 最深叶子
+        fun walk(node: AccessibilityNodeInfo) {
+            if (matchLabel(node)) {
+                if (node.isEditable) {
+                    bestEditable?.recycle()
+                    bestEditable = AccessibilityNodeInfo.obtain(node)
+                } else if (bestOther == null) {
+                    bestOther = AccessibilityNodeInfo.obtain(node)
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                walk(child)
+                child.recycle()
+            }
+        }
+        walk(root)
+        if (bestEditable != null) {
+            bestOther?.recycle()
+            return bestEditable
+        }
+        bestOther?.let { other ->
+            val rect = Rect()
+            other.getBoundsInScreen(rect)
+            findEditableNear(root, rect.centerX(), rect.centerY())?.let { editable ->
+                other.recycle()
+                return editable
+            }
+        }
+        return bestOther
+    }
+
+    private fun pickBestTextMatch(root: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
+        val results = root.findAccessibilityNodeInfosByText(text)
+        if (results.isEmpty()) return null
+        val exact = results.filter {
+            val t = it.text?.toString().orEmpty()
+            val cd = it.contentDescription?.toString().orEmpty()
+            t.equals(text, ignoreCase = true) || cd.equals(text, ignoreCase = true)
+                || t.contains(text, ignoreCase = true) || cd.contains(text, ignoreCase = true)
+        }
+        val pool = if (exact.isNotEmpty()) exact else results
+        val editable = pool.firstOrNull { it.isEditable }
+        if (editable != null) {
+            results.filter { it != editable }.forEach { try { it.recycle() } catch (_: Exception) {} }
+            return editable
+        }
+        val best = pickPreferClickable(pool)
+        results.filter { it != best }.forEach { try { it.recycle() } catch (_: Exception) {} }
+        return best
+    }
+
+    private fun pickPreferClickable(nodes: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? {
+        if (nodes.isEmpty()) return null
+        return nodes.firstOrNull { it.isClickable }
+            ?: nodes.firstOrNull { it.isEditable }
+            ?: nodes[0]
+    }
+
+    private fun locateByCoordinate(root: AccessibilityNodeInfo, step: Step): AccessibilityNodeInfo? {
         val coord = step.screenCoordinate
         if (coord != null && coord.isValid) {
-            nodeAnalyzer.findBestNode(root, coord.x, coord.y)?.let { info ->
-                // 回放需要原生节点：按坐标再取一次
+            nodeAnalyzer.findBestNode(root, coord.x, coord.y)?.let {
                 return findNodeAtCoordinate(root, coord) ?: findNodeAtOrNearCoordinate(root, coord)
             }
             return findNodeAtOrNearCoordinate(root, coord)
         }
-
         return null
+    }
+
+    /** 仅在桌面分页中查找应用名。禁止在 App 内调用。 */
+    private fun locateAcrossPages(step: Step): AccessibilityNodeInfo? {
+        val directions = listOf(
+            SwipeDirection.LEFT, SwipeDirection.LEFT, SwipeDirection.LEFT, SwipeDirection.LEFT,
+            SwipeDirection.RIGHT, SwipeDirection.RIGHT, SwipeDirection.RIGHT,
+            SwipeDirection.RIGHT, SwipeDirection.RIGHT
+        )
+        for (dir in directions) {
+            val pkgBefore = activeWindowPackage()
+            if (!isLauncherPackage(pkgBefore)) {
+                android.util.Log.i("AssistantA11y", "stop page-swipe: left launcher ($pkgBefore)")
+                return null
+            }
+            performPageSwipe(dir)
+            try {
+                Thread.sleep(450)
+            } catch (_: InterruptedException) {
+                return null
+            }
+            val pageRoot = rootInActiveWindow ?: continue
+            try {
+                if (!isLauncherPackage(pageRoot.packageName?.toString().orEmpty())) {
+                    return null
+                }
+                locateBySelector(pageRoot, step)?.let { return it }
+            } finally {
+                try { pageRoot.recycle() } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    private fun performPageSwipe(direction: SwipeDirection) {
+        val dm = resources.displayMetrics
+        val w = dm.widthPixels.toFloat()
+        val h = dm.heightPixels.toFloat()
+        val path = Path()
+        when (direction) {
+            SwipeDirection.LEFT -> {
+                path.moveTo(w * 0.85f, h * 0.5f)
+                path.lineTo(w * 0.15f, h * 0.5f)
+            }
+            SwipeDirection.RIGHT -> {
+                path.moveTo(w * 0.15f, h * 0.5f)
+                path.lineTo(w * 0.85f, h * 0.5f)
+            }
+            SwipeDirection.UP -> {
+                path.moveTo(w * 0.5f, h * 0.7f)
+                path.lineTo(w * 0.5f, h * 0.3f)
+            }
+            SwipeDirection.DOWN -> {
+                path.moveTo(w * 0.5f, h * 0.3f)
+                path.lineTo(w * 0.5f, h * 0.7f)
+            }
+        }
+        performGestureSync(path, durationMs = 280)
+    }
+
+    /** @deprecated 使用 locateTargetForAction */
+    private fun locateTarget(root: AccessibilityNodeInfo, step: Step): AccessibilityNodeInfo? {
+        return locateTargetForAction(root, step)
     }
 
     private fun findNodeByContentDesc(root: AccessibilityNodeInfo, desc: String): AccessibilityNodeInfo? {
@@ -660,15 +1006,95 @@ class AssistantAccessibilityService : AccessibilityService() {
             ActionType.HOME -> performHomeAction()
             ActionType.OPEN_APP -> performOpenAppAction(step)
             ActionType.ASSERT -> performAssertAction(targetNode, step)
-            ActionType.SCREENSHOT -> performScreenshotAction()
+            ActionType.SCREENSHOT -> performScreenshotAction(step)
+            ActionType.EXTRACT_TEXT -> performExtractTextAction(targetNode, step)
+            ActionType.WAIT_UNTIL -> performWaitUntilAction(step)
+            ActionType.CLOSE_APP -> performCloseAppAction(step)
+            ActionType.PRESS_KEY -> performPressKeyAction(step)
+            ActionType.SCROLL -> performScrollAction(step)
+            ActionType.SCROLL_UNTIL -> performScrollUntilAction(step)
+            ActionType.SCAN_QR -> performScanQrAction(step)
+            ActionType.REPEAT, ActionType.WHILE -> performWaitUntilAction(
+                step.copy(
+                    action = ActionType.WAIT_UNTIL,
+                    assertText = step.extras.untilAssertText.ifBlank { step.assertText },
+                    waitDurationMs = if (step.waitDurationMs > 0) step.waitDurationMs
+                    else (step.extras.repeatMax.coerceAtLeast(1) * 1000L)
+                )
+            )
+            ActionType.SOLVE_CAPTCHA -> StepResult(
+                success = false,
+                errorMessage = "SOLVE_CAPTCHA must be orchestrated by ReplayViewModel",
+                actualStrategy = "SOLVE_CAPTCHA_DELEGATED"
+            )
+            ActionType.HUMAN_GATE -> StepResult(
+                success = true,
+                actualStrategy = "HUMAN_GATE",
+                errorMessage = "await_human"
+            )
         }
     }
 
     private fun performTapAction(node: AccessibilityNodeInfo?, step: Step): StepResult {
-        // 坐标手势必须同步等待；原缺陷：dispatchGesture 异步返回后立刻 success=true，
-        // 下一步立刻再派发会取消上一步 → 进度条狂奔、界面无操作、仍显示成功。
-        val coord = getActionCoordinate(node, step)
+        val hasSelector = step.locator.text.isNotBlank()
+                || step.locator.contentDesc.isNotBlank()
+                || step.locator.resourceId.isNotBlank()
+
+        // 有 text/id 时只点定位到的节点，绝不用录制坐标（分页桌面会点到错误页同坐标）
+        if (node != null) {
+            // 输入框占位：直接 FOCUS + CLICK 可编辑节点
+            if (node.isEditable) {
+                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                val clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                val focused = node.isFocused || clicked
+                if (focused || clicked) {
+                    return StepResult(success = true, actualStrategy = "EDITABLE_FOCUS_CLICK")
+                }
+            }
+            val clickable = findClickableNode(node)
+            if (clickable != null) {
+                val success = clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                android.util.Log.i(
+                    "AssistantA11y",
+                    "TAP NODE_CLICK success=$success desc='${step.description}' text='${step.locator.text}'"
+                )
+                if (success) {
+                    return StepResult(success = true, actualStrategy = "NODE_CLICK")
+                }
+            }
+            // 节点不可点：用该节点当前 bounds 中心
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            if (rect.width() > 0 && rect.height() > 0) {
+                val ok = performClickSync(rect.centerX().toFloat(), rect.centerY().toFloat())
+                if (ok) {
+                    return StepResult(
+                        success = true,
+                        actualStrategy = "NODE_BOUNDS_CLICK",
+                        actualCoordinate = ScreenCoordinate(rect.centerX(), rect.centerY())
+                    )
+                }
+            }
+        }
+
+        if (hasSelector) {
+            val label = step.locator.text.ifBlank {
+                step.locator.contentDesc.ifBlank { step.locator.resourceId }
+            }
+            return StepResult(
+                success = false,
+                errorMessage = "未找到「$label」。应用内不会用坐标/翻页兜底。",
+                actualStrategy = "SELECTOR_NOT_FOUND"
+            )
+        }
+
+        // 无 selector 才允许录制坐标兜底
+        val coord = step.screenCoordinate
         if (coord != null && coord.isValid) {
+            android.util.Log.i(
+                "AssistantA11y",
+                "TAP COORDINATE_CLICK at (${coord.x},${coord.y}) desc='${step.description}'"
+            )
             val ok = performClickSync(coord.x.toFloat(), coord.y.toFloat())
             if (ok) {
                 return StepResult(
@@ -677,13 +1103,6 @@ class AssistantAccessibilityService : AccessibilityService() {
                     actualCoordinate = coord
                 )
             }
-            // 手势失败时再试节点点击
-            if (node != null && node.isClickable) {
-                val success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                if (success) {
-                    return StepResult(success = true, actualStrategy = "NODE_CLICK_FALLBACK")
-                }
-            }
             return StepResult(
                 success = false,
                 errorMessage = "点击手势未完成或被取消 ($coord)",
@@ -691,17 +1110,40 @@ class AssistantAccessibilityService : AccessibilityService() {
                 actualCoordinate = coord
             )
         }
-        if (node != null && node.isClickable) {
-            val success = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            return StepResult(success = success, actualStrategy = "NODE_CLICK")
+        return StepResult(
+            success = false,
+            errorMessage = "无有效点击目标（无文本/id 且无坐标）: '${step.description}'",
+            actualStrategy = "TAP_NO_TARGET"
+        )
+    }
+
+    private fun findClickableNode(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        var cur = node
+        while (cur != null) {
+            if (cur.isClickable) return cur
+            cur = try {
+                cur.parent
+            } catch (_: Exception) {
+                null
+            }
         }
-        return StepResult(success = false, errorMessage = "No valid click target")
+        return null
     }
 
     private fun performLongPressAction(node: AccessibilityNodeInfo?, step: Step): StepResult {
+        val clickable = findClickableNode(node)
+        if (clickable != null && clickable.isLongClickable) {
+            val success = clickable.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+            if (success) {
+                return StepResult(success = true, actualStrategy = "NODE_LONG_CLICK")
+            }
+        }
         val coord = getActionCoordinate(node, step)
         if (coord != null && coord.isValid) {
-            val path = Path().apply { moveTo(coord.x.toFloat(), coord.y.toFloat()) }
+            val path = Path().apply {
+                moveTo(coord.x.toFloat(), coord.y.toFloat())
+                lineTo(coord.x.toFloat() + 1f, coord.y.toFloat() + 1f)
+            }
             val ok = performGestureSync(path, durationMs = 800)
             if (ok) {
                 return StepResult(
@@ -710,22 +1152,12 @@ class AssistantAccessibilityService : AccessibilityService() {
                     actualCoordinate = coord
                 )
             }
-            if (node != null && node.isLongClickable) {
-                val success = node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-                if (success) {
-                    return StepResult(success = true, actualStrategy = "NODE_LONG_CLICK_FALLBACK")
-                }
-            }
             return StepResult(
                 success = false,
                 errorMessage = "长按手势未完成或被取消",
                 actualStrategy = "COORDINATE_LONG_PRESS_FAILED",
                 actualCoordinate = coord
             )
-        }
-        if (node != null && node.isLongClickable) {
-            val success = node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-            return StepResult(success = success, actualStrategy = "NODE_LONG_CLICK")
         }
         return StepResult(success = false, errorMessage = "No valid long-press target")
     }
@@ -734,29 +1166,152 @@ class AssistantAccessibilityService : AccessibilityService() {
         if (step.inputText.isBlank()) {
             return StepResult(success = false, errorMessage = "输入内容为空", actualStrategy = "INPUT_EMPTY")
         }
-        return if (node != null && node.isEditable) {
-            val args = android.os.Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, step.inputText)
+
+        // 等页面稳定；上一步常是点开登录表单
+        try {
+            Thread.sleep(400)
+        } catch (_: InterruptedException) { }
+
+        // 若 locator 带占位文案，优先按 hint 找 EditText
+        var hintNode: AccessibilityNodeInfo? = null
+        if (step.locator.text.isNotBlank() || step.locator.contentDesc.isNotBlank()) {
+            val root = rootInActiveWindow
+            if (root != null) {
+                try {
+                    val label = step.locator.text.ifBlank { step.locator.contentDesc }
+                    hintNode = findNodeByHintOrEditableLabel(root, label)
+                } finally {
+                    try { root.recycle() } catch (_: Exception) {}
+                }
             }
-            val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-            StepResult(
-                success = success,
-                actualStrategy = "NODE_INPUT",
-                errorMessage = if (success) "" else "SET_TEXT 失败"
+        }
+
+        val editable = resolveEditableNode(hintNode ?: node, step)
+            ?: return StepResult(
+                success = false,
+                errorMessage = "未找到可编辑输入框",
+                actualStrategy = "INPUT_NO_EDITABLE"
             )
-        } else if (node != null) {
+
+        editable.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        editable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        try {
+            Thread.sleep(250)
+        } catch (_: InterruptedException) { }
+
+        // 先清空再写入，避免追加
+        val clearArgs = android.os.Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+        }
+        editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, clearArgs)
+
+        val args = android.os.Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                step.inputText
+            )
+        }
+        if (editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            return StepResult(success = true, actualStrategy = "NODE_INPUT")
+        }
+
+        if (pasteViaClipboard(editable, step.inputText)) {
+            return StepResult(success = true, actualStrategy = "CLIPBOARD_PASTE")
+        }
+
+        return StepResult(
+            success = false,
+            errorMessage = "SET_TEXT 与粘贴均失败",
+            actualStrategy = "INPUT_FAILED"
+        )
+    }
+
+    private fun resolveEditableNode(
+        node: AccessibilityNodeInfo?,
+        step: Step
+    ): AccessibilityNodeInfo? {
+        if (node != null && node.isEditable) return node
+
+        // 子树中找可编辑
+        if (node != null) {
+            findEditableInSubtree(node)?.let { return it }
+            // 父节点附近（hint 「输入手机号码」常是 TextView，EditText 在旁边/父级）
+            var parent = node.parent
+            var depth = 0
+            while (parent != null && depth < 4) {
+                findEditableInSubtree(parent)?.let { found ->
+                    // 不 recycle parent 链上的 found
+                    return found
+                }
+                val next = parent.parent
+                parent.recycle()
+                parent = next
+                depth++
+            }
+            parent?.recycle()
+        }
+
+        // 按坐标附近找
+        val coord = step.screenCoordinate
+        val root = rootInActiveWindow
+        if (root != null) {
+            try {
+                if (coord != null && coord.isValid) {
+                    findEditableNear(root, coord.x, coord.y)?.let { return it }
+                }
+                // 全树第一个可编辑
+                findEditableInSubtree(root)?.let { return it }
+            } finally {
+                try { root.recycle() } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    private fun findEditableInSubtree(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable) return AccessibilityNodeInfo.obtain(node)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findEditableInSubtree(child)
+            child.recycle()
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private fun findEditableNear(root: AccessibilityNodeInfo, x: Int, y: Int): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        var bestDist = Int.MAX_VALUE
+        val rect = Rect()
+        fun walk(n: AccessibilityNodeInfo) {
+            if (n.isEditable) {
+                n.getBoundsInScreen(rect)
+                val dist = kotlin.math.abs(rect.centerX() - x) + kotlin.math.abs(rect.centerY() - y)
+                if (dist < bestDist) {
+                    best?.recycle()
+                    best = AccessibilityNodeInfo.obtain(n)
+                    bestDist = dist
+                }
+            }
+            for (i in 0 until n.childCount) {
+                val c = n.getChild(i) ?: continue
+                walk(c)
+                c.recycle()
+            }
+        }
+        walk(root)
+        return best
+    }
+
+    private fun pasteViaClipboard(node: AccessibilityNodeInfo, text: String): Boolean {
+        return try {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("testory_input", text))
             node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            val args = android.os.Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, step.inputText)
-            }
-            val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-            StepResult(
-                success = success,
-                actualStrategy = "FOCUS_INPUT",
-                errorMessage = if (success) "" else "输入框不可编辑或 SET_TEXT 失败"
-            )
-        } else {
-            StepResult(success = false, errorMessage = "未找到可输入控件", actualStrategy = "INPUT_NO_NODE")
+            node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        } catch (e: Exception) {
+            android.util.Log.w("AssistantA11y", "clipboard paste failed", e)
+            false
         }
     }
 
@@ -895,43 +1450,403 @@ class AssistantAccessibilityService : AccessibilityService() {
     }
 
     private fun performAssertAction(node: AccessibilityNodeInfo?, step: Step): StepResult {
-        if (step.assertText.isBlank()) {
-            return StepResult(success = true, actualStrategy = "ASSERT_SKIP_EMPTY")
-        }
-        if (node != null) {
-            val nodeText = (node.text?.toString() ?: "") + (node.contentDescription?.toString() ?: "")
-            val found = nodeText.contains(step.assertText, ignoreCase = true) ||
-                nodeText.matches(Regex(step.assertText))
-            return StepResult(
-                success = found,
-                errorMessage = if (found) "" else "Assert failed: expected '${step.assertText}' not found in '$nodeText'",
-                actualStrategy = "ASSERT"
-            )
-        }
-        // Try to find text in whole UI tree
-        val root = rootInActiveWindow ?: return StepResult(
-            success = false,
-            errorMessage = "Cannot perform assert: no window root"
-        )
-        try {
-            val texts = mutableListOf<String>()
-            collectAllTexts(root, texts)
-            val found = texts.any { it.contains(step.assertText, ignoreCase = true) }
-            root.recycle()
-            return StepResult(
-                success = found,
-                errorMessage = if (found) "" else "Text '${step.assertText}' not found on screen",
-                actualStrategy = "ASSERT_SCREEN_WIDE"
-            )
-        } catch (_: Exception) {
-            root.recycle()
-            return StepResult(success = false, errorMessage = "Assert error")
+        val assertType = step.extras.assertType.ifBlank { "contains" }.lowercase()
+        val expected = step.assertText
+
+        when (assertType) {
+            "visible" -> {
+                val needle = expected.ifBlank { step.locator.text }.ifBlank { step.locator.contentDesc }
+                if (needle.isBlank() && node != null) {
+                    return StepResult(success = true, actualStrategy = "ASSERT_VISIBLE_NODE")
+                }
+                val found = node != null || screenContainsText(needle)
+                return StepResult(
+                    success = found,
+                    errorMessage = if (found) "" else "元素不可见: '$needle'",
+                    actualStrategy = "ASSERT_VISIBLE"
+                )
+            }
+            "not_visible" -> {
+                val needle = expected.ifBlank { step.locator.text }.ifBlank { step.locator.contentDesc }
+                val found = if (needle.isBlank()) node != null else screenContainsText(needle)
+                return StepResult(
+                    success = !found,
+                    errorMessage = if (!found) "" else "元素仍可见: '$needle'",
+                    actualStrategy = "ASSERT_NOT_VISIBLE"
+                )
+            }
+            "equals", "text_equals" -> {
+                if (expected.isBlank()) {
+                    return StepResult(success = true, actualStrategy = "ASSERT_SKIP_EMPTY")
+                }
+                val actual = nodeText(node).ifBlank { findExactScreenText(expected) }
+                val ok = actual.equals(expected, ignoreCase = true)
+                return StepResult(
+                    success = ok,
+                    errorMessage = if (ok) "" else "断言 equals 失败: expected='$expected' actual='$actual'",
+                    actualStrategy = "ASSERT_EQUALS"
+                )
+            }
+            else -> { // contains
+                if (expected.isBlank()) {
+                    return StepResult(success = true, actualStrategy = "ASSERT_SKIP_EMPTY")
+                }
+                if (node != null) {
+                    val nodeText = nodeText(node)
+                    val found = nodeText.contains(expected, ignoreCase = true) ||
+                        runCatching { nodeText.matches(Regex(expected)) }.getOrDefault(false)
+                    return StepResult(
+                        success = found,
+                        errorMessage = if (found) "" else "Assert failed: expected '$expected' not found in '$nodeText'",
+                        actualStrategy = "ASSERT"
+                    )
+                }
+                val found = screenContainsText(expected)
+                return StepResult(
+                    success = found,
+                    errorMessage = if (found) "" else "Text '$expected' not found on screen",
+                    actualStrategy = "ASSERT_SCREEN_WIDE"
+                )
+            }
         }
     }
 
-    private fun performScreenshotAction(): StepResult {
-        // Screenshot capability requires MediaProjection - handled in MirrorEngine
-        return StepResult(success = true, actualStrategy = "SCREENSHOT_DEFERRED")
+    private fun nodeText(node: AccessibilityNodeInfo?): String {
+        if (node == null) return ""
+        return (node.text?.toString() ?: "") + (node.contentDescription?.toString() ?: "")
+    }
+
+    private fun screenContainsText(needle: String): Boolean {
+        if (needle.isBlank()) return false
+        val root = rootInActiveWindow ?: return false
+        return try {
+            val texts = mutableListOf<String>()
+            collectAllTexts(root, texts)
+            texts.any { it.contains(needle, ignoreCase = true) }
+        } finally {
+            try { root.recycle() } catch (_: Exception) {}
+        }
+    }
+
+    private fun findExactScreenText(expected: String): String {
+        val root = rootInActiveWindow ?: return ""
+        return try {
+            val texts = mutableListOf<String>()
+            collectAllTexts(root, texts)
+            texts.firstOrNull { it.equals(expected, ignoreCase = true) }.orEmpty()
+        } finally {
+            try { root.recycle() } catch (_: Exception) {}
+        }
+    }
+
+    fun textVisibleOnScreen(needle: String): Boolean = screenContainsText(needle)
+
+    private fun performExtractTextAction(node: AccessibilityNodeInfo?, step: Step): StepResult {
+        val saveAs = step.extras.saveAs.ifBlank { "extracted_text" }
+        val text = when {
+            node != null -> nodeText(node).trim()
+            step.locator.text.isNotBlank() -> {
+                // 定位失败时尝试全屏匹配附近文本
+                val root = rootInActiveWindow
+                if (root != null) {
+                    try {
+                        val texts = mutableListOf<String>()
+                        collectAllTexts(root, texts)
+                        texts.firstOrNull { it.contains(step.locator.text, ignoreCase = true) }.orEmpty()
+                    } finally {
+                        try { root.recycle() } catch (_: Exception) {}
+                    }
+                } else ""
+            }
+            else -> ""
+        }
+        if (text.isBlank()) {
+            return StepResult(
+                success = false,
+                errorMessage = "EXTRACT_TEXT 未取到文本",
+                actualStrategy = "EXTRACT_TEXT_EMPTY"
+            )
+        }
+        return StepResult(
+            success = true,
+            actualStrategy = "EXTRACT_TEXT",
+            variables = mapOf(saveAs to text)
+        )
+    }
+
+    private fun performWaitUntilAction(step: Step): StepResult {
+        val needle = step.extras.untilAssertText.ifBlank { step.assertText }.ifBlank { step.locator.text }
+        if (needle.isBlank()) {
+            return performWaitAction(step)
+        }
+        val timeout = if (step.waitDurationMs > 0) step.waitDurationMs else 15000L
+        val deadline = System.currentTimeMillis() + timeout
+        while (System.currentTimeMillis() < deadline) {
+            if (screenContainsText(needle)) {
+                return StepResult(success = true, actualStrategy = "WAIT_UNTIL")
+            }
+            try {
+                Thread.sleep(300)
+            } catch (_: InterruptedException) {
+                break
+            }
+        }
+        return StepResult(
+            success = false,
+            errorMessage = "WAIT_UNTIL 超时: '$needle'",
+            actualStrategy = "WAIT_UNTIL_TIMEOUT"
+        )
+    }
+
+    private fun performCloseAppAction(step: Step): StepResult {
+        val pkg = step.locator.packageName.ifBlank {
+            step.targetNode?.packageName.orEmpty()
+        }.ifBlank {
+            activeWindowPackage()
+        }
+        if (pkg.isBlank() || pkg.startsWith("com.testory.assistant")) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            return StepResult(success = true, actualStrategy = "CLOSE_APP_HOME")
+        }
+        return try {
+            val am = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            @Suppress("DEPRECATION")
+            am.killBackgroundProcesses(pkg)
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            StepResult(success = true, actualStrategy = "CLOSE_APP")
+        } catch (e: Exception) {
+            performGlobalAction(GLOBAL_ACTION_RECENTS)
+            StepResult(success = true, actualStrategy = "CLOSE_APP_RECENTS", errorMessage = e.message.orEmpty())
+        }
+    }
+
+    private fun performPressKeyAction(step: Step): StepResult {
+        val key = step.extras.keyCode.ifBlank { step.inputText }.uppercase()
+        val ok = when (key) {
+            "BACK", "KEYCODE_BACK", "4" -> performGlobalAction(GLOBAL_ACTION_BACK)
+            "HOME", "KEYCODE_HOME", "3" -> performGlobalAction(GLOBAL_ACTION_HOME)
+            "RECENTS", "KEYCODE_APP_SWITCH", "187" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+            "NOTIFICATIONS" -> performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+            else -> performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+        return StepResult(
+            success = ok,
+            actualStrategy = "PRESS_KEY:$key",
+            errorMessage = if (ok) "" else "PRESS_KEY 失败: $key"
+        )
+    }
+
+    private fun performScrollAction(step: Step): StepResult {
+        val dir = step.swipeDirection ?: SwipeDirection.UP
+        val amount = step.extras.scrollAmount.takeIf { it > 0 } ?: 600
+        val dm = resources.displayMetrics
+        val cx = dm.widthPixels / 2f
+        val cy = dm.heightPixels / 2f
+        val (x1, y1, x2, y2) = when (dir) {
+            SwipeDirection.UP -> listOf(cx, cy + amount / 2f, cx, cy - amount / 2f)
+            SwipeDirection.DOWN -> listOf(cx, cy - amount / 2f, cx, cy + amount / 2f)
+            SwipeDirection.LEFT -> listOf(cx + amount / 2f, cy, cx - amount / 2f, cy)
+            SwipeDirection.RIGHT -> listOf(cx - amount / 2f, cy, cx + amount / 2f, cy)
+        }
+        val ok = performSwipeSync(x1, y1, x2, y2)
+        return StepResult(
+            success = ok,
+            actualStrategy = "SCROLL_${dir.name}",
+            errorMessage = if (ok) "" else "SCROLL 手势失败"
+        )
+    }
+
+    private fun performScrollUntilAction(step: Step): StepResult {
+        val needle = step.extras.untilAssertText.ifBlank { step.assertText }.ifBlank { step.locator.text }
+        if (needle.isBlank()) {
+            return StepResult(success = false, errorMessage = "SCROLL_UNTIL 缺少目标文本")
+        }
+        val maxSwipes = step.extras.repeatMax.takeIf { it > 0 } ?: 8
+        if (screenContainsText(needle)) {
+            return StepResult(success = true, actualStrategy = "SCROLL_UNTIL_ALREADY")
+        }
+        repeat(maxSwipes) {
+            val swipeStep = step.copy(
+                action = ActionType.SCROLL,
+                swipeDirection = step.swipeDirection ?: SwipeDirection.UP
+            )
+            performScrollAction(swipeStep)
+            try { Thread.sleep(400) } catch (_: InterruptedException) {}
+            if (screenContainsText(needle)) {
+                return StepResult(success = true, actualStrategy = "SCROLL_UNTIL")
+            }
+        }
+        return StepResult(
+            success = false,
+            errorMessage = "SCROLL_UNTIL 未找到: '$needle'",
+            actualStrategy = "SCROLL_UNTIL_MISS"
+        )
+    }
+
+    private fun performScanQrAction(step: Step): StepResult {
+        val png = captureScreenshotPng(step.extras.roi) ?: return StepResult(
+            success = false,
+            errorMessage = "截屏失败，无法扫码",
+            actualStrategy = "SCAN_QR_NO_SHOT"
+        )
+        val decoded = decodeQr(png)
+        if (decoded.isNullOrBlank()) {
+            return StepResult(
+                success = false,
+                errorMessage = "未识别到二维码",
+                actualStrategy = "SCAN_QR_EMPTY"
+            )
+        }
+        val saveAs = step.extras.saveAs.ifBlank { "qr_text" }
+        return StepResult(
+            success = true,
+            actualStrategy = "SCAN_QR",
+            variables = mapOf(saveAs to decoded)
+        )
+    }
+
+    private fun performScreenshotAction(step: Step): StepResult {
+        val png = captureScreenshotPng(step.extras.roi)
+        if (png == null) {
+            return StepResult(
+                success = false,
+                errorMessage = "截图失败（需 API 30+ 或权限）",
+                actualStrategy = "SCREENSHOT_FAILED"
+            )
+        }
+        val dir = filesDir.resolve("screenshots").apply { mkdirs() }
+        val file = dir.resolve("shot_${System.currentTimeMillis()}.png")
+        return try {
+            file.writeBytes(png)
+            val b64Preview = android.util.Base64.encodeToString(
+                png.take(64).toByteArray(),
+                android.util.Base64.NO_WRAP
+            )
+            StepResult(
+                success = true,
+                actualStrategy = "SCREENSHOT",
+                evidence = file.absolutePath,
+                variables = if (step.extras.saveAs.isNotBlank()) {
+                    mapOf(step.extras.saveAs to file.absolutePath)
+                } else emptyMap()
+            ).also {
+                android.util.Log.i("AssistantA11y", "screenshot saved ${file.absolutePath} head=$b64Preview")
+            }
+        } catch (e: Exception) {
+            StepResult(
+                success = false,
+                errorMessage = e.message ?: "写截图失败",
+                actualStrategy = "SCREENSHOT_WRITE_FAILED"
+            )
+        }
+    }
+
+    /**
+     * 截取全屏或 ROI PNG。API 30+ 使用 AccessibilityService.takeScreenshot。
+     */
+    fun captureScreenshotPng(roi: List<Int>? = null): ByteArray? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val latch = CountDownLatch(1)
+        val holder = arrayOfNulls<ByteArray>(1)
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        try {
+                            val hw = screenshot.hardwareBuffer
+                            val colorSpace = screenshot.colorSpace
+                            val bitmap = android.graphics.Bitmap.wrapHardwareBuffer(hw, colorSpace)
+                                ?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                            hw.close()
+                            if (bitmap != null) {
+                                val cropped = cropBitmap(bitmap, roi)
+                                val baos = java.io.ByteArrayOutputStream()
+                                cropped.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
+                                if (cropped !== bitmap) cropped.recycle()
+                                bitmap.recycle()
+                                holder[0] = baos.toByteArray()
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.w("AssistantA11y", "screenshot encode failed", e)
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        android.util.Log.w("AssistantA11y", "takeScreenshot failed code=$errorCode")
+                        latch.countDown()
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("AssistantA11y", "takeScreenshot exception", e)
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS)
+        return holder[0]
+    }
+
+    private fun cropBitmap(src: android.graphics.Bitmap, roi: List<Int>?): android.graphics.Bitmap {
+        if (roi == null || roi.size < 4) return src
+        val l = roi[0].coerceIn(0, src.width - 1)
+        val t = roi[1].coerceIn(0, src.height - 1)
+        val r = roi[2].coerceIn(l + 1, src.width)
+        val b = roi[3].coerceIn(t + 1, src.height)
+        return try {
+            android.graphics.Bitmap.createBitmap(src, l, t, r - l, b - t)
+        } catch (_: Exception) {
+            src
+        }
+    }
+
+    private fun decodeQr(png: ByteArray): String? {
+        return try {
+            val bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size) ?: return null
+            val width = bitmap.width
+            val height = bitmap.height
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+            bitmap.recycle()
+            val source = com.google.zxing.RGBLuminanceSource(width, height, pixels)
+            val binary = com.google.zxing.BinaryBitmap(com.google.zxing.common.HybridBinarizer(source))
+            val reader = com.google.zxing.MultiFormatReader()
+            reader.decode(binary)?.text
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun performSwipeSync(x1: Float, y1: Float, x2: Float, y2: Float, timeoutMs: Long = 3000L): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+        val path = Path().apply {
+            moveTo(x1, y1)
+            lineTo(x2, y2)
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 350)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        val latch = CountDownLatch(1)
+        val ok = AtomicBoolean(false)
+        val mainHandler = Handler(Looper.getMainLooper())
+        val dispatched = mainHandler.post {
+            dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    ok.set(true)
+                    latch.countDown()
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    latch.countDown()
+                }
+            }, null)
+        }
+        if (!dispatched) {
+            latch.countDown()
+        }
+        latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        return ok.get()
     }
 
     private fun collectAllTexts(node: AccessibilityNodeInfo, texts: MutableList<String>) {
@@ -963,24 +1878,33 @@ class AssistantAccessibilityService : AccessibilityService() {
             return targetNode.bounds.toScreenCoordinate()
         }
 
-        // Priority 4: fallback to screen center (never return 0,0 → causes "invalid coordinate")
-        val dm = resources.displayMetrics
-        return ScreenCoordinate(dm.widthPixels / 2, dm.heightPixels / 2)
+        // 禁止回退到屏幕中心：会「手势成功」但点到空白 → 进度空转、界面无操作
+        return null
     }
 
     private fun needsNodeForAction(action: ActionType, step: Step): Boolean {
-        // TAP / LONG_PRESS never require a node — coordinate dispatch always works as fallback.
-        // Even if coordinate is (0,0), performTapAction will derive from targetNode bounds.
+        val hasSelector = step.locator.text.isNotBlank()
+                || step.locator.contentDesc.isNotBlank()
+                || step.locator.resourceId.isNotBlank()
         if (action == ActionType.TAP || action == ActionType.LONG_PRESS) {
+            return hasSelector
+        }
+        if (action == ActionType.INPUT || action == ActionType.EXTRACT_TEXT) {
             return false
         }
-        // INPUT: only needs node for set-text; clipboard-based input is fallback
-        if (action == ActionType.INPUT) {
-            return step.screenCoordinate?.isValid != true && step.inputText.isNotBlank()
+        if (action == ActionType.ASSERT) {
+            val t = step.extras.assertType.lowercase()
+            return hasSelector && t != "visible" && t != "not_visible" &&
+                !(t == "contains" || t == "equals" || t == "text_equals" || t.isBlank())
         }
         return action != ActionType.WAIT && action != ActionType.BACK
                 && action != ActionType.HOME && action != ActionType.SWIPE
                 && action != ActionType.OPEN_APP && action != ActionType.SCREENSHOT
+                && action != ActionType.WAIT_UNTIL && action != ActionType.CLOSE_APP
+                && action != ActionType.PRESS_KEY && action != ActionType.SCROLL
+                && action != ActionType.SCROLL_UNTIL && action != ActionType.SCAN_QR
+                && action != ActionType.SOLVE_CAPTCHA && action != ActionType.HUMAN_GATE
+                && action != ActionType.REPEAT && action != ActionType.WHILE
     }
 
     private fun AccessibilityNodeInfo.recycleChildren(keep: List<AccessibilityNodeInfo>) {

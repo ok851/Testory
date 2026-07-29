@@ -59,7 +59,10 @@ data class CaseEntity(
     val projectId: String = "",
 
     @ColumnInfo(name = "project_name")
-    val projectName: String = ""
+    val projectName: String = "",
+
+    @ColumnInfo(name = "data_rows_json")
+    val dataRowsJson: String = "[]"
 )
 
 fun CaseEntity.toDomain(steps: List<com.testory.assistant.v2.core.model.Step> = emptyList()): TestCase = TestCase(
@@ -83,7 +86,8 @@ fun CaseEntity.toDomain(steps: List<com.testory.assistant.v2.core.model.Step> = 
         )
     } else null,
     projectId = projectId,
-    projectName = projectName
+    projectName = projectName,
+    dataRows = parseDataRows(dataRowsJson)
 )
 
 fun TestCase.toEntity(): CaseEntity = CaseEntity(
@@ -103,7 +107,8 @@ fun TestCase.toEntity(): CaseEntity = CaseEntity(
     totalSteps = lastRunResult?.totalSteps ?: 0,
     stepCount = steps.size,
     projectId = projectId,
-    projectName = projectName
+    projectName = projectName,
+    dataRowsJson = encodeDataRows(dataRows)
 )
 
 private fun parseTagsList(json: String): List<String> {
@@ -114,4 +119,45 @@ private fun parseTagsList(json: String): List<String> {
             .map { it.trim().removeSurrounding("\"") }
             .filter { it.isNotBlank() }
     } catch (_: Exception) { emptyList() }
+}
+
+private val caseJson = kotlinx.serialization.json.Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
+
+private fun parseDataRows(raw: String): List<Map<String, String>> {
+    if (raw.isBlank() || raw == "[]") return emptyList()
+    return try {
+        val el = caseJson.parseToJsonElement(raw)
+        val arr = el as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+        arr.mapNotNull { item ->
+            val obj = item as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            obj.mapValues { (_, v) ->
+                (v as? kotlinx.serialization.json.JsonPrimitive)?.content ?: v.toString()
+            }
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
+
+private fun encodeDataRows(rows: List<Map<String, String>>): String {
+    if (rows.isEmpty()) return "[]"
+    return try {
+        val arr = kotlinx.serialization.json.buildJsonArray {
+            rows.forEach { row ->
+                add(
+                    kotlinx.serialization.json.buildJsonObject {
+                        row.forEach { (k, v) ->
+                            put(k, kotlinx.serialization.json.JsonPrimitive(v))
+                        }
+                    }
+                )
+            }
+        }
+        arr.toString()
+    } catch (_: Exception) {
+        "[]"
+    }
 }

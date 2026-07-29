@@ -290,6 +290,13 @@ private fun StepResultCard(result: StepResult) {
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
                 }
+                if (result.actualStrategy.isNotBlank()) {
+                    Text(
+                        text = result.actualStrategy,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
                 if (result.errorMessage.isNotEmpty()) {
                     Text(
                         text = result.errorMessage,
