@@ -542,6 +542,7 @@
                 <button class="ce-quick-cmd" onclick="CE.loadTemplate('order_sync')" title="API下单 → 浏览器验证 → 移动端核验 → 清理">🛒 订单同步验证</button>
                 <button class="ce-quick-cmd" onclick="CE.loadTemplate('data_consistency')" title="API查余额 → 桌面端OCR提取 → 断言一致性">📊 数据一致性检查</button>
                 <button class="ce-quick-cmd" onclick="CE.loadTemplate('mobile_desktop')" title="移动端截图 → 桌面端截图 → 断言两端数据一致">📱💻 移动端与桌面端对比</button>
+                <button class="ce-quick-cmd" onclick="CE.loadOtpDemoExample()" title="示例：桌面+手机取码（非唯一场景；对话 Agent 不依赖此模板）">📱 示例：OTP 跨端剧本</button>
                 <button class="ce-quick-cmd" onclick="CE.loadDesktopMainpath()" title="标准计划：launch 记事本 → attach → input → verify">💻 桌面主路径（记事本）</button>
                 <button class="ce-quick-cmd" onclick="CE.loadErpDesktopSample()" title="Fake ERP：API 订单号 ↔ 桌面窗口标题断言">🏢 ERP 桌面样例</button>
                 <button class="ce-quick-cmd" onclick="CE.loadErpAliasSample()" title="经 DESKTOP_APP_ALIASES / 用户别名的 @erp 启动客户客户端">🏢 ERP @erp 别名</button>
@@ -920,6 +921,29 @@
         })
         .catch(function(err) {
             CE.addLog('warn', '加载桌面主路径失败: ' + err);
+        });
+    };
+
+    CE.loadOtpDemoExample = function() {
+        fetch('/api/ai/cross-end/otp-demo-plan', {
+            method: 'GET',
+            headers: {'Accept': 'application/json'},
+            credentials: 'same-origin'
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data || !data.ok || !data.plan) {
+                CE.addLog('warn', (data && data.error) || '加载 OTP 示例失败');
+                return;
+            }
+            CE.plan = data.plan;
+            CE.renderPlan(data.plan);
+            var execBtn = document.getElementById('ceExecuteBtn');
+            if (execBtn) execBtn.disabled = false;
+            CE.addLog('info', data.hint || '已加载 OTP 跨端示例剧本（可改变量后执行；非唯一场景）');
+        })
+        .catch(function(err) {
+            CE.addLog('warn', '加载 OTP 示例失败: ' + err);
         });
     };
 

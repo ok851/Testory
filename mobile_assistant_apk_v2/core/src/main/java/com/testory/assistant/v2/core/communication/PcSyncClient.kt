@@ -155,10 +155,12 @@ data class AiGenerateRequest(
 data class AiGenerateResponse(
     val success: Boolean,
     val error: String? = null,
+    val reply: String? = null,
     val case_name: String? = null,
     val description: String? = null,
     val expected_result: String? = null,
     val steps: List<AiStepDto> = emptyList(),
+    val mode: String? = null,
     val ai_status: AiStatusDto? = null
 )
 
@@ -199,6 +201,8 @@ data class AiGenerateResult(
     val caseName: String = "",
     val description: String = "",
     val expectedResult: String = "",
+    val reply: String = "",
+    val mode: String = "",
     val steps: List<com.testory.assistant.v2.core.model.Step> = emptyList(),
     val provider: String = "",
     val model: String = ""

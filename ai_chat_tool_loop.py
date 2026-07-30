@@ -1323,32 +1323,49 @@ def chat_tool_schemas(
     allow_desktop_windows_tools: Optional[bool] = None,
     message: str = "",
     allow_refine_test_plan: bool = True,
+    connected_hands: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     allow = allow_hermes if allow_hermes is not None else allow_openclaw
     schemas: List[Dict[str, Any]] = []
-    enable_win = (
-        allow_desktop_windows_tools
-        if allow_desktop_windows_tools is not None
-        else _should_enable_desktop_windows_tools(platform_type, message)
-    )
+    hands = connected_hands if isinstance(connected_hands, dict) else None
+    # 连接态优先：已连接桌面则挂 windows_*，不因「手机」话术关掉
+    if hands is not None and hands.get("desktop") is True:
+        enable_win = True if allow_desktop_windows_tools is not False else False
+    else:
+        enable_win = (
+            allow_desktop_windows_tools
+            if allow_desktop_windows_tools is not None
+            else _should_enable_desktop_windows_tools(platform_type, message)
+        )
     plat = (platform_type or "web").strip().lower()
-    # 桌面精简 profile：只暴露 windows_* + 轻量观察，避免 hermes/refine 淹没模型
+    # 有跨端双手时用 auto/desktop 精简叙事，避免锁死 android-only
+    if hands and (hands.get("desktop") or hands.get("phone")):
+        if plat == "android":
+            plat = "desktop" if hands.get("desktop") else "auto"
     desktop_slim = enable_win and plat in ("desktop", "auto") and (
         plat == "desktop"
         or _should_enable_desktop_windows_tools("desktop", message)
+        or bool(hands and hands.get("desktop"))
     )
     if enable_win:
         schemas.extend(_desktop_windows_tool_schemas())
-        # 桌面任务默认带观察工具（精简集）
         if desktop_slim or allow_screen_tools:
             schemas.extend(_screen_observation_tool_schemas())
     elif allow_screen_tools:
         schemas.extend(_screen_observation_tool_schemas())
-    # 统一多端工具面：desktop_* 别名 + mobile_*（本机 await）
+    # 按已连接双手挂 desktop_* / mobile_*
     try:
         from mobile_cross_end_tools import cross_end_tool_schemas
 
-        schemas.extend(cross_end_tool_schemas())
+        include_desk = True if hands is None else bool(hands.get("desktop"))
+        include_phone = True if hands is None else bool(hands.get("phone"))
+        # 无连接快照时保持兼容：全挂（旧行为）
+        schemas.extend(
+            cross_end_tool_schemas(
+                include_desktop=include_desk or (hands is None),
+                include_mobile=include_phone or (hands is None),
+            )
+        )
     except Exception:
         pass
     if allow and not (desktop_slim and plat == "desktop"):
@@ -1408,11 +1425,114 @@ def _is_cross_end_agent_tool(name: str) -> bool:
         return False
 
 
-def _dispatch_cross_end_agent_tool(name: str, args: Dict[str, Any]) -> str:
+def _dispatch_cross_end_agent_tool(
+    name: str,
+    args: Dict[str, Any],
+    *,
+    abort_event: Any = None,
+    on_tick: Any = None,
+) -> str:
     from mobile_cross_end_tools import dispatch_cross_end_tool
 
-    result = dispatch_cross_end_tool(name, args or {})
+    result = dispatch_cross_end_tool(
+        name,
+        args or {},
+        abort_event=abort_event,
+        on_tick=on_tick,
+    )
     return json.dumps(result, ensure_ascii=False, default=str)
+
+
+def _run_mobile_tool_with_progress(
+    name: str,
+    call_args: Dict[str, Any],
+    *,
+    abort_event: Any = None,
+    timeout_cap: Optional[float] = None,
+):
+    """在独立线程执行 mobile_* await，主线程可 yield 进度。
+
+    yield ("progress", text) … 最后 yield ("result", result_json_str)
+    """
+    import queue
+    import threading
+
+    args = dict(call_args or {})
+    if timeout_cap is not None:
+        try:
+            req = float(args.get("timeout_sec") or timeout_cap)
+        except Exception:
+            req = float(timeout_cap)
+        # 给外层收尾留一点余量；真正卡住点是手机不领任务，不是数字本身
+        args["timeout_sec"] = max(8.0, min(req, float(timeout_cap)))
+
+    progress_q: "queue.Queue[str]" = queue.Queue()
+    result_box: List[str] = []
+    error_box: List[BaseException] = []
+
+    def _on_tick(job: Dict[str, Any]) -> None:
+        st = str((job or {}).get("status") or "pending")
+        jid = str((job or {}).get("job_id") or "")
+        if st == "pending":
+            msg = (
+                f"仍在等待手机领取任务（job={jid or '?'}，status=pending）。"
+                "若长时间不动：请确认无障碍已开启且 APK 显示已连接。"
+            )
+        elif st == "running":
+            msg = f"手机已领取任务，本机回放中（job={jid or '?'}）…"
+        else:
+            msg = f"手机任务状态：{st}（job={jid or '?'}）"
+        try:
+            progress_q.put_nowait(msg)
+        except Exception:
+            pass
+
+    def _worker() -> None:
+        try:
+            result_box.append(
+                _dispatch_cross_end_agent_tool(
+                    name,
+                    args,
+                    abort_event=abort_event,
+                    on_tick=_on_tick,
+                )
+            )
+        except BaseException as e:
+            error_box.append(e)
+
+    th = threading.Thread(target=_worker, name=f"mobile-tool-{name}", daemon=True)
+    th.start()
+    yield (
+        "progress",
+        f"已开始调用 {name}：下发任务并等待手机本机执行（非桌面瞬时工具）…",
+    )
+    while th.is_alive():
+        try:
+            msg = progress_q.get(timeout=0.45)
+            yield ("progress", msg)
+        except queue.Empty:
+            pass
+        if abort_event is not None and abort_event.is_set():
+            # worker 内 wait 会感知 abort；这里继续等到线程退出
+            yield ("progress", f"{name}：收到中止信号，正在结束等待…")
+    th.join(timeout=2.0)
+    while not progress_q.empty():
+        try:
+            yield ("progress", progress_q.get_nowait())
+        except Exception:
+            break
+    if error_box:
+        yield (
+            "result",
+            json.dumps(
+                {"ok": False, "success": False, "error": str(error_box[0])},
+                ensure_ascii=False,
+            ),
+        )
+        return
+    yield ("result", result_box[0] if result_box else json.dumps(
+        {"ok": False, "error": f"{name} 无返回"}, ensure_ascii=False
+    ))
 
 
 _CROSS_END_VAR_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
@@ -1434,6 +1554,29 @@ def _resolve_cross_end_vars(obj: Any, vars_map: Optional[Dict[str, Any]]) -> Any
     if isinstance(obj, list):
         return [_resolve_cross_end_vars(v, vars_map) for v in obj]
     return obj
+
+
+def _seed_cross_end_vars_from_message(message: str) -> Dict[str, str]:
+    try:
+        from agent_intent import extract_cross_end_seed_vars
+
+        return dict(extract_cross_end_seed_vars(message or "") or {})
+    except Exception:
+        return {}
+
+
+def _cross_end_strategy_lines() -> List[str]:
+    """通用跨端原则（非固定业务步骤模板）。"""
+    return [
+        "",
+        "## 跨端工具原则（能力面，非固定剧本）",
+        "- 桌面 GUI：用 desktop_* / windows_*；每步根据工具返回再决定下一步，禁止臆造成功。",
+        "- 需要短信/通知验证码：调用 mobile_extract_otp，只用工具返回值；禁止编造验证码。",
+        "- 需要手机本机跑步骤或用例：mobile_run_steps / mobile_run_case。",
+        "- 跨工具共享变量在平台侧累积；参数中可写 {{var}}（如 {{sms_otp}} / {{phone_number}}），平台会替换。",
+        "- 用户目标可能是登录、注册、换绑或其他：按当前界面与目标自行选择控件描述与顺序，勿套死模板。",
+        "- 任一步失败：停止并向用户如实说明工具错误，禁止假装已完成。",
+    ]
 
 
 def _build_system_prompt(
@@ -1468,13 +1611,11 @@ def _build_system_prompt(
         "请先判断用户输入的意图：",
         "- 如果用户在闲聊、询问你的身份/能力、表达感谢或抱怨 → 直接自然语言回答，不要调用任何工具。",
         "- 如果用户要求执行具体的浏览器测试操作 → 可调用 hermes_execute（同一任务只调用一次）。",
-            "- 如果是 Windows 桌面 GUI 操作（打开应用、点击、输入等）→ **直接调用 windows_***"
-            "或 desktop_*（launch/focus → 新建用 Ctrl+N → type_text）；"
-            "「编辑内容为X」勿点菜单编辑），逐步执行；"
-            "每步根据工具返回再决定下一步。"
+        "- 如果是 Windows 桌面 GUI 操作（打开应用、点击、输入等）→ **直接调用 windows_***"
+            "或 desktop_*；逐步执行；每步根据工具返回再决定下一步。"
             "禁止只调用 hermes_execute 后空等；禁止臆造「已输入/已发送」。",
-        "- 多端联动（桌面发验证码→手机取码→回填）：用 desktop_* + mobile_extract_otp；"
-        "手机侧是本机 await，禁止臆造 sms_otp。",
+        "- 涉及手机取码、本机执行或桌面+手机联动：按「跨端工具原则」选用 desktop_* / mobile_*；"
+        "禁止臆造 sms_otp。",
         (
             "- 开启「执行后生成用例」时：操作成功后只需简短中文汇报；"
             "平台会从动作轨迹自动规范化生成用例，禁止 refine_test_plan，禁止手写大段用例 JSON。"
@@ -1511,7 +1652,7 @@ def _build_system_prompt(
         ]
     elif plat == "desktop":
         parts_agent = [
-            "【重要】当前为 **Windows 桌面** 场景。用 windows_* 逐步操控本机任意 GUI 应用。",
+            "【重要】当前为 **Windows 桌面** 场景（可同时使用手机 await 工具）。用 windows_* / desktop_* 逐步操控本机 GUI。",
             "通用流程：若应用可能未打开，先 windows_launch_app / windows_focus_app → "
             "需要新建文件/新页时用 windows_press_key(Ctrl+N) → "
             "「编辑内容为… / 输入… / 写入…」请直接 windows_type_text(正文)，不要点菜单「编辑」。",
@@ -1523,13 +1664,13 @@ def _build_system_prompt(
             "少用反复 get_screen_description。",
             "禁止未看工具返回就声称「已完成」；失败时用中文说明真实工具错误。"
             "【流程闸】同轮每步只调一个 windows_*；上一步 success=false / flow_halt 则整任务停止，禁止继续猜测下一步。",
-            "【严禁编造能力限制】你具备 windows_*，可操作本机已安装/已打开的桌面应用。"
+            "【严禁编造能力限制】你具备 windows_* 与跨端 mobile_*，可操作本机已安装/已打开的桌面应用，并可 await 已配对手机。",
             "禁止回答「只能测网页」「某某应用无法自动化所以不做」等推脱。",
             (
                 "【收尾】开启生成用例：windows_* 成功后一两句中文汇报即可；"
                 "平台从动作轨迹自动生成用例，禁止 refine_test_plan / 手写大段 JSON。"
                 if generate_case_after_run
-                else "【收尾】未开启生成用例：windows_* 目标完成后立刻用一两句中文汇报结果并结束，禁止再调工具、禁止输出用例 JSON。"
+                else "【收尾】未开启生成用例：目标完成后立刻用一两句中文汇报结果并结束，禁止再调工具、禁止输出用例 JSON。"
             ),
         ]
     elif embedded_gateway_enabled() and not _ai_allow_main_playwright_fallback():
@@ -1567,6 +1708,7 @@ def _build_system_prompt(
             "当仅改 JSON 步骤、选择器或断言、且无需浏览器时，可只调用 refine_test_plan。",
         ]
     parts.extend(parts_agent)
+    parts.extend(_cross_end_strategy_lines())
     if plat == "auto":
         parts.extend([
             "",
@@ -1735,6 +1877,12 @@ class ChatToolLoopParams:
     generate_case_after_run: bool = False
     # 是否暴露 refine_test_plan（任务执行默认 False；用例对话可 True）
     allow_refine_test_plan: Optional[bool] = None
+    # 当前登录用户（mobile_* enqueue / 权限）
+    user_id: int = 0
+    # 统一 Agent 会话（PC / 手机共用）
+    agent_session_id: Optional[str] = None
+    # 已连接双手快照；None=不按连接裁剪（兼容旧调用）
+    connected_hands: Optional[Dict[str, Any]] = None
 
 
 def _remaining_deadline_sec(params: "ChatToolLoopParams") -> Optional[float]:
@@ -2421,6 +2569,62 @@ def _handle_agent_execute(
     return result_text
 
 
+def _prepare_unified_agent_meta(params: "ChatToolLoopParams", plat: str) -> Dict[str, Any]:
+    """初始化 meta：合并统一会话 vars + 本轮种子。"""
+    seeded = _seed_cross_end_vars_from_message(getattr(params, "message", "") or "")
+    uid = int(getattr(params, "user_id", 0) or 0)
+    sid = getattr(params, "agent_session_id", None)
+    if uid > 0:
+        try:
+            from agent_unified_session import get_or_create_session, merge_cross_end_vars
+
+            sess = get_or_create_session(uid, sid)
+            merged = dict(sess.get("cross_end_vars") or {})
+            merged.update(seeded)
+            merge_cross_end_vars(uid, seeded, session_id=sid)
+            cross_vars = merged
+        except Exception:
+            cross_vars = seeded
+    else:
+        cross_vars = seeded
+    return {
+        "tool_rounds": 0,
+        "tools_used": [],
+        "succeeded_action_fps": [],
+        "desktop_phase": "start",
+        "flow_profile": _resolve_desktop_flow_profile(
+            getattr(params, "message", "") or "", plat
+        ),
+        "obs_count": 0,
+        "typed_texts": [],
+        "focused_apps": [],
+        "search_ui_done": False,
+        "repair_forward_only": False,
+        "cross_end_vars": cross_vars,
+        "agent_session_id": sid or "default",
+    }
+
+
+def _persist_unified_agent_session(params: "ChatToolLoopParams", meta: Dict[str, Any], reply: str = "") -> None:
+    uid = int(getattr(params, "user_id", 0) or 0)
+    if uid <= 0:
+        return
+    try:
+        from agent_unified_session import merge_cross_end_vars, set_session_meta
+
+        vars_map = meta.get("cross_end_vars") if isinstance(meta.get("cross_end_vars"), dict) else {}
+        merge_cross_end_vars(uid, vars_map, session_id=getattr(params, "agent_session_id", None))
+        set_session_meta(
+            uid,
+            session_id=getattr(params, "agent_session_id", None),
+            tools_used=list(meta.get("tools_used") or []),
+            last_reply=reply or "",
+            connected_hands=getattr(params, "connected_hands", None),
+        )
+    except Exception:
+        pass
+
+
 def run_ai_chat_with_tools(
     *,
     local_ai_service: Any,
@@ -2449,6 +2653,7 @@ def run_ai_chat_with_tools(
             if getattr(params, "allow_refine_test_plan", None) is not None
             else True
         ),
+        connected_hands=getattr(params, "connected_hands", None),
     )
     agent_client = get_agent_gateway_client()
 
@@ -2479,20 +2684,7 @@ def run_ai_chat_with_tools(
     messages.append({"role": "user", "content": params.message})
 
     last_plan: Dict[str, Any] = dict(params.current_plan) if isinstance(params.current_plan, dict) else {}
-    meta: Dict[str, Any] = {
-        "tool_rounds": 0,
-        "tools_used": [],
-        "succeeded_action_fps": [],
-        "desktop_phase": "start",
-        "flow_profile": _resolve_desktop_flow_profile(
-            getattr(params, "message", "") or "", plat
-        ),
-        "obs_count": 0,
-        "typed_texts": [],
-        "focused_apps": [],
-        "search_ui_done": False,
-        "repair_forward_only": False,
-    }
+    meta: Dict[str, Any] = _prepare_unified_agent_meta(params, plat)
     prof: Optional[Dict[str, Any]] = params.profile if isinstance(params.profile, dict) else None
     max_result = agent_tool_result_max_chars()
     _abort = abort_event or params.abort_event
@@ -2515,6 +2707,7 @@ def run_ai_chat_with_tools(
                 ),
             )
             meta["halt_reply"] = reply
+            _persist_unified_agent_session(params, meta, reply)
             return {}, [], meta
         if prof:
             assistant_msg = dispatch_chat_completion_messages(
@@ -2726,7 +2919,21 @@ def run_ai_chat_with_tools(
                 )
                 if getattr(params, "user_id", None) and not call_args.get("user_id"):
                     call_args["user_id"] = int(params.user_id)
-                result_text = _dispatch_cross_end_agent_tool(name, call_args)
+                rem_tool = _remaining_deadline_sec(params)
+                if name.startswith("mobile_"):
+                    # 阻塞路径无 UI 进度；仍传 abort，避免空等
+                    for pevt, pdata in _run_mobile_tool_with_progress(
+                        name,
+                        call_args,
+                        abort_event=_abort,
+                        timeout_cap=rem_tool,
+                    ):
+                        if pevt == "result":
+                            result_text = str(pdata)
+                else:
+                    result_text = _dispatch_cross_end_agent_tool(
+                        name, call_args, abort_event=_abort
+                    )
                 meta["tools_used"].append(name)
                 if name.startswith("mobile_") and isinstance(meta.get("cross_end_vars"), dict) is False:
                     meta["cross_end_vars"] = {}
@@ -2883,6 +3090,44 @@ def run_ai_chat_with_tools(
     raise ValueError(f"工具调用轮数超过上限（{_max_tool_rounds()}），请缩短任务或提高 AI_CHAT_TOOLS_MAX_ROUNDS")
 
 
+def run_unified_agent_blocking(
+    *,
+    local_ai_service: Any,
+    params: ChatToolLoopParams,
+    abort_event: Optional[threading.Event] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    """同步跑统一 Agent（PC/手机入口共用）；返回 (plan, meta, reply)。"""
+    last_reply = ""
+    last_meta: Dict[str, Any] = {}
+    last_plan: Dict[str, Any] = {}
+    err = ""
+    for evt, data in run_ai_chat_with_tools_stream(
+        local_ai_service=local_ai_service,
+        params=params,
+        abort_event=abort_event,
+    ):
+        if evt == "reply" and isinstance(data, dict):
+            t = (data.get("text") or "").strip()
+            if t:
+                last_reply = t
+        elif evt == "done" and isinstance(data, dict):
+            last_meta = data.get("meta") if isinstance(data.get("meta"), dict) else last_meta
+            if isinstance(data.get("plan"), dict):
+                last_plan = data["plan"]
+            if (data.get("reply") or "").strip():
+                last_reply = str(data.get("reply")).strip()
+        elif evt == "error":
+            err = str(data or "")
+    if not last_reply and err:
+        last_reply = err
+    if not last_meta:
+        last_meta = {"cross_end_vars": {}, "tools_used": []}
+    if not last_reply:
+        last_reply = last_meta.get("halt_reply") or last_meta.get("reply_text") or "（无文本回复）"
+    _persist_unified_agent_session(params, last_meta, last_reply)
+    return last_plan, last_meta, last_reply
+
+
 def run_ai_chat_with_tools_stream(
     *,
     local_ai_service: Any,
@@ -2916,6 +3161,7 @@ def run_ai_chat_with_tools_stream(
             if getattr(params, "allow_refine_test_plan", None) is not None
             else True
         ),
+        connected_hands=getattr(params, "connected_hands", None),
     )
     agent_client = get_agent_gateway_client()
 
@@ -2955,20 +3201,7 @@ def run_ai_chat_with_tools_stream(
         pass
 
     last_plan: Dict[str, Any] = dict(params.current_plan) if isinstance(params.current_plan, dict) else {}
-    meta: Dict[str, Any] = {
-        "tool_rounds": 0,
-        "tools_used": [],
-        "succeeded_action_fps": [],
-        "desktop_phase": "start",
-        "flow_profile": _resolve_desktop_flow_profile(
-            getattr(params, "message", "") or "", plat
-        ),
-        "obs_count": 0,
-        "typed_texts": [],
-        "focused_apps": [],
-        "search_ui_done": False,
-        "repair_forward_only": False,
-    }
+    meta: Dict[str, Any] = _prepare_unified_agent_meta(params, plat)
     prof: Optional[Dict[str, Any]] = params.profile if isinstance(params.profile, dict) else None
     max_result = agent_tool_result_max_chars()
     _abort = abort_event or params.abort_event
@@ -3049,6 +3282,7 @@ def run_ai_chat_with_tools_stream(
             llm_timeout = max(5, min(llm_timeout, int(rem)))
         last_think_len = 0
         announced_tools: set = set()
+        last_args_think = 0
         try:
             for evt_type, evt_data in dispatch_chat_stream(
                 messages, tools, prof, local_ai_service,
@@ -3072,7 +3306,17 @@ def run_ai_chat_with_tools_stream(
                             "thinking",
                             {
                                 "round": round_idx,
-                                "content": f"准备执行工具：{tname}…",
+                                "content": f"模型选定工具：{tname}，正在生成参数（尚未真正执行）…",
+                            },
+                        )
+                    alen = int((evt_data or {}).get("arguments_len") or 0)
+                    if alen and alen - last_args_think >= 120:
+                        last_args_think = alen
+                        yield (
+                            "thinking",
+                            {
+                                "round": round_idx,
+                                "content": f"正在生成工具参数…（已约 {alen} 字符）",
                             },
                         )
                 elif evt_type == "done":
@@ -3212,6 +3456,12 @@ def run_ai_chat_with_tools_stream(
                 or args.get("text")
                 or args.get("key")
                 or args.get("hint")
+                or (
+                    f"{len(args.get('steps') or [])} steps"
+                    if isinstance(args.get("steps"), list)
+                    else None
+                )
+                or (f"case_id={args.get('case_id')}" if args.get("case_id") else None)
                 or str(list(args.keys()))
             )
             yield ("tool_call_start", {"round": round_idx, "tool": name, "args_summary": str(args_summary)[:200]})
@@ -3539,7 +3789,25 @@ def run_ai_chat_with_tools_stream(
                         call_args["user_id"] = int(params.user_id)
                     except Exception:
                         pass
-                result_text = _dispatch_cross_end_agent_tool(name, call_args)
+                rem_tool = _remaining_deadline_sec(params)
+                if name.startswith("mobile_"):
+                    for pevt, pdata in _run_mobile_tool_with_progress(
+                        name,
+                        call_args,
+                        abort_event=_abort,
+                        timeout_cap=rem_tool,
+                    ):
+                        if pevt == "progress":
+                            yield (
+                                "thinking",
+                                {"round": round_idx, "content": str(pdata)},
+                            )
+                        elif pevt == "result":
+                            result_text = str(pdata)
+                else:
+                    result_text = _dispatch_cross_end_agent_tool(
+                        name, call_args, abort_event=_abort
+                    )
                 meta["tools_used"].append(name)
                 try:
                     parsed_ce = json.loads(result_text)
@@ -3548,7 +3816,12 @@ def run_ai_chat_with_tools_stream(
                             meta.setdefault("cross_end_vars", {}).update(parsed_ce["variables"])
                         if parsed_ce.get("sms_otp"):
                             meta.setdefault("cross_end_vars", {})["sms_otp"] = parsed_ce["sms_otp"]
-                        preview = parsed_ce.get("sms_otp") or parsed_ce.get("error") or ""
+                        preview = (
+                            parsed_ce.get("sms_otp")
+                            or parsed_ce.get("error")
+                            or parsed_ce.get("job_id")
+                            or ""
+                        )
                         if preview:
                             yield ("vision_result", {"text": f"cross_end:{name} {preview}"[:300]})
                 except Exception:

@@ -12,8 +12,7 @@ import java.util.UUID
 import javax.inject.Inject
 
 /**
- * AI 桥接：手机只发自然语言意图；推理在 PC（已绑定大模型）；
- * 保存与执行仍在手机本机。
+ * AI 桥接：与 PC 同一 Agent 大脑；本机与桌面为双手（已连接时联动）。
  */
 @HiltViewModel
 class AIBridgeViewModel @Inject constructor(
@@ -55,7 +54,11 @@ class AIBridgeViewModel @Inject constructor(
     }
 
     fun setAiMode(mode: String) {
-        val normalized = if (mode == "generate") "generate" else "chat"
+        val normalized = when (mode) {
+            "generate" -> "generate"
+            "chat" -> "chat"
+            else -> "agent"
+        }
         _uiState.update { it.copy(aiMode = normalized) }
     }
 
@@ -75,7 +78,7 @@ class AIBridgeViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         messages = it.messages + ChatMessage.System(
-                            "未配对 PC。请先在设置中连接，AI 推理在 PC 端完成。"
+                            "未配对 PC。请先在设置中连接；Agent 大脑在 PC，双手含本机与桌面。"
                         ),
                         isGenerating = false
                     )
@@ -117,11 +120,13 @@ class AIBridgeViewModel @Inject constructor(
                         )
                     }
                 } else if (result.success) {
-                    val reply = result.description.ifBlank {
-                        if (mode == "generate") {
-                            "未生成步骤。可换更具体的场景描述，或先用「对话」模式讨论。"
-                        } else {
-                            "已收到。需要可回放步骤时，请切换到「生成用例」模式。"
+                    val reply = result.reply.ifBlank {
+                        result.description.ifBlank {
+                            when (mode) {
+                                "generate" -> "未生成步骤。可换更具体的场景描述，或先用 Agent 模式讨论。"
+                                "chat" -> "已收到。"
+                                else -> "Agent 已处理（与 PC 同一大脑）。"
+                            }
                         }
                     }
                     _uiState.update {

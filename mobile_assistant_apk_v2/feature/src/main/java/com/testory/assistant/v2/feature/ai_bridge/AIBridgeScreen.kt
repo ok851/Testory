@@ -106,9 +106,15 @@ fun AIBridgeScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterChip(
+                            selected = uiState.aiMode == "agent",
+                            onClick = { viewModel.setAiMode("agent") },
+                            label = { Text("Agent") },
+                            enabled = !uiState.isGenerating
+                        )
+                        FilterChip(
                             selected = uiState.aiMode == "chat",
                             onClick = { viewModel.setAiMode("chat") },
-                            label = { Text("对话") },
+                            label = { Text("闲聊") },
                             enabled = !uiState.isGenerating
                         )
                         FilterChip(
@@ -120,10 +126,10 @@ fun AIBridgeScreen(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = if (uiState.aiMode == "generate") {
-                            "将生成可回放步骤（需等 PC 推理）"
-                        } else {
-                            "自由对话：不会强制生成用例 JSON"
+                        text = when (uiState.aiMode) {
+                            "generate" -> "仅生成手机可回放步骤"
+                            "chat" -> "短回复，不调跨端工具"
+                            else -> "与 PC 同一 Agent；已连接端可联动（桌面/本机）"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -139,8 +145,11 @@ fun AIBridgeScreen(
                             modifier = Modifier.weight(1f),
                             placeholder = {
                                 Text(
-                                    if (uiState.aiMode == "generate") "描述要生成的测试场景…"
-                                    else "随便问，或讨论测试思路…"
+                                    when (uiState.aiMode) {
+                                        "generate" -> "描述要生成的测试场景…"
+                                        "chat" -> "随便问…"
+                                        else -> "例如：登录某应用并取验证码填写…"
+                                    }
                                 )
                             },
                             maxLines = 3,
@@ -440,6 +449,6 @@ data class AIBridgeUiState(
     val aiReady: Boolean = false,
     val aiModelLabel: String = "",
     val aiMessage: String = "",
-    /** chat=自由对话；generate=生成可回放步骤（对齐 PC「是否生成用例」开关） */
-    val aiMode: String = "chat"
+    /** agent=与 PC 同一大脑；chat=闲聊；generate=仅生成步骤 */
+    val aiMode: String = "agent"
 )

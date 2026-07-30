@@ -2,6 +2,7 @@ package com.testory.assistant.v2.core.communication
 
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import com.testory.assistant.v2.core.model.*
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
@@ -66,9 +67,30 @@ class OkHttpPcSyncClient @Inject constructor(
         context.getSharedPreferences("testory_pc_sync", Context.MODE_PRIVATE)
     }
 
+    private fun resolveStableDeviceId(): String {
+        // Build.SERIAL 在 Android 10+ 常为 "unknown"，PC 若按 device_id 过滤会导致永远领不到任务
+        val androidId = try {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+        } catch (_: Exception) {
+            null
+        }?.trim().orEmpty()
+        if (androidId.isNotBlank() && !androidId.equals("unknown", ignoreCase = true)) {
+            return androidId
+        }
+        val serial = try {
+            Build.SERIAL
+        } catch (_: Exception) {
+            ""
+        }?.trim().orEmpty()
+        if (serial.isNotBlank() && !serial.equals("unknown", ignoreCase = true)) {
+            return serial
+        }
+        return Build.MODEL.replace(" ", "_").ifBlank { "android-device" }
+    }
+
     private val deviceInfo: DeviceInfo by lazy {
         DeviceInfo(
-            deviceId = Build.SERIAL.ifEmpty { Build.MODEL.replace(" ", "_") },
+            deviceId = resolveStableDeviceId(),
             deviceName = Build.MODEL,
             model = Build.MODEL,
             manufacturer = Build.MANUFACTURER,
@@ -471,6 +493,8 @@ class OkHttpPcSyncClient @Inject constructor(
                             caseName = aiResp.case_name ?: "AI生成用例",
                             description = aiResp.description ?: "",
                             expectedResult = aiResp.expected_result ?: "",
+                            reply = aiResp.reply ?: aiResp.description ?: "",
+                            mode = aiResp.mode ?: mode,
                             steps = coreSteps,
                             provider = aiResp.ai_status?.provider ?: "",
                             model = aiResp.ai_status?.model ?: ""

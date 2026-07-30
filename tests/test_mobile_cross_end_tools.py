@@ -36,7 +36,7 @@ def test_mobile_extract_otp_awaits_device_job(monkeypatch):
         assert kwargs.get("job_kind") == "extract_otp"
         return "job-otp-1"
 
-    def fake_wait(job_id, timeout_sec=120.0):
+    def fake_wait(job_id, timeout_sec=120.0, **kwargs):
         assert job_id == "job-otp-1"
         return {
             "job_id": job_id,
@@ -51,11 +51,90 @@ def test_mobile_extract_otp_awaits_device_job(monkeypatch):
 
     with patch("mobile_cross_end_tools.enqueue_mobile_job", side_effect=fake_enqueue):
         with patch("mobile_cross_end_tools.wait_mobile_job", side_effect=fake_wait):
-            out = mobile_extract_otp(timeout_sec=30, mock_allowed=True)
+            with patch(
+                "mobile_cross_end_tools.ensure_mobile_hand_ready",
+                return_value=None,
+            ):
+                out = mobile_extract_otp(timeout_sec=30, mock_allowed=True)
     assert out["success"] is True
     assert out["sms_otp"] == "998877"
     assert out["job_id"] == "job-otp-1"
     assert out["source"] == "device_await"
+
+
+def test_ensure_mobile_hand_ready_fails_without_pair():
+    from mobile_cross_end_tools import ensure_mobile_hand_ready, mobile_run_steps
+
+    with patch(
+        "mobile_sync_store.list_paired_devices_for_user",
+        return_value=[],
+    ):
+        err = ensure_mobile_hand_ready(user_id=1)
+        assert err and err.get("error_code") == "MOBILE_HAND_OFFLINE"
+        out = mobile_run_steps(
+            [{"action": "open_app", "description": "QQ"}],
+            user_id=1,
+            timeout_sec=5,
+        )
+        assert out.get("success") is False
+        assert out.get("error_code") == "MOBILE_HAND_OFFLINE"
+
+
+def test_run_job_persists_across_memory_clear(tmp_path, monkeypatch):
+    """模拟双进程：enqueue 落盘后清空内存，pop 仍能领到。"""
+    import mobile_sync_store as store
+
+    monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
+    store._STORE_PATH = None
+    store._JOBS_PATH = None
+    store._JOBS_FILE_MTIME = 0.0
+    with store._LOCK:
+        store._RUN_JOBS.clear()
+        store._RUN_EVENTS.clear()
+        store._DEVICE_TOKENS.clear()
+
+    jid = store.enqueue_run_job(
+        case_id=0,
+        steps=[{"action": "open_app", "description": "QQ"}],
+        user_id=1,
+        device_id="",
+        job_kind="run_steps",
+    )
+    assert (tmp_path / "mobile_sync" / "run_jobs.json").is_file()
+
+    # 模拟另一进程：内存空，只靠磁盘
+    with store._LOCK:
+        store._RUN_JOBS.clear()
+        store._RUN_EVENTS.clear()
+        store._JOBS_FILE_MTIME = 0.0
+
+    got = store.pop_pending_run_for_device("dev-x", job_kind="run_steps", user_id=1)
+    assert got is not None
+    assert got["job_id"] == jid
+    assert got["status"] == "running"
+
+
+def test_pop_ignores_unknown_target_device_id(tmp_path, monkeypatch):
+    import mobile_sync_store as store
+
+    monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
+    store._STORE_PATH = None
+    store._JOBS_PATH = None
+    store._JOBS_FILE_MTIME = 0.0
+    with store._LOCK:
+        store._RUN_JOBS.clear()
+        store._RUN_EVENTS.clear()
+
+    jid = store.enqueue_run_job(
+        case_id=0,
+        steps=[{"action": "open_app"}],
+        user_id=1,
+        device_id="unknown",
+        job_kind="run_steps",
+    )
+    got = store.pop_pending_run_for_device("phone-android-id", job_kind="run_steps", user_id=1)
+    assert got is not None
+    assert got["job_id"] == jid
 
 
 def test_dispatch_cross_end_tool_desktop_alias():
@@ -106,7 +185,7 @@ def test_enqueue_run_job_stores_kind():
     assert job["job_meta"]["skill"] == "extract_otp"
 
 
-def test_pop_pending_job_kind_filter_does_not_swallow_run_steps():
+def test_pop_pending_job_kind_filter_does_not_swallow_run_steps(tmp_path, monkeypatch):
     """冒烟缺陷回归：取码轮询不得把 run_steps 标成 running 后丢弃。"""
     import mobile_sync_store as mss
     from mobile_sync_store import (
@@ -115,6 +194,10 @@ def test_pop_pending_job_kind_filter_does_not_swallow_run_steps():
         pop_pending_run_for_device,
     )
 
+    monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
+    mss._STORE_PATH = None
+    mss._JOBS_PATH = None
+    mss._JOBS_FILE_MTIME = 0.0
     with mss._LOCK:
         mss._RUN_JOBS.clear()
         mss._RUN_EVENTS.clear()

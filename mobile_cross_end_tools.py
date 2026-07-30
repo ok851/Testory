@@ -67,21 +67,75 @@ def enqueue_mobile_job(
 ) -> str:
     from mobile_sync_store import enqueue_run_job
 
+    # 模型常瞎填 device_id（adb udid / unknown）；无效则清空，让任意已配对设备可领
+    did = (device_id or "").strip()
+    if did:
+        try:
+            from mobile_sync_store import list_paired_devices_for_user
+
+            paired = list_paired_devices_for_user(int(user_id or 0))
+            ok_ids = {(d.get("device_id") or "").strip() for d in paired}
+            if did not in ok_ids or did.lower() == "unknown":
+                did = ""
+        except Exception:
+            did = ""
+
     return enqueue_run_job(
         case_id=int(case_id or 0),
         steps=list(steps or []),
         user_id=int(user_id or 0),
-        device_id=(device_id or "").strip(),
+        device_id=did,
         source=source,
         job_kind=job_kind,
         job_meta=dict(job_meta or {}),
     )
 
 
-def wait_mobile_job(job_id: str, *, timeout_sec: float = 120.0) -> Dict[str, Any]:
+def wait_mobile_job(
+    job_id: str,
+    *,
+    timeout_sec: float = 120.0,
+    abort_event: Any = None,
+    on_tick: Any = None,
+) -> Dict[str, Any]:
     from mobile_sync_store import wait_for_run_job
 
-    return wait_for_run_job(job_id, timeout_sec=timeout_sec)
+    return wait_for_run_job(
+        job_id,
+        timeout_sec=timeout_sec,
+        abort_event=abort_event,
+        on_tick=on_tick,
+    )
+
+
+def ensure_mobile_hand_ready(user_id: int = 0, device_id: str = "") -> Optional[Dict[str, Any]]:
+    """无配对手机时立刻失败，避免 enqueue 后空等被误当成「工具调用卡住」。"""
+    try:
+        from mobile_sync_store import list_paired_devices_for_user
+
+        devices = list_paired_devices_for_user(int(user_id or 0))
+    except Exception:
+        devices = []
+    if not devices:
+        return {
+            "success": False,
+            "ok": False,
+            "error": (
+                "未检测到已配对手机。请先在「移动端」完成配对，并保持 APK 已连接；"
+                "领取 PC 任务还需开启无障碍（PcRunJobPoller）。"
+            ),
+            "error_code": "MOBILE_HAND_OFFLINE",
+        }
+    want = (device_id or "").strip()
+    if want and not any((d.get("device_id") or "") == want for d in devices):
+        return {
+            "success": False,
+            "ok": False,
+            "error": f"指定 device_id={want} 未在已配对列表中",
+            "error_code": "MOBILE_DEVICE_MISMATCH",
+            "paired_devices": [d.get("device_id") for d in devices],
+        }
+    return None
 
 
 def mobile_extract_otp(
@@ -92,6 +146,8 @@ def mobile_extract_otp(
     user_id: int = 0,
     device_id: str = "",
     mock_allowed: bool = True,
+    abort_event: Any = None,
+    on_tick: Any = None,
 ) -> Dict[str, Any]:
     """高层工具：等待手机本机提取短信/通知验证码，写入 sms_otp。
 
@@ -107,6 +163,10 @@ def mobile_extract_otp(
             "source": "mock_env",
             "evidence": [{"type": "otp_mock", "hint": "MOBILE_OTP_MOCK"}],
         }
+
+    hand_err = ensure_mobile_hand_ready(user_id, device_id)
+    if hand_err:
+        return hand_err
 
     job_meta = {
         "skill": "extract_otp",
@@ -133,7 +193,12 @@ def mobile_extract_otp(
         job_meta=job_meta,
         source="mobile_extract_otp",
     )
-    job = wait_mobile_job(job_id, timeout_sec=timeout_sec)
+    job = wait_mobile_job(
+        job_id,
+        timeout_sec=timeout_sec,
+        abort_event=abort_event,
+        on_tick=on_tick,
+    )
     payload = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
     vars_out = {}
     if isinstance(payload.get("variables"), dict):
@@ -193,14 +258,21 @@ def mobile_extract_otp(
 def mobile_run_steps(
     steps: List[Dict[str, Any]],
     *,
-    timeout_sec: float = 600.0,
+    timeout_sec: float = 180.0,
     user_id: int = 0,
     device_id: str = "",
     case_id: int = 0,
+    abort_event: Any = None,
+    on_tick: Any = None,
+    skip_hand_check: bool = False,
 ) -> Dict[str, Any]:
     """高层工具：把步骤下发给已配对手机本机回放并等待结果。"""
     if not steps:
         return {"success": False, "ok": False, "error": "steps 为空"}
+    if not skip_hand_check:
+        hand_err = ensure_mobile_hand_ready(user_id, device_id)
+        if hand_err:
+            return hand_err
     job_id = enqueue_mobile_job(
         steps=list(steps),
         case_id=case_id,
@@ -209,7 +281,12 @@ def mobile_run_steps(
         job_kind="run_steps",
         source="mobile_run_steps",
     )
-    job = wait_mobile_job(job_id, timeout_sec=timeout_sec)
+    job = wait_mobile_job(
+        job_id,
+        timeout_sec=timeout_sec,
+        abort_event=abort_event,
+        on_tick=on_tick,
+    )
     payload = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
     st = str(job.get("status") or "").strip().lower()
     ok = st in ("success", "ok") or payload.get("success") is True
@@ -220,7 +297,12 @@ def mobile_run_steps(
         "status": st,
         "result_payload": payload,
         "variables": payload.get("variables") if isinstance(payload.get("variables"), dict) else {},
-        "error": None if ok else (job.get("error") or payload.get("error") or "手机本机执行失败"),
+        "error": None if ok else (
+            job.get("error")
+            or payload.get("error")
+            or "手机本机执行失败"
+        ),
+        "error_code": None if ok else (job.get("error_code") or payload.get("error_code")),
         "source": "device_await",
     }
 
@@ -228,9 +310,11 @@ def mobile_run_steps(
 def mobile_run_case(
     case_id: int,
     *,
-    timeout_sec: float = 600.0,
+    timeout_sec: float = 180.0,
     user_id: int = 0,
     device_id: str = "",
+    abort_event: Any = None,
+    on_tick: Any = None,
 ) -> Dict[str, Any]:
     """按 PC 用例库 case_id 拉步骤后本机执行（需 user_id 有权限）。"""
     from database import Database
@@ -250,6 +334,8 @@ def mobile_run_case(
         user_id=user_id,
         device_id=device_id,
         case_id=cid,
+        abort_event=abort_event,
+        on_tick=on_tick,
     )
 
 
@@ -296,10 +382,19 @@ DESKTOP_ALIAS_TOOL_NAMES = frozenset(
 )
 
 
-def dispatch_cross_end_tool(name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def dispatch_cross_end_tool(
+    name: str,
+    args: Optional[Dict[str, Any]] = None,
+    *,
+    abort_event: Any = None,
+    on_tick: Any = None,
+) -> Dict[str, Any]:
     """供 ai_chat_tool_loop 调用。"""
     a = dict(args or {})
     n = (name or "").strip()
+    # 内部控制参数不进工具 schema
+    a.pop("_abort_event", None)
+    a.pop("_on_tick", None)
     try:
         if n == "desktop_launch":
             return desktop_launch(str(a.get("app_name") or a.get("name") or ""))
@@ -318,6 +413,8 @@ def dispatch_cross_end_tool(name: str, args: Optional[Dict[str, Any]] = None) ->
                 pattern=str(a.get("pattern") or a.get("regex") or ""),
                 user_id=int(a.get("user_id") or 0),
                 device_id=str(a.get("device_id") or ""),
+                abort_event=abort_event,
+                on_tick=on_tick,
             )
         if n == "mobile_run_steps":
             steps = a.get("steps") or []
@@ -325,26 +422,34 @@ def dispatch_cross_end_tool(name: str, args: Optional[Dict[str, Any]] = None) ->
                 return {"success": False, "error": "steps 须为数组"}
             return mobile_run_steps(
                 steps,
-                timeout_sec=float(a.get("timeout_sec") or 600),
+                timeout_sec=float(a.get("timeout_sec") or 180),
                 user_id=int(a.get("user_id") or 0),
                 device_id=str(a.get("device_id") or ""),
                 case_id=int(a.get("case_id") or 0),
+                abort_event=abort_event,
+                on_tick=on_tick,
             )
         if n == "mobile_run_case":
             return mobile_run_case(
                 int(a.get("case_id") or 0),
-                timeout_sec=float(a.get("timeout_sec") or 600),
+                timeout_sec=float(a.get("timeout_sec") or 180),
                 user_id=int(a.get("user_id") or 0),
                 device_id=str(a.get("device_id") or ""),
+                abort_event=abort_event,
+                on_tick=on_tick,
             )
     except Exception as e:
         return {"success": False, "ok": False, "error": str(e)}
     return {"success": False, "ok": False, "error": f"未知跨端工具 {n}"}
 
 
-def cross_end_tool_schemas() -> List[Dict[str, Any]]:
-    """Agent 可见的统一多端工具面（桌面别名 + 手机本机）。"""
-    return [
+def cross_end_tool_schemas(
+    *,
+    include_desktop: bool = True,
+    include_mobile: bool = True,
+) -> List[Dict[str, Any]]:
+    """Agent 可见的统一多端工具面（按已连接双手裁剪）。"""
+    all_schemas: List[Dict[str, Any]] = [
         {
             "type": "function",
             "function": {
@@ -462,3 +567,15 @@ def cross_end_tool_schemas() -> List[Dict[str, Any]]:
             },
         },
     ]
+    out: List[Dict[str, Any]] = []
+    for s in all_schemas:
+        try:
+            name = str((s.get("function") or {}).get("name") or "")
+        except Exception:
+            name = ""
+        if name.startswith("desktop_") and not include_desktop:
+            continue
+        if name.startswith("mobile_") and not include_mobile:
+            continue
+        out.append(s)
+    return out

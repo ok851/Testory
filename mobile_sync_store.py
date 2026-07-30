@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import threading
 import time
@@ -21,33 +22,69 @@ _RUN_EVENTS: Dict[str, List[Dict[str, Any]]] = {}
 _PAIR_TTL_SEC = 120
 _PAIR_RETRY_WINDOW_SEC = 30
 _STORE_PATH: Optional[Path] = None
+_JOBS_PATH: Optional[Path] = None
+_JOBS_FILE_MTIME: float = 0.0
+
+
+def _sync_dirs() -> List[Path]:
+    """可能存放 mobile_sync 的目录（兼容 UAT_DATA_DIR 与源码旁落盘）。"""
+    dirs: List[Path] = []
+    seen = set()
+    candidates: List[Path] = []
+    env = (os.environ.get("UAT_DATA_DIR") or "").strip()
+    if env:
+        candidates.append(Path(env) / "mobile_sync")
+    try:
+        from install_paths import uat_data_dir  # type: ignore
+
+        candidates.append(Path(uat_data_dir()) / "mobile_sync")
+    except Exception:
+        pass
+    candidates.append(Path(__file__).resolve().parent / "mobile_sync")
+    for d in candidates:
+        try:
+            key = str(d.resolve())
+        except Exception:
+            key = str(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        dirs.append(d)
+    return dirs or [Path(__file__).resolve().parent / "mobile_sync"]
 
 
 def _store_file() -> Path:
     global _STORE_PATH
     if _STORE_PATH is None:
-        try:
-            from install_paths import uat_data_dir
-
-            base = uat_data_dir()
-        except Exception:
-            base = Path(__file__).resolve().parent
-        _STORE_PATH = Path(base) / "mobile_sync" / "tokens.json"
+        primary = _sync_dirs()[0]
+        _STORE_PATH = primary / "tokens.json"
     return _STORE_PATH
 
 
+def _jobs_file() -> Path:
+    global _JOBS_PATH
+    if _JOBS_PATH is None:
+        _JOBS_PATH = _store_file().parent / "run_jobs.json"
+    return _JOBS_PATH
+
+
 def _load_persisted() -> None:
-    path = _store_file()
-    if not path.is_file():
-        return
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        tokens = raw.get("device_tokens") or {}
-        if isinstance(tokens, dict):
-            with _LOCK:
-                _DEVICE_TOKENS.update(tokens)
-    except Exception:
-        pass
+    # 合并所有候选目录中的 tokens，避免「Tauri UAT_DATA_DIR」与「源码旁 mobile_sync」分裂
+    for d in _sync_dirs():
+        path = d / "tokens.json"
+        if not path.is_file():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            tokens = raw.get("device_tokens") or {}
+            if isinstance(tokens, dict):
+                with _LOCK:
+                    for tok, meta in tokens.items():
+                        if tok and isinstance(meta, dict):
+                            _DEVICE_TOKENS[tok] = meta
+        except Exception:
+            pass
+    _load_jobs_from_disk(force=True)
 
 
 def _save_persisted() -> None:
@@ -58,7 +95,116 @@ def _save_persisted() -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-_load_persisted()
+def _status_rank(st: str) -> int:
+    s = (st or "").strip().lower()
+    if s == "pending":
+        return 0
+    if s == "running":
+        return 1
+    if s in ("success", "ok", "error", "failed", "cancelled"):
+        return 2
+    return 0
+
+
+def _load_jobs_from_disk(*, force: bool = False) -> None:
+    """把磁盘上的 run job 合并进内存，解决双 Flask / 多进程各持一份 _RUN_JOBS 的问题。"""
+    global _JOBS_FILE_MTIME
+    path = _jobs_file()
+    if not path.is_file():
+        return
+    try:
+        mtime = float(path.stat().st_mtime)
+    except Exception:
+        return
+    if not force and mtime <= _JOBS_FILE_MTIME:
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    jobs = raw.get("jobs") if isinstance(raw, dict) else None
+    events = raw.get("events") if isinstance(raw, dict) else None
+    if not isinstance(jobs, dict):
+        return
+    with _LOCK:
+        for jid, job in jobs.items():
+            if not jid or not isinstance(job, dict):
+                continue
+            cur = _RUN_JOBS.get(jid)
+            if cur is None:
+                _RUN_JOBS[jid] = dict(job)
+            else:
+                if _status_rank(str(job.get("status"))) > _status_rank(str(cur.get("status"))):
+                    _RUN_JOBS[jid] = dict(job)
+        if isinstance(events, dict):
+            for jid, evs in events.items():
+                if isinstance(evs, list) and jid:
+                    _RUN_EVENTS.setdefault(jid, [])
+                    if not _RUN_EVENTS[jid] and evs:
+                        _RUN_EVENTS[jid] = list(evs)[-50:]
+        _JOBS_FILE_MTIME = mtime
+
+
+def _persist_jobs_unlocked() -> None:
+    global _JOBS_FILE_MTIME
+    path = _jobs_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # 清理过旧终态，避免文件无限涨
+    now = time.time()
+    pruned: Dict[str, Dict[str, Any]] = {}
+    for jid, job in list(_RUN_JOBS.items()):
+        st = str(job.get("status") or "").strip().lower()
+        finished = float(job.get("finished_at") or 0) or float(job.get("created_at") or 0)
+        if st in ("success", "ok", "error", "failed", "cancelled") and finished and now - finished > 3600:
+            _RUN_JOBS.pop(jid, None)
+            _RUN_EVENTS.pop(jid, None)
+            continue
+        pruned[jid] = job
+    payload = {
+        "jobs": pruned,
+        "events": {k: (v[-30:] if isinstance(v, list) else []) for k, v in _RUN_EVENTS.items() if k in pruned},
+    }
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    try:
+        _JOBS_FILE_MTIME = float(path.stat().st_mtime)
+    except Exception:
+        _JOBS_FILE_MTIME = time.time()
+
+
+def _migrate_legacy_jobs_once() -> None:
+    """启动时把其它目录里的 pending job 迁到主目录（仅一次合并）。"""
+    primary = _jobs_file()
+    for d in _sync_dirs():
+        path = d / "run_jobs.json"
+        if path == primary or not path.is_file():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            jobs = raw.get("jobs") if isinstance(raw, dict) else None
+            if not isinstance(jobs, dict):
+                continue
+            with _LOCK:
+                changed = False
+                for jid, job in jobs.items():
+                    if not jid or not isinstance(job, dict):
+                        continue
+                    if jid not in _RUN_JOBS:
+                        _RUN_JOBS[jid] = dict(job)
+                        changed = True
+                if changed:
+                    _persist_jobs_unlocked()
+        except Exception:
+            continue
+
+
+def _bootstrap_persisted() -> None:
+    _load_persisted()
+    _migrate_legacy_jobs_once()
+
+
+_bootstrap_persisted()
 
 
 def create_pair_code(user_id: int, tenant_id: Optional[int] = None) -> Dict[str, Any]:
@@ -132,6 +278,28 @@ def resolve_device_token() -> Tuple[Optional[Dict[str, Any]], Optional[Any]]:
     if not meta:
         return None, (jsonify({"success": False, "error": "设备 token 无效"}), 401)
     return dict(meta), None
+
+
+def list_paired_devices_for_user(user_id: int) -> List[Dict[str, Any]]:
+    """该用户当前有效的已配对手机（双手：phone）。"""
+    uid = int(user_id or 0)
+    out: List[Dict[str, Any]] = []
+    with _LOCK:
+        for tok, meta in list(_DEVICE_TOKENS.items()):
+            if not isinstance(meta, dict):
+                continue
+            try:
+                if int(meta.get("user_id") or 0) != uid:
+                    continue
+            except Exception:
+                continue
+            out.append({
+                "device_id": meta.get("device_id") or "",
+                "user_id": uid,
+                "paired_at": meta.get("paired_at"),
+                "token_suffix": (tok[-6:] if tok else ""),
+            })
+    return out
 
 
 def list_accessible_cases(db: Any, user_id: int) -> List[Dict[str, Any]]:
@@ -215,6 +383,7 @@ def enqueue_run_job(
     job_meta: Optional[Dict[str, Any]] = None,
 ) -> str:
     job_id = secrets.token_hex(12)
+    _load_jobs_from_disk(force=True)
     with _LOCK:
         _RUN_JOBS[job_id] = {
             "job_id": job_id,
@@ -229,6 +398,7 @@ def enqueue_run_job(
             "created_at": time.time(),
         }
         _RUN_EVENTS[job_id] = []
+        _persist_jobs_unlocked()
     return job_id
 
 
@@ -236,6 +406,7 @@ def pop_pending_run_for_device(
     device_id: str,
     *,
     job_kind: str = "",
+    user_id: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """取出一条 pending job 并标为 running。
 
@@ -243,24 +414,51 @@ def pop_pending_run_for_device(
     """
     device_id = (device_id or "").strip()
     want_kind = (job_kind or "").strip().lower()
+    want_uid = int(user_id or 0)
+    _load_jobs_from_disk(force=True)
     with _LOCK:
+        skipped = []
         for job_id, job in list(_RUN_JOBS.items()):
             if job.get("status") != "pending":
                 continue
+            job_uid = int(job.get("user_id") or 0)
+            # job.user_id==0 视为通配（旧调用）；否则须与配对用户一致
+            if want_uid and job_uid and job_uid != want_uid:
+                skipped.append(f"{job_id}:user_mismatch")
+                continue
             target = (job.get("device_id") or "").strip()
-            if target and device_id and target != device_id:
+            # 目标为空 / unknown：任意本用户设备可领；否则须精确匹配
+            if target and target.lower() != "unknown" and device_id and target != device_id:
+                skipped.append(f"{job_id}:device_mismatch({target}!={device_id})")
                 continue
             if want_kind:
                 kind = str(job.get("job_kind") or "run_steps").strip().lower()
                 if kind != want_kind:
+                    skipped.append(f"{job_id}:kind={kind}")
                     continue
             job["status"] = "running"
+            job["claimed_by"] = device_id
+            job["claimed_at"] = time.time()
+            _persist_jobs_unlocked()
             return dict(job)
+        if skipped:
+            try:
+                from logger import uat_logger
+
+                uat_logger.info(
+                    "mobile pending miss device=%s kind=%s pending_skips=%s",
+                    device_id,
+                    want_kind or "*",
+                    ";".join(skipped[:12]),
+                )
+            except Exception:
+                pass
     return None
 
 
 def requeue_run_job(job_id: str) -> bool:
     """将误取的 running job 退回 pending（未被执行时使用）。"""
+    _load_jobs_from_disk(force=True)
     with _LOCK:
         job = _RUN_JOBS.get(job_id)
         if not job:
@@ -269,10 +467,14 @@ def requeue_run_job(job_id: str) -> bool:
             return False
         job["status"] = "pending"
         job.pop("finished_at", None)
+        job.pop("claimed_by", None)
+        job.pop("claimed_at", None)
+        _persist_jobs_unlocked()
         return True
 
 
 def append_run_events(job_id: str, payload: Dict[str, Any]) -> bool:
+    _load_jobs_from_disk(force=True)
     with _LOCK:
         job = _RUN_JOBS.get(job_id)
         if not job:
@@ -285,6 +487,7 @@ def append_run_events(job_id: str, payload: Dict[str, Any]) -> bool:
             if str(job.get("status") or "") == "running":
                 job["status"] = "pending"
                 job.pop("finished_at", None)
+            _persist_jobs_unlocked()
             return True
         if status in ("success", "error", "failed", "cancelled", "ok"):
             job["status"] = "success" if status in ("success", "ok") else (
@@ -292,15 +495,36 @@ def append_run_events(job_id: str, payload: Dict[str, Any]) -> bool:
             )
             job["finished_at"] = time.time()
             job["result_payload"] = dict(payload)
+            _persist_jobs_unlocked()
         elif payload.get("status"):
             job["status"] = payload.get("status")
+            _persist_jobs_unlocked()
         return True
 
 
 def get_run_job(job_id: str) -> Optional[Dict[str, Any]]:
+    _load_jobs_from_disk(force=True)
     with _LOCK:
         job = _RUN_JOBS.get(job_id)
         return dict(job) if job else None
+
+
+def cancel_run_job(job_id: str, *, error: str = "", error_code: str = "MOBILE_JOB_CANCELLED") -> bool:
+    """将 pending/running job 标为 cancelled（任务中止时避免手机稍后误执行）。"""
+    _load_jobs_from_disk(force=True)
+    with _LOCK:
+        job = _RUN_JOBS.get(job_id)
+        if not job:
+            return False
+        st = str(job.get("status") or "").strip().lower()
+        if st in ("success", "error", "failed", "cancelled", "ok"):
+            return False
+        job["status"] = "cancelled"
+        job["error"] = (error or "").strip() or "任务已取消"
+        job["error_code"] = error_code
+        job["finished_at"] = time.time()
+        _persist_jobs_unlocked()
+        return True
 
 
 def wait_for_run_job(
@@ -308,11 +532,30 @@ def wait_for_run_job(
     *,
     timeout_sec: float = 600.0,
     poll_interval_sec: float = 1.0,
+    abort_event: Any = None,
+    on_tick: Any = None,
 ) -> Dict[str, Any]:
-    """阻塞等待手机本机跑完并上报事件。返回 job 快照（含 result_payload）。"""
+    """阻塞等待手机本机跑完并上报事件。返回 job 快照（含 result_payload）。
+
+    abort_event: 任务中止时立刻返回，不再空等。
+    on_tick: 可选回调 ``on_tick(job_snapshot)``，用于 UI 进度（勿做重活）。
+    """
     deadline = time.time() + max(1.0, float(timeout_sec))
-    terminal = {"success", "error", "failed", "cancelled"}
+    terminal = {"success", "error", "failed", "cancelled", "ok"}
+    last_tick = 0.0
     while time.time() < deadline:
+        if abort_event is not None and getattr(abort_event, "is_set", lambda: False)():
+            cancel_run_job(
+                job_id,
+                error="任务已中止，停止等待手机本机执行",
+                error_code="MOBILE_AWAIT_ABORTED",
+            )
+            job = get_run_job(job_id) or {"job_id": job_id}
+            job = dict(job)
+            job["status"] = "cancelled"
+            job["error"] = job.get("error") or "任务已中止，停止等待手机本机执行"
+            job["error_code"] = job.get("error_code") or "MOBILE_AWAIT_ABORTED"
+            return job
         job = get_run_job(job_id)
         if not job:
             return {
@@ -323,14 +566,36 @@ def wait_for_run_job(
         st = str(job.get("status") or "").strip().lower()
         if st in terminal:
             return job
+        now = time.time()
+        if on_tick is not None and (now - last_tick) >= 5.0:
+            last_tick = now
+            try:
+                on_tick(dict(job))
+            except Exception:
+                pass
         time.sleep(max(0.2, float(poll_interval_sec)))
     job = get_run_job(job_id) or {"job_id": job_id}
     job = dict(job)
+    st = str(job.get("status") or "").strip().lower()
+    if st == "pending":
+        hint = (
+            f"手机未领取任务（status=pending，等了 {int(timeout_sec)}s）。"
+            "请确认：① APK 已配对且显示已连接；② 无障碍服务已开启（PcRunJobPoller 仅在无障碍内轮询）；"
+            "③ 手机与 PC 同网可访问 Flask。"
+        )
+        code = "MOBILE_JOB_NOT_PICKED"
+    elif st == "running":
+        hint = (
+            f"手机已领取但未回报完成（status=running，等了 {int(timeout_sec)}s）。"
+            "请查看手机无障碍回放是否卡住或报错。"
+        )
+        code = "MOBILE_JOB_RUNNING_STALL"
+    else:
+        hint = f"等待手机本机执行超时（{int(timeout_sec)}s）；请在手机上完成该阶段后重试"
+        code = "MOBILE_DEVICE_AWAIT_TIMEOUT"
     job["status"] = "error"
-    job["error"] = job.get("error") or (
-        f"等待手机本机执行超时（{int(timeout_sec)}s）；请在手机上完成该阶段后重试"
-    )
-    job["error_code"] = "MOBILE_DEVICE_AWAIT_TIMEOUT"
+    job["error"] = job.get("error") or hint
+    job["error_code"] = job.get("error_code") or code
     return job
 
 
@@ -755,6 +1020,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         job = pop_pending_run_for_device(
             meta.get("device_id") or "",
             job_kind=job_kind,
+            user_id=int(meta.get("user_id") or 0),
         )
         if not job:
             return jsonify({"success": True, "has_job": False})
@@ -896,14 +1162,19 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         user_message = (body.get("message") or "").strip()
         if not user_message:
             return jsonify({"success": False, "error": "请输入测试需求描述"}), 400
-        # chat=自由对话（默认）；generate=生成可回放步骤（用户显式选择）
-        mode = (body.get("mode") or body.get("intent") or "chat").strip().lower()
+        # chat=短闲聊；agent=同一统一 Agent 工具循环；generate=仅生成 Android 步骤
+        mode = (body.get("mode") or body.get("intent") or "agent").strip().lower()
         if mode in ("case", "steps", "plan", "generate_case"):
             mode = "generate"
-        if mode not in ("chat", "generate"):
+        if mode in ("chat", "talk", "free"):
             mode = "chat"
+        if mode in ("agent", "auto", "tool", ""):
+            mode = "agent"
+        if mode not in ("chat", "generate", "agent"):
+            mode = "agent"
 
         user_id = int(meta["user_id"])
+        session_id = (body.get("session_id") or body.get("agent_session_id") or "").strip()
         user_data = Database().get_user_by_id(user_id)
         project_name = (user_data.get("project_name") or user_data.get("username") or "") if user_data else ""
 
@@ -921,7 +1192,7 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
                 "ai_status": status,
             }), 400
 
-        # 寒暄：本地即时回复
+        # 寒暄：本地即时回复（agent/chat 均可）
         chitchat = _mobile_ai_chitchat_reply(user_message)
         if chitchat is not None:
             return jsonify({
@@ -930,6 +1201,70 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
                 "mode": mode,
                 "ai_status": status,
             })
+
+        # 统一 Agent：与 /ai-test 同一工具循环（一脑多端双手）
+        if mode == "agent":
+            try:
+                from ai_chat_tool_loop import ChatToolLoopParams, run_unified_agent_blocking
+                from ai_local_inference import local_ai_service
+                from agent_unified_session import snapshot_connected_hands
+
+                hands = snapshot_connected_hands(user_id)
+                # 本请求来自已配对手机 → 强制 phone 双手可用
+                hands["phone"] = True
+                use_desk = bool(hands.get("desktop"))
+                params = ChatToolLoopParams(
+                    message=user_message,
+                    project_name=project_name or "mobile",
+                    current_plan={},
+                    history=[],
+                    profile=profile if isinstance(profile, dict) else None,
+                    legacy_model="",
+                    page_snapshot="",
+                    probe_registry=None,
+                    probe_url="",
+                    memory_context="",
+                    dom_context_pack="",
+                    interaction_context={
+                        "entry": "mobile_apk",
+                        "device_id": meta.get("device_id") or "",
+                        "hands": hands,
+                    },
+                    test_scope=user_message,
+                    platform_type="desktop" if use_desk else "auto",
+                    allow_screen_tools=use_desk,
+                    allow_desktop_windows_tools=True if use_desk else False,
+                    allow_hermes_execute=False,
+                    allow_refine_test_plan=False,
+                    generate_case_after_run=False,
+                    user_id=user_id,
+                    agent_session_id=session_id or None,
+                    connected_hands=hands,
+                )
+                _plan, tool_meta, reply = run_unified_agent_blocking(
+                    local_ai_service=local_ai_service,
+                    params=params,
+                )
+                vars_out = tool_meta.get("cross_end_vars") if isinstance(tool_meta, dict) else {}
+                return jsonify({
+                    "success": True,
+                    "mode": "agent",
+                    "reply": reply,
+                    "description": reply,
+                    "variables": vars_out if isinstance(vars_out, dict) else {},
+                    "tools_used": list((tool_meta or {}).get("tools_used") or []),
+                    "connected_hands": hands,
+                    "session_id": session_id or "default",
+                    "ai_status": status,
+                })
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception("移动端统一 Agent 失败")
+                return jsonify({
+                    "success": False,
+                    "error": f"Agent 执行失败: {e}",
+                    "ai_status": status,
+                }), 500
 
         # 对话模式：短回复，不强制生成用例 JSON
         if mode == "chat":

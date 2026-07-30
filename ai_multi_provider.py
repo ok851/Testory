@@ -685,9 +685,18 @@ def openai_compatible_chat_stream(
                     fn = tc.get("function") or {}
                     if fn.get("name"):
                         tool_buffers[idx]["name"] = fn["name"]
-                        yield ("tool_call_delta", {"index": idx, "name": fn["name"]})
+                        yield ("tool_call_delta", {
+                            "index": idx,
+                            "name": fn["name"],
+                            "arguments_len": len(tool_buffers[idx]["arguments"]),
+                        })
                     if fn.get("arguments"):
                         tool_buffers[idx]["arguments"] += fn["arguments"]
+                        yield ("tool_call_delta", {
+                            "index": idx,
+                            "name": tool_buffers[idx]["name"],
+                            "arguments_len": len(tool_buffers[idx]["arguments"]),
+                        })
                     if tc.get("id"):
                         tool_buffers[idx]["id"] = tc["id"]
     except Exception as e:

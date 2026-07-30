@@ -2599,7 +2599,7 @@ def ai_test_page():
 @app.route('/mobile-testing')
 @login_required
 def mobile_testing_page():
-    """Android 移动端测试：左栏配置与设备画面，右栏 Hermes Agent 对话。"""
+    """Android 移动端测试：配对/用例；Agent 与 /ai-test 同一大脑（一脑多端双手）。"""
     from ai_chat_tool_loop import ai_chat_tools_enabled
     from agent_gateway_client import agent_gateway_configured
 
@@ -5507,6 +5507,29 @@ def api_ai_cross_end_desktop_mainpath_plan():
     })
 
 
+@app.route('/api/ai/cross-end/otp-demo-plan', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_ai_cross_end_otp_demo_plan():
+    """可选示例：加载 demos 下 OTP 剧本（非运行时唯一模板；对话 Agent 不依赖本接口）。"""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent / 'demos' / 'cross_end' / 'desktop_mobile_otp_plan.json'
+    if not path.is_file():
+        return jsonify({'ok': False, 'error': '示例剧本文件不存在'}), 404
+    try:
+        plan = json.loads(path.read_text(encoding='utf-8'))
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'读取失败: {e}'}), 500
+    return jsonify({
+        'ok': True,
+        'plan': plan,
+        'hint': '示例剧本，可改 variables_defaults 后执行；非唯一支持场景',
+    })
+
+
 @app.route('/api/ai/cross-end/erp-desktop-plan', methods=['GET', 'POST'])
 @login_required
 @role_required('admin', 'tester', 'project_manager', 'test_lead')
@@ -7546,10 +7569,18 @@ def api_ai_task_execute():
             from hermes_gateway_client import HermesGatewayClient
             hermes_client = HermesGatewayClient()
             # 桌面外层工具不依赖 Hermes；缩短探测，避免再卡 1.5s+
+            _needs_mobile_await = bool(
+                task_route is not None and getattr(task_route, "needs_mobile_await", False)
+            )
+            _cross_end_cap = bool(
+                task_route is not None
+                and str(getattr(task_route, "reason", "") or "").startswith("cross_end")
+            )
             _desk_only_early = run_platform == "desktop" or (
                 task_route is not None and bool(getattr(task_route, "needs_desktop_tools", False))
             )
-            _hermes_probe_sec = 0.4 if _desk_only_early else 1.5
+            _outer_tools_ok_early = _desk_only_early or _needs_mobile_await or _cross_end_cap
+            _hermes_probe_sec = 0.4 if _outer_tools_ok_early else 1.5
             hermes_available = hermes_client.is_configured() and hermes_client.health_check(
                 timeout_sec=_hermes_probe_sec
             )
@@ -7559,19 +7590,23 @@ def api_ai_task_execute():
                 return
 
             # 明确要做真实操作时才要求智能体已启动；闲聊/问答可走平台 LLM
-            # 桌面外层 windows_* 不依赖 Hermes Gateway
+            # 桌面外层 windows_* / 跨端 mobile_* 不依赖 Hermes Gateway
             _desk_only = _desk_only_early or (
                 task_route is not None and bool(getattr(task_route, "needs_desktop_tools", False))
             )
-            if needs_automation and not hermes_available and not _desk_only:
+            _outer_tools_ok = _desk_only or _needs_mobile_await or _cross_end_cap
+            if needs_automation and not hermes_available and not _outer_tools_ok:
                 yield send('think', text='智能体未启动。请先在左上角点击「启动」后再执行自动化任务。', status='warning')
                 yield send('error', error='请先启动智能体后再执行操作类任务')
                 return
 
             if hermes_available:
                 yield send('think', text='智能体已就绪', status='done')
-            elif _desk_only and needs_automation:
-                yield send('think', text='桌面工具就绪（无需 Hermes）', status='done')
+            elif _outer_tools_ok and needs_automation:
+                if _needs_mobile_await or _cross_end_cap:
+                    yield send('think', text='跨端工具就绪（桌面 + 手机 await，无需 Hermes）', status='done')
+                else:
+                    yield send('think', text='桌面工具就绪（无需 Hermes）', status='done')
             else:
                 yield send('think', text='以对话模式回复（未启动自动化）', status='done')
 
@@ -7680,7 +7715,7 @@ def api_ai_task_execute():
             from agent_task_context import new_task_context
 
             # 桌面外层工具：不强制 Hermes；避免重复 health 拖慢首包
-            _pf_need_hermes = not _desk_only
+            _pf_need_hermes = not _outer_tools_ok
             pf_ok, pf_msg, pf_snap = preflight_for_task(
                 task, require_hermes=_pf_need_hermes
             )
@@ -7779,10 +7814,10 @@ def api_ai_task_execute():
                 from agent_desktop_fastpath import is_desktop_nl_task, execute_desktop_nl
                 from ai_chat_tool_loop import ai_chat_tools_enabled
 
-                # 桌面外层路径已不依赖 Hermes 子进程模型；跳过二次 sync
-                if not _desk_only:
+                # 桌面/跨端外层路径已不依赖 Hermes 子进程模型；跳过二次 sync
+                if not _outer_tools_ok:
                     sync_platform_llm_credentials_to_hermes_env()
-                llm_st = hermes_upstream_llm_status() if not _desk_only else {"ok": True}
+                llm_st = hermes_upstream_llm_status() if not _outer_tools_ok else {"ok": True}
                 # MiMo 已证实可用 Bearer，不再因 active_is_xiaomi 判定 Hermes 不可用
                 hermes_llm_bad = not bool(llm_st.get("ok"))
                 # 微信/桌面 GUI：优先外层 windows_* 工具循环；禁止因「是微信」就绕过 Agent
@@ -7892,9 +7927,14 @@ def api_ai_task_execute():
                 if route2.needs_automation and route2.platform in ("web", "desktop", "android"):
                     run_platform_early = route2.platform
                     run_platform = run_platform_early
-                use_outer_desktop = bool(route2.needs_desktop_tools) or prefer_outer_desktop_tools(
-                    platform_type=run_platform_early,
-                    message=task,
+                use_outer_desktop = (
+                    bool(route2.needs_desktop_tools)
+                    or bool(getattr(route2, "needs_mobile_await", False))
+                    or str(getattr(route2, "reason", "") or "").startswith("cross_end")
+                    or prefer_outer_desktop_tools(
+                        platform_type=run_platform_early,
+                        message=task,
+                    )
                 )
             except Exception:
                 use_outer_desktop = run_platform_early == "desktop"
@@ -7968,6 +8008,37 @@ def api_ai_task_execute():
                 if use_outer_desktop:
                     run_platform = "desktop"
 
+                _uid = 0
+                try:
+                    _uid = int(getattr(current_user, "id", 0) or 0)
+                except Exception:
+                    _uid = 0
+
+                _agent_sid = ""
+                try:
+                    _agent_sid = str(
+                        (data.get("agent_session_id") if isinstance(data, dict) else None)
+                        or request.args.get("agent_session_id")
+                        or ""
+                    ).strip()
+                except Exception:
+                    _agent_sid = ""
+
+                _hands = {}
+                try:
+                    from agent_unified_session import snapshot_connected_hands
+
+                    _hands = snapshot_connected_hands(_uid)
+                except Exception:
+                    _hands = {"phone": False, "desktop": use_outer_desktop, "browser": False}
+
+                # 连接态双手：有桌面则挂桌面工具；有手机则保证 mobile_*
+                if _hands.get("desktop"):
+                    use_outer_desktop = True
+                    run_platform = "desktop"
+                elif use_outer_desktop:
+                    run_platform = "desktop"
+
                 params = ChatToolLoopParams(
                     message=task,
                     project_name=project_name,
@@ -7986,6 +8057,8 @@ def api_ai_task_execute():
                         "enable_vision": allow_screen_tools,
                         "allow_screen_tools": allow_screen_tools,
                         "session_id": task_ctx.session_id,
+                        "hands": _hands,
+                        "entry": "ai_test",
                     },
                     test_scope=task,
                     embedded_session_id="",
@@ -7993,7 +8066,6 @@ def api_ai_task_execute():
                     abort_event=abort_event,
                     recorder=recorder,
                     allow_screen_tools=True if use_outer_desktop else allow_screen_tools,
-                    # 网页任务严禁外层 windows_*，避免桌面工具污染 Hermes
                     allow_desktop_windows_tools=True if use_outer_desktop else (
                         False if run_platform == "web" else None
                     ),
@@ -8003,8 +8075,10 @@ def api_ai_task_execute():
                     task_session_id=task_ctx.session_id,
                     capabilities_summary=caps_summary,
                     generate_case_after_run=generate_case_after_run,
-                    # 任务执行：用例走 ActionRecorder，禁止二次 LLM refine（会卡在「优化测试用例」）
                     allow_refine_test_plan=False,
+                    user_id=_uid,
+                    agent_session_id=_agent_sid or None,
+                    connected_hands=_hands,
                 )
 
                 final_plan = None
@@ -8037,6 +8111,28 @@ def api_ai_task_execute():
                                 quiet_chat=True,
                             )
                             yield send('think', text=f'桌面操作：{tool_name}', status='running')
+                        elif tool_name.startswith("mobile_"):
+                            yield send(
+                                'action',
+                                action_type=tool_name,
+                                target=str(args_summary)[:80] or '等待手机本机',
+                                status='running',
+                                quiet_chat=True,
+                            )
+                            yield send(
+                                'think',
+                                text=f'手机双手：{tool_name}（enqueue 后等待本机领取）',
+                                status='running',
+                            )
+                        elif tool_name.startswith("desktop_"):
+                            yield send(
+                                'action',
+                                action_type=tool_name,
+                                target=str(args_summary)[:80],
+                                status='running',
+                                quiet_chat=True,
+                            )
+                            yield send('think', text=f'桌面双手：{tool_name}', status='running')
                         elif tool_name == "refine_test_plan":
                             yield send('think', text='正在优化测试用例', status='running')
 
@@ -8177,6 +8273,44 @@ def api_ai_task_execute():
                                 status=status,
                                 result=(_human or result_preview)[:200],
                                 quiet_chat=True,
+                            )
+                        elif tool_name.startswith("mobile_") or tool_name.startswith("desktop_"):
+                            _ok = True
+                            _human = ""
+                            try:
+                                import json as _j
+                                _p = _j.loads(result_preview)
+                                if isinstance(_p, dict):
+                                    if _p.get("success") is False or _p.get("ok") is False:
+                                        _ok = False
+                                    _human = (
+                                        _p.get("error")
+                                        or _p.get("sms_otp")
+                                        or _p.get("job_id")
+                                        or _p.get("status")
+                                        or ""
+                                    )
+                                    if _p.get("error_code"):
+                                        _human = f"{_human} [{_p.get('error_code')}]".strip()
+                            except Exception:
+                                low = (result_preview or "").lower()
+                                _ok = '"success": false' not in low and '"ok": false' not in low
+                            yield send(
+                                'action',
+                                action_type=tool_name,
+                                target=str(_human or result_preview)[:80],
+                                status='success' if _ok else 'failed',
+                                result=(_human or result_preview)[:200],
+                                quiet_chat=True,
+                            )
+                            yield send(
+                                'think',
+                                text=(
+                                    f'{tool_name} 完成'
+                                    if _ok
+                                    else f'{tool_name} 失败：{str(_human or result_preview)[:120]}'
+                                ),
+                                status='done' if _ok else 'error',
                             )
 
                     elif evt_type == "action_records":

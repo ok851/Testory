@@ -63,12 +63,12 @@ mobile / android stage → 入队 sync run job → **等待**手机本机执行�
 
 APK `PcRunJobPoller`（无障碍服务启动后）：轮询 `extract_otp` → `run_steps`，本机执行后上报 events。
 
-### Agent 口径（大脑 / 双手）
+### Agent 口径（一脑多端双手）
 
-- **Agent（大脑）**在 PC：选工具、读写 `sms_otp` 等变量  
-- **手机 APK（双手）**本机执行：`mobile_extract_otp` / `mobile_run_steps`  
-- **桌面 UIA（双手）**：`desktop_*` / `windows_*`  
-- 一会话可交替操作 PC 与手机；禁止把 adb 逐步点当作正式引擎  
+- **同一个 Agent（大脑）**在 PC：工具循环 + 统一会话 `cross_end_vars`  
+- **入口**：`/ai-test` 或手机 APK「Agent」模式（同一大脑，不是两套 Agent）  
+- **双手**：已配对手机 → `mobile_*`；桌面可用 → `desktop_*` / `windows_*`  
+- 禁止把 adb 逐步点当作正式引擎  
 
 统一步骤 IR：[`docs/mobile_step_ir.md`](../../../docs/mobile_step_ir.md)。  
 详见 [`docs/cross_end_agent_tools.md`](../../../docs/cross_end_agent_tools.md)。

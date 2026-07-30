@@ -260,6 +260,38 @@ _ANDROID_HINTS = (
     "scrcpy",
 )
 
+# 手机侧 await 能力（取码 / 本机执行）—— 不计为「纯 android 巡检」平台分
+_MOBILE_AWAIT_HINTS = (
+    "验证码",
+    "短信验证码",
+    "短信",
+    "通知栏",
+    "取码",
+    "取验证码",
+    "获取验证码",
+    "sms_otp",
+    "mobile_extract",
+    "本机执行",
+    "手机本机",
+    "从手机",
+    "到手机",
+    "在手机",
+    "移动端取",
+    "从移动端",
+    "移动端获取",
+    "通知验证码",
+    "mobile_run",
+    "跑手机",
+)
+
+_CROSS_END_HINTS = (
+    "跨端",
+    "联动",
+    "多端",
+    "回填",
+    "两端",
+)
+
 
 @dataclass(frozen=True)
 class TaskRoute:
@@ -275,9 +307,59 @@ class TaskRoute:
     web_score: int = 0
     desktop_score: int = 0
     android_score: int = 0
+    # 需要手机本机 await（OTP / run_steps 等），与 platform=android 解耦
+    needs_mobile_await: bool = False
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def _score_mobile_await(message: str) -> int:
+    t = (message or "").strip()
+    tl = t.lower()
+    score = 0
+    for h in _MOBILE_AWAIT_HINTS:
+        if h in t or h in tl:
+            score += 3
+    return score
+
+
+def _has_cross_end_hint(message: str) -> bool:
+    t = (message or "").strip()
+    return any(h in t for h in _CROSS_END_HINTS)
+
+
+def message_needs_mobile_await(message: str) -> bool:
+    """是否需要手机侧 await 工具（取码/本机跑步骤），不绑定具体业务剧本。"""
+    return _score_mobile_await(message) > 0
+
+
+_PHONE_RE = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
+
+
+def extract_cross_end_seed_vars(message: str) -> Dict[str, str]:
+    """从用户话可选抽取初始变量（便利，非强制剧本）。"""
+    out: Dict[str, str] = {}
+    t = (message or "").strip()
+    if not t:
+        return out
+    m = _PHONE_RE.search(t)
+    if m:
+        out["phone_number"] = m.group(1)
+    m2 = re.search(
+        r"(?:登录|登陆|打开|启动|注册)\s*"
+        r"([^\s，,。：:的到并和与]{1,24})",
+        t,
+    )
+    if m2:
+        name = (m2.group(1) or "").strip()
+        skip = {
+            "一下", "软件", "应用", "手机", "移动端", "桌面", "本机",
+            "系统", "这个", "那个", "一下吧",
+        }
+        if name and name not in skip and not name.isdigit():
+            out["app_name"] = name
+    return out
 
 
 def _looks_like_greeting_only(message: str) -> bool:
@@ -396,10 +478,13 @@ def resolve_task_route(
         )
 
     web_s, desk_s, andr_s = _score_surfaces(t)
-    action = _has_action_signal(t)
+    mobile_await_s = _score_mobile_await(t)
+    needs_mobile_await = mobile_await_s > 0
+    cross_hint = _has_cross_end_hint(t)
+    action = _has_action_signal(t) or needs_mobile_await or cross_hint
     chatish = any(h in t for h in _CHAT_HINTS) and not action
 
-    if chatish and web_s == 0 and desk_s == 0 and andr_s == 0:
+    if chatish and web_s == 0 and desk_s == 0 and andr_s == 0 and not needs_mobile_await:
         return TaskRoute(
             mode="chat",
             platform="auto" if ui == "auto" else ui,  # type: ignore[arg-type]
@@ -411,6 +496,41 @@ def resolve_task_route(
             web_score=web_s,
             desktop_score=desk_s,
             android_score=andr_s,
+            needs_mobile_await=False,
+        )
+
+    # 能力面：桌面操作 + 手机 await，或明确跨端词 → 挂桌面外层工具，勿因「手机」掉进 android-only
+    desk_ops = desk_s > 0 or any(
+        k in t for k in ("登录", "登陆", "注册", "填写", "回填", "输入", "打开", "启动", "提交")
+    )
+    if needs_mobile_await and (desk_ops or cross_hint or desk_s > 0 or "桌面" in t):
+        return TaskRoute(
+            mode="automation",
+            platform="desktop",
+            needs_automation=True,
+            needs_browser=False,
+            needs_desktop_tools=True,
+            ui_platform=ui,
+            reason="cross_end_capabilities",
+            web_score=web_s,
+            desktop_score=max(desk_s, 1),
+            android_score=andr_s,
+            needs_mobile_await=True,
+        )
+    # 仅手机 await（取码 / 本机跑），无桌面信号：仍自动化，但不抢 desktop 工具
+    if needs_mobile_await and not desk_ops and desk_s == 0 and not cross_hint:
+        return TaskRoute(
+            mode="automation",
+            platform="android" if ui != "desktop" else "desktop",
+            needs_automation=True,
+            needs_browser=False,
+            needs_desktop_tools=(ui == "desktop"),
+            ui_platform=ui,
+            reason="mobile_await_only",
+            web_score=web_s,
+            desktop_score=desk_s,
+            android_score=max(andr_s, 1),
+            needs_mobile_await=True,
         )
 
     # 无自动化信号 → 默认 chat（避免误启浏览器）
@@ -468,7 +588,7 @@ def resolve_task_route(
             android_score=andr_s,
         )
 
-    # 由分数选消息面平台
+    # 由分数选消息面平台（手机 await 分不计入 android 平台分，避免误抢）
     msg_platform: TaskPlatform = "auto"
     reason = "auto_balanced"
     if andr_s > 0 and andr_s >= desk_s and andr_s >= web_s:
@@ -525,6 +645,7 @@ def resolve_task_route(
         web_score=web_s,
         desktop_score=desk_s,
         android_score=andr_s,
+        needs_mobile_await=needs_mobile_await,
     )
 
 
