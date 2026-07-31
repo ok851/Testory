@@ -737,17 +737,38 @@ class AssistantAccessibilityService : AccessibilityService() {
 
     private fun locateBySelector(root: AccessibilityNodeInfo, step: Step): AccessibilityNodeInfo? {
         val locator = step.locator
+        val preferCheckable = wantsCheckable(step)
 
         if (locator.text.isNotBlank()) {
-            pickBestTextMatch(root, locator.text)?.let { return it }
+            pickBestTextMatch(root, locator.text, preferCheckable)?.let { textNode ->
+                if (preferCheckable) {
+                    resolveCheckableTarget(root, textNode)?.let { checkable ->
+                        if (checkable != textNode) {
+                            try { textNode.recycle() } catch (_: Exception) {}
+                        }
+                        return checkable
+                    }
+                }
+                return textNode
+            }
             findNodeByHintOrEditableLabel(root, locator.text)?.let { return it }
         }
         if (locator.contentDesc.isNotBlank()) {
             val results = root.findAccessibilityNodeInfosByText(locator.contentDesc)
             if (results.isNotEmpty()) {
-                val best = pickPreferClickable(results)
+                val best = pickPreferClickable(results, preferCheckable)
                 results.filter { it != best }.forEach { try { it.recycle() } catch (_: Exception) {} }
-                if (best != null) return best
+                if (best != null) {
+                    if (preferCheckable) {
+                        resolveCheckableTarget(root, best)?.let { checkable ->
+                            if (checkable != best) {
+                                try { best.recycle() } catch (_: Exception) {}
+                            }
+                            return checkable
+                        }
+                    }
+                    return best
+                }
             }
             findNodeByContentDesc(root, locator.contentDesc)?.let { return it }
             findNodeByHintOrEditableLabel(root, locator.contentDesc)?.let { return it }
@@ -755,7 +776,7 @@ class AssistantAccessibilityService : AccessibilityService() {
         if (locator.resourceId.isNotBlank()) {
             val results = root.findAccessibilityNodeInfosByViewId(locator.resourceId)
             if (results.isNotEmpty()) {
-                val best = pickPreferClickable(results)
+                val best = pickPreferClickable(results, preferCheckable)
                 results.filter { it != best }.forEach { try { it.recycle() } catch (_: Exception) {} }
                 if (best != null) return best
             }
@@ -815,31 +836,270 @@ class AssistantAccessibilityService : AccessibilityService() {
         return bestOther
     }
 
-    private fun pickBestTextMatch(root: AccessibilityNodeInfo, text: String): AccessibilityNodeInfo? {
+    private fun pickBestTextMatch(
+        root: AccessibilityNodeInfo,
+        text: String,
+        preferCheckable: Boolean = false
+    ): AccessibilityNodeInfo? {
         val results = root.findAccessibilityNodeInfosByText(text)
         if (results.isEmpty()) return null
-        val exact = results.filter {
-            val t = it.text?.toString().orEmpty()
-            val cd = it.contentDescription?.toString().orEmpty()
-            t.equals(text, ignoreCase = true) || cd.equals(text, ignoreCase = true)
-                || t.contains(text, ignoreCase = true) || cd.contains(text, ignoreCase = true)
+        val needle = text.trim()
+        fun score(node: AccessibilityNodeInfo): Int {
+            val t = node.text?.toString().orEmpty()
+            val cd = node.contentDescription?.toString().orEmpty()
+            var s = 0
+            when {
+                t.equals(needle, ignoreCase = true) || cd.equals(needle, ignoreCase = true) -> s += 100
+                t.startsWith(needle, ignoreCase = true) || cd.startsWith(needle, ignoreCase = true) -> s += 70
+                t.contains(needle, ignoreCase = true) || cd.contains(needle, ignoreCase = true) -> s += 40
+                else -> s -= 20
+            }
+            // 长文案里嵌协议链接时降权，避免点到超链接区域
+            val longer = maxOf(t.length, cd.length)
+            if (longer > needle.length * 2 + 8) s -= 25
+            if (longer > needle.length * 4) s -= 25
+            if (node.isEditable) s += 35
+            if (preferCheckable && node.isCheckable) s += 60
+            if (node.isClickable) s += 20
+            if (node.isEnabled) s += 5
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val area = rect.width() * rect.height()
+            if (area in 1..120_000) s += 15
+            if (area > 250_000) s -= 30
+            return s
         }
-        val pool = if (exact.isNotEmpty()) exact else results
-        val editable = pool.firstOrNull { it.isEditable }
-        if (editable != null) {
-            results.filter { it != editable }.forEach { try { it.recycle() } catch (_: Exception) {} }
-            return editable
-        }
-        val best = pickPreferClickable(pool)
+        val best = results.maxByOrNull { score(it) }
         results.filter { it != best }.forEach { try { it.recycle() } catch (_: Exception) {} }
         return best
     }
 
-    private fun pickPreferClickable(nodes: List<AccessibilityNodeInfo>): AccessibilityNodeInfo? {
+    private fun pickPreferClickable(
+        nodes: List<AccessibilityNodeInfo>,
+        preferCheckable: Boolean = false
+    ): AccessibilityNodeInfo? {
         if (nodes.isEmpty()) return null
+        if (preferCheckable) {
+            nodes.firstOrNull { it.isCheckable }?.let { return it }
+        }
         return nodes.firstOrNull { it.isClickable }
             ?: nodes.firstOrNull { it.isEditable }
             ?: nodes[0]
+    }
+
+    private fun wantsCheckable(step: Step): Boolean {
+        if (step.extras.preferCheckable) return true
+        val blob = "${step.description} ${step.locator.text} ${step.locator.contentDesc}".lowercase()
+        val keys = listOf(
+            "勾选", "选中", "打勾", "勾上", "打鉤", "复选", "勾选框",
+            "check ", "checkbox", "tick ", "toggle check"
+        )
+        return keys.any { it in blob }
+    }
+
+    private fun wantsUncheck(step: Step): Boolean {
+        val blob = "${step.description} ${step.locator.text}".lowercase()
+        return listOf("取消勾选", "取消选中", "取消打勾", "uncheck", "deselect").any { it in blob }
+    }
+
+    private fun looksLikeSubmitIntent(step: Step): Boolean {
+        val blob = "${step.description} ${step.locator.text}".lowercase()
+        val keys = listOf(
+            "继续", "提交", "下一步", "完成", "确认", "登录", "注册", "发送", "开始",
+            "continue", "submit", "next", "confirm", "sign in", "log in", "done", "finish",
+            "agree and", "同意并"
+        )
+        return keys.any { it in blob }
+    }
+
+    /**
+     * 勾选意图：在文案锚点附近找 checkable（通常在标签左侧），避免点协议链接。
+     */
+    private fun resolveCheckableTarget(
+        root: AccessibilityNodeInfo,
+        anchor: AccessibilityNodeInfo
+    ): AccessibilityNodeInfo? {
+        if (anchor.isCheckable || isLikelyCheckboxClass(anchor)) {
+            return AccessibilityNodeInfo.obtain(anchor)
+        }
+        val anchorRect = Rect().also { anchor.getBoundsInScreen(it) }
+        findCheckableInAncestors(anchor, anchorRect)?.let { return it }
+        return findCheckableInTree(root, anchorRect)
+    }
+
+    private fun findCheckableNear(scope: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val anchorRect = Rect().also { scope.getBoundsInScreen(it) }
+        return findCheckableInAncestors(scope, anchorRect)
+    }
+
+    private fun findCheckableInAncestors(
+        start: AccessibilityNodeInfo,
+        anchor: Rect
+    ): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        var bestScore = Int.MIN_VALUE
+        var cur: AccessibilityNodeInfo? = try {
+            start.parent
+        } catch (_: Exception) {
+            null
+        }
+        var depth = 0
+        while (cur != null && depth < 5) {
+            scoreCheckablesInSubtree(cur, anchor) { node, score ->
+                if (score > bestScore) {
+                    best?.let { try { it.recycle() } catch (_: Exception) {} }
+                    best = AccessibilityNodeInfo.obtain(node)
+                    bestScore = score
+                }
+            }
+            val next = try {
+                cur.parent
+            } catch (_: Exception) {
+                null
+            }
+            try {
+                cur.recycle()
+            } catch (_: Exception) {
+            }
+            cur = next
+            depth++
+        }
+        return best
+    }
+
+    private fun findCheckableInTree(
+        root: AccessibilityNodeInfo,
+        anchor: Rect
+    ): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        var bestScore = Int.MIN_VALUE
+        scoreCheckablesInSubtree(root, anchor) { node, score ->
+            if (score > bestScore) {
+                best?.let { try { it.recycle() } catch (_: Exception) {} }
+                best = AccessibilityNodeInfo.obtain(node)
+                bestScore = score
+            }
+        }
+        return best
+    }
+
+    private fun scoreCheckablesInSubtree(
+        node: AccessibilityNodeInfo,
+        anchor: Rect,
+        onCandidate: (AccessibilityNodeInfo, Int) -> Unit
+    ) {
+        if (node.isCheckable || isLikelyCheckboxClass(node)) {
+            val r = Rect()
+            node.getBoundsInScreen(r)
+            if (r.width() > 0 && r.height() > 0) {
+                val cyDist = kotlin.math.abs(r.centerY() - anchor.centerY())
+                val rowSlop = maxOf(anchor.height(), r.height(), 24) * 1.5f
+                if (cyDist <= rowSlop) {
+                    var score = 50
+                    if (node.isCheckable) score += 40
+                    if (r.centerX() <= anchor.left + r.width()) score += 35
+                    if (r.right <= anchor.left + 8) score += 25
+                    val area = r.width() * r.height()
+                    if (area in 1..20_000) score += 30
+                    if (area > 80_000) score -= 50
+                    score -= (cyDist / 2).toInt()
+                    onCandidate(node, score)
+                }
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            scoreCheckablesInSubtree(child, anchor, onCandidate)
+            try {
+                child.recycle()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun isLikelyCheckboxClass(node: AccessibilityNodeInfo): Boolean {
+        val cls = node.className?.toString()?.lowercase().orEmpty()
+        return "checkbox" in cls || "radiobutton" in cls || "switch" in cls || "toggle" in cls
+    }
+
+    /** 标签左侧手势点：通用「框在文案左边」布局兜底 */
+    private fun clickLeftOfLabel(anchor: AccessibilityNodeInfo): Boolean {
+        val r = Rect()
+        anchor.getBoundsInScreen(r)
+        if (r.height() <= 0) return false
+        val x = (r.left - r.height() * 1.15f).coerceAtLeast(4f)
+        val y = r.centerY().toFloat()
+        return performClickSync(x, y)
+    }
+
+    private fun nodeOrAncestorsMatchConsent(node: AccessibilityNodeInfo): Boolean {
+        var p: AccessibilityNodeInfo? = AccessibilityNodeInfo.obtain(node)
+        var depth = 0
+        try {
+            while (p != null && depth < 4) {
+                val blob = buildString {
+                    append(p?.text?.toString().orEmpty())
+                    append(' ')
+                    append(p?.contentDescription?.toString().orEmpty())
+                }.lowercase()
+                val keys = listOf(
+                    "同意", "协议", "隐私", "条款", "已阅读", "terms", "privacy", "policy",
+                    "agree", "license", "licence", "consent"
+                )
+                if (keys.any { it in blob }) return true
+                val parent = try {
+                    p?.parent
+                } catch (_: Exception) {
+                    null
+                }
+                try {
+                    p?.recycle()
+                } catch (_: Exception) {
+                }
+                p = parent
+                depth++
+            }
+        } finally {
+            try {
+                p?.recycle()
+            } catch (_: Exception) {
+            }
+        }
+        return false
+    }
+
+    private fun hasBlockingUncheckedConsent(root: AccessibilityNodeInfo): Boolean {
+        var found = false
+        fun walk(node: AccessibilityNodeInfo) {
+            if (found) return
+            if (node.isCheckable && !node.isChecked && nodeOrAncestorsMatchConsent(node)) {
+                found = true
+                return
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                walk(child)
+                try {
+                    child.recycle()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        walk(root)
+        return found
+    }
+
+    private fun screenHasExactText(root: AccessibilityNodeInfo, text: String): Boolean {
+        val needle = text.trim()
+        if (needle.isEmpty()) return false
+        val results = root.findAccessibilityNodeInfosByText(needle)
+        val hit = results.any {
+            val t = it.text?.toString().orEmpty()
+            val cd = it.contentDescription?.toString().orEmpty()
+            t.equals(needle, true) || cd.equals(needle, true)
+        }
+        results.forEach { try { it.recycle() } catch (_: Exception) {} }
+        return hit
     }
 
     private fun locateByCoordinate(root: AccessibilityNodeInfo, step: Step): AccessibilityNodeInfo? {
@@ -1039,9 +1299,16 @@ class AssistantAccessibilityService : AccessibilityService() {
         val hasSelector = step.locator.text.isNotBlank()
                 || step.locator.contentDesc.isNotBlank()
                 || step.locator.resourceId.isNotBlank()
+        val checkIntent = wantsCheckable(step)
+        val wantChecked = !wantsUncheck(step)
 
         // 有 text/id 时只点定位到的节点，绝不用录制坐标（分页桌面会点到错误页同坐标）
         if (node != null) {
+            // 勾选意图：禁止点文案中心（易命中协议超链接），必须点 checkable 或标签左侧
+            if (checkIntent) {
+                return performCheckToggleAction(node, step, wantChecked)
+            }
+
             // 输入框占位：直接 FOCUS + CLICK 可编辑节点
             if (node.isEditable) {
                 node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -1051,27 +1318,41 @@ class AssistantAccessibilityService : AccessibilityService() {
                     return StepResult(success = true, actualStrategy = "EDITABLE_FOCUS_CLICK")
                 }
             }
+            if (!node.isEnabled) {
+                return StepResult(
+                    success = false,
+                    errorMessage = "目标控件当前不可用（disabled）: '${step.locator.text.ifBlank { step.description }}'",
+                    actualStrategy = "TARGET_DISABLED"
+                )
+            }
             val clickable = findClickableNode(node)
             if (clickable != null) {
+                if (!clickable.isEnabled) {
+                    return StepResult(
+                        success = false,
+                        errorMessage = "可点击目标当前不可用（disabled）",
+                        actualStrategy = "TARGET_DISABLED"
+                    )
+                }
                 val success = clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 android.util.Log.i(
                     "AssistantA11y",
                     "TAP NODE_CLICK success=$success desc='${step.description}' text='${step.locator.text}'"
                 )
                 if (success) {
-                    return StepResult(success = true, actualStrategy = "NODE_CLICK")
+                    return finalizeTapSuccess(step, "NODE_CLICK")
                 }
             }
-            // 节点不可点：用该节点当前 bounds 中心
+            // 节点不可点：用该节点当前 bounds 中心（非勾选意图）
             val rect = Rect()
             node.getBoundsInScreen(rect)
             if (rect.width() > 0 && rect.height() > 0) {
                 val ok = performClickSync(rect.centerX().toFloat(), rect.centerY().toFloat())
                 if (ok) {
-                    return StepResult(
-                        success = true,
-                        actualStrategy = "NODE_BOUNDS_CLICK",
-                        actualCoordinate = ScreenCoordinate(rect.centerX(), rect.centerY())
+                    return finalizeTapSuccess(
+                        step,
+                        "NODE_BOUNDS_CLICK",
+                        ScreenCoordinate(rect.centerX(), rect.centerY())
                     )
                 }
             }
@@ -1097,11 +1378,7 @@ class AssistantAccessibilityService : AccessibilityService() {
             )
             val ok = performClickSync(coord.x.toFloat(), coord.y.toFloat())
             if (ok) {
-                return StepResult(
-                    success = true,
-                    actualStrategy = "COORDINATE_CLICK",
-                    actualCoordinate = coord
-                )
+                return finalizeTapSuccess(step, "COORDINATE_CLICK", coord)
             }
             return StepResult(
                 success = false,
@@ -1114,6 +1391,146 @@ class AssistantAccessibilityService : AccessibilityService() {
             success = false,
             errorMessage = "无有效点击目标（无文本/id 且无坐标）: '${step.description}'",
             actualStrategy = "TAP_NO_TARGET"
+        )
+    }
+
+    private fun performCheckToggleAction(
+        anchorOrCheckable: AccessibilityNodeInfo,
+        step: Step,
+        wantChecked: Boolean
+    ): StepResult {
+        fun verifiedState(node: AccessibilityNodeInfo?): Boolean? {
+            if (node == null || !node.isCheckable) return null
+            try {
+                node.refresh()
+            } catch (_: Exception) {
+            }
+            return node.isChecked
+        }
+
+        fun clickNode(node: AccessibilityNodeInfo): Boolean {
+            if (!node.isEnabled) return false
+            return when {
+                node.isCheckable || node.isClickable ->
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                else -> {
+                    val r = Rect()
+                    node.getBoundsInScreen(r)
+                    r.width() > 0 && performClickSync(r.centerX().toFloat(), r.centerY().toFloat())
+                }
+            }
+        }
+
+        fun confirmAfterClick(strategy: String): StepResult? {
+            try {
+                Thread.sleep(280)
+            } catch (_: InterruptedException) {
+            }
+            val root = rootInActiveWindow ?: return null
+            try {
+                val again = resolveCheckableTarget(root, anchorOrCheckable)
+                val state = verifiedState(again)
+                try {
+                    again?.recycle()
+                } catch (_: Exception) {
+                }
+                if (state == null) {
+                    return StepResult(
+                        success = false,
+                        errorMessage = "已尝试勾选，但无法确认勾选框状态",
+                        actualStrategy = "CHECK_UNVERIFIED"
+                    )
+                }
+                if (state == wantChecked) {
+                    return StepResult(success = true, actualStrategy = strategy)
+                }
+                return null
+            } finally {
+                try {
+                    root.recycle()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        val target = if (anchorOrCheckable.isCheckable || isLikelyCheckboxClass(anchorOrCheckable)) {
+            AccessibilityNodeInfo.obtain(anchorOrCheckable)
+        } else {
+            findCheckableNear(anchorOrCheckable)
+        }
+
+        if (target != null) {
+            val before = verifiedState(target)
+            if (before == wantChecked) {
+                try {
+                    target.recycle()
+                } catch (_: Exception) {
+                }
+                return StepResult(success = true, actualStrategy = "CHECK_ALREADY")
+            }
+            val clicked = clickNode(target)
+            try {
+                target.recycle()
+            } catch (_: Exception) {
+            }
+            if (clicked) {
+                confirmAfterClick("CHECKABLE_CLICK")?.let { return it }
+            }
+        }
+
+        if (clickLeftOfLabel(anchorOrCheckable)) {
+            confirmAfterClick("CHECK_LEFT_OF_LABEL")?.let { return it }
+        }
+
+        return StepResult(
+            success = false,
+            errorMessage = "未能勾选目标（可能点到了协议链接而非勾选框）: '${step.locator.text.ifBlank { step.description }}'",
+            actualStrategy = "CHECK_NOT_TOGGLED"
+        )
+    }
+
+    /**
+     * 提交类按钮：若同屏仍有「协议/同意」类未勾选项且按钮文案仍在，视为未真正推进。
+     */
+    private fun finalizeTapSuccess(
+        step: Step,
+        strategy: String,
+        coord: ScreenCoordinate? = null
+    ): StepResult {
+        if (!looksLikeSubmitIntent(step)) {
+            return StepResult(
+                success = true,
+                actualStrategy = strategy,
+                actualCoordinate = coord
+            )
+        }
+        try {
+            Thread.sleep(450)
+        } catch (_: InterruptedException) {
+        }
+        val root = rootInActiveWindow
+            ?: return StepResult(success = true, actualStrategy = strategy, actualCoordinate = coord)
+        try {
+            val label = step.locator.text.trim()
+            val stillThere = label.isBlank() || screenHasExactText(root, label)
+            if (stillThere && hasBlockingUncheckedConsent(root)) {
+                return StepResult(
+                    success = false,
+                    errorMessage = "点击已送达，但界面未推进：仍有未勾选的协议/同意项。请先勾选后再点「${label.ifBlank { step.description }}」。",
+                    actualStrategy = "SUBMIT_BLOCKED_BY_UNCHECKED",
+                    actualCoordinate = coord
+                )
+            }
+        } finally {
+            try {
+                root.recycle()
+            } catch (_: Exception) {
+            }
+        }
+        return StepResult(
+            success = true,
+            actualStrategy = strategy,
+            actualCoordinate = coord
         )
     }
 

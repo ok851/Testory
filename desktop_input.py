@@ -7,7 +7,7 @@ import re
 import sys
 import os
 import time
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 if sys.platform != "win32":
     raise RuntimeError("desktop_input 仅支持 Windows")
@@ -1238,6 +1238,104 @@ def uia_set_value_in_hwnd(hwnd: int, text: str) -> bool:
         return False
     except Exception:
         return False
+
+
+def _uia_element_text(elem: Any) -> str:
+    """从 pywinauto 元素尽量读出可见/可编辑文本。"""
+    if elem is None:
+        return ""
+    for getter in (
+        lambda e: e.get_value(),
+        lambda e: e.window_text(),
+        lambda e: getattr(e.element_info, "name", None),
+        lambda e: getattr(e.element_info, "rich_text", None),
+    ):
+        try:
+            val = getter(elem)
+            if val is None:
+                continue
+            s = str(val).strip()
+            if s:
+                return s
+        except Exception:
+            continue
+    try:
+        leg = elem.legacy_properties()
+        if isinstance(leg, dict):
+            for k in ("Value", "Name", "DefaultAction"):
+                s = str(leg.get(k) or "").strip()
+                if s:
+                    return s
+    except Exception:
+        pass
+    return ""
+
+
+def uia_get_focused_edit_text(hwnd: int) -> str:
+    """回读目标窗当前焦点可编辑控件文本；失败返回空串。"""
+    hwnd = int(hwnd or 0)
+    if not hwnd:
+        return ""
+    try:
+        from pywinauto import Desktop  # type: ignore
+
+        win = Desktop(backend="uia").window(handle=hwnd)
+        focused = None
+        try:
+            focused = win.get_focus()
+        except Exception:
+            focused = None
+        if focused is None:
+            return ""
+        return _uia_element_text(focused)
+    except Exception:
+        return ""
+
+
+def uia_hwnd_tree_contains_text(
+    hwnd: int,
+    token: str,
+    *,
+    max_nodes: int = 180,
+) -> Dict[str, Any]:
+    """在 hwnd 子树 Name/Value 中查找 token（搜索结果列表等证据）。"""
+    hwnd = int(hwnd or 0)
+    needle = re.sub(r"\s+", "", str(token or "").strip())
+    out: Dict[str, Any] = {"ok": False, "matched": "", "via": ""}
+    if not hwnd or not needle:
+        return out
+    try:
+        from pywinauto import Desktop  # type: ignore
+
+        win = Desktop(backend="uia").window(handle=hwnd)
+        # descendants 可能很慢；限制数量
+        try:
+            nodes = win.descendants()
+        except Exception:
+            nodes = []
+        scanned = 0
+        for elem in nodes:
+            if scanned >= max_nodes:
+                break
+            scanned += 1
+            text = _uia_element_text(elem)
+            if not text:
+                continue
+            compact = re.sub(r"\s+", "", text)
+            if needle == compact or needle in compact or compact in needle:
+                # 过短通用名易误命中
+                if len(compact) < 2:
+                    continue
+                out["ok"] = True
+                out["matched"] = text[:80]
+                out["via"] = "uia_name"
+                out["scanned"] = scanned
+                return out
+        out["scanned"] = scanned
+        return out
+    except Exception as e:
+        out["error"] = str(e)[:160]
+        return out
 
 
 def no_focus_steal_enabled() -> bool:

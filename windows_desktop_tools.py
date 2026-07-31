@@ -1443,12 +1443,40 @@ def _ocr_find_candidates(description: str, png: bytes) -> List[Dict[str, Any]]:
     return out
 
 
+def _token_matches_blob(token: str, blob: str) -> Dict[str, Any]:
+    """共用匹配：精确 / ascii 忽略大小写 / 中文子串。"""
+    compact_blob = re.sub(r"\s+", "", blob or "")
+    compact_tok = re.sub(r"\s+", "", token or "")
+    out: Dict[str, Any] = {"ok": False}
+    if not compact_tok:
+        return out
+    if compact_tok in compact_blob:
+        out["ok"] = True
+        out["match"] = "exact"
+        return out
+    if compact_tok.isascii() and compact_tok.lower() in compact_blob.lower():
+        out["ok"] = True
+        out["match"] = "ascii_ci"
+        return out
+    if (not compact_tok.isascii()) and len(compact_tok) >= 2:
+        win = 3 if len(compact_tok) >= 3 else 2
+        for i in range(0, max(1, len(compact_tok) - win + 1)):
+            sub = compact_tok[i : i + win]
+            if sub and sub in compact_blob:
+                out["ok"] = True
+                out["partial"] = True
+                out["match"] = "cjk_sub"
+                out["matched_sub"] = sub
+                return out
+    return out
+
+
 def _verify_typed_text_on_screen(
     token: str, *, field: str = "auto"
 ) -> Dict[str, Any]:
-    """OCR 真实验证：输入内容是否出现在屏幕上（禁止假成功）。"""
+    """OCR 核验（兜底）：输入内容是否出现在屏幕上。"""
     token = (token or "").strip()
-    out: Dict[str, Any] = {"ok": False, "token": token, "texts": []}
+    out: Dict[str, Any] = {"ok": False, "token": token, "texts": [], "via": "ocr"}
     if not token:
         return out
     try:
@@ -1497,37 +1525,72 @@ def _verify_typed_text_on_screen(
         blob = " ".join(texts) + " " + full
         out["texts"] = texts[:24]
         out["field"] = phase
-        compact_blob = re.sub(r"\s+", "", blob)
-        compact_tok = re.sub(r"\s+", "", token)
-        if compact_tok and compact_tok in compact_blob:
-            out["ok"] = True
-            out["match"] = "exact"
+        matched = _token_matches_blob(token, blob)
+        if matched.get("ok"):
+            out.update(matched)
+            out["via"] = f"ocr_{matched.get('match') or 'hit'}"
             return out
-        if compact_tok.isascii() and compact_tok.lower() in compact_blob.lower():
-            out["ok"] = True
-            out["match"] = "ascii_ci"
-            return out
-        if (not compact_tok.isascii()) and len(compact_tok) >= 2:
-            # 连续 2～3 字子串（中文 OCR 常漏字，但结果列表可能露出联系人名）
-            ok_sub = False
-            win = 3 if len(compact_tok) >= 3 else 2
-            for i in range(0, max(1, len(compact_tok) - win + 1)):
-                sub = compact_tok[i : i + win]
-                if sub and sub in compact_blob:
-                    ok_sub = True
-                    out["matched_sub"] = sub
-                    break
-            if ok_sub:
-                out["ok"] = True
-                out["partial"] = True
-                out["match"] = "cjk_sub"
-                return out
         out["error"] = "OCR 未在画面上看到输入内容"
-        out["blob_preview"] = compact_blob[:120]
+        out["blob_preview"] = re.sub(r"\s+", "", blob)[:120]
         return out
     except Exception as e:
         out["error"] = str(e)[:200]
         return out
+
+
+def _verify_typed_text(
+    token: str,
+    *,
+    hwnd: int = 0,
+    field: str = "auto",
+    search_context: bool = False,
+) -> Dict[str, Any]:
+    """输入核验：UIA 回读 > 搜索树 Name > OCR。禁止仅靠截图哈希 soft 成功。"""
+    token = (token or "").strip()
+    out: Dict[str, Any] = {"ok": False, "token": token, "via": ""}
+    if not token:
+        return out
+    hwnd = int(hwnd or get_desktop_target().get("hwnd") or 0)
+
+    # 1) UIA 焦点框回读
+    try:
+        from desktop_input import uia_get_focused_edit_text
+
+        focused_val = uia_get_focused_edit_text(hwnd) if hwnd else ""
+    except Exception:
+        focused_val = ""
+    if focused_val:
+        out["uia_value"] = focused_val[:120]
+        matched = _token_matches_blob(token, focused_val)
+        if matched.get("ok"):
+            out.update(matched)
+            out["via"] = "uia_value"
+            return out
+
+    # 2) 搜索场景：控件树 Name/Value 含目标（联系人出现在结果列表）
+    if search_context:
+        try:
+            from desktop_input import uia_hwnd_tree_contains_text
+
+            tree_hit = uia_hwnd_tree_contains_text(hwnd, token) if hwnd else {"ok": False}
+        except Exception as e:
+            tree_hit = {"ok": False, "error": str(e)[:120]}
+        if tree_hit.get("ok"):
+            out["ok"] = True
+            out["via"] = "uia_name"
+            out["match"] = "uia_name"
+            out["matched"] = tree_hit.get("matched") or ""
+            return out
+        if tree_hit.get("error"):
+            out["uia_tree_error"] = tree_hit.get("error")
+
+    # 3) OCR 兜底
+    ocr = _verify_typed_text_on_screen(token, field=field)
+    if ocr.get("ok"):
+        return ocr
+    out["error"] = ocr.get("error") or "UIA/OCR 均未确认输入内容"
+    out["ocr_check"] = {k: ocr.get(k) for k in ("texts", "blob_preview", "field", "error") if k in ocr}
+    return out
 
 
 def _run_one_type_strategy(hwnd: int, text: str, strategy: str, *, clear: bool = False) -> Dict[str, Any]:
@@ -1598,7 +1661,7 @@ def _type_observe_act_verify(
     frame_id: str,
     field: str = "auto",
 ) -> Dict[str, Any]:
-    """观察→灌字→再观察：多策略，画面证据才算成功（禁止 soft_verify 假成功）。"""
+    """观察→灌字→再观察：多策略；核验 UIA 回读优先、OCR 兜底（禁止 soft_verify）。"""
     expect = (text or "").strip()
     prefer_qt = bool(search_armed or _is_qt_wechat_target(hwnd))
     has_cjk = any(ord(c) > 127 for c in expect)
@@ -1612,7 +1675,7 @@ def _type_observe_act_verify(
         order = ["uia", "clipboard_ctrl_v", "wm_char", "sendinput"]
 
     attempts: List[Dict[str, Any]] = []
-    last_ocr: Dict[str, Any] = {}
+    last_verify: Dict[str, Any] = {}
     last_delivery: Dict[str, Any] = {}
     need_clear = bool(clear) or search_armed
     verify_field = (field or "auto").strip().lower()
@@ -1630,34 +1693,42 @@ def _type_observe_act_verify(
             hwnd, text, strategy, clear=(need_clear and i == 0)
         )
         time.sleep(_pace_val("type_settle_sec"))
-        ocr_check = (
-            _verify_typed_text_on_screen(expect, field=verify_field)
+        verify = (
+            _verify_typed_text(
+                expect,
+                hwnd=hwnd,
+                field=verify_field,
+                search_context=bool(search_armed),
+            )
             if expect
             else {"ok": False}
         )
-        last_ocr = ocr_check
+        last_verify = verify
         last_delivery = delivered
         attempts.append(
             {
                 "strategy": strategy,
                 "delivery": {k: delivered.get(k) for k in ("ok", "via", "error", "chars")},
-                "ocr_ok": bool(ocr_check.get("ok")),
-                "ocr_match": ocr_check.get("match"),
+                "verify_ok": bool(verify.get("ok")),
+                "verify_via": verify.get("via"),
+                "ocr_ok": bool(verify.get("ok")) and str(verify.get("via") or "").startswith("ocr"),
+                "ocr_match": verify.get("match"),
             }
         )
-        if ocr_check.get("ok"):
+        if verify.get("ok"):
             cap = capture_after_action(hwnd, before_hash=before_hash, require_change=False)
             return {
                 "ok": True,
                 "verified": True,
                 "delivery": delivered,
-                "ocr_check": ocr_check,
+                "ocr_check": verify,
+                "verify": verify,
                 "capture_after": cap,
                 "attempts": attempts,
                 "frame_id": frame_id,
                 "strategy": strategy,
             }
-        # 投递失败则继续下一策略；投递成功但 OCR 未看到也继续（换通道）
+        # 投递失败则继续下一策略；投递成功但未核验也继续（换通道）
         if search_armed and i < len(order) - 1:
             # 清空后再试下一策略，避免残留混字
             try:
@@ -1665,17 +1736,21 @@ def _type_observe_act_verify(
             except Exception:
                 pass
 
-    cap = capture_after_action(hwnd, before_hash=before_hash, require_change=False)
+    delivery_ok = bool((last_delivery or {}).get("ok"))
+    err = (last_verify or {}).get("error") or "已尝试输入，但 UIA/OCR 均未确认文字"
+    if delivery_ok:
+        via = str((last_delivery or {}).get("via") or "input")
+        err = f"已通过 {via} 投递，但 UIA/OCR 均未确认输入内容出现在控件或画面上"
     return {
         "ok": False,
         "verified": False,
         "delivery": last_delivery,
-        "ocr_check": last_ocr,
-        "capture_after": cap,
+        "ocr_check": last_verify,
+        "verify": last_verify,
         "attempts": attempts,
         "frame_id": frame_id,
-        "error": (last_ocr.get("error") if last_ocr else None)
-        or "多策略输入后屏幕仍未见文字",
+        "error": err,
+        "delivery_ok": delivery_ok,
     }
 
 
@@ -2582,7 +2657,7 @@ def windows_type_text(
                 "steps_done": steps,
             }
 
-        # 有期望内容：多策略 + OCR 核验（禁止 soft 假成功）
+        # 有期望内容：多策略 + UIA/OCR 核验（禁止 soft 假成功）
         result = _type_observe_act_verify(
             hwnd,
             raw,
@@ -2595,6 +2670,8 @@ def windows_type_text(
         steps.append("type_verify_loop")
         if result.get("ok") and result.get("verified"):
             steps.append("type")
+            verify = result.get("verify") or result.get("ocr_check") or {}
+            via = str(verify.get("via") or result.get("strategy") or "")
             return {
                 "success": True,
                 "verified": True,
@@ -2603,6 +2680,7 @@ def windows_type_text(
                 "delivery": result.get("delivery"),
                 "reclick_search": reclick,
                 "ocr_check": result.get("ocr_check"),
+                "verify": verify,
                 "capture_after": result.get("capture_after"),
                 "attempts": result.get("attempts"),
                 "strategy": result.get("strategy"),
@@ -2612,9 +2690,9 @@ def windows_type_text(
                 "input_phase": get_input_phase(),
                 "steps_done": steps,
                 "reply": (
-                    "画面已确认输入内容。"
+                    f"已确认输入内容（via={via or 'uia/ocr'}）。"
                     if search_armed
-                    else "屏幕观察已确认输入。"
+                    else f"已确认输入（via={via or 'uia/ocr'}）。"
                 ),
             }
 
@@ -2636,19 +2714,25 @@ def windows_type_text(
                 "reply": "已投递输入（未要求画面核验）。",
             }
 
-        steps.append("type_ocr_miss")
+        steps.append("type_verify_miss")
+        delivery_ok = bool(result.get("delivery_ok")) or bool(
+            (result.get("delivery") or {}).get("ok")
+        )
+        err = result.get("error") or (
+            (result.get("ocr_check") or {}).get("error")
+        ) or "已尝试输入，但未能核验文字，不能认定成功。"
         return {
             "success": False,
             "verified": False,
             "flow_halt": True,
-            "error": result.get("error")
-            or ((result.get("ocr_check") or {}).get("error"))
-            or "已尝试输入，但屏幕未看到文字，不能认定成功。",
+            "delivery_ok": delivery_ok,
+            "error": err,
             "text_length": len(raw),
             "cleared": bool(clear) or search_armed,
             "delivery": result.get("delivery"),
             "reclick_search": reclick,
             "ocr_check": result.get("ocr_check"),
+            "verify": result.get("verify") or result.get("ocr_check"),
             "capture_after": result.get("capture_after"),
             "attempts": result.get("attempts"),
             "frame_id": frame.get("frame_id"),
@@ -2657,14 +2741,22 @@ def windows_type_text(
             "input_phase": get_input_phase(),
             "steps_done": steps,
             "suggestion": (
-                "搜索框需先有光标；平台已尝试剪贴板Ctrl+V / WM_PASTE / WM_CHAR。"
-                "请确认目标应用前台后重试，或手动点搜索框再说「继续」。"
-                if search_armed
+                (
+                    "投递通道已成功，但 UIA/OCR 未读到搜索词。"
+                    "若你肉眼已看到搜索框内容，可手动按 Enter 选联系人或说「继续」；"
+                    "勿再重复 type 同一串（会叠字）。"
+                )
+                if delivery_ok and search_armed
                 else (
-                    "会话消息栏已聚焦时请直接 windows_type_text 消息正文（勿再点搜索）。"
-                    "若仍失败：先 click 底部消息输入框，再 type，最后 Enter 发送。"
-                    if compose_mode or get_input_phase() == "compose"
-                    else "请先 windows_click_element 聚焦输入框，再 windows_type_text。"
+                    "搜索框需先有光标；平台已尝试剪贴板Ctrl+V / WM_PASTE / WM_CHAR。"
+                    "请确认目标应用前台后重试，或手动点搜索框再说「继续」。"
+                    if search_armed
+                    else (
+                        "会话消息栏已聚焦时请直接 windows_type_text 消息正文（勿再点搜索）。"
+                        "若仍失败：先 click 底部消息输入框，再 type，最后 Enter 发送。"
+                        if compose_mode or get_input_phase() == "compose"
+                        else "请先 windows_click_element 聚焦输入框，再 windows_type_text。"
+                    )
                 )
             ),
         }

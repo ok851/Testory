@@ -60,7 +60,12 @@ data class StepExtras(
     /** ROI [left, top, right, bottom]，扫码/验证码裁剪 */
     val roi: List<Int>? = null,
     /** SCROLL 幅度像素，0=默认 */
-    val scrollAmount: Int = 0
+    val scrollAmount: Int = 0,
+    /**
+     * 勾选/开关意图：优先命中 checkable 控件，避免点到协议链接文案。
+     * 由 PC normalize 或描述启发式写入。
+     */
+    val preferCheckable: Boolean = false
 )
 
 @Serializable
@@ -94,19 +99,21 @@ enum class ActionType {
             val a = (raw ?: "tap").trim().lowercase()
             return when (a) {
                 "tap", "click" -> TAP
+                "check", "uncheck", "toggle_check", "check_box", "checkbox" -> TAP
                 "long_press", "longpress" -> LONG_PRESS
                 "swipe" -> SWIPE
                 "input", "input_text", "type" -> INPUT
                 "assert", "verify", "assert_text", "assert_element" -> ASSERT
-                "wait" -> WAIT
-                "open_app" -> OPEN_APP
-                "back" -> BACK
-                "home" -> HOME
+                "wait", "sleep", "delay" -> WAIT
+                "open_app", "launch_app", "start_app", "launch", "startapp",
+                "am_start", "start_activity" -> OPEN_APP
+                "back", "press_back" -> BACK
+                "home", "press_home", "goto_home" -> HOME
                 "screenshot" -> SCREENSHOT
                 "extract_text" -> EXTRACT_TEXT
                 "wait_until" -> WAIT_UNTIL
                 "close_app" -> CLOSE_APP
-                "press_key" -> PRESS_KEY
+                "press_key", "key_event", "keycode" -> PRESS_KEY
                 "scroll" -> SCROLL
                 "repeat" -> REPEAT
                 "while" -> WHILE
@@ -114,6 +121,7 @@ enum class ActionType {
                 "scroll_until" -> SCROLL_UNTIL
                 "solve_captcha" -> SOLVE_CAPTCHA
                 "human_gate" -> HUMAN_GATE
+                "find_and_tap", "tap_text", "click_text" -> TAP
                 else -> try {
                     valueOf(a.uppercase())
                 } catch (_: Exception) {

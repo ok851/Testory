@@ -941,9 +941,50 @@ def _desktop_progress_reminder(meta: Dict[str, Any]) -> str:
 
 
 def _desktop_flow_should_stop(meta: Optional[Dict[str, Any]]) -> bool:
-    """桌面步骤失败后整任务停：禁止进入下一轮 LLM。"""
+    """桌面/手机步骤失败后整任务停：禁止进入下一轮 LLM。"""
     m = meta or {}
-    return bool(m.get("desktop_flow_halted"))
+    return bool(m.get("desktop_flow_halted") or m.get("mobile_flow_halted"))
+
+
+def _mobile_halt_user_facing(tool_name: str, result_text: str) -> str:
+    err = ""
+    try:
+        parsed = json.loads(result_text or "")
+        if isinstance(parsed, dict):
+            err = str(parsed.get("error") or "")[:240]
+    except Exception:
+        err = (result_text or "")[:240]
+    tip = err or "手机本机执行失败"
+    return (
+        f"手机双手工具 {tool_name} 连续失败，已停止自动重试。"
+        f"原因：{tip}"
+        " 请确认步骤 IR（推荐 action=open_app + package_name）后重试。"
+    )
+
+
+def _record_mobile_tool_outcome(meta: Dict[str, Any], name: str, result_text: str) -> None:
+    """mobile_* 失败计入次数；满 2 次则停（允许一轮修正）。"""
+    if not (name or "").startswith("mobile_"):
+        return
+    ok = True
+    try:
+        parsed = json.loads(result_text or "")
+        if isinstance(parsed, dict):
+            if parsed.get("success") is False or parsed.get("ok") is False:
+                ok = False
+    except Exception:
+        low = (result_text or "").lower()
+        ok = '"success": false' not in low and '"ok": false' not in low
+    if ok:
+        meta["mobile_fail_streak"] = 0
+        return
+    streak = int(meta.get("mobile_fail_streak") or 0) + 1
+    meta["mobile_fail_streak"] = streak
+    meta["mobile_last_failed_tool"] = name
+    meta["mobile_last_error"] = (result_text or "")[:500]
+    if streak >= 2:
+        meta["mobile_flow_halted"] = True
+        meta["halt_reply"] = _mobile_halt_user_facing(name, result_text)
 
 
 def _desktop_halt_user_facing(tool_name: str, result_text: str) -> str:
@@ -1573,9 +1614,23 @@ def _cross_end_strategy_lines() -> List[str]:
         "- 桌面 GUI：用 desktop_* / windows_*；每步根据工具返回再决定下一步，禁止臆造成功。",
         "- 需要短信/通知验证码：调用 mobile_extract_otp，只用工具返回值；禁止编造验证码。",
         "- 需要手机本机跑步骤或用例：mobile_run_steps / mobile_run_case。",
+        "- mobile_run_steps 的 steps 须用手机 IR action："
+        "open_app（推荐，带 package_name 如 com.tencent.mobileqq）、"
+        "tap/input/wait/home/back；禁止 invent launch_app/start_app/shell/find_and_tap。",
+        "- 打开应用示例："
+        '{"action":"open_app","description":"打开QQ","package_name":"com.tencent.mobileqq"}',
+        "- 应用内点击必须带可见文案定位（勿只写 description）："
+        '{"action":"tap","description":"点击登录","selector_type":"text","selector_value":"登录"}',
+        "- 勾选协议/复选框：description 含「勾选」且 prefer_checkable（平台会自动补）；"
+        "禁止用协议链接文案当唯一目标，应定位勾选框旁短文案。",
+        "- 应用内输入：input_value=内容，selector_value=输入框提示文案："
+        '{"action":"input","description":"输入手机号","selector_type":"text",'
+        '"selector_value":"手机号","input_value":"13800000000"}',
+        "- mobile_* 工具返回的 success 只表示手势层结果；必须阅读 steps_digest / error。"
+        "禁止在工具未全部 OK、或存在未勾选/未推进错误时向用户宣称「已完成」。",
         "- 跨工具共享变量在平台侧累积；参数中可写 {{var}}（如 {{sms_otp}} / {{phone_number}}），平台会替换。",
         "- 用户目标可能是登录、注册、换绑或其他：按当前界面与目标自行选择控件描述与顺序，勿套死模板。",
-        "- 任一步失败：停止并向用户如实说明工具错误，禁止假装已完成。",
+        "- 任一步失败：最多再调整尝试 1 次（共 2 轮）；仍失败则停止并向用户如实说明，禁止长时间循环猜测。",
     ]
 
 
@@ -2699,13 +2754,22 @@ def run_ai_chat_with_tools(
         if _desktop_flow_should_stop(meta):
             meta["final_round"] = round_idx
             meta["savable"] = False
-            reply = _desktop_halt_user_facing(
-                str(meta.get("desktop_last_failed_tool") or "windows_*"),
-                json.dumps(
-                    {"error": meta.get("desktop_last_error") or "", "suggestion": ""},
-                    ensure_ascii=False,
-                ),
-            )
+            if meta.get("mobile_flow_halted"):
+                reply = meta.get("halt_reply") or _mobile_halt_user_facing(
+                    str(meta.get("mobile_last_failed_tool") or "mobile_*"),
+                    json.dumps(
+                        {"error": meta.get("mobile_last_error") or ""},
+                        ensure_ascii=False,
+                    ),
+                )
+            else:
+                reply = meta.get("halt_reply") or _desktop_halt_user_facing(
+                    str(meta.get("desktop_last_failed_tool") or "windows_*"),
+                    json.dumps(
+                        {"error": meta.get("desktop_last_error") or "", "suggestion": ""},
+                        ensure_ascii=False,
+                    ),
+                )
             meta["halt_reply"] = reply
             _persist_unified_agent_session(params, meta, reply)
             return {}, [], meta
@@ -2945,6 +3009,8 @@ def run_ai_chat_with_tools(
                             meta.setdefault("cross_end_vars", {})["sms_otp"] = parsed_ce["sms_otp"]
                 except Exception:
                     pass
+                if name.startswith("mobile_"):
+                    _record_mobile_tool_outcome(meta, name, result_text)
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 
@@ -2955,6 +3021,13 @@ def run_ai_chat_with_tools(
                     "content": result_text,
                 }
             )
+            if meta.get("mobile_flow_halted"):
+                reply = meta.get("halt_reply") or _mobile_halt_user_facing(name, result_text)
+                meta["halt_reply"] = reply
+                meta["final_round"] = round_idx
+                meta["savable"] = False
+                _persist_unified_agent_session(params, meta, reply)
+                return {}, [], meta
             if name == "windows_click_element":
                 auto = _auto_type_contact_after_search_click(
                     params=params, meta=meta, click_result_text=result_text
@@ -3229,16 +3302,27 @@ def run_ai_chat_with_tools_stream(
             yield ("error", "任务已超过设定的超时时间，已自动停止")
             return
         if _desktop_flow_should_stop(meta):
-            reply = meta.get("halt_reply") or _desktop_halt_user_facing(
-                str(meta.get("desktop_last_failed_tool") or "windows_*"),
-                json.dumps(
-                    {"error": meta.get("desktop_last_error") or ""},
-                    ensure_ascii=False,
-                ),
-            )
+            if meta.get("mobile_flow_halted"):
+                reply = meta.get("halt_reply") or _mobile_halt_user_facing(
+                    str(meta.get("mobile_last_failed_tool") or "mobile_*"),
+                    json.dumps(
+                        {"error": meta.get("mobile_last_error") or ""},
+                        ensure_ascii=False,
+                    ),
+                )
+                think_msg = "手机步骤连续失败，已停止自动重试"
+            else:
+                reply = meta.get("halt_reply") or _desktop_halt_user_facing(
+                    str(meta.get("desktop_last_failed_tool") or "windows_*"),
+                    json.dumps(
+                        {"error": meta.get("desktop_last_error") or ""},
+                        ensure_ascii=False,
+                    ),
+                )
+                think_msg = "步骤失败，任务已停止"
             meta["final_round"] = round_idx
             meta["savable"] = False
-            yield ("thinking", {"round": round_idx, "content": "步骤失败，任务已停止"})
+            yield ("thinking", {"round": round_idx, "content": think_msg})
             yield ("reply", {"text": reply})
             yield (
                 "done",
@@ -3826,6 +3910,8 @@ def run_ai_chat_with_tools_stream(
                             yield ("vision_result", {"text": f"cross_end:{name} {preview}"[:300]})
                 except Exception:
                     pass
+                if name.startswith("mobile_"):
+                    _record_mobile_tool_outcome(meta, name, result_text)
             else:
                 result_text = json.dumps({"ok": False, "error": f"未知工具 {name}"}, ensure_ascii=False)
 
@@ -3833,6 +3919,27 @@ def run_ai_chat_with_tools_stream(
                 "round": round_idx, "tool": name,
                 "result_preview": result_text[:500],
             })
+
+            if meta.get("mobile_flow_halted"):
+                reply = meta.get("halt_reply") or _mobile_halt_user_facing(name, result_text)
+                meta["halt_reply"] = reply
+                meta["final_round"] = round_idx
+                meta["savable"] = False
+                yield ("thinking", {"round": round_idx, "content": "手机步骤连续失败，已停止自动重试"})
+                yield ("reply", {"text": reply})
+                yield (
+                    "done",
+                    {
+                        "total_rounds": round_idx + 1,
+                        "plan": {},
+                        "meta": meta,
+                        "reply": reply,
+                        "failed": True,
+                        "savable": False,
+                        "partial": True,
+                    },
+                )
+                return
 
             # 点开搜索后立刻自动输入联系人（不等下一轮 LLM，避免焦点被平台抢走）
             if name == "windows_click_element":
@@ -4248,13 +4355,22 @@ def run_ai_chat_with_tools_stream(
                 break
 
         if _desktop_flow_should_stop(meta):
-            reply = meta.get("halt_reply") or _desktop_halt_user_facing(
-                str(meta.get("desktop_last_failed_tool") or "windows_*"),
-                json.dumps(
-                    {"error": meta.get("desktop_last_error") or ""},
-                    ensure_ascii=False,
-                ),
-            )
+            if meta.get("mobile_flow_halted"):
+                reply = meta.get("halt_reply") or _mobile_halt_user_facing(
+                    str(meta.get("mobile_last_failed_tool") or "mobile_*"),
+                    json.dumps(
+                        {"error": meta.get("mobile_last_error") or ""},
+                        ensure_ascii=False,
+                    ),
+                )
+            else:
+                reply = meta.get("halt_reply") or _desktop_halt_user_facing(
+                    str(meta.get("desktop_last_failed_tool") or "windows_*"),
+                    json.dumps(
+                        {"error": meta.get("desktop_last_error") or ""},
+                        ensure_ascii=False,
+                    ),
+                )
             meta["final_round"] = round_idx
             meta["savable"] = False
             yield ("reply", {"text": reply})

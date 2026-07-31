@@ -67,18 +67,11 @@ def enqueue_mobile_job(
 ) -> str:
     from mobile_sync_store import enqueue_run_job
 
-    # 模型常瞎填 device_id（adb udid / unknown）；无效则清空，让任意已配对设备可领
-    did = (device_id or "").strip()
-    if did:
-        try:
-            from mobile_sync_store import list_paired_devices_for_user
-
-            paired = list_paired_devices_for_user(int(user_id or 0))
-            ok_ids = {(d.get("device_id") or "").strip() for d in paired}
-            if did not in ok_ids or did.lower() == "unknown":
-                did = ""
-        except Exception:
-            did = ""
+    # Agent 场景禁止绑定历史 device_id：tokens 里常有多台/旧 ANDROID_ID，
+    # 模型或 hands 快照一旦填错，当前轮询手机会永远领不到（status=pending）。
+    # 空 device_id = 该用户任意已配对设备可领。
+    _ = (device_id or "").strip()
+    did = ""
 
     return enqueue_run_job(
         case_id=int(case_id or 0),
@@ -164,6 +157,7 @@ def mobile_extract_otp(
             "evidence": [{"type": "otp_mock", "hint": "MOBILE_OTP_MOCK"}],
         }
 
+    device_id = ""
     hand_err = ensure_mobile_hand_ready(user_id, device_id)
     if hand_err:
         return hand_err
@@ -269,6 +263,8 @@ def mobile_run_steps(
     """高层工具：把步骤下发给已配对手机本机回放并等待结果。"""
     if not steps:
         return {"success": False, "ok": False, "error": "steps 为空"}
+    # 不信任调用方/模型传入的 device_id，避免绑到历史设备
+    device_id = ""
     if not skip_hand_check:
         hand_err = ensure_mobile_hand_ready(user_id, device_id)
         if hand_err:
@@ -290,12 +286,32 @@ def mobile_run_steps(
     payload = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
     st = str(job.get("status") or "").strip().lower()
     ok = st in ("success", "ok") or payload.get("success") is True
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    step_lines: List[str] = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        ok_i = r.get("success") is True
+        mark = "OK" if ok_i else "FAIL"
+        desc = str(r.get("stepDescription") or r.get("step_description") or "")[:40]
+        strat = str(r.get("action") or r.get("actualStrategy") or r.get("actual_strategy") or "")
+        err = str(r.get("errorMessage") or r.get("error_message") or "")[:80]
+        line = f"[{mark}] {desc} ({strat})"
+        if err and not ok_i:
+            line += f" err={err}"
+        step_lines.append(line)
+    agent_note = (
+        "success 仅表示手机无障碍手势层回报；不得据此编造「业务已办完」。"
+        "请逐条对照 steps_digest；若有 FAIL 或未勾选/未推进类错误，必须如实告知用户并停止夸大。"
+    )
     return {
         "success": ok,
         "ok": ok,
         "job_id": job_id,
         "status": st,
         "result_payload": payload,
+        "steps_digest": step_lines,
+        "agent_note": agent_note,
         "variables": payload.get("variables") if isinstance(payload.get("variables"), dict) else {},
         "error": None if ok else (
             job.get("error")
@@ -521,7 +537,6 @@ def cross_end_tool_schemas(
                         "timeout_sec": {"type": "number", "description": "等待秒数，默认 120"},
                         "sender_hint": {"type": "string", "description": "可选：短信发送方提示"},
                         "pattern": {"type": "string", "description": "可选：自定义正则，须含捕获组"},
-                        "device_id": {"type": "string"},
                     },
                 },
             },
@@ -533,17 +548,26 @@ def cross_end_tool_schemas(
                 "description": (
                     "把 Android 步骤下发给已配对手机本机回放并等待完成。"
                     "正式路径：enqueue + await，禁止用 adb 逐步点手机。"
+                    "steps.action 须为手机 IR：open_app（推荐，带 package_name）、"
+                    "tap/input/wait/home/back；勿用 launch_app/start_app/shell。"
+                    "应用内 tap 必须 selector_type=text + selector_value=可见文案；"
+                    "input 必须 input_value + 输入框文案定位。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "steps": {
                             "type": "array",
-                            "description": "步骤数组（action/description/selector_value/input_value）",
+                            "description": (
+                                "步骤数组。示例："
+                                'open_app={"action":"open_app","package_name":"com.tencent.mobileqq"}；'
+                                'tap={"action":"tap","selector_type":"text","selector_value":"登录"}；'
+                                'input={"action":"input","selector_type":"text","selector_value":"手机号",'
+                                '"input_value":"13800000000"}'
+                            ),
                             "items": {"type": "object"},
                         },
                         "timeout_sec": {"type": "number"},
-                        "device_id": {"type": "string"},
                         "case_id": {"type": "integer"},
                     },
                     "required": ["steps"],
@@ -560,7 +584,6 @@ def cross_end_tool_schemas(
                     "properties": {
                         "case_id": {"type": "integer"},
                         "timeout_sec": {"type": "number"},
-                        "device_id": {"type": "string"},
                     },
                     "required": ["case_id"],
                 },

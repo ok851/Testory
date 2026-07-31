@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -281,7 +282,7 @@ def resolve_device_token() -> Tuple[Optional[Dict[str, Any]], Optional[Any]]:
 
 
 def list_paired_devices_for_user(user_id: int) -> List[Dict[str, Any]]:
-    """该用户当前有效的已配对手机（双手：phone）。"""
+    """该用户当前有效的已配对手机（双手：phone）。按 paired_at 新→旧。"""
     uid = int(user_id or 0)
     out: List[Dict[str, Any]] = []
     with _LOCK:
@@ -299,6 +300,7 @@ def list_paired_devices_for_user(user_id: int) -> List[Dict[str, Any]]:
                 "paired_at": meta.get("paired_at"),
                 "token_suffix": (tok[-6:] if tok else ""),
             })
+    out.sort(key=lambda d: float(d.get("paired_at") or 0), reverse=True)
     return out
 
 
@@ -322,7 +324,10 @@ def list_accessible_cases(db: Any, user_id: int) -> List[Dict[str, Any]]:
 
 
 def normalize_device_step(step: Dict[str, Any]) -> Dict[str, Any]:
-    """DB/API 步骤 → 手机可执行 IR：mobile_spec 字符串展开，IR 字段上提到顶层。"""
+    """DB/API/Agent 步骤 → 手机可执行 IR。
+
+    模型常发明 launch_app/start_app/shell 等 action；统一收敛到 open_app/home/tap 等。
+    """
     out = dict(step)
     ms = out.get("mobile_spec")
     if isinstance(ms, str) and ms.strip():
@@ -348,11 +353,293 @@ def normalize_device_step(step: Dict[str, Any]) -> Dict[str, Any]:
         "roi",
         "scroll_amount",
         "swipe_direction",
+        "packageName",
+        "package_name",
+        "text",
     ):
         if ms.get(k) is not None and out.get(k) is None:
             out[k] = ms.get(k)
+
+    action = str(out.get("action") or "").strip().lower().replace("-", "_")
+    desc = str(out.get("description") or "").strip()
+    pkg = (
+        str(out.get("package_name") or out.get("app_package") or out.get("package") or "").strip()
+        or str(ms.get("packageName") or ms.get("package_name") or "").strip()
+    )
+    sel = str(out.get("selector_value") or "").strip()
+    if not pkg and sel.count(".") >= 1 and " " not in sel and sel.startswith("com."):
+        pkg = sel
+    if not pkg:
+        pkg = _guess_android_package(desc, sel, str(out.get("text") or ""))
+
+    # 打开应用类
+    if action in (
+        "open_app",
+        "launch_app",
+        "start_app",
+        "launch",
+        "startapp",
+        "am_start",
+        "start_activity",
+    ) or (
+        action == "shell"
+        and "am start" in str(out.get("command") or out.get("input_value") or "").lower()
+    ):
+        if not pkg and action == "shell":
+            cmd = str(out.get("command") or out.get("input_value") or "")
+            # am start -n pkg/activity 或 -p pkg
+            m = re.search(r"(?:-n\s+|component\s+)([\w.]+)/", cmd)
+            if not m:
+                m = re.search(r"-p\s+([\w.]+)", cmd)
+            if m:
+                pkg = m.group(1)
+        out["action"] = "open_app"
+        if pkg:
+            out["package_name"] = pkg
+            out["selector_value"] = pkg
+            out["selector_type"] = out.get("selector_type") or "package"
+            ms["packageName"] = pkg
+            ms["package_name"] = pkg
+        # 无包名时把描述里的应用名留给手机按桌面图标点
+        app_label = _guess_app_label(desc) or desc
+        if app_label and not ms.get("text"):
+            ms["text"] = app_label
+    elif action in ("home", "press_home", "goto_home") or (
+        action in ("key_event", "press_key", "keycode")
+        and str(out.get("keycode") or out.get("key_code") or out.get("input_value") or "")
+        .strip()
+        .upper()
+        in ("HOME", "3", "KEYCODE_HOME")
+    ):
+        out["action"] = "home"
+    elif action in ("back", "press_back"):
+        out["action"] = "back"
+    elif action in (
+        "tap",
+        "click",
+        "find_and_tap",
+        "tap_text",
+        "click_text",
+        "long_press",
+        "longpress",
+        "check",
+        "uncheck",
+        "toggle_check",
+        "checkbox",
+    ):
+        out["action"] = "long_press" if action in ("long_press", "longpress") else "tap"
+        _ensure_text_locator(out, ms, desc)
+        if action in ("check", "uncheck", "toggle_check", "checkbox") or _is_check_intent(desc):
+            ms["prefer_checkable"] = True
+            out["prefer_checkable"] = True
+    elif action in ("input", "type", "type_text", "fill", "set_text", "input_text"):
+        out["action"] = "input"
+        _normalize_input_step(out, ms, desc)
+    elif action in ("wait", "sleep", "delay"):
+        out["action"] = "wait"
+        dur = (
+            out.get("wait_duration_ms")
+            or out.get("duration")
+            or out.get("duration_ms")
+            or out.get("timeout")
+            or out.get("timeout_ms")
+            or out.get("ms")
+        )
+        try:
+            d = int(dur or 0)
+            # 模型常写 2000 表示毫秒；若 < 50 当秒
+            if 0 < d < 50:
+                d *= 1000
+            if d > 0:
+                out["wait_duration_ms"] = d
+        except Exception:
+            pass
+
     out["mobile_spec"] = ms
     return out
+
+
+def _looks_like_typed_content(value: str, description: str = "") -> bool:
+    """text 字段像「要输入的内容」而非控件文案（手机号/密码等）。"""
+    v = (value or "").strip()
+    if not v:
+        return False
+    desc = (description or "").strip()
+    if any(k in desc for k in ("输入", "填写", "键入", "密码", "验证码", "账号", "手机号")):
+        if len(v) >= 4 or v.isdigit():
+            return True
+    if v.isdigit() and len(v) >= 6:
+        return True
+    if len(v) >= 8 and " " not in v and not v.startswith("com."):
+        # 较长 token 更像输入内容而非按钮文案
+        return True
+    return False
+
+
+def _is_check_intent(description: str) -> bool:
+    d = (description or "").strip().lower()
+    if not d:
+        return False
+    keys = (
+        "勾选",
+        "选中",
+        "打勾",
+        "勾上",
+        "复选",
+        "勾选框",
+        "check ",
+        "checkbox",
+        "tick ",
+        "toggle check",
+    )
+    return any(k in d for k in keys)
+
+
+def _extract_ui_label(description: str) -> str:
+    """从自然语言描述抽出短控件文案：点击登录按钮 → 登录。"""
+    raw = (description or "").strip()
+    if not raw:
+        return ""
+    m = re.search(r"[「\"'【《]([^」\"'】》]{1,24})[」\"'】》]", raw)
+    if m:
+        return m.group(1).strip()
+    cleaned = re.sub(
+        r"^(?:查找并)?(?:点击|点按|轻触|勾选|选择|打开|按下|按一下|点一下)\s*",
+        "",
+        raw,
+    )
+    cleaned = re.sub(r"(?:按钮|图标|控件|入口|选项|复选框|勾选框)$", "", cleaned).strip()
+    cleaned = re.sub(r"^(?:一下|下)\s*", "", cleaned).strip()
+    if 1 <= len(cleaned) <= 20:
+        return cleaned
+    if cleaned:
+        return cleaned[:20]
+    return raw[:20]
+
+
+def _guess_input_label(description: str) -> str:
+    """输入手机号 → 手机号；填写密码 → 密码。"""
+    raw = (description or "").strip()
+    if not raw:
+        return ""
+    m = re.search(
+        r"(?:输入|填写|键入|在)\s*([A-Za-z\u4e00-\u9fff0-9/]{1,16})",
+        raw,
+    )
+    if m:
+        label = m.group(1).strip()
+        label = re.sub(r"(?:框|输入框|字段|栏)$", "", label).strip()
+        if label and label not in ("内容", "文本", "文字"):
+            return label
+    for hint in ("手机号", "手机号码", "QQ号", "账号", "帐号", "密码", "验证码", "用户名"):
+        if hint in raw:
+            return hint
+    return ""
+
+
+def _ensure_text_locator(out: Dict[str, Any], ms: Dict[str, Any], desc: str) -> None:
+    """保证 tap/long_press 有 text 定位（APK 依赖 locator.text）。"""
+    sel_type = str(out.get("selector_type") or "").strip().lower()
+    sel = str(out.get("selector_value") or "").strip()
+    text = str(out.get("text") or ms.get("text") or "").strip()
+    if sel_type in ("resource_id", "id", "content_desc", "xpath", "coordinate", "package"):
+        if sel_type in ("id",):
+            out["selector_type"] = "resource_id"
+        if sel and sel_type in ("resource_id", "content_desc") and not ms.get(
+            "resource_id" if "resource" in sel_type else "content_desc"
+        ):
+            if "resource" in sel_type:
+                ms["resource_id"] = sel
+            else:
+                ms["content_desc"] = sel
+        return
+    if not text or _looks_like_typed_content(text, desc):
+        text = ""
+    if not text and sel and sel_type in ("", "text") and not sel.startswith("com."):
+        text = sel
+    if not text:
+        text = _extract_ui_label(desc)
+    if text:
+        out["selector_type"] = "text"
+        out["selector_value"] = text
+        out["text"] = text
+        ms["text"] = text
+
+
+def _normalize_input_step(out: Dict[str, Any], ms: Dict[str, Any], desc: str) -> None:
+    """模型常把输入内容写在 text，且缺输入框定位。"""
+    content = str(out.get("input_value") or "").strip()
+    raw_text = str(out.get("text") or ms.get("text") or "").strip()
+    sel = str(out.get("selector_value") or "").strip()
+    sel_type = str(out.get("selector_type") or "").strip().lower()
+
+    if not content:
+        if raw_text and _looks_like_typed_content(raw_text, desc):
+            content = raw_text
+            raw_text = ""
+        elif sel and _looks_like_typed_content(sel, desc) and sel_type in ("", "text"):
+            content = sel
+            sel = ""
+
+    if content:
+        out["input_value"] = content
+
+    label = ""
+    if sel and not _looks_like_typed_content(sel, desc) and not sel.startswith("com."):
+        label = sel
+    if not label and raw_text and not _looks_like_typed_content(raw_text, desc):
+        label = raw_text
+    if not label:
+        label = _guess_input_label(desc)
+    if label:
+        out["selector_type"] = "text"
+        out["selector_value"] = label
+        out["text"] = label
+        ms["text"] = label
+    elif "text" in out and content and out.get("text") == content:
+        # 避免把手机号留在 locator.text
+        out.pop("text", None)
+        ms.pop("text", None)
+
+
+_APP_PACKAGE_HINTS = {
+    "qq": "com.tencent.mobileqq",
+    "微信": "com.tencent.mm",
+    "wechat": "com.tencent.mm",
+    "支付宝": "com.eg.android.AlipayGphone",
+    "淘宝": "com.taobao.taobao",
+    "抖音": "com.ss.android.ugc.aweme",
+    "设置": "com.android.settings",
+    "settings": "com.android.settings",
+    "chrome": "com.android.chrome",
+    "浏览器": "com.android.chrome",
+}
+
+
+def _guess_android_package(*texts: str) -> str:
+    blob = " ".join(t for t in texts if t).lower()
+    if not blob:
+        return ""
+    for name, pkg in _APP_PACKAGE_HINTS.items():
+        if name.lower() in blob or name in blob:
+            return pkg
+    return ""
+
+
+def _guess_app_label(description: str) -> str:
+    raw = (description or "").strip()
+    if not raw:
+        return ""
+    for name in _APP_PACKAGE_HINTS:
+        if name in raw or name.lower() in raw.lower():
+            return name if name not in ("wechat", "settings", "chrome") else (
+                "微信" if name == "wechat" else ("设置" if name == "settings" else "Chrome")
+            )
+    # 「打开QQ应用」→ QQ
+    m = re.search(r"(?:打开|启动|运行)\s*([A-Za-z\u4e00-\u9fff0-9]{1,12})", raw)
+    if m:
+        return m.group(1).replace("应用", "").strip()
+    return ""
 
 
 def normalize_device_steps(steps: Any) -> List[Dict[str, Any]]:
@@ -416,31 +703,74 @@ def pop_pending_run_for_device(
     want_kind = (job_kind or "").strip().lower()
     want_uid = int(user_id or 0)
     _load_jobs_from_disk(force=True)
+
+    def _kind_ok(job: Dict[str, Any]) -> bool:
+        if not want_kind:
+            return True
+        kind = str(job.get("job_kind") or "run_steps").strip().lower()
+        return kind == want_kind
+
+    def _user_ok(job: Dict[str, Any]) -> bool:
+        job_uid = int(job.get("user_id") or 0)
+        if want_uid and job_uid and job_uid != want_uid:
+            return False
+        return True
+
+    def _claim(job_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+        job["status"] = "running"
+        job["claimed_by"] = device_id
+        job["claimed_at"] = time.time()
+        _persist_jobs_unlocked()
+        return dict(job)
+
     with _LOCK:
+        # 1) 精确 device 匹配（或 job 未指定 / unknown）
         skipped = []
         for job_id, job in list(_RUN_JOBS.items()):
             if job.get("status") != "pending":
                 continue
-            job_uid = int(job.get("user_id") or 0)
-            # job.user_id==0 视为通配（旧调用）；否则须与配对用户一致
-            if want_uid and job_uid and job_uid != want_uid:
+            if not _user_ok(job):
                 skipped.append(f"{job_id}:user_mismatch")
                 continue
+            if not _kind_ok(job):
+                skipped.append(f"{job_id}:kind")
+                continue
             target = (job.get("device_id") or "").strip()
-            # 目标为空 / unknown：任意本用户设备可领；否则须精确匹配
             if target and target.lower() != "unknown" and device_id and target != device_id:
                 skipped.append(f"{job_id}:device_mismatch({target}!={device_id})")
                 continue
-            if want_kind:
-                kind = str(job.get("job_kind") or "run_steps").strip().lower()
-                if kind != want_kind:
-                    skipped.append(f"{job_id}:kind={kind}")
-                    continue
-            job["status"] = "running"
-            job["claimed_by"] = device_id
-            job["claimed_at"] = time.time()
-            _persist_jobs_unlocked()
-            return dict(job)
+            return _claim(job_id, job)
+
+        # 2) 回退：同用户 + 同 kind 的 agent 任务，忽略过期 device_id 绑定
+        #    （历史 tokens 里的旧 ANDROID_ID 常导致永远 pending）
+        for job_id, job in list(_RUN_JOBS.items()):
+            if job.get("status") != "pending":
+                continue
+            if not _user_ok(job):
+                continue
+            if not _kind_ok(job):
+                continue
+            src = str(job.get("source") or "").strip().lower()
+            if src not in (
+                "mobile_run_steps",
+                "mobile_run_case",
+                "mobile_extract_otp",
+                "agent_tool",
+            ) and not src.startswith("mobile_"):
+                continue
+            try:
+                from logger import uat_logger
+
+                uat_logger.info(
+                    "mobile pending fallback claim job=%s ignore_device=%s by=%s",
+                    job_id,
+                    job.get("device_id"),
+                    device_id,
+                )
+            except Exception:
+                pass
+            return _claim(job_id, job)
+
         if skipped:
             try:
                 from logger import uat_logger

@@ -393,7 +393,7 @@
     .ai-right-panel {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 10px;
         height: 100%;
         min-height: 0;
         overflow: hidden;
@@ -407,10 +407,23 @@
         overflow: hidden;
         display: flex;
         flex-direction: column;
+        min-height: 0;
+        transition: flex-basis 0.2s ease, min-height 0.2s ease, opacity 0.2s ease;
     }
-    .ai-right-card:not(.ai-right-card--report) {
+    /* 展开：参与均分剩余高度，内部列表可滚动 */
+    .ai-right-card:not(.collapsed):not(.ai-right-card--report) {
         flex: 1 1 0;
-        min-height: 100px;
+        min-height: 120px;
+    }
+    .ai-right-card:not(.collapsed).ai-right-card--report {
+        flex: 0 0 auto;
+        min-height: auto;
+    }
+    /* 收起：只留标题条，不再占大块空白 */
+    .ai-right-card.collapsed {
+        flex: 0 0 auto;
+        min-height: 0;
+        max-height: none;
     }
     html.dark .ai-right-card {
         background: rgba(30,41,59,0.8);
@@ -424,6 +437,9 @@
         cursor: pointer;
         user-select: none;
         flex-shrink: 0;
+    }
+    .ai-right-card.collapsed .ai-right-card__head {
+        border-bottom: none;
     }
     html.dark .ai-right-card__head {
         background: rgba(15,23,42,0.6);
@@ -445,39 +461,39 @@
     }
     .ai-right-card.collapsed .ai-right-card__toggle { transform: rotate(-90deg); }
     .ai-right-card__body {
-        padding: 10px 12px 12px;
-        flex: 1;
+        padding: 8px 10px 12px;
+        flex: 1 1 auto;
         min-height: 0;
+        overflow-x: hidden;
         overflow-y: auto;
-        transition: max-height 0.3s ease, opacity 0.2s ease;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
     }
+    /* 收起时整块 body 不占位（不是半透明空壳） */
     .ai-right-card.collapsed .ai-right-card__body {
-        max-height: 0; padding: 0 12px; opacity: 0; overflow: hidden; flex: 0;
+        display: none;
     }
-    .ai-right-card--report {
+    .ai-right-card--report:not(.collapsed) .ai-right-card__body {
         flex: 0 0 auto;
-        min-height: auto;
-    }
-    .ai-right-card--report .ai-right-card__body {
-        flex: 0 0 auto;
-        overflow-y: visible;
-    }
-    .ai-right-card--report.collapsed .ai-right-card__body {
-        overflow: hidden;
+        max-height: min(42vh, 360px);
+        overflow-y: auto;
     }
     /* 自定义滚动条 */
     .ai-right-card__body::-webkit-scrollbar {
-        width: 4px;
+        width: 5px;
     }
     .ai-right-card__body::-webkit-scrollbar-track {
         background: transparent;
     }
     .ai-right-card__body::-webkit-scrollbar-thumb {
-        background: rgba(148, 163, 184, 0.4);
+        background: rgba(148, 163, 184, 0.45);
         border-radius: 4px;
     }
     .ai-right-card__body::-webkit-scrollbar-thumb:hover {
-        background: rgba(148, 163, 184, 0.6);
+        background: rgba(148, 163, 184, 0.7);
     }
     /* 报告详情展开 */
     .ai-report-detail {
@@ -546,12 +562,13 @@
     .ai-think-item {
         display: flex; align-items: flex-start; gap: 10px;
         padding: 10px 12px;
-        margin-bottom: 6px;
+        margin-bottom: 0;
         border-radius: 8px;
         background: rgba(99,102,241,0.05);
         font-size: 12px;
         line-height: 1.5;
         color: #475569;
+        flex-shrink: 0;
         animation: ai-think-fade-in 0.3s ease;
     }
     @keyframes ai-think-fade-in {
@@ -600,11 +617,12 @@
     .ai-action-item {
         display: flex; align-items: flex-start; gap: 10px;
         padding: 10px 12px;
-        margin-bottom: 6px;
+        margin-bottom: 0;
         border-radius: 8px;
         font-size: 12px;
         line-height: 1.5;
         color: #475569;
+        flex-shrink: 0;
         animation: ai-action-fade-in 0.3s ease;
     }
     @keyframes ai-action-fade-in {
@@ -629,10 +647,11 @@
         padding: 8px;
         border-radius: 8px;
         background: rgba(0,0,0,0.03);
-        margin-bottom: 6px;
+        margin-bottom: 0;
         font-size: 11px;
         line-height: 1.45;
         color: #475569;
+        flex-shrink: 0;
     }
     html.dark .ai-case-step { background: rgba(255,255,255,0.03); color: #cbd5e1; }
     .ai-case-step__num {

@@ -828,5 +828,6 @@ data class MobileSpecDto(
     @kotlinx.serialization.SerialName("captcha_hint") val captchaHint: String? = null,
     @kotlinx.serialization.SerialName("captcha_fallback") val captchaFallback: String? = null,
     @kotlinx.serialization.SerialName("roi") val roi: List<Int>? = null,
-    @kotlinx.serialization.SerialName("scroll_amount") val scrollAmount: Int? = null
+    @kotlinx.serialization.SerialName("scroll_amount") val scrollAmount: Int? = null,
+    @kotlinx.serialization.SerialName("prefer_checkable") val preferCheckable: Boolean? = null
 )

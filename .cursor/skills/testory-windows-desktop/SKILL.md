@@ -55,11 +55,13 @@ POST /internal/session/{id}/inspect     {"max_depth": 4, "max_nodes": 120}
 ## 最佳实践
 
 1. **观察→动作→核验**：无证据不得报成功
-2. **UIA 优先**：点击优先 Invoke，再 PostMessage；输入优先 ValuePattern
-3. **后台模式**：`DESKTOP_NO_FOCUS_STEAL=1` 不抢前台；`DESKTOP_PHYSICAL_MOUSE=0` 不移光标
-4. **勿默认点搜索**：仅任务需要搜索时再点搜索控件并输入
-5. **核验等待**：`windows_wait(condition='desktop_change'|'window:标题'|'stable')`
-6. **一步失败则 flow_halt**：整任务停止，勿连环盲点
+2. **定位/点击**：UIA 优先（Invoke），再 PostMessage；ORB/OCR 视觉仅作降级
+3. **输入投递**：优先 UIA ValuePattern / 焦点框写值，再剪贴板与 WM_*（Qt 应用常跳过 UIA 写值）
+4. **输入核验**：**UIA 回读焦点框 > 搜索树 Name/Value > OCR**；禁止「仅截图哈希变化」soft 成功
+5. **后台模式**：`DESKTOP_NO_FOCUS_STEAL=1` 不抢前台；`DESKTOP_PHYSICAL_MOUSE=0` 不移光标
+6. **勿默认点搜索**：仅任务需要搜索时再点搜索控件并输入
+7. **核验等待**：`windows_wait(condition='desktop_change'|'window:标题'|'stable')`
+8. **一步失败则 flow_halt**：整任务停止，勿连环盲点；投递成功但未核验时勿重复 type 同一串
 
 ## Hermes 使用方式
 
