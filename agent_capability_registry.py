@@ -75,6 +75,29 @@ def probe_mobile() -> Dict[str, Any]:
     }
 
 
+
+def probe_ios() -> Dict[str, Any]:
+    """探测 iOS 设备可用性。"""
+    ok = False
+    detail = "ios_disabled"
+    device_count = 0
+    try:
+        from mobile_engine.device.ios_device import check_ios_preflight
+        pre = check_ios_preflight()
+        ok = bool(pre.get("idb_available"))
+        device_count = int(pre.get("device_count") or 0)
+        detail = f"idb={'ok' if ok else 'unavailable'},devices={device_count}"
+    except Exception as e:
+        detail = str(e)[:120]
+    return {
+        "id": "ios",
+        "available": ok and device_count > 0,
+        "detail": detail,
+        "device_count": device_count,
+        "skills": ["testory-ios-mobile"] if ok else [],
+    }
+
+
 def probe_api() -> Dict[str, Any]:
     # 接口执行内核始终在平台进程内可用
     return {
@@ -110,10 +133,11 @@ def snapshot_capabilities() -> Dict[str, Any]:
         "web": probe_web(),
         "desktop": probe_desktop(),
         "mobile": probe_mobile(),
+        "ios": probe_ios(),
         "api": probe_api(),
     }
     skills: List[str] = []
-    for key in ("web", "desktop", "mobile", "api"):
+    for key in ("web", "desktop", "mobile", "ios", "api"):
         c = caps[key]
         if c.get("available"):
             for s in c.get("skills") or []:

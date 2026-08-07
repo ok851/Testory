@@ -298,11 +298,80 @@ def list_paired_devices_for_user(user_id: int) -> List[Dict[str, Any]]:
                 "device_id": meta.get("device_id") or "",
                 "user_id": uid,
                 "paired_at": meta.get("paired_at"),
+                "last_poll_at": meta.get("last_poll_at"),
+                "poller_alive": _poller_alive_unlocked(meta),
                 "token_suffix": (tok[-6:] if tok else ""),
             })
     out.sort(key=lambda d: float(d.get("paired_at") or 0), reverse=True)
     return out
 
+
+# PcRunJobPoller 默认约 2s 一轮；超过此窗口视为无障碍/轮询未跑
+_POLLER_STALE_SEC = 45.0
+
+
+def _poller_alive_unlocked(meta: Dict[str, Any]) -> bool:
+    try:
+        ts = float(meta.get("last_poll_at") or 0)
+    except Exception:
+        ts = 0.0
+    if ts <= 0:
+        return False
+    return (time.time() - ts) <= _POLLER_STALE_SEC
+
+
+def touch_device_poll(device_id: str = "", *, user_id: int = 0, token: str = "") -> None:
+    """APK 拉取 pending 时心跳：证明 PcRunJobPoller/无障碍仍在跑。"""
+    did = (device_id or "").strip()
+    tok = (token or "").strip()
+    now = time.time()
+    with _LOCK:
+        targets: List[Dict[str, Any]] = []
+        if tok and tok in _DEVICE_TOKENS and isinstance(_DEVICE_TOKENS.get(tok), dict):
+            targets.append(_DEVICE_TOKENS[tok])
+        elif did:
+            for meta in _DEVICE_TOKENS.values():
+                if not isinstance(meta, dict):
+                    continue
+                if (meta.get("device_id") or "") != did:
+                    continue
+                if user_id and int(meta.get("user_id") or 0) not in (0, int(user_id)):
+                    continue
+                targets.append(meta)
+        if not targets:
+            return
+        need_persist = False
+        for meta in targets:
+            prev = float(meta.get("last_poll_at") or 0)
+            meta["last_poll_at"] = now
+            if now - float(meta.get("_last_poll_persist") or 0) >= 12.0:
+                meta["_last_poll_persist"] = now
+                need_persist = True
+            elif prev <= 0:
+                meta["_last_poll_persist"] = now
+                need_persist = True
+        if need_persist:
+            try:
+                _save_persisted()
+            except Exception:
+                pass
+
+
+def device_poller_status_for_user(user_id: int, device_id: str = "") -> Dict[str, Any]:
+    """返回配对设备中最近一次 poll 状态（供 hand ready 门禁）。"""
+    devices = list_paired_devices_for_user(int(user_id or 0))
+    want = (device_id or "").strip()
+    if want:
+        devices = [d for d in devices if (d.get("device_id") or "") == want]
+    alive = [d for d in devices if d.get("poller_alive")]
+    best = alive[0] if alive else (devices[0] if devices else None)
+    return {
+        "paired_count": len(list_paired_devices_for_user(int(user_id or 0))),
+        "candidates": devices,
+        "alive_count": len(alive),
+        "best": best,
+        "stale_sec": _POLLER_STALE_SEC,
+    }
 
 def list_accessible_cases(db: Any, user_id: int) -> List[Dict[str, Any]]:
     projects = db.get_user_projects(user_id) or []
@@ -1346,6 +1415,26 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
         meta, err = resolve_device_token()
         if err:
             return err
+        # 无论有无 job，都记心跳：证明无障碍内 PcRunJobPoller 在跑
+        try:
+            touch_device_poll(
+                meta.get("device_id") or "",
+                user_id=int(meta.get("user_id") or 0),
+                token=str(meta.get("token") or meta.get("device_token") or ""),
+            )
+        except Exception:
+            pass
+        # resolve_device_token 返回的 meta 未必带 raw token；用 Authorization 再触一次
+        try:
+            auth = (request.headers.get("Authorization") or "").strip()
+            if auth.lower().startswith("bearer "):
+                touch_device_poll(
+                    meta.get("device_id") or "",
+                    user_id=int(meta.get("user_id") or 0),
+                    token=auth[7:].strip(),
+                )
+        except Exception:
+            pass
         job_kind = (request.args.get("job_kind") or "").strip()
         job = pop_pending_run_for_device(
             meta.get("device_id") or "",
@@ -1576,15 +1665,56 @@ def register_sync_routes(app, *, api_error_handler, login_required, role_require
                     params=params,
                 )
                 vars_out = tool_meta.get("cross_end_vars") if isinstance(tool_meta, dict) else {}
+                if not isinstance(vars_out, dict):
+                    vars_out = {}
+                # 变量一律字符串化，便于 APK JSON 解码
+                vars_str = {
+                    str(k): ("" if v is None else str(v))
+                    for k, v in vars_out.items()
+                }
+                digest: List[str] = []
+                if isinstance(tool_meta, dict):
+                    raw_d = tool_meta.get("steps_digest") or tool_meta.get("mobile_steps_digest")
+                    if isinstance(raw_d, list):
+                        digest = [str(x) for x in raw_d if x]
+                    # 从 tools 结果摘要拼一段（若有）
+                    if not digest and tool_meta.get("tools_used"):
+                        digest = [f"tool:{t}" for t in (tool_meta.get("tools_used") or [])[:20]]
+                sid_out = session_id or "default"
+                # 成功跨端 run 自动沉淀 Skill 草稿（失败不沉淀）
+                promote_meta = None
+                failed = bool(
+                    (isinstance(tool_meta, dict) and (
+                        tool_meta.get("mobile_flow_halted")
+                        or tool_meta.get("desktop_flow_halted")
+                        or tool_meta.get("failed")
+                    ))
+                )
+                if not failed and (vars_str or (tool_meta or {}).get("tools_used")):
+                    try:
+                        from ai_modules.skills.promote_from_run import promote_unified_agent_meta
+
+                        _p, promote_meta = promote_unified_agent_meta(
+                            tool_meta if isinstance(tool_meta, dict) else {},
+                            user_message=user_message,
+                            reply=reply or "",
+                            skill_name="",
+                            session_id=sid_out,
+                            force=False,
+                        )
+                    except Exception:
+                        promote_meta = None
                 return jsonify({
                     "success": True,
                     "mode": "agent",
                     "reply": reply,
                     "description": reply,
-                    "variables": vars_out if isinstance(vars_out, dict) else {},
+                    "variables": vars_str,
                     "tools_used": list((tool_meta or {}).get("tools_used") or []),
+                    "steps_digest": digest,
                     "connected_hands": hands,
-                    "session_id": session_id or "default",
+                    "session_id": sid_out,
+                    "promote": promote_meta,
                     "ai_status": status,
                 })
             except Exception as e:

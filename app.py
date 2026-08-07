@@ -5640,6 +5640,638 @@ def api_desktop_alias_probe(alias):
     return jsonify({'ok': bool(probe.get('ok')), **probe}), code
 
 
+
+# ----------------------------------------------------------------------
+# CI/CD 跨端计划触发 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ci/cross-end/runs', methods=['POST'])
+@token_or_login_required
+@feature_required('ci_integration')
+def api_ci_cross_end_runs():
+    """CI 触发跨端计划执行。"""
+    from ai_modules.execute.cross_end_async import create_run, start_run_thread
+    from ai_modules.execute.orchestrator import execute_cross_end_plan
+
+    data = request.get_json(silent=True) or {}
+    plan = data.get('plan')
+    if not isinstance(plan, dict) or not plan.get('stages'):
+        return jsonify({'ok': False, 'error': 'plan.stages 不能为空'}), 400
+
+    build_id = str(data.get('build_id') or data.get('pipeline_id') or '').strip()
+    git_sha = str(data.get('git_sha') or data.get('commit') or '').strip()
+    branch = str(data.get('branch') or '').strip()
+    callback_url = str(data.get('callback_url') or data.get('webhook_url') or '').strip()
+    project_id = data.get('project_id')
+    want_async = bool(data.get('async') or str(request.args.get('async') or '').lower() in ('1', 'true'))
+    uid = current_user.id if current_user.is_authenticated else None
+
+    if want_async:
+        rec = create_run(plan, user_id=str(uid or ''), project_id=project_id, trigger_source='ci')
+        run_id = rec['run_id']
+
+        def _ci_worker():
+            try:
+                result = execute_cross_end_plan(plan, user_id=str(uid or ''), project_id=project_id, trigger_source='ci')
+                from ai_modules.execute.cross_end_async import _patch
+                status = 'success' if result.get('success') is True else 'failed'
+                _patch(run_id, status=status, result=result, error=result.get('error'), error_code=result.get('error_code'))
+                if callback_url:
+                    _deliver_ci_callback(callback_url, run_id, result)
+            except Exception as e:
+                from ai_modules.execute.cross_end_async import _patch
+                _patch(run_id, status='failed', error=str(e)[:300], error_code='CI_CROSS_END_ERROR')
+
+        t = threading.Thread(target=_ci_worker, name=f'ci-cross-end-{run_id}', daemon=True)
+        t.start()
+        return jsonify({'ok': True, 'accepted': True, 'async': True, 'run_id': run_id, 'status': 'queued', 'poll_url': f'/api/ci/cross-end/runs/{run_id}', 'build_id': build_id or None}), 202
+
+    result = execute_cross_end_plan(plan, user_id=str(uid or ''), project_id=project_id, trigger_source='ci')
+    run_id = f'ci-ce-{uuid.uuid4().hex[:10]}'
+    status = 'success' if result.get('success') is True else 'failed'
+    if callback_url:
+        _deliver_ci_callback(callback_url, run_id, result)
+    return jsonify({'ok': True, 'async': False, 'run_id': run_id, 'status': status, 'success': bool(result.get('success')), 'gate_passed': bool(result.get('gate_passed')), 'result': result, 'build_id': build_id or None})
+
+
+@app.route('/api/ci/cross-end/runs/<run_id>', methods=['GET'])
+@token_or_login_required
+def api_ci_cross_end_run_get(run_id):
+    """查询 CI 跨端执行状态。"""
+    from ai_modules.execute.cross_end_async import get_run
+    rec = get_run(run_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    terminal = rec.get('status') in ('success', 'failed')
+    return jsonify({'ok': True, 'run_id': rec.get('run_id'), 'status': rec.get('status'), 'terminal': terminal, 'success': bool(rec.get('status') == 'success'), 'error': rec.get('error'), 'error_code': rec.get('error_code'), 'result': rec.get('result')})
+
+
+@app.route('/api/ci/cross-end/runs/<run_id>/junit.xml', methods=['GET'])
+@token_or_login_required
+def api_ci_cross_end_run_junit(run_id):
+    """导出 CI 跨端执行结果为 JUnit XML。"""
+    from ai_modules.execute.cross_end_async import get_run
+    rec = get_run(run_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    result = rec.get('result') or {}
+    stage_results = result.get('stage_results') or []
+    elapsed = result.get('total_elapsed_ms', 0)
+    elapsed_sec = elapsed / 1000 if elapsed else 0
+    fail_count = sum(1 for s in stage_results if not s.get('ok_assert'))
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
+    lines.append('<testsuites tests="{}" failures="{}" time="{:.2f}">'.format(len(stage_results), fail_count, elapsed_sec))
+    lines.append('  <testsuite name="cross-end-{}" tests="{}">'.format(run_id, len(stage_results)))
+    for sr in stage_results:
+        sid = sr.get('stage_id', 'unknown')
+        layer = sr.get('layer', '')
+        t = (sr.get('elapsed_ms') or 0) / 1000
+        lines.append('    <testcase name="{}" classname="cross-end.{}" time="{:.2f}">'.format(sid, layer, t))
+        if not sr.get('ok_assert'):
+            err = (sr.get('error') or 'unknown').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            ec = sr.get('error_code', '')
+            lines.append('      <failure message="{}" type="{}">{}</failure>'.format(err, ec, err))
+        lines.append('    </testcase>')
+    lines.append('  </testsuite>')
+    lines.append('</testsuites>')
+    xml_text = '\n'.join(lines)
+    return Response(xml_text, mimetype='application/xml', headers={'Content-Disposition': 'attachment; filename="testory-cross-end-{}-junit.xml"'.format(run_id)})
+
+
+def _deliver_ci_callback(callback_url, run_id, result):
+    """向 CI 回调 URL 发送执行结果。"""
+    if not callback_url:
+        return
+    import urllib.request
+    payload = json.dumps({'run_id': run_id, 'success': bool(result.get('success')), 'status': 'success' if result.get('success') else 'failed', 'gate_passed': bool(result.get('gate_passed')), 'error': result.get('error'), 'stage_count': len(result.get('stage_results') or [])}, ensure_ascii=False).encode('utf-8')
+    try:
+        req = urllib.request.Request(callback_url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(req, timeout=15):
+            pass
+    except Exception:
+        pass
+
+
+
+# ----------------------------------------------------------------------
+# 性能监控与报告 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/cross-end/performance/<run_id>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_performance(run_id):
+    """获取指定执行的性能报告。"""
+    from ai_modules.execute.performance_monitor import get_performance_report
+    report = get_performance_report(run_id)
+    if not report:
+        return jsonify({'ok': False, 'error': '性能数据不存在'}), 404
+    return jsonify({'ok': True, 'performance': report})
+
+
+@app.route('/api/ai/cross-end/performance/<run_id>/bottleneck', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_bottleneck(run_id):
+    """瓶颈分析。"""
+    from ai_modules.execute.performance_monitor import analyze_bottlenecks
+    analysis = analyze_bottlenecks(run_id)
+    if analysis.get('error'):
+        return jsonify({'ok': False, **analysis}), 404
+    return jsonify({'ok': True, 'analysis': analysis})
+
+
+@app.route('/api/ai/cross-end/performance/trends', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_trends():
+    """性能趋势数据。"""
+    from ai_modules.execute.performance_monitor import get_performance_trends
+    scenario = request.args.get('scenario', '')
+    limit = request.args.get('limit', 10, type=int)
+    trends = get_performance_trends(scenario=scenario, limit=limit)
+    return jsonify({'ok': True, 'trends': trends, 'count': len(trends)})
+
+
+@app.route('/api/ci/cross-end/runs/<run_id>/junit-enhanced.xml', methods=['GET'])
+@token_or_login_required
+def api_ci_cross_end_run_junit_enhanced(run_id):
+    """导出增强版 JUnit XML（含性能指标）。"""
+    from ai_modules.execute.cross_end_async import get_run
+    from ai_modules.execute.performance_monitor import generate_enhanced_junit
+    rec = get_run(run_id)
+    if not rec:
+        return jsonify({'ok': False, 'error': 'run 不存在'}), 404
+    result = rec.get('result') or {}
+    xml_text = generate_enhanced_junit(run_id, result)
+    return Response(xml_text, mimetype='application/xml', headers={'Content-Disposition': 'attachment; filename="testory-cross-end-{}-junit-enhanced.xml"'.format(run_id)})
+
+
+# ----------------------------------------------------------------------
+# 场景模板库 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/cross-end/templates', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_templates():
+    """列出场景模板。"""
+    from ai_modules.execute.scenario_templates import list_templates
+    industry = request.args.get('industry', '')
+    tag = request.args.get('tag', '')
+    return jsonify({'ok': True, 'templates': list_templates(industry=industry, tag=tag)})
+
+
+@app.route('/api/ai/cross-end/templates/<template_id>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_template_get(template_id):
+    """获取模板详情。"""
+    from ai_modules.execute.scenario_templates import get_template
+    tpl = get_template(template_id)
+    if not tpl:
+        return jsonify({'ok': False, 'error': '模板不存在'}), 404
+    return jsonify({'ok': True, 'template': tpl})
+
+
+@app.route('/api/ai/cross-end/templates/<template_id>/instantiate', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_template_instantiate(template_id):
+    """实例化模板（填充参数生成 plan）。"""
+    from ai_modules.execute.scenario_templates import instantiate_template
+    data = request.get_json(silent=True) or {}
+    result = instantiate_template(
+        template_id,
+        data.get('parameters') or {},
+        scenario_name=data.get('scenario_name', ''),
+    )
+    if not result.get('success'):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route('/api/ai/cross-end/templates/custom', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_template_save():
+    """保存自定义模板。"""
+    from ai_modules.execute.scenario_templates import save_custom_template
+    data = request.get_json(silent=True) or {}
+    result = save_custom_template(data)
+    return jsonify(result)
+
+
+@app.route('/api/ai/cross-end/templates/custom/<template_id>', methods=['DELETE'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_template_delete(template_id):
+    """删除自定义模板。"""
+    from ai_modules.execute.scenario_templates import delete_custom_template
+    result = delete_custom_template(template_id)
+    if not result.get('success'):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+# ----------------------------------------------------------------------
+# 场景版本管理 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/cross-end/scenario/<scenario_id>/versions', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_scenario_versions(scenario_id):
+    """获取场景版本历史。"""
+    from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+    mgr = ScenarioVersionManager()
+    limit = request.args.get('limit', 20, type=int)
+    history = mgr.get_history(scenario_id, limit=limit)
+    return jsonify({'ok': True, 'scenario_id': scenario_id, 'versions': history})
+
+
+@app.route('/api/ai/cross-end/scenario/<scenario_id>/versions/<int:version>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_scenario_version_get(scenario_id, version):
+    """获取指定版本的完整 plan。"""
+    from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+    mgr = ScenarioVersionManager()
+    ver = mgr.get_version(scenario_id, version)
+    if not ver:
+        return jsonify({'ok': False, 'error': f'版本 {version} 不存在'}), 404
+    return jsonify({'ok': True, 'version': ver})
+
+
+@app.route('/api/ai/cross-end/scenario/<scenario_id>/rollback', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_scenario_rollback(scenario_id):
+    """回滚到指定版本。"""
+    from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+    data = request.get_json(silent=True) or {}
+    version = data.get('version')
+    if not version:
+        return jsonify({'ok': False, 'error': 'version 必填'}), 400
+    mgr = ScenarioVersionManager()
+    result = mgr.rollback(scenario_id, int(version))
+    return jsonify(result)
+
+
+@app.route('/api/ai/cross-end/scenario/<scenario_id>/diff', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_scenario_diff(scenario_id):
+    """对比两个版本的差异。"""
+    from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+    v1 = request.args.get('v1', type=int)
+    v2 = request.args.get('v2', type=int)
+    if v1 is None or v2 is None:
+        return jsonify({'ok': False, 'error': 'v1 和 v2 参数必填'}), 400
+    mgr = ScenarioVersionManager()
+    diff = mgr.diff(scenario_id, v1, v2)
+    return jsonify({'ok': True, 'diff': diff, 'v1': v1, 'v2': v2})
+
+
+@app.route('/api/ai/cross-end/scenario/<scenario_id>/export', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_scenario_export(scenario_id):
+    """导出场景（指定版本或最新版本）。"""
+    from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+    version = request.args.get('version', type=int)
+    mgr = ScenarioVersionManager()
+    result = mgr.export_version(scenario_id, version)
+    if not result.get('success'):
+        return jsonify(result), 404
+    return jsonify(result)
+
+
+@app.route('/api/ai/cross-end/scenario/<scenario_id>/import', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_scenario_import(scenario_id):
+    """从导出的 JSON 导入场景版本。"""
+    from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+    data = request.get_json(silent=True) or {}
+    message = data.get('message', '导入')
+    author = str(getattr(current_user, 'username', '') or current_user.id if current_user.is_authenticated else '')
+    mgr = ScenarioVersionManager()
+    result = mgr.import_version(scenario_id, data, message=message, author=author)
+    if not result.get('success'):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route('/api/ai/cross-end/scenarios/all', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_all_versioned_scenarios():
+    """列出所有有版本历史的场景。"""
+    from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+    mgr = ScenarioVersionManager()
+    return jsonify({'ok': True, 'scenarios': mgr.list_all_scenarios()})
+
+
+# ----------------------------------------------------------------------
+# iOS 设备管理 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/mobile/ios/devices', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ios_devices():
+    """列出已连接的 iOS 设备。"""
+    from mobile_engine.device.ios_device import check_ios_preflight
+    pre = check_ios_preflight()
+    return jsonify({'ok': True, **pre})
+
+
+@app.route('/api/mobile/ios/preflight', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ios_preflight():
+    """iOS 环境预检。"""
+    from mobile_engine.device.ios_device import check_ios_preflight
+    pre = check_ios_preflight()
+    status = 200 if pre.get('idb_available') else 503
+    return jsonify({'ok': pre.get('idb_available', False), 'preflight': pre}), status
+
+
+@app.route('/api/mobile/ios/simulators', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ios_simulators():
+    """列出 iOS 模拟器。"""
+    from mobile_engine.device.ios_device import IOSDeviceManager
+    sims = IOSDeviceManager.list_simulators()
+    return jsonify({'ok': True, 'simulators': sims, 'count': len(sims)})
+
+
+@app.route('/api/mobile/ios/simulators/<udid>/boot', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_ios_simulator_boot(udid):
+    """启动模拟器。"""
+    from mobile_engine.device.ios_device import IOSDeviceManager
+    ok, msg = IOSDeviceManager.boot_simulator(udid)
+    return jsonify({'ok': ok, 'message': msg, 'udid': udid})
+
+
+# ----------------------------------------------------------------------
+# 多设备并行调度 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/api/ai/cross-end/multi-device/discover', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_multi_device_discover():
+    """发现当前可用设备。"""
+    from ai_modules.execute.multi_device_scheduler import _discover_available_devices
+    platform = request.args.get('platform', 'android')
+    max_dev = request.args.get('max_devices', type=int, default=0)
+    devices = _discover_available_devices(platform_filter=platform, max_devices=max_dev)
+    return jsonify({'ok': True, 'devices': devices, 'count': len(devices)})
+
+
+@app.route('/api/ai/cross-end/multi-device/test', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+@log_api_request
+def api_multi_device_test():
+    """在多台设备上并行执行 steps。"""
+    from ai_modules.execute.multi_device_scheduler import execute_multi_device_stage, multi_device_summary
+    data = request.get_json(silent=True) or {}
+    steps = data.get('steps') or []
+    if not isinstance(steps, list) or not steps:
+        return jsonify({'ok': False, 'error': 'steps 不能为空'}), 400
+    stage = {'id': data.get('stage_id') or 'multi-device-test', 'layer': 'mobile', 'steps': steps, 'parallel_devices': data.get('parallel_devices') or True}
+    if isinstance(data.get('devices'), list):
+        stage['devices'] = data['devices']
+    if data.get('max_devices'):
+        stage.setdefault('parallel_devices', {})
+        if isinstance(stage['parallel_devices'], dict):
+            stage['parallel_devices']['max_devices'] = data['max_devices']
+    result, extracted = execute_multi_device_stage(stage)
+    result['multi_device_summary'] = multi_device_summary(result)
+    return jsonify({'ok': True, 'result': result, 'extracted': extracted})
+
+
+# ----------------------------------------------------------------------
+# 可视化调试：时间线 API
+# ----------------------------------------------------------------------
+
+
+@app.route('/cross-end/debug', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+def cross_end_debug_page():
+    """跨端调试面板页面。"""
+    return render_template('cross_end_debug.html')
+
+
+@app.route('/api/ai/cross-end/timeline', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_timeline_list():
+    """列出活跃的跨端执行时间线。"""
+    from ai_modules.execute.timeline_tracker import list_trackers
+    status = request.args.get('status', '')
+    limit = request.args.get('limit', 20, type=int)
+    trackers = list_trackers(status=status, limit=limit)
+    return jsonify({'ok': True, 'trackers': trackers})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_timeline_get(run_id):
+    """获取指定执行的完整时间线。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+    return jsonify({'ok': True, **tracker.to_dict()})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>/events', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+def api_cross_end_timeline_sse(run_id):
+    """SSE 实时推送时间线事件。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+
+    def generate():
+        q = []
+        tracker.add_sse_queue(q)
+        try:
+            for ev in tracker.get_events_since():
+                yield 'data: {}\n\n'.format(json.dumps(ev, ensure_ascii=False))
+            while True:
+                if not q:
+                    time.sleep(0.3)
+                    if tracker.status in ('success', 'failed'):
+                        yield 'data: {}\n\n'.format(json.dumps({'kind': 'done', 'status': tracker.status}))
+                        break
+                    continue
+                while q:
+                    payload = q.pop(0)
+                    yield 'data: {}\n\n'.format(payload)
+        finally:
+            tracker.remove_sse_queue(q)
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>/stage/<stage_id>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_timeline_stage(run_id, stage_id):
+    """获取指定阶段的详细时间线。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+    stage = tracker.get_stage(stage_id)
+    if not stage:
+        return jsonify({'ok': False, 'error': '阶段不存在'}), 404
+    return jsonify({'ok': True, 'stage': stage})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>/variables', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_timeline_vars(run_id):
+    """获取变量流转历史。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+    data = tracker.to_dict()
+    return jsonify({'ok': True, 'variables': data.get('variables', {}), 'var_history': data.get('var_history', [])})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>/breakpoints', methods=['GET', 'POST', 'DELETE'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_breakpoints(run_id):
+    """管理断点。GET=列出，POST=设置，DELETE=清除。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+
+    if request.method == 'GET':
+        return jsonify({'ok': True, 'breakpoints': tracker.get_breakpoints()})
+
+    if request.method == 'DELETE':
+        tracker.clear_breakpoints()
+        return jsonify({'ok': True, 'message': '已清除所有断点'})
+
+    data = request.get_json(silent=True) or {}
+    stage_id = data.get('stage_id', '').strip()
+    if not stage_id:
+        return jsonify({'ok': False, 'error': 'stage_id 必填'}), 400
+    tracker.set_breakpoint(
+        stage_id,
+        condition=str(data.get('condition', '')),
+        enabled=bool(data.get('enabled', True)),
+    )
+    return jsonify({'ok': True, 'stage_id': stage_id})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>/step-mode', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_step_mode(run_id):
+    """启用/禁用单步模式。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', True))
+    tracker.set_step_mode(enabled)
+    return jsonify({'ok': True, 'step_mode': enabled})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>/resume', methods=['POST'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_resume(run_id):
+    """恢复执行（从断点/单步暂停中恢复）。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+    tracker.resume()
+    return jsonify({'ok': True, 'message': '已恢复执行'})
+
+
+@app.route('/api/ai/cross-end/timeline/<run_id>/var-diff/<stage_id>', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_var_diff(run_id, stage_id):
+    """获取阶段执行前后的变量差异。"""
+    from ai_modules.execute.timeline_tracker import get_tracker
+    tracker = get_tracker(run_id)
+    if not tracker:
+        return jsonify({'ok': False, 'error': '时间线不存在'}), 404
+    diff = tracker.get_var_diff(stage_id)
+    return jsonify({'ok': True, 'diff': diff, 'stage_id': stage_id})
+
+
+@app.route('/api/ai/cross-end/debug/panel', methods=['GET'])
+@login_required
+@role_required('admin', 'tester', 'project_manager', 'test_lead')
+@api_error_handler
+def api_cross_end_debug_panel():
+    """返回调试面板数据。"""
+    from ai_modules.execute.timeline_tracker import list_trackers
+    from agent_capability_registry import snapshot_capabilities
+    active = list_trackers(status='running', limit=10)
+    recent = list_trackers(limit=10)
+    caps = snapshot_capabilities()
+    return jsonify({'ok': True, 'active_executions': active, 'recent_executions': recent, 'capabilities': caps.get('capabilities', {}), 'available_skills': caps.get('available_skills', [])})
+
 # ----------------------------------------------------------------------
 # 对话测试 API（保留原区块分隔由后续路由承接）
 # ----------------------------------------------------------------------
@@ -18961,3 +19593,7 @@ if __name__ == '__main__':
         _port = int(os.environ.get('FLASK_RUN_PORT', '5000'))
 
     app.run(debug=_debug, host=_host, port=_port, threaded=True)
+
+
+
+

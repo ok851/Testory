@@ -20,6 +20,11 @@ from ai_modules.plan.sync_manager import SyncPointManager
 from ai_modules.plan.recovery_engine import RecoveryEngine, RECOVERY_RETRY, RECOVERY_SKIP, RECOVERY_ABORT
 from ai_modules.plan.cross_end_assertion import run_cross_end_assertions
 from ai_modules.plan.api_skill_adapter import ApiSkillAdapter
+from ai_modules.execute.timeline_tracker import get_or_create_tracker
+from ai_modules.execute.performance_monitor import PerformanceMetrics, record_metrics
+from ai_modules.execute.scenario_version_manager import ScenarioVersionManager
+
+_version_mgr = ScenarioVersionManager()
 
 
 _SCENARIO_STORE = None
@@ -243,6 +248,33 @@ def _execute_api_stage(
     return result, extracted
 
 
+
+
+def _detect_mobile_platform(stage: Dict[str, Any]) -> str:
+    """从 stage 配置推断移动端平台 (android/ios)。"""
+    if not isinstance(stage, dict):
+        return "android"
+    plat = str(stage.get("platform") or stage.get("mobile_platform") or "").strip().lower()
+    if plat in ("ios", "iphone", "ipad"):
+        return "ios"
+    device_id = str(stage.get("device_id") or stage.get("udid") or "").strip()
+    if device_id:
+        import re
+        if re.match(r'^[0-9a-fA-F-]{25,40}$', device_id) or re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-', device_id):
+            return "ios"
+    return "android"
+
+def _is_multi_device_stage(stage: Dict[str, Any]) -> bool:
+    """判断 stage 是否需要多设备并行执行。"""
+    if not isinstance(stage, dict):
+        return False
+    if stage.get("parallel_devices") or stage.get("device_group"):
+        return True
+    devices_cfg = stage.get("devices")
+    if isinstance(devices_cfg, list) and len(devices_cfg) > 1:
+        return True
+    return False
+
 def _stage_requests_hermes(
     stage: Dict[str, Any],
     plan: Optional[Dict[str, Any]] = None,
@@ -320,7 +352,7 @@ def _execute_ui_stage(
         result["error_code"] = "NO_STEPS"
         return result, extracted
 
-    if layer not in ("web", "mobile", "desktop", "android"):
+    if layer not in ("web", "mobile", "desktop", "android", "ios"):
         result["error"] = f"不支持的 UI layer: {layer or '(empty)'}"
         result["error_code"] = "UNSUPPORTED_LAYER"
         return result, extracted
@@ -336,7 +368,7 @@ def _execute_ui_stage(
                 hermes_execute_stage,
             )
 
-            plat = "mobile" if layer in ("mobile", "android") else layer
+            plat = "mobile" if layer in ("mobile", "android") else ("ios" if layer == "ios" else layer)
             if not hermes_execute_available(plat):
                 result["error"] = (
                     "本阶段指定了 Hermes 执行器，但 Gateway 未配置或健康检查未通过，"
@@ -444,8 +476,8 @@ def _execute_ui_stage(
                     else:
                         result["ok_assert"] = True
 
-        elif layer in ("mobile", "android"):
-            from mobile_automation import validate_mobile_step_result
+        elif layer in ("mobile", "android", "ios"):
+            from mobile_automation import validate_mobile_step_result  # iOS: validate_mobile_step_result also handles iOS results
 
             skill = str(
                 resolved_stage.get("skill")
@@ -562,12 +594,14 @@ def _execute_ui_stage(
                         or context.get_variable("mobile_case_id")
                         or 0
                     )
+                    _mob_platform = _detect_mobile_platform(resolved_stage)
                     job_id = enqueue_run_job(
                         case_id=case_id,
                         steps=list(steps),
                         user_id=user_id,
                         device_id=device_id,
                         source="cross_end_await",
+                        platform=_mob_platform,
                     )
                     result["executor"] = "await_device_run"
                     result["mobile_job_id"] = job_id
@@ -912,6 +946,18 @@ def execute_cross_end_plan(
     record_history=True 时诚实写入 run_history（test_type=cross_end）与文件审计。
     """
     plan_id = (plan or {}).get("plan_id") or str(uuid.uuid4())[:12]
+
+    # ???????????
+    _scenario_id_for_ver = (plan or {}).get("scenario_id") or plan_id
+    try:
+        _version_mgr.save_version(
+            _scenario_id_for_ver, plan,
+            message=f"??????? (run {plan_id})",
+            author="system",
+            tags=["auto", "pre-exec"],
+        )
+    except Exception:
+        pass
     uid = str(user_id or (plan or {}).get("user_id") or "").strip()
     owner = f"cross_end:{plan_id}:user:{uid or 'anon'}"
     pid = project_id if project_id is not None else (plan or {}).get("project_id")
@@ -1014,6 +1060,14 @@ def _execute_cross_end_plan_impl(
     uid = str(user_id or plan.get("user_id") or "").strip()
 
     context.mark_start()
+
+    # 创建时间线追踪器（可视化调试）
+    timeline_run_id = f"tl-{uuid.uuid4().hex[:12]}"
+    tracker = get_or_create_tracker(timeline_run_id, plan_id=plan_id, scenario=scenario)
+    tracker.mark_start()
+
+    # 创建性能监控
+    perf = PerformanceMetrics(timeline_run_id, plan_id=plan_id, scenario=scenario)
 
     stage_results: List[Dict[str, Any]] = []
     cleanup_stages: List[Dict[str, Any]] = []
@@ -1118,11 +1172,29 @@ def _execute_cross_end_plan_impl(
                     continue
             # 预门禁通过且非专用层：落入下方正常执行
 
+        # 断点/单步检查
+        tracker.snapshot_vars_before(stage_id)
+        if tracker.check_breakpoint(stage_id):
+            tracker.pause_at(stage_id)
+
+        # 记录阶段开始到时间线
+        tracker.stage_start(stage_id, layer=layer)
+
         if layer == "api":
             result, extracted = _execute_api_stage(stage, context)
         elif layer in ("hitl", "human"):
             # 已在上方处理
             continue
+        elif layer in ("mobile", "android", "ios") and _is_multi_device_stage(stage):
+            # 多设备并行执行
+            from ai_modules.execute.multi_device_scheduler import (
+                execute_multi_device_stage,
+                multi_device_summary,
+            )
+            result, extracted = execute_multi_device_stage(
+                stage, progress_callback=progress_callback, user_id=int(uid or 0),
+            )
+            result["multi_device_summary"] = multi_device_summary(result)
         else:
             result, extracted = _execute_ui_stage(stage, context, plan=plan)
 
@@ -1136,6 +1208,32 @@ def _execute_cross_end_plan_impl(
             result["risk_events"] = risk_gate.get("risk_events")
         stage_results.append(result)
         context.record_stage_result(stage_id, result, extracted)
+
+        # 记录阶段结果到时间线
+        tracker.stage_end(
+            stage_id,
+            ok=bool(result.get("ok_assert")),
+            elapsed_ms=float(result.get("elapsed_ms") or 0),
+            error=str(result.get("error") or ""),
+            error_code=str(result.get("error_code") or ""),
+            steps_executed=int(result.get("steps_executed") or 0),
+            device_results=result.get("device_results"),
+            extracted=extracted,
+            risk_level=str(risk_gate.get("risk_level") or ""),
+        )
+        # 记录性能指标
+        perf.record_stage(
+            stage_id, layer, float(result.get("elapsed_ms") or 0),
+            ok=bool(result.get("ok_assert")),
+            steps_executed=int(result.get("steps_executed") or 0),
+            executor=str(result.get("executor") or ""),
+            device_results=result.get("device_results"),
+        )
+
+        # 记录变量写入
+        if extracted:
+            for vk, vv in extracted.items():
+                tracker.var_write(vk, vv, source=stage_id)
 
         if progress_callback:
             try:
@@ -1311,6 +1409,36 @@ def _execute_cross_end_plan_impl(
         summary = normalize_cross_end_result(summary)
     except Exception:
         pass
+    # 记录时间线完成状态
+    try:
+        tracker.mark_finish(success=success, error=str(final_error or ""))
+        summary["timeline_run_id"] = timeline_run_id
+    except Exception:
+        pass
+
+    # 记录性能指标
+    try:
+        perf_result = perf.finish(success)
+        record_metrics(perf_result)
+        summary["performance"] = {
+            "total_ms": perf_result.get("total_ms"),
+            "bottleneck": perf_result.get("bottleneck"),
+            "summary": perf_result.get("summary"),
+        }
+    except Exception:
+        pass
+
+    # ?????????????????
+    try:
+        _version_mgr.save_version(
+            _scenario_id_for_ver, plan,
+            message=f"???? {'??' if success else '??'} (run {plan_id})",
+            author="system",
+            tags=["auto", "post-exec", "ok" if success else "fail"],
+        )
+    except Exception:
+        pass
+
     return summary
 
 
@@ -1342,3 +1470,7 @@ def execute_cross_platform_scenario(
         acquire_lock=acquire_lock,
         lock_timeout_sec=lock_timeout_sec,
     )
+
+
+
+

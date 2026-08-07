@@ -1,13 +1,7 @@
 /* 全站布局：顶栏与主内容区隔离，避免各模块页面 CSS 污染导航 */
 
-/* WebView2 / 部分浏览器的 View Transition 会在换页时闪白，仅在明确支持且非桌面壳时启用 */
-@supports (view-transition-name: none) {
-  html:not(.testory-desktop-html):not(.testory-no-view-transition) {
-    @view-transition {
-      navigation: auto;
-    }
-  }
-}
+/* 跨文档 View Transition（navigation: auto）在部分内核/WebView 会先拿未样式快照导致闪白，
+   暂时禁用自动跨文档视图过渡，改用「首帧底色 + 预取 + 导航态保护」的可靠换页策略。 */
 
 html {
   background-color: #f9fafb;
@@ -60,7 +54,11 @@ body.testory-desktop-client #testoryMainNav .testory-nav-inner {
 .testory-page-main {
   flex: 1;
   min-height: 0;
-  background-color: inherit;
+  background-color: #f9fafb;
+}
+
+html.dark .testory-page-main {
+  background-color: #030712;
 }
 
 /* 换页时不再做半透明/扫光，避免叠加闪白观感 */

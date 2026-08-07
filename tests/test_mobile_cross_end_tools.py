@@ -80,6 +80,57 @@ def test_ensure_mobile_hand_ready_fails_without_pair():
         assert out.get("error_code") == "MOBILE_HAND_OFFLINE"
 
 
+def test_ensure_mobile_hand_ready_fails_when_poller_stale(monkeypatch):
+    from mobile_cross_end_tools import ensure_mobile_hand_ready
+
+    monkeypatch.delenv("MOBILE_OTP_MOCK", raising=False)
+    monkeypatch.delenv("MOBILE_HAND_SKIP_POLLER", raising=False)
+    with patch(
+        "mobile_sync_store.list_paired_devices_for_user",
+        return_value=[{"device_id": "dev-a", "paired_at": 1.0, "poller_alive": False}],
+    ):
+        with patch(
+            "mobile_sync_store.device_poller_status_for_user",
+            return_value={"alive_count": 0, "stale_sec": 45, "best": None},
+        ):
+            err = ensure_mobile_hand_ready(user_id=1)
+    assert err and err.get("error_code") == "MOBILE_POLLER_STALE"
+
+
+def test_ensure_mobile_hand_ready_ok_when_poller_alive(monkeypatch):
+    from mobile_cross_end_tools import ensure_mobile_hand_ready
+
+    monkeypatch.delenv("MOBILE_OTP_MOCK", raising=False)
+    with patch(
+        "mobile_sync_store.list_paired_devices_for_user",
+        return_value=[{"device_id": "dev-a", "paired_at": 1.0, "poller_alive": True}],
+    ):
+        with patch(
+            "mobile_sync_store.device_poller_status_for_user",
+            return_value={"alive_count": 1, "stale_sec": 45, "best": {"device_id": "dev-a"}},
+        ):
+            assert ensure_mobile_hand_ready(user_id=1) is None
+
+
+def test_touch_device_poll_marks_alive(tmp_path, monkeypatch):
+    import time
+    import mobile_sync_store as store
+
+    monkeypatch.setenv("UAT_DATA_DIR", str(tmp_path))
+    store._STORE_PATH = None
+    store._JOBS_PATH = None
+    with store._LOCK:
+        store._DEVICE_TOKENS.clear()
+        store._DEVICE_TOKENS["tok-abc"] = {
+            "device_id": "dev-1",
+            "user_id": 9,
+            "paired_at": time.time(),
+        }
+    store.touch_device_poll(token="tok-abc", device_id="dev-1", user_id=9)
+    devices = store.list_paired_devices_for_user(9)
+    assert devices and devices[0].get("poller_alive") is True
+
+
 def test_run_job_persists_across_memory_clear(tmp_path, monkeypatch):
     """模拟双进程：enqueue 落盘后清空内存，pop 仍能领到。"""
     import mobile_sync_store as store

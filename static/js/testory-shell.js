@@ -4,6 +4,17 @@
 (function () {
     'use strict';
 
+    try {
+        // 尽早同步 html 底色，避免换页/渲染间隙出现白屏闪烁
+        (function () {
+            try {
+                document.documentElement.style.backgroundColor =
+                    (document.documentElement.classList.contains('dark') || localStorage.getItem('ui_theme') === 'dark')
+                        ? '#030712'
+                        : '#f9fafb';
+            } catch (e) {}
+        })();
+    } catch (e) {}
     var prefetched = Object.create(null);
     var isDesktop = false;
     /* 换页无文档间隙：必须用深色，近白 (#f9fafb) 会被看成白屏闪烁 */

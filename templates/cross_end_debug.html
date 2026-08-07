@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+{% block title %}跨端调试面板 - {{ product_name }}{% endblock %}
+{% block head %}
+<style>
+    .dbg-page { background: #0f172a; min-height: calc(100vh - 72px); padding: 16px; font-family: 'Segoe UI', system-ui, sans-serif; color: #e2e8f0; }
+    .dbg-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .dbg-header h2 { font-size: 1.3rem; font-weight: 700; margin: 0; }
+    .dbg-grid { display: grid; grid-template-columns: 320px 1fr 300px; gap: 12px; height: calc(100vh - 140px); }
+    .dbg-panel { background: #1e293b; border-radius: 12px; padding: 14px; overflow-y: auto; }
+    .dbg-panel h3 { font-size: 0.85rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 10px; }
+
+    /* 左栏：执行列表 */
+    .exec-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 6px; border-left: 3px solid transparent; transition: all 0.15s; }
+    .exec-item:hover { background: #334155; }
+    .exec-item.active { background: #334155; border-left-color: #818cf8; }
+    .exec-item__name { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .exec-item__meta { font-size: 0.72rem; color: #64748b; margin-top: 2px; }
+    .exec-item__status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .exec-item__status.running { background: #fbbf24; animation: pulse 1.5s infinite; }
+    .exec-item__status.success { background: #34d399; }
+    .exec-item__status.failed { background: #f87171; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* 中栏：时间线 */
+    .timeline-container { position: relative; padding-left: 20px; }
+    .timeline-container::before { content: ''; position: absolute; left: 8px; top: 0; bottom: 0; width: 2px; background: #334155; }
+    .tl-node { position: relative; margin-bottom: 12px; padding: 10px 14px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; transition: border-color 0.2s; }
+    .tl-node:hover { border-color: #818cf8; }
+    .tl-node::before { content: ''; position: absolute; left: -16px; top: 14px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #475569; background: #1e293b; }
+    .tl-node.running::before { border-color: #fbbf24; background: #fbbf24; }
+    .tl-node.success::before { border-color: #34d399; background: #34d399; }
+    .tl-node.failed::before { border-color: #f87171; background: #f87171; }
+    .tl-node__header { display: flex; align-items: center; justify-content: space-between; }
+    .tl-node__stage { font-size: 0.82rem; font-weight: 600; }
+    .tl-node__layer { font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; background: #334155; color: #94a3b8; }
+    .tl-node__layer.api { background: #1e3a5f; color: #7dd3fc; }
+    .tl-node__layer.web { background: #1e3a2f; color: #86efac; }
+    .tl-node__layer.desktop { background: #3b1e5f; color: #d8b4fe; }
+    .tl-node__layer.mobile { background: #5f3b1e; color: #fdba74; }
+    .tl-node__detail { font-size: 0.75rem; color: #94a3b8; margin-top: 6px; }
+    .tl-node__error { font-size: 0.75rem; color: #fca5a5; margin-top: 4px; padding: 4px 8px; background: rgba(248,113,113,0.1); border-radius: 4px; }
+    .tl-node__vars { margin-top: 6px; }
+    .tl-var { display: inline-block; font-size: 0.7rem; padding: 1px 6px; margin: 2px; border-radius: 4px; background: #334155; color: #a5b4fc; }
+    .tl-device { display: inline-block; font-size: 0.7rem; padding: 1px 6px; margin: 2px; border-radius: 4px; }
+    .tl-device.ok { background: rgba(52,211,153,0.15); color: #6ee7b7; }
+    .tl-device.fail { background: rgba(248,113,113,0.15); color: #fca5a5; }
+
+    /* 右栏：变量 */
+    .var-row { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-bottom: 1px solid #1e293b; font-size: 0.78rem; }
+    .var-key { color: #a5b4fc; font-weight: 500; min-width: 80px; word-break: break-all; }
+    .var-val { color: #e2e8f0; word-break: break-all; flex: 1; }
+    .var-source { color: #64748b; font-size: 0.68rem; }
+
+
+
+    /* 变量 diff */
+    .var-diff-section { margin-top: 8px; padding: 8px; background: #0f172a; border-radius: 6px; border: 1px solid #334155; }
+    .var-diff-section h4 { font-size: 0.72rem; color: #94a3b8; margin: 0 0 6px; text-transform: uppercase; }
+    .var-diff-row { display: flex; align-items: baseline; gap: 6px; font-size: 0.72rem; padding: 2px 0; }
+    .var-diff-key { color: #a5b4fc; min-width: 60px; font-weight: 500; }
+    .var-diff-added { color: #4ade80; }
+    .var-diff-removed { color: #f87171; text-decoration: line-through; }
+    .var-diff-changed-old { color: #f87171; text-decoration: line-through; }
+    .var-diff-changed-new { color: #4ade80; }
+    .var-diff-btn { font-size: 0.68rem; padding: 2px 8px; border-radius: 4px; border: 1px solid #475569; background: transparent; color: #94a3b8; cursor: pointer; margin-top: 4px; }
+    .var-diff-btn:hover { background: #334155; color: #e2e8f0; }
+    /* 性能面板 */
+    .perf-panel { margin-top: 12px; }
+    .perf-bar-chart { display: flex; flex-direction: column; gap: 6px; }
+    .perf-bar-row { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; }
+    .perf-bar-label { min-width: 90px; color: #94a3b8; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .perf-bar-track { flex: 1; height: 18px; background: #0f172a; border-radius: 4px; overflow: hidden; position: relative; }
+    .perf-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; min-width: 2px; }
+    .perf-bar-fill.api { background: #3b82f6; }
+    .perf-bar-fill.web { background: #22c55e; }
+    .perf-bar-fill.desktop { background: #a855f7; }
+    .perf-bar-fill.mobile { background: #f97316; }
+    .perf-bar-fill.hitl { background: #eab308; }
+    .perf-bar-fill.sync { background: #64748b; }
+    .perf-bar-time { min-width: 55px; color: #94a3b8; text-align: right; font-family: monospace; }
+    .perf-bottleneck { margin-top: 10px; padding: 8px 12px; border-radius: 8px; font-size: 0.78rem; }
+    .perf-bottleneck.slow_stage { background: rgba(251,191,36,0.15); border: 1px solid #fbbf24; color: #fde68a; }
+    .perf-bottleneck.sync_wait { background: rgba(100,116,139,0.2); border: 1px solid #64748b; color: #cbd5e1; }
+    .perf-bottleneck.hitl_wait { background: rgba(234,179,8,0.15); border: 1px solid #eab308; color: #fde68a; }
+    .perf-bottleneck.distributed { background: rgba(34,197,94,0.1); border: 1px solid #22c55e; color: #bbf7d0; }
+    .perf-bottleneck.none { background: rgba(34,197,94,0.1); border: 1px solid #22c55e; color: #bbf7d0; }
+    .perf-total { margin-top: 8px; font-size: 0.82rem; color: #e2e8f0; font-weight: 600; }
+    .perf-rec { font-size: 0.72rem; color: #94a3b8; margin-top: 4px; padding-left: 12px; }
+    .perf-empty { text-align: center; color: #475569; padding: 20px 0; font-size: 0.82rem; }
+    .dbg-tab-btns { display: flex; gap: 4px; margin-bottom: 10px; }
+    .dbg-tab-btn { padding: 4px 10px; border-radius: 6px; border: 1px solid #334155; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.72rem; }
+    .dbg-tab-btn.active { background: #334155; color: #e2e8f0; border-color: #818cf8; }
+    .dbg-empty { text-align: center; color: #475569; padding: 40px 0; font-size: 0.85rem; }
+    .dbg-actions { display: flex; gap: 8px; }
+    .dbg-btn { padding: 6px 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.78rem; font-weight: 500; transition: all 0.15s; }
+    .dbg-btn--primary { background: #6366f1; color: #fff; }
+    .dbg-btn--primary:hover { background: #818cf8; }
+    .dbg-btn--ghost { background: transparent; color: #94a3b8; border: 1px solid #334155; }
+    .dbg-btn--ghost:hover { background: #334155; color: #e2e8f0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dbg-page">
+    <div class="dbg-header">
+        <div>
+            <h2>跨端调试面板</h2>
+            <span style="font-size:0.78rem;color:#64748b;">实时时间线 · 变量追踪 · 多设备监控</span>
+        </div>
+        <div class="dbg-actions">
+            <button class="dbg-btn dbg-btn--ghost" onclick="Dbg.refresh()">刷新</button>
+            <a href="/cross-end" class="dbg-btn dbg-btn--ghost">返回编排</a>
+        </div>
+    </div>
+    <div class="dbg-grid">
+        <!-- 左栏：执行列表 -->
+        <div class="dbg-panel" id="dbgExecList">
+            <h3>执行记录</h3>
+            <div id="dbgExecItems"><div class="dbg-empty">加载中…</div></div>
+        </div>
+        <!-- 中栏：时间线 -->
+        <div class="dbg-panel" id="dbgTimeline">
+            <h3>执行时间线</h3>
+            <div id="dbgTimelineNodes"><div class="dbg-empty">选择左侧执行记录查看时间线</div></div>
+        </div>
+        <!-- 右栏：变量 -->
+        <div class="dbg-panel" id="dbgVars">
+            <h3>变量状态</h3>
+            <div id="dbgVarRows"><div class="dbg-empty">暂无变量</div></div>
+        </div>
+    </div>
+</div>
+<script>
+const Dbg = {
+    activeRunId: null,
+    evtSource: null,
+
+    async init() {
+        await this.refresh();
+    },
+
+    async refresh() {
+        try {
+            const resp = await fetch('/api/ai/cross-end/debug/panel');
+            const data = await resp.json();
+            if (!data.ok) return;
+            this.renderExecList(data.active_executions || [], data.recent_executions || []);
+        } catch (e) {
+            console.error('debug panel fetch failed', e);
+        }
+    },
+
+    renderExecList(active, recent) {
+        const el = document.getElementById('dbgExecItems');
+        const items = [...active, ...recent];
+        // 去重
+        const seen = new Set();
+        const unique = items.filter(i => { if (seen.has(i.run_id)) return false; seen.add(i.run_id); return true; });
+        if (!unique.length) { el.innerHTML = '<div class="dbg-empty">暂无执行记录</div>'; return; }
+        el.innerHTML = unique.map(t => {
+            const st = t.status || 'unknown';
+            const isActive = t.run_id === this.activeRunId;
+            return `<div class="exec-item ${isActive ? 'active' : ''}" onclick="Dbg.selectRun('${t.run_id}')">
+                <div class="exec-item__name"><span class="exec-item__status ${st}"></span>${t.scenario || t.plan_id || t.run_id}</div>
+                <div class="exec-item__meta">${t.stage_count || 0} 阶段 · ${t.event_count || 0} 事件 · ${st}</div>
+            </div>`;
+        }).join('');
+    },
+
+    async selectRun(runId) {
+        this.activeRunId = runId;
+        // 关闭旧 SSE
+        if (this.evtSource) { this.evtSource.close(); this.evtSource = null; }
+        try {
+            const resp = await fetch('/api/ai/cross-end/timeline/' + encodeURIComponent(runId));
+            const data = await resp.json();
+            if (!data.ok) return;
+            this.renderTimeline(data);
+            this.renderVars(data.variables || {}, data.var_history || []);
+            this.loadPerformance(runId);
+            // 如果还在运行，开启 SSE
+            if (data.status === 'running') {
+                this.startSSE(runId);
+            }
+            // 高亮选中项
+            document.querySelectorAll('.exec-item').forEach(el => el.classList.remove('active'));
+            this.refresh();
+        } catch (e) {
+            console.error('selectRun failed', e);
+        }
+    },
+
+    renderTimeline(data) {
+        const el = document.getElementById('dbgTimelineNodes');
+        const stages = data.stages || {};
+        const events = data.events || [];
+        const stageIds = Object.keys(stages);
+        if (!stageIds.length) { el.innerHTML = '<div class="dbg-empty">暂无阶段数据</div>'; return; }
+
+        el.innerHTML = '<div class="timeline-container">' + stageIds.map(sid => {
+            const s = stages[sid];
+            const status = s.status || 'pending';
+            const layer = s.layer || '';
+            const elapsed = s.elapsed_ms ? (s.elapsed_ms / 1000).toFixed(1) + 's' : '';
+            let detail = '';
+            if (s.executor) detail += `执行器: ${s.executor} `;
+            if (s.steps_executed) detail += `步骤: ${s.steps_executed} `;
+            if (elapsed) detail += `耗时: ${elapsed}`;
+            let errorHtml = '';
+            if (s.error) errorHtml = `<div class="tl-node__error">${this.esc(s.error)}</div>`;
+            let varsHtml = '';
+            const ev = s.extracted_vars || {};
+            const varKeys = Object.keys(ev);
+            if (varKeys.length) {
+                varsHtml = '<div class="tl-node__vars">' + varKeys.map(k =>
+                    `<span class="tl-var">${this.esc(k)}=${this.esc(String(ev[k]).substring(0, 40))}</span>`
+                ).join('') + '</div>';
+            }
+            let deviceHtml = '';
+            if (s.device_results && s.device_results.length) {
+                deviceHtml = '<div style="margin-top:4px">' + s.device_results.map(d =>
+                    `<span class="tl-device ${d.ok ? 'ok' : 'fail'}">${this.esc(d.device_udid || '?')} ${d.ok ? '✓' : '✗'}</span>`
+                ).join('') + '</div>';
+            }
+            return `<div class="tl-node ${status}">
+                <div class="tl-node__header">
+                    <span class="tl-node__stage">${this.esc(sid)}</span>
+                    <span class="tl-node__layer ${layer}">${layer}</span>
+                </div>
+                <div class="tl-node__detail">${detail}</div>
+                ${errorHtml}${varsHtml}${deviceHtml}
+            </div>`;
+        }).join('') + '</div>';
+    },
+
+    renderVars(vars, history) {
+        const el = document.getElementById('dbgVarRows');
+        const keys = Object.keys(vars);
+        if (!keys.length) { el.innerHTML = '<div class="dbg-empty">暂无变量</div>'; return; }
+        el.innerHTML = keys.map(k => {
+            const src = (history || []).find(h => h.key === k);
+            return `<div class="var-row">
+                <span class="var-key">${this.esc(k)}</span>
+                <span class="var-val">${this.esc(String(vars[k]).substring(0, 100))}</span>
+                ${src ? `<span class="var-source">${this.esc(src.source || '')}</span>` : ''}
+            </div>`;
+        }).join('');
+    },
+
+    startSSE(runId) {
+        const url = '/api/ai/cross-end/timeline/' + encodeURIComponent(runId) + '/events';
+        this.evtSource = new EventSource(url);
+        this.evtSource.onmessage = (e) => {
+            try {
+                const ev = JSON.parse(e.data);
+                if (ev.kind === 'done') {
+                    this.evtSource.close();
+                    this.evtSource = null;
+                    // 刷新完整时间线
+                    this.selectRun(runId);
+                    return;
+                }
+                // 增量更新（简单方案：重新拉取）
+                this.selectRun(runId);
+            } catch (err) { /* ignore */ }
+        };
+        this.evtSource.onerror = () => {
+            this.evtSource.close();
+            this.evtSource = null;
+        };
+    },
+
+    async loadVarDiff(stageId) {
+        if (!this.activeRunId) return;
+        const container = document.getElementById('vardiff-' + stageId);
+        if (!container) return;
+        // Toggle off if already showing
+        if (container.innerHTML.trim()) { container.innerHTML = ''; return; }
+        try {
+            const url = '/api/ai/cross-end/timeline/' + encodeURIComponent(this.activeRunId) + '/var-diff/' + encodeURIComponent(stageId);
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (!data.ok) { container.innerHTML = '<span style="color:#64748b;font-size:0.7rem">无数据</span>'; return; }
+            const diff = data.diff || {};
+            let html = '<div class="var-diff-section">';
+            const added = diff.added || {};
+            const changed = diff.changed || {};
+            const removed = diff.removed || {};
+            const addedKeys = Object.keys(added);
+            const changedKeys = Object.keys(changed);
+            const removedKeys = Object.keys(removed);
+            if (!addedKeys.length && !changedKeys.length && !removedKeys.length) {
+                html += '<div style="color:#64748b;font-size:0.72rem">无变化</div>';
+            }
+            if (addedKeys.length) {
+                html += '<h4>新增</h4>';
+                addedKeys.forEach(k => {
+                    html += '<div class="var-diff-row"><span class="var-diff-key">' + this.esc(k) + '</span><span class="var-diff-added">+ ' + this.esc(String(added[k]).substring(0,60)) + '</span></div>';
+                });
+            }
+            if (changedKeys.length) {
+                html += '<h4>变更</h4>';
+                changedKeys.forEach(k => {
+                    const c = changed[k];
+                    html += '<div class="var-diff-row"><span class="var-diff-key">' + this.esc(k) + '</span>'
+                        + '<span class="var-diff-changed-old">' + this.esc(String(c.before).substring(0,40)) + '</span>'
+                        + '<span style="color:#64748b">→</span>'
+                        + '<span class="var-diff-changed-new">' + this.esc(String(c.after).substring(0,40)) + '</span></div>';
+                });
+            }
+            if (removedKeys.length) {
+                html += '<h4>删除</h4>';
+                removedKeys.forEach(k => {
+                    html += '<div class="var-diff-row"><span class="var-diff-key">' + this.esc(k) + '</span><span class="var-diff-removed">- ' + this.esc(String(removed[k]).substring(0,60)) + '</span></div>';
+                });
+            }
+            html += '</div>';
+            container.innerHTML = html;
+        } catch (e) { container.innerHTML = '<span style="color:#f87171;font-size:0.7rem">加载失败</span>'; }
+    },
+
+    switchRightTab(tab, evt) {
+        document.querySelectorAll('.dbg-tab-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById('dbgVarsTab').style.display = tab === 'vars' ? '' : 'none';
+        document.getElementById('dbgPerfTab').style.display = tab === 'perf' ? '' : 'none';
+        (evt || event).target.classList.add('active');
+    },
+
+    async loadPerformance(runId) {
+        const el = document.getElementById('dbgPerfContent');
+        try {
+            const [perfResp, bnResp] = await Promise.all([
+                fetch('/api/ai/cross-end/performance/' + encodeURIComponent(runId)),
+                fetch('/api/ai/cross-end/performance/' + encodeURIComponent(runId) + '/bottleneck'),
+            ]);
+            const perf = await perfResp.json();
+            const bn = await bnResp.json();
+            if (!perf.ok || !perf.metrics) { el.innerHTML = '<div class="perf-empty">暂无性能数据</div>'; return; }
+            this.renderPerformance(perf.metrics, bn);
+        } catch (e) { el.innerHTML = '<div class="perf-empty">加载失败</div>'; }
+    },
+
+    renderPerformance(m, bn) {
+        const el = document.getElementById('dbgPerfContent');
+        const stages = m.stage_metrics || [];
+        const totalMs = m.total_ms || 1;
+        let html = '<div class="perf-total">总耗时: ' + (totalMs / 1000).toFixed(2) + 's</div>';
+
+        // 阶段耗时条形图
+        html += '<div class="perf-bar-chart" style="margin-top:8px">';
+        stages.forEach(s => {
+            const pct = Math.min(100, (s.elapsed_ms / totalMs * 100));
+            const layer = s.layer || 'api';
+            const label = s.stage_id.length > 14 ? s.stage_id.slice(0, 14) + '..' : s.stage_id;
+            html += '<div class="perf-bar-row">'
+                + '<span class="perf-bar-label" title="' + this.esc(s.stage_id) + '">' + this.esc(label) + '</span>'
+                + '<div class="perf-bar-track"><div class="perf-bar-fill ' + layer + '" style="width:' + pct.toFixed(1) + '%"></div></div>'
+                + '<span class="perf-bar-time">' + (s.elapsed_ms / 1000).toFixed(2) + 's</span>'
+                + '</div>';
+        });
+        // HITL / sync overhead
+        if (m.hitl_wait_ms > 0) {
+            const pct = Math.min(100, m.hitl_wait_ms / totalMs * 100);
+            html += '<div class="perf-bar-row"><span class="perf-bar-label">HITL 等待</span><div class="perf-bar-track"><div class="perf-bar-fill hitl" style="width:' + pct.toFixed(1) + '%"></div></div><span class="perf-bar-time">' + (m.hitl_wait_ms/1000).toFixed(2) + 's</span></div>';
+        }
+        if (m.sync_wait_ms > 0) {
+            const pct = Math.min(100, m.sync_wait_ms / totalMs * 100);
+            html += '<div class="perf-bar-row"><span class="perf-bar-label">同步等待</span><div class="perf-bar-track"><div class="perf-bar-fill sync" style="width:' + pct.toFixed(1) + '%"></div></div><span class="perf-bar-time">' + (m.sync_wait_ms/1000).toFixed(2) + 's</span></div>';
+        }
+        html += '</div>';
+
+        // 瓶颈
+        if (bn && bn.type && bn.type !== 'none') {
+            const bnType = bn.type;
+            const detail = bn.detail || {};
+            let msg = '';
+            if (bnType === 'slow_stage') msg = '瓶颈: ' + (detail.stage_id || '?') + ' 占 ' + (detail.percentage || '?') + '%';
+            else if (bnType === 'sync_wait') msg = '同步等待占比过高 (' + (bn.sync_wait_ms/1000).toFixed(1) + 's)';
+            else if (bnType === 'hitl_wait') msg = 'HITL 等待占比过高 (' + (bn.hitl_wait_ms/1000).toFixed(1) + 's)';
+            else msg = '耗时分布均匀';
+            html += '<div class="perf-bottleneck ' + bnType + '">' + this.esc(msg) + '</div>';
+        }
+
+        // 建议
+        if (bn.recommendations && bn.recommendations.length) {
+            bn.recommendations.forEach(r => { html += '<div class="perf-rec">· ' + this.esc(r) + '</div>'; });
+        }
+
+        el.innerHTML = html;
+    },
+
+    esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; },
+};
+
+document.addEventListener('DOMContentLoaded', () => Dbg.init());
+</script>
+{% endblock %}
+
+

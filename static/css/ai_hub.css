@@ -113,6 +113,10 @@
 .ai-hub-card--design { border-color: #818cf8; }
 .ai-hub-card--execute { border-color: #6366f1; }
 .ai-hub-card--heal { border-color: #a78bfa; }
+.ai-hub-card--cross { border-color: #f59e0b; }
+.ai-hub-card--cross .ai-hub-card__icon { background: linear-gradient(135deg, #d97706, #f59e0b); }
+.ai-hub-card--debug { border-color: #10b981; }
+.ai-hub-card--debug .ai-hub-card__icon { background: linear-gradient(135deg, #059669, #10b981); }
 .ai-hub-card__icon {
     width: 48px;
     height: 48px;

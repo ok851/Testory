@@ -454,7 +454,11 @@ class OkHttpPcSyncClient @Inject constructor(
         return parseXY(parts[0]) to parseXY(parts[1])
     }
 
-    override suspend fun aiGenerateSteps(message: String, mode: String): AiGenerateResult {
+    override suspend fun aiGenerateSteps(
+        message: String,
+        mode: String,
+        sessionId: String
+    ): AiGenerateResult {
         if (baseUrl.isEmpty()) {
             return AiGenerateResult(success = false, error = "未连接 PC 端")
         }
@@ -462,7 +466,12 @@ class OkHttpPcSyncClient @Inject constructor(
             try {
                 val body = json.encodeToString(
                     AiGenerateRequest.serializer(),
-                    AiGenerateRequest(message = message, mode = mode)
+                    AiGenerateRequest(
+                        message = message,
+                        mode = mode,
+                        sessionId = sessionId,
+                        agentSessionId = sessionId
+                    )
                 )
                 val requestBody = body.toRequestBody(JSON_MEDIA)
                 val request = buildRequest("$baseUrl/api/mobile/sync/ai/generate") {
@@ -497,7 +506,11 @@ class OkHttpPcSyncClient @Inject constructor(
                             mode = aiResp.mode ?: mode,
                             steps = coreSteps,
                             provider = aiResp.ai_status?.provider ?: "",
-                            model = aiResp.ai_status?.model ?: ""
+                            model = aiResp.ai_status?.model ?: "",
+                            sessionId = aiResp.sessionId.orEmpty(),
+                            variables = aiResp.variables,
+                            toolsUsed = aiResp.toolsUsed,
+                            stepsDigest = aiResp.stepsDigest
                         )
                     } else {
                         AiGenerateResult(

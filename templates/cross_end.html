@@ -1,24 +1,24 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% block title %}跨端联动编排 - {{ product_name }}{% endblock %}
 {% block head %}
 <style>
     .ce-page {
-        background: linear-gradient(160deg, #0f172a 0%, #1e1b4b 45%, #312e81 100%);
+        background: linear-gradient(160deg, #4f46e5 0%, #7c3aed 45%, #5b21b6 100%);
         min-height: calc(100vh - 72px);
         padding: 20px 16px 28px;
         box-sizing: border-box;
         font-family: 'Segoe UI', system-ui, sans-serif;
     }
     .ce-shell {
-        max-width: 1600px;
+        max-width: 960px;
         margin: 0 auto;
-        border-radius: 20px;
+        border-radius: 18px;
         overflow: hidden;
-        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
         background: #fff;
         display: flex;
         flex-direction: column;
-        min-height: calc(100vh - 64px);
+        min-height: auto;
     }
     .ce-topbar {
         display: flex;
@@ -26,7 +26,7 @@
         justify-content: space-between;
         gap: 16px;
         padding: 22px 26px;
-        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #5b21b6 100%);
         color: #fff;
         flex-shrink: 0;
     }
@@ -132,7 +132,7 @@
     .ce-btn {
         padding: 10px 22px; border-radius: 12px; border: none; cursor: pointer;
         font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 7px;
-        transition: all 0.2s; white-space: nowrap;
+        transition: transform 0.2s, opacity 0.2s; white-space: nowrap;
     }
     .ce-btn--primary {
         background: linear-gradient(135deg, #4f46e5, #6366f1);
@@ -150,7 +150,7 @@
     .ce-quick-cmd {
         padding: 6px 14px; border-radius: 999px; font-size: 12px;
         background: #fff; border: 1px solid #e2e8f0; color: #475569;
-        cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; white-space: nowrap;
     }
     .ce-quick-cmd:hover { border-color: #6366f1; color: #4f46e5; background: #eef2ff; }
 
@@ -408,7 +408,7 @@
     .ce-scenario-row {
         display: flex; align-items: center; gap: 12px;
         padding: 10px 14px; border-radius: 10px; border: 1px solid #e2e8f0;
-        margin-bottom: 8px; cursor: pointer; transition: all 0.15s;
+        margin-bottom: 8px; cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;
         font-size: 13px;
     }
     .ce-scenario-row:hover { border-color: #6366f1; background: #eef2ff; }
@@ -431,6 +431,7 @@
                 </div>
             </div>
             <div class="ce-topbar__right">
+                <a href="/cross-end/debug" class="ce-badge" style="text-decoration:none;cursor:pointer;" title="调试面板"><i class="fas fa-bug"></i> 调试</a>
                 <button class="ce-badge ce-project-btn" id="ceProjectBadge" onclick="CE.selectProject()">
                     <i class="fas fa-folder"></i> 未选择项目 <i class="fas fa-chevron-down" style="font-size:9px;margin-left:4px;"></i>
                 </button>
@@ -655,6 +656,15 @@
             CE.updateProjectBadge(CE.projectId, CE.projectName);
         }
         CE.loadSavedScenarios();
+    // Click-outside handler for project dropdown
+    document.addEventListener('click', function(e) {
+        var dd = document.getElementById('ceProjectDropdown');
+        var btn = document.getElementById('ceProjectBadge');
+        if (dd && dd.style.display === 'block' && !dd.contains(e.target) && !btn.contains(e.target)) {
+            dd.style.display = 'none';
+        }
+    });
+
         if (typeof CE.refreshDesktopPreflight === 'function') {
             CE.refreshDesktopPreflight();
         }
@@ -796,13 +806,18 @@
             '<span class="ce-log-line__lvl ce-log-line__lvl--' + lvlClass + '">' + level.toUpperCase() + '</span>' +
             '<span class="ce-log-line__msg">' + CE.escapeHtml(msg) + '</span>';
         panel.appendChild(line);
+        // Limit log entries to prevent DOM bloat
+        while (panel.children.length > 200) {
+            panel.removeChild(panel.firstChild);
+        }
         panel.scrollTop = panel.scrollHeight;
     };
 
+    CE._escDiv = null;  // reuse single div for escapeHtml
     CE.escapeHtml = function(s) {
-        var d = document.createElement('div');
-        d.textContent = s == null ? '' : String(s);
-        return d.innerHTML;
+        if (!CE._escDiv) CE._escDiv = document.createElement('div');
+        CE._escDiv.textContent = s == null ? '' : String(s);
+        return CE._escDiv.innerHTML;
     };
 
     CE.stageKey = function(stage, idx) {
@@ -1919,3 +1934,4 @@
 })();
 </script>
 {% endblock %}
+

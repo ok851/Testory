@@ -3,6 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <script>
+        // 首帧上色：在 CSS 解析前同步设置 html 底色，避免换页/首屏白屏闪烁
+        (function () {
+            try {
+                var dark = localStorage.getItem('ui_theme') === 'dark';
+                document.documentElement.style.backgroundColor = dark ? '#030712' : '#f9fafb';
+            } catch (e) {}
+        })();
+    </script>
+    <script>
         /* 必须在任何 CSS/外链之前执行，避免首帧白底 */
         (function () {
             try {
@@ -495,11 +504,13 @@
 
         function applyThemeFromStorage() {
             try {
-                if (localStorage.getItem('ui_theme') === 'dark') {
+                var isDark = localStorage.getItem('ui_theme') === 'dark';
+                if (isDark) {
                     document.documentElement.classList.add('dark');
                 } else {
                     document.documentElement.classList.remove('dark');
                 }
+                document.documentElement.style.backgroundColor = isDark ? '#030712' : '#f9fafb';
             } catch (e) {}
         }
 

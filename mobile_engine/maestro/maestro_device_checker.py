@@ -55,6 +55,10 @@ class MaestroDeviceChecker:
                 "warnings": [...],
             }
         """
+        # iOS 设备走独立检查流程
+        if self._is_ios_device(udid):
+            return self._run_ios_checks(udid, expected_package)
+
         checks: List[Dict[str, Any]] = []
         errors: List[str] = []
         warnings: List[str] = []
@@ -114,6 +118,97 @@ class MaestroDeviceChecker:
             "errors": errors,
             "warnings": warnings,
         }
+
+    # ------------------------------------------------------------------
+    # iOS 设备支持
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_ios_device(udid: str) -> bool:
+        """判断是否为 iOS 设备（UDID 格式：为 25-40 位十六进制含连字符）。"""
+        import re
+        if re.match(r'^[0-9a-fA-F-]{25,40}$', udid):
+            return True
+        if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-', udid):
+            return True
+        return False
+
+    def _check_idb_connection(self, udid: str) -> Tuple[bool, str]:
+        """检查 idb 是否可连接到 iOS 设备。"""
+        try:
+            idb = os.environ.get("IDB_PATH", "idb")
+            proc = subprocess.run(
+                [idb, "--udid", udid, "describe", "--json"],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if proc.returncode == 0:
+                return True, f"iOS 设备 {udid[:12]}... 已连接"
+            return False, f"idb 连接失败: {(proc.stderr or '').strip() or '未知错误'}"
+        except FileNotFoundError:
+            return False, "idb 未安装 (brew install idb-companion && pip3 install fb-idb)"
+        except Exception as exc:
+            return False, f"idb 连接检查异常: {exc}"
+
+    def _check_ios_screen_locked(self, udid: str) -> Tuple[bool, str]:
+        """检查 iOS 设备是否锁屏。"""
+        try:
+            idb = os.environ.get("IDB_PATH", "idb")
+            proc = subprocess.run(
+                [idb, "--udid", udid, "describe", "--json"],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                info = json.loads(proc.stdout)
+                if info.get("screen_lock") is True:
+                    return False, "iOS 设备处于锁屏状态"
+                return True, "iOS 设备屏幕已解锁"
+            return True, "iOS 屏幕状态无法确定（已视为正常）"
+        except Exception:
+            return True, "iOS 屏幕检查跳过"
+
+    def _check_ios_app_installed(self, udid: str, bundle_id: str) -> Tuple[bool, str]:
+        """检查 iOS App 是否已安装。"""
+        try:
+            idb = os.environ.get("IDB_PATH", "idb")
+            proc = subprocess.run(
+                [idb, "--udid", udid, "list-apps"],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            if proc.returncode == 0:
+                output = proc.stdout or ""
+                if bundle_id in output:
+                    return True, f"iOS App {bundle_id} 已安装"
+            return False, f"iOS App {bundle_id} 未安装，请先通过 idb install 安装"
+        except FileNotFoundError:
+            return False, "idb 未安装，无法检查 App 安装状态"
+        except Exception as exc:
+            return False, f"iOS App 安装检查失败: {exc}"
+
+    def _run_ios_checks(self, udid: str, expected_package: str = "") -> Dict[str, Any]:
+        """iOS 设备专用前置检查流程。"""
+        checks: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        warnings: List[str] = []
+
+        def add_check(name: str, passed: bool, message: str,
+                      severity: str = "error") -> None:
+            checks.append({"name": name, "passed": passed, "message": message, "severity": severity})
+            if not passed:
+                (errors if severity == "error" else warnings).append(f"[{name}] {message}")
+
+        idb_ok, idb_msg = self._check_idb_connection(udid)
+        add_check("idb 连接", idb_ok, idb_msg)
+        if not idb_ok:
+            return {"all_passed": False, "checks": checks, "errors": errors, "warnings": warnings}
+
+        lock_ok, lock_msg = self._check_ios_screen_locked(udid)
+        add_check("屏幕锁定", lock_ok, lock_msg, severity="warning")
+
+        if expected_package:
+            app_ok, app_msg = self._check_ios_app_installed(udid, expected_package)
+            add_check(f"App 安装 ({expected_package})", app_ok, app_msg)
+
+        return {"all_passed": len(errors) == 0, "checks": checks, "errors": errors, "warnings": warnings}
 
     # ------------------------------------------------------------------
     # 单项检查

@@ -251,6 +251,22 @@ class DevicePool:
 
         return result
 
+    def discover_ios_devices(self) -> List[DeviceInfo]:
+        """发现已连接的 iOS 设备。"""
+        try:
+            from mobile_engine.device.ios_device import IOSDeviceManager
+            mgr = IOSDeviceManager()
+            return mgr.list_devices()
+        except Exception:
+            return []
+
+    def discover_all_devices(self) -> List[DeviceInfo]:
+        """发现所有平台设备（Android + iOS）。"""
+        devices = self.discover_devices()
+        ios_devices = self.discover_ios_devices()
+        devices.extend(ios_devices)
+        return devices
+
     def _mark_busy(self, udid: str) -> None:
         with self._lock:
             self._busy_devices.add(udid)

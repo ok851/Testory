@@ -1,6 +1,7 @@
 package com.testory.assistant.v2.core.communication
 
 import com.testory.assistant.v2.core.model.*
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -59,7 +60,12 @@ interface PcSyncClient {
 
     /** AI 生成测试步骤（经 PC 已绑定大模型） */
     /** AI：mode=chat 自由对话；mode=generate 生成可回放步骤 */
-    suspend fun aiGenerateSteps(message: String, mode: String = "chat"): AiGenerateResult
+    /** AI 生成 / Agent：与 PC 同一大脑；可传 session_id 跨入口共享变量 */
+    suspend fun aiGenerateSteps(
+        message: String,
+        mode: String = "chat",
+        sessionId: String = ""
+    ): AiGenerateResult
 
     /** 查询 PC 端 AI 模型就绪态（无密钥） */
     suspend fun fetchAiStatus(): AiStatusResult
@@ -148,7 +154,9 @@ data class RunStepEvent(
 @Serializable
 data class AiGenerateRequest(
     val message: String,
-    val mode: String = "chat"
+    val mode: String = "chat",
+    @SerialName("session_id") val sessionId: String = "",
+    @SerialName("agent_session_id") val agentSessionId: String = ""
 )
 
 @Serializable
@@ -161,7 +169,12 @@ data class AiGenerateResponse(
     val expected_result: String? = null,
     val steps: List<AiStepDto> = emptyList(),
     val mode: String? = null,
-    val ai_status: AiStatusDto? = null
+    val ai_status: AiStatusDto? = null,
+    @SerialName("session_id") val sessionId: String? = null,
+    val variables: Map<String, String> = emptyMap(),
+    @SerialName("tools_used") val toolsUsed: List<String> = emptyList(),
+    @SerialName("steps_digest") val stepsDigest: List<String> = emptyList(),
+    @SerialName("connected_hands") val connectedHands: Map<String, Boolean> = emptyMap()
 )
 
 @Serializable
@@ -205,7 +218,11 @@ data class AiGenerateResult(
     val mode: String = "",
     val steps: List<com.testory.assistant.v2.core.model.Step> = emptyList(),
     val provider: String = "",
-    val model: String = ""
+    val model: String = "",
+    val sessionId: String = "",
+    val variables: Map<String, String> = emptyMap(),
+    val toolsUsed: List<String> = emptyList(),
+    val stepsDigest: List<String> = emptyList()
 )
 
 data class AiStatusResult(

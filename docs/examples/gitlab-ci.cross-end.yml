@@ -1,0 +1,146 @@
+﻿# GitLab CI — 跨端联动执行（CrossEndPlan）
+# 变量：UAT_PLATFORM_URL、UAT_API_TOKEN、PROJECT_ID
+# 可选：CROSS_END_SCENARIO_ID 或 CROSS_END_PLAN_JSON
+
+stages:
+  - prepare
+  - execute
+  - report
+
+variables:
+  PROJECT_ID: "1"
+
+testory-cross-end-prepare:
+  stage: prepare
+  image: python:3.11-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl jq >/dev/null
+  script:
+    - |
+      set -e
+
+      # 优先使用场景 ID 加载计划
+      if [ -n "${CROSS_END_SCENARIO_ID}" ]; then
+        echo "加载场景: ${CROSS_END_SCENARIO_ID}"
+        RESP=$(curl -sS "${UAT_PLATFORM_URL}/api/ai/cross-end/scenario/${CROSS_END_SCENARIO_ID}" \
+          -H "Authorization: Bearer ${UAT_API_TOKEN}")
+        echo "$RESP" | jq . > scenario.json
+        OK=$(echo "$RESP" | jq -r '.ok')
+        if [ "$OK" != "true" ]; then
+          echo "加载场景失败"
+          echo "$RESP"
+          exit 1
+        fi
+        echo "$RESP" | jq '.scenario.plan // .scenario' > plan.json
+        echo "场景加载成功"
+      elif [ -n "${CROSS_END_PLAN_JSON}" ]; then
+        echo "${CROSS_END_PLAN_JSON}" > plan.json
+        echo "使用传入的 Plan JSON"
+      else
+        echo "错误：请设置 CROSS_END_SCENARIO_ID 或 CROSS_END_PLAN_JSON"
+        exit 1
+      fi
+
+      # 验证 plan 格式
+      STAGES=$(jq '.stages | length' plan.json)
+      if [ "$STAGES" -eq 0 ] 2>/dev/null; then
+        echo "错误：plan.stages 为空"
+        exit 1
+      fi
+      echo "Plan 包含 ${STAGES} 个阶段"
+  artifacts:
+    paths:
+      - plan.json
+      - scenario.json
+    expire_in: 7 days
+
+testory-cross-end-execute:
+  stage: execute
+  image: curlimages/curl:8.5.0
+  needs:
+    - job: testory-cross-end-prepare
+      artifacts: true
+  script:
+    - |
+      set -e
+
+      # 读取 plan
+      PLAN=$(cat plan.json)
+
+      # 触发跨端执行
+      PAYLOAD=$(jq -n \
+        --argjson plan "$PLAN" \
+        --arg project_id "${PROJECT_ID}" \
+        --arg build_id "${CI_PIPELINE_ID}" \
+        --arg git_sha "${CI_COMMIT_SHA}" \
+        --arg branch "${CI_COMMIT_REF_NAME}" \
+        --arg trigger_source "gitlab" \
+        '{plan: $plan, project_id: ($project_id | tonumber), build_id: $build_id, git_sha: $git_sha, branch: $branch, trigger_source: $trigger_source, async: true}')
+
+      RESP=$(curl -sS -X POST "${UAT_PLATFORM_URL}/api/ci/cross-end/runs" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD")
+      echo "$RESP" > trigger-response.json
+
+      OK=$(echo "$RESP" | jq -r '.ok')
+      if [ "$OK" != "true" ]; then
+        echo "触发失败"
+        echo "$RESP"
+        exit 1
+      fi
+
+      RUN_ID=$(echo "$RESP" | jq -r '.run_id')
+      POLL_URL=$(echo "$RESP" | jq -r '.poll_url')
+      echo "run_id=${RUN_ID}"
+      echo "poll_url=${POLL_URL}"
+
+      # 轮询等待完成
+      MAX=120
+      N=0
+      while [ $N -lt $MAX ]; do
+        N=$((N + 1))
+        sleep 10
+        STATUS_JSON=$(curl -sS "${UAT_PLATFORM_URL}${POLL_URL}" \
+          -H "Authorization: Bearer ${UAT_API_TOKEN}")
+        echo "$STATUS_JSON" > poll-${N}.json
+
+        STATUS=$(echo "$STATUS_JSON" | jq -r '.status')
+        TERMINAL=$(echo "$STATUS_JSON" | jq -r '.terminal')
+
+        echo "poll ${N}: status=${STATUS} terminal=${TERMINAL}"
+
+        if [ "$TERMINAL" = "true" ] || [ "$STATUS" = "success" ] || [ "$STATUS" = "failed" ]; then
+          echo "$STATUS_JSON" > final-result.json
+          break
+        fi
+      done
+
+      if [ ! -f final-result.json ]; then
+        echo "等待超时"
+        exit 1
+      fi
+
+      # 下载 JUnit
+      curl -sS "${UAT_PLATFORM_URL}/api/ci/cross-end/runs/${RUN_ID}/junit.xml" \
+        -H "Authorization: Bearer ${UAT_API_TOKEN}" \
+        -o testory-cross-end-junit.xml || true
+
+      # 检查门禁
+      SUCCESS=$(jq -r '.success' final-result.json)
+      if [ "$SUCCESS" != "true" ]; then
+        echo "跨端门禁未通过"
+        jq '.result.stage_results[]? | "[\(.ok_assert | if . then "OK" else "FAIL" end)] \(.stage_id) (\(.layer)) \(.error // "")"' final-result.json
+        exit 1
+      fi
+
+      echo "跨端门禁通过"
+  artifacts:
+    when: always
+    paths:
+      - trigger-response.json
+      - final-result.json
+      - poll-*.json
+    reports:
+      junit: testory-cross-end-junit.xml
+    expire_in: 30 days

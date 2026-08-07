@@ -1,0 +1,200 @@
+﻿pipeline {
+    agent any
+
+    environment {
+        UAT_PLATFORM_URL = credentials('uat-platform-url')
+        UAT_API_TOKEN = credentials('uat-api-token')
+    }
+
+    parameters {
+        string(name: 'PROJECT_ID', defaultValue: '1', description: '测试项目ID')
+        text(name: 'PLAN_JSON', defaultValue: '', description: 'CrossEndPlan JSON（为空则使用场景ID）')
+        string(name: 'SCENARIO_ID', defaultValue: '', description: '已保存的跨端场景ID（与 PLAN_JSON 二选一）')
+        booleanParam(name: 'ASYNC_MODE', defaultValue: false, description: '异步模式（推荐：长任务使用）')
+        string(name: 'NOTIFY_WEBHOOK', defaultValue: '', description: '通知Webhook地址（钉钉/企微）')
+    }
+
+    stages {
+        stage('准备跨端计划') {
+            steps {
+                script {
+                    if (params.PLAN_JSON?.trim()) {
+                        env.PLAN_JSON = params.PLAN_JSON.trim()
+                        echo "使用传入的 CrossEndPlan JSON"
+                    } else if (params.SCENARIO_ID?.trim()) {
+                        echo "加载场景: ${params.SCENARIO_ID}"
+                        def resp = httpRequest(
+                            url: "${env.UAT_PLATFORM_URL}/api/ai/cross-end/scenario/${params.SCENARIO_ID}",
+                            httpMode: 'GET',
+                            customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]]
+                        )
+                        def data = readJSON text: resp.content
+                        if (!data.ok) {
+                            error("加载场景失败: ${data.error}")
+                        }
+                        env.PLAN_JSON = groovy.json.JsonOutput.toJson(data.scenario.plan ?: data.scenario)
+                        echo "场景加载成功: ${data.scenario.name ?: data.scenario_id}"
+                    } else {
+                        error("请指定 PLAN_JSON 或 SCENARIO_ID")
+                    }
+                }
+            }
+        }
+
+        stage('执行跨端计划') {
+            steps {
+                script {
+                    def payload = [
+                        plan: readJSON text: env.PLAN_JSON,
+                        project_id: params.PROJECT_ID.toInteger(),
+                        async: params.ASYNC_MODE,
+                        trigger_source: 'jenkins',
+                        build_id: env.BUILD_NUMBER,
+                        branch: env.GIT_BRANCH ?: '',
+                        git_sha: env.GIT_COMMIT ?: '',
+                    ]
+
+                    if (params.NOTIFY_WEBHOOK?.trim()) {
+                        payload.callback_url = params.NOTIFY_WEBHOOK.trim()
+                    }
+
+                    def response = httpRequest(
+                        url: "${env.UAT_PLATFORM_URL}/api/ci/cross-end/runs",
+                        httpMode: 'POST',
+                        contentType: 'APPLICATION_JSON',
+                        requestBody: groovy.json.JsonOutput.toJson(payload),
+                        customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]],
+                        validResponseCodes: '200:202'
+                    )
+
+                    def result = readJSON text: response.content
+                    if (!result.ok) {
+                        error("触发跨端执行失败: ${result.error}")
+                    }
+
+                    env.CROSS_END_RUN_ID = result.run_id
+                    env.POLL_URL = result.poll_url ?: "/api/ci/cross-end/runs/${result.run_id}"
+                    echo "跨端执行已触发，run_id: ${env.CROSS_END_RUN_ID}"
+
+                    // 同步模式直接返回结果
+                    if (!params.ASYNC_MODE) {
+                        env.CROSS_END_STATUS = result.status ?: 'unknown'
+                        env.CROSS_END_SUCCESS = result.success ? 'true' : 'false'
+                        echo "同步执行完成: status=${env.CROSS_END_STATUS}, success=${env.CROSS_END_SUCCESS}"
+                    }
+                }
+            }
+        }
+
+        stage('等待执行完成') {
+            when { expression { params.ASYNC_MODE } }
+            steps {
+                script {
+                    def maxAttempts = 120  // 最多等待120次，每次10秒
+                    def attempt = 0
+                    def completed = false
+
+                    while (attempt < maxAttempts && !completed) {
+                        sleep(10)
+                        attempt++
+
+                        def response = httpRequest(
+                            url: "${env.UAT_PLATFORM_URL}${env.POLL_URL}",
+                            httpMode: 'GET',
+                            customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]]
+                        )
+
+                        def result = readJSON text: response.content
+                        if (result.terminal || result.status in ['success', 'failed']) {
+                            completed = true
+                            env.CROSS_END_STATUS = result.status ?: 'unknown'
+                            env.CROSS_END_SUCCESS = result.success ? 'true' : 'false'
+                            echo "执行完成: status=${env.CROSS_END_STATUS}, success=${env.CROSS_END_SUCCESS}"
+
+                            if (result.result?.stage_results) {
+                                echo "阶段结果:"
+                                result.result.stage_results.each { sr ->
+                                    def mark = sr.ok_assert ? 'OK' : 'FAIL'
+                                    echo "  [${mark}] ${sr.stage_id} (${sr.layer}) ${sr.error ?: ''}"
+                                }
+                            }
+                        }
+                    }
+
+                    if (!completed) {
+                        error("等待跨端执行超时（${maxAttempts * 10}s）")
+                    }
+                }
+            }
+        }
+
+        stage('下载 JUnit 报告') {
+            steps {
+                script {
+                    try {
+                        def response = httpRequest(
+                            url: "${env.UAT_PLATFORM_URL}/api/ci/cross-end/runs/${env.CROSS_END_RUN_ID}/junit.xml",
+                            httpMode: 'GET',
+                            customHeaders: [[name: 'Authorization', value: "Bearer ${env.UAT_API_TOKEN}"]],
+                            outputFile: 'testory-cross-end-junit.xml'
+                        )
+                        echo "JUnit 报告已下载"
+                    } catch (Exception e) {
+                        echo "JUnit 报告下载失败（非致命）: ${e.message}"
+                    }
+                }
+            }
+        }
+
+        stage('检查门禁') {
+            steps {
+                script {
+                    if (env.CROSS_END_SUCCESS != 'true') {
+                        echo "跨端执行失败: status=${env.CROSS_END_STATUS}"
+                        unstable("跨端门禁未通过")
+                    } else {
+                        echo "跨端门禁通过"
+                    }
+                }
+            }
+        }
+
+        stage('通知') {
+            when { expression { params.NOTIFY_WEBHOOK?.trim() } }
+            steps {
+                script {
+                    def status = env.CROSS_END_SUCCESS == 'true' ? '成功' : '失败'
+                    def msg = "Testory 跨端执行 ${status}\n" +
+                              "run_id: ${env.CROSS_END_RUN_ID}\n" +
+                              "项目: ${params.PROJECT_ID}\n" +
+                              "构建: ${env.BUILD_URL}"
+
+                    try {
+                        httpRequest(
+                            url: params.NOTIFY_WEBHOOK.trim(),
+                            httpMode: 'POST',
+                            contentType: 'APPLICATION_JSON',
+                            requestBody: groovy.json.JsonOutput.toJson([text: msg]),
+                            validResponseCodes: '200:299'
+                        )
+                    } catch (Exception e) {
+                        echo "通知发送失败: ${e.message}"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'testory-cross-end-junit.xml', allowEmptyArchive: true
+            junit 'testory-cross-end-junit.xml'
+        }
+        failure {
+            echo "跨端执行 Pipeline 失败"
+        }
+        success {
+            echo "跨端执行 Pipeline 成功"
+        }
+    }
+}

@@ -102,9 +102,9 @@ def wait_mobile_job(
 
 
 def ensure_mobile_hand_ready(user_id: int = 0, device_id: str = "") -> Optional[Dict[str, Any]]:
-    """无配对手机时立刻失败，避免 enqueue 后空等被误当成「工具调用卡住」。"""
+    """无配对手机或无障碍轮询心跳过期时立刻失败，避免 enqueue 后空等。"""
     try:
-        from mobile_sync_store import list_paired_devices_for_user
+        from mobile_sync_store import device_poller_status_for_user, list_paired_devices_for_user
 
         devices = list_paired_devices_for_user(int(user_id or 0))
     except Exception:
@@ -126,6 +126,35 @@ def ensure_mobile_hand_ready(user_id: int = 0, device_id: str = "") -> Optional[
             "ok": False,
             "error": f"指定 device_id={want} 未在已配对列表中",
             "error_code": "MOBILE_DEVICE_MISMATCH",
+            "paired_devices": [d.get("device_id") for d in devices],
+        }
+
+    # 跳过心跳：CI / 显式放行；有 OTP mock 时也不强卡 poller
+    skip_poller = (os.environ.get("MOBILE_HAND_SKIP_POLLER") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ) or bool(_mock_otp())
+    if skip_poller:
+        return None
+
+    try:
+        status = device_poller_status_for_user(int(user_id or 0), want)
+    except Exception:
+        status = {"alive_count": 0, "stale_sec": 45}
+    if int(status.get("alive_count") or 0) <= 0:
+        stale = status.get("stale_sec") or 45
+        return {
+            "success": False,
+            "ok": False,
+            "error": (
+                f"手机已配对，但近 {int(stale)}s 内无任务轮询心跳。"
+                "请打开 APK 无障碍服务（PcRunJobPoller 仅在无障碍内运行），"
+                "确认界面显示已连接后再试。"
+            ),
+            "error_code": "MOBILE_POLLER_STALE",
+            "poller_status": status,
             "paired_devices": [d.get("device_id") for d in devices],
         }
     return None
